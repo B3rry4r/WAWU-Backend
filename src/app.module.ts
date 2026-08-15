@@ -1,10 +1,13 @@
 import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
-import { AppService } from './app.service';
+import { WawuAuthModule } from './common/auth/wawu-auth.module';
+// SEAM: Phase 5 resource modules register here, one import line each,
+// per conventions.md § Naming & layout "Registration entry".
 
 @Module({
-  imports: [],
+  imports: [ConfigModule.forRoot({ isGlobal: true }), WawuAuthModule],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [],
 })
 export class AppModule {}
