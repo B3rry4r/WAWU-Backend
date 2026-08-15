@@ -5,3 +5,5 @@ dist/
 *.log
 coverage/
 .DS_Store
+mock-wawu-id/node_modules/
+mock-wawu-id/private.pem
