@@ -1,5 +1,7 @@
 node_modules/
 dist/
+dist-seed/
+generated/
 .env
 .env.local
 *.log

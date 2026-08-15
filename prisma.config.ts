@@ -7,6 +7,13 @@ export default defineConfig({
   schema: "prisma/schema.prisma",
   migrations: {
     path: "prisma/migrations",
+    // Runs `npm run db:seed`, which precompiles seed.ts (+ the generated
+    // Prisma client it imports) with tsc before running with plain node —
+    // ts-node's CommonJS require hook does not resolve the generated
+    // client's internal `./x.js` -> `./x.ts` cross-file imports correctly
+    // under this project's `moduleResolution: "nodenext"`, but tsc does
+    // (confirmed while building this schema).
+    seed: "npm run db:seed --silent",
   },
   datasource: {
     url: process.env["DATABASE_URL"],

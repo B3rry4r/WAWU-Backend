@@ -4,10 +4,774 @@
 // Get a free hosted Postgres database in seconds: `npx create-db`
 
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
+  moduleFormat = "cjs"
 }
 
 datasource db {
   provider = "postgresql"
+}
+
+// =============================================================================
+// WAWU Hub API — Prisma schema
+//
+// Built from .pipeline/registry.json (frozen, 39 resources) + dep-graph.json
+// + conventions.md. See the schema-agent report for the full rationale;
+// summarized judgment calls are called out inline as `// JUDGMENT:` comments.
+//
+// Auth model: this backend has NO local User table. Every `*WawuId` /
+// `*WawuUserId` field below is a plain, indexed String holding WAWU ID's own
+// `sub` claim — never a Prisma relation() to a local model, even where the
+// referenced concept (e.g. CreatorState) happens to be keyed by wawuUserId.
+// Identity lives in WAWU ID; this backend only stores WAWUAfrica-specific
+// state keyed by that foreign identity string. Relations are only modeled
+// between resources this backend actually owns end-to-end (ContentPiece ->
+// CourseLesson, Community -> CommunityMessage, etc).
+//
+// Four resources in the registry are NOT modeled as tables here:
+//   - SearchResponse: fields: [] — pure computed aggregate, no storage.
+//   - Account: fields: [] — DELETE /account acts on wawuUserId directly,
+//     nothing to store; BlockedAccount does not need a real FK to it.
+//   - CreatorEarnings: registry's own endpoint note says explicitly "not a
+//     running ledger balance" — it's a flat aggregate computed at request
+//     time across Purchase + DirectMessage + CreditSpend + CreatorSubscription.
+//     Modeled as a wire-response interface only (src/common/types/).
+//   - LearnEntitlement: every field (tier, freeCoursesTotal, freeCoursesUsed,
+//     enrolledCourseIds) is fully derivable from CreatorState.tier +
+//     CourseEnrollment rows — no independent state to persist. Wire-response
+//     interface only.
+// =============================================================================
+
+// -----------------------------------------------------------------------------
+// Enums
+// -----------------------------------------------------------------------------
+
+enum AccountType {
+  user
+  creator
+}
+
+enum CreatorTier {
+  basic
+  pro
+}
+
+/// Shared by CreatorState.kycStatus, KycSubmission.status and
+/// VerificationSubmission.status — all three are the same pending/approved/
+/// rejected review lifecycle.
+enum ReviewStatus {
+  pending
+  approved
+  rejected
+}
+
+enum VerificationTier {
+  basic
+  verified_user
+  verified_business
+  certified_professional
+  trusted_partner
+}
+
+enum ContentType {
+  video
+  course
+  audio
+  pdf
+  image
+  template
+}
+
+enum AccessType {
+  free
+  paid
+}
+
+enum ContentStatus {
+  pending
+  live
+  rejected
+}
+
+enum PurchaseType {
+  content
+  tip
+}
+
+/// Shared by Purchase.status and CreditPurchase.status.
+enum TransactionStatus {
+  pending
+  completed
+  failed
+}
+
+enum DmStatus {
+  awaiting_response
+  responded
+  refunded
+}
+
+enum PenaltyState {
+  none
+  warned
+  disabled_7d
+  disabled_30d
+}
+
+enum CommunityKind {
+  open
+  private
+}
+
+enum MembershipStatus {
+  joined
+  pending
+}
+
+enum CreditPack {
+  starter
+  popular
+  pro
+}
+
+enum SubscriptionStatus {
+  active
+  past_due
+  cancelled
+  expired
+}
+
+enum PartnerServiceStatus {
+  live
+  coming
+}
+
+enum ServiceApplicationKind {
+  cac
+  nepc
+  mentor_request @map("mentor-request")
+}
+
+enum GuideKind {
+  country
+  article
+  template
+}
+
+enum ShopKind {
+  basket
+  beauty
+}
+
+// -----------------------------------------------------------------------------
+// Identity / profile / creator gates
+// -----------------------------------------------------------------------------
+
+/// One row per WAWU user who has completed onboarding on this app. Created on
+/// first PATCH /users/me (post-signup onboarding), updated thereafter.
+model UserProfile {
+  wawuUserId      String      @id
+  accountType     AccountType
+  handle          String?     @unique
+  bio             String?
+  interests       String[]
+  instagramHandle String?
+  whatsappHandle  String?
+  websiteUrl      String?
+  createdAt       DateTime    @default(now())
+
+  @@index([accountType])
+}
+
+/// Creator-only entitlement/gate state. Two independent gates per CLAUDE.md:
+/// subscriptionPaid gates uploading, kycStatus=approved gates earning.
+/// `slotsTotal` is deliberately NOT a column — it derives from `tier`
+/// (registry's own example of a derived field) and is computed in the wire
+/// response / service layer, never stored.
+model CreatorState {
+  wawuUserId       String       @id
+  tier             CreatorTier
+  subscriptionPaid Boolean      @default(false)
+  kycStatus        ReviewStatus @default(pending)
+  slotsUsed        Int          @default(0)
+  dmPrice          Int?
+  dmEnabled        Boolean      @default(false)
+
+  @@index([tier])
+  @@index([kycStatus])
+}
+
+/// WAWU ID verification-tier ladder (Basic -> Verified User -> Verified
+/// Business -> Certified Professional -> Trusted Partner). This backend owns
+/// only the submission/review workflow; the resulting tier value is written
+/// back to WAWU ID (conventions.md § Auth model) and is NOT this table's
+/// concern to keep in sync. Multiple rows per user over time are expected
+/// (resubmission), so no unique on wawuUserId — history is a business
+/// requirement.
+model VerificationSubmission {
+  id              String           @id @default(uuid())
+  wawuUserId      String
+  tier            VerificationTier
+  status          ReviewStatus     @default(pending)
+  documents       String[]
+  submittedAt     DateTime         @default(now())
+  reviewedAt      DateTime?
+  rejectionReason String?
+
+  @@index([wawuUserId])
+  @@index([status])
+}
+
+/// Creator KYC (BVN/NIN or national-ID equivalent + payout bank details).
+/// Fully owned by this backend, entirely separate from verification tier
+/// (CLAUDE.md non-negotiable — never collapse the two). One "active"
+/// submission per wawuUserId is a business rule enforced in service logic,
+/// NOT a DB unique — resubmission needs history, per the task brief.
+model KycSubmission {
+  id                   String       @id @default(uuid())
+  wawuUserId           String
+  country              String
+  bvn                  String?
+  nin                  String?
+  nationalIdEquivalent String?
+  idDocumentType       String
+  idDocumentUrl        String
+  payoutBankName       String
+  payoutAccountNumber  String
+  status               ReviewStatus @default(pending)
+  rejectionReason      String?
+  submittedAt          DateTime     @default(now())
+  reviewedAt           DateTime?
+
+  @@index([wawuUserId])
+  @@index([status])
+}
+
+// -----------------------------------------------------------------------------
+// Content
+// -----------------------------------------------------------------------------
+
+/// `fullAssetLocked` (registry: "derived") is intentionally not a column —
+/// it's computed at read time from accessType/price + whether the requester
+/// has a completed Purchase. `fullAssetUrl` IS a real stored column (the
+/// actual asset location); the derivation only governs whether it's *returned*
+/// to a given requester, which is a wire-layer / service-layer concern.
+///
+/// JUDGMENT: `tags: String[]` is added even though it's absent from this
+/// resource's top-level `fields` array in registry.json — it appears in the
+/// POST /content request body (`tags: string[], nullable: true`) with no
+/// other place to land it. Treated as a registry omission (endpoint contract
+/// vs. resource field list drift), not a deliberate exclusion.
+model ContentPiece {
+  id                     String        @id @default(uuid())
+  slug                   String        @unique
+  creatorWawuId          String
+  contentType            ContentType
+  title                  String
+  description            String
+  category               String
+  tags                   String[]      @default([])
+  accessType             AccessType
+  price                  Int
+  durationLabel          String?
+  pageCount              Int?
+  previewAssetUrl        String
+  fullAssetUrl           String?
+  creatorFirstUploadFree Boolean       @default(false)
+  status                 ContentStatus @default(pending)
+  views                  Int           @default(0)
+  ratingPct              Int?
+  commentCount           Int           @default(0)
+  likes                  Int           @default(0)
+  createdAt              DateTime      @default(now())
+
+  lessons   CourseLesson[]
+  comments  Comment[]
+  purchases Purchase[]
+  savedBy   SavedItem[]
+
+  @@index([creatorWawuId])
+  @@index([status])
+  @@index([category])
+  @@index([contentType])
+}
+
+/// `locked` (registry: "derived from purchase state") intentionally not a
+/// column — computed per-requester at read time.
+model CourseLesson {
+  id            String       @id @default(uuid())
+  contentId     String
+  content       ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  title         String
+  order         Int
+  durationLabel String?
+
+  @@index([contentId])
+}
+
+model Comment {
+  id           String       @id @default(uuid())
+  contentId    String
+  content      ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  authorWawuId String
+  text         String
+  replyToId    String?
+  replyTo      Comment?     @relation("CommentReplies", fields: [replyToId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  replies      Comment[]    @relation("CommentReplies")
+  likes        Int          @default(0)
+  createdAt    DateTime     @default(now())
+
+  @@index([contentId])
+  @@index([authorWawuId])
+}
+
+// -----------------------------------------------------------------------------
+// Transactions
+// -----------------------------------------------------------------------------
+
+/// Covers both content purchases and tips (`contentId` null for tips, per
+/// registry note). `commissionRate` is snapshotted at transaction time —
+/// never recomputed from the creator's current tier later (conventions.md).
+model Purchase {
+  id               String            @id @default(uuid())
+  contentId        String?
+  content          ContentPiece?     @relation(fields: [contentId], references: [id], onDelete: SetNull)
+  type             PurchaseType
+  buyerWawuId      String
+  creatorWawuId    String
+  amount           Int
+  commissionRate   Decimal           @db.Decimal(5, 4)
+  flutterwaveTxRef String
+  flutterwaveTxId  String?
+  status           TransactionStatus @default(pending)
+  note             String?
+  purchasedAt      DateTime          @default(now())
+
+  @@index([buyerWawuId])
+  @@index([creatorWawuId])
+  @@index([contentId])
+  @@index([status])
+}
+
+model SavedItem {
+  id         String       @id @default(uuid())
+  userWawuId String
+  contentId  String
+  content    ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  savedAt    DateTime     @default(now())
+
+  @@unique([userWawuId, contentId])
+  @@index([userWawuId])
+  @@index([contentId])
+}
+
+model FollowRelationship {
+  id              String   @id @default(uuid())
+  followerWawuId  String
+  followingWawuId String
+  createdAt       DateTime @default(now())
+
+  @@unique([followerWawuId, followingWawuId])
+  @@index([followerWawuId])
+  @@index([followingWawuId])
+}
+
+// -----------------------------------------------------------------------------
+// Direct messages (paid DMs)
+// -----------------------------------------------------------------------------
+
+model DirectMessage {
+  id               String    @id @default(uuid())
+  creatorWawuId    String
+  senderWawuId     String
+  text             String
+  amount           Int
+  status           DmStatus  @default(awaiting_response)
+  sentAt           DateTime  @default(now())
+  deadlineAt       DateTime
+  respondedAt      DateTime?
+  responseText     String?
+  flutterwaveTxRef String
+
+  reports DmReport[]
+
+  @@index([creatorWawuId])
+  @@index([senderWawuId])
+  @@index([status, deadlineAt])
+}
+
+/// Rolling per-creator stats maintained by the DM-deadline-sweep cron job
+/// (conventions.md § Scheduled/background jobs). Single evolving row per
+/// creator, not a history log.
+model CreatorNoResponseTracker {
+  creatorWawuId     String       @id
+  noResponseRatePct Decimal      @default(0) @db.Decimal(5, 2)
+  penaltyState      PenaltyState @default(none)
+  dmDisabledUntil   DateTime?
+}
+
+/// JUDGMENT: added `@@unique([threadId, reporterWawuId])` — not specified in
+/// the registry, but a sensible constraint (one report per reporter per
+/// thread) consistent with the "sensible uniques" instruction.
+model DmReport {
+  id             String        @id @default(uuid())
+  threadId       String
+  thread         DirectMessage @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  reporterWawuId String
+  createdAt      DateTime      @default(now())
+
+  @@unique([threadId, reporterWawuId])
+  @@index([threadId])
+  @@index([reporterWawuId])
+}
+
+// -----------------------------------------------------------------------------
+// Communities & credits
+// -----------------------------------------------------------------------------
+
+/// `memberCount` / `messagesToday` (registry: "derived") intentionally not
+/// columns — computed via count() over CommunityMembership / CommunityMessage
+/// at read time.
+model Community {
+  id          String        @id @default(uuid())
+  name        String
+  description String
+  hostWawuId  String
+  kind        CommunityKind
+
+  memberships  CommunityMembership[]
+  messages     CommunityMessage[]
+  creditSpends CreditSpend[]
+
+  @@index([hostWawuId])
+  @@index([kind])
+}
+
+model CommunityMembership {
+  id          String           @id @default(uuid())
+  userWawuId  String
+  communityId String
+  community   Community        @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  status      MembershipStatus @default(joined)
+  joinedAt    DateTime?
+
+  @@unique([userWawuId, communityId])
+  @@index([userWawuId])
+  @@index([communityId])
+}
+
+model CommunityMessage {
+  id            String    @id @default(uuid())
+  communityId   String
+  community     Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  senderWawuId  String
+  text          String
+  costInCredits Int       @default(1)
+  sentAt        DateTime  @default(now())
+
+  @@index([communityId])
+  @@index([senderWawuId])
+}
+
+model CreditsState {
+  userWawuId    String   @id
+  creditBalance Int      @default(0)
+  trialEndsAt   DateTime
+}
+
+model CreditPurchase {
+  id               String            @id @default(uuid())
+  userWawuId       String
+  pack             CreditPack
+  creditsGranted   Int
+  flutterwaveTxRef String
+  amount           Int
+  status           TransactionStatus @default(pending)
+  purchasedAt      DateTime          @default(now())
+
+  @@index([userWawuId])
+  @@index([status])
+}
+
+/// JUDGMENT: registry lists no `id` field for CreditSpend (append-only
+/// per-message ledger row, analogous to Purchase). A synthetic UUID PK is
+/// added since there is no natural key — (userWawuId, communityId, spentAt)
+/// is not guaranteed unique to the second.
+model CreditSpend {
+  id            String    @id @default(uuid())
+  userWawuId    String
+  communityId   String
+  community     Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  creditsSpent  Int       @default(1)
+  creatorWawuId String
+  spentAt       DateTime  @default(now())
+
+  @@index([userWawuId])
+  @@index([communityId])
+  @@index([creatorWawuId])
+}
+
+// -----------------------------------------------------------------------------
+// Creator subscription / earnings / scoring
+// -----------------------------------------------------------------------------
+
+/// Single evolving row per creator (not a billing-history ledger — that's
+/// GET /creator-subscription/billing-history, served from CreditPurchase-
+/// shaped rows / Flutterwave data, not modeled as its own table since the
+/// registry gives it no dedicated resource).
+model CreatorSubscription {
+  creatorWawuId          String             @id
+  tier                   CreatorTier
+  status                 SubscriptionStatus @default(active)
+  commissionRateOverride Decimal?           @db.Decimal(5, 4)
+  flutterwaveCustomerRef String?
+  flutterwavePlanId      String?
+  currentPeriodEnd       DateTime
+  renewalAttempts        Int                @default(0)
+  cancelsAt              DateTime?
+  cardLast4              String?
+
+  @@index([status])
+  @@index([currentPeriodEnd])
+}
+
+/// `score` is a periodically-recomputed cache (views + purchases*weight +
+/// comments, per registry note) — the row itself IS stored (hence
+/// `updatedAt`), even though the computation reads across multiple tables.
+model EvgScore {
+  creatorWawuId String   @id
+  score         Int      @default(0)
+  updatedAt     DateTime @updatedAt
+}
+
+// -----------------------------------------------------------------------------
+// Notifications
+// -----------------------------------------------------------------------------
+
+model Notification {
+  id           String   @id @default(uuid())
+  userWawuId   String
+  kind         String
+  title        String
+  body         String
+  tone         String
+  amount       Int?
+  creditsCount Int?
+  actionLabel  String?
+  read         Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  @@index([userWawuId])
+  @@index([userWawuId, read])
+}
+
+model NotificationSettings {
+  userWawuId      String  @id
+  newReplies      Boolean @default(true)
+  newFollowers    Boolean @default(true)
+  dmReminders     Boolean @default(true)
+  refunds         Boolean @default(true)
+  promotions      Boolean @default(false)
+  communityDigest Boolean @default(true)
+}
+
+// -----------------------------------------------------------------------------
+// Services hub (partner services, applications, mentors)
+// -----------------------------------------------------------------------------
+
+/// Reference/seed data, admin-managed later per registry note.
+model PartnerService {
+  id         String               @id @default(uuid())
+  name       String
+  tagline    String
+  blurb      String
+  icon       String
+  status     PartnerServiceStatus
+  turnaround String?
+  priceFrom  String?
+  partner    String?
+  comingNote String?
+}
+
+/// `status` (free-text machine state, e.g. "submitted"/"in_review"/"issued")
+/// and `statusLabel` (its human-readable display twin) are both typed as
+/// plain `string` in the registry with no enumerated value set given, so
+/// left as String rather than invented enums. `timeline` (registry:
+/// "object[]") is kept as Json — no filter/query value in modeling a
+/// free-form status-history array relationally, per the task brief's own
+/// example (ServiceApplication.timeline).
+model ServiceApplication {
+  id                    String                 @id @default(uuid())
+  applicantWawuId       String
+  kind                  ServiceApplicationKind
+  title                 String
+  reference             String
+  appliedDate           DateTime               @default(now())
+  status                String
+  statusLabel           String
+  amountPaid            Int?
+  certificateExpectedBy DateTime?              @db.Date
+  timeline              Json
+  rejection             String?
+
+  @@index([applicantWawuId])
+  @@index([kind])
+}
+
+model Mentor {
+  id              String   @id @default(uuid())
+  name            String
+  handle          String   @unique
+  field           String
+  category        String
+  tagline         String
+  bio             String
+  topics          String[]
+  verification    String
+  openForRequests Boolean  @default(true)
+  fullUntil       String?
+  yearsExperience Int
+  sessions        Int      @default(0)
+  languages       String[]
+
+  requests MentorRequest[]
+
+  @@index([category])
+}
+
+/// FREE — mentors volunteer their time, no payment step (product-truths.json,
+/// per registry note). `status` left as plain String — no enumerated value
+/// set given in the registry.
+model MentorRequest {
+  id              String   @id @default(uuid())
+  mentorId        String
+  mentor          Mentor   @relation(fields: [mentorId], references: [id], onDelete: Cascade)
+  requesterWawuId String
+  topics          String[]
+  note            String
+  slot            String
+  status          String   @default("pending")
+  createdAt       DateTime @default(now())
+
+  @@index([mentorId])
+  @@index([requesterWawuId])
+}
+
+// -----------------------------------------------------------------------------
+// Learn (courses, enrollment, guides, playbook)
+// -----------------------------------------------------------------------------
+
+model LearnCourse {
+  id              String   @id @default(uuid())
+  title           String
+  category        String
+  hours           Int
+  certificate     Boolean  @default(false)
+  overview        String
+  whatItCovers    String[]
+  externalHostUrl String
+
+  enrollments CourseEnrollment[]
+
+  @@index([category])
+}
+
+/// JUDGMENT: registry lists no `id` field for CourseEnrollment (an
+/// enrollment fact, analogous to CommunityMembership). Synthetic UUID PK +
+/// compound unique added, mirroring CommunityMembership's treatment.
+model CourseEnrollment {
+  id          String      @id @default(uuid())
+  userWawuId  String
+  courseId    String
+  course      LearnCourse @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  enrolledAt  DateTime    @default(now())
+  progressPct Int?
+
+  @@unique([userWawuId, courseId])
+  @@index([userWawuId])
+  @@index([courseId])
+}
+
+/// `chapters` / `readingSections` (registry: "object[]") kept as Json — the
+/// single global playbook's content tree has no cross-row filter/query need.
+model Playbook {
+  id              String @id @default(uuid())
+  title           String
+  pages           Int
+  format          String
+  description     String
+  chapters        Json
+  readingSections Json
+}
+
+/// `sections` (registry: "object[]", nullable) kept as Json for the same
+/// reason as Playbook — free-form nested content, no relational query value.
+model LearnGuide {
+  id          String    @id @default(uuid())
+  kind        GuideKind
+  title       String
+  updated     DateTime  @db.Date
+  country     String?
+  subtitle    String
+  readMinutes Int
+  sections    Json?
+  fileCount   Int?
+
+  @@index([kind])
+  @@index([country])
+}
+
+// -----------------------------------------------------------------------------
+// Marketplace handoff (WAWUBasket / WAWUBeauty — external, save-only)
+// -----------------------------------------------------------------------------
+
+/// JUDGMENT: registry lists no `id` field. Synthetic UUID PK + compound
+/// unique added, same pattern as other save/join-style resources.
+/// `productId` is intentionally NOT a relation — external id, opaque to this
+/// backend per registry note (supersede S-5).
+model MarketplaceSave {
+  id         String   @id @default(uuid())
+  userWawuId String
+  productId  String
+  shop       ShopKind
+  savedAt    DateTime @default(now())
+
+  @@unique([userWawuId, productId, shop])
+  @@index([userWawuId])
+}
+
+// -----------------------------------------------------------------------------
+// Settings / privacy / account lifecycle
+// -----------------------------------------------------------------------------
+
+model PrivacySettings {
+  userWawuId        String  @id
+  showPurchases     Boolean @default(true)
+  showSavedItems    Boolean @default(true)
+  showFollowing     Boolean @default(true)
+  showInMemberLists Boolean @default(true)
+}
+
+/// JUDGMENT: `@@unique([userWawuId, blockedWawuId])` added — not specified
+/// in the registry, but a sensible constraint (can't block the same account
+/// twice) per the "sensible uniques" instruction.
+model BlockedAccount {
+  id            String   @id @default(uuid())
+  userWawuId    String
+  blockedWawuId String
+  blockedAt     DateTime @default(now())
+
+  @@unique([userWawuId, blockedWawuId])
+  @@index([userWawuId])
+  @@index([blockedWawuId])
+}
+
+model DataExportRequest {
+  id          String   @id @default(uuid())
+  userWawuId  String
+  status      String   @default("pending")
+  requestedAt DateTime @default(now())
+
+  @@index([userWawuId])
 }
