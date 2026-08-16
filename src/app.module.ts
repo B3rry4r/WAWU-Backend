@@ -37,9 +37,14 @@ import { UserProfileModule } from './user-profile/user-profile.module';
 import { CourseEnrollmentModule } from './course-enrollment/course-enrollment.module';
 import { CreatorSubscriptionModule } from './creator-subscription/creator-subscription.module';
 import { SearchResponseModule } from './search-response/search-response.module';
-// SEAM: remaining Phase 5 resource modules (wave 3) register here,
-// one import line each, per conventions.md § Naming & layout
-// "Registration entry". Waves 0-2 (34 resources) are now complete.
+import { CommunityModule } from './community/community.module';
+import { CommunityMessageModule } from './community-message/community-message.module';
+import { CreatorEarningsModule } from './creator-earnings/creator-earnings.module';
+import { DirectMessageModule } from './direct-message/direct-message.module';
+// Phase 5 build (waves 0-3, all 39 registry resources) is now complete.
+// Remaining SEAMs: the deferred Flutterwave webhook + scheduled-job cron
+// pass (declared/scheduled-jobs.json — spans CreatorSubscription +
+// DirectMessage, both now built), then Phase 6 (wire frontend).
 
 @Module({
   imports: [
@@ -80,6 +85,10 @@ import { SearchResponseModule } from './search-response/search-response.module';
     CourseEnrollmentModule,
     CreatorSubscriptionModule,
     SearchResponseModule,
+    CommunityModule,
+    CommunityMessageModule,
+    CreatorEarningsModule,
+    DirectMessageModule,
   ],
   controllers: [AppController],
   providers: [],
