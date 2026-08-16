@@ -21,6 +21,17 @@ const prisma = new PrismaClient({ adapter });
 const SEEDED_COMMENT_IDS = ['12000000-0000-4000-8000-000000000001'];
 const SEEDED_PURCHASE_IDS = ['80000000-0000-4000-8000-000000000001'];
 
+// CreditPurchase's contract tests increment the seeded users' CreditsState
+// row in place (real Flutterwave-verify -> credit grant path) rather than
+// creating a fresh row, so deleteMany can't undo it -- reset the balance
+// seed.ts's upsert set on first create (prisma/seed.ts line ~626).
+const SEEDED_CREDIT_USER_IDS = [
+  '00000000-0000-4000-8000-000000000001', // USER_PLAIN
+  '00000000-0000-4000-8000-000000000002', // USER_CREATOR_BASIC
+  '00000000-0000-4000-8000-000000000003', // USER_CREATOR_PRO
+];
+const SEEDED_CREDIT_BALANCE = 48;
+
 async function main() {
   const deletedComments = await prisma.comment.deleteMany({
     where: { id: { notIn: SEEDED_COMMENT_IDS } },
@@ -28,7 +39,11 @@ async function main() {
   const deletedPurchases = await prisma.purchase.deleteMany({
     where: { id: { notIn: SEEDED_PURCHASE_IDS } },
   });
-  console.log(`Cleaned ${deletedComments.count} test-generated comments, ${deletedPurchases.count} test-generated purchases.`);
+  const resetCredits = await prisma.creditsState.updateMany({
+    where: { userWawuId: { in: SEEDED_CREDIT_USER_IDS } },
+    data: { creditBalance: SEEDED_CREDIT_BALANCE },
+  });
+  console.log(`Cleaned ${deletedComments.count} test-generated comments, ${deletedPurchases.count} test-generated purchases, reset ${resetCredits.count} CreditsState balances to ${SEEDED_CREDIT_BALANCE}.`);
 }
 
 main().finally(() => prisma.$disconnect());

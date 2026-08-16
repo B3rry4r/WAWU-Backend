@@ -25,9 +25,18 @@ import { MentorModule } from './mentor/mentor.module';
 import { ServiceApplicationModule } from './service-application/service-application.module';
 import { VerificationSubmissionModule } from './verification-submission/verification-submission.module';
 import { FollowRelationshipModule } from './follow-relationship/follow-relationship.module';
-// SEAM: remaining Phase 5 resource modules (waves 1-3) register here,
+import { BlockedAccountModule } from './blocked-account/blocked-account.module';
+import { ContentPieceModule } from './content-piece/content-piece.module';
+import { CreditPurchaseModule } from './credit-purchase/credit-purchase.module';
+import { KycSubmissionModule } from './kyc-submission/kyc-submission.module';
+import { LearnEntitlementModule } from './learn-entitlement/learn-entitlement.module';
+import { MentorRequestModule } from './mentor-request/mentor-request.module';
+import { NotificationSettingsModule } from './notification-settings/notification-settings.module';
+import { PrivacySettingsModule } from './privacy-settings/privacy-settings.module';
+import { UserProfileModule } from './user-profile/user-profile.module';
+// SEAM: remaining Phase 5 resource modules (waves 2-3) register here,
 // one import line each, per conventions.md § Naming & layout
-// "Registration entry". Wave 0 (22 resources) is now complete.
+// "Registration entry". Waves 0-1 (31 resources) are now complete.
 
 @Module({
   imports: [
@@ -56,6 +65,15 @@ import { FollowRelationshipModule } from './follow-relationship/follow-relations
     ServiceApplicationModule,
     VerificationSubmissionModule,
     FollowRelationshipModule,
+    BlockedAccountModule,
+    ContentPieceModule,
+    CreditPurchaseModule,
+    KycSubmissionModule,
+    LearnEntitlementModule,
+    MentorRequestModule,
+    NotificationSettingsModule,
+    PrivacySettingsModule,
+    UserProfileModule,
   ],
   controllers: [AppController],
   providers: [],
