@@ -65,12 +65,21 @@ import { DirectMessageModule } from './direct-message/direct-message.module';
     LearnGuideModule,
     MarketplaceSaveModule,
     NotificationModule,
+    // MentorModule/ServiceApplicationModule MUST register before
+    // PartnerServiceModule: PartnerServiceController is `@Controller('services')`
+    // with `@Get(':id')`, a catch-all that Express matches by registration
+    // order — with PartnerServiceModule first, GET /services/mentors and
+    // GET /services/applications were being swallowed as `:id === "mentors"`
+    // / `:id === "applications"` before MentorController's own
+    // `@Controller('services/mentors')` or ServiceApplicationController's
+    // `@Get('applications')` were ever reached (confirmed live during Phase
+    // 6 frontend wiring — both routes 400'd with "uuid v4 is expected").
+    MentorModule,
+    ServiceApplicationModule,
     PartnerServiceModule,
     PlaybookModule,
     SavedItemModule,
     PurchaseModule,
-    MentorModule,
-    ServiceApplicationModule,
     VerificationSubmissionModule,
     FollowRelationshipModule,
     BlockedAccountModule,
