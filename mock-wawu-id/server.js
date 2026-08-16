@@ -17,6 +17,24 @@ const crypto = require("crypto");
 const app = express();
 app.use(express.json());
 
+// CORS -- the real WAWU ID enables this (main.ts: enableCors, credentials
+// true, origin defaults to allow-all when ALLOWED_ORIGINS is unset -- see
+// /workspace/projects/WAWU-ID/src/main.ts). Without it, WAWU-Web's browser
+// client (auth.ts calling this service directly, cross-origin from :3000)
+// gets silently blocked at the CORS-preflight level; every call falls
+// through to auth.ts's mock-fallback branch instead, which looks like a
+// working sign-in (a fake token gets stored) but every subsequent real
+// Hub API call then 401s on that fake token -- a false-positive discovered
+// live during Phase 8 E2E testing, not a hypothetical.
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", req.headers.origin || "*");
+  res.header("Access-Control-Allow-Credentials", "true");
+  res.header("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type,Authorization");
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
+
 const PRIVATE_KEY = fs.readFileSync(path.join(__dirname, "private.pem"), "utf8");
 const PUBLIC_KEY = fs.readFileSync(path.join(__dirname, "public.pem"), "utf8");
 const KID = "mock-wawu-id-key-1";
