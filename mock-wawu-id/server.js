@@ -72,10 +72,76 @@ function signRefreshToken(sub) {
   return jwt.sign({ sub, type: "refresh" }, PRIVATE_KEY, { algorithm: "RS256", keyid: KID, expiresIn: "30d" });
 }
 
+// The real WAWU ID's `user` response field is a DIFFERENT shape from the
+// JWT claims (UserResponse: {id, fullName, ...} vs AccessTokenPayload:
+// {sub, firstName, lastName, ...} — confirmed by direct inspection of
+// /workspace/projects/WAWU-ID/src/auth/auth.service.ts). auth.ts (this
+// backend's frontend, WAWU-Web) reads `response.user.id`/`.fullName` on
+// every register/login/otp-verify call — the JWT claims shape alone
+// (this mock's original USERS record) doesn't have those fields.
+function toUserResponse(claims) {
+  return {
+    id: claims.sub,
+    fullName: [claims.firstName, claims.lastName].filter(Boolean).join(" "),
+    email: claims.email,
+    phone: claims.phone,
+    country: claims.country,
+    state: claims.state ?? null,
+    gender: claims.gender ?? null,
+    occupation: claims.occupation ?? null,
+    verificationTier: claims.verificationTier,
+    trustScore: claims.trustScore,
+    status: claims.status,
+  };
+}
+
+function tokenPairFor(claims) {
+  return {
+    accessToken: signAccessToken(claims),
+    refreshToken: signRefreshToken(claims.sub),
+    user: toUserResponse(claims),
+  };
+}
+
 app.get("/.well-known/jwks.json", (_req, res) => {
   const keyObject = crypto.createPublicKey(PUBLIC_KEY);
   const jwk = keyObject.export({ format: "jwk" });
   res.json({ keys: [{ ...jwk, kid: KID, use: "sig", alg: "RS256" }] });
+});
+
+// Register — the real WAWU ID issues tokens immediately, no OTP step.
+// Matches on email OR phone (both must be free, mirroring the real
+// service's 409-on-either-taken behavior).
+app.post("/auth/register", (req, res) => {
+  const { fullName, email, phone, dialCode, country, state, gender, occupation, password } = req.body || {};
+  if (!fullName || !email || !phone || !country || !password) {
+    return res.status(400).json({ statusCode: 400, message: "fullName, email, phone, country, password are required" });
+  }
+  const taken = Object.values(USERS).find((u) => u.email === email || u.phone === phone);
+  if (taken) {
+    return res.status(409).json({ statusCode: 409, message: "An account with this email or phone already exists." });
+  }
+  const [firstName, ...rest] = String(fullName).trim().split(/\s+/);
+  const sub = crypto.randomUUID();
+  const claims = {
+    sub,
+    email,
+    phone,
+    dialCode: dialCode ?? null,
+    firstName: firstName ?? fullName,
+    lastName: rest.join(" ") || null,
+    country,
+    state: state ?? null,
+    gender: gender ?? null,
+    occupation: occupation ?? null,
+    verificationTier: "basic",
+    trustScore: 0,
+    status: "active",
+    platformRefs: { wawuafricaAppUserId: sub },
+  };
+  USERS[email] = claims;
+  USERS[phone] = claims;
+  res.status(201).json(tokenPairFor(claims));
 });
 
 // Mock login — accepts ANY password for a seeded identifier. This is a
@@ -86,21 +152,38 @@ app.post("/auth/login", (req, res) => {
   if (!user) {
     return res.status(404).json({ code: "USER_NOT_IN_WAWUID", message: "No such test user" });
   }
-  const accessToken = signAccessToken(user);
-  const refreshToken = signRefreshToken(user.sub);
-  res.json({ accessToken, refreshToken, user });
+  res.json(tokenPairFor(user));
 });
 
 app.post("/auth/otp/start", (req, res) => {
-  res.json({ sent: true, devOtp: "000000" });
+  res.json({ message: "OTP sent", expiresIn: 300, devOtp: "000000" });
 });
 
 app.post("/auth/otp/verify", (req, res) => {
   const identifier = req.body?.phone || req.body?.email;
   const user = Object.values(USERS).find((u) => u.phone === identifier || u.email === identifier) || USERS["user@test.wawu.dev"];
-  const accessToken = signAccessToken(user);
-  const refreshToken = signRefreshToken(user.sub);
-  res.json({ accessToken, refreshToken, user });
+  res.json(tokenPairFor(user));
+});
+
+// Anti-enumeration: always the same message, matching the real service.
+app.post("/auth/forgot-password", (_req, res) => {
+  res.json({ message: "If an account exists, a reset code has been sent." });
+});
+
+// Email-link path only (this is a web frontend) — accepts any {token,email,password}
+// for a known seeded email, matching the real service's shape.
+app.post("/auth/reset-password", (req, res) => {
+  const { token, email, password, identifier, code, newPassword } = req.body || {};
+  if (token && email && password) {
+    if (!USERS[email]) return res.status(400).json({ statusCode: 400, message: "Invalid or expired token" });
+    return res.json({ message: "Password reset successfully" });
+  }
+  if (identifier && code && newPassword) {
+    const user = USERS[identifier];
+    if (!user) return res.status(400).json({ statusCode: 400, message: "Invalid or expired code" });
+    return res.json(tokenPairFor(user));
+  }
+  res.status(400).json({ statusCode: 400, message: "Provide either {token,email,password} or {identifier,code,newPassword}" });
 });
 
 app.post("/auth/refresh", (req, res) => {
@@ -108,7 +191,8 @@ app.post("/auth/refresh", (req, res) => {
     const decoded = jwt.verify(req.body.refreshToken, PUBLIC_KEY, { algorithms: ["RS256"] });
     const user = Object.values(USERS).find((u) => u.sub === decoded.sub);
     if (!user) return res.status(401).json({ message: "invalid refresh token" });
-    res.json({ accessToken: signAccessToken(user), refreshToken: signRefreshToken(user.sub) });
+    const { user: _unused, ...pair } = tokenPairFor(user);
+    res.json(pair);
   } catch {
     res.status(401).json({ message: "invalid refresh token" });
   }
