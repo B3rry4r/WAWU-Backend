@@ -20,6 +20,11 @@ const prisma = new PrismaClient({ adapter });
 // tables was created by a contract test run and is safe to clear.
 const SEEDED_COMMENT_IDS = ['12000000-0000-4000-8000-000000000001'];
 const SEEDED_PURCHASE_IDS = ['80000000-0000-4000-8000-000000000001'];
+const SEEDED_CONTENT_PIECE_IDS = [
+  '10000000-0000-4000-8000-000000000001', // CONTENT_CAC_COURSE
+  '10000000-0000-4000-8000-000000000002', // CONTENT_MAKEUP_VIDEO
+  '10000000-0000-4000-8000-000000000003', // CONTENT_PDF_TEMPLATE
+];
 
 // CreditPurchase's contract tests increment the seeded users' CreditsState
 // row in place (real Flutterwave-verify -> credit grant path) rather than
@@ -33,6 +38,12 @@ const SEEDED_CREDIT_USER_IDS = [
 const SEEDED_CREDIT_BALANCE = 48;
 
 async function main() {
+  // ContentPiece first: Comment/Purchase/SavedItem cascade off it, so
+  // clearing stray content also clears any stray rows those tables hold
+  // that reference it (onDelete: Cascade/SetNull, see schema.prisma).
+  const deletedContent = await prisma.contentPiece.deleteMany({
+    where: { id: { notIn: SEEDED_CONTENT_PIECE_IDS } },
+  });
   const deletedComments = await prisma.comment.deleteMany({
     where: { id: { notIn: SEEDED_COMMENT_IDS } },
   });
@@ -43,7 +54,7 @@ async function main() {
     where: { userWawuId: { in: SEEDED_CREDIT_USER_IDS } },
     data: { creditBalance: SEEDED_CREDIT_BALANCE },
   });
-  console.log(`Cleaned ${deletedComments.count} test-generated comments, ${deletedPurchases.count} test-generated purchases, reset ${resetCredits.count} CreditsState balances to ${SEEDED_CREDIT_BALANCE}.`);
+  console.log(`Cleaned ${deletedContent.count} test-generated content pieces, ${deletedComments.count} test-generated comments, ${deletedPurchases.count} test-generated purchases, reset ${resetCredits.count} CreditsState balances to ${SEEDED_CREDIT_BALANCE}.`);
 }
 
 main().finally(() => prisma.$disconnect());

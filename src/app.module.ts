@@ -34,9 +34,12 @@ import { MentorRequestModule } from './mentor-request/mentor-request.module';
 import { NotificationSettingsModule } from './notification-settings/notification-settings.module';
 import { PrivacySettingsModule } from './privacy-settings/privacy-settings.module';
 import { UserProfileModule } from './user-profile/user-profile.module';
-// SEAM: remaining Phase 5 resource modules (waves 2-3) register here,
+import { CourseEnrollmentModule } from './course-enrollment/course-enrollment.module';
+import { CreatorSubscriptionModule } from './creator-subscription/creator-subscription.module';
+import { SearchResponseModule } from './search-response/search-response.module';
+// SEAM: remaining Phase 5 resource modules (wave 3) register here,
 // one import line each, per conventions.md § Naming & layout
-// "Registration entry". Waves 0-1 (31 resources) are now complete.
+// "Registration entry". Waves 0-2 (34 resources) are now complete.
 
 @Module({
   imports: [
@@ -74,6 +77,9 @@ import { UserProfileModule } from './user-profile/user-profile.module';
     NotificationSettingsModule,
     PrivacySettingsModule,
     UserProfileModule,
+    CourseEnrollmentModule,
+    CreatorSubscriptionModule,
+    SearchResponseModule,
   ],
   controllers: [AppController],
   providers: [],

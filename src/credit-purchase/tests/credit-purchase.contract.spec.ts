@@ -103,6 +103,13 @@ describe('CreditPurchase (contract)', () => {
   }, 30000);
 
   afterAll(async () => {
+    // This suite's verify tests grant real credits onto the seeded users'
+    // shared CreditsState rows (not throwaway rows) -- restore seed.ts's
+    // default so other suites sharing wawu_hub_test see a stable balance.
+    await prisma?.creditsState.updateMany({
+      where: { userWawuId: { in: [USER_PLAIN, USER_CREATOR_BASIC] } },
+      data: { creditBalance: 48 },
+    });
     await app?.close();
     if (ownedMockWawuId && mockWawuId) {
       mockWawuId.kill();

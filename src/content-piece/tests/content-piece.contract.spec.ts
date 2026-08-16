@@ -114,6 +114,13 @@ describe('ContentPiece (contract)', () => {
   }, 30000);
 
   afterAll(async () => {
+    // POST /content and /unlock tests create real ContentPiece rows
+    // (titled 'Contract Test Upload' / 'Unlock Flow Fixture') that are not
+    // in seed.ts's known-id set -- delete them so other suites sharing
+    // wawu_hub_test (e.g. list-scoped assertions) see a stable dataset.
+    await prisma?.contentPiece.deleteMany({
+      where: { title: { in: ['Contract Test Upload', 'Unlock Flow Fixture'] } },
+    });
     await app?.close();
     if (ownedMockWawuId && mockWawuId) {
       mockWawuId.kill();
