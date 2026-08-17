@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { UserProfileController } from './user-profile.controller';
+import { PublicUserProfileController } from './public-user-profile.controller';
 import { UserProfileService } from './user-profile.service';
 
 /**
@@ -8,7 +9,7 @@ import { UserProfileService } from './user-profile.service';
  * re-imported here.
  */
 @Module({
-  controllers: [UserProfileController],
+  controllers: [UserProfileController, PublicUserProfileController],
   providers: [UserProfileService],
 })
 export class UserProfileModule {}
