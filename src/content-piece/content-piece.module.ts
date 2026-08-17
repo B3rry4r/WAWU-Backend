@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ContentPieceController } from './content-piece.controller';
+import { PublicContentController } from './public-content.controller';
 import { ContentPieceService } from './content-piece.service';
 import { CreatorAccountGuard } from './guards/creator-account-guard';
 import { FLUTTERWAVE_CLIENT } from './flutterwave-client.interface';
@@ -16,7 +17,7 @@ import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';
  * ContentPiece's own unlock/verify flow).
  */
 @Module({
-  controllers: [ContentPieceController],
+  controllers: [ContentPieceController, PublicContentController],
   providers: [
     ContentPieceService,
     CreatorAccountGuard,
