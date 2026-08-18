@@ -107,7 +107,6 @@ export class ServiceApplicationService {
     PartnerServiceKind,
     { title: string; prefix: string; partner: string }
   > = {
-    easybuy: { title: 'EasyBuy', prefix: 'EBY', partner: 'CredPal' },
     pension: { title: 'Pension', prefix: 'PEN', partner: 'ARM Pension' },
     banking: { title: 'Banking', prefix: 'BNK', partner: 'WEMA Bank' },
     grants: { title: 'Grants and funding', prefix: 'GRT', partner: 'WAWUAfrica' },

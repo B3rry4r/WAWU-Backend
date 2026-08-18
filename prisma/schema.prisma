@@ -152,7 +152,11 @@ enum ServiceApplicationKind {
   nepc
   mentor_request @map("mentor-request")
   /// Carried over from the previous platform. Each is a short request a
-  /// partner then reviews (CredPal, ARM Pension, WEMA Bank, WAWUAfrica).
+  /// partner then reviews (ARM Pension, WEMA Bank, WAWUAfrica).
+  ///
+  /// `easybuy` is retained only because dropping a Postgres enum value means
+  /// rewriting the type and every column using it. The CredPal partnership
+  /// behind it has ended and no code path accepts it any more.
   easybuy
   pension
   banking

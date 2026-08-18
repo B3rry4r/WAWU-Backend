@@ -52,7 +52,7 @@ export class ServiceApplicationController {
     return this.serviceApplicationService.verifyCac(user.sub, dto);
   }
 
-  /** The carried-over partner services: EasyBuy, Pension, Banking, Grants. */
+  /** The carried-over partner services: Pension, Banking, Grants. */
   @Post('partner/apply')
   @HttpCode(HttpStatus.CREATED)
   applyPartner(
