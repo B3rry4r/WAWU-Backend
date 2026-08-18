@@ -638,16 +638,28 @@ model NotificationSettings {
 
 /// Reference/seed data, admin-managed later per registry note.
 model PartnerService {
-  id         String               @id @default(uuid())
-  name       String
-  tagline    String
-  blurb      String
-  icon       String
-  status     PartnerServiceStatus
-  turnaround String?
-  priceFrom  String?
-  partner    String?
-  comingNote String?
+  id          String               @id @default(uuid())
+  /// Stable routing key. The app used to match services by name to work out
+  /// where a card should go, which only ever handled CAC and NEPC and broke
+  /// silently for everything else.
+  slug        String               @unique
+  name        String
+  tagline     String
+  blurb       String
+  icon        String
+  status      PartnerServiceStatus
+  turnaround  String?
+  priceFrom   String?
+  partner     String?
+  comingNote  String?
+  /// Carried over from the previous platform, which showed each partner
+  /// service with what you need before applying and what you get.
+  eligibility String[]             @default([])
+  benefits    String[]             @default([])
+  /// [label, description] pairs.
+  steps       Json?
+  ctaLabel    String?
+  ctaHref     String?
 }
 
 /// `status` (free-text machine state, e.g. "submitted"/"in_review"/"issued")

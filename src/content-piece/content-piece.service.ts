@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
@@ -78,6 +79,8 @@ interface ContentRow {
  */
 @Injectable()
 export class ContentPieceService {
+  private readonly logger = new Logger(ContentPieceService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     @Inject(FLUTTERWAVE_CLIENT) private readonly flutterwave: FlutterwaveClient,
@@ -192,17 +195,35 @@ export class ContentPieceService {
     // a ranked feed, so ranking is only applied to public browsing.
     const ranked = scope !== 'mine' && sort !== 'recent';
 
-    const [items, total] = ranked
-      ? await this.listRanked(category, sort, page, perPage)
-      : await this.prisma.$transaction([
-          this.prisma.contentPiece.findMany({
-            where,
-            orderBy: { createdAt: 'desc' },
-            skip: (page - 1) * perPage,
-            take: perPage,
-          }),
-          this.prisma.contentPiece.count({ where }),
-        ]);
+    const chronological = () =>
+      this.prisma.$transaction([
+        this.prisma.contentPiece.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          skip: (page - 1) * perPage,
+          take: perPage,
+        }),
+        this.prisma.contentPiece.count({ where }),
+      ]);
+
+    // Ranking is an ordering preference, not the feed itself. If the ranked
+    // query fails the feed still has to render, so fall back to newest-first
+    // and log it rather than 500ing the home screen.
+    let items: ContentPieceRow[];
+    let total: number;
+    if (ranked) {
+      try {
+        [items, total] = await this.listRanked(category, sort, page, perPage);
+      } catch (e) {
+        this.logger.error(
+          `Ranked feed query failed, falling back to newest-first: ${String(e)}`,
+        );
+        [items, total] = await chronological();
+      }
+    } else {
+      [items, total] = await chronological();
+    }
+
 
     const unlockedSet = await this.resolveUnlockedSet(
       requesterWawuId,
@@ -233,13 +254,17 @@ export class ContentPieceService {
     page: number,
     perPage: number,
   ): Promise<[ContentPieceRow[], number]> {
+    // Every weight is cast to numeric. Postgres infers a bound parameter's type
+    // from its context, so `c."views" * $n` typed the 0.1 view weight as an
+    // integer and rejected it outright ("invalid input syntax for type integer:
+    // 0.1"), which 500'd the whole feed.
     const engagement = Prisma.sql`(
-      ${RANKING.base}
-      + (c."likes" * ${RANKING.like})
-      + (c."commentCount" * ${RANKING.comment})
-      + (COALESCE(p."purchases", 0) * ${RANKING.purchase})
-      + (c."views" * ${RANKING.view})
-      + (COALESCE(c."ratingPct", 0)::numeric / ${RANKING.ratingDivisor})
+      ${RANKING.base}::numeric
+      + (c."likes" * ${RANKING.like}::numeric)
+      + (c."commentCount" * ${RANKING.comment}::numeric)
+      + (COALESCE(p."purchases", 0) * ${RANKING.purchase}::numeric)
+      + (c."views" * ${RANKING.view}::numeric)
+      + (COALESCE(c."ratingPct", 0)::numeric / ${RANKING.ratingDivisor}::numeric)
     )`;
 
     const score =
@@ -247,7 +272,7 @@ export class ContentPieceService {
         ? engagement
         : Prisma.sql`${engagement} / POWER(
             (EXTRACT(EPOCH FROM (NOW() - c."createdAt")) / 3600.0) + 2,
-            ${RANKING.gravity}
+            ${RANKING.gravity}::numeric
           )`;
 
     const categoryFilter = category

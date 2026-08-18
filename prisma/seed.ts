@@ -424,6 +424,7 @@ async function main() {
     update: {},
     create: {
       id: PARTNER_SERVICE_CAC,
+      slug: 'seed-cac',
       name: 'CAC Business Registration',
       tagline: 'Register your business with CAC in days, not months.',
       blurb: 'We handle name reservation, filing, and certificate delivery end to end.',
@@ -441,6 +442,7 @@ async function main() {
     update: {},
     create: {
       id: PARTNER_SERVICE_NEPC,
+      slug: 'seed-nepc',
       name: 'NEPC Export License',
       tagline: 'Get export-ready with your NEPC certificate.',
       blurb: 'End-to-end NEPC registration for exporters targeting new markets.',
@@ -458,6 +460,7 @@ async function main() {
     update: {},
     create: {
       id: PARTNER_SERVICE_TRADEMARK,
+      slug: 'seed-trademark',
       name: 'SEEDED: WAWU Trademark Fast-Track',
       tagline: 'Protect your brand name and logo.',
       blurb: 'Trademark filing and search, coming soon to the services hub.',
