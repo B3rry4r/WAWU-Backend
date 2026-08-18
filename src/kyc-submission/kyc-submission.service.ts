@@ -1,5 +1,12 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { StorageService } from '../storage/storage.service';
+
+/** Keeps the last four characters, masks the rest: "22123456789" -> "•••••••6789". */
+function maskTail<T extends string | null | undefined>(value: T): T {
+  if (!value || value.length <= 4) return value;
+  return `${'•'.repeat(value.length - 4)}${value.slice(-4)}` as T;
+}
 import type { KycSubmission } from '../common/types';
 import type { CreateKycSubmissionDto } from './dto/create-kyc-submission.dto';
 import type { ReviewKycSubmissionDto } from './dto/review-kyc-submission.dto';
@@ -17,7 +24,10 @@ import type { ReviewKycSubmissionDto } from './dto/review-kyc-submission.dto';
  */
 @Injectable()
 export class KycSubmissionService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: StorageService,
+  ) {}
 
   /**
    * Creator gate: same pattern as CreatorStateService (a plain user has no
@@ -35,10 +45,47 @@ export class KycSubmissionService {
   /** GET /kyc — "KycSubmission | null": the caller's most recent submission, or null if none exists. */
   async getMine(wawuUserId: string): Promise<KycSubmission | null> {
     await this.requireCreator(wawuUserId);
-    return this.prisma.kycSubmission.findFirst({
+    const row = await this.prisma.kycSubmission.findFirst({
       where: { wawuUserId },
       orderBy: { submittedAt: 'desc' },
     });
+    return row ? this.maskIdentifiers(await this.withSignedDocument(row)) : null;
+  }
+
+  /**
+   * Never return full BVN, NIN or bank account numbers on a read.
+   *
+   * The submitter already knows their own numbers, so echoing them back adds
+   * nothing — but tokens live in browser storage, so any XSS on the client
+   * turned this endpoint into a full identity + bank-details dump. The UI only
+   * ever renders these masked anyway. The stored values are untouched; this
+   * masks the response.
+   */
+  private maskIdentifiers(row: KycSubmission): KycSubmission {
+    return {
+      ...row,
+      bvn: maskTail(row.bvn),
+      nin: maskTail(row.nin),
+      nationalIdEquivalent: maskTail(row.nationalIdEquivalent),
+      payoutAccountNumber: maskTail(row.payoutAccountNumber),
+    };
+  }
+
+  /**
+   * `idDocumentUrl` is stored as a bare object KEY, never as a signed URL —
+   * a persisted long-lived URL is a bearer token for a government ID. It is
+   * exchanged for a short-lived signed URL only when handed to someone
+   * entitled to see it (the owner, or an admin reviewer).
+   */
+  private async withSignedDocument(row: KycSubmission): Promise<KycSubmission> {
+    if (!row.idDocumentUrl) return row;
+    try {
+      return { ...row, idDocumentUrl: await this.storage.signedReadUrl(row.idDocumentUrl) };
+    } catch {
+      // Storage unavailable: return the row without a resolvable document
+      // rather than failing the whole KYC read.
+      return { ...row, idDocumentUrl: '' };
+    }
   }
 
   /**

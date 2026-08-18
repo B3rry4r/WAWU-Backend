@@ -75,7 +75,7 @@ describe('CreditSpend (contract)', () => {
         userWawuId: USER_PLAIN,
         communityId: SEEDED_COMMUNITY_ID,
         creatorWawuId: USER_CREATOR_PRO,
-        creditsSpent: 1, // registry.json: "always 1" — never caller-suppliable
+        creditsSpent: 1, // schema default when the caller supplies no cost
       });
       expect(typeof result.id).toBe('string');
       expect(result.spentAt).toBeInstanceOf(Date);
@@ -87,15 +87,26 @@ describe('CreditSpend (contract)', () => {
       expect(persisted?.creditsSpent).toBe(1);
     });
 
-    it('rejects a caller-supplied creditsSpent outright — the DTO has no such field, and validation is whitelist+forbidNonWhitelisted (mirrors the global ValidationPipe convention), so a smuggled credit count fails closed rather than being silently stripped', async () => {
+    it('records the real cost the caller charged (CommunityMessage.costInCredits) rather than a hardcoded 1 — the ledger must agree with the balance that was actually debited', async () => {
+      const result = await service.record({
+        userWawuId: USER_PLAIN,
+        communityId: SEEDED_COMMUNITY_ID,
+        creatorWawuId: USER_CREATOR_PRO,
+        creditsSpent: 3,
+      });
+
+      expect(result.creditsSpent).toBe(3);
+      const persisted = await prisma.creditSpend.findUnique({ where: { id: result.id } });
+      expect(persisted?.creditsSpent).toBe(3);
+    });
+
+    it('rejects a non-positive creditsSpent — a spend of 0 or less is never a real charge', async () => {
       await expect(
         service.record({
           userWawuId: USER_PLAIN,
           communityId: SEEDED_COMMUNITY_ID,
           creatorWawuId: USER_CREATOR_PRO,
-          // @ts-expect-error — intentionally probing that an extraneous field
-          // cannot smuggle a different credit count onto the ledger row.
-          creditsSpent: 999,
+          creditsSpent: 0,
         }),
       ).rejects.toBeInstanceOf(BadRequestException);
     });

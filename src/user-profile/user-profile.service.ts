@@ -58,7 +58,12 @@ export class UserProfileService {
       return await this.prisma.userProfile.upsert({
         where: { wawuUserId },
         update: {
-          ...(dto.accountType !== undefined && {
+          // `accountType` is deliberately self-selectable (CLAUDE.md: creator
+          // is an ACCOUNT TYPE, not an earned tier — the paid gate is
+          // CreatorState.subscriptionPaid, checked separately). But the
+          // column is NOT nullable, so an explicit `null` must be ignored
+          // rather than written, which previously 500'd.
+          ...(dto.accountType != null && {
             accountType: dto.accountType as AccountType,
           }),
           ...(dto.interests !== undefined && { interests: dto.interests }),

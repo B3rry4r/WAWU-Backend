@@ -147,8 +147,11 @@ export class PurchaseService {
       throw new BadRequestException('Payment verification failed');
     }
 
-    await this.prisma.purchase.update({
-      where: { id: purchase.id },
+    // Conditional flip so two concurrent verifies cannot both "complete" the
+    // same purchase (see credit-purchase.service.ts for the case where that
+    // race granted a free balance).
+    await this.prisma.purchase.updateMany({
+      where: { id: purchase.id, status: 'pending' },
       data: { status: 'completed', flutterwaveTxId: result.transactionId },
     });
 

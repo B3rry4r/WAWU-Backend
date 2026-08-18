@@ -151,6 +151,12 @@ enum ServiceApplicationKind {
   cac
   nepc
   mentor_request @map("mentor-request")
+  /// Carried over from the previous platform. Each is a short request a
+  /// partner then reviews (CredPal, ARM Pension, WEMA Bank, WAWUAfrica).
+  easybuy
+  pension
+  banking
+  grants
 }
 
 enum GuideKind {
@@ -295,6 +301,10 @@ model ContentPiece {
   @@index([status])
   @@index([category])
   @@index([contentType])
+  /// Feed/explore reads are always "approved content, newest first" — the
+  /// single-column status index still left Postgres sorting the whole
+  /// approved set.
+  @@index([status, createdAt])
 }
 
 /// `locked` (registry: "derived from purchase state") intentionally not a
@@ -317,7 +327,11 @@ model Comment {
   authorWawuId String
   text         String
   replyToId    String?
-  replyTo      Comment?     @relation("CommentReplies", fields: [replyToId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// onDelete: SetNull — `NoAction` meant deleting a parent comment blew up
+  /// on the FK from its own replies (a 500 on a perfectly ordinary delete).
+  /// `replyToId` is already nullable, so an orphaned reply simply becomes a
+  /// top-level comment rather than disappearing with the parent.
+  replyTo      Comment?     @relation("CommentReplies", fields: [replyToId], references: [id], onDelete: SetNull)
   replies      Comment[]    @relation("CommentReplies")
   likes        Int          @default(0)
   createdAt    DateTime     @default(now())
@@ -336,13 +350,21 @@ model Comment {
 model Purchase {
   id               String            @id @default(uuid())
   contentId        String?
-  content          ContentPiece?     @relation(fields: [contentId], references: [id], onDelete: SetNull)
+  /// Restrict, not SetNull: a Purchase is a financial record of what a buyer
+  /// paid for. SetNull let a content deletion silently blank that link on
+  /// every buyer's row — the payment survived but no longer said what it
+  /// bought, breaking entitlement checks and receipts. Content that has been
+  /// sold must be unpublished, never hard-deleted.
+  content          ContentPiece?     @relation(fields: [contentId], references: [id], onDelete: Restrict)
   type             PurchaseType
   buyerWawuId      String
   creatorWawuId    String
   amount           Int
   commissionRate   Decimal           @db.Decimal(5, 4)
-  flutterwaveTxRef String
+  /// Payment lookup key — every Flutterwave verify/webhook finds the row by
+  /// this. Unique both because a duplicate here means a double-credited
+  /// payment, and because the lookup was a sequential scan without it.
+  flutterwaveTxRef String            @unique
   flutterwaveTxId  String?
   status           TransactionStatus @default(pending)
   note             String?
@@ -352,6 +374,7 @@ model Purchase {
   @@index([creatorWawuId])
   @@index([contentId])
   @@index([status])
+  @@index([type])
 }
 
 model SavedItem {
@@ -392,7 +415,8 @@ model DirectMessage {
   deadlineAt       DateTime
   respondedAt      DateTime?
   responseText     String?
-  flutterwaveTxRef String
+  /// Payment lookup key — see Purchase.flutterwaveTxRef.
+  flutterwaveTxRef String    @unique
 
   reports DmReport[]
 
@@ -485,7 +509,8 @@ model CreditPurchase {
   userWawuId       String
   pack             CreditPack
   creditsGranted   Int
-  flutterwaveTxRef String
+  /// Payment lookup key — see Purchase.flutterwaveTxRef.
+  flutterwaveTxRef String            @unique
   amount           Int
   status           TransactionStatus @default(pending)
   purchasedAt      DateTime          @default(now())
@@ -520,6 +545,36 @@ model CreditSpend {
 /// GET /creator-subscription/billing-history, served from CreditPurchase-
 /// shaped rows / Flutterwave data, not modeled as its own table since the
 /// registry gives it no dedicated resource).
+/// A charge that has been initiated with Flutterwave but not yet verified.
+///
+/// This bridge used to be a process-local `Map` in CreatorSubscriptionService
+/// and DirectMessageService. Any deploy, crash or second replica between the
+/// checkout popup opening and its callback firing lost the record entirely:
+/// the customer was charged at Flutterwave and this backend had nothing to
+/// reconcile against. Railway scales by default, so that window was real.
+///
+/// Rows are short-lived — deleted on successful verify, and safe to sweep
+/// after a day or so once reconciled.
+model PendingCharge {
+  /// The Flutterwave tx_ref. One charge, one row.
+  txRef          String   @id
+  /// Which flow created it: 'subscribe' | 'upgrade' | 'dm'.
+  kind           String
+  /// The caller the charge belongs to. Verify must match this.
+  wawuUserId     String
+  /// Naira the SERVER intended to charge. Verification enforces
+  /// `amount >= expectedAmount` — the client supplies the amount to the
+  /// inline SDK, so this is what stops a ₦1 payment buying a ₦18,999 tier.
+  expectedAmount Int
+  /// Flow-specific context (tier + planId for subscriptions, threadId/text
+  /// for a paid DM). Kept as JSON so one table serves every money flow.
+  context        Json
+  createdAt      DateTime @default(now())
+
+  @@index([wawuUserId])
+  @@index([createdAt])
+}
+
 model CreatorSubscription {
   creatorWawuId          String             @id
   tier                   CreatorTier
@@ -564,6 +619,7 @@ model Notification {
 
   @@index([userWawuId])
   @@index([userWawuId, read])
+  @@index([createdAt])
 }
 
 model NotificationSettings {
@@ -614,6 +670,10 @@ model ServiceApplication {
   certificateExpectedBy DateTime?              @db.Date
   timeline              Json
   rejection             String?
+  /// URLs of supporting documents the applicant uploaded (ID, signature,
+  /// passport photograph). Object-storage URLs produced by POST
+  /// /uploads/presign — the application flow used to collect nothing.
+  documents             String[]               @default([])
 
   @@index([applicantWawuId])
   @@index([kind])
@@ -774,4 +834,166 @@ model DataExportRequest {
   requestedAt DateTime @default(now())
 
   @@index([userWawuId])
+}
+
+// ---------------------------------------------------------------------------
+// Lifestyle Services — WAWUPay (bills), WAWUCare (health), WAWU Legal.
+//
+// All three follow the same shape: the user pays WAWU through Flutterwave
+// checkout, the server verifies that payment, and only then does WAWU call the
+// partner to fulfil. Fulfilment is therefore a second step that can fail on its
+// own, which is why every one of these carries a status separate from the
+// payment and keeps the provider's own reference for reconciliation.
+// ---------------------------------------------------------------------------
+
+/// Payment taken, fulfilment still owed. `paid` means WAWU has the money but
+/// the partner has not delivered yet — the state a refund sweep looks for.
+enum FulfilmentStatus {
+  pending
+  paid
+  delivered
+  failed
+  refunded
+}
+
+/// WAWUPay. One row per bill the user pays through Flutterwave's Bills API.
+model BillPayment {
+  id          String @id @default(uuid())
+  buyerWawuId String
+  /// Flutterwave bill category slug (AIRTIME, DATA_BUNDLE, POWER, CABLEBILLS…).
+  category    String
+  billerCode  String
+  itemCode    String
+  billerName  String
+  /// Phone number, meter number or smartcard number, depending on the biller.
+  customerRef String
+  amount      Int
+  fee         Int    @default(0)
+
+  /// The user's card payment to WAWU.
+  flutterwaveTxRef String  @unique
+  flutterwaveTxId  String?
+
+  /// Flutterwave's reference for the bill we then paid on their behalf.
+  providerReference String?
+  providerStatus    String?
+  failureReason     String?
+
+  status      FulfilmentStatus @default(pending)
+  createdAt   DateTime         @default(now())
+  deliveredAt DateTime?
+
+  @@index([buyerWawuId])
+  @@index([status])
+  @@index([status, createdAt])
+}
+
+/// WAWUCare. A WellaHealth (Zoi) health plan subscription bought in-app.
+model HealthSubscription {
+  id         String @id @default(uuid())
+  wawuUserId String
+
+  planCode String
+  planName String
+  price    Int
+
+  /// WellaHealth keys the enrollee on phone number, so it is required here.
+  phoneNumber String
+  firstName   String
+  lastName    String
+  gender      String
+  dateOfBirth String
+  email       String?
+
+  flutterwaveTxRef String  @unique
+  flutterwaveTxId  String?
+
+  policyNumber      String?
+  providerReference String?
+  failureReason     String?
+
+  status    FulfilmentStatus @default(pending)
+  startsAt  DateTime?
+  expiresAt DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([wawuUserId])
+  @@index([status])
+}
+
+/// WAWU Legal routes on this. `simple` is form-in, document-out with no lawyer
+/// in the loop; `consultation` requires a paid consultation before WAWU can
+/// even quote the work.
+enum LegalPath {
+  simple
+  consultation
+}
+
+enum ConsultationMedium {
+  chat
+  zoom
+  physical
+}
+
+/// The full lifecycle of a legal request. A `simple` request skips straight
+/// from awaiting_payment to in_progress; a `consultation` one walks the whole
+/// ladder, and can never reach in_progress without a signed contract.
+enum LegalRequestStatus {
+  draft
+  /// Submitted, price to be agreed. Simple services whose fee WAWU sets after
+  /// looking at the request rather than off a price list.
+  awaiting_quote
+  awaiting_consultation_payment
+  consultation_scheduled
+  consultation_done
+  quoted
+  contract_signed
+  awaiting_service_payment
+  in_progress
+  delivered
+  cancelled
+}
+
+model LegalRequest {
+  id          String             @id @default(uuid())
+  wawuUserId  String
+  serviceCode String
+  serviceName String
+  category    String
+  path        LegalPath
+  status      LegalRequestStatus @default(draft)
+
+  /// Whatever the service's intake form collected.
+  details   Json?
+  documents String[] @default([])
+
+  consultationMedium ConsultationMedium?
+  consultationFee    Int?
+  consultationTxRef  String?             @unique
+  consultationPaidAt DateTime?
+  scheduledFor       DateTime?
+  consultationNotes  String?
+
+  /// What WAWU quotes after the consultation.
+  quoteAmount Int?
+  quoteNote   String?
+
+  /// Signing is a liability record, so it keeps the exact text agreed to
+  /// rather than a pointer to a template that may later change.
+  contractText     String?
+  contractSignedAs String?
+  contractSignedAt DateTime?
+  contractSignedIp String?
+
+  serviceTxRef   String?   @unique
+  servicePaidAt  DateTime?
+  deliverableUrl String?
+  deliveredAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([wawuUserId])
+  @@index([status])
+  @@index([serviceCode])
 }

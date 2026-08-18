@@ -57,6 +57,14 @@ interface PendingAttempt {
   wawuUserId: string;
   tier: CreatorTier;
   planId: string;
+  /**
+   * Naira the server intended to charge. Verification must check the amount
+   * Flutterwave actually took against this: `initCharge` does not call
+   * Flutterwave, so the CLIENT supplies the amount to the inline SDK. Without
+   * this check a caller could open checkout for ₦100 and still be granted
+   * Pro. Every other paid module already enforces `amount >= expected`.
+   */
+  expectedAmount: number;
 }
 
 /**
@@ -87,7 +95,42 @@ interface PendingAttempt {
  */
 @Injectable()
 export class CreatorSubscriptionService {
-  private readonly pendingAttempts = new Map<string, PendingAttempt>();
+  /**
+   * Charge attempts are persisted (PendingCharge), never held in memory.
+   * A process-local Map lost the record on any deploy, crash or second
+   * replica between the checkout popup and its callback — the customer was
+   * charged at Flutterwave and this backend had nothing to reconcile.
+   */
+  private async recordPendingCharge(
+    txRef: string,
+    attempt: PendingAttempt & { expectedAmount: number },
+  ): Promise<void> {
+    await this.prisma.pendingCharge.create({
+      data: {
+        txRef,
+        kind: attempt.kind,
+        wawuUserId: attempt.wawuUserId,
+        expectedAmount: attempt.expectedAmount,
+        context: { tier: attempt.tier, planId: attempt.planId },
+      },
+    });
+  }
+
+  private async takePendingCharge(
+    txRef: string,
+    wawuUserId: string,
+  ): Promise<(PendingAttempt & { expectedAmount: number }) | null> {
+    const row = await this.prisma.pendingCharge.findUnique({ where: { txRef } });
+    if (!row || row.wawuUserId !== wawuUserId) return null;
+    const ctx = (row.context ?? {}) as { tier?: CreatorTier; planId?: string };
+    return {
+      kind: row.kind as PendingAttemptKind,
+      wawuUserId: row.wawuUserId,
+      tier: (ctx.tier ?? 'basic') as CreatorTier,
+      planId: ctx.planId ?? '',
+      expectedAmount: row.expectedAmount,
+    };
+  }
 
   constructor(
     private readonly prisma: PrismaService,
@@ -166,11 +209,12 @@ export class CreatorSubscriptionService {
       planId: plan.planId,
     });
 
-    this.pendingAttempts.set(charge.txRef, {
+    await this.recordPendingCharge(charge.txRef, {
       kind: 'subscribe',
       wawuUserId,
       tier: dto.tier,
       planId: plan.planId,
+      expectedAmount: charge.amount,
     });
 
     return {
@@ -188,8 +232,8 @@ export class CreatorSubscriptionService {
     wawuUserId: string,
     dto: VerifySubscriptionDto,
   ): Promise<CreatorSubscriptionResponse> {
-    const pending = this.pendingAttempts.get(dto.tx_ref);
-    if (!pending || pending.wawuUserId !== wawuUserId) {
+    const pending = await this.takePendingCharge(dto.tx_ref, wawuUserId);
+    if (!pending) {
       throw new NotFoundException(
         'No matching subscription attempt found for this reference',
       );
@@ -203,9 +247,10 @@ export class CreatorSubscriptionService {
     const verified =
       result.status === 'successful' &&
       result.currency === 'NGN' &&
-      result.txRef === dto.tx_ref;
+      result.txRef === dto.tx_ref &&
+      result.amount >= pending.expectedAmount;
 
-    this.pendingAttempts.delete(dto.tx_ref);
+    await this.prisma.pendingCharge.deleteMany({ where: { txRef: dto.tx_ref } });
 
     if (!verified) {
       throw new BadRequestException('Payment verification failed');
@@ -345,11 +390,12 @@ export class CreatorSubscriptionService {
       planId: plan.planId,
     });
 
-    this.pendingAttempts.set(charge.txRef, {
+    await this.recordPendingCharge(charge.txRef, {
       kind: 'upgrade',
       wawuUserId: creatorWawuId,
       tier: 'pro',
       planId: plan.planId,
+      expectedAmount: charge.amount,
     });
 
     return {

@@ -4,6 +4,7 @@ import { ServiceApplicationService } from './service-application.service';
 import { FLUTTERWAVE_CLIENT } from './flutterwave-client.interface';
 import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';
 import { RealFlutterwaveAdapter } from './real-flutterwave.adapter';
+import { shouldUseMockFlutterwave } from '../common/flutterwave/require-payment-config';
 
 /**
  * registry.json "ServiceApplication" resource module. PrismaService comes
@@ -21,8 +22,9 @@ import { RealFlutterwaveAdapter } from './real-flutterwave.adapter';
 function usesMockFlutterwave(): boolean {
   if (process.env.FLUTTERWAVE_MODE === 'mock') return true;
   if (process.env.FLUTTERWAVE_MODE === 'live') return false;
-  const key = process.env.FLUTTERWAVE_SECRET_KEY ?? '';
-  return key.length === 0 || key.includes('placeholder');
+  // Shared guard: refuses to boot in production rather than silently
+  // substituting an adapter that approves every charge for free.
+  return shouldUseMockFlutterwave();
 }
 
 @Module({

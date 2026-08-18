@@ -88,50 +88,93 @@ export class CreatorEarningsService {
   }
 
   async getForCreator(creatorWawuId: string): Promise<CreatorEarningsResponse> {
-    const [commissionRate, purchases, directMessages, creditSpends] =
-      await Promise.all([
-        this.resolveCommissionRate(creatorWawuId),
-        this.prisma.purchase.findMany({
-          where: {
-            creatorWawuId,
-            status: TransactionStatus.completed,
-            type: { in: [PurchaseType.content, PurchaseType.tip] },
-          },
-          orderBy: { purchasedAt: 'desc' },
-        }),
-        this.prisma.directMessage.findMany({
-          where: {
-            creatorWawuId,
-            status: { in: [DmStatus.responded, DmStatus.awaiting_response] },
-          },
-          orderBy: { sentAt: 'desc' },
-        }),
-        this.prisma.creditSpend.findMany({
-          where: { creatorWawuId },
-          orderBy: { spentAt: 'desc' },
-        }),
-      ]);
+    const purchaseWhere = {
+      creatorWawuId,
+      status: TransactionStatus.completed,
+      type: { in: [PurchaseType.content, PurchaseType.tip] },
+    };
+    const dmWhere = {
+      creatorWawuId,
+      status: { in: [DmStatus.responded, DmStatus.awaiting_response] },
+    };
+
+    const [
+      commissionRate,
+      purchaseTotals,
+      recentPurchases,
+      dmTotals,
+      recentDms,
+      creditTotals,
+      recentCreditSpends,
+    ] = await Promise.all([
+      this.resolveCommissionRate(creatorWawuId),
+      // Totals are summed IN POSTGRES, grouped by the two dimensions the
+      // net-of-commission maths needs (type, and the per-row snapshotted
+      // rate). This used to be a findMany() of every Purchase/DirectMessage/
+      // CreditSpend row the creator ever had, reduced in JS — a successful
+      // creator's earnings screen would eventually OOM the process.
+      this.prisma.purchase.groupBy({
+        by: ['type', 'commissionRate'],
+        where: purchaseWhere,
+        _sum: { amount: true },
+      }),
+      this.prisma.purchase.findMany({
+        where: purchaseWhere,
+        orderBy: { purchasedAt: 'desc' },
+        take: RECENT_SALES_LIMIT,
+        select: {
+          id: true,
+          type: true,
+          amount: true,
+          commissionRate: true,
+          purchasedAt: true,
+        },
+      }),
+      this.prisma.directMessage.groupBy({
+        by: ['status'],
+        where: dmWhere,
+        _sum: { amount: true },
+      }),
+      this.prisma.directMessage.findMany({
+        where: dmWhere,
+        orderBy: { sentAt: 'desc' },
+        take: RECENT_SALES_LIMIT,
+        select: { id: true, amount: true, sentAt: true },
+      }),
+      this.prisma.creditSpend.aggregate({
+        where: { creatorWawuId },
+        _sum: { creditsSpent: true },
+      }),
+      this.prisma.creditSpend.findMany({
+        where: { creatorWawuId },
+        orderBy: { spentAt: 'desc' },
+        take: RECENT_SALES_LIMIT,
+        select: { id: true, creditsSpent: true, spentAt: true },
+      }),
+    ]);
 
     // ---- Purchase: content + tips, always "payable" (Purchase has no
     // held/escrow state of its own — `status: completed` already means the
     // charge cleared). Each row uses ITS OWN snapshotted commissionRate
-    // (locked in at transaction time), not the caller's current rate. ----
+    // (locked in at transaction time), not the caller's current rate —
+    // which is exactly why the group-by carries `commissionRate` as a key.
+    // ----
     let contentTotal = 0;
     let tipsTotal = 0;
-    const purchaseSales: SaleRow[] = [];
 
-    for (const p of purchases) {
-      const net = p.amount * (1 - Number(p.commissionRate));
-      if (p.type === PurchaseType.content) contentTotal += net;
+    for (const group of purchaseTotals) {
+      const gross = group._sum.amount ?? 0;
+      const net = gross * (1 - Number(group.commissionRate));
+      if (group.type === PurchaseType.content) contentTotal += net;
       else tipsTotal += net;
-
-      purchaseSales.push({
-        id: p.id,
-        source: p.type === PurchaseType.content ? 'content' : 'tip',
-        amount: round2(net),
-        occurredAt: p.purchasedAt,
-      });
     }
+
+    const purchaseSales: SaleRow[] = recentPurchases.map((p) => ({
+      id: p.id,
+      source: p.type === PurchaseType.content ? 'content' : 'tip',
+      amount: round2(p.amount * (1 - Number(p.commissionRate))),
+      occurredAt: p.purchasedAt,
+    }));
 
     // ---- DirectMessage: `responded` rows are payable (payout released on
     // respond, docs/02_TECHNICAL_CONTEXT.md §3.4); `awaiting_response` rows
@@ -144,22 +187,19 @@ export class CreatorEarningsService {
     // reads as sanctioning a live recompute here. ----
     let dmPayable = 0;
     let dmHeld = 0;
-    const dmSales: SaleRow[] = [];
 
-    for (const dm of directMessages) {
-      const net = dm.amount * (1 - commissionRate);
-      if (dm.status === DmStatus.responded) {
-        dmPayable += net;
-      } else {
-        dmHeld += net;
-      }
-      dmSales.push({
-        id: dm.id,
-        source: 'dm',
-        amount: round2(net),
-        occurredAt: dm.sentAt,
-      });
+    for (const group of dmTotals) {
+      const net = (group._sum.amount ?? 0) * (1 - commissionRate);
+      if (group.status === DmStatus.responded) dmPayable += net;
+      else dmHeld += net;
     }
+
+    const dmSales: SaleRow[] = recentDms.map((dm) => ({
+      id: dm.id,
+      source: 'dm' as const,
+      amount: round2(dm.amount * (1 - commissionRate)),
+      occurredAt: dm.sentAt,
+    }));
 
     // ---- CreditSpend: raw credit COUNT, never converted to naira — see
     // class-level doc comment. Always "payable" in the sense that a spent
@@ -167,13 +207,10 @@ export class CreatorEarningsService {
     // of DM's awaiting_response state exists on CreditSpend), but it is
     // NOT added into the naira `payable` figure — count and naira must
     // never be summed together. ----
-    const creditsSpentTotal = creditSpends.reduce(
-      (sum, c) => sum + c.creditsSpent,
-      0,
-    );
-    const creditSales: SaleRow[] = creditSpends.map((c) => ({
+    const creditsSpentTotal = creditTotals._sum.creditsSpent ?? 0;
+    const creditSales: SaleRow[] = recentCreditSpends.map((c) => ({
       id: c.id,
-      source: 'community_credits',
+      source: 'community_credits' as const,
       amount: c.creditsSpent,
       occurredAt: c.spentAt,
     }));
@@ -182,6 +219,9 @@ export class CreatorEarningsService {
     const held = round2(dmHeld);
     const total = round2(payable + held);
 
+    // Each source contributed at most RECENT_SALES_LIMIT rows, already in
+    // newest-first order, so the true global top-N is guaranteed to be
+    // inside this <=3N merge.
     const recentSales: CreatorEarningsRecentSale[] = [
       ...purchaseSales,
       ...dmSales,

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { KycSubmissionController } from './kyc-submission.controller';
 import { KycSubmissionService } from './kyc-submission.service';
 import { KycAdminGuard } from './guards/admin.guard';
+import { StorageModule } from '../storage/storage.module';
 
 /**
  * registry.json "KycSubmission" resource module. PrismaService comes from
@@ -16,6 +17,7 @@ import { KycAdminGuard } from './guards/admin.guard';
  * precedent for a resource with no WawuIdClient dependency of its own.
  */
 @Module({
+  imports: [StorageModule],
   controllers: [KycSubmissionController],
   providers: [KycSubmissionService, KycAdminGuard],
 })

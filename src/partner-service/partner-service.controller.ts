@@ -6,9 +6,16 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
+import {
+  OptionalPaginationQueryDto,
+  paginateArray,
+  wantsPagination,
+} from '../common/dto/pagination.dto';
+import type { Paginated } from '../common/interceptors/response.interceptor';
 import { PartnerServiceService } from './partner-service.service';
 import type { PartnerService } from '../common/types';
 
@@ -24,9 +31,19 @@ import type { PartnerService } from '../common/types';
 export class PartnerServiceController {
   constructor(private readonly partnerServiceService: PartnerServiceService) {}
 
+  /**
+   * Opt-in pagination: no `page`/`perPage` -> the full array, exactly the
+   * shape the frontend already consumes. Supply either and the response
+   * becomes the standard `Paginated<T>` envelope.
+   */
   @Get()
-  list(): Promise<PartnerService[]> {
-    return this.partnerServiceService.list();
+  async list(
+    @Query() pagination: OptionalPaginationQueryDto,
+  ): Promise<PartnerService[] | Paginated<PartnerService>> {
+    const services = await this.partnerServiceService.list();
+    return wantsPagination(pagination)
+      ? paginateArray(services, pagination)
+      : services;
   }
 
   @Get(':id')

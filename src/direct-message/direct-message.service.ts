@@ -65,7 +65,52 @@ interface PendingDmAttempt {
  */
 @Injectable()
 export class DirectMessageService {
-  private readonly pendingAttempts = new Map<string, PendingDmAttempt>();
+  /**
+   * Persisted, not in-memory — a process-local Map lost the record on any
+   * deploy, crash or second replica between the checkout popup and its
+   * callback, stranding a real charge with nothing to reconcile against.
+   * Keyed by the messageId (threadId) the client verifies with; the txRef
+   * is kept in context so verify can still bind the two.
+   */
+  private async recordPendingDm(
+    messageId: string,
+    attempt: PendingDmAttempt,
+  ): Promise<void> {
+    await this.prisma.pendingCharge.create({
+      data: {
+        txRef: messageId,
+        kind: 'dm',
+        wawuUserId: attempt.senderWawuId,
+        expectedAmount: attempt.amount,
+        context: {
+          txRef: attempt.txRef,
+          creatorWawuId: attempt.creatorWawuId,
+          text: attempt.text,
+        },
+      },
+    });
+  }
+
+  private async takePendingDm(
+    messageId: string,
+  ): Promise<PendingDmAttempt | null> {
+    const row = await this.prisma.pendingCharge.findUnique({
+      where: { txRef: messageId },
+    });
+    if (!row || row.kind !== 'dm') return null;
+    const ctx = (row.context ?? {}) as {
+      txRef?: string;
+      creatorWawuId?: string;
+      text?: string;
+    };
+    return {
+      txRef: ctx.txRef ?? '',
+      creatorWawuId: ctx.creatorWawuId ?? '',
+      senderWawuId: row.wawuUserId,
+      text: ctx.text ?? '',
+      amount: row.expectedAmount,
+    };
+  }
 
   constructor(
     private readonly prisma: PrismaService,
@@ -127,7 +172,7 @@ export class DirectMessageService {
       wawuUserId: senderWawuId,
     });
 
-    this.pendingAttempts.set(threadId, {
+    await this.recordPendingDm(threadId, {
       txRef: charge.txRef,
       creatorWawuId,
       senderWawuId,
@@ -158,7 +203,7 @@ export class DirectMessageService {
     messageId: string,
     dto: VerifyDmDto,
   ): Promise<DirectMessage> {
-    const pending = this.pendingAttempts.get(messageId);
+    const pending = await this.takePendingDm(messageId);
     if (
       !pending ||
       pending.senderWawuId !== senderWawuId ||
@@ -183,7 +228,7 @@ export class DirectMessageService {
     // Consumed on resolution either way — a second verify against the same
     // messageId has nothing left to match (mirrors CreatorSubscription's
     // documented precedent).
-    this.pendingAttempts.delete(messageId);
+    await this.prisma.pendingCharge.deleteMany({ where: { txRef: messageId } });
 
     if (!verified) {
       throw new BadRequestException('Payment verification failed');

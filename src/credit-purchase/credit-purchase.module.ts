@@ -4,6 +4,7 @@ import { CreditPurchaseService } from './credit-purchase.service';
 import { FLUTTERWAVE_CLIENT } from './flutterwave-client.interface';
 import { RealFlutterwaveAdapter } from './real-flutterwave.adapter';
 import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';
+import { shouldUseMockFlutterwave } from '../common/flutterwave/require-payment-config';
 
 /**
  * registry.json "CreditPurchase" resource module. PrismaService comes from
@@ -28,7 +29,7 @@ import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';
         mock: MockFlutterwaveAdapter,
         real: RealFlutterwaveAdapter,
       ) =>
-        process.env.NODE_ENV === 'test' || !process.env.FLUTTERWAVE_SECRET_KEY
+        shouldUseMockFlutterwave()
           ? mock
           : real,
       inject: [MockFlutterwaveAdapter, RealFlutterwaveAdapter],

@@ -1,4 +1,12 @@
-import { Controller, Delete, Get, Param, Query, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Delete,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
@@ -25,8 +33,12 @@ export class BlockedAccountController {
     return this.blockedAccountService.list(user.sub, page, perPage);
   }
 
+  /** `:id` is the BlockedAccount row's own uuid PK, not the blocked user's wawuId — see the service. */
   @Delete(':id')
-  remove(@CurrentUser() user: WawuJwtClaims, @Param('id') id: string): Promise<void> {
+  remove(
+    @CurrentUser() user: WawuJwtClaims,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+  ): Promise<void> {
     return this.blockedAccountService.remove(user.sub, id);
   }
 }

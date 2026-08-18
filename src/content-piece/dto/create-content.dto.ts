@@ -11,6 +11,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { CATEGORY_IDS, type CategoryId } from '../../common/categories';
 
 const CONTENT_TYPES = [
   'video',
@@ -37,10 +38,15 @@ export class CreateContentDto {
   @MaxLength(5000)
   description: string;
 
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(100)
-  category: string;
+  /**
+   * Must be one of the 25 taxonomy ids (src/common/categories.ts). A free
+   * string here let content be filed under a category no browse surface
+   * lists, which made it unreachable.
+   */
+  @IsIn(CATEGORY_IDS as unknown as string[], {
+    message: `category must be one of: ${CATEGORY_IDS.join(', ')}`,
+  })
+  category: CategoryId;
 
   @IsOptional()
   @IsArray()

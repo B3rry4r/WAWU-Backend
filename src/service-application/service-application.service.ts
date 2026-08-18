@@ -1,4 +1,8 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ApplyPartnerServiceDto,
+  type PartnerServiceKind,
+} from './dto/apply-partner.dto';
 import { PrismaService } from '../common/prisma/prisma.service';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type { ServiceApplication, ServiceApplicationTimelineEntry } from '../common/types';
@@ -84,6 +88,7 @@ export class ServiceApplicationService {
         statusLabel: 'Awaiting payment',
         amountPaid: null,
         timeline: timeline as unknown as object[],
+        documents: dto.documents ?? [],
       },
     });
 
@@ -94,6 +99,51 @@ export class ServiceApplicationService {
     });
 
     return { flutterwaveConfig };
+  }
+
+
+  /** Names and reference prefixes carried over from the previous platform. */
+  private static readonly PARTNER_SERVICES: Record<
+    PartnerServiceKind,
+    { title: string; prefix: string; partner: string }
+  > = {
+    easybuy: { title: 'EasyBuy', prefix: 'EBY', partner: 'CredPal' },
+    pension: { title: 'Pension', prefix: 'PEN', partner: 'ARM Pension' },
+    banking: { title: 'Banking', prefix: 'BNK', partner: 'WEMA Bank' },
+    grants: { title: 'Grants and funding', prefix: 'GRT', partner: 'WAWUAfrica' },
+  };
+
+  /**
+   * The generic partner-service request. These carry no payment: the applicant
+   * submits, the partner reviews, and onboarding happens off-platform, which is
+   * how all four worked on the previous platform.
+   */
+  async applyForPartnerService(
+    applicantWawuId: string,
+    dto: ApplyPartnerServiceDto,
+  ) {
+    const service = ServiceApplicationService.PARTNER_SERVICES[dto.kind];
+
+    const created = await this.prisma.serviceApplication.create({
+      data: {
+        applicantWawuId,
+        kind: dto.kind,
+        title: service.title,
+        reference: this.generateReference(service.prefix),
+        status: 'under_review',
+        statusLabel: 'With the partner',
+        timeline: [
+          {
+            label: 'Request submitted',
+            occurredAt: new Date().toISOString(),
+            note: `Sent to ${service.partner} for review.`,
+          },
+        ] as unknown as object[],
+        documents: dto.documents ?? [],
+      },
+    });
+
+    return created;
   }
 
   async verifyCac(applicantWawuId: string, dto: VerifyCacDto): Promise<ServiceApplication> {

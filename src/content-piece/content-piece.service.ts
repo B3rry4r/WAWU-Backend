@@ -7,6 +7,10 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { uploadAllowanceFor } from '../common/creator-tier-allowance';
+import { RANKING, type ContentSort } from './ranking';
+import { Prisma } from '../../generated/prisma/client';
+import type { ContentPieceModel as ContentPieceRow } from '../../generated/prisma/models';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type { ContentPieceResponse } from '../common/types/content-piece.type';
 import type { SavedItem } from '../common/types';
@@ -173,6 +177,7 @@ export class ContentPieceService {
     category: string | undefined,
     page: number,
     perPage: number,
+    sort: ContentSort = 'trending',
   ): Promise<Paginated<ContentPieceResponse>> {
     const where =
       scope === 'mine'
@@ -182,15 +187,22 @@ export class ContentPieceService {
           }
         : { status: 'live' as const, ...(category ? { category } : {}) };
 
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.contentPiece.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * perPage,
-        take: perPage,
-      }),
-      this.prisma.contentPiece.count({ where }),
-    ]);
+    // "mine" is a creator looking at their own shelf, including drafts and
+    // pieces still in review. That is a chronological list of their work, not
+    // a ranked feed, so ranking is only applied to public browsing.
+    const ranked = scope !== 'mine' && sort !== 'recent';
+
+    const [items, total] = ranked
+      ? await this.listRanked(category, sort, page, perPage)
+      : await this.prisma.$transaction([
+          this.prisma.contentPiece.findMany({
+            where,
+            orderBy: { createdAt: 'desc' },
+            skip: (page - 1) * perPage,
+            take: perPage,
+          }),
+          this.prisma.contentPiece.count({ where }),
+        ]);
 
     const unlockedSet = await this.resolveUnlockedSet(
       requesterWawuId,
@@ -204,6 +216,62 @@ export class ContentPieceService {
       perPage,
       total,
     };
+  }
+
+  /**
+   * Ranked browse. Prisma cannot order by a computed expression, so the score
+   * is evaluated in Postgres. Purchases are joined rather than denormalised
+   * onto ContentPiece: a counter column would need every payment path to
+   * remember to bump it, and one that silently drifts is worse than a join.
+   *
+   * `trending` decays by age; `top` is the same engagement score with no
+   * decay, for an all-time leaderboard.
+   */
+  private async listRanked(
+    category: string | undefined,
+    sort: ContentSort,
+    page: number,
+    perPage: number,
+  ): Promise<[ContentPieceRow[], number]> {
+    const engagement = Prisma.sql`(
+      ${RANKING.base}
+      + (c."likes" * ${RANKING.like})
+      + (c."commentCount" * ${RANKING.comment})
+      + (COALESCE(p."purchases", 0) * ${RANKING.purchase})
+      + (c."views" * ${RANKING.view})
+      + (COALESCE(c."ratingPct", 0)::numeric / ${RANKING.ratingDivisor})
+    )`;
+
+    const score =
+      sort === 'top'
+        ? engagement
+        : Prisma.sql`${engagement} / POWER(
+            (EXTRACT(EPOCH FROM (NOW() - c."createdAt")) / 3600.0) + 2,
+            ${RANKING.gravity}
+          )`;
+
+    const categoryFilter = category
+      ? Prisma.sql`AND c."category" = ${category}`
+      : Prisma.empty;
+
+    const rows = await this.prisma.$queryRaw<ContentPieceRow[]>(Prisma.sql`
+      SELECT c.*
+      FROM "ContentPiece" c
+      LEFT JOIN (
+        SELECT "contentId", COUNT(*)::int AS purchases
+        FROM "Purchase"
+        WHERE "contentId" IS NOT NULL AND "status" = 'completed'
+        GROUP BY "contentId"
+      ) p ON p."contentId" = c."id"
+      WHERE c."status" = 'live' ${categoryFilter}
+      ORDER BY ${score} DESC, c."createdAt" DESC
+      LIMIT ${perPage} OFFSET ${(page - 1) * perPage}
+    `);
+
+    const total = await this.prisma.contentPiece.count({
+      where: { status: 'live', ...(category ? { category } : {}) },
+    });
+    return [rows, total];
   }
 
   async listMine(
@@ -231,7 +299,7 @@ export class ContentPieceService {
   ): Promise<ContentPieceResponse> {
     const creatorState = await this.prisma.creatorState.findUnique({
       where: { wawuUserId: creatorWawuId },
-      select: { subscriptionPaid: true },
+      select: { subscriptionPaid: true, tier: true },
     });
     if (!creatorState || !creatorState.subscriptionPaid) {
       throw new ForbiddenException(
@@ -239,14 +307,16 @@ export class ContentPieceService {
       );
     }
 
-    const existingCount = await this.prisma.contentPiece.count({
-      where: { creatorWawuId },
-    });
-    const isFirstUpload = existingCount === 0;
+    const allowance = uploadAllowanceFor(creatorState.tier);
 
-    if (isFirstUpload && dto.accessType === 'paid') {
+    // `previewAsset` is public by design — it is returned to every caller,
+    // including anonymous ones on /content/public/featured. If it points at
+    // the same object as `fullAsset`, the paywall is decorative: anyone can
+    // read the preview URL and download the paid asset. Reject it rather
+    // than silently shipping unlocked content.
+    if (dto.accessType === 'paid' && dto.previewAsset === dto.fullAsset) {
       throw new BadRequestException(
-        "A creator's first upload must be free (creatorFirstUploadFree) — resubmit with accessType 'free'.",
+        'Paid content needs a separate free preview — previewAsset must not be the same file as fullAsset.',
       );
     }
     if (dto.accessType === 'free' && dto.price !== 0) {
@@ -260,22 +330,69 @@ export class ContentPieceService {
 
     const slug = `${this.slugify(dto.title)}-${randomUUID().slice(0, 8)}`;
 
-    const created = await this.prisma.contentPiece.create({
-      data: {
-        slug,
-        creatorWawuId,
-        contentType: dto.contentType as never,
-        title: dto.title,
-        description: dto.description,
-        category: dto.category,
-        tags: dto.tags ?? [],
-        accessType: dto.accessType as never,
-        price: dto.price,
-        previewAssetUrl: dto.previewAsset,
-        fullAssetUrl: dto.fullAsset,
-        creatorFirstUploadFree: isFirstUpload,
-        status: 'pending',
-      },
+    // The tier allowance is a paid entitlement, so it is counted and claimed
+    // inside one transaction. Counting outside it would let two uploads sent
+    // at the same moment both read "2 used" and both be written.
+    const created = await this.prisma.$transaction(async (tx) => {
+      const [freeUsed, paidUsed] = await Promise.all([
+        tx.contentPiece.count({
+          where: { creatorWawuId, accessType: 'free' },
+        }),
+        tx.contentPiece.count({
+          where: { creatorWawuId, accessType: 'paid' },
+        }),
+      ]);
+      const isFirstUpload = freeUsed + paidUsed === 0;
+
+      if (isFirstUpload && dto.accessType === 'paid') {
+        throw new BadRequestException(
+          "A creator's first upload must be free (creatorFirstUploadFree) — resubmit with accessType 'free'.",
+        );
+      }
+
+      // Free and paid slots are not interchangeable: a Basic creator with 1
+      // free and 0 paid uploads has 2 slots left, but neither of them can be
+      // spent on another free piece.
+      if (dto.accessType === 'free' && freeUsed >= allowance.free) {
+        throw new ForbiddenException(
+          `Your ${creatorState.tier} plan includes ${allowance.free} free upload${allowance.free === 1 ? '' : 's'}, and you have used ${freeUsed}. Upload this as paid content, or upgrade your plan for more slots.`,
+        );
+      }
+      if (dto.accessType === 'paid' && paidUsed >= allowance.paid) {
+        throw new ForbiddenException(
+          `Your ${creatorState.tier} plan includes ${allowance.paid} paid upload${allowance.paid === 1 ? '' : 's'}, and you have used ${paidUsed}. Upgrade your plan for more slots.`,
+        );
+      }
+
+      // Claims the slot conditionally, so the total cap holds even if the
+      // per-kind counts above were read concurrently by another request.
+      const claimed = await tx.creatorState.updateMany({
+        where: { wawuUserId: creatorWawuId, slotsUsed: { lt: allowance.total } },
+        data: { slotsUsed: { increment: 1 } },
+      });
+      if (claimed.count === 0) {
+        throw new ForbiddenException(
+          `You have used all ${allowance.total} upload slots on your ${creatorState.tier} plan. Upgrade your plan for more slots.`,
+        );
+      }
+
+      return tx.contentPiece.create({
+        data: {
+          slug,
+          creatorWawuId,
+          contentType: dto.contentType as never,
+          title: dto.title,
+          description: dto.description,
+          category: dto.category,
+          tags: dto.tags ?? [],
+          accessType: dto.accessType as never,
+          price: dto.price,
+          previewAssetUrl: dto.previewAsset,
+          fullAssetUrl: dto.fullAsset,
+          creatorFirstUploadFree: isFirstUpload,
+          status: 'pending',
+        },
+      });
     });
 
     return this.toResponse(created, true);
@@ -423,8 +540,12 @@ export class ContentPieceService {
       throw new BadRequestException('Payment verification failed');
     }
 
-    await this.prisma.purchase.update({
-      where: { id: purchase.id },
+    // Conditional flip: two concurrent verifies both read 'pending' above,
+    // so an unconditional update would let both proceed. Unlocking is
+    // idempotent so a lost race is harmless here, but the same shape guards
+    // the paid-credit path in credit-purchase where it is not.
+    await this.prisma.purchase.updateMany({
+      where: { id: purchase.id, status: 'pending' },
       data: { status: 'completed', flutterwaveTxId: result.transactionId },
     });
 

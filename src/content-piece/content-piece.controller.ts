@@ -44,6 +44,7 @@ export class ContentPieceController {
       query.category,
       query.page,
       query.perPage,
+      query.sort,
     );
   }
 

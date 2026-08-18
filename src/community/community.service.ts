@@ -96,6 +96,25 @@ export class CommunityService {
    *   - open    -> status: joined,  joinedAt: now
    *   - private -> status: pending, joinedAt: null
    */
+  /**
+   * The caller's own membership, or null. There was no way to ask whether
+   * you had joined, so the client guessed from local state and showed
+   * "Joined" on one device and "Join" on another.
+   */
+  async myMembership(id: string, userWawuId: string): Promise<CommunityMembership | null> {
+    return this.prisma.communityMembership.findUnique({
+      where: { userWawuId_communityId: { userWawuId, communityId: id } },
+    });
+  }
+
+  /** Leaves a community. Idempotent: leaving one you are not in is a no-op. */
+  async leave(id: string, userWawuId: string): Promise<{ joined: false }> {
+    await this.prisma.communityMembership.deleteMany({
+      where: { userWawuId, communityId: id },
+    });
+    return { joined: false };
+  }
+
   async join(id: string, userWawuId: string): Promise<CommunityMembership> {
     const community = await this.prisma.community.findUnique({
       where: { id },

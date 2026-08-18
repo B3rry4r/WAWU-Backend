@@ -1,5 +1,6 @@
 import {
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -41,6 +42,22 @@ export class CommunityController {
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
   ): Promise<CommunityResponse> {
     return this.communityService.findOne(id);
+  }
+
+  @Get(':id/membership')
+  myMembership(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: WawuJwtClaims,
+  ) {
+    return this.communityService.myMembership(id, user.sub);
+  }
+
+  @Delete(':id/join')
+  leave(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: WawuJwtClaims,
+  ) {
+    return this.communityService.leave(id, user.sub);
   }
 
   @Post(':id/join')

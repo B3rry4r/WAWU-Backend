@@ -31,10 +31,12 @@ export class CommunityMessageController {
   @Get()
   list(
     @Param('id', ParseUUIDPipe) communityId: string,
+    @CurrentUser() user: WawuJwtClaims,
     @Query() query: PaginationQueryDto,
   ) {
     return this.communityMessageService.list(
       communityId,
+      user.sub,
       query.page,
       query.perPage,
     );

@@ -137,10 +137,22 @@ export class CreditPurchaseService {
       throw new BadRequestException('Payment verification failed');
     }
 
-    await this.prisma.creditPurchase.update({
-      where: { id: purchase.id },
+    // Flip pending -> completed CONDITIONALLY and use the row count as the
+    // right-to-credit. Two concurrent verifies of the same purchase both read
+    // status 'pending' above, so an unconditional update let both proceed to
+    // increment the balance — a free credit top-up by racing the endpoint.
+    // Exactly one of them can match `status: 'pending'` here.
+    const claimed = await this.prisma.creditPurchase.updateMany({
+      where: { id: purchase.id, status: 'pending' },
       data: { status: 'completed' },
     });
+    if (claimed.count === 0) {
+      // Another request already completed this purchase and credited it.
+      const existing = await this.prisma.creditsState.findUnique({
+        where: { userWawuId },
+      });
+      return { creditBalance: existing?.creditBalance ?? 0 };
+    }
 
     // Credit the balance — upsert since CreditsState may not exist yet for
     // this user (credits-state's own getOrCreate is the *read*-path

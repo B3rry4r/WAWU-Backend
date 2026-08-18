@@ -81,7 +81,12 @@ export class RealFlutterwaveAdapter implements FlutterwaveClient {
       status: data.status === 'successful' ? 'successful' : 'failed',
       amount: typeof data.amount === 'number' ? data.amount : 0,
       currency: data.currency ?? '',
-      txRef: data.tx_ref ?? params.txRef,
+      // NEVER fall back to the caller's own txRef here. Every module's
+      // replay defence is `result.txRef === purchase.flutterwaveTxRef`; if a
+      // Flutterwave response omitted tx_ref, that fallback turned the check
+      // into a tautology comparing client input with itself. An empty string
+      // fails the comparison, which is the safe direction.
+      txRef: data.tx_ref ?? '',
       transactionId:
         data.id !== undefined ? String(data.id) : params.transactionId,
     };

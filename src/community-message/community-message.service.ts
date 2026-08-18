@@ -3,15 +3,28 @@ import {
   HttpStatus,
   Injectable,
   NotFoundException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { CreditSpendService } from '../credit-spend/credit-spend.service';
+import {
+  CreditSpendService,
+  DEFAULT_CREDITS_SPENT,
+  type CreditSpendPrismaClient,
+} from '../credit-spend/credit-spend.service';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type { CommunityMessage } from '../common/types';
 import type { CreateCommunityMessageDto } from './dto/create-community-message.dto';
 
 /** 7 days, mirrors CreditsStateService's own trial window constant (wave 0). */
 const TRIAL_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Price of one community message, mirroring `CommunityMessage.costInCredits`'s
+ * schema default. Written explicitly onto the row (rather than left to the
+ * default) so the row, the balance debit and the CreditSpend ledger row all
+ * agree on one number — they were previously free to diverge.
+ */
+const MESSAGE_COST_IN_CREDITS = DEFAULT_CREDITS_SPENT;
 
 /**
  * CommunityMessage resource — frozen endpoints `GET /communities/:id/messages`
@@ -33,10 +46,11 @@ const TRIAL_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
  *
  * Gate + decrement semantics (judgment call, since the task brief leaves
  * the exact interaction underspecified):
- *   - A sender with `creditBalance > 0` spends from that real balance,
- *     regardless of whether their trial is also still active. The message
- *     costs `costInCredits` (schema default 1); the balance is decremented
- *     by that amount, floored at 0 so it can never go negative.
+ *   - A sender whose balance covers `costInCredits` (schema default 1)
+ *     spends from that real balance, regardless of whether their trial is
+ *     also still active. The debit is a conditional UPDATE guarded on
+ *     sufficient balance, so it can never go negative and never double-spend
+ *     under concurrency (see create()).
  *   - A sender with `creditBalance === 0` is only let through if their
  *     trial is still active (`trialEndsAt > now`). That message is
  *     "trial-covered" — there is no real balance to decrement, so none is
@@ -59,7 +73,7 @@ const TRIAL_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
  * doc comment: "export CreditSpendService for the CommunityMessage
  * module"). Judgment call: the ledger row is written unconditionally, not
  * only on real-balance spends, because CreditSpend carries no monetary
- * field (`creditsSpent` is hardcoded to 1 by CreditSpendService itself) —
+ * field (`creditsSpent` records the message's real `costInCredits`) —
  * it is a volume/attribution ledger for the community host's earnings
  * rollup, not a cash-movement record, so gating it on "did this draw down
  * real balance" would undercount exactly the trial-period messages WAWU
@@ -86,6 +100,30 @@ export class CommunityMessageService {
   }
 
   /**
+   * Membership gate. `CommunityMembership` and the join/leave endpoints
+   * existed, but nothing consulted them: any authenticated user could read a
+   * community's entire history and post into it without ever joining, and a
+   * private community's pending (unapproved) request behaved like full
+   * membership. The host always has access to their own community.
+   */
+  private async assertMember(
+    communityId: string,
+    userWawuId: string,
+    hostWawuId: string,
+  ): Promise<void> {
+    if (userWawuId === hostWawuId) return;
+    const membership = await this.prisma.communityMembership.findUnique({
+      where: { userWawuId_communityId: { userWawuId, communityId } },
+      select: { status: true },
+    });
+    if (!membership || membership.status !== 'joined') {
+      throw new ForbiddenException(
+        'Join this community to read or post in it.',
+      );
+    }
+  }
+
+  /**
    * List order: newest-first (`sentAt: 'desc'`), matching this codebase's
    * one existing chat-like sibling — CommentService.list() also orders
    * `createdAt: 'desc'` for a threaded/reverse-chronological feed. No
@@ -95,10 +133,12 @@ export class CommunityMessageService {
    */
   async list(
     communityId: string,
+    readerWawuId: string,
     page: number,
     perPage: number,
   ): Promise<Paginated<CommunityMessage>> {
-    await this.assertCommunityExists(communityId);
+    const community = await this.assertCommunityExists(communityId);
+    await this.assertMember(communityId, readerWawuId, community.hostWawuId);
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.communityMessage.findMany({
@@ -113,69 +153,89 @@ export class CommunityMessageService {
     return { items, currentPage: page, perPage, total };
   }
 
+  /**
+   * Credits are debited ATOMICALLY. This used to read the balance, compute
+   * `balance - cost` in JS and write the result back: two sends racing on
+   * one balance of 1 both read 1, both wrote 0, and one message was sent
+   * free. The debit is now a single conditional `updateMany` — the balance
+   * guard lives in the WHERE clause, so Postgres row-locks and only one of
+   * the two concurrent statements can match. Its `count` IS the answer to
+   * "did this sender have the credits?", so there is no read-then-write
+   * window left to lose.
+   *
+   * The debit, the message row and the CreditSpend ledger row all run in one
+   * interactive transaction: a failure anywhere rolls the credit back
+   * instead of charging for a message that was never stored.
+   */
   async create(
     communityId: string,
     senderWawuId: string,
     dto: CreateCommunityMessageDto,
   ): Promise<CommunityMessage> {
     const community = await this.assertCommunityExists(communityId);
+    await this.assertMember(communityId, senderWawuId, community.hostWawuId);
 
-    const creditsState = await this.getOrCreateCreditsState(senderWawuId);
-    const hasRealBalance = creditsState.creditBalance > 0;
-    const trialActive = creditsState.trialEndsAt.getTime() > Date.now();
+    const cost = MESSAGE_COST_IN_CREDITS;
 
-    if (!hasRealBalance && !trialActive) {
-      throw new HttpException(
-        {
-          message:
-            'Out of WAWU Credits and your trial has ended. Buy more credits to keep messaging in this community.',
-          reason: 'insufficient_credits',
-        },
-        HttpStatus.PAYMENT_REQUIRED,
-      );
-    }
+    return this.prisma.$transaction(async (tx) => {
+      const creditsState = await this.getOrCreateCreditsState(senderWawuId, tx);
 
-    const message = await this.prisma.communityMessage.create({
-      data: {
-        communityId,
-        senderWawuId,
-        text: dto.text,
-      },
-    });
-
-    if (hasRealBalance) {
-      const nextBalance = Math.max(
-        0,
-        creditsState.creditBalance - message.costInCredits,
-      );
-      await this.prisma.creditsState.update({
-        where: { userWawuId: senderWawuId },
-        data: { creditBalance: nextBalance },
+      const { count } = await tx.creditsState.updateMany({
+        where: { userWawuId: senderWawuId, creditBalance: { gte: cost } },
+        data: { creditBalance: { decrement: cost } },
       });
-    }
-    // else: trial-covered send — no real balance to decrement, balance stays 0.
+      const spentRealBalance = count > 0;
 
-    await this.creditSpendService.record({
-      userWawuId: senderWawuId,
-      communityId,
-      creatorWawuId: community.hostWawuId,
+      // Trial-covered send: no balance to debit, so nothing was debited.
+      // (Unchanged semantics — see the class doc comment.)
+      const trialActive = creditsState.trialEndsAt.getTime() > Date.now();
+      if (!spentRealBalance && !trialActive) {
+        throw new HttpException(
+          {
+            message:
+              'Out of WAWU Credits and your trial has ended. Buy more credits to keep messaging in this community.',
+            reason: 'insufficient_credits',
+          },
+          HttpStatus.PAYMENT_REQUIRED,
+        );
+      }
+
+      const message = await tx.communityMessage.create({
+        data: {
+          communityId,
+          senderWawuId,
+          text: dto.text,
+          costInCredits: cost,
+        },
+      });
+
+      await this.creditSpendService.record(
+        {
+          userWawuId: senderWawuId,
+          communityId,
+          creatorWawuId: community.hostWawuId,
+          creditsSpent: cost,
+        },
+        tx,
+      );
+
+      return message;
     });
-
-    return message;
   }
 
-  /** Mirrors CreditsStateService.getOrCreate exactly (find, else create with a fresh trial). */
+  /**
+   * Mirrors CreditsStateService.getOrCreate (row, else a fresh 7-day trial),
+   * as an upsert rather than find-then-create so two first-ever sends from
+   * the same user can't race into a duplicate-key 500.
+   */
   private async getOrCreateCreditsState(
     userWawuId: string,
+    client: CreditSpendPrismaClient = this.prisma,
   ): Promise<{ creditBalance: number; trialEndsAt: Date }> {
-    const existing = await this.prisma.creditsState.findUnique({
+    return client.creditsState.upsert({
       where: { userWawuId },
-    });
-    if (existing) {
-      return existing;
-    }
-    return this.prisma.creditsState.create({
-      data: {
+      update: {},
+      create: {
         userWawuId,
         creditBalance: 0,
         trialEndsAt: new Date(Date.now() + TRIAL_DURATION_MS),

@@ -13,7 +13,17 @@ async function bootstrap() {
   app.use(helmet());
   app.use(compression());
   app.use(cookieParser());
-  app.enableCors({ origin: process.env.CORS_ORIGIN?.split(',') ?? true, credentials: true });
+  // `origin: true` reflects whatever Origin the caller sends. Combined with
+  // credentials that is a production footgun, so in production an explicit
+  // CORS_ORIGIN allowlist is required; other environments keep the permissive
+  // default for local tooling.
+  const corsOrigin = process.env.CORS_ORIGIN?.split(',').map((o) => o.trim()).filter(Boolean);
+  if (process.env.NODE_ENV === 'production' && (!corsOrigin || corsOrigin.length === 0)) {
+    throw new Error(
+      'CORS_ORIGIN must list the allowed origins in production. Refusing to start with a reflect-any-origin CORS policy.',
+    );
+  }
+  app.enableCors({ origin: corsOrigin ?? true, credentials: true });
 
   app.setGlobalPrefix('api/hub');
 

@@ -1,4 +1,12 @@
-import { Controller, Delete, Param, Post, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Delete,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
@@ -8,16 +16,29 @@ import { FollowRelationshipService } from './follow-relationship.service';
  * registry.json "FollowRelationship": POST/DELETE /creators/:wawuId/follow.
  * Both endpoints are `roles: ["any"]` — any authenticated WAWU user, no
  * creator gate. `:wawuId` is the target creator being followed/unfollowed
- * (the WAWU ID `sub` value), never a local FK.
+ * (the WAWU ID `sub` value), never a local FK — and WAWU ID `sub` values are
+ * v4 UUIDs, so the param is validated as one. This is never a handle/slug:
+ * the frontend resolves a profile to its wawuId before calling these
+ * (src/lib/api/profile.ts, src/lib/api/explore.ts).
  */
 @UseGuards(WawuAuthGuard)
 @Controller('creators/:wawuId/follow')
 export class FollowRelationshipController {
-  constructor(private readonly followRelationshipService: FollowRelationshipService) {}
+  constructor(
+    private readonly followRelationshipService: FollowRelationshipService,
+  ) {}
+
+  @Get()
+  status(
+    @Param('wawuId', new ParseUUIDPipe({ version: '4' })) wawuId: string,
+    @CurrentUser() user: WawuJwtClaims,
+  ): Promise<{ following: boolean }> {
+    return this.followRelationshipService.status(user.sub, wawuId);
+  }
 
   @Post()
   follow(
-    @Param('wawuId') wawuId: string,
+    @Param('wawuId', new ParseUUIDPipe({ version: '4' })) wawuId: string,
     @CurrentUser() user: WawuJwtClaims,
   ): Promise<{ following: true }> {
     return this.followRelationshipService.follow(user.sub, wawuId);
@@ -25,7 +46,7 @@ export class FollowRelationshipController {
 
   @Delete()
   unfollow(
-    @Param('wawuId') wawuId: string,
+    @Param('wawuId', new ParseUUIDPipe({ version: '4' })) wawuId: string,
     @CurrentUser() user: WawuJwtClaims,
   ): Promise<{ following: false }> {
     return this.followRelationshipService.unfollow(user.sub, wawuId);

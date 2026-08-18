@@ -26,6 +26,19 @@ export class FollowRelationshipService {
     }
   }
 
+  /**
+   * Whether the caller already follows this creator. The web client had no
+   * way to ask, so it fell back to local mock state and showed the wrong
+   * follow button on any new device or after clearing storage.
+   */
+  async status(followerWawuId: string, followingWawuId: string): Promise<{ following: boolean }> {
+    const existing = await this.prisma.followRelationship.findFirst({
+      where: { followerWawuId, followingWawuId },
+      select: { followerWawuId: true },
+    });
+    return { following: existing !== null };
+  }
+
   async follow(followerWawuId: string, followingWawuId: string): Promise<{ following: true }> {
     await this.assertFollowableCreator(followerWawuId, followingWawuId);
 

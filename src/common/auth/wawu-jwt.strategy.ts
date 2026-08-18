@@ -20,10 +20,20 @@ export class WawuJwtStrategy extends PassportStrategy(Strategy, 'wawu-jwt') {
   constructor(config: ConfigService) {
     const jwksUri = config.get<string>('WAWU_ID_JWKS_URL') ?? 'http://localhost:4001/.well-known/jwks.json';
 
+    // WAWU ID signs for several products (Basket, Beauty, this hub). Without
+    // an issuer/audience check ANY valid RS256 token from that JWKS is
+    // accepted here, including one minted for a different product entirely.
+    // Both are optional so existing environments keep working, but each is
+    // enforced when configured.
+    const issuer = config.get<string>('WAWU_ID_JWT_ISSUER');
+    const audience = config.get<string>('WAWU_ID_JWT_AUDIENCE');
+
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
       algorithms: ['RS256'],
+      ...(issuer ? { issuer } : {}),
+      ...(audience ? { audience } : {}),
       secretOrKeyProvider: jwksRsa.passportJwtSecret({
         cache: true,
         cacheMaxAge: 24 * 60 * 60 * 1000, // 24h, per conventions.md

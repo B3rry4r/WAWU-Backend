@@ -1,4 +1,16 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import { ApplyPartnerServiceDto } from './dto/apply-partner.dto';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
@@ -38,6 +50,16 @@ export class ServiceApplicationController {
   @Post('cac/apply/verify')
   verifyCac(@CurrentUser() user: WawuJwtClaims, @Body() dto: VerifyCacDto) {
     return this.serviceApplicationService.verifyCac(user.sub, dto);
+  }
+
+  /** The carried-over partner services: EasyBuy, Pension, Banking, Grants. */
+  @Post('partner/apply')
+  @HttpCode(HttpStatus.CREATED)
+  applyPartner(
+    @CurrentUser() user: WawuJwtClaims,
+    @Body() dto: ApplyPartnerServiceDto,
+  ) {
+    return this.serviceApplicationService.applyForPartnerService(user.sub, dto);
   }
 
   @Post('nepc/apply')

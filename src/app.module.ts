@@ -41,6 +41,14 @@ import { CommunityModule } from './community/community.module';
 import { CommunityMessageModule } from './community-message/community-message.module';
 import { CreatorEarningsModule } from './creator-earnings/creator-earnings.module';
 import { DirectMessageModule } from './direct-message/direct-message.module';
+import { StorageModule } from './storage/storage.module';
+import { BillPaymentModule } from './bill-payment/bill-payment.module';
+import { HealthPlanModule } from './health-plan/health-plan.module';
+import { LegalModule } from './legal/legal.module';
+import { ScheduleModule } from '@nestjs/schedule';
+import { SchedulerModule } from './scheduler/scheduler.module';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
 // Phase 5 build (waves 0-3, all 39 registry resources) is now complete.
 // Remaining SEAMs: the deferred Flutterwave webhook + scheduled-job cron
 // pass (declared/scheduled-jobs.json — spans CreatorSubscription +
@@ -49,7 +57,21 @@ import { DirectMessageModule } from './direct-message/direct-message.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    // Rate limiting: @nestjs/throttler was a dependency but was never
+    // registered, leaving presign, search and every payment-verify endpoint
+    // unlimited — a storage-cost and scan-cost DoS from a single account.
+    ThrottlerModule.forRoot([
+      { name: 'short', ttl: 1_000, limit: 20 },
+      { name: 'medium', ttl: 60_000, limit: 200 },
+    ]),
+    ScheduleModule.forRoot(),
+    SchedulerModule,
     PrismaModule,
+    StorageModule,
+    // Lifestyle Services: WAWUPay, WAWUCare, WAWU Legal.
+    BillPaymentModule,
+    HealthPlanModule,
+    LegalModule,
     WawuAuthModule,
     AccountModule,
     CommentModule,
@@ -100,6 +122,6 @@ import { DirectMessageModule } from './direct-message/direct-message.module';
     DirectMessageModule,
   ],
   controllers: [AppController],
-  providers: [],
+  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
 export class AppModule {}
