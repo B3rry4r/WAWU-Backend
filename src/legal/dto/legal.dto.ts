@@ -1,5 +1,6 @@
 import {
   IsArray,
+  IsISO8601,
   IsIn,
   IsInt,
   IsNotEmpty,
@@ -26,6 +27,15 @@ export class CreateLegalRequestDto {
 export class BookConsultationDto {
   @IsIn(['chat', 'zoom', 'physical'])
   medium!: 'chat' | 'zoom' | 'physical';
+
+  /**
+   * The slot the client picked, from GET /legal/availability. Required for
+   * chat and Zoom; physical consultations are arranged by email and book no
+   * slot, so it is optional here and rejected in the service for physical.
+   */
+  @IsOptional()
+  @IsISO8601()
+  scheduledFor?: string;
 }
 
 export class VerifyPaymentDto {

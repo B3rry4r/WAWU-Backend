@@ -5,7 +5,7 @@ import { IsArray, IsIn, IsOptional, IsString, IsUrl, MaxLength, MinLength } from
  * services: the applicant says what they need, attaches anything relevant, and
  * the partner reviews it. Only CAC and NEPC need their own bespoke forms.
  */
-export const PARTNER_SERVICE_KINDS = ['loans', 'pension', 'grants'] as const;
+export const PARTNER_SERVICE_KINDS = ['loans', 'pension', 'banking', 'grants'] as const;
 export type PartnerServiceKind = (typeof PARTNER_SERVICE_KINDS)[number];
 
 export class ApplyPartnerServiceDto {

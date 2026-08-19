@@ -15,6 +15,7 @@ import {
   type ConsultationMediumId,
 } from './legal-catalogue';
 import { renderContract } from './contract-template';
+import { CONSULTATION_HOURS, buildAvailability } from './availability';
 import type {
   BookConsultationDto,
   CreateLegalRequestDto,
@@ -41,6 +42,27 @@ export class LegalRequestsService {
     private readonly prisma: PrismaService,
     private readonly verifier: FlutterwaveCheckoutVerifier,
   ) {}
+
+  /**
+   * The bookable calendar. Slots already held by a paid consultation are
+   * marked unavailable so nobody pays for an hour someone else has.
+   */
+  async availability() {
+    const booked = await this.prisma.legalRequest.findMany({
+      where: { scheduledFor: { not: null } },
+      select: { scheduledFor: true },
+    });
+    const taken = new Set(
+      booked
+        .map((b) => b.scheduledFor?.toISOString())
+        .filter((v): v is string => Boolean(v)),
+    );
+    return {
+      timeZone: CONSULTATION_HOURS.timeZone,
+      slotMinutes: CONSULTATION_HOURS.slotMinutes,
+      days: buildAvailability(taken, new Date()),
+    };
+  }
 
   catalogue() {
     return {
@@ -112,6 +134,30 @@ export class LegalRequestsService {
     }
 
     const option = CONSULTATION_FEES[dto.medium as ConsultationMediumId];
+
+    // Chat and Zoom happen at a specific hour, so one has to be chosen. A
+    // physical consultation is arranged by email and books no slot.
+    let scheduledFor: Date | null = null;
+    if (option.feeNaira !== null) {
+      if (!dto.scheduledFor) {
+        throw new BadRequestException('Pick a time for your consultation.');
+      }
+      scheduledFor = new Date(dto.scheduledFor);
+      if (Number.isNaN(scheduledFor.getTime()) || scheduledFor.getTime() <= Date.now()) {
+        throw new BadRequestException('Pick a time in the future.');
+      }
+      const clash = await this.prisma.legalRequest.findFirst({
+        where: { scheduledFor, id: { not: record.id } },
+        select: { id: true },
+      });
+      if (clash) {
+        throw new ConflictException('That time has just been taken. Pick another.');
+      }
+    } else if (dto.scheduledFor) {
+      throw new BadRequestException(
+        'In-person consultations are arranged by email, so they cannot be booked to a slot here.',
+      );
+    }
 
     if (option.feeNaira === null) {
       const updated = await this.prisma.legalRequest.update({

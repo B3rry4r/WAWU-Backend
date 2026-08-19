@@ -32,6 +32,12 @@ import {
 export class LegalController {
   constructor(private readonly legal: LegalRequestsService) {}
 
+  /** When a lawyer is free. Drives the booking calendar. */
+  @Get('availability')
+  availability() {
+    return this.legal.availability();
+  }
+
   @Get('catalogue')
   catalogue() {
     return this.legal.catalogue();
