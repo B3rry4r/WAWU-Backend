@@ -109,7 +109,6 @@ export class ServiceApplicationService {
   > = {
     loans: { title: 'Loans/EasyBuy', prefix: 'LON', partner: 'our lending partner' },
     pension: { title: 'Pensions', prefix: 'PEN', partner: 'ARM Pension' },
-    grants: { title: 'Grants', prefix: 'GRT', partner: 'WAWUAfrica' },
   };
 
   /**
