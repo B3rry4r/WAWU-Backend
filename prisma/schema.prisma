@@ -190,6 +190,13 @@ model UserProfile {
   instagramHandle String?
   whatsappHandle  String?
   websiteUrl      String?
+  /// Where else a creator can be reached. Handles are stored without the "@";
+  /// the full URLs are stored as given.
+  xHandle         String?
+  tiktokHandle    String?
+  youtubeUrl      String?
+  facebookUrl     String?
+  linkedinUrl     String?
   createdAt       DateTime    @default(now())
 
   @@index([accountType])

@@ -19,6 +19,11 @@ export interface CreatorProfile {
   instagramHandle: string | null;
   whatsappHandle: string | null;
   websiteUrl: string | null;
+  xHandle: string | null;
+  tiktokHandle: string | null;
+  youtubeUrl: string | null;
+  facebookUrl: string | null;
+  linkedinUrl: string | null;
   tier: 'basic' | 'pro';
   evgScore: number;
   contentCount: number;

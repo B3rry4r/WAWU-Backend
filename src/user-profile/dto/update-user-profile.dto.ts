@@ -4,6 +4,7 @@ import {
   IsEnum,
   IsOptional,
   IsString,
+  IsUrl,
   Matches,
   MaxLength,
 } from 'class-validator';
@@ -51,4 +52,16 @@ export class UpdateUserProfileDto {
   @IsString()
   @MaxLength(50)
   whatsappHandle?: string | null;
+
+  /**
+   * The rest of where a creator can be reached. Handles are short strings;
+   * the three URL fields take a full link, validated as one so a profile
+   * cannot publish something that will not open.
+   */
+  @IsOptional() @IsString() @MaxLength(50) xHandle?: string | null;
+  @IsOptional() @IsString() @MaxLength(50) tiktokHandle?: string | null;
+  @IsOptional() @IsUrl({}, { message: 'youtubeUrl must be a full link' }) @MaxLength(200) youtubeUrl?: string | null;
+  @IsOptional() @IsUrl({}, { message: 'facebookUrl must be a full link' }) @MaxLength(200) facebookUrl?: string | null;
+  @IsOptional() @IsUrl({}, { message: 'linkedinUrl must be a full link' }) @MaxLength(200) linkedinUrl?: string | null;
+  @IsOptional() @IsUrl({}, { message: 'websiteUrl must be a full link' }) @MaxLength(200) websiteUrl?: string | null;
 }
