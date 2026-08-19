@@ -107,9 +107,9 @@ export class ServiceApplicationService {
     PartnerServiceKind,
     { title: string; prefix: string; partner: string }
   > = {
-    pension: { title: 'Pension', prefix: 'PEN', partner: 'ARM Pension' },
-    banking: { title: 'Banking', prefix: 'BNK', partner: 'WEMA Bank' },
-    grants: { title: 'Grants and funding', prefix: 'GRT', partner: 'WAWUAfrica' },
+    loans: { title: 'Loans/EasyBuy', prefix: 'LON', partner: 'our lending partner' },
+    pension: { title: 'Pensions', prefix: 'PEN', partner: 'ARM Pension' },
+    grants: { title: 'Grants', prefix: 'GRT', partner: 'WAWUAfrica' },
   };
 
   /**

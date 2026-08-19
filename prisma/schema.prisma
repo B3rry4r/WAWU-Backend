@@ -161,6 +161,7 @@ enum ServiceApplicationKind {
   pension
   banking
   grants
+  loans
 }
 
 enum GuideKind {

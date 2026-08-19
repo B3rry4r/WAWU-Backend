@@ -63,20 +63,12 @@ export const LEGAL_SERVICES: LegalService[] = [
   // ---- Simple: no consultation, no lawyer interaction ----
   {
     code: 'cac-registration',
-    name: 'CAC business registration',
+    name: 'CAC business name registration',
     category: 'Business Services',
     path: 'simple',
-    blurb: 'Register a limited company or business name with the Corporate Affairs Commission.',
+    blurb: 'Register your business name with the Corporate Affairs Commission.',
     priceNaira: null,
     requiresDocuments: true,
-  },
-  {
-    code: 'business-name-reservation',
-    name: 'Business name reservation',
-    category: 'Business Services',
-    path: 'simple',
-    blurb: 'Reserve your business name at CAC before somebody else takes it.',
-    priceNaira: null,
   },
   {
     code: 'tax-registration',
