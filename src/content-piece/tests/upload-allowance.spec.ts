@@ -85,8 +85,8 @@ function dto(accessType: 'free' | 'paid'): CreateContentDto {
 
 describe('ContentPieceService upload allowances', () => {
   it('matches the tiers advertised on the pricing card', () => {
-    expect(UPLOAD_ALLOWANCE_BY_TIER.basic).toEqual({ free: 1, paid: 2, total: 3 });
-    expect(UPLOAD_ALLOWANCE_BY_TIER.pro).toEqual({ free: 2, paid: 5, total: 7 });
+    expect(UPLOAD_ALLOWANCE_BY_TIER.basic).toEqual({ free: 1, paid: 5, total: 6 });
+    expect(UPLOAD_ALLOWANCE_BY_TIER.pro).toEqual({ free: 2, paid: 13, total: 15 });
   });
 
   it('claims a slot when the upload is within allowance', async () => {
@@ -103,12 +103,12 @@ describe('ContentPieceService upload allowances', () => {
     expect(state.slotsUsed).toBe(1);
   });
 
-  it('refuses a third paid upload on Basic (2 paid slots)', async () => {
-    const { service, state } = buildService('basic', { free: 1, paid: 2 });
+  it('refuses a sixth paid upload on Basic (5 paid slots)', async () => {
+    const { service, state } = buildService('basic', { free: 1, paid: 5 });
     await expect(service.create('creator-1', dto('paid'))).rejects.toThrow(
       ForbiddenException,
     );
-    expect(state.slotsUsed).toBe(3);
+    expect(state.slotsUsed).toBe(6);
   });
 
   it('allows Pro a second free upload where Basic is capped', async () => {
@@ -117,8 +117,8 @@ describe('ContentPieceService upload allowances', () => {
     expect(state.slotsUsed).toBe(2);
   });
 
-  it('refuses a sixth paid upload on Pro (5 paid slots)', async () => {
-    const { service } = buildService('pro', { free: 2, paid: 5 });
+  it('refuses a fourteenth paid upload on Pro (13 paid slots)', async () => {
+    const { service } = buildService('pro', { free: 2, paid: 13 });
     await expect(service.create('creator-1', dto('paid'))).rejects.toThrow(
       ForbiddenException,
     );
@@ -133,7 +133,7 @@ describe('ContentPieceService upload allowances', () => {
   });
 
   it('does not claim a slot when the write is rejected', async () => {
-    const { service, tx } = buildService('basic', { free: 1, paid: 2 });
+    const { service, tx } = buildService('basic', { free: 1, paid: 5 });
     await expect(service.create('creator-1', dto('free'))).rejects.toThrow();
     expect(tx.contentPiece.create).not.toHaveBeenCalled();
   });

@@ -9,8 +9,8 @@ import type { CreatorTier } from '../../generated/prisma/enums';
  * prisma/schema.prisma): it derives from `tier`, so a tier change takes
  * effect immediately rather than needing a backfill.
  *
- * Basic  — 3 uploads: 1 free, 2 paid.
- * Pro    — 7 uploads: 2 free, 5 paid.
+ * Basic  — 6 uploads: 1 free, 5 paid.
+ * Pro    — 15 uploads: 2 free, 13 paid.
  *
  * `total` is not independent: it is free + paid, and a creator who has used
  * all their free slots cannot spend the remainder on more free uploads.
@@ -23,8 +23,8 @@ export interface UploadAllowance {
 }
 
 export const UPLOAD_ALLOWANCE_BY_TIER: Record<CreatorTier, UploadAllowance> = {
-  basic: { free: 1, paid: 2, total: 3 },
-  pro: { free: 2, paid: 5, total: 7 },
+  basic: { free: 1, paid: 5, total: 6 },
+  pro: { free: 2, paid: 13, total: 15 },
 };
 
 export function uploadAllowanceFor(tier: CreatorTier): UploadAllowance {

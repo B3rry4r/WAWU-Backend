@@ -127,7 +127,7 @@ describe('CreatorState (contract)', () => {
           subscriptionPaid: true,
           kycStatus: 'pending',
           slotsUsed: 1,
-          slotsTotal: 3,
+          slotsTotal: 6,
           dmPrice: 100,
           dmEnabled: true,
         },
@@ -143,7 +143,7 @@ describe('CreatorState (contract)', () => {
       expect(res.body.data).toMatchObject({
         wawuUserId: USER_CREATOR_PRO,
         tier: 'pro',
-        slotsTotal: 7,
+        slotsTotal: 15,
       });
     });
 
