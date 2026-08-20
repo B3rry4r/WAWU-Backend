@@ -120,13 +120,26 @@ export class UserProfileService {
     }
   }
 
-  async getPublicProfile(wawuUserId: string): Promise<CreatorProfile> {
-    const profile = await this.prisma.userProfile.findUnique({
-      where: { wawuUserId },
-    });
+  /**
+   * Accepts either a wawuUserId or a handle.
+   *
+   * Profiles are shared by username, not by an opaque id, so a link somebody
+   * actually sends to a friend has to resolve. The id is tried first because
+   * that is what the app's own internal links use; a handle lookup only runs
+   * when that misses.
+   */
+  async getPublicProfile(idOrHandle: string): Promise<CreatorProfile> {
+    const profile =
+      (await this.prisma.userProfile.findUnique({
+        where: { wawuUserId: idOrHandle },
+      })) ??
+      (await this.prisma.userProfile.findUnique({
+        where: { handle: idOrHandle.replace(/^@/, '') },
+      }));
     if (!profile) {
       throw new NotFoundException('User not found');
     }
+    const wawuUserId = profile.wawuUserId;
 
     const creatorState = await this.prisma.creatorState.findUnique({
       where: { wawuUserId },

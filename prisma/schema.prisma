@@ -787,6 +787,11 @@ model Playbook {
   description     String
   chapters        Json
   readingSections Json
+  /// The uploaded document, stored via POST /uploads/presign. Null means the
+  /// playbook is described but has no file to hand out yet.
+  fileUrl         String?
+  updatedAt       DateTime?
+  updatedBy       String?
 }
 
 /// `sections` (registry: "object[]", nullable) kept as Json for the same
@@ -801,6 +806,10 @@ model LearnGuide {
   readMinutes Int
   sections    Json?
   fileCount   Int?
+  /// The uploaded document, stored via POST /uploads/presign.
+  fileUrl     String?
+  updatedAt   DateTime?
+  updatedBy   String?
 
   @@index([kind])
   @@index([country])

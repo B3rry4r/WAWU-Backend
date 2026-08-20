@@ -1,10 +1,14 @@
 import {
+  Body,
   Controller,
   Get,
   NotFoundException,
   Param,
   ParseUUIDPipe,
+  Patch,
+  Post,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import { IsInt, IsOptional, Max, Min } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -18,6 +22,8 @@ import type { Paginated } from '../common/interceptors/response.interceptor';
 import type { LearnGuideResponse } from '../common/types';
 import { ListLearnGuidesQueryDto } from './dto/list-learn-guides-query.dto';
 import { LearnGuideService } from './learn-guide.service';
+import { AdminKeyGuard } from '../common/guards/admin-key.guard';
+import { UpsertLearnGuideDto } from './dto/upsert-learn-guide.dto';
 
 /**
  * `kind`/`country` filters + opt-in `page`/`perPage`. One class because the
@@ -57,6 +63,22 @@ export class LearnGuideController {
   ): Promise<LearnGuideResponse[] | Paginated<LearnGuideResponse>> {
     const guides = await this.learnGuideService.findAll(query);
     return wantsPagination(query) ? paginateArray(guides, query) : guides;
+  }
+
+  /**
+   * Operator upload. Guides were seeded text with no document behind them.
+   * Behind the operator key: publishing a guide is not a user action.
+   */
+  @Post()
+  @UseGuards(AdminKeyGuard)
+  create(@Body() dto: UpsertLearnGuideDto) {
+    return this.learnGuideService.createGuide(dto);
+  }
+
+  @Patch(':id')
+  @UseGuards(AdminKeyGuard)
+  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpsertLearnGuideDto) {
+    return this.learnGuideService.updateGuide(id, dto);
   }
 
   @Get(':id')

@@ -9,6 +9,56 @@ import type { ListLearnGuidesQueryDto } from './dto/list-learn-guides-query.dto'
 export class LearnGuideService {
   constructor(private readonly prisma: PrismaService) {}
 
+  async createGuide(dto: {
+    title?: string;
+    subtitle?: string;
+    kind?: string;
+    country?: string;
+    readMinutes?: number;
+    updated?: string;
+    fileUrl?: string;
+  }) {
+    return this.prisma.learnGuide.create({
+      data: {
+        title: dto.title ?? 'Untitled guide',
+        subtitle: dto.subtitle ?? '',
+        kind: (dto.kind ?? 'guide') as never,
+        country: dto.country ?? null,
+        readMinutes: dto.readMinutes ?? 5,
+        updated: dto.updated ? new Date(dto.updated) : new Date(),
+        fileUrl: dto.fileUrl ?? null,
+        updatedAt: new Date(),
+      },
+    });
+  }
+
+  async updateGuide(
+    id: string,
+    dto: {
+      title?: string;
+      subtitle?: string;
+      kind?: string;
+      country?: string;
+      readMinutes?: number;
+      updated?: string;
+      fileUrl?: string;
+    },
+  ) {
+    return this.prisma.learnGuide.update({
+      where: { id },
+      data: {
+        ...(dto.title !== undefined && { title: dto.title }),
+        ...(dto.subtitle !== undefined && { subtitle: dto.subtitle }),
+        ...(dto.kind !== undefined && { kind: dto.kind as never }),
+        ...(dto.country !== undefined && { country: dto.country }),
+        ...(dto.readMinutes !== undefined && { readMinutes: dto.readMinutes }),
+        ...(dto.updated !== undefined && { updated: new Date(dto.updated) }),
+        ...(dto.fileUrl !== undefined && { fileUrl: dto.fileUrl }),
+        updatedAt: new Date(),
+      },
+    });
+  }
+
   async findAll(query: ListLearnGuidesQueryDto): Promise<LearnGuideResponse[]> {
     const guides = await this.prisma.learnGuide.findMany({
       where: {
