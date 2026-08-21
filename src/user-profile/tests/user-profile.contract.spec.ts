@@ -243,11 +243,48 @@ describe('UserProfile (contract)', () => {
         .expect(400);
     });
 
-    it('400s on a payload with a non-whitelisted field (websiteUrl is read-only via this endpoint)', async () => {
-      await request(app.getHttpServer())
+    // `websiteUrl` used to be rejected here: the registry's PATCH body list
+    // omitted it, so `forbidNonWhitelisted` 400'd it. Commit 85ef2f6 made it
+    // (and the rest of a creator's links) writable, so "websiteUrl is
+    // read-only" no longer describes the product. The rules that DO still
+    // apply are asserted instead: the field round-trips, it has to be a real
+    // link, and the whitelist itself is still enforced.
+    it('accepts and persists websiteUrl (writable since 85ef2f6)', async () => {
+      const res = await request(app.getHttpServer())
         .patch('/users/me')
         .set('Authorization', `Bearer ${userToken}`)
         .send({ websiteUrl: 'https://example.com' })
+        .expect(200);
+
+      expect(res.body.data).toEqual(
+        expect.objectContaining({ websiteUrl: 'https://example.com' }),
+      );
+
+      const stored = await prisma.userProfile.findUnique({
+        where: { wawuUserId: USER_PLAIN },
+      });
+      expect(stored?.websiteUrl).toBe('https://example.com');
+
+      // Restore the seeded value so this suite leaves no residue behind.
+      await prisma.userProfile.update({
+        where: { wawuUserId: USER_PLAIN },
+        data: { websiteUrl: null },
+      });
+    });
+
+    it('400s when websiteUrl is not a full link', async () => {
+      await request(app.getHttpServer())
+        .patch('/users/me')
+        .set('Authorization', `Bearer ${userToken}`)
+        .send({ websiteUrl: 'not-a-url' })
+        .expect(400);
+    });
+
+    it('400s on a payload with a field that is genuinely not whitelisted', async () => {
+      await request(app.getHttpServer())
+        .patch('/users/me')
+        .set('Authorization', `Bearer ${userToken}`)
+        .send({ trustScore: 99 })
         .expect(400);
     });
 

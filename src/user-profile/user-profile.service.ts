@@ -179,6 +179,10 @@ export class UserProfileService {
       whatsappHandle: profile.whatsappHandle,
       websiteUrl: profile.websiteUrl,
       tier: creatorState.tier,
+      // Buyer-facing DM settings — see CreatorProfile's doc comment for why
+      // their absence made paid messaging unusable.
+      dmEnabled: creatorState.dmEnabled,
+      dmPrice: creatorState.dmPrice,
       evgScore: evgScore?.score ?? 0,
       contentCount,
       followerCount,

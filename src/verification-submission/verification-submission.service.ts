@@ -123,19 +123,33 @@ export class VerificationSubmissionService {
       throw new BadRequestException('rejectionReason is required when rejecting a submission');
     }
 
-    const updated = await this.prisma.verificationSubmission.update({
+    // Elevate at WAWU ID BEFORE recording the approval locally.
+    //
+    // The other order looks harmless but is not recoverable: this method
+    // refuses any submission that is not `pending`, so if the row were
+    // flipped to `approved` first and the callback then failed, the
+    // submission would be permanently approved on this side, never elevated
+    // at WAWU ID, and impossible to retry through the API — a silent
+    // divergence between two services with no way back. Elevating first
+    // means a failed callback leaves the submission `pending` and the review
+    // simply retryable. The reverse risk is benign: if the callback succeeds
+    // and the write then fails, the tier PATCH is idempotent (it sets an
+    // absolute value), so the retry re-sends the same tier.
+    if (dto.decision === 'approved') {
+      await this.wawuIdClient.elevateVerificationTier(
+        submission.wawuUserId,
+        submission.tier,
+      );
+    }
+
+    return this.prisma.verificationSubmission.update({
       where: { id },
       data: {
         status: dto.decision,
         reviewedAt: new Date(),
-        rejectionReason: dto.decision === 'rejected' ? (dto.rejectionReason ?? null) : null,
+        rejectionReason:
+          dto.decision === 'rejected' ? (dto.rejectionReason ?? null) : null,
       },
     });
-
-    if (dto.decision === 'approved') {
-      await this.wawuIdClient.elevateVerificationTier(submission.wawuUserId, submission.tier);
-    }
-
-    return updated;
   }
 }

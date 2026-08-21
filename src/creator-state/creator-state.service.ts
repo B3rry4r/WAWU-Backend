@@ -61,7 +61,10 @@ export class CreatorStateService {
   }
 
   async updateDmSettings(wawuUserId: string, dto: UpdateDmSettingsDto): Promise<CreatorStateResponse> {
-    const existing = await this.prisma.creatorState.findUnique({ where: { wawuUserId } });
+    const [existing, submissionCount] = await Promise.all([
+      this.prisma.creatorState.findUnique({ where: { wawuUserId } }),
+      this.prisma.kycSubmission.count({ where: { wawuUserId } }),
+    ]);
     if (!existing) {
       throw new ForbiddenException('This account has no creator state — a creator account type is required.');
     }
@@ -69,6 +72,10 @@ export class CreatorStateService {
       where: { wawuUserId },
       data: { dmEnabled: dto.dmEnabled, dmPrice: dto.dmPrice },
     });
-    return this.toResponse(updated);
+    // Must pass `hasSubmitted` through, exactly as getState does. Letting it
+    // default to `true` made this endpoint report 'pending' for an account
+    // GET /creator/state reported as 'not_started' — the same creator saw two
+    // different KYC states depending on which call refreshed the screen.
+    return this.toResponse(updated, submissionCount > 0);
   }
 }

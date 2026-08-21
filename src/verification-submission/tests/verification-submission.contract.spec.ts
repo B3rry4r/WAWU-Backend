@@ -19,12 +19,35 @@ import { VerificationSubmissionModule } from '../verification-submission.module'
  * or mock-wawu-id/server.js yet (see ../guards/admin.guard.ts).
  */
 
-const MOCK_WAWU_ID_URL = 'http://localhost:4001';
+const MOCK_WAWU_ID_URL = process.env.WAWU_ID_BASE_URL ?? 'http://localhost:4001';
+
+/**
+ * The service-to-service key this suite's approval path has to present to the
+ * mock WAWU ID.
+ *
+ * This suite exercises a real cross-service call (WawuIdClient PATCHes
+ * /internal/users/:id/verification-tier) but never pinned the shared secret,
+ * so it silently inherited whatever `.env` happened to hold. `.env` points at
+ * the REAL WAWU ID on :3002 and carries that service's key, while the mock on
+ * :4001 runs on the documented dev fallback — so the PATCH 401'd, WawuIdClient
+ * threw, and the endpoint 500'd. The test was correct; the harness was reading
+ * a key for a different server.
+ *
+ * Pinned here (and exported into the environment below, before ConfigModule
+ * compiles) so both sides of the call always agree regardless of ambient
+ * `.env`. Override via MOCK_WAWU_ID_INTERNAL_SERVICE_KEY if the mock is
+ * started with a non-default key.
+ */
+const MOCK_INTERNAL_SERVICE_KEY =
+  process.env.MOCK_WAWU_ID_INTERNAL_SERVICE_KEY ?? 'dev-internal-service-key-not-secret';
 
 // Seeded wawuUserIds (mirrors mock-wawu-id/server.js and prisma/seed.ts).
 const USER_PLAIN = '00000000-0000-4000-8000-000000000001'; // verificationTier: verified_user
 const USER_CREATOR_BASIC = '00000000-0000-4000-8000-000000000002'; // verificationTier: basic
 const ADMIN_WAWU_ID = '00000000-0000-4000-8000-0000000000ad'; // not a seeded WAWU-ID user; admin allowlist only
+// A sub mock-wawu-id has never heard of, so /internal/.../verification-tier
+// 404s for it — used to force the approval callback to fail on demand.
+const UNKNOWN_TO_WAWU_ID = '00000000-0000-4000-8000-0000000000ff';
 
 const TIER_ORDER = [
   'basic',
@@ -100,10 +123,36 @@ describe('VerificationSubmission contract', () => {
     // AdminGuard reads this at request time via ConfigService — must be set
     // before ConfigModule.forRoot() compiles below.
     process.env.ADMIN_WAWU_USER_IDS = ADMIN_WAWU_ID;
+    // Same timing requirement: WawuIdClient reads the key in its constructor,
+    // and @nestjs/config never overwrites a variable already in process.env,
+    // so setting it here wins over the `.env` value meant for the real
+    // WAWU ID service.
+    process.env.WAWU_ID_INTERNAL_SERVICE_KEY = MOCK_INTERNAL_SERVICE_KEY;
+    process.env.WAWU_ID_BASE_URL = MOCK_WAWU_ID_URL;
 
     const userLogin = await loginFull('user@test.wawu.dev');
     userToken = userLogin.accessToken;
     userStartingVerificationTier = userLogin.verificationTier;
+
+    // Fail with the actual reason if the mock rejects our key, rather than
+    // letting it surface later as an unexplained 500 from the approval test.
+    // Writes back the tier we just read, so the probe itself changes nothing.
+    const preflightUrl = `${MOCK_WAWU_ID_URL}/internal/users/${USER_PLAIN}/verification-tier`;
+    const preflight = await fetch(preflightUrl, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Service-Key': MOCK_INTERNAL_SERVICE_KEY,
+      },
+      body: JSON.stringify({ tier: userStartingVerificationTier }),
+    });
+    if (!preflight.ok) {
+      throw new Error(
+        `mock-wawu-id rejected the internal service key (${preflight.status}). ` +
+          'Start the mock with the default dev key, or set ' +
+          'MOCK_WAWU_ID_INTERNAL_SERVICE_KEY to the key it is using.',
+      );
+    }
     creatorToken = await loginAs('creator-basic@test.wawu.dev');
     adminToken = await mintTokenFor(ADMIN_WAWU_ID);
 
@@ -126,13 +175,21 @@ describe('VerificationSubmission contract', () => {
     // Clean slate for the two seeded identities this spec drives through
     // the full submit -> reject -> resubmit -> approve lifecycle.
     await prisma.verificationSubmission.deleteMany({
-      where: { wawuUserId: { in: [USER_PLAIN, USER_CREATOR_BASIC] } },
+      where: {
+        wawuUserId: {
+          in: [USER_PLAIN, USER_CREATOR_BASIC, UNKNOWN_TO_WAWU_ID],
+        },
+      },
     });
   });
 
   afterAll(async () => {
     await prisma.verificationSubmission.deleteMany({
-      where: { wawuUserId: { in: [USER_PLAIN, USER_CREATOR_BASIC] } },
+      where: {
+        wawuUserId: {
+          in: [USER_PLAIN, USER_CREATOR_BASIC, UNKNOWN_TO_WAWU_ID],
+        },
+      },
     });
     // Restore the mock WAWU ID service's tier for this seeded user (see the
     // comment on userStartingVerificationTier above).
@@ -140,7 +197,7 @@ describe('VerificationSubmission contract', () => {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
-        'X-Service-Key': process.env.WAWU_ID_INTERNAL_SERVICE_KEY ?? 'dev-internal-service-key-not-secret',
+        'X-Service-Key': MOCK_INTERNAL_SERVICE_KEY,
       },
       body: JSON.stringify({ tier: userStartingVerificationTier }),
     });
@@ -406,6 +463,51 @@ describe('VerificationSubmission contract', () => {
       });
       const body = (await freshLogin.json()) as { user: { verificationTier: string } };
       expect(body.user.verificationTier).toBe('verified_business');
+    });
+
+    /**
+     * Regression guard for the ordering inside review().
+     *
+     * The approval used to be written to the database first and the WAWU ID
+     * callback fired afterwards. Because review() refuses any submission that
+     * is not `pending`, a failed callback left the submission permanently
+     * `approved` here, never elevated there, and impossible to retry through
+     * the API. Approving a submission for a wawuUserId the identity service
+     * has never heard of makes the callback fail on demand.
+     */
+    it('leaves the submission pending and retryable when the WAWU ID callback fails', async () => {
+      const created = await prisma.verificationSubmission.create({
+        data: {
+          wawuUserId: UNKNOWN_TO_WAWU_ID,
+          tier: 'verified_business',
+          status: 'pending',
+          documents: ['https://storage.test/unknown-user.pdf'],
+        },
+      });
+
+      await request(app.getHttpServer())
+        .post(`/api/hub/verification/submissions/${created.id}/review`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ decision: 'approved' })
+        .expect(500);
+
+      const after = await prisma.verificationSubmission.findUnique({
+        where: { id: created.id },
+      });
+      expect(after).toMatchObject({ status: 'pending', reviewedAt: null });
+
+      // Still reviewable — which is the whole point of not writing first.
+      const retry = await request(app.getHttpServer())
+        .post(`/api/hub/verification/submissions/${created.id}/review`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          decision: 'rejected',
+          rejectionReason: 'Could not verify identity.',
+        })
+        .expect(200);
+      expect(retry.body.data).toMatchObject({ status: 'rejected' });
+
+      await prisma.verificationSubmission.delete({ where: { id: created.id } });
     });
   });
 });

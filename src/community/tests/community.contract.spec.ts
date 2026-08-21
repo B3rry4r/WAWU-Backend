@@ -34,6 +34,16 @@ const TEST_COMMUNITY_OPEN = 'c1000000-0000-4000-8000-000000000001';
 const TEST_COMMUNITY_PRIVATE = 'c1000000-0000-4000-8000-000000000002';
 const TEST_COMMUNITY_COUNTS = 'c1000000-0000-4000-8000-000000000003';
 
+// Names the POST /communities tests ask the API to create. Swept in afterAll
+// so a failed assertion can never leave a row behind for the next run.
+const CREATED_COMMUNITY_NAMES = [
+  'TEST: Basic Creator Open Community',
+  'TEST: Basic Creator Private Attempt',
+  'TEST: Pro Creator Private Community',
+  'TEST: Pro Second Community A',
+  'TEST: Pro Second Community B',
+];
+
 const MOCK_WAWU_ID_PORT = process.env.WAWU_ID_JWKS_URL
   ? new URL(process.env.WAWU_ID_JWKS_URL).port
   : '4001';
@@ -68,6 +78,46 @@ async function login(identifier: string): Promise<string> {
   return body.accessToken;
 }
 
+/**
+ * The POST/PATCH gate matrix needs identities the seed does not provide (an
+ * UNPAID creator) and, more importantly, identities no OTHER spec can move
+ * under it. Several specs mutate the three seeded accounts against this
+ * shared wawu_hub_test database — creator-subscription's subscribe flow
+ * promotes the seeded plain user to a creator account, and the seeded Basic
+ * creator's tier/slots are edited elsewhere — so pinning "Basic is refused a
+ * private community" to a seeded row makes the result depend on test order.
+ *
+ * Each gate test therefore runs against a throwaway WAWU ID registered by
+ * this spec, with a UserProfile + CreatorState this spec owns outright and
+ * deletes in afterAll. A per-run-unique email keeps the mock's
+ * 409-on-taken-email from firing when the mock server is reused across runs.
+ */
+let throwawayNonce = 0;
+async function registerThrowawayIdentity(
+  label: string,
+): Promise<{ sub: string; accessToken: string }> {
+  const nonce = `${Date.now().toString().slice(-8)}${(throwawayNonce += 1)}`;
+  const res = await fetch(`${MOCK_WAWU_ID_BASE}/auth/register`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      fullName: `Community Spec ${label}`,
+      email: `community-spec-${label}-${nonce}@test.wawu.dev`,
+      phone: `+2349${nonce}`,
+      country: 'NG',
+      password: 'not-a-real-password',
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`mock-wawu-id register failed for ${label}: ${res.status}`);
+  }
+  const body = (await res.json()) as {
+    accessToken: string;
+    user: { id: string };
+  };
+  return { sub: body.user.id, accessToken: body.accessToken };
+}
+
 describe('Community (contract)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
@@ -77,6 +127,20 @@ describe('Community (contract)', () => {
   let plainUserToken: string;
   let basicCreatorToken: string;
   let proCreatorToken: string;
+  // Spec-owned identities (see registerThrowawayIdentity) — the gate matrix
+  // runs against these, never against the mutable seeded accounts.
+  let ownPlainUserToken: string;
+  let ownUnpaidCreatorToken: string;
+  let ownUnpaidCreatorSub: string;
+  let ownBasicCreatorToken: string;
+  let ownBasicCreatorSub: string;
+  let ownProCreatorToken: string;
+  let ownProCreatorSub: string;
+  /** Every wawuUserId this spec registered — profiles/states torn down in afterAll. */
+  const ownedSubs: string[] = [];
+
+  /** Communities created by the POST /communities tests — cleaned up in afterAll. */
+  const createdCommunityIds: string[] = [];
 
   beforeAll(async () => {
     // Reuse an already-running mock WAWU ID if present, otherwise spawn one
@@ -98,6 +162,19 @@ describe('Community (contract)', () => {
     plainUserToken = await login('user@test.wawu.dev');
     basicCreatorToken = await login('creator-basic@test.wawu.dev');
     proCreatorToken = await login('creator-pro@test.wawu.dev');
+
+    const ownPlain = await registerThrowawayIdentity('plain');
+    const ownUnpaid = await registerThrowawayIdentity('unpaid');
+    const ownBasic = await registerThrowawayIdentity('basic');
+    const ownPro = await registerThrowawayIdentity('pro');
+    ownPlainUserToken = ownPlain.accessToken;
+    ownUnpaidCreatorToken = ownUnpaid.accessToken;
+    ownUnpaidCreatorSub = ownUnpaid.sub;
+    ownBasicCreatorToken = ownBasic.accessToken;
+    ownBasicCreatorSub = ownBasic.sub;
+    ownProCreatorToken = ownPro.accessToken;
+    ownProCreatorSub = ownPro.sub;
+    ownedSubs.push(ownPlain.sub, ownUnpaid.sub, ownBasic.sub, ownPro.sub);
 
     const moduleRef = await Test.createTestingModule({
       imports: [
@@ -121,6 +198,60 @@ describe('Community (contract)', () => {
     await app.init();
 
     prisma = moduleRef.get(PrismaService);
+
+    // The gate matrix, as four rows this spec fully controls. NOTE both
+    // paid creators are deliberately kycStatus='pending': KYC gates EARNING,
+    // never hosting (CLAUDE.md — the two creator gates are independent), and
+    // that independence is exactly what these tests exist to pin.
+    const ownProfiles: Array<{
+      sub: string;
+      accountType: 'user' | 'creator';
+      state?: { tier: 'basic' | 'pro'; subscriptionPaid: boolean };
+    }> = [
+      { sub: ownPlain.sub, accountType: 'user' },
+      {
+        sub: ownUnpaid.sub,
+        accountType: 'creator',
+        state: { tier: 'basic', subscriptionPaid: false },
+      },
+      {
+        sub: ownBasic.sub,
+        accountType: 'creator',
+        state: { tier: 'basic', subscriptionPaid: true },
+      },
+      {
+        sub: ownPro.sub,
+        accountType: 'creator',
+        state: { tier: 'pro', subscriptionPaid: true },
+      },
+    ];
+    for (const { sub, accountType, state } of ownProfiles) {
+      await prisma.userProfile.upsert({
+        where: { wawuUserId: sub },
+        update: { accountType },
+        create: {
+          wawuUserId: sub,
+          accountType,
+          bio: 'Fixture for community.contract.spec.ts.',
+          interests: [],
+        },
+      });
+      if (state) {
+        await prisma.creatorState.upsert({
+          where: { wawuUserId: sub },
+          update: state,
+          create: {
+            wawuUserId: sub,
+            tier: state.tier,
+            subscriptionPaid: state.subscriptionPaid,
+            kycStatus: 'pending',
+            slotsUsed: 0,
+            dmPrice: null,
+            dmEnabled: false,
+          },
+        });
+      }
+    }
 
     // Fixtures this spec owns outright (fresh UUIDs, cleaned up in afterAll).
     await prisma.community.create({
@@ -222,6 +353,30 @@ describe('Community (contract)', () => {
         },
       },
     });
+    // Communities the POST /communities tests created (ids only known at
+    // runtime), then the throwaway identities' own rows. The name sweep is
+    // belt-and-braces: if an assertion fails BEFORE the new id is recorded,
+    // an id-only cleanup would leave the row behind and poison the next run
+    // (which is exactly what happened once).
+    if (createdCommunityIds.length > 0) {
+      await prisma.community.deleteMany({
+        where: { id: { in: createdCommunityIds } },
+      });
+    }
+    await prisma.community.deleteMany({
+      where: { name: { in: CREATED_COMMUNITY_NAMES } },
+    });
+    if (ownedSubs.length > 0) {
+      await prisma.community.deleteMany({
+        where: { hostWawuId: { in: ownedSubs } },
+      });
+      await prisma.creatorState.deleteMany({
+        where: { wawuUserId: { in: ownedSubs } },
+      });
+      await prisma.userProfile.deleteMany({
+        where: { wawuUserId: { in: ownedSubs } },
+      });
+    }
     // Any membership this spec's join tests created against the fixtures
     // above is already gone via cascade; nothing else was mutated.
     await app?.close();
@@ -404,6 +559,319 @@ describe('Community (contract)', () => {
         communityId: TEST_COMMUNITY_PRIVATE,
         status: 'pending',
         joinedAt: null,
+      });
+    });
+  });
+
+  /**
+   * The hosting gap: community hosting is a SOLD subscription feature
+   * (docs/01_SPEC.md — Basic "cannot open/host private communities", Pro
+   * "Can open/host private communities") and yet nothing in this backend
+   * could write a Community row. These tests pin the write path AND, just as
+   * importantly, which gates apply to it.
+   */
+  describe('POST /communities', () => {
+    it('401s with no Authorization header', async () => {
+      await request(app.getHttpServer())
+        .post('/communities')
+        .send({ name: 'No auth', description: 'No auth', kind: 'open' })
+        .expect(401);
+    });
+
+    it('403s a plain (non-creator) account', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/communities')
+        .set('Authorization', `Bearer ${ownPlainUserToken}`)
+        .send({
+          name: 'Plain user community',
+          description: 'A plain user should not be able to host.',
+          kind: 'open',
+        })
+        .expect(403);
+
+      expect(res.body.message).toBe(
+        'This endpoint is only available to creator accounts.',
+      );
+    });
+
+    it('403s a creator whose subscription is unpaid', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/communities')
+        .set('Authorization', `Bearer ${ownUnpaidCreatorToken}`)
+        .send({
+          name: 'Unpaid creator community',
+          description: 'Hosting is a paid-plan feature.',
+          kind: 'open',
+        })
+        .expect(403);
+
+      expect(res.body.message).toBe(
+        'A paid subscription is required to host a community (CreatorState.subscriptionPaid=false).',
+      );
+
+      const rows = await prisma.community.count({
+        where: { hostWawuId: ownUnpaidCreatorSub },
+      });
+      expect(rows).toBe(0);
+    });
+
+    it('creates an open community for a paid Basic creator whose KYC is still PENDING (the two gates are independent)', async () => {
+      // The precondition is asserted, not assumed: the whole point of this
+      // test is that "paid + KYC pending" is a normal, allowed state, and
+      // this exact independence has been got wrong in this codebase before.
+      const state = await prisma.creatorState.findUnique({
+        where: { wawuUserId: ownBasicCreatorSub },
+      });
+      expect(state).toMatchObject({
+        tier: 'basic',
+        subscriptionPaid: true,
+        kycStatus: 'pending',
+      });
+
+      const res = await request(app.getHttpServer())
+        .post('/communities')
+        .set('Authorization', `Bearer ${ownBasicCreatorToken}`)
+        .send({
+          name: 'TEST: Basic Creator Open Community',
+          description: 'Opened by a paid Basic creator with KYC pending.',
+          kind: 'open',
+        });
+
+      expect([200, 201]).toContain(res.status);
+      createdCommunityIds.push(res.body.data.id);
+
+      expect(res.body.data).toEqual({
+        id: expect.any(String),
+        name: 'TEST: Basic Creator Open Community',
+        description: 'Opened by a paid Basic creator with KYC pending.',
+        hostWawuId: ownBasicCreatorSub,
+        kind: 'open',
+        // Host-implies-member is this codebase's existing convention
+        // (CommunityMessageService.assertMember short-circuits on the host),
+        // so no CommunityMembership row is written for the host and the
+        // derived memberCount starts at 0.
+        memberCount: 0,
+        messagesToday: 0,
+      });
+
+      const stored = await prisma.community.findUnique({
+        where: { id: res.body.data.id },
+      });
+      expect(stored).toMatchObject({
+        hostWawuId: ownBasicCreatorSub,
+        kind: 'open',
+      });
+
+      const hostMembership = await prisma.communityMembership.findUnique({
+        where: {
+          userWawuId_communityId: {
+            userWawuId: ownBasicCreatorSub,
+            communityId: res.body.data.id,
+          },
+        },
+      });
+      expect(hostMembership).toBeNull();
+    });
+
+    it('403s a Basic creator asking for a PRIVATE community, naming the tier required', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/communities')
+        .set('Authorization', `Bearer ${ownBasicCreatorToken}`)
+        .send({
+          name: 'TEST: Basic Creator Private Attempt',
+          description: 'Private hosting is Pro-only per docs/01_SPEC.md.',
+          kind: 'private',
+        })
+        .expect(403);
+
+      expect(res.body.message).toBe(
+        'Private communities are a Pro-tier feature. Your Basic plan can host open communities — upgrade to Pro to host a private one.',
+      );
+
+      // Refused, not silently downgraded to an open community.
+      const leaked = await prisma.community.findFirst({
+        where: { name: 'TEST: Basic Creator Private Attempt' },
+      });
+      expect(leaked).toBeNull();
+    });
+
+    it('creates a PRIVATE community for a Pro creator', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/communities')
+        .set('Authorization', `Bearer ${ownProCreatorToken}`)
+        .send({
+          name: 'TEST: Pro Creator Private Community',
+          description: 'Private hosting is included on the Pro tier.',
+          kind: 'private',
+        });
+
+      expect([200, 201]).toContain(res.status);
+      createdCommunityIds.push(res.body.data.id);
+
+      expect(res.body.data).toMatchObject({
+        name: 'TEST: Pro Creator Private Community',
+        hostWawuId: ownProCreatorSub,
+        kind: 'private',
+      });
+    });
+
+    it('lets a Pro creator host more than one community (no invented cap)', async () => {
+      const first = await request(app.getHttpServer())
+        .post('/communities')
+        .set('Authorization', `Bearer ${ownProCreatorToken}`)
+        .send({
+          name: 'TEST: Pro Second Community A',
+          description: 'The spec states no per-creator community cap.',
+          kind: 'open',
+        });
+      const second = await request(app.getHttpServer())
+        .post('/communities')
+        .set('Authorization', `Bearer ${ownProCreatorToken}`)
+        .send({
+          name: 'TEST: Pro Second Community B',
+          description: 'The spec states no per-creator community cap.',
+          kind: 'open',
+        });
+
+      expect([200, 201]).toContain(first.status);
+      expect([200, 201]).toContain(second.status);
+      createdCommunityIds.push(first.body.data.id, second.body.data.id);
+      expect(first.body.data.id).not.toBe(second.body.data.id);
+    });
+
+    it('400s an invalid kind, a missing name, an over-long name and a whitespace-only name', async () => {
+      await request(app.getHttpServer())
+        .post('/communities')
+        .set('Authorization', `Bearer ${ownBasicCreatorToken}`)
+        .send({ name: 'Valid name', description: 'Valid', kind: 'secret' })
+        .expect(400);
+
+      await request(app.getHttpServer())
+        .post('/communities')
+        .set('Authorization', `Bearer ${ownBasicCreatorToken}`)
+        .send({ description: 'No name given', kind: 'open' })
+        .expect(400);
+
+      await request(app.getHttpServer())
+        .post('/communities')
+        .set('Authorization', `Bearer ${ownBasicCreatorToken}`)
+        .send({ name: 'x'.repeat(81), description: 'Too long', kind: 'open' })
+        .expect(400);
+
+      await request(app.getHttpServer())
+        .post('/communities')
+        .set('Authorization', `Bearer ${ownBasicCreatorToken}`)
+        .send({ name: '     ', description: 'Blank name', kind: 'open' })
+        .expect(400);
+    });
+
+    it('400s an unknown field (whitelist is enforced — hostWawuId is never client-supplied)', async () => {
+      await request(app.getHttpServer())
+        .post('/communities')
+        .set('Authorization', `Bearer ${ownBasicCreatorToken}`)
+        .send({
+          name: 'Spoofed host',
+          description: 'hostWawuId must come from the token, not the body.',
+          kind: 'open',
+          hostWawuId: USER_CREATOR_PRO,
+        })
+        .expect(400);
+    });
+  });
+
+  describe('PATCH /communities/:id', () => {
+    it('401s with no Authorization header', async () => {
+      await request(app.getHttpServer())
+        .patch(`/communities/${TEST_COMMUNITY_OPEN}`)
+        .send({ name: 'Renamed' })
+        .expect(401);
+    });
+
+    it('403s a plain (non-creator) account', async () => {
+      await request(app.getHttpServer())
+        .patch(`/communities/${TEST_COMMUNITY_OPEN}`)
+        .set('Authorization', `Bearer ${ownPlainUserToken}`)
+        .send({ name: 'Renamed by a plain user' })
+        .expect(403);
+    });
+
+    it('403s a creator who is not the host', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(`/communities/${TEST_COMMUNITY_OPEN}`)
+        .set('Authorization', `Bearer ${ownBasicCreatorToken}`)
+        .send({ name: 'Renamed by another creator' })
+        .expect(403);
+
+      expect(res.body.message).toBe(
+        'Only the community host can edit this community.',
+      );
+    });
+
+    it('404s a community that does not exist', async () => {
+      await request(app.getHttpServer())
+        .patch(`/communities/${NON_EXISTENT_COMMUNITY}`)
+        .set('Authorization', `Bearer ${proCreatorToken}`)
+        .send({ name: 'Renamed' })
+        .expect(404);
+    });
+
+    it('400s an empty body', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(`/communities/${TEST_COMMUNITY_OPEN}`)
+        .set('Authorization', `Bearer ${proCreatorToken}`)
+        .send({})
+        .expect(400);
+
+      expect(res.body.message).toBe(
+        'Nothing to update — send a name and/or a description.',
+      );
+    });
+
+    it('400s an attempt to change kind (immutable)', async () => {
+      await request(app.getHttpServer())
+        .patch(`/communities/${TEST_COMMUNITY_OPEN}`)
+        .set('Authorization', `Bearer ${proCreatorToken}`)
+        .send({ kind: 'private' })
+        .expect(400);
+    });
+
+    it('updates name and description for the host, leaving kind and host untouched (200)', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(`/communities/${TEST_COMMUNITY_OPEN}`)
+        .set('Authorization', `Bearer ${proCreatorToken}`)
+        .send({
+          name: 'TEST: Open Community (renamed)',
+          description: 'Edited by the host via PATCH.',
+        })
+        .expect(200);
+
+      expect(res.body.data).toMatchObject({
+        id: TEST_COMMUNITY_OPEN,
+        name: 'TEST: Open Community (renamed)',
+        description: 'Edited by the host via PATCH.',
+        hostWawuId: USER_CREATOR_PRO,
+        kind: 'open',
+      });
+
+      const stored = await prisma.community.findUnique({
+        where: { id: TEST_COMMUNITY_OPEN },
+      });
+      expect(stored).toMatchObject({
+        name: 'TEST: Open Community (renamed)',
+        kind: 'open',
+      });
+    });
+
+    it('accepts a partial update: description only, name preserved (200)', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(`/communities/${TEST_COMMUNITY_OPEN}`)
+        .set('Authorization', `Bearer ${proCreatorToken}`)
+        .send({ description: 'Description-only edit.' })
+        .expect(200);
+
+      expect(res.body.data).toMatchObject({
+        name: 'TEST: Open Community (renamed)',
+        description: 'Description-only edit.',
       });
     });
   });

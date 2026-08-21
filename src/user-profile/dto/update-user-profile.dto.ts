@@ -11,10 +11,15 @@ import {
 import { AccountType } from '../../../generated/prisma/enums';
 
 /**
- * PATCH /users/me body — registry.json UserProfile contract. Exactly the
- * registry's declared body fields; `websiteUrl` is deliberately NOT here
- * even though it's a UserProfile column, because the registry's PATCH body
- * list omits it (read-only via this endpoint per the frozen contract).
+ * PATCH /users/me body — registry.json UserProfile contract.
+ *
+ * `websiteUrl` was originally omitted here on purpose: the registry's PATCH
+ * body list left it out, so `forbidNonWhitelisted` made it read-only via this
+ * endpoint. Commit 85ef2f6 added it alongside the rest of a creator's links,
+ * because a creator has to be able to publish where they can be reached. This
+ * comment used to still claim the opposite, which is why a contract test kept
+ * asserting a 400 the endpoint no longer returns.
+ *
  * `@IsOptional()` treats an explicit `null` the same as `undefined` (skips
  * the rest of that field's validators), so a client MAY send `null` to
  * clear a nullable field, matching CreateCommentDto's `replyToId` idiom.

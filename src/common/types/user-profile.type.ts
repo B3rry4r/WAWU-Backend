@@ -25,6 +25,21 @@ export interface CreatorProfile {
   facebookUrl: string | null;
   linkedinUrl: string | null;
   tier: 'basic' | 'pro';
+  /**
+   * The creator's paid-message settings, as a BUYER needs to see them.
+   *
+   * These were missing from this aggregate, and nothing else exposed another
+   * user's DM settings — so the web client had no way to learn any creator's
+   * real price and hardcoded `dmEnabled: false, dmPrice: 0`. Every creator on
+   * the platform read as "Messages off" to every buyer, which made paid
+   * messaging non-functional from the only side that pays for it, however
+   * carefully the creator set their rate.
+   *
+   * `dmPrice` is null when the creator has not set one. A buyer-facing surface
+   * must treat "enabled with no price" as closed, never as free.
+   */
+  dmEnabled: boolean;
+  dmPrice: number | null;
   evgScore: number;
   contentCount: number;
   followerCount: number;

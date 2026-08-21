@@ -38,9 +38,35 @@ import { CreatorStateModule } from '../creator-state.module';
  * is untouched.
  */
 
-const USER_PLAIN = '00000000-0000-4000-8000-000000000001'; // seeded: no CreatorState row
-const USER_CREATOR_BASIC = '00000000-0000-4000-8000-000000000002'; // seeded: basic, subscriptionPaid, kyc pending
-const USER_CREATOR_PRO = '00000000-0000-4000-8000-000000000003'; // seeded: pro, subscriptionPaid, kyc approved
+/**
+ * Fixtures this spec owns outright.
+ *
+ * These assertions used to run against the three SHARED seeded accounts, and
+ * that made them order-dependent: content-piece's upload tests claim an
+ * upload slot on the seeded Basic creator (`slotsUsed += 1`) and
+ * creator-subscription's subscribe flow promotes the seeded plain user to a
+ * creator account. Whether `slotsUsed: 1` held therefore depended on which
+ * suite jest happened to run first — the exact failure mode that makes a red
+ * suite unreadable.
+ *
+ * This spec now creates its own rows under fresh UUIDs that neither seed.ts
+ * nor any other spec touches, and deletes them in afterAll. It signs its own
+ * tokens (see TestWawuAuthGuard below), so unlike community.contract.spec.ts
+ * it does not need to register throwaway identities with mock-wawu-id at all
+ * — a fresh `sub` is enough. Same principle, one less moving part.
+ */
+const OWN_PLAIN = 'c5000000-0000-4000-8000-000000000001'; // no CreatorState row
+const OWN_CREATOR_BASIC = 'c5000000-0000-4000-8000-000000000002'; // basic, paid, KYC submitted + pending
+const OWN_CREATOR_PRO = 'c5000000-0000-4000-8000-000000000003'; // pro, paid, kyc approved
+// Basic + paid, but has never opened a KYC submission: the stored `pending`
+// must surface as `not_started` (see CreatorStateService.toResponse).
+const OWN_CREATOR_NO_KYC = 'c5000000-0000-4000-8000-000000000004';
+const OWNED_SUBS = [
+  OWN_PLAIN,
+  OWN_CREATOR_BASIC,
+  OWN_CREATOR_PRO,
+  OWN_CREATOR_NO_KYC,
+];
 
 describe('CreatorState (contract)', () => {
   let app: INestApplication;
@@ -105,24 +131,119 @@ describe('CreatorState (contract)', () => {
     await app.init();
 
     prisma = moduleRef.get(PrismaService);
+
+    // Build this spec's own rows. Mirrors the seeded shapes the assertions
+    // below expect, but under UUIDs nothing else can move.
+    await prisma.userProfile.upsert({
+      where: { wawuUserId: OWN_PLAIN },
+      update: { accountType: 'user' },
+      create: {
+        wawuUserId: OWN_PLAIN,
+        accountType: 'user',
+        bio: 'Fixture for creator-state.contract.spec.ts.',
+        interests: [],
+      },
+    });
+    for (const [sub, state] of [
+      [
+        OWN_CREATOR_BASIC,
+        {
+          tier: 'basic',
+          subscriptionPaid: true,
+          kycStatus: 'pending',
+          slotsUsed: 1,
+          dmPrice: 100,
+          dmEnabled: true,
+        },
+      ],
+      [
+        OWN_CREATOR_PRO,
+        {
+          tier: 'pro',
+          subscriptionPaid: true,
+          kycStatus: 'approved',
+          slotsUsed: 2,
+          dmPrice: 300,
+          dmEnabled: true,
+        },
+      ],
+      [
+        OWN_CREATOR_NO_KYC,
+        {
+          tier: 'basic',
+          subscriptionPaid: true,
+          kycStatus: 'pending',
+          slotsUsed: 0,
+          dmPrice: 100,
+          dmEnabled: false,
+        },
+      ],
+    ] as const) {
+      await prisma.userProfile.upsert({
+        where: { wawuUserId: sub },
+        update: { accountType: 'creator' },
+        create: {
+          wawuUserId: sub,
+          accountType: 'creator',
+          bio: 'Fixture for creator-state.contract.spec.ts.',
+          interests: [],
+        },
+      });
+      await prisma.creatorState.upsert({
+        where: { wawuUserId: sub },
+        update: state as never,
+        create: { wawuUserId: sub, ...state } as never,
+      });
+    }
+
+    // `kycStatus: 'pending'` is reported as 'not_started' unless a
+    // KycSubmission actually exists, so the "pending" fixture needs one.
+    // OWN_CREATOR_NO_KYC deliberately gets none.
+    await prisma.kycSubmission.deleteMany({
+      where: { wawuUserId: { in: [...OWNED_SUBS] } },
+    });
+    await prisma.kycSubmission.create({
+      data: {
+        wawuUserId: OWN_CREATOR_BASIC,
+        country: 'NG',
+        bvn: '12345678901',
+        nin: '12345678901',
+        idDocumentType: 'national_id',
+        idDocumentUrl: 'https://storage.test/id.pdf',
+        payoutBankName: 'Test Bank',
+        payoutAccountNumber: '0123456789',
+        status: 'pending',
+      },
+    });
   });
 
   afterAll(async () => {
+    // Undo everything this spec created, so the shared wawu_hub_test database
+    // is byte-for-byte what it was before the run.
+    await prisma.kycSubmission.deleteMany({
+      where: { wawuUserId: { in: [...OWNED_SUBS] } },
+    });
+    await prisma.creatorState.deleteMany({
+      where: { wawuUserId: { in: [...OWNED_SUBS] } },
+    });
+    await prisma.userProfile.deleteMany({
+      where: { wawuUserId: { in: [...OWNED_SUBS] } },
+    });
     await app.close();
   });
 
   describe('GET /creator/state', () => {
-    it('200s with the shape + tier-derived slotsTotal for a seeded basic creator', async () => {
+    it('200s with the shape + tier-derived slotsTotal for a basic creator', async () => {
       const res = await request(app.getHttpServer())
         .get('/creator/state')
-        .set('Authorization', `Bearer ${signToken(USER_CREATOR_BASIC)}`)
+        .set('Authorization', `Bearer ${signToken(OWN_CREATOR_BASIC)}`)
         .expect(200);
 
       expect(res.body).toMatchObject({
         statusCode: 200,
         message: 'OK',
         data: {
-          wawuUserId: USER_CREATOR_BASIC,
+          wawuUserId: OWN_CREATOR_BASIC,
           tier: 'basic',
           subscriptionPaid: true,
           kycStatus: 'pending',
@@ -134,16 +255,36 @@ describe('CreatorState (contract)', () => {
       });
     });
 
-    it('200s with slotsTotal=7 for the seeded pro creator', async () => {
+    it('200s with slotsTotal=15 for a pro creator', async () => {
       const res = await request(app.getHttpServer())
         .get('/creator/state')
-        .set('Authorization', `Bearer ${signToken(USER_CREATOR_PRO)}`)
+        .set('Authorization', `Bearer ${signToken(OWN_CREATOR_PRO)}`)
         .expect(200);
 
       expect(res.body.data).toMatchObject({
-        wawuUserId: USER_CREATOR_PRO,
+        wawuUserId: OWN_CREATOR_PRO,
         tier: 'pro',
         slotsTotal: 15,
+      });
+    });
+
+    // A stored `pending` means two different things — "never started" and
+    // "submitted, awaiting review" — and the difference is derived from
+    // whether a KycSubmission exists. Both branches are pinned so the
+    // derivation cannot quietly regress.
+    it("reports a stored 'pending' as 'not_started' when no KYC was ever submitted", async () => {
+      const res = await request(app.getHttpServer())
+        .get('/creator/state')
+        .set(
+          'Authorization',
+          `Bearer ${signToken(OWN_CREATOR_NO_KYC)}`,
+        )
+        .expect(200);
+
+      expect(res.body.data).toMatchObject({
+        wawuUserId: OWN_CREATOR_NO_KYC,
+        subscriptionPaid: true,
+        kycStatus: 'not_started',
       });
     });
 
@@ -152,10 +293,10 @@ describe('CreatorState (contract)', () => {
       expect(res.body.data).toBeNull();
     });
 
-    it('403s for a seeded plain-user account (no CreatorState row — not the creator role)', async () => {
+    it('403s for a plain-user account (no CreatorState row — not the creator role)', async () => {
       const res = await request(app.getHttpServer())
         .get('/creator/state')
-        .set('Authorization', `Bearer ${signToken(USER_PLAIN)}`)
+        .set('Authorization', `Bearer ${signToken(OWN_PLAIN)}`)
         .expect(403);
       expect(res.body.data).toBeNull();
     });
@@ -165,7 +306,7 @@ describe('CreatorState (contract)', () => {
     afterEach(async () => {
       // restore seeded values so tests stay independent of run order
       await prisma.creatorState.update({
-        where: { wawuUserId: USER_CREATOR_BASIC },
+        where: { wawuUserId: OWN_CREATOR_BASIC },
         data: { dmEnabled: true, dmPrice: 100 },
       });
     });
@@ -173,25 +314,78 @@ describe('CreatorState (contract)', () => {
     it('200s and persists a valid dmEnabled/dmPrice update', async () => {
       const res = await request(app.getHttpServer())
         .patch('/creator/dm-settings')
-        .set('Authorization', `Bearer ${signToken(USER_CREATOR_BASIC)}`)
+        .set('Authorization', `Bearer ${signToken(OWN_CREATOR_BASIC)}`)
         .send({ dmEnabled: false, dmPrice: 250 })
         .expect(200);
 
       expect(res.body).toMatchObject({
         statusCode: 200,
         message: 'OK',
-        data: { wawuUserId: USER_CREATOR_BASIC, dmEnabled: false, dmPrice: 250, slotsTotal: 3 },
+        data: { wawuUserId: OWN_CREATOR_BASIC, dmEnabled: false, dmPrice: 250, slotsTotal: 6 },
       });
 
-      const persisted = await prisma.creatorState.findUnique({ where: { wawuUserId: USER_CREATOR_BASIC } });
+      const persisted = await prisma.creatorState.findUnique({ where: { wawuUserId: OWN_CREATOR_BASIC } });
       expect(persisted).toMatchObject({ dmEnabled: false, dmPrice: 250 });
     });
 
-    it('400s when dmPrice is outside the ₦50-500 range', async () => {
+    // The ₦500 ceiling this used to assert was removed in d370b05 on the
+    // product owner's explicit instruction (docs/01_SPEC.md line 23:
+    // "min ₦50, no ceiling"). Asserting the removed rule is replaced by
+    // asserting the rule that actually applies now: the ₦50 floor stays as an
+    // abuse guard, and above it the creator sets their own rate.
+    // PATCH returns the same CreatorState shape as GET, so it has to derive
+    // kycStatus the same way. It used to default `hasSubmitted` to true, so
+    // the same account read 'not_started' from GET and 'pending' from PATCH.
+    it("derives kycStatus the same way GET does (no KYC submitted -> 'not_started')", async () => {
       const res = await request(app.getHttpServer())
         .patch('/creator/dm-settings')
-        .set('Authorization', `Bearer ${signToken(USER_CREATOR_BASIC)}`)
-        .send({ dmEnabled: true, dmPrice: 1000 })
+        .set('Authorization', `Bearer ${signToken(OWN_CREATOR_NO_KYC)}`)
+        .send({ dmEnabled: true, dmPrice: 150 })
+        .expect(200);
+
+      expect(res.body.data).toMatchObject({
+        wawuUserId: OWN_CREATOR_NO_KYC,
+        kycStatus: 'not_started',
+      });
+    });
+
+    it('400s when dmPrice is below the ₦50 floor', async () => {
+      const res = await request(app.getHttpServer())
+        .patch('/creator/dm-settings')
+        .set('Authorization', `Bearer ${signToken(OWN_CREATOR_BASIC)}`)
+        .send({ dmEnabled: true, dmPrice: 49 })
+        .expect(400);
+      expect(res.body.data).toBeNull();
+    });
+
+    it('accepts ₦50 exactly (the floor is inclusive)', async () => {
+      const res = await request(app.getHttpServer())
+        .patch('/creator/dm-settings')
+        .set('Authorization', `Bearer ${signToken(OWN_CREATOR_BASIC)}`)
+        .send({ dmEnabled: true, dmPrice: 50 })
+        .expect(200);
+      expect(res.body.data).toMatchObject({ dmPrice: 50 });
+    });
+
+    it('accepts a dmPrice above the old ₦500 ceiling (cap removed in d370b05)', async () => {
+      const res = await request(app.getHttpServer())
+        .patch('/creator/dm-settings')
+        .set('Authorization', `Bearer ${signToken(OWN_CREATOR_BASIC)}`)
+        .send({ dmEnabled: true, dmPrice: 5000 })
+        .expect(200);
+      expect(res.body.data).toMatchObject({ dmPrice: 5000 });
+
+      const persisted = await prisma.creatorState.findUnique({
+        where: { wawuUserId: OWN_CREATOR_BASIC },
+      });
+      expect(persisted?.dmPrice).toBe(5000);
+    });
+
+    it('400s when dmPrice exceeds the sanity limit', async () => {
+      const res = await request(app.getHttpServer())
+        .patch('/creator/dm-settings')
+        .set('Authorization', `Bearer ${signToken(OWN_CREATOR_BASIC)}`)
+        .send({ dmEnabled: true, dmPrice: 10_000_001 })
         .expect(400);
       expect(res.body.data).toBeNull();
     });
@@ -204,10 +398,10 @@ describe('CreatorState (contract)', () => {
       expect(res.body.data).toBeNull();
     });
 
-    it('403s for a seeded plain-user account (no CreatorState row — not the creator role)', async () => {
+    it('403s for a plain-user account (no CreatorState row — not the creator role)', async () => {
       const res = await request(app.getHttpServer())
         .patch('/creator/dm-settings')
-        .set('Authorization', `Bearer ${signToken(USER_PLAIN)}`)
+        .set('Authorization', `Bearer ${signToken(OWN_PLAIN)}`)
         .send({ dmEnabled: true, dmPrice: 150 })
         .expect(403);
       expect(res.body.data).toBeNull();

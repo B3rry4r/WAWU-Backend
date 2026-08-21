@@ -384,6 +384,11 @@ export class SearchResponseService {
         whatsappHandle: profile.whatsappHandle,
         websiteUrl: profile.websiteUrl,
         tier: state.tier,
+        // Same buyer-facing DM settings as the public-profile aggregate, so a
+        // creator found through search is not described differently from the
+        // same creator opened directly.
+        dmEnabled: state.dmEnabled,
+        dmPrice: state.dmPrice,
         evgScore: scoreMap.get(id) ?? 0,
         contentCount: contentCountMap.get(id) ?? 0,
         followerCount: followerCountMap.get(id) ?? 0,

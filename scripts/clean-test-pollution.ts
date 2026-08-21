@@ -38,23 +38,29 @@ const SEEDED_CREDIT_USER_IDS = [
 const SEEDED_CREDIT_BALANCE = 48;
 
 async function main() {
-  // ContentPiece first: Comment/Purchase/SavedItem cascade off it, so
-  // clearing stray content also clears any stray rows those tables hold
-  // that reference it (onDelete: Cascade/SetNull, see schema.prisma).
+  // Purchase FIRST. Comment and SavedItem do cascade off ContentPiece, but
+  // Purchase -> ContentPiece is `onDelete: Restrict` (schema.prisma), so a
+  // stray purchase BLOCKS the delete of the content it points at. This used
+  // to be ordered the other way round on the assumption that everything
+  // cascaded, which made the script throw a foreign-key error the moment a
+  // run left a purchase behind.
+  const deletedPurchases = await prisma.purchase.deleteMany({
+    where: { id: { notIn: SEEDED_PURCHASE_IDS } },
+  });
   const deletedContent = await prisma.contentPiece.deleteMany({
     where: { id: { notIn: SEEDED_CONTENT_PIECE_IDS } },
   });
   const deletedComments = await prisma.comment.deleteMany({
     where: { id: { notIn: SEEDED_COMMENT_IDS } },
   });
-  const deletedPurchases = await prisma.purchase.deleteMany({
-    where: { id: { notIn: SEEDED_PURCHASE_IDS } },
-  });
+  // CreditPurchase rows are created fresh by every credit-purchase run and
+  // seed.ts creates none, so anything here is test-generated.
+  const deletedCreditPurchases = await prisma.creditPurchase.deleteMany({});
   const resetCredits = await prisma.creditsState.updateMany({
     where: { userWawuId: { in: SEEDED_CREDIT_USER_IDS } },
     data: { creditBalance: SEEDED_CREDIT_BALANCE },
   });
-  console.log(`Cleaned ${deletedContent.count} test-generated content pieces, ${deletedComments.count} test-generated comments, ${deletedPurchases.count} test-generated purchases, reset ${resetCredits.count} CreditsState balances to ${SEEDED_CREDIT_BALANCE}.`);
+  console.log(`Cleaned ${deletedContent.count} test-generated content pieces, ${deletedComments.count} test-generated comments, ${deletedPurchases.count} test-generated purchases, ${deletedCreditPurchases.count} test-generated credit purchases, reset ${resetCredits.count} CreditsState balances to ${SEEDED_CREDIT_BALANCE}.`);
 }
 
 main().finally(() => prisma.$disconnect());

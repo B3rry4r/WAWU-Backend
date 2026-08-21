@@ -70,6 +70,26 @@ describe('ContentPiece (contract)', () => {
 
   let userToken: string;
   let creatorToken: string;
+  /**
+   * Snapshot of the seeded creator's CreatorState, restored in afterAll.
+   *
+   * This suite's POST /content tests genuinely need USER_CREATOR_BASIC — the
+   * scope=mine assertions are pinned to content that account owns in the
+   * seed, so a throwaway identity cannot stand in for it here. What it must
+   * NOT do is leave the row mutated: every successful create claims an upload
+   * slot (`slotsUsed += 1`), and deleting the ContentPiece rows in afterAll
+   * does not give the slot back. That leak is why CreatorState's contract spec
+   * saw `slotsUsed: 2` and failed depending on which suite ran first, and why
+   * `slotsUsed` climbed by one on every single run of the suite.
+   */
+  let seededCreatorState: {
+    tier: 'basic' | 'pro';
+    subscriptionPaid: boolean;
+    kycStatus: string;
+    slotsUsed: number;
+    dmPrice: number | null;
+    dmEnabled: boolean;
+  } | null = null;
 
   beforeAll(async () => {
     const alreadyUp = await waitForHealth(`${MOCK_WAWU_ID_BASE}/health`, 1000);
@@ -111,6 +131,20 @@ describe('ContentPiece (contract)', () => {
     await app.init();
 
     prisma = moduleRef.get(PrismaService);
+
+    const state = await prisma.creatorState.findUnique({
+      where: { wawuUserId: USER_CREATOR_BASIC },
+    });
+    if (state) {
+      seededCreatorState = {
+        tier: state.tier,
+        subscriptionPaid: state.subscriptionPaid,
+        kycStatus: state.kycStatus,
+        slotsUsed: state.slotsUsed,
+        dmPrice: state.dmPrice,
+        dmEnabled: state.dmEnabled,
+      };
+    }
   }, 30000);
 
   afterAll(async () => {
@@ -118,9 +152,33 @@ describe('ContentPiece (contract)', () => {
     // (titled 'Contract Test Upload' / 'Unlock Flow Fixture') that are not
     // in seed.ts's known-id set -- delete them so other suites sharing
     // wawu_hub_test (e.g. list-scoped assertions) see a stable dataset.
-    await prisma?.contentPiece.deleteMany({
+    const created = await prisma?.contentPiece.findMany({
       where: { title: { in: ['Contract Test Upload', 'Unlock Flow Fixture'] } },
+      select: { id: true },
     });
+    const createdIds = (created ?? []).map((c) => c.id);
+    if (createdIds.length > 0) {
+      // Purchase -> ContentPiece is onDelete: Restrict (schema.prisma), NOT
+      // Cascade, so the unlock-flow purchases have to go first. This never
+      // fired before because the unlock tests were failing in beforeAll and
+      // no purchase was ever created; the moment they started passing, the
+      // teardown itself began throwing.
+      await prisma?.purchase.deleteMany({
+        where: { contentId: { in: createdIds } },
+      });
+      await prisma?.contentPiece.deleteMany({
+        where: { id: { in: createdIds } },
+      });
+    }
+    // Give back the upload slots the creates above claimed. Without this the
+    // seeded creator's `slotsUsed` ratchets up permanently and poisons every
+    // other suite that reads it.
+    if (seededCreatorState) {
+      await prisma?.creatorState.update({
+        where: { wawuUserId: USER_CREATOR_BASIC },
+        data: seededCreatorState as never,
+      });
+    }
     await app?.close();
     if (ownedMockWawuId && mockWawuId) {
       mockWawuId.kill();
@@ -414,7 +472,12 @@ describe('ContentPiece (contract)', () => {
           title: 'Unlock Flow Fixture',
           description:
             'Created and flipped live directly for the unlock-flow test.',
-          category: 'business',
+          // Must be one of the 25 taxonomy ids in src/common/categories.ts.
+          // This was 'business', which stopped being valid when d01000e
+          // introduced the taxonomy — the fixture create 400'd, `data` came
+          // back null, and all eight tests in this block died on a
+          // `Cannot read properties of null` instead of reporting the 400.
+          category: 'business_entrepreneurship',
           accessType: 'paid',
           price: 1200,
           previewAsset:
@@ -422,6 +485,14 @@ describe('ContentPiece (contract)', () => {
           fullAsset:
             'https://storage.seed.local/content/unlock-fixture-full.pdf',
         });
+      // Fail loudly, and with the server's own reason, if the fixture cannot
+      // be created — a broken fixture must not masquerade as eight unrelated
+      // assertion failures.
+      if (![200, 201].includes(createRes.status) || !createRes.body?.data) {
+        throw new Error(
+          `Unlock fixture create failed: ${createRes.status} ${JSON.stringify(createRes.body)}`,
+        );
+      }
       liveContentId = createRes.body.data.id;
       // Flip to 'live' directly — no moderation/publish endpoint exists in
       // ContentPiece's own contract (out of scope), so this test fixture

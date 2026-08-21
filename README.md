@@ -1,3 +1,88 @@
+# WAWU Hub API
+
+NestJS + Prisma backend for the WAWU creator content marketplace.
+
+## Running the tests
+
+**The contract suite is not parallel-safe. Always run it with `--runInBand`.**
+
+```bash
+npm run test:contract
+```
+
+That script is the supported entry point. It pins `--runInBand --forceExit` and
+defaults the three environment variables the suite needs:
+
+| Variable | Default |
+| --- | --- |
+| `DATABASE_URL` | `postgresql://postgres:postgres@localhost:5432/wawu_hub_test?schema=public` |
+| `WAWU_ID_JWKS_URL` | `http://localhost:4001/.well-known/jwks.json` |
+| `WAWU_ID_BASE_URL` | `http://localhost:4001` |
+
+Each is overridable by exporting it first. Port 4001 is the local
+`mock-wawu-id` service (`node mock-wawu-id/server.js`); the specs reuse an
+already-running instance and spawn one only if the port is cold. Note that the
+committed `.env` points `WAWU_ID_*` at the **real** WAWU ID on :3002 — that is
+why the variables have to be set explicitly for a test run, and why
+`WAWU_ID_INTERNAL_SERVICE_KEY` from `.env` must not leak into a spec that talks
+to the mock (`verification-submission` pins its own; see the comment there).
+
+### Why not parallel
+
+Running bare `jest` (parallel, the default) fails a handful of tests, and **a
+different handful on each run** — the counts and the names are not stable. The
+cause is not a flake in any one spec: most specs share the same three seeded
+accounts from `prisma/seed.ts` and the single `CreatorState` / `CreditsState`
+rows that hang off them. In parallel, workers interleave reads and writes on
+those rows, so one spec's balance decrement or slot claim lands in the middle
+of another's assertion.
+
+Fixing that properly means giving every spec its own identities. Two specs now
+do —`src/community/tests/community.contract.spec.ts` registers throwaway WAWU
+IDs and tears them down in `afterAll`, and
+`src/creator-state/tests/creator-state.contract.spec.ts` owns its rows under
+fixture UUIDs — and that pattern is what any newly isolated spec should copy.
+Until the rest follow, `--runInBand` is the only way to get a comparable
+number, and a parallel run's failures should not be read as regressions.
+
+### Test hygiene rules
+
+A spec must leave `wawu_hub_test` exactly as it found it. Two ways to comply,
+in order of preference:
+
+1. **Own your fixtures.** Create rows under UUIDs nothing else touches and
+   delete them in `afterAll`. Prefer this.
+2. **Snapshot and restore.** If an assertion genuinely needs a seeded row
+   (`content-piece` needs the seeded creator's own content for its `scope=mine`
+   assertions), snapshot the row in `beforeAll` and write it back in
+   `afterAll`.
+
+Deleting the rows you created is not always enough: claiming an upload slot
+increments `CreatorState.slotsUsed`, and deleting the ContentPiece does not
+give the slot back. That leak is what made `CreatorState › slotsTotal` pass or
+fail depending on suite order.
+
+Watch foreign-key directions when tearing down — `Purchase -> ContentPiece` is
+`onDelete: Restrict`, not `Cascade`, so purchases must be deleted first.
+
+### Resetting the database
+
+Some tables (`Purchase`, `CreditPurchase`, `Comment`) still accumulate rows
+across runs from specs that have not been isolated yet. Nothing asserts on
+their totals today, so this is untidy rather than breaking, but to get back to
+a clean baseline:
+
+```bash
+npm run test:db:clean     # non-destructive: removes only test-generated rows
+```
+
+A full reset is `npx prisma migrate reset` against `wawu_hub_test` — that drops
+every table, so check `DATABASE_URL` first. Note that re-seeding alone does
+**not** repair a mutated seed row: `prisma/seed.ts` upserts with `update: {}`,
+so an existing row is left exactly as the last test run left it.
+
+---
+
 <p align="center">
   <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
 </p>
