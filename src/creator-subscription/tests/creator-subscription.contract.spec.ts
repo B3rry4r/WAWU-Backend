@@ -94,6 +94,12 @@ describe('CreatorSubscription (contract)', () => {
   let originalProState: Awaited<
     ReturnType<PrismaService['creatorState']['findUniqueOrThrow']>
   >;
+  // Verifying a subscribe charge now promotes UserProfile.accountType to
+  // 'creator' (that is the whole point — see the subscribe-flow test below),
+  // so the seeded plain account is snapshotted and restored too.
+  let originalPlainProfile: Awaited<
+    ReturnType<PrismaService['userProfile']['findUniqueOrThrow']>
+  >;
 
   beforeAll(async () => {
     const alreadyUp = await waitForHealth(`${MOCK_WAWU_ID_BASE}/health`, 1000);
@@ -149,6 +155,9 @@ describe('CreatorSubscription (contract)', () => {
     originalProState = await prisma.creatorState.findUniqueOrThrow({
       where: { wawuUserId: USER_CREATOR_PRO },
     });
+    originalPlainProfile = await prisma.userProfile.findUniqueOrThrow({
+      where: { wawuUserId: USER_PLAIN },
+    });
 
     // Clean slate for USER_PLAIN's own subscribe-from-scratch flow, in case
     // a previous failed run left rows behind.
@@ -156,6 +165,10 @@ describe('CreatorSubscription (contract)', () => {
       where: { creatorWawuId: USER_PLAIN },
     });
     await prisma.creatorState.deleteMany({ where: { wawuUserId: USER_PLAIN } });
+    await prisma.userProfile.update({
+      where: { wawuUserId: USER_PLAIN },
+      data: { accountType: 'user' },
+    });
   }, 30000);
 
   afterAll(async () => {
@@ -207,6 +220,15 @@ describe('CreatorSubscription (contract)', () => {
       });
       await prisma.creatorState.deleteMany({
         where: { wawuUserId: USER_PLAIN },
+      });
+      // upsert, not update: a test that fails partway through the
+      // create-the-missing-profile case below can leave the row deleted,
+      // and an afterAll that throws would then cascade into every
+      // subsequent run of this suite.
+      await prisma.userProfile.upsert({
+        where: { wawuUserId: USER_PLAIN },
+        create: originalPlainProfile,
+        update: { accountType: originalPlainProfile.accountType },
       });
     }
 
@@ -382,18 +404,86 @@ describe('CreatorSubscription (contract)', () => {
         expect.objectContaining({ tier: 'basic', subscriptionPaid: true }),
       );
 
-      // GET /creator-subscription is creator-role-gated on
-      // UserProfile.accountType (CreatorAccountGuard) — this resource never
-      // touches UserProfile (out of scope; accountType conversion is
-      // UserProfile's own PATCH /users/me concern), so a plain account that
-      // has just subscribed correctly still 403s here until they separately
-      // complete creator-account onboarding. Assert the persisted row
-      // directly instead.
       const stored = await prisma.creatorSubscription.findUnique({
         where: { creatorWawuId: USER_PLAIN },
       });
       expect(stored?.tier).toBe('basic');
       expect(stored?.status).toBe('active');
+
+      // Paying for a creator subscription IS becoming a creator account.
+      // Every CreatorAccountGuard (creator-earnings, creator-subscription,
+      // content-piece, direct-message, creator-no-response-tracker) gates
+      // purely on UserProfile.accountType, so if verify() does not promote
+      // the account here, a creator who has genuinely paid gets a 403 on
+      // Earnings and on their own Subscription screen. This assertion is the
+      // regression guard for that production bug — it replaces a comment
+      // that used to claim accountType conversion was out of scope.
+      const profile = await prisma.userProfile.findUnique({
+        where: { wawuUserId: USER_PLAIN },
+      });
+      expect(profile?.accountType).toBe('creator');
+
+      // ...and the promoted account can now actually reach the creator-gated
+      // read it just paid for, rather than 403ing.
+      const gated = await request(app.getHttpServer())
+        .get('/creator-subscription')
+        .set('Authorization', `Bearer ${userToken}`)
+        .expect(200);
+      expect(gated.body.data).toEqual(
+        expect.objectContaining({ creatorWawuId: USER_PLAIN, tier: 'basic' }),
+      );
+
+      // Restore immediately: the remaining describe blocks in this file use
+      // `userToken` as their "plain (non-creator) account 403s" fixture.
+      // (Same restore-in-place pattern as the 404 test in GET above.)
+      await prisma.userProfile.update({
+        where: { wawuUserId: USER_PLAIN },
+        data: { accountType: originalPlainProfile.accountType },
+      });
+    });
+
+    it('creates a UserProfile for a payer who never completed onboarding, rather than leaving them ungated', async () => {
+      // A subscriber can reach checkout without ever having hit PATCH
+      // /users/me, so verify() may have no UserProfile row to update. The
+      // guards treat a missing row exactly like a non-creator one, so the
+      // row has to be created — with the model's required minimums only
+      // (accountType, and interests as an empty String[]).
+      await prisma.creatorSubscription.deleteMany({
+        where: { creatorWawuId: USER_PLAIN },
+      });
+      await prisma.creatorState.deleteMany({
+        where: { wawuUserId: USER_PLAIN },
+      });
+      await prisma.userProfile.delete({ where: { wawuUserId: USER_PLAIN } });
+
+      const initRes = await request(app.getHttpServer())
+        .post('/creator-subscription')
+        .set('Authorization', `Bearer ${userToken}`)
+        .send({ tier: 'pro' });
+      const txRef = initRes.body.data.flutterwaveConfig.txRef;
+
+      await request(app.getHttpServer())
+        .post('/creator-subscription/verify')
+        .set('Authorization', `Bearer ${userToken}`)
+        .send({ transaction_id: 'real-looking-tx-id', tx_ref: txRef });
+
+      const created = await prisma.userProfile.findUnique({
+        where: { wawuUserId: USER_PLAIN },
+      });
+      expect(created).toEqual(
+        expect.objectContaining({ accountType: 'creator', interests: [] }),
+      );
+
+      // Restore the seeded profile and subscription state for the rest of
+      // the suite.
+      await prisma.creatorSubscription.deleteMany({
+        where: { creatorWawuId: USER_PLAIN },
+      });
+      await prisma.creatorState.deleteMany({
+        where: { wawuUserId: USER_PLAIN },
+      });
+      await prisma.userProfile.delete({ where: { wawuUserId: USER_PLAIN } });
+      await prisma.userProfile.create({ data: originalPlainProfile });
     });
   });
 

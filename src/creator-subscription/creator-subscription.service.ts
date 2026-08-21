@@ -7,6 +7,7 @@ import {
 import { PrismaService } from '../common/prisma/prisma.service';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type { CreatorSubscriptionResponse } from '../common/types/creator-subscription.type';
+import { AccountType } from '../../generated/prisma/enums';
 import type { CreatorTier } from '../../generated/prisma/enums';
 import {
   FLUTTERWAVE_CLIENT,
@@ -259,55 +260,90 @@ export class CreatorSubscriptionService {
     const now = new Date();
 
     if (pending.kind === 'subscribe') {
-      const row = await this.prisma.creatorSubscription.upsert({
-        where: { creatorWawuId: wawuUserId },
-        create: {
-          creatorWawuId: wawuUserId,
-          tier: pending.tier,
-          status: 'active',
-          commissionRateOverride:
-            pending.tier === 'pro' ? PRO_COMMISSION_RATE_OVERRIDE : null,
-          flutterwaveCustomerRef: `flw-cust-${wawuUserId}`,
-          flutterwavePlanId: pending.planId,
-          currentPeriodEnd: new Date(now.getTime() + ONE_YEAR_MS),
-          renewalAttempts: 0,
-          cancelsAt: null,
-          cardLast4: result.cardLast4 ?? null,
-        },
-        update: {
-          tier: pending.tier,
-          status: 'active',
-          commissionRateOverride:
-            pending.tier === 'pro' ? PRO_COMMISSION_RATE_OVERRIDE : null,
-          flutterwavePlanId: pending.planId,
-          currentPeriodEnd: new Date(now.getTime() + ONE_YEAR_MS),
-          renewalAttempts: 0,
-          cancelsAt: null,
-          cardLast4: result.cardLast4 ?? undefined,
-        },
-      });
+      // Subscription row, entitlement gate and account type are written in ONE
+      // transaction. They are three faces of a single fact — "this person has
+      // paid to be a creator" — and a partial write is a broken account: a
+      // CreatorSubscription with no `accountType: 'creator'` leaves the payer
+      // 403'd by every CreatorAccountGuard in the codebase (creator-earnings,
+      // creator-subscription, content-piece, direct-message,
+      // creator-no-response-tracker), which is exactly the production bug this
+      // replaces.
+      const row = await this.prisma.$transaction(async (tx) => {
+        const subscription = await tx.creatorSubscription.upsert({
+          where: { creatorWawuId: wawuUserId },
+          create: {
+            creatorWawuId: wawuUserId,
+            tier: pending.tier,
+            status: 'active',
+            commissionRateOverride:
+              pending.tier === 'pro' ? PRO_COMMISSION_RATE_OVERRIDE : null,
+            flutterwaveCustomerRef: `flw-cust-${wawuUserId}`,
+            flutterwavePlanId: pending.planId,
+            currentPeriodEnd: new Date(now.getTime() + ONE_YEAR_MS),
+            renewalAttempts: 0,
+            cancelsAt: null,
+            cardLast4: result.cardLast4 ?? null,
+          },
+          update: {
+            tier: pending.tier,
+            status: 'active',
+            commissionRateOverride:
+              pending.tier === 'pro' ? PRO_COMMISSION_RATE_OVERRIDE : null,
+            flutterwavePlanId: pending.planId,
+            currentPeriodEnd: new Date(now.getTime() + ONE_YEAR_MS),
+            renewalAttempts: 0,
+            cancelsAt: null,
+            cardLast4: result.cardLast4 ?? undefined,
+          },
+        });
 
-      // This is the ONLY code path allowed to set CreatorState.subscriptionPaid
-      // = true (task brief — no other dev-only toggle exists in this
-      // resource). CreatorState may not exist yet for a first-time
-      // subscriber (creating it here, not in UserProfile/CreatorState's own
-      // resources, mirrors how CreditPurchase.verifyPurchase is the write-
-      // path originator for CreditsState).
-      await this.prisma.creatorState.upsert({
-        where: { wawuUserId },
-        create: {
-          wawuUserId,
-          tier: pending.tier,
-          subscriptionPaid: true,
-          kycStatus: 'pending',
-          slotsUsed: 0,
-          dmPrice: null,
-          dmEnabled: false,
-        },
-        update: {
-          tier: pending.tier,
-          subscriptionPaid: true,
-        },
+        // This is the ONLY code path allowed to set
+        // CreatorState.subscriptionPaid = true (task brief — no other
+        // dev-only toggle exists in this resource). CreatorState may not
+        // exist yet for a first-time subscriber (creating it here, not in
+        // UserProfile/CreatorState's own resources, mirrors how
+        // CreditPurchase.verifyPurchase is the write-path originator for
+        // CreditsState).
+        await tx.creatorState.upsert({
+          where: { wawuUserId },
+          create: {
+            wawuUserId,
+            tier: pending.tier,
+            subscriptionPaid: true,
+            kycStatus: 'pending',
+            slotsUsed: 0,
+            dmPrice: null,
+            dmEnabled: false,
+          },
+          update: {
+            tier: pending.tier,
+            subscriptionPaid: true,
+          },
+        });
+
+        // Promote the account. Paying for a creator subscription IS choosing
+        // a creator account — CreatorAccountGuard reads UserProfile
+        // .accountType and nothing else, so without this the payer is locked
+        // out of Earnings, Subscription management, uploads and paid DMs
+        // despite a successful charge. A first-time subscriber may have no
+        // UserProfile row at all (it is created on the first PATCH
+        // /users/me, which onboarding may not have reached), so this upserts
+        // with the model's own minimums: `accountType` is required and
+        // `interests` is a String[]; every other column is nullable and is
+        // deliberately left for the profile screen to fill in. Only ever
+        // written UP to 'creator' — nothing here or anywhere else in this
+        // service demotes (see cancel()/downgrade()/retryPayment()).
+        await tx.userProfile.upsert({
+          where: { wawuUserId },
+          create: {
+            wawuUserId,
+            accountType: AccountType.creator,
+            interests: [],
+          },
+          update: { accountType: AccountType.creator },
+        });
+
+        return subscription;
       });
 
       return this.toResponse(row);
@@ -427,6 +463,9 @@ export class CreatorSubscriptionService {
    * flip at `currentPeriodEnd` is out of scope here and is called out
    * again in this build's final report as a follow-up dependency on the
    * deferred cron.
+   *
+   * Account type is untouched (see cancel()'s note): a Pro -> Basic move is
+   * a tier change, and both tiers are creator accounts regardless.
    */
   async downgrade(creatorWawuId: string): Promise<CreatorSubscriptionResponse> {
     const existing = await this.prisma.creatorSubscription.findUnique({
@@ -461,6 +500,11 @@ export class CreatorSubscriptionService {
    * returned `flutterwaveConfig` is a receipt echo (txRef/amount/currency/
    * publicKey) for the client to display, not something requiring a
    * further /verify call.
+   *
+   * On the exhausted-retries path the subscription lapses to `expired` and
+   * the hourly scheduler clears `CreatorState.subscriptionPaid`. Account
+   * type is deliberately NOT demoted (see cancel()'s note) — a declined card
+   * closes the upload gate, it does not turn a creator back into a viewer.
    */
   async retryPayment(
     creatorWawuId: string,
@@ -523,6 +567,16 @@ export class CreatorSubscriptionService {
    * status stays `active` until period end (does NOT immediately
    * deactivate). Idempotent: calling this again once `cancelsAt` is already
    * set is a no-op that returns the current row, rather than erroring.
+   *
+   * ACCOUNT TYPE IS NOT TOUCHED, HERE OR ANYWHERE ELSE. Cancelling ends the
+   * paid entitlement, not the identity: per CLAUDE.md, creator is an ACCOUNT
+   * TYPE, not an earned tier or a trust level. Flipping
+   * `UserProfile.accountType` back to 'user' would delete someone's account
+   * identity — their handle, their creator profile, their whole
+   * Create-vs-Explore navigation — because a card expired. The gate that
+   * SHOULD close is `CreatorState.subscriptionPaid` (uploading), and the
+   * scheduler already closes it. Nothing in this service, and nothing in
+   * src/scheduler/scheduler.service.ts, writes accountType at all.
    */
   async cancel(creatorWawuId: string): Promise<CreatorSubscriptionResponse> {
     const existing = await this.prisma.creatorSubscription.findUnique({

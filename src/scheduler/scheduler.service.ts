@@ -103,6 +103,12 @@ export class SchedulerService {
 
     // A lapsed subscription must not keep handing out the paid upload gate or
     // the Pro commission rate.
+    //
+    // Only `CreatorState.subscriptionPaid` is cleared. `UserProfile
+    // .accountType` is deliberately left as 'creator' — per CLAUDE.md creator
+    // is an ACCOUNT TYPE, not an earned tier, so a lapse closes the upload
+    // gate without deleting the person's creator identity (handle, profile,
+    // Create navigation). Nothing in this backend demotes an account.
     const stale = await this.prisma.creatorSubscription.findMany({
       where: { status: { in: ['past_due', 'expired'] } },
       select: { creatorWawuId: true },
