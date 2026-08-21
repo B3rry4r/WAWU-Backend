@@ -4,7 +4,12 @@ import {
   Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { FOLDER_CONTENT_TYPES, type UploadFolder } from './dto/presign-upload.dto';
+import {
+  FOLDER_CONTENT_TYPES,
+  EXTENSION_FOR_CONTENT_TYPE,
+  serveAs,
+  type UploadFolder,
+} from './dto/presign-upload.dto';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import {
@@ -58,6 +63,15 @@ export class StorageService {
       // which is the S3 default. Buckets created before that change need
       // path-style — set STORAGE_FORCE_PATH_STYLE=true for those.
       forcePathStyle: this.config.get<string>('STORAGE_FORCE_PATH_STYLE') === 'true',
+      // MUST stay 'WHEN_REQUIRED'. Since v3.729 the SDK defaults to
+      // 'WHEN_SUPPORTED', which adds an integrity checksum to every
+      // PutObject. Presigning has no body to checksum, so it hashed NOTHING
+      // and baked `x-amz-checksum-crc32=AAAAAA==` — CRC32 of zero bytes —
+      // into the signed URL. The browser then PUT the real file, whose
+      // checksum is obviously not that, and storage rejected every single
+      // upload with 400 Bad Request. KYC documents, content assets, CAC and
+      // NEPC paperwork: none of it could be uploaded at all.
+      requestChecksumCalculation: 'WHEN_REQUIRED',
     });
   }
 
@@ -95,7 +109,11 @@ export class StorageService {
       );
     }
 
-    const safeExt = extension.replace(/[^a-z0-9]/gi, '').slice(0, 8).toLowerCase() || 'bin';
+    // The extension comes from the type we just VALIDATED, not from the
+    // client's `extension` field — see EXTENSION_FOR_CONTENT_TYPE. The key is
+    // what read URLs use to decide how to serve the bytes, so letting the
+    // caller name it would hand back the control the allowlist just took.
+    const safeExt = EXTENSION_FOR_CONTENT_TYPE[contentType];
     const key = `${folder}/${wawuId}/${randomUUID()}.${safeExt}`;
 
     const uploadUrl = await getSignedUrl(
@@ -107,9 +125,17 @@ export class StorageService {
         // Signing for an exact length makes storage itself enforce the cap:
         // an upload of any other size is rejected.
         ContentLength: contentLength,
-        // Never render an uploaded object inline in the browser, even if a
-        // future allowlist entry turns out to be scriptable.
-        ContentDisposition: 'attachment',
+        // ContentDisposition is deliberately NOT set here.
+        //
+        // Signing it put `content-disposition` in X-Amz-SignedHeaders, which
+        // obliges the browser to send that exact header on the PUT. Our
+        // uploader sends only Content-Type, so once the checksum bug above
+        // was fixed this would have been the next failure — a signature
+        // mismatch instead of a checksum one. Asking the client to send it
+        // would also mean it is only enforced while the client cooperates.
+        //
+        // The protection it existed for now happens at READ time, where it
+        // cannot be bypassed: see signedReadUrl below.
       }),
       { expiresIn: 300 },
     );
@@ -132,7 +158,13 @@ export class StorageService {
     }
     return getSignedUrl(
       this.client,
-      new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+      new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        // Sensitive documents are never rendered in place.
+        ResponseContentType: serveAs(key).contentType,
+        ResponseContentDisposition: 'attachment',
+      }),
       { expiresIn: expiresInSeconds },
     );
   }
@@ -149,9 +181,18 @@ export class StorageService {
         'File uploads are not available on this environment yet.',
       );
     }
+    // Force both the type and the disposition on the way out. The uploader
+    // cannot influence either, so bytes that were smuggled in under a false
+    // Content-Type are still served as the kind of file the key says.
+    const { contentType, inline } = serveAs(key);
     return getSignedUrl(
       this.client,
-      new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+      new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        ResponseContentType: contentType,
+        ResponseContentDisposition: inline ? 'inline' : 'attachment',
+      }),
       { expiresIn: 604800 },
     );
   }

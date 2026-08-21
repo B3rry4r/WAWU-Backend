@@ -52,6 +52,59 @@ export const FOLDER_CONTENT_TYPES: Record<UploadFolder, readonly string[]> = {
   avatars: IMAGE,
 };
 
+/**
+ * The one extension each allowed type is stored under, and the type each
+ * extension is served back as.
+ *
+ * This exists because the allowlist above was ADVISORY ONLY. The presigner
+ * drops `ContentType` entirely — it is neither signed into the URL nor hoisted
+ * to a query parameter — so nothing stopped a caller from presigning as
+ * `image/jpeg`, passing the allowlist, and then PUTting `text/html` bytes with
+ * whatever Content-Type they liked. The object came back on a week-long read
+ * URL serving exactly what the allowlist was written to prevent.
+ *
+ * So the server picks the extension from the type it VALIDATED, and read URLs
+ * force the matching Content-Type back on the way out. The bytes are then
+ * served as the declared kind of file whatever the uploader actually sent.
+ */
+export const EXTENSION_FOR_CONTENT_TYPE: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+  'application/pdf': 'pdf',
+  'video/mp4': 'mp4',
+  'video/quicktime': 'mov',
+  'video/webm': 'webm',
+  'audio/mpeg': 'mp3',
+  'audio/wav': 'wav',
+  'audio/mp4': 'm4a',
+  'audio/aac': 'aac',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+  'text/csv': 'csv',
+  'application/zip': 'zip',
+};
+
+const CONTENT_TYPE_FOR_EXTENSION: Record<string, string> = Object.fromEntries(
+  Object.entries(EXTENSION_FOR_CONTENT_TYPE).map(([type, ext]) => [ext, type]),
+);
+
+/**
+ * What to serve a stored object as. An extension this server never issued
+ * (an object from before this rule, or anything unrecognised) is served as an
+ * opaque download rather than being guessed at.
+ */
+export function serveAs(key: string): { contentType: string; inline: boolean } {
+  const ext = key.split('.').pop()?.toLowerCase() ?? '';
+  const contentType = CONTENT_TYPE_FOR_EXTENSION[ext];
+  if (!contentType) return { contentType: 'application/octet-stream', inline: false };
+  // Only images render in place — a cover, a preview thumbnail, an avatar.
+  // Everything else is a file you receive, including every PDF: an inline PDF
+  // is a document viewer pointed at user-supplied bytes.
+  return { contentType, inline: contentType.startsWith('image/') };
+}
+
 export class PresignUploadDto {
   @IsIn(UPLOAD_FOLDERS)
   folder: UploadFolder;
