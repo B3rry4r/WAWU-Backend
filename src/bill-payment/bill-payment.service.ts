@@ -7,6 +7,10 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
+import {
+  AdminOpsAuditService,
+  type AdminActor,
+} from '../common/audit/admin-ops-audit.service';
 import { FlutterwaveCheckoutVerifier } from '../common/flutterwave/checkout-verifier';
 import {
   FlutterwaveBillsClient,
@@ -47,6 +51,7 @@ export class BillPaymentService {
     private readonly prisma: PrismaService,
     private readonly bills: FlutterwaveBillsClient,
     private readonly verifier: FlutterwaveCheckoutVerifier,
+    private readonly audit: AdminOpsAuditService,
   ) {}
 
   listCategories(country = 'NG'): Promise<BillCategory[]> {
@@ -184,7 +189,8 @@ export class BillPaymentService {
   }
 
   // ---------------------------------------------------------------------
-  // Operator recovery. Reached only through AdminKeyGuard.
+  // Operator recovery. Reached only through AdminAuthGuard + AdminRolesGuard
+  // (superadmin/finance; the stuck queue also support) -- see the ops controller.
   // ---------------------------------------------------------------------
 
   /**
@@ -224,7 +230,7 @@ export class BillPaymentService {
    * WAWU sent, so a delivery that succeeded and whose response was lost gets
    * recognised as delivered rather than refunded by mistake.
    */
-  async reconcile(billPaymentId: string) {
+  async reconcile(billPaymentId: string, admin: AdminActor) {
     const record = await this.prisma.billPayment.findUnique({
       where: { id: billPaymentId },
     });
@@ -245,6 +251,13 @@ export class BillPaymentService {
           deliveredAt: record.deliveredAt ?? new Date(),
         },
       });
+      await this.audit.record(admin, {
+        resource: 'bill_payment',
+        resourceId: delivered.id,
+        subjectWawuId: delivered.buyerWawuId,
+        action: 'bill_reconciled',
+        detail: { providerStatus, previousStatus: record.status, newStatus: 'delivered' },
+      });
       return { billPayment: this.toResponse(delivered), providerStatus, changed: true };
     }
 
@@ -258,11 +271,19 @@ export class BillPaymentService {
             record.failureReason ?? 'The biller reported the payment as failed.',
         },
       });
+      await this.audit.record(admin, {
+        resource: 'bill_payment',
+        resourceId: failed.id,
+        subjectWawuId: failed.buyerWawuId,
+        action: 'bill_reconciled',
+        detail: { providerStatus, previousStatus: record.status, newStatus: 'failed' },
+      });
       return { billPayment: this.toResponse(failed), providerStatus, changed: true };
     }
 
     // Still in flight, or a shape we do not recognise. Left alone rather than
-    // guessed at — the row stays visible in listStuck().
+    // guessed at — the row stays visible in listStuck(). No audit row: nothing
+    // changed, and the trail records actions, not attempts.
     return { billPayment: this.toResponse(record), providerStatus, changed: false };
   }
 
@@ -274,7 +295,11 @@ export class BillPaymentService {
    * bookkeeping entry for a transfer a human made, which is why the reference
    * of that transfer is required.
    */
-  async recordRefund(billPaymentId: string, dto: RecordRefundDto) {
+  async recordRefund(
+    billPaymentId: string,
+    dto: RecordRefundDto,
+    admin: AdminActor,
+  ) {
     const record = await this.prisma.billPayment.findUnique({
       where: { id: billPaymentId },
     });
@@ -297,8 +322,22 @@ export class BillPaymentService {
       },
     });
     this.logger.log(
-      `Bill ${record.id} marked refunded against real-world reference ${dto.refundReference}.`,
+      `Bill ${record.id} marked refunded against real-world reference ${dto.refundReference} by ${admin.email}.`,
     );
+    // Recorded AFTER the transition and never allowed to fail it: the human
+    // refund this row describes has already left WAWU's account.
+    await this.audit.record(admin, {
+      resource: 'bill_payment',
+      resourceId: refunded.id,
+      subjectWawuId: refunded.buyerWawuId,
+      action: 'bill_refund_recorded',
+      detail: {
+        refundReference: dto.refundReference,
+        amount: refunded.amount,
+        fee: refunded.fee,
+        previousStatus: record.status,
+      },
+    });
     return this.toResponse(refunded);
   }
 

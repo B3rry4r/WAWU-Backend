@@ -9,6 +9,17 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
 import { AllExceptionsFilter } from '../../common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../../common/interceptors/response.interceptor';
+import { AdminAuthModule } from '../../admin/auth/admin-auth.module';
+import {
+  adminFixtures,
+  adminJwtSecrets,
+  bearer,
+  deleteAdminFixtures,
+  loginAllAdmins,
+  rolesOtherThan,
+  seedAdminFixtures,
+  type AdminTokens,
+} from '../../common/tests/admin-session.helper';
 import { LegalModule } from '../legal.module';
 
 /**
@@ -24,11 +35,35 @@ import { LegalModule } from '../legal.module';
  * through checkout: `FLUTTERWAVE_SECRET_KEY` is deliberately empty in this
  * sandbox, so `FlutterwaveCheckoutVerifier` cannot confirm anything and the
  * payment legs are not what is under test here.
+ *
+ * ── WHAT CHANGED IN THIS FILE, AND WHY ───────────────────────────────────
+ * Every ops request below used to authenticate with `x-wawu-admin-key` — one
+ * shared static secret, no identity, no roles. A dashboard agent measured the
+ * consequence: a `support` admin correctly refused the KYC queue could reach
+ * these routes and cancel a fully-paid matter or set the ₦ figure a client is
+ * billed, with nothing attributable to a person. The routes now sit behind
+ * AdminAuthGuard + AdminRolesGuard and this suite asserts the matrix per
+ * handler:
+ *
+ *   GET requests                      — superadmin, support, finance (reviewer 403)
+ *   consultation/complete, deliver    — superadmin, support          (finance, reviewer 403)
+ *   quote, cancel                     — superadmin, finance          (support, reviewer 403)
+ *
+ * The old header is asserted DEAD rather than quietly dropped.
  */
 
 const MOCK_WAWU_ID_URL = process.env.WAWU_ID_BASE_URL ?? 'http://localhost:4001';
 const REPO_ROOT = path.resolve(__dirname, '../../../');
-const ADMIN_KEY = 'legal-ops-contract-spec-key';
+
+/** Still configured, so the assertion below proves a CORRECT key opens nothing. */
+const RETIRED_KEY = 'legal-ops-contract-spec-key';
+
+const QUEUE_ROLES = ['superadmin', 'support', 'finance'] as const;
+const LIFECYCLE_ROLES = ['superadmin', 'support'] as const;
+const MONEY_ROLES = ['superadmin', 'finance'] as const;
+
+const ADMINS = adminFixtures('1e110000', 'legal-ops');
+const SECRETS = adminJwtSecrets('legal-ops');
 
 async function isMockWawuIdUp(): Promise<boolean> {
   try {
@@ -64,9 +99,12 @@ describe('WAWU Legal ops lifecycle (contract)', () => {
   let mockWawuIdProcess: ChildProcess | undefined;
   let token: string;
   let userId: string;
-  let previousAdminKey: string | undefined;
+  let tokens: AdminTokens;
+  const envSnapshot: Record<string, string | undefined> = {};
 
   const createdIds: string[] = [];
+
+  const http = () => request(app.getHttpServer());
 
   /** Seeds a request straight into a state the payment legs would produce. */
   async function seed(data: Record<string, unknown>) {
@@ -86,8 +124,12 @@ describe('WAWU Legal ops lifecycle (contract)', () => {
   }
 
   beforeAll(async () => {
-    previousAdminKey = process.env.WAWU_ADMIN_KEY;
-    process.env.WAWU_ADMIN_KEY = ADMIN_KEY;
+    for (const key of ['ADMIN_JWT_SECRET', 'ADMIN_JWT_REFRESH_SECRET', 'WAWU_ADMIN_KEY']) {
+      envSnapshot[key] = process.env[key];
+    }
+    process.env.ADMIN_JWT_SECRET = SECRETS.access;
+    process.env.ADMIN_JWT_REFRESH_SECRET = SECRETS.refresh;
+    process.env.WAWU_ADMIN_KEY = RETIRED_KEY;
 
     if (!(await isMockWawuIdUp())) {
       mockWawuIdProcess = spawn('node', ['mock-wawu-id/server.js'], {
@@ -104,7 +146,13 @@ describe('WAWU Legal ops lifecycle (contract)', () => {
     ).sub as string;
 
     const moduleRef = await Test.createTestingModule({
-      imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, WawuAuthModule, LegalModule],
+      imports: [
+        ConfigModule.forRoot({ isGlobal: true }),
+        PrismaModule,
+        WawuAuthModule,
+        AdminAuthModule,
+        LegalModule,
+      ],
     }).compile();
 
     app = moduleRef.createNestApplication();
@@ -115,37 +163,176 @@ describe('WAWU Legal ops lifecycle (contract)', () => {
     await app.init();
 
     prisma = moduleRef.get(PrismaService);
+    await seedAdminFixtures(prisma, ADMINS);
+    tokens = await loginAllAdmins(app, ADMINS);
   }, 30_000);
 
   afterAll(async () => {
     if (prisma && createdIds.length) {
+      await prisma.adminOpsAudit.deleteMany({ where: { resourceId: { in: createdIds } } });
       await prisma.legalRequest.deleteMany({ where: { id: { in: createdIds } } });
     }
+    if (prisma) await deleteAdminFixtures(prisma, ADMINS);
     if (app) await app.close();
-    if (previousAdminKey === undefined) delete process.env.WAWU_ADMIN_KEY;
-    else process.env.WAWU_ADMIN_KEY = previousAdminKey;
+    for (const [key, value] of Object.entries(envSnapshot)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   });
 
-  describe('the operator key gates every ops route', () => {
-    it('401s with no operator key', async () => {
-      await request(app.getHttpServer())
+  describe('the admin identity gates every ops route', () => {
+    it('401s with no credential at all', async () => {
+      await http()
         .post(`/api/hub/legal/ops/requests/${crypto.randomUUID()}/cancel`)
         .send({ reason: 'Client asked us to stop.' })
         .expect(401);
     });
 
-    it('401s with the wrong operator key', async () => {
-      await request(app.getHttpServer())
-        .get('/api/hub/legal/ops/requests')
-        .set('x-wawu-admin-key', 'not-the-key')
-        .expect(401);
-    });
-
-    it('a user token is not an operator key', async () => {
-      await request(app.getHttpServer())
+    it('a WAWU ID user token is not an admin session', async () => {
+      await http()
         .get('/api/hub/legal/ops/requests')
         .set('Authorization', `Bearer ${token}`)
         .expect(401);
+    });
+
+    it('the retired x-wawu-admin-key header alone no longer opens anything', async () => {
+      const record = await seed({ status: 'in_progress', servicePaidAt: new Date() });
+      await http().get('/api/hub/legal/ops/requests').set('x-wawu-admin-key', RETIRED_KEY).expect(401);
+      await http()
+        .post(`/api/hub/legal/ops/requests/${record.id}/cancel`)
+        .set('x-wawu-admin-key', RETIRED_KEY)
+        .send({ reason: 'A held key should not be able to do this.' })
+        .expect(401);
+      const unchanged = await prisma.legalRequest.findUnique({ where: { id: record.id } });
+      expect(unchanged?.status).toBe('in_progress');
+    });
+
+    it('a garbage bearer token is not an admin session', async () => {
+      await http()
+        .get('/api/hub/legal/ops/requests')
+        .set('Authorization', 'Bearer not-a-real-jwt')
+        .expect(401);
+    });
+  });
+
+  /**
+   * The measured defect, closed. Before this change a `support` admin — the
+   * role deliberately refused the KYC queue — could set a ₦ quote and cancel a
+   * fully-paid matter here, because there was no role model to refuse them.
+   */
+  describe('the role matrix', () => {
+    it.each(QUEUE_ROLES)('%s can read the queue', async (role) => {
+      await http().get('/api/hub/legal/ops/requests').set(bearer(tokens[role])).expect(200);
+    });
+
+    it.each(rolesOtherThan(QUEUE_ROLES))('%s is refused the queue', async (role) => {
+      await http().get('/api/hub/legal/ops/requests').set(bearer(tokens[role])).expect(403);
+    });
+
+    it.each(rolesOtherThan(MONEY_ROLES))('%s cannot set a price, and none is written', async (role) => {
+      const record = await seed({ status: 'awaiting_quote', path: 'simple' });
+      await http()
+        .post(`/api/hub/legal/ops/requests/${record.id}/quote`)
+        .set(bearer(tokens[role]))
+        .send({ amountNaira: 500_000 })
+        .expect(403);
+      const unchanged = await prisma.legalRequest.findUnique({ where: { id: record.id } });
+      expect(unchanged?.quoteAmount).toBeNull();
+      expect(unchanged?.status).toBe('awaiting_quote');
+    });
+
+    it.each(rolesOtherThan(MONEY_ROLES))('%s cannot cancel a paid matter', async (role) => {
+      const record = await seed({ status: 'in_progress', servicePaidAt: new Date() });
+      await http()
+        .post(`/api/hub/legal/ops/requests/${record.id}/cancel`)
+        .set(bearer(tokens[role]))
+        .send({ reason: 'This role has no business closing paid work.' })
+        .expect(403);
+      const unchanged = await prisma.legalRequest.findUnique({ where: { id: record.id } });
+      expect(unchanged?.status).toBe('in_progress');
+      expect(unchanged?.cancelledAt).toBeNull();
+    });
+
+    it.each(rolesOtherThan(LIFECYCLE_ROLES))('%s cannot deliver work', async (role) => {
+      const record = await seed({ status: 'in_progress', servicePaidAt: new Date() });
+      await http()
+        .post(`/api/hub/legal/ops/requests/${record.id}/deliver`)
+        .set(bearer(tokens[role]))
+        .send({ deliverableUrl: 'https://storage.wawu.test/legal/x.pdf' })
+        .expect(403);
+      const unchanged = await prisma.legalRequest.findUnique({ where: { id: record.id } });
+      expect(unchanged?.deliverableUrl).toBeNull();
+    });
+
+    it.each(rolesOtherThan(LIFECYCLE_ROLES))('%s cannot close out a consultation', async (role) => {
+      const record = await seed({
+        status: 'consultation_scheduled',
+        consultationMedium: 'zoom',
+        consultationFee: 45_000,
+        consultationPaidAt: new Date(),
+      });
+      await http()
+        .post(`/api/hub/legal/ops/requests/${record.id}/consultation/complete`)
+        .set(bearer(tokens[role]))
+        .send({})
+        .expect(403);
+      const unchanged = await prisma.legalRequest.findUnique({ where: { id: record.id } });
+      expect(unchanged?.status).toBe('consultation_scheduled');
+    });
+  });
+
+  describe('attribution', () => {
+    it('records who priced a matter, and keeps it off the client-facing response', async () => {
+      const record = await seed({ status: 'awaiting_quote', path: 'simple' });
+      const finance = ADMINS.find((a) => a.role === 'finance')!;
+
+      const res = await http()
+        .post(`/api/hub/legal/ops/requests/${record.id}/quote`)
+        .set(bearer(tokens.finance))
+        .send({ amountNaira: 250_000, note: 'Two supplier contracts.' })
+        .expect(200);
+
+      const trail = await prisma.adminOpsAudit.findMany({
+        where: { resource: 'legal_request', resourceId: record.id },
+      });
+      expect(trail).toHaveLength(1);
+      expect(trail[0]).toMatchObject({
+        action: 'legal_quoted',
+        subjectWawuId: userId,
+        actedByAdminId: finance.id,
+        actedByAdminEmail: finance.email,
+        actedByAdminRole: 'finance',
+      });
+      // The ₦ figure itself is on the trail, not just the fact of a quote.
+      expect(trail[0].detail).toMatchObject({ amountNaira: 250_000 });
+      // LegalRequest reaches the client through toResponse(); no staff
+      // identity may ride along on it.
+      expect(JSON.stringify(res.body.data)).not.toContain('@admin.test.wawu.dev');
+      expect(JSON.stringify(res.body.data)).not.toContain(finance.id);
+    });
+
+    it('records who cancelled a paid matter, with what had been paid', async () => {
+      const record = await seed({
+        status: 'in_progress',
+        quoteAmount: 120_000,
+        consultationPaidAt: new Date(),
+        servicePaidAt: new Date(),
+      });
+      await http()
+        .post(`/api/hub/legal/ops/requests/${record.id}/cancel`)
+        .set(bearer(tokens.superadmin))
+        .send({ reason: 'Conflict of interest on the counterparty check.' })
+        .expect(200);
+
+      const trail = await prisma.adminOpsAudit.findMany({
+        where: { resource: 'legal_request', resourceId: record.id, action: 'legal_cancelled' },
+      });
+      expect(trail).toHaveLength(1);
+      expect(trail[0].detail).toMatchObject({
+        servicePaid: true,
+        consultationPaid: true,
+        quoteAmount: 120_000,
+      });
     });
   });
 
@@ -161,7 +348,7 @@ describe('WAWU Legal ops lifecycle (contract)', () => {
 
       const res = await request(app.getHttpServer())
         .post(`/api/hub/legal/ops/requests/${record.id}/quote`)
-        .set('x-wawu-admin-key', ADMIN_KEY)
+        .set(bearer(tokens.finance))
         .send({ amountNaira: 75_000, note: 'Includes the TIN filing.' })
         .expect(200);
 
@@ -177,7 +364,7 @@ describe('WAWU Legal ops lifecycle (contract)', () => {
 
       await request(app.getHttpServer())
         .post(`/api/hub/legal/ops/requests/${record.id}/quote`)
-        .set('x-wawu-admin-key', ADMIN_KEY)
+        .set(bearer(tokens.finance))
         .send({ amountNaira: 50_000 })
         .expect(400);
     });
@@ -185,7 +372,7 @@ describe('WAWU Legal ops lifecycle (contract)', () => {
     it('404s on a request that does not exist', async () => {
       await request(app.getHttpServer())
         .post(`/api/hub/legal/ops/requests/${crypto.randomUUID()}/quote`)
-        .set('x-wawu-admin-key', ADMIN_KEY)
+        .set(bearer(tokens.finance))
         .send({ amountNaira: 1000 })
         .expect(404);
     });
@@ -203,7 +390,7 @@ describe('WAWU Legal ops lifecycle (contract)', () => {
 
       const done = await request(app.getHttpServer())
         .post(`/api/hub/legal/ops/requests/${record.id}/consultation/complete`)
-        .set('x-wawu-admin-key', ADMIN_KEY)
+        .set(bearer(tokens.support))
         .send({ notes: 'Scope agreed: two supplier contracts.' })
         .expect(200);
       expect(done.body.data.status).toBe('consultation_done');
@@ -211,7 +398,7 @@ describe('WAWU Legal ops lifecycle (contract)', () => {
       // The whole point: the ladder continues from here.
       const quoted = await request(app.getHttpServer())
         .post(`/api/hub/legal/ops/requests/${record.id}/quote`)
-        .set('x-wawu-admin-key', ADMIN_KEY)
+        .set(bearer(tokens.finance))
         .send({ amountNaira: 120_000 })
         .expect(200);
       expect(quoted.body.data).toMatchObject({ status: 'quoted', quoteAmount: 120_000 });
@@ -224,7 +411,7 @@ describe('WAWU Legal ops lifecycle (contract)', () => {
       const record = await seed({ status: 'in_progress', consultationPaidAt: new Date() });
       await request(app.getHttpServer())
         .post(`/api/hub/legal/ops/requests/${record.id}/consultation/complete`)
-        .set('x-wawu-admin-key', ADMIN_KEY)
+        .set(bearer(tokens.support))
         .send({})
         .expect(409);
     });
@@ -233,7 +420,7 @@ describe('WAWU Legal ops lifecycle (contract)', () => {
       const record = await seed({ status: 'consultation_scheduled' });
       await request(app.getHttpServer())
         .post(`/api/hub/legal/ops/requests/${record.id}/consultation/complete`)
-        .set('x-wawu-admin-key', ADMIN_KEY)
+        .set(bearer(tokens.support))
         .send({})
         .expect(400);
     });
@@ -251,7 +438,7 @@ describe('WAWU Legal ops lifecycle (contract)', () => {
 
       const res = await request(app.getHttpServer())
         .post(`/api/hub/legal/ops/requests/${record.id}/deliver`)
-        .set('x-wawu-admin-key', ADMIN_KEY)
+        .set(bearer(tokens.support))
         .send({ deliverableUrl: 'https://storage.wawu.test/legal/contract-drafting.pdf' })
         .expect(200);
 
@@ -266,7 +453,7 @@ describe('WAWU Legal ops lifecycle (contract)', () => {
       const record = await seed({ status: 'quoted', quoteAmount: 10_000 });
       await request(app.getHttpServer())
         .post(`/api/hub/legal/ops/requests/${record.id}/deliver`)
-        .set('x-wawu-admin-key', ADMIN_KEY)
+        .set(bearer(tokens.support))
         .send({ deliverableUrl: 'https://storage.wawu.test/x.pdf' })
         .expect(409);
     });
@@ -275,7 +462,7 @@ describe('WAWU Legal ops lifecycle (contract)', () => {
       const record = await seed({ status: 'in_progress', servicePaidAt: new Date() });
       await request(app.getHttpServer())
         .post(`/api/hub/legal/ops/requests/${record.id}/deliver`)
-        .set('x-wawu-admin-key', ADMIN_KEY)
+        .set(bearer(tokens.support))
         .send({})
         .expect(400);
     });
@@ -287,7 +474,7 @@ describe('WAWU Legal ops lifecycle (contract)', () => {
 
       const res = await request(app.getHttpServer())
         .post(`/api/hub/legal/ops/requests/${record.id}/cancel`)
-        .set('x-wawu-admin-key', ADMIN_KEY)
+        .set(bearer(tokens.finance))
         .send({ reason: 'Conflict of interest found on the counterparty check.' })
         .expect(200);
 
@@ -302,7 +489,7 @@ describe('WAWU Legal ops lifecycle (contract)', () => {
       const record = await seed({ status: 'quoted', quoteAmount: 1000 });
       await request(app.getHttpServer())
         .post(`/api/hub/legal/ops/requests/${record.id}/cancel`)
-        .set('x-wawu-admin-key', ADMIN_KEY)
+        .set(bearer(tokens.finance))
         .send({ reason: 'no' })
         .expect(400);
     });
@@ -311,7 +498,7 @@ describe('WAWU Legal ops lifecycle (contract)', () => {
       const record = await seed({ status: 'delivered', deliveredAt: new Date() });
       await request(app.getHttpServer())
         .post(`/api/hub/legal/ops/requests/${record.id}/cancel`)
-        .set('x-wawu-admin-key', ADMIN_KEY)
+        .set(bearer(tokens.finance))
         .send({ reason: 'Client changed their mind about it.' })
         .expect(409);
     });
@@ -322,7 +509,7 @@ describe('WAWU Legal ops lifecycle (contract)', () => {
       const record = await seed({ status: 'awaiting_quote', path: 'simple' });
       const res = await request(app.getHttpServer())
         .get('/api/hub/legal/ops/requests?status=awaiting_quote')
-        .set('x-wawu-admin-key', ADMIN_KEY)
+        .set(bearer(tokens.support))
         .expect(200);
 
       expect(res.body.data.every((r: { status: string }) => r.status === 'awaiting_quote')).toBe(true);
@@ -332,7 +519,7 @@ describe('WAWU Legal ops lifecycle (contract)', () => {
     it('400s on a status that is not a real one', async () => {
       await request(app.getHttpServer())
         .get('/api/hub/legal/ops/requests?status=made-up')
-        .set('x-wawu-admin-key', ADMIN_KEY)
+        .set(bearer(tokens.support))
         .expect(400);
     });
   });
@@ -394,7 +581,7 @@ describe('WAWU Legal ops lifecycle (contract)', () => {
 
       await request(app.getHttpServer())
         .post(`/api/hub/legal/ops/requests/${record.id}/cancel`)
-        .set('x-wawu-admin-key', ADMIN_KEY)
+        .set(bearer(tokens.finance))
         .send({ reason: 'Client rescheduled to a later date.' })
         .expect(200);
 

@@ -193,7 +193,24 @@ stops purchases getting stranded in `pending`.
    `unmatched`, `rejected` or `failed` are the reconciliation queue.
 7. Other required env vars: `DATABASE_URL`, `HUB_API_PORT`, `CORS_ORIGIN`
    (mandatory in production), `WAWU_ID_JWKS_URL`, `WAWU_ID_BASE_URL`,
-   `WAWU_ID_INTERNAL_SERVICE_KEY`, `FLUTTERWAVE_PUBLIC_KEY`, `WAWU_ADMIN_KEY`.
+   `WAWU_ID_INTERNAL_SERVICE_KEY`, `FLUTTERWAVE_PUBLIC_KEY`.
+
+## `WAWU_ADMIN_KEY` is retired
+
+It used to gate six operator surfaces — `legal/ops`, `services/ops/applications`,
+`bills/ops`, `care/ops`, `PATCH /learn/playbook` and the `learn/guides` writes —
+as a single shared static secret with no identity and no role model. All six now
+sit behind `AdminAuthGuard` + `AdminRolesGuard` (`src/admin/auth/`), so every
+operator action names a real admin and every handler declares which roles may
+reach it. Setting `WAWU_ADMIN_KEY` grants access to nothing; `AdminKeyGuard` is
+kept only because WAWUAfrica-Dashboard's `scripts/generate-ops-contract.mjs`
+parses the file. Configure `ADMIN_JWT_SECRET` / `ADMIN_JWT_REFRESH_SECRET`
+instead (see `.env.example`) and create the first admin with `npm run admin:seed`.
+
+**Callers must send the admin's own bearer token.** WAWUAfrica-Dashboard's
+`src/app/api/ops/[key]/route.ts` already verifies the caller's admin session
+against `GET /api/hub/admin/auth/me` and then swaps in the shared key on the
+upstream hop; it needs to forward that same `Authorization` header instead.
 
 ---
 

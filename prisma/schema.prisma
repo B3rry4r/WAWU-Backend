@@ -1444,3 +1444,79 @@ model PaymentWebhookReceipt {
   @@index([status])
   @@index([receivedAt])
 }
+
+/// Which operator surface an AdminOpsAudit row belongs to.
+enum AdminOpsResource {
+  legal_request
+  service_application
+  bill_payment
+  health_subscription
+}
+
+/// Every consequential ops action that used to be anonymous behind
+/// AdminKeyGuard, named for what it did rather than for the route that did it.
+enum AdminOpsAction {
+  legal_quoted
+  legal_consultation_completed
+  legal_delivered
+  legal_cancelled
+  application_progressed
+  application_rejected
+  application_approved
+  bill_reconciled
+  bill_refund_recorded
+  care_enrolment_retried
+  care_refund_recorded
+}
+
+/// Attribution for the operator surfaces that moved from AdminKeyGuard onto
+/// the real admin identity — WAWU Legal, ServiceApplication, WAWUPay and
+/// WAWUCare.
+///
+/// A SIDE TABLE, for the same reason AdminContentReview and AdminKycAudit are
+/// side tables: protected-surface hazard H-1 records that most wire types in
+/// src/common/types are bare Prisma re-exports returned by spread, so an
+/// `actedByAdminId` column on LegalRequest, ServiceApplication, BillPayment or
+/// HealthSubscription would appear verbatim in a live app response the moment
+/// it existed. A client looking at their own legal matter has no business
+/// seeing which WAWU staff member priced or cancelled it.
+///
+/// ONE table across four resources rather than four tables, and that is a
+/// departure from AdminContentReview / AdminKycAudit. Those two carry
+/// resource-specific TYPED columns (ContentStatus transitions, a slot-return
+/// flag, an AdminKycAction) that only make sense for their own entity. These
+/// eleven handlers share exactly one shape — "an admin did a named thing to
+/// one row, and here is what changed" — so four near-identical tables would be
+/// four places to look for one question ("what has this admin done?").
+///
+/// `detail` is the per-action payload as JSON rather than as columns: a quote
+/// amount, a cancellation reason, a refund reference and a provider status are
+/// not the same field, and inventing a nullable column for each would make the
+/// table wider than the four it replaces.
+///
+/// No FK to the audited row or to AdminUser, matching every cross-boundary
+/// reference in this schema (KycSubmission.wawuUserId, Purchase.buyerWawuId).
+/// Admin email and role are SNAPSHOTS: "who cancelled this ₦120,000 matter"
+/// has to stay answerable after that admin is renamed, suspended or deleted.
+model AdminOpsAudit {
+  id         String           @id @default(uuid())
+  resource   AdminOpsResource
+  resourceId String
+  /// Snapshot of whose money or matter this action touched. Empty string only
+  /// where the audited row genuinely has no owner.
+  subjectWawuId String
+
+  action AdminOpsAction
+  /// What actually changed — the quote amount, the refund reference, the new
+  /// status. Shape varies by `action`; see src/common/audit.
+  detail Json?
+
+  actedByAdminId    String
+  actedByAdminEmail String
+  actedByAdminRole  AdminRole
+  actedAt           DateTime @default(now())
+
+  @@index([resource, resourceId])
+  @@index([actedByAdminId])
+  @@index([actedAt])
+}

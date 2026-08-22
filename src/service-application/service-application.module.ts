@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { AdminAuthModule } from '../admin/auth/admin-auth.module';
+import { AdminOpsAuditModule } from '../common/audit/admin-ops-audit.module';
 import { ServiceApplicationController } from './service-application.controller';
 import { ServiceApplicationAliasController } from './service-application-alias.controller';
 import { ServiceApplicationOpsController } from './service-application-ops.controller';
@@ -29,7 +31,16 @@ function usesMockFlutterwave(): boolean {
   return shouldUseMockFlutterwave();
 }
 
+/**
+ * AdminAuthModule is imported for its two exported GUARDS only.
+ * ServiceApplicationOpsController moved off AdminKeyGuard (one shared static
+ * secret, no identity, no roles) onto AdminAuthGuard + AdminRolesGuard.
+ * Imported here rather than wired in app.module.ts so the documented,
+ * load-bearing route-registration order in that file is untouched — Nest
+ * dedupes the already-registered module.
+ */
 @Module({
+  imports: [AdminAuthModule, AdminOpsAuditModule],
   controllers: [
     ServiceApplicationController,
     ServiceApplicationAliasController,

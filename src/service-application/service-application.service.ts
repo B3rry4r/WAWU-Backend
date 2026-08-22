@@ -4,6 +4,10 @@ import {
   type PartnerServiceKind,
 } from './dto/apply-partner.dto';
 import { PrismaService } from '../common/prisma/prisma.service';
+import {
+  AdminOpsAuditService,
+  type AdminActor,
+} from '../common/audit/admin-ops-audit.service';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type { ServiceApplication, ServiceApplicationTimelineEntry } from '../common/types';
 import { FLUTTERWAVE_CLIENT, type FlutterwaveClient } from './flutterwave-client.interface';
@@ -54,6 +58,7 @@ export class ServiceApplicationService {
   constructor(
     private readonly prisma: PrismaService,
     @Inject(FLUTTERWAVE_CLIENT) private readonly flutterwave: FlutterwaveClient,
+    private readonly audit: AdminOpsAuditService,
   ) {}
 
   private generateReference(prefix: string): string {
@@ -267,7 +272,7 @@ export class ServiceApplicationService {
 
   // ---------------------------------------------------------------------
   // Operator progression. Everything below is reached only through
-  // AdminKeyGuard — see dto/progress-application.dto.ts.
+  // AdminAuthGuard + AdminRolesGuard -- see service-application-ops.controller.ts.
   // ---------------------------------------------------------------------
 
   private async requireApplication(id: string) {
@@ -291,10 +296,14 @@ export class ServiceApplicationService {
    * write that was missing — an application could be created and then never
    * change again.
    */
-  async progress(id: string, dto: ProgressApplicationDto): Promise<ServiceApplication> {
+  async progress(
+    id: string,
+    dto: ProgressApplicationDto,
+    admin: AdminActor,
+  ): Promise<ServiceApplication> {
     const application = await this.requireApplication(id);
 
-    return this.prisma.serviceApplication.update({
+    const updated = await this.prisma.serviceApplication.update({
       where: { id },
       data: {
         ...(dto.status !== undefined && { status: dto.status }),
@@ -309,6 +318,22 @@ export class ServiceApplicationService {
         }),
       },
     });
+    // The `timeline` entry is what the APPLICANT sees, so it deliberately
+    // carries no staff name. The audit row is the other half of that: who
+    // moved it, kept where the applicant never reads it.
+    await this.audit.record(admin, {
+      resource: 'service_application',
+      resourceId: updated.id,
+      subjectWawuId: updated.applicantWawuId,
+      action: 'application_progressed',
+      detail: {
+        label: dto.label,
+        previousStatus: application.status,
+        newStatus: updated.status,
+        certificateExpectedBy: dto.certificateExpectedBy ?? null,
+      },
+    });
+    return updated;
   }
 
   /**
@@ -319,10 +344,14 @@ export class ServiceApplicationService {
    * transfer nothing in this codebase performs. The note is where an operator
    * tells them what actually happened.
    */
-  async reject(id: string, dto: RejectApplicationDto): Promise<ServiceApplication> {
+  async reject(
+    id: string,
+    dto: RejectApplicationDto,
+    admin: AdminActor,
+  ): Promise<ServiceApplication> {
     const application = await this.requireApplication(id);
 
-    return this.prisma.serviceApplication.update({
+    const updated = await this.prisma.serviceApplication.update({
       where: { id },
       data: {
         status: 'rejected',
@@ -335,13 +364,32 @@ export class ServiceApplicationService {
         }),
       },
     });
+    // A refusal strands whatever the applicant already paid (₦25,000 for CAC),
+    // and no adapter here can give it back — so the amount is recorded next to
+    // the person who wrote the refusal.
+    await this.audit.record(admin, {
+      resource: 'service_application',
+      resourceId: updated.id,
+      subjectWawuId: updated.applicantWawuId,
+      action: 'application_rejected',
+      detail: {
+        reason: dto.reason,
+        previousStatus: application.status,
+        amountPaid: application.amountPaid,
+      },
+    });
+    return updated;
   }
 
   /** Approves an application and, if one was issued, attaches the certificate. */
-  async approve(id: string, dto: ApproveApplicationDto): Promise<ServiceApplication> {
+  async approve(
+    id: string,
+    dto: ApproveApplicationDto,
+    admin: AdminActor,
+  ): Promise<ServiceApplication> {
     const application = await this.requireApplication(id);
 
-    return this.prisma.serviceApplication.update({
+    const updated = await this.prisma.serviceApplication.update({
       where: { id },
       data: {
         status: 'approved',
@@ -356,5 +404,16 @@ export class ServiceApplicationService {
         }),
       },
     });
+    await this.audit.record(admin, {
+      resource: 'service_application',
+      resourceId: updated.id,
+      subjectWawuId: updated.applicantWawuId,
+      action: 'application_approved',
+      detail: {
+        previousStatus: application.status,
+        certificateUrl: dto.certificateUrl ?? null,
+      },
+    });
+    return updated;
   }
 }
