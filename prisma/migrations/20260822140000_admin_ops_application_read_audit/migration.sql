@@ -1,0 +1,31 @@
+-- One new value on an existing admin-only enum. Nothing else.
+--
+-- ADDITIVE ONLY, and additive in the strictest sense available: no CREATE
+-- TABLE, no ALTER TABLE, no column added, dropped, renamed, retyped, narrowed
+-- or widened. "AdminOpsAction" is read and written by AdminOpsAuditService
+-- alone; the AdminOpsAudit table is never returned to the shipped app on any
+-- route, so widening the enum cannot widen an app response. That is the exact
+-- hazard (H-1: most wire types in src/common/types are bare Prisma re-exports
+-- returned by spread) that keeps `ServiceApplication` itself untouched here —
+-- the operator reads that ship alongside this migration declare their own view
+-- types instead of adding a column.
+--
+-- WHY A READ NEEDS AN ACTION AT ALL. The convention in this codebase is that
+-- writes are audited and queue reads are not (see AdminOpsAuditService's own
+-- comment: the legal/bills/care queue reads "disclose no identity document and
+-- no bank detail, so they are not the kind of read AdminKycAudit exists for").
+-- The service-application DETAIL read is the kind: ServiceApplication.documents
+-- is documented in this schema as the applicant's uploaded ID, signature and
+-- passport photograph, and the detail response hands every one of those URLs to
+-- an operator, next to the business details the applicant typed. AdminKycAudit
+-- records a `document_viewed` row for precisely that disclosure. This is the
+-- same event on a different resource, so it is recorded the same way.
+--
+-- The QUEUE read (GET /services/ops/applications) writes nothing: it carries no
+-- document URL and no intake answers, only what triage needs.
+--
+-- Safe on PostgreSQL 12+ inside Prisma's per-migration transaction because the
+-- new value is not USED anywhere in this migration.
+
+-- AlterEnum
+ALTER TYPE "AdminOpsAction" ADD VALUE 'application_documents_viewed';

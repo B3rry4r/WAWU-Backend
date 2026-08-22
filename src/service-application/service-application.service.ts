@@ -19,6 +19,13 @@ import type {
   ProgressApplicationDto,
   RejectApplicationDto,
 } from './dto/progress-application.dto';
+import type { OpsApplicationQueueQueryDto } from './dto/ops-application-queue-query.dto';
+import {
+  toServiceApplicationOpsDetailView,
+  toServiceApplicationOpsQueueItemView,
+  type ServiceApplicationOpsDetailView,
+  type ServiceApplicationOpsQueueItemView,
+} from './service-application-ops-view.type';
 
 /** Server-priced, never client-suppliable (conventions.md § Identity & format canon). */
 export const CAC_FEE_NAIRA = 25_000;
@@ -415,5 +422,112 @@ export class ServiceApplicationService {
       },
     });
     return updated;
+  }
+
+  // ---------------------------------------------------------------------
+  // Operator READS. Same guard stack, same roles as the three writes above.
+  //
+  // These are the reads that did not exist. `list` and `getById` at the top of
+  // this file are scoped to `applicantWawuId`, so an operator running either
+  // one saw their OWN applications and nothing else -- while `progress`,
+  // `reject` and `approve` all take an application id that nothing an operator
+  // could reach supplied. CAC and NEPC registrations, paid for, sat in a queue
+  // with no door.
+  //
+  // Both return a DECLARED view type built by an exported mapper, not a spread
+  // of a row: see service-application-ops-view.type.ts for why that matters
+  // here specifically.
+  // ---------------------------------------------------------------------
+
+  /**
+   * GET /services/ops/applications -- every applicant's applications, oldest
+   * first, filterable by status and by kind.
+   *
+   * EVERY status by default, unlike the content and KYC review queues which
+   * are hard-filtered to `pending`. Those two have another surface to fall
+   * back on; this one does not. It is the only operator read on the resource,
+   * so it is also the only way to find the id for `progress`, `reject` and
+   * `approve` -- including for an application already `under_review` that an
+   * operator is moving along for the third time. Hiding rows behind an
+   * implicit filter would leave the queue exactly as unreachable as it was.
+   * `?status=submitted` narrows it for whoever wants the untouched work.
+   *
+   * `total` comes from a real `count()` in the same transaction as the page,
+   * so the dashboard can render "37 waiting" rather than "20", which is all a
+   * row count of the current page could ever tell it.
+   */
+  async opsQueue(
+    query: OpsApplicationQueueQueryDto,
+  ): Promise<Paginated<ServiceApplicationOpsQueueItemView>> {
+    const where = {
+      ...(query.status !== undefined && { status: query.status }),
+      ...(query.kind !== undefined && { kind: query.kind }),
+    };
+
+    const [rows, total] = await this.prisma.$transaction([
+      this.prisma.serviceApplication.findMany({
+        where,
+        // Oldest first by default -- see OpsApplicationQueueQueryDto.sort.
+        // Tie-broken on `id` so two applications submitted in the same
+        // millisecond cannot swap places between page 1 and page 2 and hide a
+        // row from an operator paging through.
+        orderBy: [
+          { appliedDate: query.sort === 'newest' ? 'desc' : 'asc' },
+          { id: 'asc' },
+        ],
+        skip: (query.page - 1) * query.perPage,
+        take: query.perPage,
+      }),
+      this.prisma.serviceApplication.count({ where }),
+    ]);
+
+    const now = Date.now();
+    return {
+      items: rows.map((row) => toServiceApplicationOpsQueueItemView(row, now)),
+      currentPage: query.page,
+      perPage: query.perPage,
+      total,
+    };
+  }
+
+  /**
+   * GET /services/ops/applications/:id -- one application in full: the
+   * applicant's own submitted answers, the documents they uploaded, the whole
+   * timeline, the rejection reason, the expected-certificate date and what
+   * they paid.
+   *
+   * AUDITED, and it is the only read on this surface that is. The convention
+   * on the other operator surfaces is that writes are audited and queue reads
+   * are not, "because they disclose no identity document and no bank detail"
+   * (AdminOpsAuditService) -- and `AdminKycAudit` writes a `document_viewed`
+   * row for the one read that does. This response hands an operator the URLs
+   * of another person's uploaded ID, signature and passport photograph (the
+   * `documents` column's own definition) alongside the business details they
+   * typed. That is the same disclosure, so it is recorded the same way: who
+   * opened whose application, and when.
+   *
+   * The audit write never throws (AdminOpsAuditService swallows and logs), so
+   * a failure to record cannot turn an operator's queue back into a blank
+   * screen -- the failure mode the whole change exists to remove.
+   */
+  async opsDetail(
+    id: string,
+    admin: AdminActor,
+  ): Promise<ServiceApplicationOpsDetailView> {
+    const application = await this.requireApplication(id);
+
+    await this.audit.record(admin, {
+      resource: 'service_application',
+      resourceId: application.id,
+      subjectWawuId: application.applicantWawuId,
+      action: 'application_documents_viewed',
+      detail: {
+        kind: application.kind,
+        status: application.status,
+        documentCount: application.documents.length,
+      },
+    });
+
+    return toServiceApplicationOpsDetailView(application);
   }
 }

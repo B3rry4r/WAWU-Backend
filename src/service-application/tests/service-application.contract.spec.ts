@@ -654,4 +654,413 @@ describe('ServiceApplication contract', () => {
       expect(res.body.data.timeline.at(-1).label).toBe('Names checked');
     });
   });
+  /**
+   * THE GAP THESE CLOSE. `progress`, `reject` and `approve` all take an
+   * application id, and until now nothing an operator could reach supplied
+   * one: the only two reads on the resource are scoped to the caller's own
+   * `applicantWawuId`, so an operator running either saw their own
+   * applications and nothing else. CAC and NEPC registrations people had paid
+   * 25,000 naira for sat in a queue with no door.
+   *
+   * The queue's own status filter is what isolates these assertions from every
+   * other suite's rows on the shared, deliberately non-parallel test database:
+   * the fixtures below are stamped with a status no other suite writes, so
+   * "oldest first" and "total" are asserted over a known set.
+   */
+  describe('GET /services/ops/applications (the operator queue)', () => {
+    const QUEUE_STATUS = 'ops-queue-spec';
+    /** Oldest first, and the oldest belongs to the OTHER applicant. */
+    const OLDEST = new Date('2026-01-05T09:00:00.000Z');
+    const MIDDLE = new Date('2026-02-05T09:00:00.000Z');
+    const NEWEST = new Date('2026-03-05T09:00:00.000Z');
+
+    let idOldestOtherApplicant: string;
+    let idMiddle: string;
+    let idNewest: string;
+
+    async function anApplicationFor(token: string): Promise<string> {
+      const res = await request(app.getHttpServer())
+        .post('/api/hub/services/nepc/apply')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          rcNumber: 'RC-QUEUE',
+          exportCategory: 'Agro',
+          mainProduct: 'Shea',
+          targetMarkets: ['UK'],
+          yearlyVolume: '4 tonnes',
+        })
+        .expect(201);
+      createdIds.push(res.body.data.id);
+      return res.body.data.id as string;
+    }
+
+    beforeAll(async () => {
+      // Any earlier crashed run of this suite would otherwise leave rows
+      // carrying QUEUE_STATUS behind and make the counts below lie.
+      await prisma.serviceApplication.deleteMany({
+        where: { status: QUEUE_STATUS },
+      });
+
+      idOldestOtherApplicant = await anApplicationFor(tokenCreatorBasic);
+      idMiddle = await anApplicationFor(tokenPlain);
+      idNewest = await anApplicationFor(tokenPlain);
+
+      for (const [id, appliedDate] of [
+        [idOldestOtherApplicant, OLDEST],
+        [idMiddle, MIDDLE],
+        [idNewest, NEWEST],
+      ] as const) {
+        await prisma.serviceApplication.update({
+          where: { id },
+          data: { status: QUEUE_STATUS, appliedDate },
+        });
+      }
+    });
+
+    const queue = (query: Record<string, unknown>, token: string) =>
+      request(app.getHttpServer())
+        .get('/api/hub/services/ops/applications')
+        .query(query)
+        .set(bearer(token));
+
+    it("lists applications from EVERY applicant, not just the caller's, oldest first", async () => {
+      const res = await queue(
+        { status: QUEUE_STATUS, perPage: 50 },
+        tokens.support,
+      ).expect(200);
+
+      expect(res.body.data.map((i: { id: string }) => i.id)).toEqual([
+        idOldestOtherApplicant,
+        idMiddle,
+        idNewest,
+      ]);
+      // The row at the front of the queue is not the caller's and not even the
+      // applicant most of this suite's fixtures belong to — which is the whole
+      // point: a self-scoped read showed an operator none of these.
+      expect(res.body.data[0].applicantWawuId).toBe(USER_CREATOR_BASIC);
+      expect(
+        new Set(
+          res.body.data.map(
+            (i: { applicantWawuId: string }) => i.applicantWawuId,
+          ),
+        ),
+      ).toEqual(new Set([USER_CREATOR_BASIC, USER_PLAIN]));
+    });
+
+    it('sort=newest flips it, so the default really is a choice', async () => {
+      const res = await queue(
+        { status: QUEUE_STATUS, perPage: 50, sort: 'newest' },
+        tokens.support,
+      ).expect(200);
+      expect(res.body.data.map((i: { id: string }) => i.id)).toEqual([
+        idNewest,
+        idMiddle,
+        idOldestOtherApplicant,
+      ]);
+    });
+
+    it('reports a real total, not the length of the page it returned', async () => {
+      const res = await queue(
+        { status: QUEUE_STATUS, perPage: 2 },
+        tokens.support,
+      ).expect(200);
+      expect(res.body.data).toHaveLength(2);
+      expect(res.body.pagination).toEqual({
+        currentPage: 1,
+        nextPage: 2,
+        perPage: 2,
+        total: 3,
+      });
+
+      const page2 = await queue(
+        { status: QUEUE_STATUS, perPage: 2, page: 2 },
+        tokens.support,
+      ).expect(200);
+      expect(page2.body.data.map((i: { id: string }) => i.id)).toEqual([
+        idNewest,
+      ]);
+      expect(page2.body.pagination).toMatchObject({
+        currentPage: 2,
+        nextPage: null,
+        total: 3,
+      });
+    });
+
+    it('filters by service kind', async () => {
+      const nepc = await queue(
+        { status: QUEUE_STATUS, kind: 'nepc', perPage: 50 },
+        tokens.support,
+      ).expect(200);
+      expect(nepc.body.data).toHaveLength(3);
+
+      const cac = await queue(
+        { status: QUEUE_STATUS, kind: 'cac', perPage: 50 },
+        tokens.support,
+      ).expect(200);
+      expect(cac.body.data).toHaveLength(0);
+      expect(cac.body.pagination.total).toBe(0);
+    });
+
+    it('400s on a kind that is not a service', async () => {
+      await queue({ kind: 'not-a-service' }, tokens.support).expect(400);
+    });
+
+    it('400s on an undeclared query parameter', async () => {
+      await queue({ applicantWawuId: USER_PLAIN }, tokens.support).expect(400);
+    });
+
+    it('returns the declared queue shape, and no document URLs', async () => {
+      const res = await queue(
+        { status: QUEUE_STATUS, perPage: 50 },
+        tokens.support,
+      ).expect(200);
+      const row = res.body.data[0];
+      expect(row).toEqual({
+        id: expect.any(String),
+        reference: expect.stringMatching(/^WA-NEPC-\d{5}$/),
+        applicantWawuId: USER_CREATOR_BASIC,
+        kind: 'nepc',
+        title: 'NEPC export registration',
+        status: QUEUE_STATUS,
+        statusLabel: 'Submitted — under review',
+        appliedDate: OLDEST.toISOString(),
+        waitingDays: expect.any(Number),
+        amountPaid: null,
+        documentCount: 0,
+        certificateExpectedBy: null,
+        latestUpdateLabel: 'Submitted',
+      });
+      // A declared view, not a spread of the row: the `documents` and
+      // `timeline` columns are detail-only, which is what makes the audit
+      // split below honest.
+      expect(row).not.toHaveProperty('documents');
+      expect(row).not.toHaveProperty('timeline');
+    });
+
+    it.each(OPS_ROLES)('%s can open the queue', async (role) => {
+      await queue({ perPage: 1 }, tokens[role]).expect(200);
+    });
+
+    it.each(rolesOtherThan(OPS_ROLES))(
+      '%s cannot open the queue',
+      async (role) => {
+        await queue({ perPage: 1 }, tokens[role]).expect(403);
+      },
+    );
+
+    it('a WAWU ID user token is not an admin session, and no credential is 401', async () => {
+      await request(app.getHttpServer())
+        .get('/api/hub/services/ops/applications')
+        .set('Authorization', `Bearer ${tokenPlain}`)
+        .expect(401);
+      await request(app.getHttpServer())
+        .get('/api/hub/services/ops/applications')
+        .expect(401);
+    });
+
+    it('writes no audit row — a queue row discloses no document', async () => {
+      const before = await prisma.adminOpsAudit.count({
+        where: {
+          resource: 'service_application',
+          resourceId: { in: createdIds },
+        },
+      });
+      await queue({ status: QUEUE_STATUS, perPage: 50 }, tokens.support).expect(
+        200,
+      );
+      const after = await prisma.adminOpsAudit.count({
+        where: {
+          resource: 'service_application',
+          resourceId: { in: createdIds },
+        },
+      });
+      expect(after).toBe(before);
+    });
+  });
+
+  describe('GET /services/ops/applications/:id (one application in full)', () => {
+    const documents = [
+      'https://storage.wawu.test/service-application/document/id-card.jpg',
+      'https://storage.wawu.test/service-application/document/signature.png',
+    ];
+    const answers =
+      'Shea butter export (Agro commodities) targeting UK, Germany. Yearly volume: 12 tonnes.';
+
+    async function aDocumentedApplication(): Promise<string> {
+      const res = await request(app.getHttpServer())
+        .post('/api/hub/services/nepc/apply')
+        .set('Authorization', `Bearer ${tokenCreatorBasic}`)
+        .send({
+          rcNumber: 'RC-DETAIL',
+          exportCategory: 'Agro commodities',
+          mainProduct: 'Shea butter',
+          targetMarkets: ['UK', 'Germany'],
+          yearlyVolume: '12 tonnes',
+          documents,
+        })
+        .expect(201);
+      createdIds.push(res.body.data.id);
+      return res.body.data.id as string;
+    }
+
+    const detail = (id: string, token: string) =>
+      request(app.getHttpServer())
+        .get(`/api/hub/services/ops/applications/${id}`)
+        .set(bearer(token));
+
+    it("returns the applicant's own answers, their documents and the timeline", async () => {
+      const id = await aDocumentedApplication();
+      const res = await detail(id, tokens.support).expect(200);
+
+      expect(res.body.data).toMatchObject({
+        id,
+        applicantWawuId: USER_CREATOR_BASIC,
+        kind: 'nepc',
+        documents,
+        documentCount: 2,
+        rejection: null,
+        certificateExpectedBy: null,
+        amountPaid: null,
+      });
+      // The submitted answers. They live in the intake timeline entry because
+      // the schema has no column for them — surfaced as their own field rather
+      // than left for the operator to dig out.
+      expect(res.body.data.submission).toEqual({
+        label: 'Submitted',
+        occurredAt: expect.any(String),
+        note: answers,
+      });
+      expect(res.body.data.timeline).toEqual([res.body.data.submission]);
+    });
+
+    it('shows a refused CAC application with what was paid and why it was refused', async () => {
+      const applied = await request(app.getHttpServer())
+        .post('/api/hub/services/cac/apply')
+        .set('Authorization', `Bearer ${tokenPlain}`)
+        .send({
+          registrationType: 'business-name',
+          names: ['Ngozi Fabrics'],
+          nature: 'Textiles',
+          documents: [documents[0]],
+        })
+        .expect(201);
+      const txRef = applied.body.data.flutterwaveConfig.txRef as string;
+      const id = txRef.replace(/^cac-/, '');
+      createdIds.push(id);
+
+      await request(app.getHttpServer())
+        .post('/api/hub/services/cac/apply/verify')
+        .set('Authorization', `Bearer ${tokenPlain}`)
+        .send({ transaction_id: 'FLW_TXN_OPSREAD', tx_ref: txRef });
+
+      const reason =
+        'All three proposed names are already on the CAC register.';
+      await request(app.getHttpServer())
+        .post(`/api/hub/services/ops/applications/${id}/reject`)
+        .set(bearer(tokens.support))
+        .send({ reason })
+        .expect(200);
+
+      const res = await detail(id, tokens.support).expect(200);
+      expect(res.body.data).toMatchObject({
+        kind: 'cac',
+        status: 'rejected',
+        rejection: reason,
+        // 25,000 naira, stranded — the figure an operator has to be able to
+        // see next to the refusal.
+        amountPaid: 25_000,
+        documents: [documents[0]],
+      });
+      expect(res.body.data.certificateExpectedBy).toEqual(expect.any(String));
+      expect(
+        res.body.data.timeline.map((t: { label: string }) => t.label),
+      ).toEqual(['Application started', 'Submitted', 'Not approved']);
+    });
+
+    it('survives a malformed timeline instead of 500ing the screen', async () => {
+      const id = await aDocumentedApplication();
+      // The column is Prisma `Json`; nothing in the type system rules this
+      // out, and the failure mode of trusting it is the operator back to a
+      // blank screen.
+      await prisma.serviceApplication.update({
+        where: { id },
+        data: { timeline: { corrupted: true } as never },
+      });
+
+      const res = await detail(id, tokens.support).expect(200);
+      expect(res.body.data.timeline).toEqual([]);
+      expect(res.body.data.submission).toBeNull();
+      expect(res.body.data.latestUpdateLabel).toBeNull();
+    });
+
+    it('records WHO opened it — the one read on this surface that is audited', async () => {
+      const id = await aDocumentedApplication();
+      const support = ADMINS.find((a) => a.role === 'support')!;
+
+      await detail(id, tokens.support).expect(200);
+
+      const trail = await prisma.adminOpsAudit.findMany({
+        where: { resource: 'service_application', resourceId: id },
+      });
+      expect(trail).toHaveLength(1);
+      expect(trail[0]).toMatchObject({
+        action: 'application_documents_viewed',
+        subjectWawuId: USER_CREATOR_BASIC,
+        actedByAdminId: support.id,
+        actedByAdminEmail: support.email,
+        actedByAdminRole: 'support',
+      });
+      expect(trail[0].detail).toMatchObject({ kind: 'nepc', documentCount: 2 });
+    });
+
+    it("never leaks the operator back to the applicant's own read", async () => {
+      const id = await aDocumentedApplication();
+      const support = ADMINS.find((a) => a.role === 'support')!;
+      await detail(id, tokens.support).expect(200);
+
+      const applicantView = await request(app.getHttpServer())
+        .get(`/api/hub/services/applications/${id}`)
+        .set('Authorization', `Bearer ${tokenCreatorBasic}`)
+        .expect(200);
+      expect(JSON.stringify(applicantView.body)).not.toContain(support.email);
+      expect(JSON.stringify(applicantView.body)).not.toContain(support.id);
+    });
+
+    it.each(OPS_ROLES)('%s can open one application', async (role) => {
+      const id = await aDocumentedApplication();
+      await detail(id, tokens[role]).expect(200);
+    });
+
+    it.each(rolesOtherThan(OPS_ROLES))(
+      '%s cannot open one application',
+      async (role) => {
+        const id = await aDocumentedApplication();
+        await detail(id, tokens[role]).expect(403);
+
+        const trail = await prisma.adminOpsAudit.count({
+          where: { resource: 'service_application', resourceId: id },
+        });
+        expect(trail).toBe(0);
+      },
+    );
+
+    it('404s on an id that is not an application, 400s on one that is not a uuid', async () => {
+      await detail(
+        'ffffffff-0000-4000-8000-000000009999',
+        tokens.support,
+      ).expect(404);
+      await detail('not-a-uuid', tokens.support).expect(400);
+    });
+
+    it('a WAWU ID user token is not an admin session, and no credential is 401', async () => {
+      const id = await aDocumentedApplication();
+      await request(app.getHttpServer())
+        .get(`/api/hub/services/ops/applications/${id}`)
+        .set('Authorization', `Bearer ${tokenPlain}`)
+        .expect(401);
+      await request(app.getHttpServer())
+        .get(`/api/hub/services/ops/applications/${id}`)
+        .expect(401);
+    });
+  });
 });

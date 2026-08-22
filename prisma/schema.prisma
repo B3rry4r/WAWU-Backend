@@ -1463,6 +1463,15 @@ enum AdminOpsAction {
   application_progressed
   application_rejected
   application_approved
+  /// The one READ that is audited on this surface. GET
+  /// /services/ops/applications/:id hands an operator another person's
+  /// uploaded ID, signature and passport photograph (see
+  /// ServiceApplication.documents) plus the business details they typed —
+  /// which is precisely what AdminKycAudit's `document_viewed` exists for.
+  /// The QUEUE read is not audited: it carries no document URL and no
+  /// intake answers, so it discloses nothing beyond "this person has an
+  /// application", the same as the legal and bills queue reads.
+  application_documents_viewed
   bill_reconciled
   bill_refund_recorded
   care_enrolment_retried

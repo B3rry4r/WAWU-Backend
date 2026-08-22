@@ -24,6 +24,13 @@ import { ResponseInterceptor } from '../../common/interceptors/response.intercep
  *  - the new `/admin/payments/*` and `/admin/creators/*` routes resolve to
  *    their own handlers, rather than being swallowed by anything registered
  *    before them;
+ *  - the operator READS on ServiceApplication (`/services/ops/applications`
+ *    and `/services/ops/applications/:id`) resolve too. Those two matter here
+ *    more than any other route in this file: they do NOT live under `/admin`,
+ *    they live under `services/`, which is the exact first segment
+ *    PartnerServiceController's `@Get(':id')` catch-all owns. A module-only
+ *    suite cannot see that collision, because it never registers the
+ *    catch-all;
  *  - the routes that the ordering already protected still resolve, so
  *    registering two more modules early has not displaced
  *    MentorModule → ServiceApplicationModule → PartnerServiceModule.
@@ -185,6 +192,62 @@ describe('Admin ops-reads registration (full AppModule)', () => {
       await http().get('/api/hub/admin/creators').set(auth(financeToken)).expect(200);
       await http().get('/api/hub/admin/payments/receipts').set(auth(userToken)).expect(401);
       await http().get('/api/hub/admin/creators').set(auth(userToken)).expect(401);
+    });
+  });
+
+  describe('the ServiceApplication operator reads resolve under the real ordering', () => {
+    // `/services/ops/applications` is two segments past `services`, so
+    // PartnerServiceController's `@Get(':id')` — a ONE-segment catch-all —
+    // should not be able to match it, and ServiceApplicationModule registers
+    // ahead of PartnerServiceModule regardless. Both of those are arguments;
+    // this is the observation. The catch-all's own failure signature is a 400
+    // reading "uuid v4 is expected", which is what these assertions would see
+    // if the ordering had not held.
+    it('GET /api/hub/services/ops/applications reaches the queue, not the /services/:id catch-all', async () => {
+      const res = await http()
+        .get('/api/hub/services/ops/applications')
+        .query({ perPage: 1 })
+        .set(auth(supportToken))
+        .expect(200);
+      expect(res.body).toMatchObject({ statusCode: 200, message: 'OK' });
+      expect(Array.isArray(res.body.data)).toBe(true);
+      expect(res.body.pagination).toEqual(
+        expect.objectContaining({
+          currentPage: 1,
+          perPage: 1,
+          total: expect.any(Number),
+        }),
+      );
+    });
+
+    it('GET /api/hub/services/ops/applications/:id resolves — a 404 from the SERVICE, not a routing miss', async () => {
+      const res = await http()
+        .get(`/api/hub/services/ops/applications/${UNKNOWN_ID}`)
+        .set(auth(supportToken))
+        .expect(404);
+      // The service's own words. A routing miss says "Cannot GET …"; the
+      // catch-all says "uuid v4 is expected".
+      expect(res.body.message).toBe('Service application not found');
+    });
+
+    it('the role gate and the token type hold on the reads under the real guard stack', async () => {
+      await http()
+        .get('/api/hub/services/ops/applications')
+        .set(auth(financeToken))
+        .expect(403);
+      await http()
+        .get('/api/hub/services/ops/applications')
+        .set(auth(userToken))
+        .expect(401);
+      await http().get('/api/hub/services/ops/applications').expect(401);
+    });
+
+    it("the applicant's own self-scoped read is untouched by the new sibling routes", async () => {
+      const res = await http()
+        .get('/api/hub/services/applications')
+        .set(auth(userToken))
+        .expect(200);
+      expect(Array.isArray(res.body.data)).toBe(true);
     });
   });
 
