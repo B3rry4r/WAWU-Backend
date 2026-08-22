@@ -4,6 +4,8 @@ import { AppController } from './app.controller';
 import { WawuAuthModule } from './common/auth/wawu-auth.module';
 import { AdminAuthModule } from './admin/auth/admin-auth.module';
 import { AdminContentReviewModule } from './admin/content-review/admin-content-review.module';
+import { AdminKycReviewModule } from './admin/kyc-review/admin-kyc-review.module';
+import { AdminVerificationReviewModule } from './admin/verification-review/admin-verification-review.module';
 import { PrismaModule } from './common/prisma/prisma.module';
 import { AccountModule } from './account/account.module';
 import { CommentModule } from './comment/comment.module';
@@ -101,6 +103,30 @@ import { APP_GUARD } from '@nestjs/core';
     // segment. The MentorModule <- ServiceApplicationModule <-
     // PartnerServiceModule ordering below is untouched.
     AdminContentReviewModule,
+    // Admin KYC review (the EARNING gate) and admin verification-tier review
+    // (the public trust badge). Registered here for the same reason
+    // AdminAuthModule and AdminContentReviewModule sit where they do: every
+    // `/admin/*` route is matched before any module that owns a parameterised
+    // route, so no present or future catch-all -- PartnerServiceController's
+    // `@Get(':id')` being the one that has already bitten (see the comment
+    // further down) -- can swallow them.
+    //
+    // Shadow-safe in the other direction too. AdminKycReviewController is
+    // `@Controller('admin/kyc')` and AdminVerificationReviewController is
+    // `@Controller('admin/verification')`; the app's own routes for the same
+    // two resources are `@Controller('kyc')` and `@Controller('verification')`,
+    // a different FIRST segment, so registering ahead of KycSubmissionModule
+    // and VerificationSubmissionModule cannot shadow either of them. Nothing
+    // else in this file declares an `admin` prefix, and the only root-level
+    // controller (AppController) declares one literal path (`health`) with no
+    // parameter segment.
+    //
+    // Two separate modules, not one: KYC and the verification tier are
+    // independent systems by product rule, and a shared module is the first
+    // step towards a shared screen. The MentorModule <- ServiceApplicationModule
+    // <- PartnerServiceModule ordering below is untouched.
+    AdminKycReviewModule,
+    AdminVerificationReviewModule,
     AccountModule,
     CommentModule,
     CourseLessonModule,

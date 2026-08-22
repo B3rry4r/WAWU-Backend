@@ -1153,3 +1153,119 @@ model AdminContentReview {
   @@index([reviewedByAdminId])
   @@index([reviewedAt])
 }
+
+enum AdminKycAction {
+  document_viewed
+  identifiers_revealed
+  approved
+  rejected
+}
+
+/// Audit trail for the admin KYC-review surface — admin-surface-extension
+/// Phase 6.
+///
+/// A SIDE TABLE for the same reason AdminContentReview is one: protected-
+/// surface hazard H-1 records that 28 of 39 wire types in src/common/types
+/// are bare re-exports of their Prisma model returned by spread, so a
+/// `reviewedByAdminId` column on KycSubmission would appear verbatim in the
+/// shipped app's `GET /kyc` response the moment it existed — and that
+/// response goes to the creator, who has no business seeing which reviewer
+/// looked at their file.
+///
+/// Unlike AdminContentReview this table records READS as well as decisions,
+/// because a read here is a disclosure: `document_viewed` is someone opening
+/// a government ID, and `identifiers_revealed` is someone unmasking a BVN,
+/// NIN or payout account number. Those are the rows a breach investigation
+/// needs, and they are exactly the ones a decision-only trail would not have.
+/// `previousStatus` / `newStatus` / `reason` are therefore null on a read row.
+///
+/// No FK to KycSubmission or AdminUser, matching every cross-boundary
+/// reference in this schema (KycSubmission.wawuUserId, Purchase.buyerWawuId).
+/// Reviewer email and role are SNAPSHOTS: "who opened this ID" must stay
+/// answerable after that admin is renamed, suspended, or deleted.
+///
+/// The signed URL itself is NEVER stored here. It is a bearer token for a
+/// government ID; the audit records that a fetch happened, never the means to
+/// repeat it.
+model AdminKycAudit {
+  id                String @id @default(uuid())
+  submissionId      String
+  /// Snapshot of whose earning gate this action touched.
+  subjectWawuUserId String
+
+  action         AdminKycAction
+  /// Both null unless this row is a decision — a view or a reveal moves
+  /// nothing. Stored rather than inferred so the trail still reads correctly
+  /// after a later resubmission moves the creator on.
+  previousStatus ReviewStatus?
+  newStatus      ReviewStatus?
+  /// Required on a rejection (enforced in the DTO and again by the existing
+  /// KycSubmissionService.review); null on every other action.
+  reason         String?
+
+  actedByAdminId    String
+  actedByAdminEmail String
+  actedByAdminRole  AdminRole
+  actedAt           DateTime  @default(now())
+
+  @@index([submissionId])
+  @@index([subjectWawuUserId])
+  @@index([actedByAdminId])
+  @@index([actedAt])
+}
+
+enum AdminVerificationAction {
+  document_viewed
+  approved
+  rejected
+}
+
+/// Audit trail for the admin verification-TIER review surface —
+/// admin-surface-extension Phase 6.
+///
+/// A SEPARATE table from AdminKycAudit, deliberately, and not a shared
+/// "review audit" with a resource discriminator. CLAUDE.md's non-negotiables
+/// and the derived-surface guardrails both say the earning gate (KYC) and the
+/// public trust badge (this ladder) are two independent systems, and this has
+/// already shipped as a bug once — the app described "Government ID submitted
+/// and approved by hand" on a rung of this ladder. One table would put a BVN
+/// disclosure and a business-certificate view in the same query, which is how
+/// the two get conflated again.
+///
+/// There is no `identifiers_revealed` action here because this resource holds
+/// no identifiers to reveal: a VerificationSubmission is a tier and a list of
+/// document keys, nothing more.
+model AdminVerificationAudit {
+  id                String           @id @default(uuid())
+  submissionId      String
+  /// Snapshot of whose badge this action touched.
+  subjectWawuUserId String
+  /// Snapshot of the rung applied for. Stored because the row it describes is
+  /// history the moment a later submission supersedes it.
+  tier              VerificationTier
+
+  action               AdminVerificationAction
+  previousStatus       ReviewStatus?
+  newStatus            ReviewStatus?
+  reason               String?
+  /// Which entry of VerificationSubmission.documents was fetched. Null on a
+  /// decision row.
+  documentIndex        Int?
+  /// True only on an approval that actually reached WAWU ID. The existing
+  /// VerificationSubmissionService elevates the tier BEFORE writing the local
+  /// approval precisely so a failed callback leaves the submission pending and
+  /// retryable — so an approval row can only exist once the elevation
+  /// succeeded, and recording it makes that ordering auditable rather than
+  /// merely commented.
+  tierElevatedAtWawuId Boolean                 @default(false)
+
+  actedByAdminId    String
+  actedByAdminEmail String
+  actedByAdminRole  AdminRole
+  actedAt           DateTime  @default(now())
+
+  @@index([submissionId])
+  @@index([subjectWawuUserId])
+  @@index([actedByAdminId])
+  @@index([actedAt])
+}
