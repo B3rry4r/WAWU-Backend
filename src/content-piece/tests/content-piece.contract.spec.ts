@@ -394,6 +394,74 @@ describe('ContentPiece (contract)', () => {
         .send({ contentType: 'video' })
         .expect(401);
     });
+
+    it('does not count a REJECTED piece against the per-kind allowance', async () => {
+      // Returning a rejected upload's slot is two caps, not one.
+      // POST /admin/content/:id/reject decrements CreatorState.slotsUsed,
+      // which restores the TOTAL cap — but the free/paid sub-caps are counted
+      // from ContentPiece rows here in create(). Those counts used to include
+      // rejected rows, making the return only half a return: the creator got
+      // the total slot back and was still refused another upload of the same
+      // kind. And because `isFirstUpload` derives from the same counts, they
+      // also stopped being a first-time uploader, which would force their
+      // first visible piece to be PAID — the opposite of the spec's
+      // first-upload-must-be-free rule.
+      //
+      // Asserted through the real creator-facing endpoint, because the
+      // counter was never the thing that was broken.
+      const state = await prisma.creatorState.findUniqueOrThrow({
+        where: { wawuUserId: USER_CREATOR_BASIC },
+      });
+
+      // This creator's single Basic free slot is already held by a seeded LIVE
+      // piece, so the rule is isolated by flipping that one piece to rejected
+      // and asserting the slot frees up. Restored below — the seeded row is
+      // shared with other specs.
+      const occupying = await prisma.contentPiece.findFirstOrThrow({
+        where: {
+          creatorWawuId: USER_CREATOR_BASIC,
+          accessType: 'free',
+          status: { not: 'rejected' },
+        },
+      });
+      await prisma.contentPiece.update({
+        where: { id: occupying.id },
+        data: { status: 'rejected' },
+      });
+
+      const res = await request(app.getHttpServer())
+        .post('/content')
+        .set('Authorization', `Bearer ${creatorToken}`)
+        .send({
+          contentType: 'pdf',
+          title: 'Replacement for the rejected piece',
+          description: 'Uploaded after a rejection handed the slot back.',
+          category: 'business_entrepreneurship',
+          accessType: 'free',
+          price: 0,
+          previewAsset: 'https://storage.seed.local/content/rep-preview.pdf',
+          fullAsset: 'https://storage.seed.local/content/rep-full.pdf',
+        });
+
+      // Restore the shared seeded row FIRST, so a failed assertion below
+      // cannot leave it rejected and poison every later spec — the exact
+      // fixture-litter trap this suite's own afterAll comment documents.
+      await prisma.contentPiece.update({
+        where: { id: occupying.id },
+        data: { status: occupying.status },
+      });
+      await prisma.contentPiece.deleteMany({
+        where: { id: res.body?.data?.id ?? '__none__' },
+      });
+      await prisma.creatorState.update({
+        where: { wawuUserId: USER_CREATOR_BASIC },
+        data: { slotsUsed: state.slotsUsed },
+      });
+
+      // A 403 here is the regression: the rejected row still occupying the
+      // creator's one free slot.
+      expect([200, 201]).toContain(res.status);
+    });
   });
 
   describe('GET /content (scope=mine) and GET /content/mine', () => {

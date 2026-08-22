@@ -359,12 +359,27 @@ export class ContentPieceService {
     // inside one transaction. Counting outside it would let two uploads sent
     // at the same moment both read "2 used" and both be written.
     const created = await this.prisma.$transaction(async (tx) => {
+      // A REJECTED piece occupies no slot, of either kind.
+      //
+      // POST /admin/content/:id/reject gives the slot back by decrementing
+      // CreatorState.slotsUsed, which restores the TOTAL cap. The per-kind
+      // caps below are counted from ContentPiece rows instead, so without this
+      // filter they would go on counting the rejected row and the return would
+      // be only half a return: a Basic creator (1 free) whose first upload is
+      // rejected would get the total slot back and still be refused another
+      // free upload. Worse, `isFirstUpload` derives from these same counts, so
+      // they would also stop being a first-time uploader — forcing their first
+      // visible piece to be PAID, in direct contradiction of the spec's
+      // first-upload-must-be-free rule.
+      //
+      // Two definitions of "used" that disagree are worse than either alone.
+      const occupiesASlot = { status: { not: 'rejected' as const } };
       const [freeUsed, paidUsed] = await Promise.all([
         tx.contentPiece.count({
-          where: { creatorWawuId, accessType: 'free' },
+          where: { creatorWawuId, accessType: 'free', ...occupiesASlot },
         }),
         tx.contentPiece.count({
-          where: { creatorWawuId, accessType: 'paid' },
+          where: { creatorWawuId, accessType: 'paid', ...occupiesASlot },
         }),
       ]);
       const isFirstUpload = freeUsed + paidUsed === 0;
