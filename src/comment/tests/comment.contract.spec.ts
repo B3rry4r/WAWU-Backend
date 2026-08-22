@@ -12,13 +12,44 @@ import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
 import { CommentModule } from '../comment.module';
 
 // Seeded WAWU IDs — mirror mock-wawu-id/server.js and prisma/seed.ts exactly
-// (see WAWU-Hub-API build task brief).
-const USER_PLAIN = '00000000-0000-4000-8000-000000000001'; // plain user, author of the seeded comment
+// (see WAWU-Hub-API build task brief). Only used to obtain real tokens; this
+// spec never mutates a row that hangs off these accounts.
+const USER_PLAIN = '00000000-0000-4000-8000-000000000001';
 const USER_CREATOR_BASIC = '00000000-0000-4000-8000-000000000002';
 
-const SEEDED_CONTENT_ID = '10000000-0000-4000-8000-000000000002'; // seeded-10-minute-owambe-makeup
-const SEEDED_COMMENT_ID = '12000000-0000-4000-8000-000000000001';
 const NONEXISTENT_CONTENT_ID = 'ffffffff-0000-4000-8000-000000000099';
+
+/**
+ * Fixtures this spec owns outright (README § Test hygiene rules, rule 1 —
+ * the pattern community.contract.spec.ts and creator-state.contract.spec.ts
+ * already follow).
+ *
+ * These tests used to read and write the SEEDED content piece
+ * `10000000-...-000000000002` and assert that the seeded comment
+ * `12000000-...-000000000001` appeared on page 1 of its comment list. The
+ * POST tests below then added two more comments to that same seeded content
+ * and never removed them. CommentService.list() orders `createdAt desc` with
+ * a default perPage of 20, so once ~10 suite runs had piled up 20 newer
+ * comments, the seeded one fell off page 1 and the GET assertion started
+ * failing — a failure inherited from previous runs rather than caused by the
+ * code under test. (Each run also left `ContentPiece.commentCount` on the
+ * seeded row two higher than seed.ts set it.)
+ *
+ * The read fixtures and the write fixtures are deliberately two DIFFERENT
+ * content pieces, so the exact totals the GET tests assert cannot drift even
+ * if the POST tests run first.
+ */
+const OWN_CONTENT_READ = 'c6000000-0000-4000-8000-000000000001';
+const OWN_CONTENT_WRITE = 'c6000000-0000-4000-8000-000000000002';
+const OWNED_CONTENT_IDS = [OWN_CONTENT_READ, OWN_CONTENT_WRITE];
+
+// Three comments on OWN_CONTENT_READ with fixed, strictly increasing
+// createdAt values, so "newest first" and the page boundaries are exact.
+const OWN_COMMENT_OLDEST = 'c6100000-0000-4000-8000-000000000001';
+const OWN_COMMENT_MIDDLE = 'c6100000-0000-4000-8000-000000000002';
+const OWN_COMMENT_NEWEST = 'c6100000-0000-4000-8000-000000000003';
+// Parent for the reply test, on the write fixture.
+const OWN_COMMENT_PARENT = 'c6100000-0000-4000-8000-000000000004';
 
 const MOCK_WAWU_ID_PORT = process.env.WAWU_ID_JWKS_URL
   ? new URL(process.env.WAWU_ID_JWKS_URL).port
@@ -61,6 +92,16 @@ describe('Comment (contract)', () => {
   let userToken: string;
   let creatorToken: string;
 
+  /** Removes every row this spec owns. Also run before creating them, so an
+   *  aborted previous run cannot leave a fixture behind that skews the counts. */
+  async function dropOwnedFixtures(): Promise<void> {
+    await prisma.comment.deleteMany({ where: { contentId: { in: OWNED_CONTENT_IDS } } });
+    // Purchase -> ContentPiece is onDelete: Restrict (README § Test hygiene),
+    // but this spec never creates a purchase against its own content, so the
+    // content delete is unblocked.
+    await prisma.contentPiece.deleteMany({ where: { id: { in: OWNED_CONTENT_IDS } } });
+  }
+
   beforeAll(async () => {
     // Reuse an already-running mock WAWU ID if present, otherwise spawn one
     // for this test run (conventions.md § Local test environment).
@@ -92,9 +133,83 @@ describe('Comment (contract)', () => {
     await app.init();
 
     prisma = moduleRef.get(PrismaService);
+
+    await dropOwnedFixtures();
+
+    // Two content pieces of this spec's own, shaped like the seeded video
+    // (prisma/seed.ts CONTENT_MAKEUP_VIDEO) but under UUIDs and slugs that
+    // neither seed.ts nor any other spec touches.
+    for (const [id, slug] of [
+      [OWN_CONTENT_READ, 'fixture-comment-spec-read'],
+      [OWN_CONTENT_WRITE, 'fixture-comment-spec-write'],
+    ] as const) {
+      await prisma.contentPiece.create({
+        data: {
+          id,
+          slug,
+          creatorWawuId: USER_CREATOR_BASIC,
+          contentType: 'video',
+          title: 'FIXTURE: comment.contract.spec.ts',
+          description: 'Owned by comment.contract.spec.ts; deleted in afterAll.',
+          category: 'beauty',
+          tags: [],
+          accessType: 'free',
+          price: 0,
+          durationLabel: '10m',
+          previewAssetUrl: 'https://storage.test/fixture-preview.mp4',
+          fullAssetUrl: 'https://storage.test/fixture-full.mp4',
+          status: 'live',
+          commentCount: 0,
+        },
+      });
+    }
+
+    await prisma.comment.createMany({
+      data: [
+        {
+          id: OWN_COMMENT_OLDEST,
+          contentId: OWN_CONTENT_READ,
+          authorWawuId: USER_PLAIN,
+          text: 'FIXTURE: oldest comment',
+          createdAt: new Date('2026-01-01T10:00:00.000Z'),
+        },
+        {
+          id: OWN_COMMENT_MIDDLE,
+          contentId: OWN_CONTENT_READ,
+          authorWawuId: USER_CREATOR_BASIC,
+          text: 'FIXTURE: middle comment',
+          createdAt: new Date('2026-01-01T11:00:00.000Z'),
+        },
+        {
+          id: OWN_COMMENT_NEWEST,
+          contentId: OWN_CONTENT_READ,
+          authorWawuId: USER_PLAIN,
+          text: 'FIXTURE: newest comment',
+          createdAt: new Date('2026-01-01T12:00:00.000Z'),
+        },
+        {
+          id: OWN_COMMENT_PARENT,
+          contentId: OWN_CONTENT_WRITE,
+          authorWawuId: USER_PLAIN,
+          text: 'FIXTURE: reply target',
+          createdAt: new Date('2026-01-01T10:00:00.000Z'),
+        },
+      ],
+    });
+    await prisma.contentPiece.update({
+      where: { id: OWN_CONTENT_READ },
+      data: { commentCount: 3 },
+    });
+    await prisma.contentPiece.update({
+      where: { id: OWN_CONTENT_WRITE },
+      data: { commentCount: 1 },
+    });
   }, 30000);
 
   afterAll(async () => {
+    // Leave wawu_hub_test exactly as it was found — including the comments the
+    // POST tests below created, which land on OWN_CONTENT_WRITE.
+    await dropOwnedFixtures();
     await app?.close();
     if (ownedMockWawuId && mockWawuId) {
       mockWawuId.kill();
@@ -104,19 +219,82 @@ describe('Comment (contract)', () => {
   describe('GET /content/:id/comments', () => {
     it('returns the paginated list of comments for valid content (200)', async () => {
       const res = await request(app.getHttpServer())
-        .get(`/content/${SEEDED_CONTENT_ID}/comments`)
+        .get(`/content/${OWN_CONTENT_READ}/comments`)
         .set('Authorization', `Bearer ${userToken}`)
         .expect(200);
 
       expect(res.body.statusCode).toBe(200);
       expect(Array.isArray(res.body.data)).toBe(true);
-      expect(res.body.pagination).toEqual(
-        expect.objectContaining({ currentPage: 1, perPage: 20, total: expect.any(Number) }),
-      );
-      const seeded = res.body.data.find((c: { id: string }) => c.id === SEEDED_COMMENT_ID);
-      expect(seeded).toBeDefined();
-      expect(seeded.contentId).toBe(SEEDED_CONTENT_ID);
-      expect(seeded.authorWawuId).toBe(USER_PLAIN);
+      // Defaults from PaginationQueryDto, and an EXACT total — this spec owns
+      // every comment on this content, so nothing else can move the number.
+      expect(res.body.pagination).toEqual({
+        currentPage: 1,
+        nextPage: null,
+        perPage: 20,
+        total: 3,
+      });
+      // Newest first (CommentService.list orders createdAt desc).
+      expect(res.body.data.map((c: { id: string }) => c.id)).toEqual([
+        OWN_COMMENT_NEWEST,
+        OWN_COMMENT_MIDDLE,
+        OWN_COMMENT_OLDEST,
+      ]);
+
+      const oldest = res.body.data.find((c: { id: string }) => c.id === OWN_COMMENT_OLDEST);
+      expect(oldest).toBeDefined();
+      expect(oldest.contentId).toBe(OWN_CONTENT_READ);
+      expect(oldest.authorWawuId).toBe(USER_PLAIN);
+      expect(oldest.text).toBe('FIXTURE: oldest comment');
+      expect(oldest.replyToId).toBeNull();
+    });
+
+    it('honours page/perPage — page 1 of 2 carries the two newest, page 2 the rest', async () => {
+      const first = await request(app.getHttpServer())
+        .get(`/content/${OWN_CONTENT_READ}/comments`)
+        .query({ page: 1, perPage: 2 })
+        .set('Authorization', `Bearer ${userToken}`)
+        .expect(200);
+
+      expect(first.body.pagination).toEqual({
+        currentPage: 1,
+        nextPage: 2,
+        perPage: 2,
+        total: 3,
+      });
+      expect(first.body.data.map((c: { id: string }) => c.id)).toEqual([
+        OWN_COMMENT_NEWEST,
+        OWN_COMMENT_MIDDLE,
+      ]);
+
+      const second = await request(app.getHttpServer())
+        .get(`/content/${OWN_CONTENT_READ}/comments`)
+        .query({ page: 2, perPage: 2 })
+        .set('Authorization', `Bearer ${userToken}`)
+        .expect(200);
+
+      expect(second.body.pagination).toEqual({
+        currentPage: 2,
+        nextPage: null,
+        perPage: 2,
+        total: 3,
+      });
+      expect(second.body.data.map((c: { id: string }) => c.id)).toEqual([OWN_COMMENT_OLDEST]);
+    });
+
+    it('returns an empty page past the end without inventing rows', async () => {
+      const res = await request(app.getHttpServer())
+        .get(`/content/${OWN_CONTENT_READ}/comments`)
+        .query({ page: 3, perPage: 2 })
+        .set('Authorization', `Bearer ${userToken}`)
+        .expect(200);
+
+      expect(res.body.data).toEqual([]);
+      expect(res.body.pagination).toEqual({
+        currentPage: 3,
+        nextPage: null,
+        perPage: 2,
+        total: 3,
+      });
     });
 
     it('404s for content that does not exist (invalid request)', async () => {
@@ -129,21 +307,21 @@ describe('Comment (contract)', () => {
     });
 
     it('401s with no Authorization header', async () => {
-      await request(app.getHttpServer()).get(`/content/${SEEDED_CONTENT_ID}/comments`).expect(401);
+      await request(app.getHttpServer()).get(`/content/${OWN_CONTENT_READ}/comments`).expect(401);
     });
   });
 
   describe('POST /content/:id/comments', () => {
     it('creates a comment for a valid request (201/200 shape)', async () => {
       const res = await request(app.getHttpServer())
-        .post(`/content/${SEEDED_CONTENT_ID}/comments`)
+        .post(`/content/${OWN_CONTENT_WRITE}/comments`)
         .set('Authorization', `Bearer ${creatorToken}`)
         .send({ text: 'Great tutorial, thank you!' });
 
       expect([200, 201]).toContain(res.status);
       expect(res.body.data).toEqual(
         expect.objectContaining({
-          contentId: SEEDED_CONTENT_ID,
+          contentId: OWN_CONTENT_WRITE,
           authorWawuId: USER_CREATOR_BASIC,
           text: 'Great tutorial, thank you!',
           replyToId: null,
@@ -157,17 +335,17 @@ describe('Comment (contract)', () => {
 
     it('supports replying to an existing comment on the same content', async () => {
       const res = await request(app.getHttpServer())
-        .post(`/content/${SEEDED_CONTENT_ID}/comments`)
+        .post(`/content/${OWN_CONTENT_WRITE}/comments`)
         .set('Authorization', `Bearer ${userToken}`)
-        .send({ text: 'Totally agree!', replyToId: SEEDED_COMMENT_ID });
+        .send({ text: 'Totally agree!', replyToId: OWN_COMMENT_PARENT });
 
       expect([200, 201]).toContain(res.status);
-      expect(res.body.data.replyToId).toBe(SEEDED_COMMENT_ID);
+      expect(res.body.data.replyToId).toBe(OWN_COMMENT_PARENT);
     });
 
     it('400s on an invalid payload (empty text)', async () => {
       const res = await request(app.getHttpServer())
-        .post(`/content/${SEEDED_CONTENT_ID}/comments`)
+        .post(`/content/${OWN_CONTENT_WRITE}/comments`)
         .set('Authorization', `Bearer ${userToken}`)
         .send({ text: '' })
         .expect(400);
@@ -177,7 +355,7 @@ describe('Comment (contract)', () => {
 
     it('400s on a payload with a non-whitelisted field', async () => {
       await request(app.getHttpServer())
-        .post(`/content/${SEEDED_CONTENT_ID}/comments`)
+        .post(`/content/${OWN_CONTENT_WRITE}/comments`)
         .set('Authorization', `Bearer ${userToken}`)
         .send({ text: 'hello', likes: 999 })
         .expect(400);
@@ -185,7 +363,7 @@ describe('Comment (contract)', () => {
 
     it('401s with no Authorization header', async () => {
       await request(app.getHttpServer())
-        .post(`/content/${SEEDED_CONTENT_ID}/comments`)
+        .post(`/content/${OWN_CONTENT_WRITE}/comments`)
         .send({ text: 'no auth' })
         .expect(401);
     });
