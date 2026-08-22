@@ -190,7 +190,13 @@ stops purchases getting stranded in `pending`.
    behind the JWT-protected path or a WAF rule that strips `verif-hash`.
 5. Run `npx prisma migrate deploy` so `PaymentWebhookReceipt` exists.
 6. `PaymentWebhookReceipt` is the operator's audit trail: rows with status
-   `unmatched`, `rejected` or `failed` are the reconciliation queue.
+   `unmatched`, `rejected` or `failed` are the reconciliation queue. It is
+   readable at `GET /api/hub/admin/payments/receipts?status=unresolved`
+   (superadmin/finance), and a stuck charge is re-run through the REAL
+   verification path with
+   `POST /api/hub/admin/payments/receipts/:id/reverify`. There is deliberately
+   no "mark as paid": settlement always re-asks Flutterwave and compares the
+   answer against `PendingCharge.expectedAmount`.
 7. Other required env vars: `DATABASE_URL`, `HUB_API_PORT`, `CORS_ORIGIN`
    (mandatory in production), `WAWU_ID_JWKS_URL`, `WAWU_ID_BASE_URL`,
    `WAWU_ID_INTERNAL_SERVICE_KEY`, `FLUTTERWAVE_PUBLIC_KEY`, `WAWU_ADMIN_KEY`.

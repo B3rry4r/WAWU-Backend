@@ -6,6 +6,8 @@ import { AdminAuthModule } from './admin/auth/admin-auth.module';
 import { AdminContentReviewModule } from './admin/content-review/admin-content-review.module';
 import { AdminKycReviewModule } from './admin/kyc-review/admin-kyc-review.module';
 import { AdminVerificationReviewModule } from './admin/verification-review/admin-verification-review.module';
+import { AdminPaymentsModule } from './admin/payments/admin-payments.module';
+import { AdminCreatorsModule } from './admin/creators/admin-creators.module';
 import { PrismaModule } from './common/prisma/prisma.module';
 import { AccountModule } from './account/account.module';
 import { CommentModule } from './comment/comment.module';
@@ -128,6 +130,38 @@ import { APP_GUARD } from '@nestjs/core';
     // <- PartnerServiceModule ordering below is untouched.
     AdminKycReviewModule,
     AdminVerificationReviewModule,
+    // Admin payment reconciliation (the read side of PaymentWebhookReceipt,
+    // which shipped with a writer and no reader) and admin creator lookup (the
+    // support screen for "I paid and I cannot upload", which had no endpoint at
+    // all). Registered adjacent to the other admin modules, and for the same
+    // reason they sit here: Express matches in registration order, so putting
+    // every `/admin/*` route ahead of every module that owns a parameterised
+    // route means no present or future catch-all can swallow one --
+    // PartnerServiceController's `@Controller('services')` + `@Get(':id')`
+    // being the catch-all that has already bitten twice (see the comment
+    // further down).
+    //
+    // Shadow-safe in the other direction too, which is the direction that
+    // matters when registering EARLY. AdminPaymentsController is
+    // `@Controller('admin/payments')` and AdminCreatorsController is
+    // `@Controller('admin/creators')`. Nothing outside src/admin/ declares an
+    // `admin` prefix; the app's own payment surface is
+    // `@Controller('webhooks/flutterwave')` and its creator surfaces are
+    // `@Controller('creator')`, `@Controller('creator-subscription')` and
+    // `@Controller('content/mine/earnings')` -- every one a different FIRST segment,
+    // so neither of these can shadow an existing route no matter how early it
+    // registers. The only root-level controller (AppController) declares one
+    // literal path (`health`) with no parameter segment.
+    //
+    // AdminPaymentsModule imports PaymentWebhookModule, which transitively
+    // imports every money module. All of them are already registered below and
+    // Nest dedupes, so the load-bearing MentorModule <- ServiceApplicationModule
+    // <- PartnerServiceModule ordering is unaffected -- exactly as it already is
+    // for PaymentWebhookModule's own registration at the end of this list.
+    // Likewise AdminCreatorsModule imports CreatorEarningsModule, which is
+    // registered below and deduped.
+    AdminPaymentsModule,
+    AdminCreatorsModule,
     AccountModule,
     CommentModule,
     CourseLessonModule,

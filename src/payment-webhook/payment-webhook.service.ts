@@ -44,7 +44,7 @@ interface ParsedDelivery {
 }
 
 /** A settlement path we can hand a tx_ref to. */
-interface Dispatch {
+export interface Dispatch {
   flow: string;
   settle: () => Promise<unknown>;
 }
@@ -244,7 +244,23 @@ export class PaymentWebhookService {
     }
   }
 
-  private async settle(
+  /**
+   * The settlement router: resolve a tx_ref to its owning flow, hand that
+   * flow its OWN verify method, and report the outcome.
+   *
+   * PUBLIC rather than private since 2026-08-22, and that is the only change
+   * to this file. `src/admin/payments/` re-runs a stuck receipt through this
+   * exact method instead of reimplementing settlement — the alternative was a
+   * second payment engine in the admin tree, which is how two definitions of
+   * "settled" get shipped. Not one line of the logic below moved, and the
+   * exactly-once guarantee is unaffected: it does not live here. It lives in
+   * the settle paths this method dispatches to (a claiming
+   * `pendingCharge.deleteMany`, or an `updateMany` with the pre-state in the
+   * WHERE), so a second call for an already-settled charge grants nothing no
+   * matter who makes it. The receipt bookkeeping around this method belongs to
+   * the caller — `handle()` above, and AdminPaymentsService.reverify().
+   */
+  async settle(
     event: string,
     txRef: string,
     transactionId: string | null,
@@ -291,8 +307,18 @@ export class PaymentWebhookService {
    * verify method the same two values the browser would have posted. Nothing
    * about settlement is reimplemented here — this is a router, not a second
    * payment engine.
+   *
+   * PUBLIC rather than private since 2026-08-22, for the same reason `settle`
+   * is: the admin reconciliation detail screen has to answer "why did this not
+   * match, and would it match now?", and the only truthful answer is the one
+   * this method computes. It is read-only — every branch below is a `findFirst`
+   * / `findUnique` and the `settle` closure is not invoked by simply resolving.
+   * `Dispatch` is exported alongside it so a caller can read `.flow` without
+   * re-declaring the shape. AdminPaymentsService reads `.flow` and never calls
+   * `.settle()`; settlement always goes through `settle()` above, which owns
+   * the outcome vocabulary.
    */
-  private async resolve(
+  async resolve(
     txRef: string,
     transactionId: string,
   ): Promise<Dispatch | null> {
