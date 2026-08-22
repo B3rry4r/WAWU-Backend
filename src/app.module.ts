@@ -8,6 +8,7 @@ import { AdminKycReviewModule } from './admin/kyc-review/admin-kyc-review.module
 import { AdminVerificationReviewModule } from './admin/verification-review/admin-verification-review.module';
 import { AdminPaymentsModule } from './admin/payments/admin-payments.module';
 import { AdminCreatorsModule } from './admin/creators/admin-creators.module';
+import { AdminEventsModule } from './admin/events/admin-events.module';
 import { PrismaModule } from './common/prisma/prisma.module';
 import { AccountModule } from './account/account.module';
 import { CommentModule } from './comment/comment.module';
@@ -47,6 +48,7 @@ import { CommunityModule } from './community/community.module';
 import { CommunityMessageModule } from './community-message/community-message.module';
 import { CreatorEarningsModule } from './creator-earnings/creator-earnings.module';
 import { DirectMessageModule } from './direct-message/direct-message.module';
+import { EventModule } from './event/event.module';
 import { StorageModule } from './storage/storage.module';
 import { BillPaymentModule } from './bill-payment/bill-payment.module';
 import { HealthPlanModule } from './health-plan/health-plan.module';
@@ -162,6 +164,25 @@ import { APP_GUARD } from '@nestjs/core';
     // registered below and deduped.
     AdminPaymentsModule,
     AdminCreatorsModule,
+    // Admin event moderation, for the Events feature reinstated 22 Aug 2026 by
+    // product-owner decision (see src/event/ for the app-facing half and
+    // prisma/schema.prisma for the three new tables). Registered alongside the
+    // other admin modules, and for the same reason they all sit here: Express
+    // matches in registration order, so every `/admin/*` route is matched
+    // ahead of any module owning a parameterised route -- PartnerServiceController's
+    // `@Controller('services')` + `@Get(':id')` being the catch-all that has
+    // already bitten twice (see the comment further down).
+    //
+    // Shadow-safe in the other direction too, which is the direction that
+    // matters when registering EARLY. AdminEventsController is
+    // `@Controller('admin/events')`; the app's own events surface is
+    // `@Controller('events')`, a different FIRST segment, so registering ahead
+    // of EventModule cannot shadow it. Nothing outside src/admin/ declares an
+    // `admin` prefix, and the only root-level controller (AppController)
+    // declares one literal path (`health`) with no parameter segment. Verified
+    // by booting and reading the printed route table, not by reasoning about
+    // it.
+    AdminEventsModule,
     AccountModule,
     CommentModule,
     CourseLessonModule,
@@ -209,6 +230,21 @@ import { APP_GUARD } from '@nestjs/core';
     CommunityMessageModule,
     CreatorEarningsModule,
     DirectMessageModule,
+    // Events, app-facing half -- reinstated 22 Aug 2026 by product-owner
+    // decision, reversing the "no Events section" line in WAWU-Web/CLAUDE.md
+    // and docs/00_PLATFORM_MAP.md (both amended with that date rather than
+    // left contradicting this code).
+    //
+    // Position is safe in both directions. EventController is
+    // `@Controller('events')`: a first segment no other controller in this
+    // file declares, so it can neither shadow nor be shadowed by one -- in
+    // particular it is NOT under `services`, so PartnerServiceController's
+    // `@Get(':id')` catch-all cannot reach it wherever either sits. Its own
+    // `mine` route is declared before `:id` INSIDE the controller, which is
+    // where that ordering actually matters. AdminEventsModule above owns
+    // `admin/events` and is deliberately a separate module: two halves, two
+    // guards, two role vocabularies, one set of tables.
+    EventModule,
     // LAST on purpose. PaymentWebhookModule imports every money module so it
     // can reuse their /verify settlement, and every one of them is already
     // registered above — Nest dedupes, so the load-bearing controller order

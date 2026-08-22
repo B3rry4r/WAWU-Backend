@@ -1256,12 +1256,12 @@ enum AdminContentDecision {
 /// reason — "who approved this" has to stay answerable after that admin is
 /// renamed, suspended, or deleted.
 model AdminContentReview {
-  id        String @id @default(uuid())
-  contentId String
+  id            String @id @default(uuid())
+  contentId     String
   /// Snapshot: which creator this decision landed on.
   creatorWawuId String
 
-  decision AdminContentDecision
+  decision       AdminContentDecision
   /// The status the piece held immediately before this decision, and the one
   /// written by it. Stored rather than inferred so the trail still reads
   /// correctly after a later decision moves the piece again.
@@ -1272,12 +1272,12 @@ model AdminContentReview {
   /// Whether this decision handed the creator's upload slot back
   /// (CreatorState.slotsUsed decrement). Recorded per row so a slot ledger can
   /// be reconstructed from the audit trail alone.
-  slotReturned   Boolean @default(false)
+  slotReturned   Boolean              @default(false)
 
   reviewedByAdminId    String
   reviewedByAdminEmail String
   reviewedByAdminRole  AdminRole
-  reviewedAt           DateTime @default(now())
+  reviewedAt           DateTime  @default(now())
 
   @@index([contentId])
   @@index([reviewedByAdminId])
@@ -1508,9 +1508,9 @@ enum AdminOpsAction {
 /// Admin email and role are SNAPSHOTS: "who cancelled this ₦120,000 matter"
 /// has to stay answerable after that admin is renamed, suspended or deleted.
 model AdminOpsAudit {
-  id         String           @id @default(uuid())
-  resource   AdminOpsResource
-  resourceId String
+  id            String           @id @default(uuid())
+  resource      AdminOpsResource
+  resourceId    String
   /// Snapshot of whose money or matter this action touched. Empty string only
   /// where the audited row genuinely has no owner.
   subjectWawuId String
@@ -1523,9 +1523,226 @@ model AdminOpsAudit {
   actedByAdminId    String
   actedByAdminEmail String
   actedByAdminRole  AdminRole
-  actedAt           DateTime @default(now())
+  actedAt           DateTime  @default(now())
 
   @@index([resource, resourceId])
   @@index([actedByAdminId])
   @@index([actedAt])
+}
+
+// -----------------------------------------------------------------------------
+// Events — reinstated 22 Aug 2026 by product-owner decision.
+//
+// WAWU-Web/CLAUDE.md and docs/00_PLATFORM_MAP.md previously listed Events under
+// what was cut. Both documents have been amended with today's date to record
+// the reversal rather than leaving them contradicting this schema.
+//
+// ── THE LINE THAT DOES NOT MOVE ──────────────────────────────────────────────
+// What the spec cut was event TICKETS, and that stays cut. There is no price
+// column, no currency, no ticket, no purchase, no payment reference, no revenue
+// split and no credit cost anywhere in the three tables below, and none may be
+// added. "Going" is an INTEREST SIGNAL: a row exists or it does not.
+// Registration, if the organiser sells one at all, happens on their own site
+// behind `Event.externalUrl` — off this platform, off this schema, and no money
+// crosses this backend for it. That is precisely why reinstating Events is
+// low-risk, so anything that starts to look like ticketing is a spec conflict
+// (CLAUDE.md: "If a task conflicts with docs/01_SPEC.md, the spec wins").
+//
+// ── WHY THREE NEW TABLES AND NOT ONE COLUMN ANYWHERE ELSE ────────────────────
+// Same reason AdminContentReview is a side table: protected-surface hazard H-1
+// — most wire types in src/common/types are bare re-exports of their Prisma
+// model returned by spread, so a new column on an EXISTING table silently
+// widens a live app response. Everything here is new tables, and every wire
+// shape is a DECLARED view in src/event/event-view.type.ts and
+// src/admin/events/admin-event-view.type.ts. Nothing re-exports these models.
+// -----------------------------------------------------------------------------
+
+/// In-Person / Online in the UI. Hybrid is deliberately absent: the old admin
+/// screen offered it, the old public filter chips never did, so an event
+/// created as Hybrid was unreachable by every filter a user could tap.
+enum EventFormat {
+  in_person
+  online
+}
+
+/// Exactly the five the public filter row offers (old EVENT_FILTERS, minus the
+/// two format chips and the "All" chip). A sixth kind would be a chip nobody
+/// can tap, i.e. an event nobody can find.
+enum EventType {
+  workshop
+  summit
+  webinar
+  meetup
+  competition
+}
+
+/// Every state here has an exit, and that is a hard requirement rather than a
+/// nicety — a `pending` row no endpoint can move is the worst bug this
+/// codebase has shipped (see AdminContentReview's header).
+///
+///   pending   -> published   POST /admin/events/:id/approve
+///   pending   -> rejected    POST /admin/events/:id/reject   (reason required)
+///   rejected  -> pending     PATCH /events/:id               (host resubmits)
+///   published -> pending     PATCH /events/:id               (host edits; see below)
+///   published -> removed     POST /admin/events/:id/remove   (reason required)
+///   removed   -> published   POST /admin/events/:id/restore
+///
+/// A host's edit ALWAYS returns the event to `pending`. One rule, no tiers of
+/// "material" versus "cosmetic" fields: a two-tier policy is a bypass waiting
+/// to be found (submit something benign, get approved, edit it into whatever
+/// you actually wanted). `removed` is the one status a host cannot edit out
+/// of — a takedown is an admin decision, and its exit is an admin restore.
+enum EventStatus {
+  pending
+  published
+  rejected
+  removed
+}
+
+/// A user-submitted event. Created `pending`; invisible on every public read
+/// until an admin approves it.
+///
+/// `hostWawuId` is the submitting WAWU ID user — a plain indexed String, never
+/// a relation, exactly as every other cross-boundary reference in this schema.
+/// Creation is NOT gated on the paid creator subscription: an event costs no
+/// upload slot and earns nobody anything, so the moderation queue is the only
+/// gate it needs.
+model Event {
+  id         String @id @default(uuid())
+  hostWawuId String
+
+  name        String
+  description String
+  /// The organisation running it ("org" in the old EventItem), and its blurb.
+  hostOrg     String
+  hostOrgBio  String?
+
+  format EventFormat
+  type   EventType
+
+  /// The authoritative instant, and the only thing upcoming/past is decided
+  /// on. The old shape stored month/day/dow as pre-rendered strings, which
+  /// made "is this event over" unanswerable in SQL.
+  startsAt  DateTime
+  endsAt    DateTime?
+  /// Host-supplied DISPLAY strings — "10:00 AM", "WAT". Deliberately not
+  /// derived from `startsAt` server-side: rendering a local time needs the
+  /// event's own zone, and guessing it in UTC is how a 9am Lagos workshop
+  /// becomes an 8am one on every card.
+  timeLabel String?
+  timezone  String?
+
+  /// City or venue name (always shown), and the street address (detail only).
+  location String
+  address  String?
+
+  /// The organiser's own page. Registration — including any paid registration
+  /// the organiser runs — lives THERE, never here. This backend takes no
+  /// money for an event.
+  externalUrl String?
+
+  /// Past-event recap, written by the host after the fact. `hasRecap` on the
+  /// wire is derived from these, matching the old EventItem.recap boolean.
+  recapUrl  String?
+  recapText String?
+
+  /// Admin-controlled pin. A host cannot set it — POST /admin/events/:id/feature
+  /// is the only writer, and a takedown clears it (a featured-but-removed
+  /// event is a rail pointing at a 404).
+  featured Boolean     @default(false)
+  status   EventStatus @default(pending)
+
+  /// Why the last rejection or takedown happened, denormalised from the audit
+  /// trail so the host's own GET /events/mine can show it without reading an
+  /// admin table. The trail in AdminEventReview stays authoritative.
+  lastDecisionReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  speakers EventSpeaker[]
+  going    EventGoing[]
+
+  @@index([hostWawuId])
+  @@index([status])
+  /// The public list is always "published, ordered by when it starts".
+  @@index([status, startsAt])
+  @@index([status, featured])
+  @@index([format])
+  @@index([type])
+}
+
+/// A billed speaker on an event. A child table rather than a Json column, the
+/// same shape CourseLesson has under ContentPiece, so the rows validate and
+/// order like anything else here. Initials are derived on the wire from
+/// `name`; storing them would be a second definition of the same fact.
+model EventSpeaker {
+  id      String  @id @default(uuid())
+  eventId String
+  event   Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  name    String
+  title   String?
+  order   Int
+
+  @@index([eventId])
+}
+
+/// The interest signal, and NOT a ticket. One row per (event, user): the
+/// unique constraint is the idempotency, so POSTing "going" ten times is the
+/// same one signal, and DELETE withdraws it. No amount, no status, no
+/// reference — there is nothing to pay for.
+model EventGoing {
+  id         String   @id @default(uuid())
+  eventId    String
+  event      Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  userWawuId String
+  markedAt   DateTime @default(now())
+
+  @@unique([eventId, userWawuId])
+  @@index([eventId])
+  @@index([userWawuId])
+}
+
+enum AdminEventAction {
+  approved
+  rejected
+  featured
+  unfeatured
+  removed
+  restored
+}
+
+/// Moderation audit trail for Event — the same side-table idiom as
+/// AdminContentReview, deliberately not a second moderation idiom.
+///
+/// No FK to Event or AdminUser: an audit row has to outlive the thing it
+/// audits, and every cross-boundary reference in this schema is already a
+/// plain String. Admin email and role are SNAPSHOTS so "who took this event
+/// down" stays answerable after that admin is renamed or deleted. Both the
+/// status and the featured flag are recorded before/after, because
+/// feature/unfeature changes no status and would otherwise leave an audit row
+/// that appears to have done nothing.
+model AdminEventReview {
+  id         String @id @default(uuid())
+  eventId    String
+  /// Snapshot: whose event this decision landed on.
+  hostWawuId String
+
+  action           AdminEventAction
+  previousStatus   EventStatus
+  newStatus        EventStatus
+  previousFeatured Boolean
+  newFeatured      Boolean
+  /// Required on `rejected` and `removed` (enforced in the DTO and again in
+  /// the service); null on the others. The host is shown it.
+  reason           String?
+
+  reviewedByAdminId    String
+  reviewedByAdminEmail String
+  reviewedByAdminRole  AdminRole
+  reviewedAt           DateTime  @default(now())
+
+  @@index([eventId])
+  @@index([reviewedByAdminId])
+  @@index([reviewedAt])
 }
