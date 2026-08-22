@@ -1104,3 +1104,52 @@ model AdminUser {
   @@index([role])
   @@index([status])
 }
+
+enum AdminContentDecision {
+  approved
+  rejected
+}
+
+/// Moderation audit trail for ContentPiece — admin-surface-extension Phase 6.
+///
+/// A SIDE TABLE, not columns on ContentPiece, and that is not a style
+/// preference: protected-surface hazard H-1 records that 28 of 39 wire types
+/// in src/common/types are bare re-exports of their Prisma model returned by
+/// spread, so a `moderationReason` column on ContentPiece would appear
+/// verbatim in the shipped app's content responses the moment it existed.
+///
+/// No FK to ContentPiece or AdminUser, matching the idiom every
+/// cross-boundary reference in this schema already uses (KycSubmission
+/// .wawuUserId, Purchase.buyerWawuId): a relation field would have to be
+/// added to the ContentPiece model block, and an audit row must outlive the
+/// thing it audits anyway. Reviewer email and role are SNAPSHOTS for the same
+/// reason — "who approved this" has to stay answerable after that admin is
+/// renamed, suspended, or deleted.
+model AdminContentReview {
+  id        String @id @default(uuid())
+  contentId String
+  /// Snapshot: which creator this decision landed on.
+  creatorWawuId String
+
+  decision AdminContentDecision
+  /// The status the piece held immediately before this decision, and the one
+  /// written by it. Stored rather than inferred so the trail still reads
+  /// correctly after a later decision moves the piece again.
+  previousStatus ContentStatus
+  newStatus      ContentStatus
+  /// Required on a rejection (enforced in the DTO + service), null on approval.
+  reason         String?
+  /// Whether this decision handed the creator's upload slot back
+  /// (CreatorState.slotsUsed decrement). Recorded per row so a slot ledger can
+  /// be reconstructed from the audit trail alone.
+  slotReturned   Boolean @default(false)
+
+  reviewedByAdminId    String
+  reviewedByAdminEmail String
+  reviewedByAdminRole  AdminRole
+  reviewedAt           DateTime @default(now())
+
+  @@index([contentId])
+  @@index([reviewedByAdminId])
+  @@index([reviewedAt])
+}

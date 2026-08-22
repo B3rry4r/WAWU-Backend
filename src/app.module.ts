@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { WawuAuthModule } from './common/auth/wawu-auth.module';
 import { AdminAuthModule } from './admin/auth/admin-auth.module';
+import { AdminContentReviewModule } from './admin/content-review/admin-content-review.module';
 import { PrismaModule } from './common/prisma/prisma.module';
 import { AccountModule } from './account/account.module';
 import { CommentModule } from './comment/comment.module';
@@ -90,6 +91,16 @@ import { APP_GUARD } from '@nestjs/core';
     // PartnerServiceModule ordering below is untouched: what matters there is
     // their order relative to each other, not their absolute position.
     AdminAuthModule,
+    // Admin content review. Registered immediately after AdminAuthModule for
+    // the same reason AdminAuthModule sits where it does: `/admin/*` is
+    // matched before any module that owns a parameterised route, so no
+    // present or future catch-all can swallow it. Shadow-safe in the other
+    // direction too -- every route it declares is `admin/content/...`, no
+    // other controller in this file declares an `admin` prefix, and the app's
+    // own content routes are `@Controller('content')`, a different first
+    // segment. The MentorModule <- ServiceApplicationModule <-
+    // PartnerServiceModule ordering below is untouched.
+    AdminContentReviewModule,
     AccountModule,
     CommentModule,
     CourseLessonModule,

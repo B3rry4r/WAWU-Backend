@@ -67,6 +67,19 @@
       "evidence": "EVG is displayed on four app surfaces but nothing writes it — the only writers in the whole backend are two seed.ts upserts, and the service's own comment defers the write path as 'out of scope for this module'. The acronym (engagement/value/growth) is expanded only in that comment, never in any doc or UI. Per contract-driven-backend law 14, a metric whose only writer is the seed script is a fake.",
       "consequence": "An admin screen showing EVG would give operators a number that cannot move, and lend it false authority. Surfacing it in the review as a decision for the owner: complete the write path, or cut it from the app.",
       "confidence": "medium"
+    },
+    {
+      "id": "d9",
+      "topic": "A rejected upload RETURNS the creator's upload slot",
+      "decision": "POST /admin/content/:id/reject decrements CreatorState.slotsUsed in the same transaction as the pending->rejected status flip, conditionally (slotsUsed > 0) so it can never go negative, and records whether it actually happened on the audit row (AdminContentReview.slotReturned).",
+      "evidence": [
+        "The slot is claimed by an atomic increment at create (content-piece.service.ts:395-405) and there was no decrement anywhere in the backend before this module.",
+        "The product already promises the slot comes back: WAWU-Web src/components/create/ContentLibrary.tsx:78-81 computes the slot gauge as items.filter(i => i.status !== 'rejected'), with a comment citing the publishing wizard's own copy (\"if it is rejected the slot comes back\").",
+        "So the app and the database disagreed. Of the two coherent settlements, the other one charges a creator a NGN 5,999-18,999/year paid entitlement for a moderation decision they did not control."
+      ],
+      "consequence": "approve (pending->live) leaves slotsUsed alone. rejected->live is deliberately NOT an endpoint: the slot has already gone back, so re-publishing would have to re-claim a slot the creator may since have spent, and silently overselling a paid entitlement is worse than asking for a resubmit through the existing upload flow.",
+      "residualDefect": "ContentPieceService.create still counts the per-kind (free/paid) allowance with contentPiece.count({creatorWawuId, accessType}), which counts rejected rows (content-piece.service.ts:352-360). The TOTAL cap reads slotsUsed and is fully restored by the decrement; the free/paid sub-cap is not. On the basic tier (free: 1) a creator whose first free upload is rejected therefore gets the total slot back but still cannot upload another FREE piece. Fixing it means editing an existing app service, which the Phase 6 build fence forbids - reported, not fixed.",
+      "confidence": "high"
     }
   ]
 }
