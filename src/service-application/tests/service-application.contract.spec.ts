@@ -9,6 +9,17 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
 import { AllExceptionsFilter } from '../../common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../../common/interceptors/response.interceptor';
+import { AdminAuthModule } from '../../admin/auth/admin-auth.module';
+import {
+  adminFixtures,
+  adminJwtSecrets,
+  bearer,
+  deleteAdminFixtures,
+  loginAllAdmins,
+  rolesOtherThan,
+  seedAdminFixtures,
+  type AdminTokens,
+} from '../../common/tests/admin-session.helper';
 import { ServiceApplicationModule } from '../service-application.module';
 import { MOCK_FLUTTERWAVE_FAIL_TXN_ID } from '../mock-flutterwave.adapter';
 
@@ -36,7 +47,20 @@ const REPO_ROOT = path.resolve(__dirname, '../../../');
 
 const USER_PLAIN = '00000000-0000-4000-8000-000000000001'; // plain user
 const USER_CREATOR_BASIC = '00000000-0000-4000-8000-000000000002'; // Basic creator, KYC pending
-const ADMIN_KEY = 'service-application-contract-spec-key';
+/**
+ * Still configured, so the assertion in "operator progression" proves that a
+ * CORRECT operator key opens nothing — not merely that an unconfigured guard
+ * fails closed. These three routes moved off AdminKeyGuard (one shared static
+ * secret, no identity, no roles) onto AdminAuthGuard + AdminRolesGuard:
+ *
+ *   progress, reject, approve  — superadmin, support  (reviewer, finance 403)
+ */
+const RETIRED_KEY = 'service-application-contract-spec-key';
+
+const OPS_ROLES = ['superadmin', 'support'] as const;
+
+const ADMINS = adminFixtures('5a110000', 'service-app-ops');
+const SECRETS = adminJwtSecrets('service-app-ops');
 
 async function isMockWawuIdUp(): Promise<boolean> {
   try {
@@ -78,11 +102,16 @@ describe('ServiceApplication contract', () => {
   let tokenCreatorBasic: string;
 
   const createdIds: string[] = [];
-  let previousAdminKey: string | undefined;
+  let tokens: AdminTokens;
+  const envSnapshot: Record<string, string | undefined> = {};
 
   beforeAll(async () => {
-    previousAdminKey = process.env.WAWU_ADMIN_KEY;
-    process.env.WAWU_ADMIN_KEY = ADMIN_KEY;
+    for (const key of ['ADMIN_JWT_SECRET', 'ADMIN_JWT_REFRESH_SECRET', 'WAWU_ADMIN_KEY']) {
+      envSnapshot[key] = process.env[key];
+    }
+    process.env.ADMIN_JWT_SECRET = SECRETS.access;
+    process.env.ADMIN_JWT_REFRESH_SECRET = SECRETS.refresh;
+    process.env.WAWU_ADMIN_KEY = RETIRED_KEY;
 
     if (!(await isMockWawuIdUp())) {
       mockWawuIdProcess = spawn('node', ['mock-wawu-id/server.js'], {
@@ -100,7 +129,13 @@ describe('ServiceApplication contract', () => {
     ]);
 
     const moduleRef = await Test.createTestingModule({
-      imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, WawuAuthModule, ServiceApplicationModule],
+      imports: [
+        ConfigModule.forRoot({ isGlobal: true }),
+        PrismaModule,
+        WawuAuthModule,
+        AdminAuthModule,
+        ServiceApplicationModule,
+      ],
     }).compile();
 
     app = moduleRef.createNestApplication();
@@ -111,15 +146,21 @@ describe('ServiceApplication contract', () => {
     await app.init();
 
     prisma = moduleRef.get(PrismaService);
+    await seedAdminFixtures(prisma, ADMINS);
+    tokens = await loginAllAdmins(app, ADMINS);
   }, 30_000);
 
   afterAll(async () => {
     if (prisma && createdIds.length) {
+      await prisma.adminOpsAudit.deleteMany({ where: { resourceId: { in: createdIds } } });
       await prisma.serviceApplication.deleteMany({ where: { id: { in: createdIds } } });
     }
+    if (prisma) await deleteAdminFixtures(prisma, ADMINS);
     if (app) await app.close();
-    if (previousAdminKey === undefined) delete process.env.WAWU_ADMIN_KEY;
-    else process.env.WAWU_ADMIN_KEY = previousAdminKey;
+    for (const [key, value] of Object.entries(envSnapshot)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     // Deliberately NOT killing mockWawuIdProcess — shared local dependency
     // other concurrently-running agents' test suites may still be using.
   });
@@ -443,7 +484,7 @@ describe('ServiceApplication contract', () => {
       return res.body.data.id as string;
     }
 
-    it('401s without the operator key', async () => {
+    it('401s with no credential at all', async () => {
       const id = await anApplication();
       await request(app.getHttpServer())
         .post(`/api/hub/services/ops/applications/${id}/progress`)
@@ -451,7 +492,7 @@ describe('ServiceApplication contract', () => {
         .expect(401);
     });
 
-    it('a user token is not an operator key', async () => {
+    it('a WAWU ID user token is not an admin session', async () => {
       const id = await anApplication();
       await request(app.getHttpServer())
         .post(`/api/hub/services/ops/applications/${id}/progress`)
@@ -460,11 +501,80 @@ describe('ServiceApplication contract', () => {
         .expect(401);
     });
 
+    it('the retired x-wawu-admin-key header alone no longer opens anything', async () => {
+      const id = await anApplication();
+      await request(app.getHttpServer())
+        .post(`/api/hub/services/ops/applications/${id}/progress`)
+        .set('x-wawu-admin-key', RETIRED_KEY)
+        .send({ label: 'Under review' })
+        .expect(401);
+
+      const unchanged = await prisma.serviceApplication.findUnique({ where: { id } });
+      expect((unchanged?.timeline as unknown[]).length).toBe(1);
+    });
+
+    it.each(OPS_ROLES)('%s can work an application', async (role) => {
+      const id = await anApplication();
+      await request(app.getHttpServer())
+        .post(`/api/hub/services/ops/applications/${id}/progress`)
+        .set(bearer(tokens[role]))
+        .send({ label: 'Under review' })
+        .expect(200);
+    });
+
+    it.each(rolesOtherThan(OPS_ROLES))('%s cannot move an application at all', async (role) => {
+      const id = await anApplication();
+      for (const [path, body] of [
+        ['progress', { label: 'Under review' }],
+        ['reject', { reason: 'A role with no claim on this queue.' }],
+        ['approve', {}],
+      ] as const) {
+        await request(app.getHttpServer())
+          .post(`/api/hub/services/ops/applications/${id}/${path}`)
+          .set(bearer(tokens[role]))
+          .send(body)
+          .expect(403);
+      }
+      const unchanged = await prisma.serviceApplication.findUnique({ where: { id } });
+      expect(unchanged?.status).toBe('submitted');
+      expect((unchanged?.timeline as unknown[]).length).toBe(1);
+    });
+
+    it('names the admin who refused it, without putting them in the applicant\'s timeline', async () => {
+      const id = await anApplication();
+      const support = ADMINS.find((a) => a.role === 'support')!;
+      const reason = 'Your bank reference letter is older than three months.';
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/hub/services/ops/applications/${id}/reject`)
+        .set(bearer(tokens.support))
+        .send({ reason })
+        .expect(200);
+
+      const trail = await prisma.adminOpsAudit.findMany({
+        where: { resource: 'service_application', resourceId: id },
+      });
+      expect(trail).toHaveLength(1);
+      expect(trail[0]).toMatchObject({
+        action: 'application_rejected',
+        subjectWawuId: USER_PLAIN,
+        actedByAdminId: support.id,
+        actedByAdminEmail: support.email,
+        actedByAdminRole: 'support',
+      });
+
+      // `timeline` is what the APPLICANT reads, and ServiceApplication is a
+      // bare Prisma re-export returned by spread — no staff identity may reach
+      // either.
+      expect(JSON.stringify(res.body.data)).not.toContain('@admin.test.wawu.dev');
+      expect(JSON.stringify(res.body.data)).not.toContain(support.id);
+    });
+
     it('appends a timeline step and can set the expected certificate date', async () => {
       const id = await anApplication();
       const res = await request(app.getHttpServer())
         .post(`/api/hub/services/ops/applications/${id}/progress`)
-        .set('x-wawu-admin-key', ADMIN_KEY)
+        .set(bearer(tokens.support))
         .send({
           label: 'Under review',
           note: 'An export agent is checking your documents.',
@@ -488,7 +598,7 @@ describe('ServiceApplication contract', () => {
       const reason = 'Your bank reference letter is older than three months.';
       const res = await request(app.getHttpServer())
         .post(`/api/hub/services/ops/applications/${id}/reject`)
-        .set('x-wawu-admin-key', ADMIN_KEY)
+        .set(bearer(tokens.support))
         .send({ reason })
         .expect(200);
 
@@ -500,7 +610,7 @@ describe('ServiceApplication contract', () => {
       const id = await anApplication();
       await request(app.getHttpServer())
         .post(`/api/hub/services/ops/applications/${id}/reject`)
-        .set('x-wawu-admin-key', ADMIN_KEY)
+        .set(bearer(tokens.support))
         .send({ reason: 'no' })
         .expect(400);
     });
@@ -509,7 +619,7 @@ describe('ServiceApplication contract', () => {
       const id = await anApplication();
       const res = await request(app.getHttpServer())
         .post(`/api/hub/services/ops/applications/${id}/approve`)
-        .set('x-wawu-admin-key', ADMIN_KEY)
+        .set(bearer(tokens.support))
         .send({
           note: 'Download it from your services list.',
           certificateUrl: 'https://storage.wawu.test/nepc/certificate.pdf',
@@ -523,7 +633,7 @@ describe('ServiceApplication contract', () => {
     it('404s on an application that does not exist', async () => {
       await request(app.getHttpServer())
         .post('/api/hub/services/ops/applications/ffffffff-0000-4000-8000-000000009999/progress')
-        .set('x-wawu-admin-key', ADMIN_KEY)
+        .set(bearer(tokens.support))
         .send({ label: 'Under review' })
         .expect(404);
     });
@@ -532,7 +642,7 @@ describe('ServiceApplication contract', () => {
       const id = await anApplication();
       await request(app.getHttpServer())
         .post(`/api/hub/services/ops/applications/${id}/progress`)
-        .set('x-wawu-admin-key', ADMIN_KEY)
+        .set(bearer(tokens.support))
         .send({ label: 'Names checked', status: 'under_review', statusLabel: 'Under review' })
         .expect(200);
 

@@ -6,6 +6,10 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
+import {
+  AdminOpsAuditService,
+  type AdminActor,
+} from '../common/audit/admin-ops-audit.service';
 import { FlutterwaveCheckoutVerifier } from '../common/flutterwave/checkout-verifier';
 import {
   CONSULTATION_FEES,
@@ -64,6 +68,7 @@ export class LegalRequestsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly verifier: FlutterwaveCheckoutVerifier,
+    private readonly audit: AdminOpsAuditService,
   ) {}
 
   /**
@@ -334,7 +339,7 @@ export class LegalRequestsService {
    * consultation is paid for, because quoting work nobody has discussed is
    * exactly what the consultation gate exists to prevent.
    */
-  async quote(id: string, dto: QuoteLegalRequestDto) {
+  async quote(id: string, dto: QuoteLegalRequestDto, admin: AdminActor) {
     const record = await this.prisma.legalRequest.findUnique({ where: { id } });
     if (!record) throw new NotFoundException('Legal request not found.');
     if (record.path === 'consultation' && !record.consultationPaidAt) {
@@ -350,6 +355,19 @@ export class LegalRequestsService {
         status: 'quoted',
       },
     });
+    // The price a client is billed used to be set anonymously behind a shared
+    // key. The naira figure is recorded with it, not just the fact of a quote.
+    await this.audit.record(admin, {
+      resource: 'legal_request',
+      resourceId: updated.id,
+      subjectWawuId: updated.wawuUserId,
+      action: 'legal_quoted',
+      detail: {
+        amountNaira: dto.amountNaira,
+        note: dto.note ?? null,
+        previousStatus: record.status,
+      },
+    });
     return this.toResponse(updated);
   }
 
@@ -361,7 +379,11 @@ export class LegalRequestsService {
    * request could never be quoted-and-signed on from a status that reads as
    * "the call still hasn't happened". This is the step out.
    */
-  async completeConsultation(id: string, dto: CompleteConsultationDto) {
+  async completeConsultation(
+    id: string,
+    dto: CompleteConsultationDto,
+    admin: AdminActor,
+  ) {
     const record = await this.requireRequest(id);
     if (!record.consultationPaidAt) {
       throw new BadRequestException(
@@ -381,6 +403,16 @@ export class LegalRequestsService {
         ...(dto.notes !== undefined && { consultationNotes: dto.notes }),
       },
     });
+    // The notes themselves are NOT copied into the audit row: they are what
+    // the client said to a lawyer. The trail records that the call was closed
+    // out and by whom, which is what attribution needs.
+    await this.audit.record(admin, {
+      resource: 'legal_request',
+      resourceId: updated.id,
+      subjectWawuId: updated.wawuUserId,
+      action: 'legal_consultation_completed',
+      detail: { notesRecorded: dto.notes !== undefined },
+    });
     return this.toResponse(updated);
   }
 
@@ -393,7 +425,7 @@ export class LegalRequestsService {
    * so every completed matter sat as "in progress" forever and the client
    * had no way to get the document they bought.
    */
-  async deliver(id: string, dto: DeliverLegalRequestDto) {
+  async deliver(id: string, dto: DeliverLegalRequestDto, admin: AdminActor) {
     const record = await this.requireRequest(id);
     if (record.status !== 'in_progress') {
       throw new ConflictException(
@@ -412,6 +444,13 @@ export class LegalRequestsService {
         deliveredAt: new Date(),
       },
     });
+    await this.audit.record(admin, {
+      resource: 'legal_request',
+      resourceId: updated.id,
+      subjectWawuId: updated.wawuUserId,
+      action: 'legal_delivered',
+      detail: { deliverableUrl: dto.deliverableUrl },
+    });
     return this.toResponse(updated);
   }
 
@@ -423,7 +462,7 @@ export class LegalRequestsService {
    * card, so a cancellation of something already paid for is an instruction
    * to a human, and the reason is where that is said out loud.
    */
-  async cancel(id: string, dto: CancelLegalRequestDto) {
+  async cancel(id: string, dto: CancelLegalRequestDto, admin: AdminActor) {
     const record = await this.requireRequest(id);
     if (record.status === 'cancelled') {
       throw new ConflictException('This request is already cancelled.');
@@ -443,6 +482,22 @@ export class LegalRequestsService {
         // for everyone permanently — which is exactly how abandoned bookings
         // were eating the lawyer's calendar.
         scheduledFor: null,
+      },
+    });
+    // Closing a matter money has already been taken for creates a manual
+    // refund obligation nothing in this codebase can discharge, so the row
+    // records what was already paid as well as who closed it.
+    await this.audit.record(admin, {
+      resource: 'legal_request',
+      resourceId: updated.id,
+      subjectWawuId: updated.wawuUserId,
+      action: 'legal_cancelled',
+      detail: {
+        reason: dto.reason,
+        previousStatus: record.status,
+        consultationPaid: record.consultationPaidAt !== null,
+        servicePaid: record.servicePaidAt !== null,
+        quoteAmount: record.quoteAmount,
       },
     });
     return this.toResponse(updated);

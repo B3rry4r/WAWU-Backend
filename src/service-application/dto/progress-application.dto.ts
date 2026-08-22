@@ -17,9 +17,12 @@ import {
  * the one entry written at intake and could never show a date or a refusal.
  * These are the three writes that were missing.
  *
- * They are ops actions, not user actions, so they sit behind AdminKeyGuard —
- * the same interim shared-key idiom the guide/playbook publishing endpoints
- * already use. FOLLOW-UP: swap for the real admin identity once it lands.
+ * They are ops actions, not user actions, so they sit behind AdminAuthGuard +
+ * AdminRolesGuard (`superadmin`, `support` — see
+ * ../service-application-ops.controller.ts for the matrix and its reasoning).
+ * They used to sit behind AdminKeyGuard, a single shared static secret with no
+ * identity and no role model; every write is now attributable to a named
+ * admin through AdminOpsAudit.
  */
 export class ProgressApplicationDto {
   /** The timeline entry's heading, e.g. "Under review", "Names checked". */

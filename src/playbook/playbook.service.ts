@@ -27,13 +27,16 @@ export class PlaybookService {
    * operator uploading the playbook for the first time should not have to seed
    * a placeholder first.
    */
-  async updatePlaybook(dto: {
-    title?: string;
-    description?: string;
-    pages?: number;
-    format?: string;
-    fileUrl?: string;
-  }) {
+  async updatePlaybook(
+    dto: {
+      title?: string;
+      description?: string;
+      pages?: number;
+      format?: string;
+      fileUrl?: string;
+    },
+    admin: { id: string },
+  ) {
     const existing = await this.prisma.playbook.findFirst({ orderBy: { id: 'asc' } });
     const data = {
       ...(dto.title !== undefined && { title: dto.title }),
@@ -42,6 +45,21 @@ export class PlaybookService {
       ...(dto.format !== undefined && { format: dto.format }),
       ...(dto.fileUrl !== undefined && { fileUrl: dto.fileUrl }),
       updatedAt: new Date(),
+      // ── ATTRIBUTION, with no schema change and no wire change ───────────
+      // `updatedBy` is an EXISTING column that has never had a writer, and it
+      // is already on the wire: getPlaybook() returns the row by spread, so
+      // every client has been receiving `updatedBy: null` since the column
+      // shipped. Filling it in changes a VALUE, not a shape — which is why no
+      // side table is needed here, unlike the four money surfaces in this
+      // change whose entities are bare Prisma re-exports that would be
+      // WIDENED by a new column.
+      //
+      // The admin's ID, deliberately NOT their email or name. This value is
+      // handed to every authenticated WAWU user on GET /learn/playbook (and
+      // the sibling LearnGuide reads are fully public), so a staff email here
+      // would be a disclosure. A UUID says nothing to a reader and resolves
+      // to exactly one AdminUser internally.
+      updatedBy: admin.id,
     };
 
     if (existing) {

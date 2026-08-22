@@ -11,7 +11,20 @@ import type { UpsertLearnGuideDto } from './dto/upsert-learn-guide.dto';
 export class LearnGuideService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async createGuide(dto: UpsertLearnGuideDto) {
+  /**
+   * `admin` is written to the EXISTING `updatedBy` column, which has never had
+   * a writer. That column is already on the wire — `toResponse()` returns the
+   * row by spread — so every reader has been receiving `updatedBy: null` since
+   * it shipped, and filling it in changes a value, not a shape. No side table
+   * is needed for these two content surfaces, unlike the four money surfaces
+   * in the same change whose entities a new column would silently WIDEN.
+   *
+   * The admin's ID, not their email: `GET /learn/guides` is PUBLIC and
+   * unauthenticated, so a staff email in this field would be disclosed to
+   * anyone on the internet. A UUID resolves to one AdminUser internally and
+   * says nothing to a reader.
+   */
+  async createGuide(dto: UpsertLearnGuideDto, admin: { id: string }) {
     return this.prisma.learnGuide.create({
       data: {
         title: dto.title ?? 'Untitled guide',
@@ -25,11 +38,12 @@ export class LearnGuideService {
         updated: dto.updated ? new Date(dto.updated) : new Date(),
         fileUrl: dto.fileUrl ?? null,
         updatedAt: new Date(),
+        updatedBy: admin.id,
       },
     });
   }
 
-  async updateGuide(id: string, dto: UpsertLearnGuideDto) {
+  async updateGuide(id: string, dto: UpsertLearnGuideDto, admin: { id: string }) {
     return this.prisma.learnGuide.update({
       where: { id },
       data: {
@@ -41,6 +55,7 @@ export class LearnGuideService {
         ...(dto.updated !== undefined && { updated: new Date(dto.updated) }),
         ...(dto.fileUrl !== undefined && { fileUrl: dto.fileUrl }),
         updatedAt: new Date(),
+        updatedBy: admin.id,
       },
     });
   }

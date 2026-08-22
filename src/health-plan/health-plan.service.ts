@@ -7,6 +7,10 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
+import {
+  AdminOpsAuditService,
+  type AdminActor,
+} from '../common/audit/admin-ops-audit.service';
 import { FlutterwaveCheckoutVerifier } from '../common/flutterwave/checkout-verifier';
 import { WellaHealthClient, type HealthPlan } from './wellahealth.client';
 import type {
@@ -36,6 +40,7 @@ export class HealthPlanService {
     private readonly prisma: PrismaService,
     private readonly wella: WellaHealthClient,
     private readonly verifier: FlutterwaveCheckoutVerifier,
+    private readonly audit: AdminOpsAuditService,
   ) {}
 
   listPlans(): Promise<HealthPlan[]> {
@@ -160,7 +165,8 @@ export class HealthPlanService {
   }
 
   // ---------------------------------------------------------------------
-  // Operator recovery. Reached only through AdminKeyGuard.
+  // Operator recovery. Reached only through AdminAuthGuard + AdminRolesGuard
+  // (superadmin/finance; the stuck queue also support) -- see the ops controller.
   // ---------------------------------------------------------------------
 
   /** Everyone who has paid for cover and does not have it. */
@@ -193,7 +199,7 @@ export class HealthPlanService {
    * second one. No money moves in either direction; the customer's payment
    * was already taken and is not taken again.
    */
-  async retryEnrolment(subscriptionId: string) {
+  async retryEnrolment(subscriptionId: string, admin: AdminActor) {
     const record = await this.prisma.healthSubscription.findUnique({
       where: { id: subscriptionId },
     });
@@ -232,6 +238,13 @@ export class HealthPlanService {
           expiresAt: expires,
         },
       });
+      await this.audit.record(admin, {
+        resource: 'health_subscription',
+        resourceId: enrolled.id,
+        subjectWawuId: enrolled.wawuUserId,
+        action: 'care_enrolment_retried',
+        detail: { outcome: 'enrolled', policyNumber: enrolled.policyNumber },
+      });
       return this.toResponse(enrolled);
     } catch (e) {
       const reason = e instanceof Error ? e.message : 'Enrolment failed';
@@ -239,6 +252,16 @@ export class HealthPlanService {
       const failed = await this.prisma.healthSubscription.update({
         where: { id: record.id },
         data: { status: 'failed', failureReason: reason.slice(0, 500) },
+      });
+      // A failed retry is still an action a named admin took against a
+      // partner on a paying customer's behalf, so it is audited before the
+      // throw rather than only on the happy path.
+      await this.audit.record(admin, {
+        resource: 'health_subscription',
+        resourceId: failed.id,
+        subjectWawuId: failed.wawuUserId,
+        action: 'care_enrolment_retried',
+        detail: { outcome: 'failed', failureReason: failed.failureReason },
       });
       // Still stuck, still owed. Kept visible rather than thrown away.
       throw new BadRequestException(
@@ -254,7 +277,11 @@ export class HealthPlanService {
    * codebase, so `refunded` may only be written against the reference of a
    * transfer that actually happened.
    */
-  async recordRefund(subscriptionId: string, dto: RecordCareRefundDto) {
+  async recordRefund(
+    subscriptionId: string,
+    dto: RecordCareRefundDto,
+    admin: AdminActor,
+  ) {
     const record = await this.prisma.healthSubscription.findUnique({
       where: { id: subscriptionId },
     });
@@ -277,8 +304,20 @@ export class HealthPlanService {
       },
     });
     this.logger.log(
-      `Health subscription ${record.id} marked refunded against real-world reference ${dto.refundReference}.`,
+      `Health subscription ${record.id} marked refunded against real-world reference ${dto.refundReference} by ${admin.email}.`,
     );
+    await this.audit.record(admin, {
+      resource: 'health_subscription',
+      resourceId: refunded.id,
+      subjectWawuId: refunded.wawuUserId,
+      action: 'care_refund_recorded',
+      detail: {
+        refundReference: dto.refundReference,
+        price: refunded.price,
+        planCode: refunded.planCode,
+        previousStatus: record.status,
+      },
+    });
     return this.toResponse(refunded);
   }
 

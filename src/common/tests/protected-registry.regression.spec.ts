@@ -18,9 +18,14 @@ import { ResponseInterceptor } from '../interceptors/response.interceptor';
  *      including hazard H-3 (a 201 response carries statusCode 200 in the
  *      BODY; the shipped app parses that).
  *   2. `auth` — WawuAuthGuard behaviour on the protected surface, and the
- *      fact that all three interim operator mechanisms (`ADMIN_WAWU_USER_IDS`
- *      allowlist, `x-wawu-admin-key`) are UNREACHABLE in every checked-in
- *      configuration (`auth.adminAuthToday`).
+ *      fact that the interim operator mechanisms are UNREACHABLE in every
+ *      checked-in configuration (`auth.adminAuthToday`). The
+ *      `ADMIN_WAWU_USER_IDS` allowlist is still one of them. The
+ *      `x-wawu-admin-key` shared secret is NO LONGER a mechanism at all: the
+ *      six controllers that used it now sit behind AdminAuthGuard +
+ *      AdminRolesGuard, so the two learn-content assertions below hold for a
+ *      stronger reason than they used to — not "the key is unconfigured", but
+ *      "there is no key".
  *   3. Hazard H-4 — the five list endpoints that return a BARE ARRAY unless a
  *      paging param is supplied. Both shapes are asserted for all five.
  *   4. Hazard H-2 — module registration ORDER in app.module.ts:90-100.
@@ -271,7 +276,7 @@ describe('Protected registry regression baseline', () => {
       expect(res.body.data).toBeNull();
     });
 
-    it('401s POST /learn/guides — AdminKeyGuard fails closed with WAWU_ADMIN_KEY unset', async () => {
+    it('401s POST /learn/guides — publishing needs an admin session, not a key', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/hub/learn/guides')
         .send({ title: 'x', kind: 'guide' })
@@ -279,7 +284,7 @@ describe('Protected registry regression baseline', () => {
       expect(res.body.data).toBeNull();
     });
 
-    it('401s PATCH /learn/playbook even for an authenticated user', async () => {
+    it('401s PATCH /learn/playbook even for an authenticated user — a WAWU ID token is not an admin session', async () => {
       await request(app.getHttpServer())
         .patch('/api/hub/learn/playbook')
         .set('Authorization', `Bearer ${creatorProToken}`)
