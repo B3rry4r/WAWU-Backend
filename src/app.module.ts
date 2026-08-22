@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { WawuAuthModule } from './common/auth/wawu-auth.module';
+import { AdminAuthModule } from './admin/auth/admin-auth.module';
 import { PrismaModule } from './common/prisma/prisma.module';
 import { AccountModule } from './account/account.module';
 import { CommentModule } from './comment/comment.module';
@@ -73,6 +74,22 @@ import { APP_GUARD } from '@nestjs/core';
     HealthPlanModule,
     LegalModule,
     WawuAuthModule,
+    // Admin surface. Position is deliberate: immediately after the auth
+    // infrastructure and ahead of every module that owns a parameterised
+    // route. Express matches in registration order, and the one
+    // shadowing hazard in this file is PartnerServiceController --
+    // `@Controller('services')` with a `@Get(':id')` catch-all that already
+    // swallowed `/services/mentors` and `/services/applications` once (see the
+    // comment further down). Registering ahead of every resource module means
+    // no present or future catch-all can reach `/admin/*` either. The reverse
+    // direction cannot bite: every admin route is `admin/auth/...`, no other
+    // controller declares an `admin` prefix, and the only root-level
+    // controller (AppController) declares a single literal path (`health`)
+    // with no parameter segment -- so nothing registered here can shadow an
+    // existing route. The MentorModule <- ServiceApplicationModule <-
+    // PartnerServiceModule ordering below is untouched: what matters there is
+    // their order relative to each other, not their absolute position.
+    AdminAuthModule,
     AccountModule,
     CommentModule,
     CourseLessonModule,

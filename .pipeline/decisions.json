@@ -1,0 +1,72 @@
+{
+  "mode": "autonomous",
+  "reason": "Product owner handed over for an unattended overnight run: 'implement and dont ask things that would require me to accept'. Per admin-surface-extension SKILL.md § Autonomous mode: decide, record, continue.",
+  "startedAt": "2026-08-22",
+  "decisions": [
+    {
+      "id": "d1",
+      "topic": "Pipeline shape — no dashboard exists to extract from",
+      "decision": "Invert Phase 2. The skill assumes a dashboard UI already exists whose screens are scanned into fragments. There is no WAWUAfrica dashboard yet, so there is nothing to scan. Instead, derive the admin surface from the protected registry (what the live backend actually holds) plus the product spec (what the business runs on). Phase 2 becomes 'derive', not 'detect+extract'.",
+      "consequence": "The ORPHAN classification is mostly moot — nothing can be a dashboard need with no backend basis if every need is derived FROM the backend. GAP detection becomes the primary triage axis and matters more than usual: it is the only thing that catches a live feature with no operator coverage.",
+      "confidence": "high"
+    },
+    {
+      "id": "d2",
+      "topic": "Dashboard framework",
+      "decision": "Next 16 + React 19 + Tailwind 4 + TypeScript.",
+      "evidence": "Sibling evidence, rung 2 of the resolution waterfall. The three most recent admin dashboards in this workspace all use it: Oja-Ewa-Admin-Dashboard (next ^16.1.6, react 19.2.0, tailwind ^4), Kudimata-Securities-Dashboard (next 16.3.0, react 19.2.8, tailwind ^4), OweMe-Dashboard (next 16.2.10, react 19.2.4, tailwind ^4). Product owner confirmed Next 16 explicitly.",
+      "confidence": "high"
+    },
+    {
+      "id": "d3",
+      "topic": "Backend branch",
+      "decision": "All admin work lands on feat/admin-surface. main is never committed to directly for admin changes.",
+      "evidence": "Explicit product-owner instruction: 'on the backend too you use another branch please... for any changes and new apis dont work from main'.",
+      "confidence": "high"
+    },
+    {
+      "id": "d5",
+      "topic": "CRITICAL — uploaded content can never become visible to a buyer",
+      "decision": "Treat the admin content-review queue as the single highest-priority item in the entire admin build, ahead of everything else including auth polish. Build it first.",
+      "evidence": [
+        "ContentPiece is created with status 'pending' (content-piece.service.ts:418).",
+        "The ONLY two contentPiece.update calls in the whole codebase are comment.service.ts:63 (commentCount) and content-piece.service.ts:631 (ratingPct). NEITHER touches status. Verified by grep across all of src/.",
+        "The 'live' literal at content-piece.service.ts:191 and :291 is a READ filter, not a write.",
+        "Every public read path filters status='live': feed, explore, search, public profile, unlock.",
+        "The upload slot is consumed at create time via an atomic increment (content-piece.service.ts:395-396) and there is NO decrement anywhere in the codebase — the slot is never returned.",
+        "The dev database contains only the 3 seeded 'live' rows and zero pending ones, i.e. no real upload has ever gone live."
+      ],
+      "consequence": "A creator pays NGN 5,999-18,999/year for upload slots, uploads a piece, permanently consumes a slot, and the piece is invisible to every buyer forever. The core transaction of the marketplace cannot complete. This is contract-driven-backend law 12 (sold is built) and law 10 (every state needs an exit) failing together, and it is exactly the class the post-mortem named.",
+      "confidence": "high"
+    },
+    {
+      "id": "d6",
+      "topic": "Notification has no writer",
+      "decision": "No admin screen. Record as an app-surface product defect for the owner.",
+      "evidence": "GET and mark-all-read exist; the only writers in the repo are two seed.ts upserts. Every notification in the product is seed data.",
+      "confidence": "high"
+    },
+    {
+      "id": "d7",
+      "topic": "Subscription revenue is recorded nowhere",
+      "decision": "BLOCKED pending a human ruling — do not build. Recording it rather than acting.",
+      "evidence": "PurchaseType is content|tip only; billing-history returns a hardcoded empty page by its own admission. WAWU's own subscription revenue — the two streams WAWU keeps 100% of — is unauditable. A fix needs a new SubscriptionCharge table written from the existing payment paths, which is a change to an app-serving surface. Autonomous mode auto-declines protected-surface changes rather than auto-approving them (admin-surface-extension law 14).",
+      "confidence": "high"
+    },
+    {
+      "id": "d8",
+      "topic": "No payment webhook exists",
+      "decision": "Build the reconciliation screen (F2) that RE-RUNS real Flutterwave verification. Never a 'mark as paid' button.",
+      "evidence": "Every payment is confirmed by a client-initiated /verify call; there is no Flutterwave webhook anywhere in the backend. A closed browser tab leaves a PendingCharge and a pending transaction while the customer has actually been charged. PendingCharge.expectedAmount exists precisely to stop a NGN 1 payment buying an NGN 18,999 tier, so any manual override would defeat a real control.",
+      "confidence": "high"
+    },
+    {
+      "id": "d4",
+      "topic": "EVG score",
+      "decision": "Do NOT build an admin surface for EVG. Record it as a product defect instead.",
+      "evidence": "EVG is displayed on four app surfaces but nothing writes it — the only writers in the whole backend are two seed.ts upserts, and the service's own comment defers the write path as 'out of scope for this module'. The acronym (engagement/value/growth) is expanded only in that comment, never in any doc or UI. Per contract-driven-backend law 14, a metric whose only writer is the seed script is a fake.",
+      "consequence": "An admin screen showing EVG would give operators a number that cannot move, and lend it false authority. Surfacing it in the review as a decision for the owner: complete the write path, or cut it from the app.",
+      "confidence": "medium"
+    }
+  ]
+}

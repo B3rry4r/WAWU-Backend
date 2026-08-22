@@ -81,6 +81,64 @@ every table, so check `DATABASE_URL` first. Note that re-seeding alone does
 **not** repair a mutated seed row: `prisma/seed.ts` upserts with `update: {}`,
 so an existing row is left exactly as the last test run left it.
 
+## Admin surface (`/api/hub/admin/*`)
+
+The admin dashboard authenticates against this backend's **own** `AdminUser`
+table. It does not go through WAWU ID, and it shares no configuration with the
+user flow.
+
+| Endpoint | Auth | Notes |
+| --- | --- | --- |
+| `POST /api/hub/admin/auth/login` | none | `{ email, password }` -> `{ accessToken, refreshToken, expiresIn, admin }`. Rate limited to 5/min. |
+| `POST /api/hub/admin/auth/refresh` | none | `{ refreshToken }` -> a fresh pair. An access token is rejected here. |
+| `GET /api/hub/admin/auth/me` | admin | The signed-in admin. |
+| `GET /api/hub/admin/auth/admins` | admin, `superadmin` only | The admin roster. |
+
+Roles are `superadmin`, `reviewer`, `support`, `finance`. A handler declares
+what it needs with `@AdminRoles(...)` and `@UseGuards(AdminAuthGuard,
+AdminRolesGuard)`; a handler with no `@AdminRoles` is open to every **active**
+admin. `superadmin` is not implicitly allowed everywhere -- each handler names
+the roles it accepts.
+
+**Why admin tokens cannot be confused with user tokens.** Admin tokens are
+HS256, signed with a secret this backend owns; WAWU ID tokens are RS256,
+verified against WAWU ID's JWKS. Each verifier pins its own algorithm, so
+neither token can satisfy the other regardless of the claims it carries. That
+is deliberate rather than decorative: the Hub enforces neither `iss` nor `aud`
+on user tokens today, so a claim-based separation would be worth nothing here.
+Access and refresh tokens also use separate secrets and audiences. The
+verified admin lands on `req.admin`, never `req.user`, so no existing guard,
+service or `@CurrentUser()` call site can observe one.
+`src/admin/auth/tests/admin-auth.contract.spec.ts` asserts the rejection in
+both directions, including for a WAWU ID *refresh* token.
+
+Revocation has no session table: bump `AdminUser.tokenVersion` and every
+outstanding access and refresh token for that admin stops working on the next
+request.
+
+### Environment
+
+| Variable | Required | Notes |
+| --- | --- | --- |
+| `ADMIN_JWT_SECRET` | yes | HS256 secret for admin **access** tokens. Min 32 chars. Unset = every admin route 401s (fails closed). |
+| `ADMIN_JWT_REFRESH_SECRET` | yes | Separate secret for admin **refresh** tokens. Never the same value. |
+| `ADMIN_JWT_ACCESS_TTL` | no | Default `30m`. |
+| `ADMIN_JWT_REFRESH_TTL` | no | Default `7d`. |
+| `ADMIN_SEED_EMAIL` / `ADMIN_SEED_PASSWORD` / `ADMIN_SEED_NAME` | seed only | Read only by `npm run admin:seed`. No defaults; password must be >= 12 chars. |
+
+### Creating the first superadmin
+
+```bash
+ADMIN_SEED_EMAIL=ops@wawu.africa \
+ADMIN_SEED_PASSWORD='<a real password>' \
+ADMIN_SEED_NAME='Ada Operator' \
+npm run admin:seed
+```
+
+Idempotent: an existing admin with that email is left untouched. Pass
+`ADMIN_SEED_RESET_PASSWORD=true` to re-hash the password and revoke that
+admin's outstanding tokens.
+
 ---
 
 <p align="center">

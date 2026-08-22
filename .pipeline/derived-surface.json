@@ -1,0 +1,2070 @@
+{
+  "$comment": "Phase 2 (INVERTED) \u2014 derived operator surface for WAWUAfrica. There is no dashboard to scan, so screens are DERIVED from prisma/schema.prisma + the live controllers + docs/01_SPEC.md. GAP detection is therefore the whole job: a live feature with no operator coverage is the failure mode. Written by the derive agent; no source code was modified.",
+  "meta": {
+    "generatedAt": "2026-08-22",
+    "pipeline": "admin-surface-extension",
+    "phase": "2-derive (inverted from 2-detect+extract)",
+    "backendRepo": "/workspace/projects/WAWU-Hub-API",
+    "dashboardRepo": "/workspace/projects/WAWUAfrica-Dashboard",
+    "dashboardState": "bare Next 16 scaffold \u2014 src/app/{page,layout,globals.css} only. Zero screens. Nothing to extract from; everything below is derived.",
+    "appRepo": "/workspace/projects/WAWU-Web",
+    "frameworkProfile": {
+      "backend": "NestJS + Prisma (postgresql) + class-validator DTOs, guard-based auth, jest contract specs per resource directory",
+      "dashboard": "Next 16 / React 19 / Tailwind 4 / TypeScript (decisions.json d2)",
+      "adminNamespace": "/admin/*",
+      "adminBranch": "feat/admin-surface (decisions.json d3)"
+    },
+    "inputsRead": [
+      "prisma/schema.prisma (1053 lines, 44 models, 20 enums)",
+      "src/**/*.controller.ts (44 controllers)",
+      "src/**/*.service.ts (spot-read for every state machine below)",
+      "src/scheduler/scheduler.service.ts",
+      "src/storage/storage.service.ts",
+      "src/common/guards/admin-key.guard.ts, src/{kyc-submission,verification-submission}/guards/admin.guard.ts",
+      "WAWU-Web/docs/{00_PLATFORM_MAP,01_SPEC,02_TECHNICAL_CONTEXT,03_USER_FLOWS}.md",
+      "WAWU-Web/CLAUDE.md",
+      ".claude/skills/POST-MORTEM-wawu.md",
+      ".pipeline/decisions.json"
+    ]
+  },
+  "identityAndAuth": {
+    "userAuth": "SSO \u2014 WAWU ID issues the JWT; this backend has NO local User table. Every *WawuId / *WawuUserId column is a plain indexed String holding WAWU ID's `sub` claim. WawuAuthGuard validates. PROTECTED \u2014 read-only for every admin agent.",
+    "adminAuthToday": [
+      {
+        "mechanism": "AdminKeyGuard (src/common/guards/admin-key.guard.ts)",
+        "shape": "shared secret in `x-wawu-admin-key`, timing-safe compare, fails closed if WAWU_ADMIN_KEY unset",
+        "usedBy": [
+          "POST /learn/guides",
+          "PATCH /learn/guides/:id",
+          "PATCH /learn/playbook"
+        ],
+        "problem": "server-to-server only, its own comment says 'never given to a browser'. A dashboard cannot use it. No identity, no attribution, no audit subject."
+      },
+      {
+        "mechanism": "KycAdminGuard + VerificationAdminGuard (two copies of the same class, in two resource directories)",
+        "shape": "env allowlist ADMIN_WAWU_USER_IDS checked against the SSO `sub`",
+        "usedBy": [
+          "POST /kyc/:id/review",
+          "POST /verification/submissions/:id/review"
+        ],
+        "problem": "admin identity rides on a USER token \u2014 the exact cross-contamination law 5 forbids. Also duplicated (post-mortem class F)."
+      }
+    ],
+    "adminAuthRequired": "Separate AdminUser table in this backend, own credentials, own token secret + iss/aud, own guard, admin sub-roles (superadmin / finance / compliance / moderator / support). An admin token must be cryptographically incapable of passing WawuAuthGuard and vice versa. Both interim guards stay in place until cut over; neither is deleted by this pipeline.",
+    "roleMatrixProposed": {
+      "superadmin": "everything, plus admin-user management",
+      "compliance": "KYC queue, verification queue, data-subject requests. NOT money actions.",
+      "finance": "transactions, reconciliation, subscriptions, refunds-owed, fulfilment. NOT KYC document viewing.",
+      "moderator": "content moderation, DM reports, community messages, penalties",
+      "support": "read-only person console + audit log. No approvals, no money writes."
+    }
+  },
+  "screens": [
+    {
+      "id": "A1",
+      "name": "Admin sign-in",
+      "route": "/login",
+      "priority": "p0",
+      "group": "Admin identity",
+      "operatorJob": "Get an operator into the dashboard as a named, attributable person \u2014 so every approval, rejection and refund below has a subject for the audit log.",
+      "entities": {
+        "reads": [
+          "AdminUser (NEW)"
+        ],
+        "writes": [
+          "AdminSession / refresh token (NEW)",
+          "AuditLog (NEW)"
+        ]
+      },
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/admin/auth/login",
+          "classification": "NEW"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/auth/refresh",
+          "classification": "NEW"
+        },
+        {
+          "method": "GET",
+          "path": "/admin/auth/me",
+          "classification": "NEW"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/auth/logout",
+          "classification": "NEW"
+        }
+      ],
+      "guardrails": [
+        "Never reuses WAWU ID token machinery.",
+        "Cross-rejection asserted in contract tests both directions."
+      ]
+    },
+    {
+      "id": "A2",
+      "name": "Audit log",
+      "route": "/audit",
+      "priority": "p0",
+      "group": "Admin identity",
+      "operatorJob": "Answer 'who approved this KYC / rejected this upload / marked this refund paid, and when'. docs/03_USER_FLOWS.md \u00a7C names an audit trail as a required admin flow; every p0 screen below writes a mutation with real-world money or identity consequences and today none of them are attributable to anyone.",
+      "entities": {
+        "reads": [
+          "AuditLog (NEW)",
+          "AdminUser (NEW)"
+        ],
+        "writes": []
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/audit",
+          "classification": "NEW",
+          "notes": "filter by actor, entity type, entity id, action, date range"
+        },
+        {
+          "method": "GET",
+          "path": "/admin/audit/:entityType/:entityId",
+          "classification": "NEW"
+        }
+      ],
+      "guardrails": [
+        "Append-only. No admin role can edit or delete an audit row.",
+        "Never records a raw BVN/NIN/account number \u2014 records that a document was viewed, not the document."
+      ]
+    },
+    {
+      "id": "A3",
+      "name": "Admin users & roles",
+      "route": "/settings/admins",
+      "priority": "p1",
+      "group": "Admin identity",
+      "operatorJob": "Add/suspend operators and set their role, so the role matrix is enforceable instead of aspirational.",
+      "entities": {
+        "reads": [
+          "AdminUser (NEW)"
+        ],
+        "writes": [
+          "AdminUser (NEW)",
+          "AuditLog (NEW)"
+        ]
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/admins",
+          "classification": "NEW"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/admins",
+          "classification": "NEW"
+        },
+        {
+          "method": "PATCH",
+          "path": "/admin/admins/:id",
+          "classification": "NEW",
+          "notes": "role change, suspend/reactivate. Soft-disable only."
+        }
+      ]
+    },
+    {
+      "id": "A4",
+      "name": "Operations home",
+      "route": "/",
+      "priority": "p1",
+      "group": "Admin identity",
+      "operatorJob": "One screen that says what is waiting: KYC pending count, content pending count, verification pending count, unreconciled payments, refunds owed, failed fulfilments, open service applications, open legal requests, DM reports. Every tile links to its queue.",
+      "entities": {
+        "reads": [
+          "KycSubmission",
+          "VerificationSubmission",
+          "ContentPiece",
+          "Purchase",
+          "CreditPurchase",
+          "PendingCharge",
+          "DirectMessage",
+          "BillPayment",
+          "HealthSubscription",
+          "ServiceApplication",
+          "LegalRequest",
+          "DmReport"
+        ],
+        "writes": []
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/overview/queues",
+          "classification": "NEW",
+          "notes": "counts only \u2014 cheap, cached. Must NOT compute a second definition of any number a queue screen shows (law 13)."
+        }
+      ],
+      "guardrails": [
+        "No naira 'GMV' tile that recomputes revenue differently from the transactions ledger.",
+        "No credit balance rendered as naira, anywhere, ever."
+      ]
+    },
+    {
+      "id": "K1",
+      "name": "KYC review queue",
+      "route": "/compliance/kyc",
+      "priority": "p0",
+      "group": "Manual review \u2014 KYC (earning gate)",
+      "operatorJob": "The reviewer's worklist. KYC is manual by spec (01_SPEC.md \u00a76: 'KYC is manual: collect data, a human reviews it'). POST /kyc/:id/review already exists and is guarded \u2014 but NOTHING lists pending submissions. There is literally no way for a reviewer to discover a submission id today. Until this screen exists, no creator on the platform can ever be cleared to earn.",
+      "entities": {
+        "reads": [
+          "KycSubmission",
+          "CreatorState",
+          "UserProfile"
+        ],
+        "writes": []
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/kyc/submissions",
+          "classification": "NEW",
+          "notes": "filter status=pending|approved|rejected, country, submittedAt range; sort oldest-first. Offset paginated (admin convention)."
+        }
+      ],
+      "columns": [
+        "submittedAt (age)",
+        "creator handle + wawuUserId",
+        "country",
+        "idDocumentType",
+        "status",
+        "resubmission? (Nth submission for this user)"
+      ],
+      "guardrails": [
+        "MUST NOT show, mention, link to, or share a nav section with the verification-tier ladder. Conflating the two is a shipped bug (post-mortem class K, CLAUDE.md non-negotiable). Different top-level nav group, different vocabulary: this screen says 'KYC' and 'payout eligibility', never 'verification'.",
+        "List response returns MASKED bvn/nin/payoutAccountNumber only (the app already masks via maskTail \u2014 admin list must not be the place the masking is dropped).",
+        "List response must NOT include idDocumentUrl. Documents are fetched one at a time, on the detail screen, through the signed-URL endpoint, so each view is an audit event."
+      ],
+      "evidence": "src/kyc-submission/kyc-submission.controller.ts \u2014 routes are GET / (self), POST / (self), POST /:id/review (admin). No list. src/kyc-submission/kyc-submission.service.ts getMine() is where=self only."
+    },
+    {
+      "id": "K2",
+      "name": "KYC submission detail & decision",
+      "route": "/compliance/kyc/[id]",
+      "priority": "p0",
+      "group": "Manual review \u2014 KYC (earning gate)",
+      "operatorJob": "See the evidence and decide. Reviewer needs: country, BVN/NIN (Nigeria) or national-ID equivalent, the ID document image, payout bank name + account number, submission history for this creator, and the creator's current gate state. Then approve (flips CreatorState.kycStatus=approved \u2192 creator can be paid) or reject with a required reason.",
+      "entities": {
+        "reads": [
+          "KycSubmission",
+          "CreatorState",
+          "UserProfile",
+          "CreatorSubscription"
+        ],
+        "writes": [
+          "KycSubmission",
+          "CreatorState (via existing service)",
+          "AuditLog (NEW)",
+          "Notification (NEW writer)"
+        ]
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/kyc/submissions/:id",
+          "classification": "NEW",
+          "notes": "full row + history for that wawuUserId + current CreatorState. Identifiers masked by default."
+        },
+        {
+          "method": "POST",
+          "path": "/admin/kyc/submissions/:id/document-url",
+          "classification": "NEW",
+          "notes": "exchanges the stored object KEY for a SHORT-LIVED signed GET. Wraps StorageService.signedReadUrl(key, 900) which already forces ResponseContentDisposition:'attachment' and the key-derived content type. Writes an AuditLog row every call. POST, not GET, precisely so it is a recorded action rather than a cacheable read."
+        },
+        {
+          "method": "POST",
+          "path": "/admin/kyc/submissions/:id/reveal",
+          "classification": "NEW",
+          "notes": "returns UNMASKED bvn/nin/payoutAccountNumber for the reviewer who must key them into a bank/NIBSS check. Superadmin+compliance only, audited, rate-limited. If the product owner rules that reveal is unnecessary, drop this endpoint \u2014 masked-only is the safer default."
+        },
+        {
+          "method": "POST",
+          "path": "/admin/kyc/submissions/:id/review",
+          "classification": "EXTEND",
+          "notes": "wraps the existing KycSubmissionService.review() \u2014 same validation (only pending reviewable, rejectionReason required on reject, flips CreatorState.kycStatus). Admin route + admin guard + audit write. The existing POST /kyc/:id/review is NOT removed or changed."
+        }
+      ],
+      "guardrails": [
+        "idDocumentUrl is stored as a bare object key precisely so a long-lived bearer URL for a government ID never exists (storage.service.ts comment). The admin surface MUST NOT persist, log, cache, or embed the signed URL it receives, and MUST NOT proxy the bytes through the API.",
+        "The signed URL expires in 900s. The dashboard fetches it on demand per view, never at list time.",
+        "Approving KYC changes the EARNING gate only. It must not touch subscriptionPaid, accountType, tier, or the WAWU ID verification tier."
+      ],
+      "evidence": "src/kyc-submission/kyc-submission.service.ts withSignedDocument() + maskIdentifiers(); src/storage/storage.service.ts signedReadUrl() vs readUrlFor() (900s vs 604800s)."
+    },
+    {
+      "id": "K3",
+      "name": "Verification-tier review queue",
+      "route": "/trust/verification",
+      "priority": "p0",
+      "group": "Manual review \u2014 verification ladder (public trust badge)",
+      "operatorJob": "Work the OTHER manual review pipeline: basic \u2192 verified_user \u2192 verified_business \u2192 certified_professional \u2192 trusted_partner. POST /verification/submissions/:id/review exists and, on approval, calls WAWU ID to elevate the tier \u2014 but again nothing lists pending submissions, so no reviewer can reach one.",
+      "entities": {
+        "reads": [
+          "VerificationSubmission",
+          "UserProfile"
+        ],
+        "writes": []
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/verification/submissions",
+          "classification": "NEW",
+          "notes": "filter status, tier; oldest-first"
+        }
+      ],
+      "guardrails": [
+        "SEPARATE top-level nav group from KYC. No shared screen, no shared filter, no combined 'verification status' column anywhere. CLAUDE.md: 'Two independent gates' / post-mortem class K: the shipped app already described KYC ('Government ID submitted and approved by hand') on this ladder's rung \u2014 do not repeat it.",
+        "Copy on this screen never uses 'KYC', 'payout', or 'earning'. Copy on K1/K2 never uses 'verified user' or 'tier'."
+      ],
+      "evidence": "src/verification-submission/verification-submission.service.ts listMine() is where:{wawuUserId} only; review() calls WawuIdClient.elevateVerificationTier BEFORE the local write."
+    },
+    {
+      "id": "K4",
+      "name": "Verification submission detail & decision",
+      "route": "/trust/verification/[id]",
+      "priority": "p0",
+      "group": "Manual review \u2014 verification ladder",
+      "operatorJob": "View submitted documents, approve (elevates tier at WAWU ID) or reject with a reason. Also see the WAWU ID call outcome, because approval is a cross-service write that can fail.",
+      "entities": {
+        "reads": [
+          "VerificationSubmission"
+        ],
+        "writes": [
+          "VerificationSubmission",
+          "WAWU ID verificationTier (via existing WawuIdClient)",
+          "AuditLog (NEW)"
+        ]
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/verification/submissions/:id",
+          "classification": "NEW"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/verification/submissions/:id/document-url",
+          "classification": "NEW",
+          "notes": "VerificationSubmission.documents is String[]; same short-lived-signed-URL treatment as KYC. These are business registration / professional certificates \u2014 sensitive, though not government ID."
+        },
+        {
+          "method": "POST",
+          "path": "/admin/verification/submissions/:id/review",
+          "classification": "EXTEND",
+          "notes": "wraps existing service; preserves the elevate-before-write ordering exactly (a reversed order is unrecoverable \u2014 see the service's own comment)"
+        }
+      ],
+      "guardrails": [
+        "Admin must not write verificationTier locally. WAWU ID owns it (conventions: elevate via WawuIdClient only)."
+      ]
+    },
+    {
+      "id": "M1",
+      "name": "Content moderation queue",
+      "route": "/moderation/content",
+      "priority": "p0",
+      "group": "Moderation",
+      "operatorJob": "Approve or reject uploaded content. THIS IS THE SINGLE LARGEST GAP IN THE PRODUCT. ContentPiece is created with status:'pending' (content-piece.service.ts:417). Every public read \u2014 feed, explore, search, public profile, unlock \u2014 filters status:'live'. Grep of the whole src tree finds no writer of 'live' or 'rejected' outside a test fixture. Creators are paying \u20a65,999\u2013\u20a618,999/year for upload slots, the slot is consumed on create, and the piece is then invisible to every buyer forever. Post-mortem class A ('sold but not built') in its purest form.",
+      "entities": {
+        "reads": [
+          "ContentPiece",
+          "CourseLesson",
+          "UserProfile",
+          "CreatorState"
+        ],
+        "writes": []
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/content",
+          "classification": "NEW",
+          "notes": "filter status (pending default), contentType, category, accessType, creator; sort oldest-first. This is also the p1 'content library' view when status filter is cleared."
+        }
+      ],
+      "columns": [
+        "createdAt (age)",
+        "title",
+        "creator",
+        "contentType",
+        "accessType + price (\u20a6)",
+        "status",
+        "firstUploadFree flag"
+      ],
+      "guardrails": [
+        "Price column renders \u20a6 only. Never $.",
+        "'Free' as an accessType value is product data, not banned marketing copy \u2014 but do not introduce the word into any button or heading (post-mortem class I)."
+      ],
+      "evidence": "src/content-piece/content-piece.service.ts:417 status:'pending' on create; :191,:297,:460 read filters on 'live'; search-response.service.ts:96,173,208,337 same. No writer of 'live' exists."
+    },
+    {
+      "id": "M2",
+      "name": "Content review detail",
+      "route": "/moderation/content/[id]",
+      "priority": "p0",
+      "group": "Moderation",
+      "operatorJob": "Watch/read the preview and the full asset, check title/description/category/price against policy, then publish (pending\u2192live) or reject with a reason the creator can act on. Also unpublish an already-live piece (live\u2192rejected) when it is reported.",
+      "entities": {
+        "reads": [
+          "ContentPiece",
+          "CourseLesson",
+          "Comment"
+        ],
+        "writes": [
+          "ContentPiece.status (NEW admin write path)",
+          "AuditLog (NEW)",
+          "Notification (NEW writer)"
+        ]
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/content/:id",
+          "classification": "NEW",
+          "notes": "full row incl. fullAssetUrl + lessons. Admin DTO \u2014 the app's ContentPieceResponse is never widened."
+        },
+        {
+          "method": "POST",
+          "path": "/admin/content/:id/publish",
+          "classification": "NEW",
+          "notes": "pending|rejected \u2192 live"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/content/:id/reject",
+          "classification": "NEW",
+          "notes": "requires reason; pending|live \u2192 rejected. NEW nullable columns needed: moderationReason, moderatedAt, moderatedByAdminId."
+        },
+        {
+          "method": "POST",
+          "path": "/admin/content/:id/restore-slot",
+          "classification": "NEW",
+          "priority": "p1",
+          "notes": "on a rejection the creator's CreatorState.slotsUsed should be returned, or a rejected upload silently costs a paid slot forever. Decide explicitly: return the slot, or don't and say so in the rejection copy. The teardown bug in post-mortem class J was this exact ratchet."
+        }
+      ],
+      "guardrails": [
+        "Content that has been SOLD must be unpublished, never hard-deleted \u2014 Purchase.contentId is onDelete:Restrict specifically to protect the buyer's receipt and entitlement (schema comment). The dashboard offers no delete control for ContentPiece.",
+        "Rejecting live content must not refund or revoke prior purchases automatically. That is a separate, explicit finance action (F5)."
+      ]
+    },
+    {
+      "id": "M3",
+      "name": "DM reports / disputes",
+      "route": "/moderation/dm-reports",
+      "priority": "p0",
+      "group": "Moderation",
+      "operatorJob": "Work reported paid-DM threads. DmReportService is create-only by design ('Reads / moderation-queue listing are out of this resource's frozen contract') \u2014 every report a user files goes into a table nobody can read. 01_SPEC.md \u00a72 says disputes 'feed into the existing admin moderation/dispute flow'; that flow has no reader here.",
+      "entities": {
+        "reads": [
+          "DmReport",
+          "DirectMessage",
+          "UserProfile",
+          "CreatorNoResponseTracker"
+        ],
+        "writes": [
+          "DmReport resolution (NEW columns)",
+          "DirectMessage.status (refund path)",
+          "AuditLog (NEW)"
+        ]
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/dm-reports",
+          "classification": "NEW",
+          "notes": "unresolved first; joins the reported thread so the operator sees text, amount, deadlineAt, status"
+        },
+        {
+          "method": "GET",
+          "path": "/admin/dm-reports/:id",
+          "classification": "NEW"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/dm-reports/:id/resolve",
+          "classification": "NEW",
+          "notes": "outcome enum {dismissed, warned, refunded, dm_disabled}; requires note. NEW nullable columns on DmReport: resolvedAt, resolvedByAdminId, outcome, note."
+        },
+        {
+          "method": "POST",
+          "path": "/admin/dm/:messageId/force-refund",
+          "classification": "NEW",
+          "notes": "operator-initiated refund of a DM outside the 24h sweep. Sets status=refunded and enqueues to the F5 refunds-owed ledger. WAWU takes ZERO fee on a refunded DM (01_SPEC.md \u00a71 stream 3)."
+        }
+      ],
+      "guardrails": [
+        "Do not build a second dispute system (01_SPEC.md \u00a72 is explicit). This is the one queue."
+      ]
+    },
+    {
+      "id": "M4",
+      "name": "Creator DM penalty state",
+      "route": "/moderation/dm-penalties",
+      "priority": "p1",
+      "group": "Moderation",
+      "operatorJob": "See which creators are warned / auto-disabled and for how long, and answer 'why is my DM switched off?'. The ladder is locked by spec: <10% none, 10\u201330% warned, 30\u201350% disabled 7d, >50% disabled 30d.",
+      "entities": {
+        "reads": [
+          "CreatorNoResponseTracker",
+          "DirectMessage",
+          "CreatorState"
+        ],
+        "writes": [
+          "CreatorNoResponseTracker (override, p2)",
+          "AuditLog (NEW)"
+        ]
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/dm/penalties",
+          "classification": "NEW",
+          "notes": "filter penaltyState; show noResponseRatePct, dmDisabledUntil, sample of missed threads"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/dm/penalties/:creatorWawuId/clear",
+          "classification": "NEW",
+          "priority": "p2",
+          "notes": "goodwill reversal after a support call; audited, reason required"
+        }
+      ],
+      "guardrails": [
+        "Display the SAME noResponseRatePct the app reads (law 13). Do not recompute the rate from DirectMessage rows on this screen \u2014 two definitions of one number is how support and creator end up on different realities.",
+        "OPEN DEFECT to flag, not to paper over: the scheduler's refundExpiredDms() flips DM status but never updates noResponseRatePct or penaltyState. 02_TECHNICAL_CONTEXT.md:174 says the sweep should do both. Today this table only moves if something else writes it. Verify a writer exists before shipping this screen, or it is a fake metric (post-mortem class E)."
+      ]
+    },
+    {
+      "id": "M5",
+      "name": "Community messages moderation",
+      "route": "/moderation/community-messages",
+      "priority": "p1",
+      "group": "Moderation",
+      "operatorJob": "Remove abusive messages and images from community rooms. Users pay 1 credit per message and can post images; there is no delete path anywhere in the codebase \u2014 not for the host, not for an operator. A single abusive image is permanent.",
+      "entities": {
+        "reads": [
+          "CommunityMessage",
+          "Community",
+          "UserProfile"
+        ],
+        "writes": [
+          "CommunityMessage soft-delete (NEW nullable columns)",
+          "AuditLog (NEW)"
+        ]
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/community-messages",
+          "classification": "NEW",
+          "notes": "filter by community, sender, date, hasImage"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/community-messages/:id/remove",
+          "classification": "NEW",
+          "notes": "SOFT delete \u2014 NEW nullable removedAt/removedByAdminId/removalReason. Hard delete would destroy the CreditSpend audit trail the creator's 90% share is computed from."
+        }
+      ],
+      "guardrails": [
+        "Removing a message does NOT refund the credit. Credits are non-refundable by spec (01_SPEC.md \u00a73 rule 1). No credit-reversal control on this screen.",
+        "Existing community reads must not start filtering on the new column in a way that changes the app's response shape \u2014 additive only; the app's read may filter removedAt IS NULL, which is a behaviour change and therefore a human ruling, not an agent's."
+      ]
+    },
+    {
+      "id": "M6",
+      "name": "Communities directory",
+      "route": "/moderation/communities",
+      "priority": "p1",
+      "group": "Moderation",
+      "operatorJob": "See every room, its host, kind (open/private), member count and activity; find the room behind a report; and verify the Pro-tier entitlement is actually being honoured (private rooms should only exist under Pro hosts).",
+      "entities": {
+        "reads": [
+          "Community",
+          "CommunityMembership",
+          "CommunityMessage",
+          "CreditSpend",
+          "CreatorState"
+        ],
+        "writes": [
+          "AuditLog (NEW)"
+        ]
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/communities",
+          "classification": "NEW",
+          "notes": "filter kind, host, activity; derived memberCount/messages-7d"
+        },
+        {
+          "method": "GET",
+          "path": "/admin/communities/:id",
+          "classification": "NEW",
+          "notes": "members, pending join requests (with requestedAt age), recent messages, credits spent"
+        }
+      ],
+      "guardrails": [
+        "Credits spent renders as a COUNT ('1,240 credits'), never as naira. CLAUDE.md non-negotiable; doc 02:109 repeats it as load-bearing.",
+        "Do not add an operator 'approve join request' control \u2014 approval is the HOST's job and the host route already exists (POST /communities/:id/requests/:userWawuId/approve). An operator override is a p2 at most, and only with an audit reason."
+      ]
+    },
+    {
+      "id": "M7",
+      "name": "Blocks & abuse signals",
+      "route": "/moderation/blocks",
+      "priority": "p2",
+      "group": "Moderation",
+      "operatorJob": "Spot an account many people have blocked \u2014 the cheapest available abuse signal in this schema.",
+      "entities": {
+        "reads": [
+          "BlockedAccount",
+          "UserProfile"
+        ],
+        "writes": []
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/blocks/top-blocked",
+          "classification": "NEW",
+          "notes": "group by blockedWawuId, count desc"
+        }
+      ],
+      "guardrails": [
+        "Read-only. An operator must not unblock on a user's behalf \u2014 DELETE /settings/privacy/blocked/:id is the user's own control."
+      ]
+    },
+    {
+      "id": "F1",
+      "name": "Transactions ledger",
+      "route": "/money/transactions",
+      "priority": "p0",
+      "group": "Money",
+      "operatorJob": "One searchable list of every naira that moved, across all six money paths, so an operator can find a payment by tx ref, by buyer, by creator, or by date. Today no such view exists in any form; each money path is a separate table read only by its own owner.",
+      "entities": {
+        "reads": [
+          "Purchase",
+          "CreditPurchase",
+          "DirectMessage",
+          "BillPayment",
+          "HealthSubscription",
+          "LegalRequest",
+          "CreatorSubscription"
+        ],
+        "writes": []
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/transactions",
+          "classification": "NEW",
+          "notes": "unioned admin view. Filters: source(content|tip|dm|credits|bill|health|legal|subscription), status, wawuId (buyer or creator), flutterwaveTxRef exact, date range. Offset paginated."
+        },
+        {
+          "method": "GET",
+          "path": "/admin/transactions/:source/:id",
+          "classification": "NEW",
+          "notes": "one record + its Flutterwave refs + the entitlement it granted"
+        }
+      ],
+      "columns": [
+        "purchasedAt",
+        "source",
+        "buyer",
+        "creator",
+        "amount \u20a6",
+        "commissionRate (snapshotted)",
+        "creator share \u20a6",
+        "WAWU share \u20a6",
+        "status",
+        "flutterwaveTxRef"
+      ],
+      "guardrails": [
+        "commissionRate is SNAPSHOTTED on Purchase at transaction time (schema comment). The ledger must display the stored rate, never recompute from the creator's current tier \u2014 a Pro creator who downgraded would otherwise retroactively rewrite history.",
+        "Only 0.15 and 0.10 are legal rates (85/15, 90/10). Any other stored value is a data defect to surface, not to render silently.",
+        "Credits rows show pack + credit COUNT + the naira PAID FOR THE PACK. They never show a naira value per credit or a naira value of a balance.",
+        "\u20a6 only. A currency symbol other than \u20a6 anywhere on this screen is a product-invariant failure (post-mortem class I)."
+      ]
+    },
+    {
+      "id": "F2",
+      "name": "Payment reconciliation (stuck & unverified)",
+      "route": "/money/reconciliation",
+      "priority": "p0",
+      "group": "Money",
+      "operatorJob": "Find the customer who was charged but got nothing. THERE IS NO FLUTTERWAVE WEBHOOK IN THIS BACKEND \u2014 grep confirms zero webhook routes. Every payment is confirmed by a client-initiated /verify call, so a closed tab, a dropped connection or a crashed browser leaves a PendingCharge row and a status:'pending' Purchase/CreditPurchase forever, with the money taken at Flutterwave. This screen is the only safety net that exists.",
+      "entities": {
+        "reads": [
+          "PendingCharge",
+          "Purchase",
+          "CreditPurchase",
+          "DirectMessage",
+          "BillPayment",
+          "HealthSubscription",
+          "LegalRequest"
+        ],
+        "writes": [
+          "the relevant record via its existing verify path",
+          "AuditLog (NEW)"
+        ]
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/reconciliation/pending",
+          "classification": "NEW",
+          "notes": "PendingCharge rows older than N minutes + all status:'pending' transaction rows older than N minutes, with kind, expectedAmount, wawuUserId, age"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/reconciliation/:txRef/verify",
+          "classification": "EXTEND",
+          "notes": "operator re-runs the SAME server-side verification the client would have run \u2014 re-queries Flutterwave, enforces amount >= expectedAmount exactly as PendingCharge.expectedAmount is designed to, and grants the entitlement through the existing service method. Never a manual 'mark as paid'."
+        },
+        {
+          "method": "POST",
+          "path": "/admin/reconciliation/:txRef/abandon",
+          "classification": "NEW",
+          "notes": "marks a charge the operator has confirmed never completed; reason required; audited"
+        }
+      ],
+      "guardrails": [
+        "NO endpoint that grants an entitlement without a fresh Flutterwave verification. A 'mark paid' button is how a \u20a61 payment buys an \u20a618,999 tier \u2014 the exact attack PendingCharge.expectedAmount exists to stop.",
+        "Do not delete PendingCharge rows from the dashboard; the scheduler already sweeps them (scheduler.service.ts:136)."
+      ],
+      "evidence": "grep webhook across src \u2192 only comments ('Remaining SEAMs: the deferred Flutterwave webhook', app.module.ts:53). PendingCharge model doc comment describes exactly this lost-window failure."
+    },
+    {
+      "id": "F3",
+      "name": "Creator subscriptions",
+      "route": "/money/subscriptions",
+      "priority": "p0",
+      "group": "Money",
+      "operatorJob": "docs/03_USER_FLOWS.md \u00a7C names this explicitly: 'Subscription status (active/past_due/expired per creator) \u2192 new list view'. Answer 'is this creator paid up, on which tier, until when, and what commission rate are they on'.",
+      "entities": {
+        "reads": [
+          "CreatorSubscription",
+          "CreatorState",
+          "UserProfile"
+        ],
+        "writes": [
+          "AuditLog (NEW)"
+        ]
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/subscriptions",
+          "classification": "NEW",
+          "notes": "filter status(active|past_due|cancelled|expired), tier, currentPeriodEnd range; flag rows where CreatorState.subscriptionPaid disagrees with CreatorSubscription.status"
+        },
+        {
+          "method": "GET",
+          "path": "/admin/subscriptions/:creatorWawuId",
+          "classification": "NEW"
+        }
+      ],
+      "columns": [
+        "creator",
+        "tier (Basic \u20a65,999 / Pro \u20a618,999)",
+        "status",
+        "currentPeriodEnd",
+        "cancelsAt",
+        "renewalAttempts",
+        "cardLast4",
+        "commissionRateOverride",
+        "gate mismatch flag"
+      ],
+      "guardrails": [
+        "Only \u20a65,999 (Basic) and \u20a618,999 (Pro) are legal tier prices. Never render another number as a tier price.",
+        "The 'gate mismatch' flag is the operator-visible form of post-mortem class C (paying never set accountType='creator'). It reads existing fields and reports disagreement; it never silently repairs one.",
+        "OPEN DEFECT: GET /creator-subscription/billing-history returns a hardcoded empty page \u2014 the service comment says there is 'genuinely nothing persisted to page through'. Subscription charges are NOT recorded anywhere (PurchaseType has no 'subscription' value). WAWU's own \u20a65,999/\u20a618,999 revenue is therefore unauditable. See gaps.G12."
+      ]
+    },
+    {
+      "id": "F4",
+      "name": "Creator payout readiness",
+      "route": "/money/payouts",
+      "priority": "p0",
+      "group": "Money",
+      "operatorJob": "Produce the list a finance operator pays FROM, outside the product: for each creator, net naira owed (85% or 90% of settled sales), whether KYC is approved, and the payout bank details from their approved KYC submission. 01_SPEC.md \u00a76 puts the payout MECHANISM out of scope \u2014 but somebody still has to work out who is owed what, and that is a reporting job the schema fully supports.",
+      "entities": {
+        "reads": [
+          "Purchase",
+          "DirectMessage",
+          "CreditSpend",
+          "CreatorState",
+          "KycSubmission",
+          "CreatorSubscription"
+        ],
+        "writes": [
+          "PayoutRun / PayoutLine (NEW, p1)",
+          "AuditLog (NEW)"
+        ]
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/payouts/readiness",
+          "classification": "NEW",
+          "notes": "per creator: gross \u20a6, WAWU share \u20a6, creator share \u20a6, kycStatus, has approved payout bank details, blocked-reason"
+        },
+        {
+          "method": "GET",
+          "path": "/admin/payouts/readiness/:creatorWawuId",
+          "classification": "NEW",
+          "notes": "line-item breakdown reconciling exactly to the creator's own GET /content/mine/earnings figures"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/payouts/runs",
+          "classification": "NEW",
+          "priority": "p1",
+          "notes": "record that a batch was paid out-of-band on a date, with a reference \u2014 so the next run knows what has already been settled. NEW tables PayoutRun/PayoutLine."
+        }
+      ],
+      "guardrails": [
+        "THIS IS NOT A WALLET. No balance the creator can see, no cash-out control, no withdrawal request state, no 'available balance' language. It is an operator report. 01_SPEC.md \u00a76 and CLAUDE.md forbid the wallet framing absolutely.",
+        "The naira figures MUST reconcile to the app's own CreatorEarningsService output (law 13). Reuse its rate resolution and its exclusions rather than writing a second sum.",
+        "Community credit earnings are EXCLUDED from the naira total, exactly as CreatorEarningsService excludes them, and shown as a credit COUNT. There is no per-credit naira rate in this product (three pack prices, no attribution) \u2014 inventing a blended rate here would be the wallet problem re-entering through arithmetic.",
+        "A creator with kycStatus != approved appears with a BLOCKED reason, not hidden. 'Paid + uploading + KYC pending' is a normal state (CLAUDE.md)."
+      ]
+    },
+    {
+      "id": "F5",
+      "name": "Refunds owed",
+      "route": "/money/refunds",
+      "priority": "p0",
+      "group": "Money",
+      "operatorJob": "The list of people WAWU owes money back to and has not paid. The scheduler flips expired DMs to status:'refunded' and its own comment says: 'this reverses the ENTITLEMENT. Moving the money back to the payer's card additionally needs a Flutterwave refund call, which no adapter in this codebase exposes yet \u2014 refundedDms is logged so those rows can be reconciled by hand.' Right now 'by hand' means grepping application logs. Bill payments and health subscriptions that reach status:'failed' after the money was taken are in the same position, and the FulfilmentStatus enum's 'refunded' value has zero writers anywhere.",
+      "entities": {
+        "reads": [
+          "DirectMessage",
+          "BillPayment",
+          "HealthSubscription",
+          "LegalRequest",
+          "Purchase"
+        ],
+        "writes": [
+          "RefundRecord (NEW table)",
+          "AuditLog (NEW)"
+        ]
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/refunds/owed",
+          "classification": "NEW",
+          "notes": "unioned: DirectMessage status=refunded with no RefundRecord; BillPayment status in (paid,failed) past SLA; HealthSubscription status=failed; any operator-flagged Purchase"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/refunds/:source/:id/mark-settled",
+          "classification": "NEW",
+          "notes": "records that the refund was executed at Flutterwave out-of-band: amount, provider refund ref, date, operator. NEW table RefundRecord. This is bookkeeping of a real-world action, NOT a payment API."
+        },
+        {
+          "method": "GET",
+          "path": "/admin/refunds/history",
+          "classification": "NEW"
+        }
+      ],
+      "guardrails": [
+        "WAWU takes ZERO fee on a refunded DM (01_SPEC.md \u00a71 stream 3, capitalised in the spec). The refund amount is the FULL amount, and no commission row is produced.",
+        "Credits are NEVER refundable (01_SPEC.md \u00a73 rule 1). CreditPurchase must not be a selectable source on this screen.",
+        "This screen does not move money. It records that money was moved. Until a Flutterwave refund adapter exists, an honest 'settled out-of-band' record is the truthful surface; a 'Refund now' button that calls nothing would be a dead control."
+      ]
+    },
+    {
+      "id": "F6",
+      "name": "Fulfilment queue \u2014 WAWUPay bills & WAWUCare health",
+      "route": "/money/fulfilment",
+      "priority": "p0",
+      "group": "Money",
+      "operatorJob": "Work the state the schema was explicitly designed to expose: 'paid means WAWU has the money but the partner has not delivered yet \u2014 the state a refund sweep looks for'. There is no sweep and no screen. A user's airtime/data/power payment or health policy can sit in paid or failed indefinitely with nobody looking.",
+      "entities": {
+        "reads": [
+          "BillPayment",
+          "HealthSubscription"
+        ],
+        "writes": [
+          "BillPayment/HealthSubscription status via retry (EXTEND)",
+          "RefundRecord (NEW)",
+          "AuditLog (NEW)"
+        ]
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/fulfilment/bills",
+          "classification": "NEW",
+          "notes": "filter status; surface providerReference, providerStatus, failureReason, age"
+        },
+        {
+          "method": "GET",
+          "path": "/admin/fulfilment/health",
+          "classification": "NEW",
+          "notes": "filter status; surface policyNumber, providerReference, failureReason"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/fulfilment/bills/:id/retry",
+          "classification": "EXTEND",
+          "notes": "re-invokes the existing partner fulfilment call for a paid-but-undelivered row; idempotent on providerReference"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/fulfilment/health/:id/retry",
+          "classification": "EXTEND"
+        }
+      ],
+      "guardrails": [
+        "Retry must go through the existing service's partner adapter. No new provider call shape.",
+        "A row that cannot be fulfilled routes to F5 as refund-owed, never quietly to 'delivered'."
+      ],
+      "evidence": "prisma/schema.prisma FulfilmentStatus doc comment; bill-payment.service.ts:127/141/156; health-plan.service.ts:99/122/135. 'refunded' has no writer in either."
+    },
+    {
+      "id": "F7",
+      "name": "Credits ledger",
+      "route": "/money/credits",
+      "priority": "p1",
+      "group": "Money",
+      "operatorJob": "Answer 'I bought a pack and my balance is wrong' \u2014 show the pack purchases, the credits granted, the spends, and the current balance for one user.",
+      "entities": {
+        "reads": [
+          "CreditsState",
+          "CreditPurchase",
+          "CreditSpend"
+        ],
+        "writes": [
+          "CreditsState grant (NEW, p2, audited)",
+          "AuditLog (NEW)"
+        ]
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/credits/purchases",
+          "classification": "NEW",
+          "notes": "filter user, pack, status"
+        },
+        {
+          "method": "GET",
+          "path": "/admin/credits/:userWawuId",
+          "classification": "NEW",
+          "notes": "balance COUNT, trialEndsAt, purchase history, spend history by community"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/credits/:userWawuId/grant",
+          "classification": "NEW",
+          "priority": "p2",
+          "notes": "goodwill credit grant after a failed pack purchase. Grants a COUNT. Reason required, audited, capped."
+        }
+      ],
+      "guardrails": [
+        "ABSOLUTE: no naira value of a balance, no naira-per-credit figure, no 'convert to naira', no debit/deduct-to-cash control. 01_SPEC.md \u00a73 and doc 02:109 make this the load-bearing constraint that keeps Credits out of CBN e-money territory.",
+        "Legal packs are exactly \u20a6500/50, \u20a61,000/120, \u20a62,000/300. The purchase row shows the pack price paid; it never divides.",
+        "Credits are non-refundable. No refund control on this screen."
+      ]
+    },
+    {
+      "id": "S1",
+      "name": "People \u2014 support console",
+      "route": "/people",
+      "priority": "p0",
+      "group": "Support",
+      "operatorJob": "The screen an operator opens when a creator emails 'I paid and I still can't upload'. Search a person by wawuUserId, handle, or a transaction reference.",
+      "entities": {
+        "reads": [
+          "UserProfile",
+          "CreatorState",
+          "CreatorSubscription"
+        ],
+        "writes": []
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/people",
+          "classification": "NEW",
+          "notes": "search q against handle and wawuUserId; filter accountType, tier, kycStatus, subscriptionPaid"
+        }
+      ],
+      "guardrails": [
+        "LOOKUPS MUST BE FORMAT-TOLERANT (skill law 8). wawuUserId is WAWU ID's opaque `sub`; handle is stored WITHOUT the leading '@' but users and operators type it WITH one; social handles are stored bare while URLs are stored whole (schema comment on UserProfile). Match all observed shapes. Never normalise stored values.",
+        "This backend has NO local user table \u2014 name, email and phone live in WAWU ID. Either the console shows only what this backend holds (honest), or it reads WAWU ID through the existing client. Do not invent a local mirror of identity."
+      ]
+    },
+    {
+      "id": "S2",
+      "name": "Person detail \u2014 gates, money and history",
+      "route": "/people/[wawuId]",
+      "priority": "p0",
+      "group": "Support",
+      "operatorJob": "THE highest-value screen in this whole surface. One page showing, side by side and clearly separated: (1) account type, (2) subscription \u2014 tier, status, period end, paid? \u2014 the UPLOAD gate, (3) KYC status \u2014 the EARNING gate, (4) upload slots used vs the tier allowance, (5) DM settings (dmEnabled, dmPrice \u20a6), (6) purchases made, (7) sales and earnings, (8) credit balance as a COUNT, (9) communities hosted and joined, (10) service/legal applications, (11) verification tier. Nearly every defect in the post-mortem was a disagreement between two of these, and none of them were visible together anywhere.",
+      "entities": {
+        "reads": [
+          "UserProfile",
+          "CreatorState",
+          "CreatorSubscription",
+          "KycSubmission",
+          "VerificationSubmission",
+          "ContentPiece",
+          "Purchase",
+          "DirectMessage",
+          "CreditsState",
+          "CreditPurchase",
+          "CommunityMembership",
+          "Community",
+          "ServiceApplication",
+          "LegalRequest",
+          "BillPayment",
+          "HealthSubscription",
+          "Notification"
+        ],
+        "writes": [
+          "AuditLog (NEW)"
+        ]
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/people/:wawuId",
+          "classification": "NEW",
+          "notes": "profile + both gates + tier allowance + DM settings"
+        },
+        {
+          "method": "GET",
+          "path": "/admin/people/:wawuId/gates",
+          "classification": "NEW",
+          "notes": "the diagnostic: accountType, subscriptionPaid, CreatorSubscription.status, kycStatus, slotsUsed vs UPLOAD_ALLOWANCE_BY_TIER, dmEnabled/dmPrice \u2014 each with the exact reason a gate is closed, computed by the SAME creatorGates()/guard logic the app uses, never a second copy"
+        },
+        {
+          "method": "GET",
+          "path": "/admin/people/:wawuId/transactions",
+          "classification": "NEW"
+        },
+        {
+          "method": "GET",
+          "path": "/admin/people/:wawuId/content",
+          "classification": "NEW"
+        },
+        {
+          "method": "GET",
+          "path": "/admin/people/:wawuId/applications",
+          "classification": "NEW"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/people/:wawuId/resync-gates",
+          "classification": "NEW",
+          "priority": "p1",
+          "notes": "re-derives CreatorState from the authoritative CreatorSubscription + latest KycSubmission and repairs a proven mismatch. Reason required, audited, diff shown before and after. Never a free-text state editor."
+        }
+      ],
+      "guardrails": [
+        "The two gates render in two SEPARATE, LABELLED panels: 'Upload access (subscription)' and 'Payout access (KYC)'. Never one combined 'verification' status. Verification tier appears in a THIRD panel, labelled 'Public trust badge', with copy that never says 'KYC' (post-mortem class K; CLAUDE.md non-negotiable).",
+        "dmPrice renders in \u20a6, from CreatorState \u2014 the SAME field the creator writes via PATCH /creator/dm-settings. Post-mortem class B was buyers seeing a hardcoded 0 because a reader never selected it; the operator console must read the real column so support and creator see one truth.",
+        "Credit balance renders as a COUNT.",
+        "No 'delete user' control. Account deletion is the user's own DELETE /account, orchestrated with WAWU ID on a 48h grace period; this backend stores no deletion marker at all, so an admin delete would be a second, divergent path."
+      ]
+    },
+    {
+      "id": "S3",
+      "name": "Data-subject requests",
+      "route": "/compliance/data-requests",
+      "priority": "p1",
+      "group": "Support / compliance",
+      "operatorJob": "Fulfil 'download my data'. DataExportRequestService writes status:'pending' and its own comment says 'Fulfilment (assembling the export, flipping pending -> ready) is a background job outside this resource's frozen contract'. That job does not exist. Every export request a user has ever made is unread and unfulfilled \u2014 an NDPR obligation with no owner.",
+      "entities": {
+        "reads": [
+          "DataExportRequest",
+          "UserProfile"
+        ],
+        "writes": [
+          "DataExportRequest.status (NEW admin write)",
+          "AuditLog (NEW)"
+        ]
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/data-requests",
+          "classification": "NEW"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/data-requests/:id/fulfil",
+          "classification": "NEW",
+          "notes": "marks ready and attaches the export artifact reference; NEW nullable columns fulfilledAt/artifactKey/fulfilledByAdminId"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/data-requests/:id/reject",
+          "classification": "NEW"
+        }
+      ],
+      "guardrails": [
+        "The export artifact is served through a short-lived signed URL, same pattern as KYC documents \u2014 never a stored long-lived link."
+      ]
+    },
+    {
+      "id": "P1",
+      "name": "Service applications queue",
+      "route": "/services/applications",
+      "priority": "p0",
+      "group": "Partner services",
+      "operatorJob": "Work applications with real-world outcomes: CAC company registration, NEPC exporter registration, pension, banking, grants, loans. Users PAY for CAC (amountPaid on the row) and the application then sits at status 'submitted'/'under_review' forever \u2014 ServiceApplicationService writes only those two values and never advances further. Nothing appends to the `timeline` Json after submission, nothing sets `rejection`, and nothing ever attaches the certificate the applicant is waiting for. `certificateExpectedBy` is a promise the system cannot keep because no code path can mark it kept.",
+      "entities": {
+        "reads": [
+          "ServiceApplication",
+          "UserProfile"
+        ],
+        "writes": [
+          "ServiceApplication (status, statusLabel, timeline, rejection, documents)",
+          "AuditLog (NEW)",
+          "Notification (NEW writer)"
+        ]
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/service-applications",
+          "classification": "NEW",
+          "notes": "filter kind(cac|nepc|pension|banking|grants|loans|mentor_request), status, date; sort oldest-first; show certificateExpectedBy breach"
+        },
+        {
+          "method": "GET",
+          "path": "/admin/service-applications/:id",
+          "classification": "NEW",
+          "notes": "full row + applicant + short-lived signed URLs for each of the applicant's uploaded documents (ID, signature, passport photograph)"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/service-applications/:id/advance",
+          "classification": "NEW",
+          "notes": "sets status + statusLabel and APPENDS a timeline entry {label, note, at, byAdminId}. statusLabel is user-facing copy: it must come from a fixed operator-selectable set, not a free-text box, or the app renders whatever an operator typed."
+        },
+        {
+          "method": "POST",
+          "path": "/admin/service-applications/:id/reject",
+          "classification": "NEW",
+          "notes": "sets rejection; reason required"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/service-applications/:id/attach",
+          "classification": "NEW",
+          "notes": "attaches the issued certificate/outcome document; the applicant then reads it through the existing self-scoped GET /services/applications/:id"
+        }
+      ],
+      "guardrails": [
+        "`easybuy` is a retained-but-dead enum value (schema comment: 'the CredPal partnership behind it has ended and no code path accepts it any more', and 00_PLATFORM_MAP.md lists EasyBuy as REMOVED). It must not appear as a filter option or a creatable kind. Existing rows stay visible.",
+        "Money already taken (amountPaid) that ends in rejection routes to F5 refunds-owed. Rejecting must not silently keep the fee."
+      ],
+      "evidence": "src/service-application/service-application.service.ts writes only 'awaiting_payment', 'under_review', 'submitted'. No further writer exists."
+    },
+    {
+      "id": "P2",
+      "name": "Legal requests queue",
+      "route": "/services/legal",
+      "priority": "p0",
+      "group": "Partner services",
+      "operatorJob": "Run WAWU Legal. The LegalRequestStatus ladder has eleven states; the user-facing controller can reach only some of them, and the ops half has NO HTTP ENTRY POINT AT ALL. LegalService.quote() exists, is documented as 'Ops action: record what the work will cost' \u2014 and no route calls it. So a paid consultation lands at consultation_scheduled and stops. `consultation_done`, `awaiting_quote`, `delivered`, `cancelled`, `consultationNotes`, `deliverableUrl` and `deliveredAt` have zero writers. Customers pay a consultation fee for a flow that cannot continue.",
+      "entities": {
+        "reads": [
+          "LegalRequest",
+          "UserProfile"
+        ],
+        "writes": [
+          "LegalRequest (status, scheduledFor, consultationNotes, quoteAmount, quoteNote, deliverableUrl, deliveredAt)",
+          "AuditLog (NEW)",
+          "Notification (NEW writer)"
+        ]
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/legal/requests",
+          "classification": "NEW",
+          "notes": "filter status, serviceCode, path(simple|consultation), category; oldest-first"
+        },
+        {
+          "method": "GET",
+          "path": "/admin/legal/requests/:id",
+          "classification": "NEW",
+          "notes": "intake details Json, signed URLs for `documents`, consultation medium/fee/paidAt, contract text as signed, payment refs"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/legal/requests/:id/schedule",
+          "classification": "NEW",
+          "notes": "sets scheduledFor for a paid consultation"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/legal/requests/:id/consultation-done",
+          "classification": "NEW",
+          "notes": "records consultationNotes, status \u2192 consultation_done"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/legal/requests/:id/quote",
+          "classification": "EXTEND",
+          "notes": "wraps the EXISTING LegalService.quote(), which already refuses to quote a consultation path before consultationPaidAt. This is the missing route, not new logic."
+        },
+        {
+          "method": "POST",
+          "path": "/admin/legal/requests/:id/deliver",
+          "classification": "NEW",
+          "notes": "attaches deliverableUrl, sets deliveredAt + status delivered. Only from in_progress."
+        },
+        {
+          "method": "POST",
+          "path": "/admin/legal/requests/:id/cancel",
+          "classification": "NEW",
+          "notes": "reason required; routes any paid-but-undelivered amount to F5"
+        }
+      ],
+      "guardrails": [
+        "contractText/contractSignedAs/contractSignedAt/contractSignedIp are a LIABILITY RECORD (schema comment). Render read-only. No admin write path may alter a signed contract, ever.",
+        "Quoting a consultation-path request before its consultation is paid must stay blocked \u2014 reuse the existing service guard rather than re-implementing it."
+      ]
+    },
+    {
+      "id": "P3",
+      "name": "Mentor requests queue",
+      "route": "/services/mentor-requests",
+      "priority": "p1",
+      "group": "Partner services",
+      "operatorJob": "Route mentorship requests to mentors and close the loop. MentorRequest.status defaults to 'pending' and the service comment confirms nothing ever changes it \u2014 every request ever submitted is still pending. Mentoring is FREE (mentors volunteer), so no money is at risk, which is the only reason this is p1 rather than p0.",
+      "entities": {
+        "reads": [
+          "MentorRequest",
+          "Mentor",
+          "UserProfile"
+        ],
+        "writes": [
+          "MentorRequest.status",
+          "AuditLog (NEW)"
+        ]
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/mentor-requests",
+          "classification": "NEW",
+          "notes": "filter mentor, status; oldest-first"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/mentor-requests/:id/status",
+          "classification": "NEW",
+          "notes": "accepted | declined | completed, with a note. Status is a plain String in the schema \u2014 the admin DTO fixes the value set rather than accepting free text."
+        }
+      ],
+      "guardrails": [
+        "No price, no payment, no fee field anywhere on this screen. Mentoring is free by product truth."
+      ]
+    },
+    {
+      "id": "P4",
+      "name": "Mentors directory",
+      "route": "/services/mentors",
+      "priority": "p1",
+      "group": "Partner services",
+      "operatorJob": "Add, edit and retire mentors. Mentor rows are seed-only today \u2014 there is no create/update path in the codebase, so onboarding a mentor requires a database migration or a manual SQL insert.",
+      "entities": {
+        "reads": [
+          "Mentor"
+        ],
+        "writes": [
+          "Mentor",
+          "AuditLog (NEW)"
+        ]
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/mentors",
+          "classification": "NEW"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/mentors",
+          "classification": "NEW"
+        },
+        {
+          "method": "PATCH",
+          "path": "/admin/mentors/:id",
+          "classification": "NEW",
+          "notes": "openForRequests, fullUntil, topics, bio"
+        }
+      ],
+      "guardrails": [
+        "Mentor.handle is @unique \u2014 the form must surface the collision, not 500.",
+        "Deleting a mentor cascades MentorRequest rows (onDelete: Cascade). Offer retire (openForRequests=false), not delete."
+      ]
+    },
+    {
+      "id": "P5",
+      "name": "Partner services catalogue",
+      "route": "/services/catalogue",
+      "priority": "p1",
+      "group": "Partner services",
+      "operatorJob": "Edit the service cards themselves \u2014 name, tagline, blurb, turnaround, priceFrom, eligibility, benefits, steps, CTA \u2014 and flip a service between `coming` and `live`. The schema comment says outright: 'Reference/seed data, admin-managed later'. Later is now: today flipping a coming-soon service live requires a deploy.",
+      "entities": {
+        "reads": [
+          "PartnerService"
+        ],
+        "writes": [
+          "PartnerService",
+          "AuditLog (NEW)"
+        ]
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/partner-services",
+          "classification": "NEW"
+        },
+        {
+          "method": "PATCH",
+          "path": "/admin/partner-services/:id",
+          "classification": "NEW"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/partner-services",
+          "classification": "NEW"
+        }
+      ],
+      "guardrails": [
+        "`slug` is the app's stable routing key (schema comment: matching by NAME 'broke silently for everything else'). Slug is immutable after create \u2014 the edit form must not expose it.",
+        "priceFrom is free text. It must read '\u20a6\u2026' \u2014 a $ here reaches the consumer app directly.",
+        "Pension and health-insurance cards are PARTNERSHIP DEPENDENCIES (01_SPEC.md \u00a74: 'flag, don't silently build a fake version of either'). Flipping either to `live` needs a signed partnership; the screen should say so at the point of the toggle."
+      ]
+    },
+    {
+      "id": "C1",
+      "name": "Learn catalogue \u2014 courses, guides, playbook",
+      "route": "/content/learn",
+      "priority": "p1",
+      "group": "Content & catalogue ops",
+      "operatorJob": "Publish and update the training material that IS the tier perks (Basic = 1 free course + business playbook; Pro = 3 courses). The playbook and guides already have operator write endpoints \u2014 behind AdminKeyGuard, a server-to-server shared secret its own comment says must never reach a browser. So the dashboard cannot use them as they stand. LearnCourse has no write path at all.",
+      "entities": {
+        "reads": [
+          "LearnCourse",
+          "LearnGuide",
+          "Playbook",
+          "CourseEnrollment"
+        ],
+        "writes": [
+          "LearnCourse",
+          "LearnGuide",
+          "Playbook",
+          "AuditLog (NEW)"
+        ]
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/learn/courses",
+          "classification": "NEW"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/learn/courses",
+          "classification": "NEW"
+        },
+        {
+          "method": "PATCH",
+          "path": "/admin/learn/courses/:id",
+          "classification": "NEW"
+        },
+        {
+          "method": "GET",
+          "path": "/admin/learn/guides",
+          "classification": "EXTEND",
+          "notes": "read exists publicly; admin needs the unpublished/all view"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/learn/guides",
+          "classification": "EXTEND",
+          "notes": "same LearnGuideService as POST /learn/guides, re-gated behind the real admin guard instead of AdminKeyGuard"
+        },
+        {
+          "method": "PATCH",
+          "path": "/admin/learn/guides/:id",
+          "classification": "EXTEND"
+        },
+        {
+          "method": "PATCH",
+          "path": "/admin/learn/playbook",
+          "classification": "EXTEND",
+          "notes": "same PlaybookService as PATCH /learn/playbook"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/uploads/presign",
+          "classification": "EXTEND",
+          "notes": "admin-authenticated presign for course/guide/playbook files and certificate attachments. The existing POST /uploads/presign requires a WAWU ID user token, which an admin does not and must not have."
+        }
+      ],
+      "guardrails": [
+        "The existing AdminKeyGuard routes are NOT deleted \u2014 they are server-to-server and may be in use. Additive only.",
+        "Playbook.updatedBy / LearnGuide.updatedBy are free-text Strings: write the admin's identifier, not a display name typed by hand.",
+        "The uploads presign path was where post-mortem class D lived (checksum-in-signature, advisory MIME allowlist, no bucket CORS). Reuse the existing hardened StorageService untouched; add no second presigner."
+      ]
+    },
+    {
+      "id": "C2",
+      "name": "Content library (all statuses)",
+      "route": "/content",
+      "priority": "p1",
+      "group": "Content & catalogue ops",
+      "operatorJob": "Browse everything ever uploaded regardless of status, find a piece by title or creator, see its sales, and reach the moderation actions. Same endpoint as M1 with the status filter cleared; kept as a distinct screen because the jobs differ (queue vs. archive).",
+      "entities": {
+        "reads": [
+          "ContentPiece",
+          "Purchase",
+          "Comment"
+        ],
+        "writes": []
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/content",
+          "classification": "NEW",
+          "notes": "shared with M1"
+        },
+        {
+          "method": "GET",
+          "path": "/admin/content/:id/sales",
+          "classification": "NEW"
+        }
+      ],
+      "guardrails": [
+        "No delete control \u2014 Purchase.contentId is onDelete:Restrict by design."
+      ]
+    },
+    {
+      "id": "C3",
+      "name": "Comments moderation",
+      "route": "/moderation/comments",
+      "priority": "p2",
+      "group": "Content & catalogue ops",
+      "operatorJob": "Remove abusive comments on content. Comment has create+read only; there is no delete path for anyone, including the author.",
+      "entities": {
+        "reads": [
+          "Comment",
+          "ContentPiece"
+        ],
+        "writes": [
+          "Comment soft-delete (NEW nullable columns)",
+          "AuditLog (NEW)"
+        ]
+      },
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/comments",
+          "classification": "NEW"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/comments/:id/remove",
+          "classification": "NEW",
+          "notes": "soft delete. Hard delete is already handled defensively by onDelete:SetNull on replyToId, but ContentPiece.commentCount would drift \u2014 decrement it in the same transaction."
+        }
+      ]
+    },
+    {
+      "id": "C4",
+      "name": "Operator notifications",
+      "route": "/comms/notifications",
+      "priority": "p2",
+      "group": "Content & catalogue ops",
+      "operatorJob": "Tell a user what an operator just did \u2014 'your KYC was approved', 'your upload was rejected because\u2026', 'your \u20a62,000 was refunded'. The Notification table has GET and mark-all-read and NO WRITER anywhere in src/; the only writers in the repo are two prisma/seed.ts upserts. Every notification in the product today is seed data.",
+      "entities": {
+        "reads": [
+          "Notification",
+          "NotificationSettings"
+        ],
+        "writes": [
+          "Notification (NEW writer)",
+          "AuditLog (NEW)"
+        ]
+      },
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/admin/notifications",
+          "classification": "NEW",
+          "notes": "targeted single-user notification emitted as a side effect of an operator decision. Templated kinds only \u2014 no free-text broadcast."
+        },
+        {
+          "method": "GET",
+          "path": "/admin/notifications/sent",
+          "classification": "NEW"
+        }
+      ],
+      "guardrails": [
+        "Honour NotificationSettings (refunds, dmReminders, promotions\u2026). An operator notification is not exempt from the user's own preferences except for compliance-critical ones.",
+        "`amount` renders \u20a6; `creditsCount` renders a COUNT. Never one in the other's field.",
+        "No mass-marketing broadcast tool. `promotions` defaults to false for a reason and this pipeline is not the place to build a campaign sender."
+      ]
+    }
+  ],
+  "gaps": [
+    {
+      "id": "G1",
+      "severity": "critical",
+      "title": "Uploaded content can never go live",
+      "detail": "ContentPiece is created status:'pending'; every public read filters status:'live'; nothing in src/ writes 'live' or 'rejected'. Creators pay \u20a65,999\u2013\u20a618,999/year for upload slots, the slot is consumed on create, and the piece is invisible forever. The core marketplace transaction is unreachable.",
+      "coverage": "M1, M2",
+      "ruling": "add-to-scope",
+      "postMortemClass": "A (sold but not built) + C (state with no exit)"
+    },
+    {
+      "id": "G2",
+      "severity": "critical",
+      "title": "No KYC reviewer queue",
+      "detail": "POST /kyc/:id/review exists and is guarded, but no endpoint lists submissions and no endpoint returns the ID document to a reviewer. A reviewer cannot discover a submission id. No creator can ever be cleared to earn.",
+      "coverage": "K1, K2",
+      "ruling": "add-to-scope"
+    },
+    {
+      "id": "G3",
+      "severity": "critical",
+      "title": "No verification-tier reviewer queue",
+      "detail": "Same shape as G2 for the public trust ladder. listMine() is self-scoped only.",
+      "coverage": "K3, K4",
+      "ruling": "add-to-scope"
+    },
+    {
+      "id": "G4",
+      "severity": "critical",
+      "title": "No Flutterwave webhook \u2014 every payment depends on the client calling /verify",
+      "detail": "Zero webhook routes in src/. A closed tab after checkout leaves a PendingCharge and a status:'pending' transaction while the customer has been charged. The only recovery is an operator re-running verification.",
+      "coverage": "F2",
+      "ruling": "add-to-scope",
+      "alsoNeeds": "a real Flutterwave webhook is the proper fix and is BACKEND product work, not admin work \u2014 flag to the owner"
+    },
+    {
+      "id": "G5",
+      "severity": "critical",
+      "title": "DM auto-refunds reverse the entitlement but never move the money",
+      "detail": "scheduler.service.ts refundExpiredDms() flips status to 'refunded' and logs the ids, with its own comment saying they must be 'reconciled by hand'. No Flutterwave refund adapter exists. There is no list of who is owed.",
+      "coverage": "F5",
+      "ruling": "add-to-scope",
+      "postMortemClass": "C"
+    },
+    {
+      "id": "G6",
+      "severity": "critical",
+      "title": "Paid-but-unfulfilled bills and health plans have no owner",
+      "detail": "FulfilmentStatus.paid is documented as 'the state a refund sweep looks for'. There is no sweep, no queue, and FulfilmentStatus.refunded has zero writers.",
+      "coverage": "F6, F5",
+      "ruling": "add-to-scope"
+    },
+    {
+      "id": "G7",
+      "severity": "critical",
+      "title": "The legal ops half has no HTTP entry point",
+      "detail": "LegalService.quote() is documented as an 'Ops action' and no controller route calls it. consultation_done, awaiting_quote, delivered and cancelled have no writers; consultationNotes, scheduledFor, deliverableUrl and deliveredAt are never written. Paid consultations dead-end.",
+      "coverage": "P2",
+      "ruling": "add-to-scope",
+      "postMortemClass": "A + C"
+    },
+    {
+      "id": "G8",
+      "severity": "critical",
+      "title": "Service applications stop at 'submitted'",
+      "detail": "Only 'awaiting_payment', 'under_review' and 'submitted' are ever written. Nothing appends to timeline, sets rejection, or attaches a certificate. Paid CAC registrations have no completion path.",
+      "coverage": "P1",
+      "ruling": "add-to-scope"
+    },
+    {
+      "id": "G9",
+      "severity": "critical",
+      "title": "DM reports are write-only",
+      "detail": "DmReportService is create-only by frozen contract. Every user report is unreadable by anyone.",
+      "coverage": "M3",
+      "ruling": "add-to-scope"
+    },
+    {
+      "id": "G10",
+      "severity": "high",
+      "title": "Notifications have no writer",
+      "detail": "GET /notifications and mark-all-read exist. Nothing in src/ creates a Notification; the only writers are two seed.ts upserts. Every notification in the product is seed data \u2014 post-mortem class E, a displayed surface with no provenance.",
+      "coverage": "C4",
+      "ruling": "add-to-scope"
+    },
+    {
+      "id": "G11",
+      "severity": "high",
+      "title": "EVG score has no writer",
+      "detail": "Displayed on four app surfaces, read by public-profile and search. Only writers are two seed.ts upserts. Confirmed again here.",
+      "coverage": "NONE \u2014 deliberately",
+      "ruling": "log",
+      "decision": "decisions.json d4 stands: build no admin screen for EVG. An operator screen would lend a frozen number false authority. Owner decision: complete the write path or cut it from the app."
+    },
+    {
+      "id": "G12",
+      "severity": "high",
+      "title": "Subscription payments are not recorded anywhere",
+      "detail": "CreatorSubscription is one evolving row per creator. PurchaseType has only content|tip, so a subscription charge cannot be represented. GET /creator-subscription/billing-history returns a hardcoded empty page by its own admission. WAWU's own \u20a65,999/\u20a618,999 revenue \u2014 streams 7 and 8, the ones WAWU keeps 100% of \u2014 is unauditable and unanswerable.",
+      "coverage": "F1, F3 (partially \u2014 they can only show current state)",
+      "ruling": "add-to-scope",
+      "alsoNeeds": "a SubscriptionCharge table (NEW, additive) written by the existing subscribe/upgrade/verify paths. Touching those paths is APP-SURFACE work and must be ruled by the human."
+    },
+    {
+      "id": "G13",
+      "severity": "high",
+      "title": "Community messages, comments and content have no removal path",
+      "detail": "No delete/remove exists for CommunityMessage or Comment for any actor. One abusive image in a paid community room is permanent.",
+      "coverage": "M5, C3",
+      "ruling": "add-to-scope"
+    },
+    {
+      "id": "G14",
+      "severity": "high",
+      "title": "Data export requests are never fulfilled",
+      "detail": "Created status:'pending'; the fulfilment job is declared out of contract and does not exist. NDPR obligation with no owner.",
+      "coverage": "S3",
+      "ruling": "add-to-scope",
+      "postMortemClass": "scope-declaration-as-resolution (the governing observation)"
+    },
+    {
+      "id": "G15",
+      "severity": "high",
+      "title": "No payout-owed report",
+      "detail": "Creators earn 85%/90% and there is no view of who is owed what, nor of whether their KYC clears them to be paid. Payout MECHANISM is deliberately out of scope (01_SPEC.md \u00a76); the reporting is not.",
+      "coverage": "F4",
+      "ruling": "add-to-scope"
+    },
+    {
+      "id": "G16",
+      "severity": "medium",
+      "title": "Mentor requests never leave 'pending'",
+      "detail": "Service comment confirms no status writer. Free service, so no money at risk.",
+      "coverage": "P3",
+      "ruling": "add-to-scope"
+    },
+    {
+      "id": "G17",
+      "severity": "medium",
+      "title": "Mentors, partner services and courses are seed-only",
+      "detail": "No create/update path for Mentor, PartnerService or LearnCourse. Onboarding a mentor or launching a service requires a deploy. PartnerService's schema comment already says 'admin-managed later'.",
+      "coverage": "P4, P5, C1",
+      "ruling": "add-to-scope"
+    },
+    {
+      "id": "G18",
+      "severity": "medium",
+      "title": "POST /services/:id/notify-me persists nothing",
+      "detail": "Returns {success:true} and stores no row \u2014 the service comment says a persisted notify-list would be a schema change and HALTs. Users tapping 'notify me' on coming-soon services join a waitlist that does not exist.",
+      "coverage": "NONE",
+      "ruling": "log",
+      "decision": "There is no queue to work because there is no data. Either add a NotifyRequest table (additive, then a p2 screen) or remove the control from the app. Owner call \u2014 flagged, not built."
+    },
+    {
+      "id": "G19",
+      "severity": "medium",
+      "title": "DM penalty state may have no writer",
+      "detail": "CreatorNoResponseTracker holds noResponseRatePct and penaltyState; 02_TECHNICAL_CONTEXT.md:174 says the DM sweep updates both, but scheduler.refundExpiredDms() only flips DirectMessage.status. Verify before shipping M4 or it is another fake metric.",
+      "coverage": "M4 (conditional)",
+      "ruling": "add-to-scope, verify writer first"
+    },
+    {
+      "id": "G20",
+      "severity": "medium",
+      "title": "Rejected content silently burns a paid upload slot",
+      "detail": "CreatorState.slotsUsed increments on create and nothing ever decrements it. Once M2 can reject, a rejected upload permanently costs a slot the creator paid for. Same ratchet shape as the test-teardown bug in post-mortem class J.",
+      "coverage": "M2 (restore-slot endpoint)",
+      "ruling": "add-to-scope, needs an explicit product ruling"
+    },
+    {
+      "id": "G21",
+      "severity": "low",
+      "title": "Account deletions are invisible to operators",
+      "detail": "DELETE /account computes a 48h grace marker and calls WAWU ID; this backend stores nothing. If the WAWU ID call fails it is logged and swallowed. No operator can see pending deletions or failures.",
+      "coverage": "NONE",
+      "ruling": "log",
+      "decision": "Storing a deletion marker is a schema + app-path change. Flag to owner; do not build an admin screen over data that does not exist."
+    },
+    {
+      "id": "G22",
+      "severity": "low",
+      "title": "Two duplicate admin guard classes",
+      "detail": "KycAdminGuard and VerificationAdminGuard are byte-identical logic in two directories, both reading ADMIN_WAWU_USER_IDS. Post-mortem class F (duplicated truth).",
+      "coverage": "resolved by the real AdminUser guard (A1)",
+      "ruling": "add-to-scope"
+    }
+  ],
+  "backendCapabilitiesWithNoOperatorScreen": [
+    {
+      "capability": "POST /services/:id/notify-me",
+      "reason": "no-op, persists nothing \u2014 there is no waitlist to work",
+      "ruling": "log (G18)"
+    },
+    {
+      "capability": "GET /creators/:wawuId/evg",
+      "reason": "metric has no writer; an admin screen would legitimise a frozen number",
+      "ruling": "log (G11, decisions.json d4)"
+    },
+    {
+      "capability": "GET /learn/entitlement",
+      "reason": "fully derived from CreatorState.tier + CourseEnrollment; the person console (S2) already shows both inputs"
+    },
+    {
+      "capability": "GET/POST/DELETE /marketplace/saves, /users/me/saved, /creators/:wawuId/follow",
+      "reason": "self-scoped personal state; no operator job. WAWUBasket/WAWUBeauty are external apps \u2014 handoff only, never rebuilt (CLAUDE.md)"
+    },
+    {
+      "capability": "GET /search, /search/suggestions, /search/closest",
+      "reason": "consumer discovery; an operator searches records via S1, not the consumer index"
+    },
+    {
+      "capability": "GET/PATCH /settings/privacy, /settings/notifications",
+      "reason": "user's own preferences; operators read them only as context inside S2/C4, never edit them"
+    },
+    {
+      "capability": "DELETE /account",
+      "reason": "orchestrated with WAWU ID, stores nothing locally (G21)"
+    },
+    {
+      "capability": "POST /content/:id/rate, /content/:id/save, comments create",
+      "reason": "consumer engagement writes; moderation reads them (C3) but there is no operator write job"
+    },
+    {
+      "capability": "GET /communities/:id/requests + approve/reject/remove-member",
+      "reason": "these are the HOST's controls and correctly host-scoped. Deliberately NOT mirrored to operators beyond read (M6) \u2014 an operator approving into someone's private room is a product decision, not a support task"
+    },
+    {
+      "capability": "POST /learn/guides, PATCH /learn/guides/:id, PATCH /learn/playbook (AdminKeyGuard)",
+      "reason": "these DO have an operator job \u2014 they are the only pre-existing operator endpoints \u2014 but their shared-secret guard cannot be used from a browser. Re-exposed as EXTEND in C1; originals left untouched"
+    }
+  ],
+  "operatorNeedsWithNoBackendEndpoint": {
+    "$comment": "This is the admin API work. Everything here is additive: new admin-namespace routes, new tables, new nullable columns, new indexes. Nothing existing is dropped, renamed, retyped or widened.",
+    "newTables": [
+      {
+        "table": "AdminUser",
+        "for": "A1, A3",
+        "notes": "own credentials, own token secret/iss/aud, role enum, soft-disable"
+      },
+      {
+        "table": "AdminRefreshToken",
+        "for": "A1"
+      },
+      {
+        "table": "AuditLog",
+        "for": "every mutating admin action",
+        "columns": "adminId, action, entityType, entityId, before/after Json, reason, ip, createdAt. Append-only. Never stores raw BVN/NIN/account numbers."
+      },
+      {
+        "table": "RefundRecord",
+        "for": "F5",
+        "columns": "source, sourceId, amount, providerRefundRef, settledAt, adminId, note"
+      },
+      {
+        "table": "PayoutRun + PayoutLine",
+        "for": "F4",
+        "priority": "p1",
+        "notes": "records an out-of-band batch settlement. NOT a wallet, NOT a balance, no user-facing surface."
+      },
+      {
+        "table": "SubscriptionCharge",
+        "for": "G12/F3",
+        "priority": "p0-blocked",
+        "notes": "requires writing from the existing subscribe/upgrade/verify paths \u2014 an APP-SURFACE change, human ruling required before any agent touches it"
+      },
+      {
+        "table": "NotifyRequest",
+        "for": "G18",
+        "priority": "p2-blocked",
+        "notes": "only if the owner keeps the notify-me control"
+      }
+    ],
+    "newNullableColumns": [
+      {
+        "on": "ContentPiece",
+        "columns": [
+          "moderationReason",
+          "moderatedAt",
+          "moderatedByAdminId"
+        ],
+        "for": "M2"
+      },
+      {
+        "on": "DmReport",
+        "columns": [
+          "resolvedAt",
+          "resolvedByAdminId",
+          "outcome",
+          "note"
+        ],
+        "for": "M3"
+      },
+      {
+        "on": "CommunityMessage",
+        "columns": [
+          "removedAt",
+          "removedByAdminId",
+          "removalReason"
+        ],
+        "for": "M5"
+      },
+      {
+        "on": "Comment",
+        "columns": [
+          "removedAt",
+          "removedByAdminId",
+          "removalReason"
+        ],
+        "for": "C3"
+      },
+      {
+        "on": "DataExportRequest",
+        "columns": [
+          "fulfilledAt",
+          "artifactKey",
+          "fulfilledByAdminId"
+        ],
+        "for": "S3"
+      },
+      {
+        "on": "MentorRequest",
+        "columns": [
+          "decidedAt",
+          "decidedByAdminId",
+          "decisionNote"
+        ],
+        "for": "P3"
+      }
+    ],
+    "newIndexes": [
+      "ContentPiece(status, createdAt) \u2014 already exists, reused by M1",
+      "KycSubmission(status, submittedAt) \u2014 for the oldest-first queue",
+      "VerificationSubmission(status, submittedAt)",
+      "ServiceApplication(status), ServiceApplication(kind, status)",
+      "LegalRequest(status, updatedAt)",
+      "DmReport(createdAt)",
+      "BillPayment(status, createdAt) \u2014 already exists",
+      "UserProfile(handle) \u2014 already unique"
+    ],
+    "capabilitiesRequiredButNotYetPossible": [
+      {
+        "need": "Execute a refund at Flutterwave",
+        "state": "no refund adapter exists in the codebase",
+        "resolution": "F5 records out-of-band settlement honestly. A 'Refund now' button that calls nothing would be a dead control \u2014 do not build one."
+      },
+      {
+        "need": "Charge a subscription renewal off-session",
+        "state": "flutterwaveCustomerRef exists but nothing populates it; the scheduler flips to past_due instead of charging",
+        "resolution": "out of admin scope; F3 shows the state truthfully and flags the gap"
+      },
+      {
+        "need": "Read a user's name/email/phone",
+        "state": "no local user table \u2014 identity lives in WAWU ID",
+        "resolution": "S1/S2 either show only locally-held fields, or read WAWU ID through the existing client. Never mirror identity locally."
+      }
+    ]
+  },
+  "refusedOrProtected": [
+    {
+      "item": "Any wallet, cash balance, available-balance, withdrawal or cash-out surface",
+      "verdict": "REFUSED",
+      "authority": "01_SPEC.md \u00a76 + \u00a73, CLAUDE.md non-negotiable, docs/02:109 ('no endpoint, no admin action, no support-tool script')",
+      "note": "F4 is a payout-readiness REPORT for an operator, deliberately not a balance and not user-visible. If it drifts toward a balance, it has become the forbidden thing."
+    },
+    {
+      "item": "Converting WAWU Credits to naira, refunding credits, or displaying a credit balance as a naira value",
+      "verdict": "REFUSED",
+      "authority": "01_SPEC.md \u00a73 rules 1\u20133; doc 02:109 names admin actions and support scripts explicitly"
+    },
+    {
+      "item": "An AML/CFT compliance dashboard",
+      "verdict": "REFUSED",
+      "authority": "01_SPEC.md \u00a76 \u2014 cut, because that obligation belongs to licensed entities holding customer funds and WAWU does not"
+    },
+    {
+      "item": "One combined 'verification' screen or status covering both KYC and the trust-tier ladder",
+      "verdict": "REFUSED",
+      "authority": "CLAUDE.md non-negotiable; post-mortem class K \u2014 already a shipped bug"
+    },
+    {
+      "item": "Editing WAWU ID identity data, verificationTier locally, or any change to WawuAuthGuard / SSO validation",
+      "verdict": "PROTECTED",
+      "authority": "skill law 1 + law 5; conventions \u00a7 Auth model (WAWU ID owns the tier, elevate via WawuIdClient only)"
+    },
+    {
+      "item": "Widening any existing app response DTO (e.g. adding fields to GET /users/:id/public-profile)",
+      "verdict": "PROTECTED",
+      "authority": "skill law 3 \u2014 admin gets its own DTOs. Note: dmPrice/dmEnabled genuinely SHOULD be on the public profile (post-mortem class B) but that is an APP fix on the app's branch, not something the admin pipeline widens."
+    },
+    {
+      "item": "Hard-deleting a ContentPiece, a Purchase, a CreditSpend, or any transaction row",
+      "verdict": "REFUSED",
+      "authority": "Purchase.contentId is onDelete:Restrict specifically so a sold piece cannot be deleted out from under a buyer's receipt (schema comment). Unpublish, never delete."
+    },
+    {
+      "item": "Altering a signed legal contract (contractText / contractSignedAt / contractSignedIp)",
+      "verdict": "REFUSED",
+      "authority": "schema comment \u2014 it is a liability record kept verbatim precisely so a template change cannot rewrite it"
+    },
+    {
+      "item": "A 'mark as paid' control that grants an entitlement without re-verifying at Flutterwave",
+      "verdict": "REFUSED",
+      "authority": "PendingCharge.expectedAmount exists to stop a \u20a61 payment buying an \u20a618,999 tier; a manual grant re-opens exactly that hole"
+    },
+    {
+      "item": "Manually setting an EVG score",
+      "verdict": "REFUSED",
+      "authority": "decisions.json d4 \u2014 a metric with no real writer must not gain a fake one"
+    },
+    {
+      "item": "Normalising stored identity values (handles, wawuUserIds) to a canon",
+      "verdict": "REFUSED",
+      "authority": "skill law 8 \u2014 tolerant reads, never a normalising migration on live data"
+    },
+    {
+      "item": "A mass-marketing / campaign broadcast sender",
+      "verdict": "OUT OF SCOPE",
+      "authority": "NotificationSettings.promotions defaults to false; C4 is decision-notifications only"
+    },
+    {
+      "item": "Rebuilding WAWUBasket / WAWUBeauty commerce, or any jobs / gigs / events / tickets surface",
+      "verdict": "REFUSED",
+      "authority": "CLAUDE.md non-negotiables; 00_PLATFORM_MAP.md \u00a71"
+    }
+  ],
+  "productInvariantsToEnforceMechanically": {
+    "$comment": "Post-mortem class I: the banned-word sweep was done by hand and the words came back the same session. These belong in an executable check in the dashboard repo (scripts/check-copy.mjs already exists in WAWU-Web \u2014 mirror it).",
+    "rules": [
+      "Currency: \u20a6 only. Fail the build on '$', 'USD', 'NGN ' rendered as a symbol.",
+      "Banned in any rendered copy: 'wallet', 'balance' (as cash), 'cash out', 'withdraw', 'top up' (as cash), 'gigs', 'jobs', 'event ticket'.",
+      "Credits: any element rendering a credit value must not be adjacent to a \u20a6 formatter. Grep for a naira formatter applied to a credits field.",
+      "Splits: only 0.15 / 0.10 and only the strings '85/15' and '90/10' may appear as rates.",
+      "Tier prices: only \u20a65,999 and \u20a618,999.",
+      "Credit packs: only \u20a6500/50, \u20a61,000/120, \u20a62,000/300.",
+      "'KYC' and 'verification tier' vocabulary must not co-occur in one screen component.",
+      "No 'liveness', 'Face ID', 'DRM', 'screenshot block' anywhere."
+    ]
+  },
+  "postMortemCoverageMap": [
+    {
+      "class": "A \u2014 sold but not built",
+      "wouldHaveBeenCaughtBy": "M1 (zero pending\u2192live transitions ever), F3 (entitlement vs gate mismatch), M6 (private rooms under non-Pro hosts)"
+    },
+    {
+      "class": "B \u2014 cross-actor data flow",
+      "wouldHaveBeenCaughtBy": "S2 (dmEnabled/dmPrice shown from the real column beside the buyer-visible state, on one page)"
+    },
+    {
+      "class": "C \u2014 lifecycle completeness",
+      "wouldHaveBeenCaughtBy": "S2 gates panel (accountType vs subscriptionPaid vs kycStatus disagreement, made visible), M4, F5"
+    },
+    {
+      "class": "D \u2014 third-party integration",
+      "partly": "F2/F6 surface failed provider calls as rows an operator sees rather than as a 400 the user eats"
+    },
+    {
+      "class": "E \u2014 displayed metrics with no provenance",
+      "wouldHaveBeenCaughtBy": "the derivation itself \u2014 G10, G11, G19 are all 'no writer' findings; deliberately NOT given screens"
+    },
+    {
+      "class": "F \u2014 forks and duplicated truth",
+      "wouldHaveBeenCaughtBy": "A1 replacing two byte-identical admin guards; law 13 forbidding a second definition of any number"
+    },
+    {
+      "class": "J \u2014 test-suite / ratchet health",
+      "wouldHaveBeenCaughtBy": "G20 (slotsUsed never decrements) \u2014 the same ratchet the test teardown had"
+    },
+    {
+      "class": "K \u2014 naming collisions",
+      "enforcedBy": "the K1/K2 vs K3/K4 separation and the copy invariant above"
+    }
+  ],
+  "buildOrder": {
+    "wave0": [
+      "A1 admin auth",
+      "A2 audit log"
+    ],
+    "wave1_p0_reviewQueues": [
+      "K1",
+      "K2",
+      "K3",
+      "K4",
+      "M1",
+      "M2"
+    ],
+    "wave2_p0_money": [
+      "F1",
+      "F2",
+      "F3",
+      "F5",
+      "F6",
+      "F4"
+    ],
+    "wave3_p0_support_and_partner": [
+      "S1",
+      "S2",
+      "M3",
+      "P1",
+      "P2"
+    ],
+    "wave4_p1": [
+      "A3",
+      "A4",
+      "M4",
+      "M5",
+      "M6",
+      "F7",
+      "S3",
+      "P3",
+      "P4",
+      "P5",
+      "C1",
+      "C2"
+    ],
+    "wave5_p2": [
+      "M7",
+      "C3",
+      "C4"
+    ],
+    "blockedPendingHumanRuling": [
+      "G12 SubscriptionCharge (touches app payment paths)",
+      "G20 slot restoration policy",
+      "G18 notify-me table or control removal",
+      "G4 real Flutterwave webhook",
+      "G11 EVG: complete or cut"
+    ]
+  },
+  "counts": {
+    "screens": 34,
+    "p0": 19,
+    "p1": 12,
+    "p2": 3,
+    "gaps": 22,
+    "criticalGaps": 9,
+    "refusals": 13
+  }
+}

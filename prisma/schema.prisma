@@ -801,7 +801,7 @@ model CourseEnrollment {
 /// `chapters` / `readingSections` (registry: "object[]") kept as Json — the
 /// single global playbook's content tree has no cross-row filter/query need.
 model Playbook {
-  id              String @id @default(uuid())
+  id              String    @id @default(uuid())
   title           String
   pages           Int
   format          String
@@ -1050,4 +1050,57 @@ model LegalRequest {
   @@index([wawuUserId])
   @@index([status])
   @@index([serviceCode])
+}
+
+// -----------------------------------------------------------------------------
+// Admin identity (admin-surface-extension Phase 5) — ADDITIVE ONLY
+//
+// This is the first admin identity this backend has ever had. It is
+// deliberately a table of its own rather than a role on any existing row:
+// user identity lives in WAWU ID (SSO) and this backend has no local User
+// table at all, so there is nothing to hang an `isAdmin` flag off even if we
+// wanted to — and we do not. An operator account and a customer account are
+// different things with different lifecycles, different credentials and
+// different blast radius.
+//
+// Nothing above this line is touched by the migration that introduces these
+// two enums and this table.
+// -----------------------------------------------------------------------------
+
+/// Operator sub-roles. See src/admin/auth/admin-auth.module.ts for the
+/// capability matrix these map to — the matrix is the contract every later
+/// admin resource gates against.
+enum AdminRole {
+  superadmin
+  reviewer
+  support
+  finance
+}
+
+enum AdminUserStatus {
+  active
+  suspended
+}
+
+model AdminUser {
+  id           String          @id @default(uuid())
+  email        String          @unique
+  /// argon2id. Never selected into any response — every read goes through
+  /// toAdminUserView() in src/admin/auth/admin-user-view.type.ts.
+  passwordHash String
+  name         String
+  role         AdminRole
+  status       AdminUserStatus @default(active)
+
+  /// Bumped to revoke every outstanding token for this admin without a
+  /// session table: the value is stamped into both the access and the
+  /// refresh token and re-checked on every request.
+  tokenVersion Int @default(0)
+
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([role])
+  @@index([status])
 }
