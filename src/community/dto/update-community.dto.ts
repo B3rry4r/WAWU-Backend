@@ -2,6 +2,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  IsUrl,
   Matches,
   MaxLength,
   MinLength,
@@ -40,4 +41,24 @@ export class UpdateCommunityDto {
     message: 'description must contain at least one non-space character',
   })
   description?: string;
+
+  /**
+   * The room's cover image. `null` REMOVES it — @IsOptional() in
+   * class-validator admits null as well as undefined, so a host who picked a
+   * picture they no longer want has a way back to the placeholder. Omitting
+   * the field leaves the current image alone (PATCH semantics), which is why
+   * the service branches on `!== undefined` rather than on truthiness.
+   */
+  @IsOptional()
+  @IsUrl(
+    // `require_tld: false` mirrors CreateContentDto's asset URLs: the storage
+    // endpoint in development is a hostname with no dot in it. On its own
+    // that also accepts a bare word like "not-a-url" as a hostname, so the
+    // scheme is required and restricted — an `imageUrl` is a thing a browser
+    // will be pointed at, and `javascript:` is not one of the two answers.
+    { require_tld: false, require_protocol: true, protocols: ['http', 'https'] },
+    { message: 'imageUrl must be a full link' },
+  )
+  @MaxLength(500)
+  imageUrl?: string | null;
 }

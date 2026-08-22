@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   HttpException,
   HttpStatus,
   Injectable,
@@ -23,6 +24,13 @@ const TRIAL_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
  * schema default. Written explicitly onto the row (rather than left to the
  * default) so the row, the balance debit and the CreditSpend ledger row all
  * agree on one number — they were previously free to diverge.
+ *
+ * ONE PRICE, WHATEVER IS IN THE MESSAGE. A message carrying an image costs
+ * the same 1 credit as a message carrying text, and a message carrying both
+ * still costs 1. docs/01_SPEC.md defines a credit as "1 credit = 1 message";
+ * pricing by content type would make a member's balance unpredictable
+ * ("how many photos is 48 credits?") and would invent a rate the spec does
+ * not contain. The count stays the count.
  */
 const MESSAGE_COST_IN_CREDITS = DEFAULT_CREDITS_SPENT;
 
@@ -172,6 +180,18 @@ export class CommunityMessageService {
     senderWawuId: string,
     dto: CreateCommunityMessageDto,
   ): Promise<CommunityMessage> {
+    // Text, an image, or both — never neither. Checked before the community
+    // is even looked up, and long before a credit is debited: an empty
+    // message must never cost anybody anything. (The DTO cannot express this
+    // either/or per field; the table's CHECK constraint backs it up.)
+    const text = dto.text?.trim() ?? null;
+    const imageUrl = dto.imageUrl ?? null;
+    if (!text && !imageUrl) {
+      throw new BadRequestException(
+        'A message needs something in it — write something, attach a photo, or both.',
+      );
+    }
+
     const community = await this.assertCommunityExists(communityId);
     await this.assertMember(communityId, senderWawuId, community.hostWawuId);
 
@@ -204,7 +224,8 @@ export class CommunityMessageService {
         data: {
           communityId,
           senderWawuId,
-          text: dto.text,
+          text,
+          imageUrl,
           costInCredits: cost,
         },
       });

@@ -10,6 +10,11 @@ export const UPLOAD_FOLDERS = [
   'kyc/id-document',
   'service-application/document',
   'avatars',
+  // A community's own cover image, and a photo posted into a room. Two
+  // destinations, not one: the cover is written by the host alone, a message
+  // photo by any member, so they never share a prefix.
+  'community/image',
+  'community/message',
 ] as const;
 
 export type UploadFolder = (typeof UPLOAD_FOLDERS)[number];
@@ -50,6 +55,12 @@ export const FOLDER_CONTENT_TYPES: Record<UploadFolder, readonly string[]> = {
   'kyc/id-document': [...IMAGE, ...DOC],
   'service-application/document': [...IMAGE, ...DOC],
   avatars: IMAGE,
+  // Images only, deliberately. A community image is rendered in place by
+  // every client (serveAs() returns inline: true for image/*), which is
+  // exactly the case the allowlist above exists to keep documents and
+  // markup out of.
+  'community/image': IMAGE,
+  'community/message': IMAGE,
 };
 
 /**

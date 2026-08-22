@@ -475,6 +475,11 @@ model Community {
   description String
   hostWawuId  String
   kind        CommunityKind
+  /// Room cover image — the URL returned by POST /uploads/presign for the
+  /// `community/image` folder. Nullable: every community that existed before
+  /// this column has none, and a host is never forced to pick one. Clients
+  /// keep their placeholder tile as the fallback.
+  imageUrl    String?
 
   memberships  CommunityMembership[]
   messages     CommunityMessage[]
@@ -490,19 +495,35 @@ model CommunityMembership {
   communityId String
   community   Community        @relation(fields: [communityId], references: [id], onDelete: Cascade)
   status      MembershipStatus @default(joined)
+  /// When the row was created, i.e. when the user asked to join. Distinct from
+  /// `joinedAt`, which stays null until a private community's host approves.
+  /// The host's review queue (GET /communities/:id/requests) is ordered by
+  /// this, so "who has been waiting longest" is answerable; without it a
+  /// pending row carried no timestamp at all and the queue could only be
+  /// ordered by a random uuid.
+  requestedAt DateTime         @default(now())
   joinedAt    DateTime?
 
   @@unique([userWawuId, communityId])
   @@index([userWawuId])
   @@index([communityId])
+  @@index([communityId, status])
 }
 
+/// A message is TEXT, an IMAGE, or both — never neither. `text` was
+/// NOT NULL, so a member could not post a photo at all on a platform whose
+/// categories are fashion, food, crafts, art and beauty. Both columns are
+/// nullable so either half can be absent; the "not both null" invariant is
+/// enforced in CommunityMessageService.create and again by the
+/// `CommunityMessage_text_or_image` CHECK constraint in the migration.
 model CommunityMessage {
   id            String    @id @default(uuid())
   communityId   String
   community     Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
   senderWawuId  String
-  text          String
+  text          String?
+  /// Photo posted in the room — a `community/message` presigned upload URL.
+  imageUrl      String?
   costInCredits Int       @default(1)
   sentAt        DateTime  @default(now())
 

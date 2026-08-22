@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -8,6 +9,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type {
   Community,
+  CommunityJoinRequest,
   CommunityMembership,
   CommunityResponse,
 } from '../common/types';
@@ -23,7 +25,7 @@ import type { UpdateCommunityDto } from './dto/update-community.dto';
  * Plus the hosting endpoints, which the registry never carried and which
  * nothing in this backend could do until now:
  *   POST  /communities       creator-only — open a community you host
- *   PATCH /communities/:id   host-only    — edit name/description
+ *   PATCH /communities/:id   host-only    — edit name/description/image
  * Hosting is a SOLD subscription feature (docs/01_SPEC.md — Basic: "cannot
  * open/host private communities"; Pro: "Can open/host private communities",
  * i.e. Basic is sold OPEN-community hosting and Pro adds private), but no
@@ -172,6 +174,10 @@ export class CommunityService {
         description: dto.description.trim(),
         hostWawuId,
         kind: dto.kind,
+        // Optional. A community with no image is normal — every one that
+        // existed before the column has none — and clients keep their
+        // placeholder tile for exactly that case.
+        imageUrl: dto.imageUrl ?? null,
       },
     });
 
@@ -179,9 +185,10 @@ export class CommunityService {
   }
 
   /**
-   * PATCH /communities/:id — the host edits the community's name and/or
-   * description. Only the host: a creator account is necessary but nowhere
-   * near sufficient, or any creator could rewrite anyone's community.
+   * PATCH /communities/:id — the host edits the community's name,
+   * description and/or image. Only the host: a creator account is necessary
+   * but nowhere near sufficient, or any creator could rewrite anyone's
+   * community.
    *
    * `kind` is not editable (see UpdateCommunityDto), and there is
    * deliberately no DELETE. Community rows cascade onto CommunityMembership,
@@ -198,9 +205,13 @@ export class CommunityService {
     editorWawuId: string,
     dto: UpdateCommunityDto,
   ): Promise<CommunityResponse> {
-    if (dto.name === undefined && dto.description === undefined) {
+    if (
+      dto.name === undefined &&
+      dto.description === undefined &&
+      dto.imageUrl === undefined
+    ) {
       throw new BadRequestException(
-        'Nothing to update — send a name and/or a description.',
+        'Nothing to update — send a name, a description and/or an image.',
       );
     }
 
@@ -224,6 +235,9 @@ export class CommunityService {
         ...(dto.description !== undefined
           ? { description: dto.description.trim() }
           : {}),
+        // `null` clears the image back to the placeholder; an omitted field
+        // leaves whatever is there. See UpdateCommunityDto.imageUrl.
+        ...(dto.imageUrl !== undefined ? { imageUrl: dto.imageUrl } : {}),
       },
     });
 
@@ -234,9 +248,13 @@ export class CommunityService {
    * POST /communities/:id/join. Idempotent (task brief, judgment call):
    * re-POSTing to a community the caller already has a membership row for
    * (any status — `joined` or `pending`) is a no-op that simply returns the
-   * existing row unchanged — it never flips a `pending` row to `joined`
-   * (that transition belongs to whatever approves a private community's
-   * membership request, out of scope here) and never errors. Only a
+   * existing row unchanged — it never flips a `pending` row to `joined`.
+   * That transition is the HOST's to make, and it now has an endpoint:
+   * `POST /communities/:id/requests/:userWawuId/approve` (see
+   * approveJoinRequest). Until it existed, `pending` was a dead end —
+   * nothing anywhere in this codebase wrote `'joined'` except the open-
+   * community branch below, so a private community could be requested but
+   * never entered. Only a
    * genuinely *new* membership decides its initial status from the
    * community's `kind`:
    *   - open    -> status: joined,  joinedAt: now
@@ -291,5 +309,258 @@ export class CommunityService {
             }
           : { userWawuId, communityId: id, status: 'pending', joinedAt: null },
     });
+  }
+
+  /**
+   * ---------------------------------------------------------------------
+   * The host's side of a private community.
+   * ---------------------------------------------------------------------
+   *
+   * `POST /communities/:id/join` writes `status: 'pending'` for a private
+   * community and nothing ever flipped it. `CommunityMessage.assertMember`
+   * requires `status === 'joined'`, so a pending member could neither read
+   * nor post: a private community was a room with a doorbell and no door.
+   * Private hosting is the Pro tier's headline differentiator (WAWU-Web
+   * docs/01_SPEC.md § tiers) and is advertised on the pricing card, so
+   * creators were being charged extra for a room nobody could be admitted
+   * to. These four methods are the other half of the hosting endpoints.
+   *
+   * HOST-ONLY, enforced HERE, not only in the guard. CreatorAccountGuard on
+   * the controller proves "creator account"; it says nothing about WHICH
+   * creator, and without this check any creator could admit people into
+   * anyone's private community. Same guard-proves-role /
+   * service-proves-ownership split as update() above, and the message shape
+   * matches its precedent ("Only the community host can edit this
+   * community.").
+   */
+  private async assertHost(
+    id: string,
+    actorWawuId: string,
+    action: string,
+  ): Promise<{ id: string; hostWawuId: string }> {
+    const community = await this.prisma.community.findUnique({
+      where: { id },
+      select: { id: true, hostWawuId: true },
+    });
+    if (!community) {
+      throw new NotFoundException('Community not found');
+    }
+    if (community.hostWawuId !== actorWawuId) {
+      throw new ForbiddenException(
+        `Only the community host can ${action} this community.`,
+      );
+    }
+    return community;
+  }
+
+  /**
+   * GET /communities/:id/requests — the review queue.
+   *
+   * Pending rows only. A `joined` row is not a request, and this list is
+   * what the host acts on; mixing settled members into it is how a host
+   * ends up "approving" someone who is already in.
+   *
+   * Ordered oldest-request-first on the `requestedAt` column this feature
+   * added (see prisma/migrations/20260821010000_community_join_requests) —
+   * a queue that cannot answer "who has been waiting longest" is not a
+   * queue, and before that column a pending row carried no timestamp at all
+   * (`joinedAt` is null precisely while pending), leaving only a random
+   * uuid to sort on.
+   *
+   * Each row carries the requester's `UserProfile.handle` so the host is
+   * deciding about a person rather than a UUID. It is genuinely nullable —
+   * handles are optional and a requester may have no profile row — and is
+   * returned as null rather than being back-filled with anything invented.
+   *
+   * Open communities are not an error here: they simply never have pending
+   * rows, so the host of one gets an empty queue.
+   */
+  async listJoinRequests(
+    id: string,
+    hostWawuId: string,
+    page: number,
+    perPage: number,
+  ): Promise<Paginated<CommunityJoinRequest>> {
+    await this.assertHost(id, hostWawuId, 'review join requests for');
+
+    const where = { communityId: id, status: 'pending' as const };
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.communityMembership.findMany({
+        where,
+        orderBy: { requestedAt: 'asc' },
+        skip: (page - 1) * perPage,
+        take: perPage,
+      }),
+      this.prisma.communityMembership.count({ where }),
+    ]);
+
+    const profiles =
+      items.length === 0
+        ? []
+        : await this.prisma.userProfile.findMany({
+            where: { wawuUserId: { in: items.map((m) => m.userWawuId) } },
+            select: { wawuUserId: true, handle: true },
+          });
+    const handleFor = new Map(
+      profiles.map((p) => [p.wawuUserId, p.handle] as const),
+    );
+
+    return {
+      items: items.map((m) => ({
+        ...m,
+        handle: handleFor.get(m.userWawuId) ?? null,
+      })),
+      currentPage: page,
+      perPage,
+      total,
+    };
+  }
+
+  /**
+   * POST /communities/:id/requests/:userWawuId/approve — pending -> joined.
+   *
+   * Sets `joinedAt` at the moment of approval, not at the moment of
+   * request: `joinedAt` is what "member since" reads from, and a private
+   * member was not a member while they were waiting.
+   *
+   * Approving an ALREADY-JOINED row is a deliberate no-op that returns the
+   * row untouched rather than erroring or re-stamping `joinedAt`. Two host
+   * devices, or one host double-tapping a stale queue, must not turn into a
+   * 409 the host cannot act on — and re-stamping would quietly rewrite that
+   * member's join date. Same idempotency stance as join()/leave() either
+   * side of it.
+   *
+   * A user with no membership row at all is a 404: there is nothing to
+   * approve, and inventing a membership from an approve call would let a
+   * host add people who never asked.
+   */
+  async approveJoinRequest(
+    id: string,
+    hostWawuId: string,
+    userWawuId: string,
+  ): Promise<CommunityMembership> {
+    await this.assertHost(id, hostWawuId, 'review join requests for');
+
+    const membership = await this.prisma.communityMembership.findUnique({
+      where: { userWawuId_communityId: { userWawuId, communityId: id } },
+    });
+    if (!membership) {
+      throw new NotFoundException(
+        'No join request from this user for this community.',
+      );
+    }
+    if (membership.status === 'joined') {
+      return membership;
+    }
+
+    return this.prisma.communityMembership.update({
+      where: { id: membership.id },
+      data: { status: 'joined', joinedAt: new Date() },
+    });
+  }
+
+  /**
+   * DELETE /communities/:id/requests/:userWawuId — decline.
+   *
+   * DECLINE DELETES THE PENDING ROW. The alternative was a third
+   * `MembershipStatus` value (`declined`, plus a migration), and this is
+   * deliberately not that. Reasons, in order of weight:
+   *
+   *  1. Absence already means exactly one thing in this schema. `leave()`
+   *     (DELETE /communities/:id/join) deletes the row, and
+   *     `assertMember` treats a missing row and a non-`joined` row
+   *     identically. A `declined` row would be a fourth thing a
+   *     CommunityMembership row can be — one that is not a membership at
+   *     all — and every existing query that reasons about "is this person
+   *     in this community" would have to learn about it.
+   *  2. A `declined` row is a BLOCK LIST, and this product has not
+   *     specified one. Persisting the refusal only matters if it stops the
+   *     user re-asking, i.e. it is a permanent ban with no expiry, no
+   *     unblock endpoint and no UI — a product decision nobody made. WAWU
+   *     already has a real, separate blocking feature (BlockedAccount) if
+   *     that is ever wanted; smuggling a weaker version of it into an enum
+   *     value is not the way to get it.
+   *  3. Re-requesting after a decline is the established real-world
+   *     behaviour for exactly this interaction (a declined follow request
+   *     on a private account can be sent again), and the cost is bounded:
+   *     the requester learns nothing (no notification exists either way)
+   *     and the host declines again.
+   *
+   * The trade this accepts, stated plainly: a declined user can immediately
+   * request again, and the host cannot see that they were declined before.
+   *
+   * A row that is already `joined` is REFUSED (409), not deleted. Declines
+   * are issued from a queue that may be stale — the host may have approved
+   * from another device in between — and silently converting "decline this
+   * request" into "eject this member" is a destructive misread of the
+   * host's intent. Removing a settled member is its own explicit endpoint
+   * (removeMember).
+   *
+   * Idempotent when there is nothing to decline: no row -> success, no
+   * error, mirroring leave(). Declining twice from a stale queue is not a
+   * failure the host can do anything about.
+   */
+  async declineJoinRequest(
+    id: string,
+    hostWawuId: string,
+    userWawuId: string,
+  ): Promise<{ declined: true }> {
+    await this.assertHost(id, hostWawuId, 'review join requests for');
+
+    const membership = await this.prisma.communityMembership.findUnique({
+      where: { userWawuId_communityId: { userWawuId, communityId: id } },
+      select: { id: true, status: true },
+    });
+    if (membership?.status === 'joined') {
+      throw new ConflictException(
+        'That request was already approved — this person is a member. Remove them instead.',
+      );
+    }
+    if (membership) {
+      await this.prisma.communityMembership.delete({
+        where: { id: membership.id },
+      });
+    }
+    return { declined: true };
+  }
+
+  /**
+   * DELETE /communities/:id/members/:userWawuId — the host removes a member.
+   *
+   * Implemented because approval without removal is a one-way door: a host
+   * who admits the wrong person, or someone who turns the room toxic, had
+   * no way back — and unlike declining, this is not a hypothetical, it is
+   * the direct consequence of the approve endpoint above existing. It is
+   * the same delete the member's own `leave()` already performs, so it
+   * introduces no new state: removal returns them to "not a member", and
+   * they may request again exactly as a declined user may.
+   *
+   * Deliberately NOT here: banning, muting, or removal reasons. Those are
+   * moderation features with their own product surface; none is invented.
+   *
+   * The host cannot remove themselves — they hold access via
+   * `Community.hostWawuId`, not a membership row (host-implies-member, see
+   * create()), so the call could only ever be a confusing no-op. Refused
+   * with an explanation instead.
+   *
+   * Idempotent (`deleteMany`): removing someone already gone succeeds.
+   */
+  async removeMember(
+    id: string,
+    hostWawuId: string,
+    userWawuId: string,
+  ): Promise<{ removed: true }> {
+    await this.assertHost(id, hostWawuId, 'remove members from');
+
+    if (userWawuId === hostWawuId) {
+      throw new BadRequestException(
+        'The host cannot be removed from their own community.',
+      );
+    }
+
+    await this.prisma.communityMembership.deleteMany({
+      where: { communityId: id, userWawuId },
+    });
+    return { removed: true };
   }
 }

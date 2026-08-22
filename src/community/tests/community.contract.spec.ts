@@ -457,6 +457,7 @@ describe('Community (contract)', () => {
           'Fixture for community.contract.spec.ts — memberCount/messagesToday math.',
         hostWawuId: USER_CREATOR_PRO,
         kind: 'open',
+        imageUrl: null,
         memberCount: 2,
         messagesToday: 2,
       });
@@ -646,6 +647,9 @@ describe('Community (contract)', () => {
         description: 'Opened by a paid Basic creator with KYC pending.',
         hostWawuId: ownBasicCreatorSub,
         kind: 'open',
+        // No image was sent, so the room has none and the client falls back
+        // to its placeholder tile — see community-image.contract.spec.ts.
+        imageUrl: null,
         // Host-implies-member is this codebase's existing convention
         // (CommunityMessageService.assertMember short-circuits on the host),
         // so no CommunityMembership row is written for the host and the
@@ -823,7 +827,7 @@ describe('Community (contract)', () => {
         .expect(400);
 
       expect(res.body.message).toBe(
-        'Nothing to update — send a name and/or a description.',
+        'Nothing to update — send a name, a description and/or an image.',
       );
     });
 

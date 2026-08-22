@@ -1,7 +1,9 @@
 import {
   IsIn,
   IsNotEmpty,
+  IsOptional,
   IsString,
+  IsUrl,
   Matches,
   MaxLength,
   MinLength,
@@ -53,4 +55,23 @@ export class CreateCommunityDto {
 
   @IsIn(COMMUNITY_KINDS)
   kind: (typeof COMMUNITY_KINDS)[number];
+
+  /**
+   * The room's cover image, as the `fileUrl` handed back by
+   * `POST /uploads/presign` for the `community/image` folder. Optional — a
+   * community without one is normal and the client falls back to its
+   * placeholder tile, so hosting is never blocked on finding a picture.
+   */
+  @IsOptional()
+  @IsUrl(
+    // `require_tld: false` mirrors CreateContentDto's asset URLs: the storage
+    // endpoint in development is a hostname with no dot in it. On its own
+    // that also accepts a bare word like "not-a-url" as a hostname, so the
+    // scheme is required and restricted — an `imageUrl` is a thing a browser
+    // will be pointed at, and `javascript:` is not one of the two answers.
+    { require_tld: false, require_protocol: true, protocols: ['http', 'https'] },
+    { message: 'imageUrl must be a full link' },
+  )
+  @MaxLength(500)
+  imageUrl?: string;
 }
