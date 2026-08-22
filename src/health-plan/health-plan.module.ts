@@ -4,10 +4,11 @@ import { FlutterwaveCheckoutVerifier } from '../common/flutterwave/checkout-veri
 import { WellaHealthClient } from './wellahealth.client';
 import { HealthPlanService } from './health-plan.service';
 import { HealthPlanController } from './health-plan.controller';
+import { HealthPlanOpsController } from './health-plan-ops.controller';
 
 @Module({
   imports: [PrismaModule],
-  controllers: [HealthPlanController],
+  controllers: [HealthPlanController, HealthPlanOpsController],
   providers: [HealthPlanService, WellaHealthClient, FlutterwaveCheckoutVerifier],
   exports: [HealthPlanService],
 })

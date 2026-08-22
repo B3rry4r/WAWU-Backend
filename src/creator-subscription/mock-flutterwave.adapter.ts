@@ -30,6 +30,13 @@ export const MOCK_RETRY_FAILURE_CUSTOMER_REF = 'mock-flw-customer-retry-fails';
 export const MOCK_PUBLIC_KEY = 'FLWPUBK_TEST-mock0000000000000000000000-X';
 /** Deterministic fake — every mock-verified card charge "ends in" this. */
 const MOCK_CARD_LAST4 = '4242';
+/**
+ * Stands in for Flutterwave's reusable card token (`data.card.token`, real
+ * shape `flw-t1nf-<hash>-mock`). The service persists this as
+ * `CreatorSubscription.flutterwaveCustomerRef`; retry-payment charges it.
+ */
+export const MOCK_CARD_TOKEN = 'flw-t1nf-mock0000000000000000000000-m03k';
+const MOCK_CUSTOMER_EMAIL = 'mock-cardholder@test.wawu.dev';
 
 @Injectable()
 export class MockFlutterwaveAdapter implements FlutterwaveClient {
@@ -77,6 +84,8 @@ export class MockFlutterwaveAdapter implements FlutterwaveClient {
       txRef: params.txRef,
       transactionId: params.transactionId,
       cardLast4: MOCK_CARD_LAST4,
+      cardToken: MOCK_CARD_TOKEN,
+      customerEmail: MOCK_CUSTOMER_EMAIL,
     };
   }
 

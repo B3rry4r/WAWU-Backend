@@ -39,3 +39,14 @@ export class VerifyHealthSubscriptionDto {
   @MaxLength(120)
   transactionId!: string;
 }
+
+/**
+ * Operator action: record a refund already paid back by hand.
+ *
+ * Same contract as WAWUPay's — see bill.dto.ts. Nothing here moves money;
+ * `refundReference` is the reference of the refund a human actually sent, and
+ * `refunded` is never written without it.
+ */
+export class RecordCareRefundDto {
+  @IsString() @IsNotEmpty() @MaxLength(120) refundReference!: string;
+}

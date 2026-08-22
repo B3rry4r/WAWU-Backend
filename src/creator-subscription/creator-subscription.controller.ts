@@ -66,7 +66,12 @@ export class CreatorSubscriptionController {
   @Post('retry-payment')
   @UseGuards(CreatorAccountGuard)
   retryPayment(@CurrentUser() user: WawuJwtClaims) {
-    return this.creatorSubscriptionService.retryPayment(user.sub);
+    // Flutterwave's tokenized-charge API requires the cardholder email
+    // alongside the token. It is not stored on CreatorSubscription (no
+    // column, and this backend never keeps WAWU ID identity as its own
+    // source of truth — conventions.md § Auth model), so it comes straight
+    // off the verified access token on each retry.
+    return this.creatorSubscriptionService.retryPayment(user.sub, user.email);
   }
 
   @Delete()

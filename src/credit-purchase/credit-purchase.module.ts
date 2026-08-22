@@ -35,5 +35,7 @@ import { shouldUseMockFlutterwave } from '../common/flutterwave/require-payment-
       inject: [MockFlutterwaveAdapter, RealFlutterwaveAdapter],
     },
   ],
+  // Exported for PaymentWebhookModule (provider-driven credit settlement).
+  exports: [CreditPurchaseService],
 })
 export class CreditPurchaseModule {}

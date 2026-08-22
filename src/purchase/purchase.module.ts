@@ -5,6 +5,8 @@ import { FLUTTERWAVE_CLIENT } from './flutterwave-client.interface';
 import { RealFlutterwaveAdapter } from './real-flutterwave.adapter';
 import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';
 import { shouldUseMockFlutterwave } from '../common/flutterwave/require-payment-config';
+import { NotificationModule } from '../notification/notification.module';
+import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 
 /**
  * registry.json "Purchase" resource module. PrismaService comes from the
@@ -25,6 +27,7 @@ import { shouldUseMockFlutterwave } from '../common/flutterwave/require-payment-
  * inject the `FLUTTERWAVE_CLIENT` token, never either adapter directly.
  */
 @Module({
+  imports: [NotificationModule, BlockedAccountModule],
   controllers: [PurchaseController],
   providers: [
     PurchaseService,
@@ -42,5 +45,8 @@ import { shouldUseMockFlutterwave } from '../common/flutterwave/require-payment-
       inject: [MockFlutterwaveAdapter, RealFlutterwaveAdapter],
     },
   ],
+  // Exported so PaymentWebhookModule can settle a tip when the provider,
+  // not the browser, confirms the charge. No route or shape changed.
+  exports: [PurchaseService],
 })
 export class PurchaseModule {}

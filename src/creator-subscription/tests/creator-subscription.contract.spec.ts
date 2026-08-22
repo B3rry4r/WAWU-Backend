@@ -21,9 +21,11 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
 import { CreatorSubscriptionModule } from '../creator-subscription.module';
 import {
+  MOCK_CARD_TOKEN,
   MOCK_FAILURE_TRANSACTION_ID,
   MOCK_RETRY_FAILURE_CUSTOMER_REF,
 } from '../mock-flutterwave.adapter';
+import { uploadAllowanceFor } from '../../common/creator-tier-allowance';
 
 // Seeded WAWU IDs — mirror mock-wawu-id/server.js and prisma/seed.ts exactly
 // (see WAWU-Hub-API build task brief).
@@ -185,6 +187,8 @@ describe('CreatorSubscription (contract)', () => {
           renewalAttempts: originalBasicSub.renewalAttempts,
           cancelsAt: originalBasicSub.cancelsAt,
           cardLast4: originalBasicSub.cardLast4,
+          pendingTier: originalBasicSub.pendingTier,
+          tierChangesAt: originalBasicSub.tierChangesAt,
         },
       });
       await prisma.creatorSubscription.update({
@@ -199,6 +203,8 @@ describe('CreatorSubscription (contract)', () => {
           renewalAttempts: originalProSub.renewalAttempts,
           cancelsAt: originalProSub.cancelsAt,
           cardLast4: originalProSub.cardLast4,
+          pendingTier: originalProSub.pendingTier,
+          tierChangesAt: originalProSub.tierChangesAt,
         },
       });
       await prisma.creatorState.update({
@@ -213,6 +219,7 @@ describe('CreatorSubscription (contract)', () => {
         data: {
           tier: originalProState.tier,
           subscriptionPaid: originalProState.subscriptionPaid,
+          slotsUsed: originalProState.slotsUsed,
         },
       });
       await prisma.creatorSubscription.deleteMany({
@@ -609,17 +616,145 @@ describe('CreatorSubscription (contract)', () => {
       });
     });
 
-    it('returns the current (unchanged) row for an active Pro subscriber (200)', async () => {
+    it('schedules Basic for currentPeriodEnd and says so, without confiscating the paid term (200)', async () => {
+      const before = await prisma.creatorSubscription.findUniqueOrThrow({
+        where: { creatorWawuId: USER_CREATOR_PRO },
+      });
+
       const res = await request(app.getHttpServer())
         .post('/creator-subscription/downgrade')
         .set('Authorization', `Bearer ${creatorProToken}`);
       expect([200, 201]).toContain(res.status);
+
+      // Still Pro TODAY — the annual term is paid for and nothing is
+      // refunded, so the 90/10 split, the 15 upload slots and private
+      // communities all survive to the end of the term (docs/01_SPEC.md §4).
       expect(res.body.data).toEqual(
         expect.objectContaining({
           creatorWawuId: USER_CREATOR_PRO,
           tier: 'pro',
+          pendingTier: 'basic',
         }),
       );
+      // The API tells the client exactly WHEN, so it can stop saying an
+      // unqualified "your split goes from 90% back to 85%".
+      expect(new Date(res.body.data.tierChangesAt).getTime()).toBe(
+        before.currentPeriodEnd.getTime(),
+      );
+
+      const state = await prisma.creatorState.findUniqueOrThrow({
+        where: { wawuUserId: USER_CREATOR_PRO },
+      });
+      expect(state.tier).toBe('pro');
+      expect(uploadAllowanceFor(state.tier).total).toBe(15);
+    });
+
+    it('is idempotent — downgrading again returns the same scheduled row (200)', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/creator-subscription/downgrade')
+        .set('Authorization', `Bearer ${creatorProToken}`);
+      expect([200, 201]).toContain(res.status);
+      expect(res.body.data.pendingTier).toBe('basic');
+      expect(res.body.data.tier).toBe('pro');
+    });
+
+    it('applies the change once the paid term ends: tier, split and slot allowance all follow', async () => {
+      const past = new Date(Date.now() - 1000);
+      await prisma.creatorSubscription.update({
+        where: { creatorWawuId: USER_CREATOR_PRO },
+        data: { currentPeriodEnd: past, tierChangesAt: past },
+      });
+      // 12 live pieces on a 15-slot Pro plan, dropping to a 6-slot Basic
+      // plan — the sharp edge.
+      await prisma.creatorState.update({
+        where: { wawuUserId: USER_CREATOR_PRO },
+        data: { tier: 'pro', slotsUsed: 12 },
+      });
+      const contentBefore = await prisma.contentPiece.findMany({
+        where: { creatorWawuId: USER_CREATOR_PRO },
+        orderBy: { id: 'asc' },
+      });
+
+      const res = await request(app.getHttpServer())
+        .get('/creator-subscription')
+        .set('Authorization', `Bearer ${creatorProToken}`)
+        .expect(200);
+
+      expect(res.body.data.tier).toBe('basic');
+      expect(res.body.data.pendingTier).toBeNull();
+      expect(res.body.data.tierChangesAt).toBeNull();
+      // Basic runs on the standard 85/15, so there is no override any more.
+      expect(res.body.data.commissionRateOverride).toBeNull();
+
+      const row = await prisma.creatorSubscription.findUniqueOrThrow({
+        where: { creatorWawuId: USER_CREATOR_PRO },
+      });
+      expect(row.tier).toBe('basic');
+      expect(row.commissionRateOverride).toBeNull();
+
+      // CreatorState.tier is the column PurchaseService / ContentPieceService
+      // / CreatorEarningsService resolve the split from, and the column
+      // uploadAllowanceFor() bounds slots by. Both follow.
+      const state = await prisma.creatorState.findUniqueOrThrow({
+        where: { wawuUserId: USER_CREATOR_PRO },
+      });
+      expect(state.tier).toBe('basic');
+      expect(uploadAllowanceFor(state.tier)).toEqual({
+        free: 1,
+        paid: 5,
+        total: 6,
+      });
+
+      // Over-cap creator: content stays live and slotsUsed is NOT truncated.
+      expect(state.slotsUsed).toBe(12);
+      const contentAfter = await prisma.contentPiece.findMany({
+        where: { creatorWawuId: USER_CREATOR_PRO },
+        orderBy: { id: 'asc' },
+      });
+      expect(contentAfter).toEqual(contentBefore);
+
+      // ...but no NEW upload can be published: this updateMany is verbatim
+      // the slot claim ContentPieceService.create() makes, and at 12 used
+      // against a 6-slot allowance it matches nothing.
+      const claimed = await prisma.creatorState.updateMany({
+        where: {
+          wawuUserId: USER_CREATOR_PRO,
+          slotsUsed: { lt: uploadAllowanceFor(state.tier).total },
+        },
+        data: { slotsUsed: { increment: 1 } },
+      });
+      expect(claimed.count).toBe(0);
+    });
+
+    it('400s once the creator is actually on Basic (no second downgrade)', async () => {
+      await request(app.getHttpServer())
+        .post('/creator-subscription/downgrade')
+        .set('Authorization', `Bearer ${creatorProToken}`)
+        .expect(400);
+    });
+
+    // Hand the seeded Pro fixture back to the describe blocks below exactly
+    // as they expect to find it.
+    afterAll(async () => {
+      await prisma.creatorSubscription.update({
+        where: { creatorWawuId: USER_CREATOR_PRO },
+        data: {
+          tier: 'pro',
+          status: 'active',
+          commissionRateOverride: originalProSub.commissionRateOverride,
+          currentPeriodEnd: originalProSub.currentPeriodEnd,
+          pendingTier: null,
+          tierChangesAt: null,
+        },
+      });
+      await prisma.creatorState.update({
+        where: { wawuUserId: USER_CREATOR_PRO },
+        data: {
+          tier: 'pro',
+          slotsUsed: originalProState.slotsUsed,
+          subscriptionPaid: originalProState.subscriptionPaid,
+        },
+      });
     });
   });
 
@@ -656,6 +791,63 @@ describe('CreatorSubscription (contract)', () => {
         .set('Authorization', `Bearer ${creatorProToken}`)
         .expect(200);
       expect(res.body.data.cancelsAt).not.toBeNull();
+    });
+
+    it('reaches SubscriptionStatus.cancelled when there is no paid term left to honour (200)', async () => {
+      // past_due = the paid year is already over and the renewal has not
+      // been taken. There is no entitlement to run down, so cancelling is
+      // immediate — and `cancelled` is the status that says the creator
+      // ended it, as distinct from `expired` (it lapsed on non-payment).
+      await prisma.creatorSubscription.update({
+        where: { creatorWawuId: USER_CREATOR_PRO },
+        data: { status: 'past_due', cancelsAt: null },
+      });
+      await prisma.creatorState.update({
+        where: { wawuUserId: USER_CREATOR_PRO },
+        data: { subscriptionPaid: true },
+      });
+
+      const res = await request(app.getHttpServer())
+        .delete('/creator-subscription')
+        .set('Authorization', `Bearer ${creatorProToken}`)
+        .expect(200);
+
+      expect(res.body.data.status).toBe('cancelled');
+      expect(res.body.data.cancelsAt).not.toBeNull();
+
+      const row = await prisma.creatorSubscription.findUniqueOrThrow({
+        where: { creatorWawuId: USER_CREATOR_PRO },
+      });
+      expect(row.status).toBe('cancelled');
+
+      // SchedulerService's cleanup sweep only looks at past_due/expired, so
+      // a `cancelled` row has to close the upload gate itself.
+      const state = await prisma.creatorState.findUniqueOrThrow({
+        where: { wawuUserId: USER_CREATOR_PRO },
+      });
+      expect(state.subscriptionPaid).toBe(false);
+    });
+
+    it('400s on a subscription that is already cancelled (the guard is live, not dead code)', async () => {
+      await request(app.getHttpServer())
+        .delete('/creator-subscription')
+        .set('Authorization', `Bearer ${creatorProToken}`)
+        .expect(400);
+    });
+
+    afterAll(async () => {
+      await prisma.creatorSubscription.update({
+        where: { creatorWawuId: USER_CREATOR_PRO },
+        data: {
+          status: 'active',
+          cancelsAt: originalProSub.cancelsAt,
+          currentPeriodEnd: originalProSub.currentPeriodEnd,
+        },
+      });
+      await prisma.creatorState.update({
+        where: { wawuUserId: USER_CREATOR_PRO },
+        data: { subscriptionPaid: true },
+      });
     });
   });
 
@@ -741,6 +933,50 @@ describe('CreatorSubscription (contract)', () => {
       expect(row?.renewalAttempts).toBe(1);
     });
 
+    it('refuses to charge the fabricated flw-cust-<id> reference, and does not burn a renewal attempt (400)', async () => {
+      // What every pre-fix subscribe() wrote. Flutterwave never issued it,
+      // so a tokenized charge against it can only ever decline — firing it
+      // would just push the creator one attempt closer to `expired`.
+      await prisma.creatorSubscription.update({
+        where: { creatorWawuId: USER_CREATOR_PRO },
+        data: {
+          status: 'past_due',
+          renewalAttempts: 0,
+          flutterwaveCustomerRef: `flw-cust-${USER_CREATOR_PRO}`,
+        },
+      });
+
+      const res = await request(app.getHttpServer())
+        .post('/creator-subscription/retry-payment')
+        .set('Authorization', `Bearer ${creatorProToken}`)
+        .expect(400);
+      expect(JSON.stringify(res.body)).toMatch(/card/i);
+
+      const row = await prisma.creatorSubscription.findUniqueOrThrow({
+        where: { creatorWawuId: USER_CREATOR_PRO },
+      });
+      expect(row.renewalAttempts).toBe(0);
+      expect(row.status).toBe('past_due');
+    });
+
+    it('PATCH /card puts a chargeable token on file, which then lets the retry through (200)', async () => {
+      await request(app.getHttpServer())
+        .patch('/creator-subscription/card')
+        .set('Authorization', `Bearer ${creatorProToken}`)
+        .send({ flutterwaveCardToken: MOCK_CARD_TOKEN })
+        .expect(200);
+
+      const row = await prisma.creatorSubscription.findUniqueOrThrow({
+        where: { creatorWawuId: USER_CREATOR_PRO },
+      });
+      expect(row.flutterwaveCustomerRef).toBe(MOCK_CARD_TOKEN);
+
+      const res = await request(app.getHttpServer())
+        .post('/creator-subscription/retry-payment')
+        .set('Authorization', `Bearer ${creatorProToken}`);
+      expect([200, 201]).toContain(res.status);
+    });
+
     it('on a successful saved-card charge: 200s, status -> active, renewalAttempts reset, currentPeriodEnd extended', async () => {
       await prisma.creatorSubscription.update({
         where: { creatorWawuId: USER_CREATOR_PRO },
@@ -748,6 +984,11 @@ describe('CreatorSubscription (contract)', () => {
           status: 'past_due',
           flutterwaveCustomerRef: originalProSub.flutterwaveCustomerRef,
         },
+      });
+      // The scheduler clears this the moment a subscription goes past_due.
+      await prisma.creatorState.update({
+        where: { wawuUserId: USER_CREATOR_PRO },
+        data: { subscriptionPaid: false },
       });
 
       const res = await request(app.getHttpServer())
@@ -764,6 +1005,70 @@ describe('CreatorSubscription (contract)', () => {
       expect(row?.status).toBe('active');
       expect(row?.renewalAttempts).toBe(0);
       expect(row!.currentPeriodEnd.getTime()).toBeGreaterThan(Date.now());
+
+      // Paying must hand the upload gate back, or the creator is charged
+      // and stays locked out.
+      const state = await prisma.creatorState.findUniqueOrThrow({
+        where: { wawuUserId: USER_CREATOR_PRO },
+      });
+      expect(state.subscriptionPaid).toBe(true);
+    });
+
+    it('a creator whose downgrade has come due renews onto the Basic price, not the Pro one', async () => {
+      const past = new Date(Date.now() - 1000);
+      await prisma.creatorSubscription.update({
+        where: { creatorWawuId: USER_CREATOR_PRO },
+        data: {
+          tier: 'pro',
+          pendingTier: 'basic',
+          tierChangesAt: past,
+          currentPeriodEnd: past,
+          status: 'past_due',
+          renewalAttempts: 0,
+          flutterwaveCustomerRef: originalProSub.flutterwaveCustomerRef,
+        },
+      });
+      await prisma.creatorState.update({
+        where: { wawuUserId: USER_CREATOR_PRO },
+        data: { tier: 'pro', subscriptionPaid: false },
+      });
+
+      const res = await request(app.getHttpServer())
+        .post('/creator-subscription/retry-payment')
+        .set('Authorization', `Bearer ${creatorProToken}`);
+      expect([200, 201]).toContain(res.status);
+      expect(res.body.data.flutterwaveConfig.amount).toBe(BASIC_ANNUAL_PRICE);
+
+      const row = await prisma.creatorSubscription.findUniqueOrThrow({
+        where: { creatorWawuId: USER_CREATOR_PRO },
+      });
+      expect(row.tier).toBe('basic');
+      expect(row.pendingTier).toBeNull();
+      expect(row.commissionRateOverride).toBeNull();
+
+      const state = await prisma.creatorState.findUniqueOrThrow({
+        where: { wawuUserId: USER_CREATOR_PRO },
+      });
+      expect(state.tier).toBe('basic');
+      expect(state.subscriptionPaid).toBe(true);
+    });
+
+    afterAll(async () => {
+      await prisma.creatorSubscription.update({
+        where: { creatorWawuId: USER_CREATOR_PRO },
+        data: {
+          tier: 'pro',
+          status: 'active',
+          commissionRateOverride: originalProSub.commissionRateOverride,
+          currentPeriodEnd: originalProSub.currentPeriodEnd,
+          pendingTier: null,
+          tierChangesAt: null,
+        },
+      });
+      await prisma.creatorState.update({
+        where: { wawuUserId: USER_CREATOR_PRO },
+        data: { tier: 'pro', subscriptionPaid: true },
+      });
     });
   });
 

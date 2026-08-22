@@ -6,7 +6,10 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import type { Paginated } from '../common/interceptors/response.interceptor';
-import type { CreatorSubscriptionResponse } from '../common/types/creator-subscription.type';
+import type {
+  CreatorSubscription as CreatorSubscriptionRow,
+  CreatorSubscriptionResponse,
+} from '../common/types/creator-subscription.type';
 import { AccountType } from '../../generated/prisma/enums';
 import type { CreatorTier } from '../../generated/prisma/enums';
 import {
@@ -16,6 +19,7 @@ import {
 import type { SubscribeDto } from './dto/subscribe.dto';
 import type { VerifySubscriptionDto } from './dto/verify-subscription.dto';
 import type { UpdateCardDto } from './dto/update-card.dto';
+import { NotificationService } from '../notification/notification.service';
 
 /**
  * Annual subscription prices, naira — confirmed against
@@ -30,6 +34,36 @@ const PRICE_TABLE: Record<CreatorTier, number> = {
 
 /** Pro-tier commission override (CLAUDE.md: 85/15 standard, 90/10 Pro). */
 const PRO_COMMISSION_RATE_OVERRIDE = 0.1;
+
+/**
+ * The commission override a tier carries. Basic is billed at the standard
+ * 85/15 (docs/01_SPEC.md §1, streams 1/2/3/5/6), which is not an override at
+ * all — hence null, matching how `verify()` has always written the column.
+ *
+ * DOCUMENTED LIMITATION — `commissionRateOverride` is NOT the rate anything
+ * actually charges. PurchaseService, ContentPieceService and
+ * CreatorEarningsService each re-derive the rate from
+ * `CreatorState.tier + CreatorState.subscriptionPaid`. Making this column
+ * authoritative means editing those three services, which is outside this
+ * change's scope, so this helper does the next best thing: it makes the
+ * column derive from `tier` in ONE place, so every write in this service
+ * (subscribe, upgrade, and now the scheduled-downgrade settlement) agrees
+ * with the tier, and the column can no longer drift away from what the
+ * other three services compute. See the final report.
+ */
+function commissionRateOverrideFor(tier: CreatorTier): number | null {
+  return tier === 'pro' ? PRO_COMMISSION_RATE_OVERRIDE : null;
+}
+
+/**
+ * The customer reference this service used to fabricate at subscribe time
+ * (`flw-cust-<wawuUserId>`). Flutterwave never issued it, so it can never
+ * resolve to a card — any subscription still carrying one has no usable
+ * card on file and must not be charged against it. Recognised (not
+ * charged) so past-due creators who subscribed before the fix get an
+ * actionable error instead of a guaranteed decline.
+ */
+const FABRICATED_CUSTOMER_REF_PREFIX = 'flw-cust-';
 
 const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -136,26 +170,127 @@ export class CreatorSubscriptionService {
   constructor(
     private readonly prisma: PrismaService,
     @Inject(FLUTTERWAVE_CLIENT) private readonly flutterwave: FlutterwaveClient,
+    private readonly notifications: NotificationService,
   ) {}
 
-  private toResponse(row: {
-    creatorWawuId: string;
-    tier: CreatorTier;
-    status: string;
-    commissionRateOverride: { toNumber(): number } | null;
-    flutterwaveCustomerRef: string | null;
-    flutterwavePlanId: string | null;
-    currentPeriodEnd: Date;
-    renewalAttempts: number;
-    cancelsAt: Date | null;
-    cardLast4: string | null;
-  }): CreatorSubscriptionResponse {
+  /**
+   * EVERY field is listed explicitly, deliberately — this used to spread the
+   * Prisma row (`...row`). `CreatorSubscriptionResponse` is one of the 28
+   * bare Prisma re-exports in the registry, so with a spread any column
+   * added to this table silently widened a live app response. Enumerating
+   * the projection means a new column is invisible on the wire until
+   * somebody adds it here on purpose.
+   *
+   * `pendingTier` / `tierChangesAt` ARE added here on purpose: a downgrade
+   * is a promise about the future, and the client cannot render "Pro until
+   * 4 March, then Basic" from a row that only says "pro".
+   */
+  private toResponse(row: CreatorSubscriptionRow): CreatorSubscriptionResponse {
     return {
-      ...row,
+      creatorWawuId: row.creatorWawuId,
+      tier: row.tier,
+      status: row.status,
       commissionRateOverride: row.commissionRateOverride
         ? row.commissionRateOverride.toNumber()
         : null,
-    } as CreatorSubscriptionResponse;
+      flutterwaveCustomerRef: row.flutterwaveCustomerRef,
+      flutterwavePlanId: row.flutterwavePlanId,
+      currentPeriodEnd: row.currentPeriodEnd,
+      renewalAttempts: row.renewalAttempts,
+      cancelsAt: row.cancelsAt,
+      cardLast4: row.cardLast4,
+      pendingTier: row.pendingTier,
+      tierChangesAt: row.tierChangesAt,
+    };
+  }
+
+  /**
+   * Apply a scheduled tier change once its moment has arrived, then return
+   * the row as it now truly is.
+   *
+   * WHY A SCHEDULED CHANGE AT ALL: the subscription is annual and paid up
+   * front, and neither downgrade nor cancel refunds anything (docs/01_SPEC.md
+   * §4 — both tiers are "billed yearly"). Flipping a creator to Basic the
+   * moment they tap Downgrade would take back the 90/10 split, the 15 upload
+   * slots and private-community hosting they have already paid for through
+   * the end of the term. So the change lands at `currentPeriodEnd`, and the
+   * response says so.
+   *
+   * WHY HERE AND NOT IN A CRON: this settles on the next touch of the
+   * subscription (any endpoint on this resource, including the renewal
+   * retry, which is the only implemented path that starts a new paid term).
+   * A `SchedulerService` sweep calling this on the hour would make it
+   * eager rather than lazy; that is a one-line addition in src/scheduler/,
+   * which is outside this change's scope — see the final report. It is a
+   * latency improvement, not a correctness one: between period end and the
+   * next touch the subscription is `past_due` anyway, which already strips
+   * `CreatorState.subscriptionPaid` and with it every Pro benefit.
+   *
+   * `CreatorState.tier` is written in the same transaction because that —
+   * not `CreatorSubscription.tier` — is the column the rest of the backend
+   * reads: `uploadAllowanceFor(state.tier)` (slots), the three
+   * `resolveCommissionRate()` copies (the split), `CommunityService.create`
+   * (private communities) and `LearnEntitlementService` (free courses) all
+   * key off it. Flipping it is what makes the downgrade real everywhere.
+   */
+  private async settleScheduledTierChange(
+    row: CreatorSubscriptionRow,
+  ): Promise<CreatorSubscriptionRow> {
+    const pendingTier = row.pendingTier;
+    if (
+      !pendingTier ||
+      !row.tierChangesAt ||
+      row.tierChangesAt.getTime() > Date.now()
+    ) {
+      return row;
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.creatorSubscription.update({
+        where: { creatorWawuId: row.creatorWawuId },
+        data: {
+          tier: pendingTier,
+          commissionRateOverride: commissionRateOverrideFor(pendingTier),
+          pendingTier: null,
+          tierChangesAt: null,
+        },
+      });
+
+      // OVER-CAP CREATORS: nothing is deleted, unpublished or hidden. A Pro
+      // creator with 12 live pieces who drops to Basic (6 slots) keeps all
+      // 12 published and earning; `CreatorState.slotsUsed` is left exactly
+      // as it is. ContentPieceService.create already claims a slot with
+      // `where: { slotsUsed: { lt: allowance.total } }`, so at 12 used
+      // against a 6-slot allowance that claim simply matches no rows and the
+      // upload is refused with "You have used all 6 upload slots on your
+      // basic plan." They come back under the cap by deleting their own
+      // content, or by upgrading again. Zeroing or truncating slotsUsed here
+      // would either destroy content or hand out free slots.
+      await tx.creatorState.updateMany({
+        where: { wawuUserId: row.creatorWawuId },
+        data: { tier: pendingTier },
+      });
+
+      return updated;
+    });
+  }
+
+  /**
+   * The single read path for this resource: fetch, apply any tier change
+   * that has come due, 404 if the caller has never subscribed.
+   */
+  private async loadSubscription(
+    creatorWawuId: string,
+  ): Promise<CreatorSubscriptionRow> {
+    const row = await this.prisma.creatorSubscription.findUnique({
+      where: { creatorWawuId },
+    });
+    if (!row) {
+      throw new NotFoundException(
+        'No subscription yet — subscribe via POST /creator-subscription first.',
+      );
+    }
+    return this.settleScheduledTierChange(row);
   }
 
   /**
@@ -170,15 +305,7 @@ export class CreatorSubscriptionService {
   async getSubscription(
     creatorWawuId: string,
   ): Promise<CreatorSubscriptionResponse> {
-    const row = await this.prisma.creatorSubscription.findUnique({
-      where: { creatorWawuId },
-    });
-    if (!row) {
-      throw new NotFoundException(
-        'No subscription yet — subscribe via POST /creator-subscription first.',
-      );
-    }
-    return this.toResponse(row);
+    return this.toResponse(await this.loadSubscription(creatorWawuId));
   }
 
   /** POST /creator-subscription — first-time-subscribe path (roles: any). */
@@ -251,10 +378,24 @@ export class CreatorSubscriptionService {
       result.txRef === dto.tx_ref &&
       result.amount >= pending.expectedAmount;
 
-    await this.prisma.pendingCharge.deleteMany({ where: { txRef: dto.tx_ref } });
+    // The delete IS the claim. Since the Flutterwave webhook landed, this
+    // method has two callers that can arrive for the same tx_ref at the same
+    // moment (the browser's /verify and PaymentWebhookService), and both will
+    // have read the same pending row above. The row count below is the single
+    // right to settle. Behaviour is otherwise unchanged: the charge is still
+    // consumed whether or not it verified.
+    const claim = await this.prisma.pendingCharge.deleteMany({
+      where: { txRef: dto.tx_ref },
+    });
 
     if (!verified) {
       throw new BadRequestException('Payment verification failed');
+    }
+
+    if (claim.count === 0) {
+      // Lost the race — the other caller already granted this subscription.
+      // Return what they wrote rather than granting a second one.
+      return this.getSubscription(wawuUserId);
     }
 
     const now = new Date();
@@ -275,25 +416,36 @@ export class CreatorSubscriptionService {
             creatorWawuId: wawuUserId,
             tier: pending.tier,
             status: 'active',
-            commissionRateOverride:
-              pending.tier === 'pro' ? PRO_COMMISSION_RATE_OVERRIDE : null,
-            flutterwaveCustomerRef: `flw-cust-${wawuUserId}`,
+            commissionRateOverride: commissionRateOverrideFor(pending.tier),
+            // Flutterwave's own reusable card token, not a string this
+            // backend invented. `flw-cust-${wawuUserId}` used to go here and
+            // was the only thing retry-payment had to charge — see
+            // retryPayment()'s doc comment. Null when the charge produced no
+            // token (non-card method); retry-payment refuses rather than
+            // charging a reference that cannot resolve.
+            flutterwaveCustomerRef: result.cardToken ?? null,
             flutterwavePlanId: pending.planId,
             currentPeriodEnd: new Date(now.getTime() + ONE_YEAR_MS),
             renewalAttempts: 0,
             cancelsAt: null,
             cardLast4: result.cardLast4 ?? null,
+            pendingTier: null,
+            tierChangesAt: null,
           },
           update: {
             tier: pending.tier,
             status: 'active',
-            commissionRateOverride:
-              pending.tier === 'pro' ? PRO_COMMISSION_RATE_OVERRIDE : null,
+            commissionRateOverride: commissionRateOverrideFor(pending.tier),
+            flutterwaveCustomerRef: result.cardToken ?? undefined,
             flutterwavePlanId: pending.planId,
             currentPeriodEnd: new Date(now.getTime() + ONE_YEAR_MS),
             renewalAttempts: 0,
             cancelsAt: null,
             cardLast4: result.cardLast4 ?? undefined,
+            // A freshly paid term supersedes anything that was scheduled
+            // against the term it replaces.
+            pendingTier: null,
+            tierChangesAt: null,
           },
         });
 
@@ -355,9 +507,14 @@ export class CreatorSubscriptionService {
       data: {
         tier: 'pro',
         status: 'active',
-        commissionRateOverride: PRO_COMMISSION_RATE_OVERRIDE,
+        commissionRateOverride: commissionRateOverrideFor('pro'),
         flutterwavePlanId: pending.planId,
+        flutterwaveCustomerRef: result.cardToken ?? undefined,
         cardLast4: result.cardLast4 ?? undefined,
+        // Paying to be Pro cancels a downgrade that was scheduled against
+        // the old term.
+        pendingTier: null,
+        tierChangesAt: null,
         // currentPeriodEnd is deliberately untouched — upgrading keeps the
         // existing annual anniversary; only the price paid today (prorated)
         // and future renewal amount change. See upgrade()'s doc comment.
@@ -389,14 +546,7 @@ export class CreatorSubscriptionService {
    * charge in the rare case the period is already essentially over.
    */
   async upgrade(creatorWawuId: string): Promise<FlutterwaveConfigResponse> {
-    const existing = await this.prisma.creatorSubscription.findUnique({
-      where: { creatorWawuId },
-    });
-    if (!existing) {
-      throw new NotFoundException(
-        'No subscription yet — subscribe via POST /creator-subscription first.',
-      );
-    }
+    const existing = await this.loadSubscription(creatorWawuId);
     if (existing.tier === 'pro') {
       throw new BadRequestException('This subscription is already Pro.');
     }
@@ -445,37 +595,35 @@ export class CreatorSubscriptionService {
   }
 
   /**
-   * POST /creator-subscription/downgrade — pro -> basic, "takes effect at
-   * period end (no refund)".
+   * POST /creator-subscription/downgrade — Pro -> Basic, scheduled for
+   * `currentPeriodEnd`.
    *
-   * JUDGMENT / documented gap: the frozen CreatorSubscription model has no
-   * field to hold a *scheduled future* tier (only `cancelsAt`, which is
-   * specifically for full cancellation via DELETE — reusing it here would
-   * make a downgrade indistinguishable from a full cancellation to any
-   * client reading the row, which would be actively misleading). Actually
-   * applying "basic at period end" therefore requires either a schema
-   * column this build cannot add (frozen schema) or the renewal-
-   * reconciliation cron, which the task brief explicitly defers to a later
-   * pass. This endpoint validates preconditions and returns the row
-   * unchanged (still Pro, still billed at the Pro rate/split until period
-   * end, exactly as promised — "no refund" cuts both ways: no partial
-   * Basic-rate credit is given now either). Completing the actual tier
-   * flip at `currentPeriodEnd` is out of scope here and is called out
-   * again in this build's final report as a follow-up dependency on the
-   * deferred cron.
+   * WHEN IT TAKES EFFECT, AND WHY THEN. The subscription is annual and paid
+   * in full up front (docs/01_SPEC.md §4: "Both tiers are billed yearly"),
+   * and nothing here refunds the unused part of a Pro year. Applying Basic
+   * the instant the button is tapped would therefore confiscate paid-for
+   * entitlements — the 90/10 split (§1 stream 8, §4: "90/10 revenue split on
+   * streams 1, 2, 3, 5, 6 ... this is the actual value prop of paying for
+   * Pro"), 15 upload slots vs Basic's 6 (§4), and private-community hosting
+   * (§4) — while keeping the ₦18,999. So the request records the intent and
+   * the tier flips at `currentPeriodEnd`. Symmetrically, no Basic-rate
+   * credit is paid out now either: "no refund" cuts both ways.
+   *
+   * The API says so rather than implying it: the response carries
+   * `pendingTier: "basic"` and `tierChangesAt: <currentPeriodEnd>`, so the
+   * client can render the exact date the split changes instead of the app's
+   * previous unqualified "goes from 90% back to 85%".
+   *
+   * WHAT HAPPENS TO A CREATOR OVER THE BASIC CAP: nothing is deleted,
+   * unpublished or hidden. See settleScheduledTierChange().
+   *
+   * Idempotent: downgrading twice re-returns the same scheduled row.
    *
    * Account type is untouched (see cancel()'s note): a Pro -> Basic move is
    * a tier change, and both tiers are creator accounts regardless.
    */
   async downgrade(creatorWawuId: string): Promise<CreatorSubscriptionResponse> {
-    const existing = await this.prisma.creatorSubscription.findUnique({
-      where: { creatorWawuId },
-    });
-    if (!existing) {
-      throw new NotFoundException(
-        'No subscription yet — subscribe via POST /creator-subscription first.',
-      );
-    }
+    const existing = await this.loadSubscription(creatorWawuId);
     if (existing.tier !== 'pro') {
       throw new BadRequestException('This subscription is already Basic.');
     }
@@ -484,8 +632,19 @@ export class CreatorSubscriptionService {
         'Only an active subscription can be downgraded.',
       );
     }
+    if (existing.pendingTier === 'basic') {
+      return this.toResponse(existing);
+    }
 
-    return this.toResponse(existing);
+    const row = await this.prisma.creatorSubscription.update({
+      where: { creatorWawuId },
+      data: {
+        pendingTier: 'basic',
+        // Never `now` — the paid term runs to currentPeriodEnd.
+        tierChangesAt: existing.currentPeriodEnd,
+      },
+    });
+    return this.toResponse(row);
   }
 
   /**
@@ -505,40 +664,86 @@ export class CreatorSubscriptionService {
    * the hourly scheduler clears `CreatorState.subscriptionPaid`. Account
    * type is deliberately NOT demoted (see cancel()'s note) — a declined card
    * closes the upload gate, it does not turn a creator back into a viewer.
+   *
+   * THE REFERENCE IT CHARGES IS NOW A REAL ONE. `flutterwaveCustomerRef`
+   * used to be written at subscribe time as `flw-cust-<wawuUserId>` — a
+   * string this backend made up. Flutterwave's tokenized-charge API only
+   * accepts a token it issued itself (`data.card.token` on the verify
+   * response), so that value could never resolve to a card and this recovery
+   * path could not succeed in production for anybody. verify() now persists
+   * the real token, PATCH /card persists one the client supplies, and this
+   * method refuses to fire a charge against a fabricated or missing one.
    */
   async retryPayment(
     creatorWawuId: string,
+    cardholderEmail: string | null,
   ): Promise<FlutterwaveConfigResponse> {
-    const existing = await this.prisma.creatorSubscription.findUnique({
-      where: { creatorWawuId },
-    });
-    if (!existing) {
-      throw new NotFoundException(
-        'No subscription yet — subscribe via POST /creator-subscription first.',
-      );
-    }
+    const existing = await this.loadSubscription(creatorWawuId);
     if (existing.status !== 'past_due') {
       throw new BadRequestException(
         'This subscription is not currently past due.',
       );
     }
 
+    // A retry can only work against a token Flutterwave itself issued. If
+    // all this row has is the old locally-fabricated `flw-cust-<id>` string
+    // (or nothing at all), firing the charge is a guaranteed decline that
+    // would also burn one of the three renewal attempts and push the
+    // creator toward `expired`. Refuse with the actual remedy instead.
+    const savedCardToken = existing.flutterwaveCustomerRef;
+    if (
+      !savedCardToken ||
+      savedCardToken.startsWith(FABRICATED_CUSTOMER_REF_PREFIX)
+    ) {
+      throw new BadRequestException(
+        'There is no usable saved card on this subscription. Add your card with PATCH /creator-subscription/card, then retry the payment.',
+      );
+    }
+
+    // `existing` has already been through settleScheduledTierChange(), so a
+    // creator who scheduled a downgrade and whose term has now ended renews
+    // onto BASIC at ₦5,999 — not onto Pro at ₦18,999. Charging the old tier
+    // here would have quietly resold the tier they cancelled.
     const amount = PRICE_TABLE[existing.tier];
     const result = await this.flutterwave.chargeSavedCard({
-      flutterwaveCustomerRef: existing.flutterwaveCustomerRef,
+      flutterwaveCustomerRef: savedCardToken,
+      email: cardholderEmail,
       amount,
       purpose: 'retry-payment',
     });
 
     if (result.status === 'successful') {
-      await this.prisma.creatorSubscription.update({
-        where: { creatorWawuId },
-        data: {
-          status: 'active',
-          currentPeriodEnd: new Date(Date.now() + ONE_YEAR_MS),
-          renewalAttempts: 0,
-        },
+      const renewedUntil = new Date(Date.now() + ONE_YEAR_MS);
+      await this.prisma.$transaction(async (tx) => {
+        await tx.creatorSubscription.update({
+          where: { creatorWawuId },
+          data: {
+            status: 'active',
+            currentPeriodEnd: renewedUntil,
+            renewalAttempts: 0,
+          },
+        });
+        // SchedulerService cleared this when the subscription went past_due.
+        // A successful renewal has to hand the upload gate back, or the
+        // creator pays and stays locked out.
+        await tx.creatorState.updateMany({
+          where: { wawuUserId: creatorWawuId },
+          data: { subscriptionPaid: true, tier: existing.tier },
+        });
       });
+
+      // Renewal confirmed — emitted after the transaction commits, and only
+      // on the successful branch. The decline path below throws instead, and
+      // the creator hears about that from SchedulerService's past_due sweep.
+      await this.notifications.emit({
+        kind: 'subscription_renewal',
+        userWawuId: creatorWawuId,
+        state: 'renewed',
+        tier: existing.tier,
+        amount,
+        nextRenewalAt: renewedUntil,
+      });
+
       return {
         flutterwaveConfig: {
           txRef: result.txRef,
@@ -568,6 +773,27 @@ export class CreatorSubscriptionService {
    * deactivate). Idempotent: calling this again once `cancelsAt` is already
    * set is a no-op that returns the current row, rather than erroring.
    *
+   * `SubscriptionStatus.cancelled` IS REACHABLE — this method is what
+   * produces it. It previously wrote only `cancelsAt`, so nothing in the
+   * codebase could ever set `cancelled` and the guard below that reads it
+   * was dead. The split is by whether there is any paid term left to honour:
+   *
+   *   - Term still running (`active`, `currentPeriodEnd` in the future):
+   *     stays `active`, `cancelsAt = currentPeriodEnd`. The creator keeps
+   *     what they paid for. SchedulerService closes it out at that date.
+   *   - Nothing left to honour (`past_due`, or the period has already
+   *     ended): there is no entitlement to run down, so the cancellation is
+   *     immediate and the status becomes `cancelled` in the same write.
+   *     `CreatorState.subscriptionPaid` is cleared here too, because
+   *     SchedulerService's own cleanup sweep only looks at `past_due` and
+   *     `expired` rows — a `cancelled` row would otherwise keep handing out
+   *     the upload gate forever.
+   *
+   * `cancelled` and `expired` stay distinct and both mean something:
+   * `cancelled` is "the creator ended this", `expired` is "it lapsed on
+   * non-payment". Any scheduled downgrade is dropped — there is no longer a
+   * later term for it to apply to.
+   *
    * ACCOUNT TYPE IS NOT TOUCHED, HERE OR ANYWHERE ELSE. Cancelling ends the
    * paid entitlement, not the identity: per CLAUDE.md, creator is an ACCOUNT
    * TYPE, not an earned tier or a trust level. Flipping
@@ -579,17 +805,35 @@ export class CreatorSubscriptionService {
    * src/scheduler/scheduler.service.ts, writes accountType at all.
    */
   async cancel(creatorWawuId: string): Promise<CreatorSubscriptionResponse> {
-    const existing = await this.prisma.creatorSubscription.findUnique({
-      where: { creatorWawuId },
-    });
-    if (!existing) {
-      throw new NotFoundException(
-        'No subscription yet — subscribe via POST /creator-subscription first.',
-      );
-    }
+    const existing = await this.loadSubscription(creatorWawuId);
     if (existing.status === 'cancelled' || existing.status === 'expired') {
       throw new BadRequestException('This subscription is not active.');
     }
+
+    const nothingLeftToHonour =
+      existing.status === 'past_due' ||
+      existing.currentPeriodEnd.getTime() <= Date.now();
+
+    if (nothingLeftToHonour) {
+      const row = await this.prisma.$transaction(async (tx) => {
+        const cancelled = await tx.creatorSubscription.update({
+          where: { creatorWawuId },
+          data: {
+            status: 'cancelled',
+            cancelsAt: existing.cancelsAt ?? new Date(),
+            pendingTier: null,
+            tierChangesAt: null,
+          },
+        });
+        await tx.creatorState.updateMany({
+          where: { wawuUserId: creatorWawuId },
+          data: { subscriptionPaid: false },
+        });
+        return cancelled;
+      });
+      return this.toResponse(row);
+    }
+
     if (existing.cancelsAt) {
       return this.toResponse(existing);
     }
@@ -616,19 +860,22 @@ export class CreatorSubscriptionService {
     creatorWawuId: string,
     dto: UpdateCardDto,
   ): Promise<{ last4: string }> {
-    const existing = await this.prisma.creatorSubscription.findUnique({
-      where: { creatorWawuId },
-    });
-    if (!existing) {
-      throw new NotFoundException(
-        'No subscription yet — subscribe via POST /creator-subscription first.',
-      );
-    }
+    // Still 404s for a creator who has never subscribed (and settles any
+    // tier change that has come due while we are here).
+    await this.loadSubscription(creatorWawuId);
 
     const last4 = dto.flutterwaveCardToken.slice(-4);
     await this.prisma.creatorSubscription.update({
       where: { creatorWawuId },
-      data: { cardLast4: last4 },
+      data: {
+        cardLast4: last4,
+        // The token IS the thing a later tokenized charge is fired against,
+        // so it is now persisted instead of being read for its last 4
+        // characters and thrown away. This is the supported way for a
+        // past-due creator whose row still carries the old fabricated
+        // `flw-cust-<id>` reference to get a chargeable card on file.
+        flutterwaveCustomerRef: dto.flutterwaveCardToken,
+      },
     });
     return { last4 };
   }

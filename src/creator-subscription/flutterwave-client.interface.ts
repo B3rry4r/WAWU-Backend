@@ -55,6 +55,20 @@ export interface FlutterwaveVerifyResult {
    * in principle, non-card payment methods) has none.
    */
   cardLast4?: string;
+  /**
+   * Flutterwave's own reusable card token (`data.card.token` on the verify
+   * response, e.g. `flw-t1nf-...`). This is THE ONLY string Flutterwave will
+   * accept on a later tokenized charge. Capturing it here is what makes
+   * POST /creator-subscription/retry-payment able to succeed — see
+   * `chargeSavedCard` below.
+   */
+  cardToken?: string;
+  /**
+   * The email Flutterwave has on file for this charge (`data.customer.email`).
+   * Flutterwave's tokenized-charge endpoint requires an email alongside the
+   * token, and it must be the one the token was created against.
+   */
+  customerEmail?: string;
 }
 
 export interface InitChargeParams {
@@ -81,8 +95,22 @@ export interface FlutterwavePlan {
 }
 
 export interface ChargeSavedCardParams {
-  /** The customer reference Flutterwave assigned when the card was first saved. */
+  /**
+   * Flutterwave's tokenized-card token, as returned by `verifyCharge` and
+   * persisted in `CreatorSubscription.flutterwaveCustomerRef`.
+   *
+   * This used to be a locally fabricated `flw-cust-<wawuUserId>` string,
+   * which Flutterwave has never heard of — every retry against it 4xx'd, so
+   * the recovery path could not succeed for any past-due creator. Callers
+   * must not synthesise this value; if there is no real token on file the
+   * creator has to re-supply a card (PATCH /creator-subscription/card).
+   */
   flutterwaveCustomerRef: string | null;
+  /**
+   * Required by Flutterwave's tokenized-charge API. The caller passes the
+   * authenticated creator's WAWU ID email claim.
+   */
+  email: string | null;
   amount: number;
   purpose: string;
 }

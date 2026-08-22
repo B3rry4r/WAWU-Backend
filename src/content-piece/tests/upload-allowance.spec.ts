@@ -65,6 +65,9 @@ function buildService(tier: 'basic' | 'pro', counts: Counts) {
   const service = new ContentPieceService(
     prisma as never,
     { verifyTransaction: jest.fn() } as never,
+    // NotificationService — the upload path emits nothing; only the paid
+    // unlock settlement does (see ContentPieceService.verifyUnlock).
+    { emit: jest.fn() } as never,
   );
   return { service, state, tx, created };
 }

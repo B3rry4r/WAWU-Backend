@@ -18,9 +18,32 @@ import { renderContract } from './contract-template';
 import { CONSULTATION_HOURS, buildAvailability } from './availability';
 import type {
   BookConsultationDto,
+  CancelLegalRequestDto,
+  CompleteConsultationDto,
   CreateLegalRequestDto,
+  DeliverLegalRequestDto,
   QuoteLegalRequestDto,
 } from './dto/legal.dto';
+
+/**
+ * A booked hour is only genuinely held while the request is still walking the
+ * consultation leg. Anything cancelled, delivered, or already consulted has
+ * given the slot back.
+ */
+const SLOT_HOLDING_STATUSES = [
+  'awaiting_consultation_payment',
+  'consultation_scheduled',
+] as const;
+
+/**
+ * How long an unpaid booking holds its hour.
+ *
+ * Booking and paying are two calls, and plenty of people never make the
+ * second. Without a limit, every abandoned checkout would take a lawyer's
+ * hour off the calendar permanently. Paid bookings are held indefinitely —
+ * they are real appointments.
+ */
+const UNPAID_HOLD_MINUTES = 30;
 
 /**
  * WAWU Legal.
@@ -49,7 +72,7 @@ export class LegalRequestsService {
    */
   async availability() {
     const booked = await this.prisma.legalRequest.findMany({
-      where: { scheduledFor: { not: null } },
+      where: this.heldSlotsWhere(new Date()),
       select: { scheduledFor: true },
     });
     const taken = new Set(
@@ -62,6 +85,62 @@ export class LegalRequestsService {
       slotMinutes: CONSULTATION_HOURS.slotMinutes,
       days: buildAvailability(taken, new Date()),
     };
+  }
+
+  /**
+   * The rows that are actually holding a calendar hour right now.
+   *
+   * This used to be every row with a `scheduledFor`, which meant a cancelled
+   * booking — or one where the payer closed the Flutterwave modal and never
+   * came back — kept a lawyer's hour blocked forever, with nothing anywhere
+   * able to release it.
+   */
+  private heldSlotsWhere(now: Date) {
+    return {
+      scheduledFor: { not: null },
+      status: { in: [...SLOT_HOLDING_STATUSES] },
+      OR: [
+        // Paid: a real appointment, held until it is done or cancelled.
+        { consultationPaidAt: { not: null } },
+        // Unpaid: a short hold while the payer is in checkout.
+        {
+          consultationPaidAt: null,
+          updatedAt: { gte: new Date(now.getTime() - UNPAID_HOLD_MINUTES * 60_000) },
+        },
+      ],
+    };
+  }
+
+  /**
+   * The exact complement of `heldSlotsWhere`: rows still carrying a
+   * `scheduledFor` that no longer means anything.
+   *
+   * This matters beyond the calendar view, because there is a partial unique
+   * index on `scheduledFor` in the database. A cancelled or abandoned booking
+   * that keeps its timestamp does not merely look busy — it makes that hour
+   * un-bookable by anyone, forever, at the Postgres level. The index was
+   * written on the assumption that "a cancelled request releases it by
+   * clearing scheduledFor", and nothing ever cleared it.
+   */
+  private deadHoldWhere(now: Date) {
+    return {
+      scheduledFor: { not: null },
+      OR: [
+        { status: { notIn: [...SLOT_HOLDING_STATUSES] } },
+        {
+          consultationPaidAt: null,
+          updatedAt: { lt: new Date(now.getTime() - UNPAID_HOLD_MINUTES * 60_000) },
+        },
+      ],
+    };
+  }
+
+  /** Hands back an hour nobody is really holding, so it can be booked again. */
+  private async releaseDeadHold(scheduledFor: Date, now: Date) {
+    await this.prisma.legalRequest.updateMany({
+      where: { ...this.deadHoldWhere(now), scheduledFor },
+      data: { scheduledFor: null },
+    });
   }
 
   catalogue() {
@@ -146,8 +225,14 @@ export class LegalRequestsService {
       if (Number.isNaN(scheduledFor.getTime()) || scheduledFor.getTime() <= Date.now()) {
         throw new BadRequestException('Pick a time in the future.');
       }
+      const now = new Date();
+      await this.releaseDeadHold(scheduledFor, now);
       const clash = await this.prisma.legalRequest.findFirst({
-        where: { scheduledFor, id: { not: record.id } },
+        where: {
+          ...this.heldSlotsWhere(now),
+          scheduledFor,
+          id: { not: record.id },
+        },
         select: { id: true },
       });
       if (clash) {
@@ -177,15 +262,31 @@ export class LegalRequestsService {
     }
 
     const txRef = `wawu-legal-consult-${randomUUID()}`;
-    const updated = await this.prisma.legalRequest.update({
-      where: { id: record.id },
-      data: {
-        consultationMedium: dto.medium,
-        consultationFee: option.feeNaira,
-        consultationTxRef: txRef,
-        status: 'awaiting_consultation_payment',
-      },
-    });
+    let updated;
+    try {
+      updated = await this.prisma.legalRequest.update({
+        where: { id: record.id },
+        data: {
+          consultationMedium: dto.medium,
+          consultationFee: option.feeNaira,
+          consultationTxRef: txRef,
+          // The picked hour was validated, clash-checked — and then never
+          // written, so the response came back with `scheduledFor: null`, the
+          // calendar never showed the slot as taken, and two people could pay
+          // for the same hour.
+          scheduledFor,
+          status: 'awaiting_consultation_payment',
+        },
+      });
+    } catch (e) {
+      // The partial unique index on `scheduledFor` is the real guard against
+      // two clients being sold the same hour; the check above is only the
+      // friendly version of it. Losing the race is a conflict, not a 500.
+      if ((e as { code?: string }).code === 'P2002') {
+        throw new ConflictException('That time has just been taken. Pick another.');
+      }
+      throw e;
+    }
 
     return {
       request: this.toResponse(updated),
@@ -216,9 +317,14 @@ export class LegalRequestsService {
       expectedAmount: record.consultationFee,
     });
 
-    const updated = await this.prisma.legalRequest.update({
-      where: { id: record.id },
+    // Conditional flip: the `consultationPaidAt` read above is not a lock, and
+    // the Flutterwave webhook can settle this alongside the browser's /verify.
+    await this.prisma.legalRequest.updateMany({
+      where: { id: record.id, consultationPaidAt: null },
       data: { consultationPaidAt: new Date(), status: 'consultation_scheduled' },
+    });
+    const updated = await this.prisma.legalRequest.findUniqueOrThrow({
+      where: { id: record.id },
     });
     return this.toResponse(updated);
   }
@@ -245,6 +351,117 @@ export class LegalRequestsService {
       },
     });
     return this.toResponse(updated);
+  }
+
+  /**
+   * Ops action: the consultation happened.
+   *
+   * `consultation_scheduled` was the end of the road — the client had paid
+   * ₦25,000 or ₦45,000 for an hour and there was no state after it, so the
+   * request could never be quoted-and-signed on from a status that reads as
+   * "the call still hasn't happened". This is the step out.
+   */
+  async completeConsultation(id: string, dto: CompleteConsultationDto) {
+    const record = await this.requireRequest(id);
+    if (!record.consultationPaidAt) {
+      throw new BadRequestException(
+        'No consultation has been paid for on this request.',
+      );
+    }
+    if (record.status !== 'consultation_scheduled') {
+      throw new ConflictException(
+        `A consultation can only be completed from consultation_scheduled, not ${record.status}.`,
+      );
+    }
+
+    const updated = await this.prisma.legalRequest.update({
+      where: { id },
+      data: {
+        status: 'consultation_done',
+        ...(dto.notes !== undefined && { consultationNotes: dto.notes }),
+      },
+    });
+    return this.toResponse(updated);
+  }
+
+  /**
+   * Ops action: the paid-for work is finished.
+   *
+   * `in_progress` is reached only after the client has signed the engagement
+   * letter and paid the service fee in full — and it had no exit at all.
+   * `delivered`, `deliverableUrl` and `deliveredAt` had no writer anywhere,
+   * so every completed matter sat as "in progress" forever and the client
+   * had no way to get the document they bought.
+   */
+  async deliver(id: string, dto: DeliverLegalRequestDto) {
+    const record = await this.requireRequest(id);
+    if (record.status !== 'in_progress') {
+      throw new ConflictException(
+        `Only work in progress can be delivered, not a request that is ${record.status}.`,
+      );
+    }
+    if (!record.servicePaidAt) {
+      throw new BadRequestException('This work has not been paid for.');
+    }
+
+    const updated = await this.prisma.legalRequest.update({
+      where: { id },
+      data: {
+        status: 'delivered',
+        deliverableUrl: dto.deliverableUrl,
+        deliveredAt: new Date(),
+      },
+    });
+    return this.toResponse(updated);
+  }
+
+  /**
+   * Ops action: close a matter WAWU will not complete.
+   *
+   * Frees the calendar hour if one was held, and records why. It does NOT
+   * refund anything: no adapter in this codebase can move money back to a
+   * card, so a cancellation of something already paid for is an instruction
+   * to a human, and the reason is where that is said out loud.
+   */
+  async cancel(id: string, dto: CancelLegalRequestDto) {
+    const record = await this.requireRequest(id);
+    if (record.status === 'cancelled') {
+      throw new ConflictException('This request is already cancelled.');
+    }
+    if (record.status === 'delivered') {
+      throw new ConflictException('This request has already been delivered.');
+    }
+
+    const updated = await this.prisma.legalRequest.update({
+      where: { id },
+      data: {
+        status: 'cancelled',
+        cancellationReason: dto.reason,
+        cancelledAt: new Date(),
+        // Hands the hour back. The partial unique index on `scheduledFor`
+        // means a cancelled booking that keeps its timestamp blocks that hour
+        // for everyone permanently — which is exactly how abandoned bookings
+        // were eating the lawyer's calendar.
+        scheduledFor: null,
+      },
+    });
+    return this.toResponse(updated);
+  }
+
+  /** Ops queue: everything sitting in one state, oldest first. */
+  async listForOps(status?: string) {
+    const rows = await this.prisma.legalRequest.findMany({
+      where: status ? { status: status as never } : {},
+      orderBy: { createdAt: 'asc' },
+      take: 100,
+    });
+    return rows.map((r) => this.toResponse(r));
+  }
+
+  private async requireRequest(id: string) {
+    const record = await this.prisma.legalRequest.findUnique({ where: { id } });
+    if (!record) throw new NotFoundException('Legal request not found.');
+    return record;
   }
 
   /** The exact contract the client is about to sign. */
@@ -356,9 +573,13 @@ export class LegalRequestsService {
       expectedAmount: record.quoteAmount,
     });
 
-    const updated = await this.prisma.legalRequest.update({
-      where: { id: record.id },
+    // Conditional flip — same race as the consultation stage above.
+    await this.prisma.legalRequest.updateMany({
+      where: { id: record.id, servicePaidAt: null },
       data: { servicePaidAt: new Date(), status: 'in_progress' },
+    });
+    const updated = await this.prisma.legalRequest.findUniqueOrThrow({
+      where: { id: record.id },
     });
     return this.toResponse(updated);
   }
@@ -403,6 +624,8 @@ export class LegalRequestsService {
     servicePaidAt: Date | null;
     deliverableUrl: string | null;
     deliveredAt: Date | null;
+    cancellationReason: string | null;
+    cancelledAt: Date | null;
     createdAt: Date;
   }) {
     return {
@@ -425,6 +648,8 @@ export class LegalRequestsService {
       servicePaidAt: r.servicePaidAt?.toISOString() ?? null,
       deliverableUrl: r.deliverableUrl,
       deliveredAt: r.deliveredAt?.toISOString() ?? null,
+      cancellationReason: r.cancellationReason,
+      cancelledAt: r.cancelledAt?.toISOString() ?? null,
       createdAt: r.createdAt.toISOString(),
     };
   }

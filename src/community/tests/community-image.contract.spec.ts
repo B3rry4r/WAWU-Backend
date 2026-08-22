@@ -103,14 +103,22 @@ describe('Community images (contract)', () => {
   let hostSub: string;
   let otherCreatorToken: string;
   let otherCreatorSub: string;
+  // An ordinary member who actually PAYS for their messages — no
+  // CreatorState row, so no subscription entitlement. The price-of-a-photo
+  // tests below are asked of this identity, not of the host: a host never
+  // pays to post in a room they host (CommunityMessageService
+  // .resolveEntitlement), so pricing asserted from the host's balance would
+  // be asserting nothing.
+  let posterToken: string;
+  let posterSub: string;
 
   const ownedSubs: string[] = [];
   const createdCommunityIds: string[] = [];
 
-  /** Sets this spec's own host balance. Never a seeded row. */
-  const setHostCredits = async (creditBalance: number) => {
+  /** Sets one of this spec's own identities' balances. Never a seeded row. */
+  const setCredits = async (userWawuId: string, creditBalance: number) => {
     await prisma.creditsState.upsert({
-      where: { userWawuId: hostSub },
+      where: { userWawuId },
       update: {
         creditBalance,
         // Trial deliberately EXPIRED: a trial-covered send does not debit a
@@ -118,7 +126,7 @@ describe('Community images (contract)', () => {
         trialEndsAt: new Date(Date.now() - 60_000),
       },
       create: {
-        userWawuId: hostSub,
+        userWawuId,
         creditBalance,
         trialEndsAt: new Date(Date.now() - 60_000),
       },
@@ -126,9 +134,8 @@ describe('Community images (contract)', () => {
   };
 
   const balanceOf = async (userWawuId: string): Promise<number | undefined> =>
-    (
-      await prisma.creditsState.findUnique({ where: { userWawuId } })
-    )?.creditBalance;
+    (await prisma.creditsState.findUnique({ where: { userWawuId } }))
+      ?.creditBalance;
 
   beforeAll(async () => {
     const alreadyUp = await waitForHealth(`${MOCK_WAWU_ID_BASE}/health`, 1000);
@@ -147,11 +154,14 @@ describe('Community images (contract)', () => {
 
     const host = await registerThrowawayIdentity('host');
     const other = await registerThrowawayIdentity('other');
+    const poster = await registerThrowawayIdentity('poster');
     hostToken = host.accessToken;
     hostSub = host.sub;
     otherCreatorToken = other.accessToken;
     otherCreatorSub = other.sub;
-    ownedSubs.push(host.sub, other.sub);
+    posterToken = poster.accessToken;
+    posterSub = poster.sub;
+    ownedSubs.push(host.sub, other.sub, poster.sub);
 
     const moduleRef = await Test.createTestingModule({
       imports: [
@@ -179,7 +189,9 @@ describe('Community images (contract)', () => {
 
     // Both are paid creators with KYC still pending — hosting is gated on the
     // subscription, never on KYC (CLAUDE.md: the two gates are independent).
-    for (const sub of ownedSubs) {
+    // `posterSub` is deliberately excluded — a plain user with no
+    // CreatorState, so they pay per message like any ordinary member.
+    for (const sub of [hostSub, otherCreatorSub]) {
       await prisma.userProfile.upsert({
         where: { wawuUserId: sub },
         update: { accountType: 'creator' },
@@ -396,19 +408,33 @@ describe('Community images (contract)', () => {
       });
       communityId = created.id;
       createdCommunityIds.push(created.id);
+
+      // The host is a member of their own community by convention
+      // (CommunityMessageService.assertMember short-circuits on the host).
+      // The paying poster needs a real membership row.
+      await prisma.communityMembership.create({
+        data: {
+          userWawuId: posterSub,
+          communityId,
+          status: 'joined',
+          joinedAt: new Date(),
+        },
+      });
     });
 
-    // The host is a member of their own community by convention
-    // (CommunityMessageService.assertMember short-circuits on the host), so
-    // no membership row is needed to post here.
+    // The photo-price tests are asked of an ordinary PAYING member, not of
+    // the host: the host of a room never pays to post in it, so a price
+    // assertion made from the host's balance would pass no matter what the
+    // price was. The host's own free send is pinned separately at the end
+    // of this block.
     const send = (body: Record<string, unknown>) =>
       request(app.getHttpServer())
         .post(`/communities/${communityId}/messages`)
-        .set('Authorization', `Bearer ${hostToken}`)
+        .set('Authorization', `Bearer ${posterToken}`)
         .send(body);
 
     it('accepts an image with no text, and charges exactly 1 credit for it', async () => {
-      await setHostCredits(10);
+      await setCredits(posterSub, 10);
 
       const res = await send({ imageUrl: MESSAGE_IMAGE });
       expect([200, 201]).toContain(res.status);
@@ -416,7 +442,7 @@ describe('Community images (contract)', () => {
       expect(res.body.data).toEqual(
         expect.objectContaining({
           communityId,
-          senderWawuId: hostSub,
+          senderWawuId: posterSub,
           text: null,
           imageUrl: MESSAGE_IMAGE,
           // The rule: 1 credit = 1 message, whatever is in it. A photo is
@@ -425,19 +451,19 @@ describe('Community images (contract)', () => {
         }),
       );
 
-      expect(await balanceOf(hostSub)).toBe(9); // 10 - 1, not 10 - anything-else
+      expect(await balanceOf(posterSub)).toBe(9); // 10 - 1, not 10 - anything-else
 
       const spend = await prisma.creditSpend.findFirst({
-        where: { userWawuId: hostSub, communityId },
+        where: { userWawuId: posterSub, communityId },
         orderBy: { spentAt: 'desc' },
       });
       // The ledger the host's earnings are computed from records the same 1.
       expect(spend?.creditsSpent).toBe(1);
-      expect(spend?.creatorWawuId).toBe(hostSub);
+      expect(spend?.creatorWawuId).toBe(hostSub); // the host is the payee, always
     });
 
     it('charges the same 1 credit for text AND an image together', async () => {
-      await setHostCredits(10);
+      await setCredits(posterSub, 10);
 
       const res = await send({
         text: 'Fresh batch, this morning.',
@@ -452,11 +478,11 @@ describe('Community images (contract)', () => {
           costInCredits: 1,
         }),
       );
-      expect(await balanceOf(hostSub)).toBe(9);
+      expect(await balanceOf(posterSub)).toBe(9);
     });
 
     it('still stores a text-only message with a null image', async () => {
-      await setHostCredits(10);
+      await setCredits(posterSub, 10);
 
       const res = await send({ text: 'No photo on this one.' });
       expect([200, 201]).toContain(res.status);
@@ -467,11 +493,11 @@ describe('Community images (contract)', () => {
           costInCredits: 1,
         }),
       );
-      expect(await balanceOf(hostSub)).toBe(9);
+      expect(await balanceOf(posterSub)).toBe(9);
     });
 
     it('400s a message with neither text nor an image, and charges nothing for it', async () => {
-      await setHostCredits(10);
+      await setCredits(posterSub, 10);
       const before = await prisma.communityMessage.count({
         where: { communityId },
       });
@@ -482,25 +508,55 @@ describe('Community images (contract)', () => {
       );
 
       // The empty message cost nobody a credit and stored nothing.
-      expect(await balanceOf(hostSub)).toBe(10);
+      expect(await balanceOf(posterSub)).toBe(10);
       expect(
         await prisma.communityMessage.count({ where: { communityId } }),
       ).toBe(before);
     });
 
     it('400s a message whose only content is whitespace', async () => {
-      await setHostCredits(10);
+      await setCredits(posterSub, 10);
 
       const res = await send({ text: '   ' }).expect(400);
       expect(res.body.data).toBeNull();
-      expect(await balanceOf(hostSub)).toBe(10);
+      expect(await balanceOf(posterSub)).toBe(10);
     });
 
     it('400s an imageUrl that is not a link', async () => {
-      await setHostCredits(10);
+      await setCredits(posterSub, 10);
 
       await send({ imageUrl: 'not-a-url' }).expect(400);
+      expect(await balanceOf(posterSub)).toBe(10);
+    });
+
+    it('charges the HOST nothing for the same photo, in the room they host', async () => {
+      // The other half of "1 credit = 1 message, whatever is in it": the
+      // rule prices the message, it does not decide who pays. The host is
+      // the party who EARNS 90% of the credits spent in this room
+      // (docs/01_SPEC.md §1, stream 4), so posting a photo of their own
+      // stock must not bill them for it — and must not write a ledger row
+      // that pays them for it either.
+      await setCredits(hostSub, 10);
+
+      const res = await request(app.getHttpServer())
+        .post(`/communities/${communityId}/messages`)
+        .set('Authorization', `Bearer ${hostToken}`)
+        .send({ imageUrl: MESSAGE_IMAGE, text: 'Same photo, from the host.' });
+      expect([200, 201]).toContain(res.status);
+      expect(res.body.data).toEqual(
+        expect.objectContaining({
+          senderWawuId: hostSub,
+          imageUrl: MESSAGE_IMAGE,
+          costInCredits: 0,
+        }),
+      );
+
       expect(await balanceOf(hostSub)).toBe(10);
+      expect(
+        await prisma.creditSpend.count({
+          where: { userWawuId: hostSub, communityId },
+        }),
+      ).toBe(0);
     });
   });
 });

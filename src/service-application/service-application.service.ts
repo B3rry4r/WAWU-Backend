@@ -10,10 +10,29 @@ import { FLUTTERWAVE_CLIENT, type FlutterwaveClient } from './flutterwave-client
 import type { ApplyCacDto } from './dto/apply-cac.dto';
 import type { ApplyNepcDto } from './dto/apply-nepc.dto';
 import type { VerifyCacDto } from './dto/verify-cac.dto';
+import type {
+  ApproveApplicationDto,
+  ProgressApplicationDto,
+  RejectApplicationDto,
+} from './dto/progress-application.dto';
 
 /** Server-priced, never client-suppliable (conventions.md § Identity & format canon). */
 export const CAC_FEE_NAIRA = 25_000;
-const CAC_TX_REF_PREFIX = 'cac-';
+/** Exported so PaymentWebhookModule can map an inbound `cac-<id>` tx_ref
+ *  back to this flow. Value unchanged. */
+export const CAC_TX_REF_PREFIX = 'cac-';
+
+/**
+ * How long after payment WAWU tells a CAC applicant to expect their
+ * certificate. Nothing ever set `certificateExpectedBy`, so the success
+ * screen's "By {date}" line rendered as "By " for every applicant who paid.
+ *
+ * Eight days is the turnaround the product already quotes (applied 15 Aug ->
+ * expected 23 Aug on the tracking design). It is a promise, not a guess about
+ * CAC's own queue, so it lives here as one named constant and an operator can
+ * move any individual application's date with the progress endpoint.
+ */
+export const CAC_CERTIFICATE_SLA_DAYS = 8;
 
 /**
  * ServiceApplication — registry.json § ServiceApplication. Owns the CAC
@@ -130,9 +149,22 @@ export class ServiceApplicationService {
         reference: this.generateReference(service.prefix),
         status: 'under_review',
         statusLabel: 'With the partner',
+        // `note` is what the applicant actually asked for, and the DTO
+        // insists on at least ten characters of it — then it was thrown
+        // away, because nothing wrote it anywhere. It goes in the timeline
+        // entry's own `note` field: that is the column the tracking screen
+        // already reads, so the partner and the applicant both see the
+        // request in the applicant's own words. Deliberately not a new
+        // column — ServiceApplication is returned to the app by spread, so
+        // adding one would widen a live response.
         timeline: [
           {
             label: 'Request submitted',
+            occurredAt: new Date().toISOString(),
+            note: dto.note,
+          },
+          {
+            label: 'With the partner',
             occurredAt: new Date().toISOString(),
             note: `Sent to ${service.partner} for review.`,
           },
@@ -184,14 +216,26 @@ export class ServiceApplicationService {
       },
     ];
 
-    return this.prisma.serviceApplication.update({
-      where: { id: application.id },
+    const expectedBy = new Date();
+    expectedBy.setUTCDate(expectedBy.getUTCDate() + CAC_CERTIFICATE_SLA_DAYS);
+
+    // Conditional flip: the `status !== 'awaiting_payment'` read above is not
+    // a lock, and since the Flutterwave webhook landed there are two callers
+    // that can settle the same charge at once. Without the guard, one payment
+    // appends the "Submitted" timeline entry twice.
+    await this.prisma.serviceApplication.updateMany({
+      where: { id: application.id, status: 'awaiting_payment' },
       data: {
         status: 'submitted',
         statusLabel: 'Submitted — under review',
         amountPaid: CAC_FEE_NAIRA,
         timeline: timeline as unknown as object[],
+        // The column is @db.Date, so only the calendar day is stored.
+        certificateExpectedBy: new Date(expectedBy.toISOString().slice(0, 10)),
       },
+    });
+    return this.prisma.serviceApplication.findUniqueOrThrow({
+      where: { id: application.id },
     });
   }
 
@@ -214,6 +258,102 @@ export class ServiceApplicationService {
         statusLabel: 'Submitted — under review',
         amountPaid: null,
         timeline: timeline as unknown as object[],
+        // The apply screen requires three uploads and this dropped all of
+        // them on the floor.
+        documents: dto.documents ?? [],
+      },
+    });
+  }
+
+  // ---------------------------------------------------------------------
+  // Operator progression. Everything below is reached only through
+  // AdminKeyGuard — see dto/progress-application.dto.ts.
+  // ---------------------------------------------------------------------
+
+  private async requireApplication(id: string) {
+    const application = await this.prisma.serviceApplication.findUnique({ where: { id } });
+    if (!application) throw new NotFoundException('Service application not found');
+    return application;
+  }
+
+  private appended(
+    application: { timeline: unknown },
+    entry: ServiceApplicationTimelineEntry,
+  ): object[] {
+    const existing =
+      (application.timeline as unknown as ServiceApplicationTimelineEntry[] | null) ?? [];
+    return [...existing, entry] as unknown as object[];
+  }
+
+  /**
+   * Moves an application along: appends a timeline entry and, optionally,
+   * updates the status pair and the expected-certificate date. This is the
+   * write that was missing — an application could be created and then never
+   * change again.
+   */
+  async progress(id: string, dto: ProgressApplicationDto): Promise<ServiceApplication> {
+    const application = await this.requireApplication(id);
+
+    return this.prisma.serviceApplication.update({
+      where: { id },
+      data: {
+        ...(dto.status !== undefined && { status: dto.status }),
+        ...(dto.statusLabel !== undefined && { statusLabel: dto.statusLabel }),
+        ...(dto.certificateExpectedBy !== undefined && {
+          certificateExpectedBy: new Date(dto.certificateExpectedBy.slice(0, 10)),
+        }),
+        timeline: this.appended(application, {
+          label: dto.label,
+          occurredAt: new Date().toISOString(),
+          ...(dto.note !== undefined && { note: dto.note }),
+        }),
+      },
+    });
+  }
+
+  /**
+   * Refuses an application, with a reason the applicant can read.
+   *
+   * `rejection` is a note only. It says nothing about money: a CAC applicant
+   * who was refused has already paid ₦25,000, and refunding that is a real
+   * transfer nothing in this codebase performs. The note is where an operator
+   * tells them what actually happened.
+   */
+  async reject(id: string, dto: RejectApplicationDto): Promise<ServiceApplication> {
+    const application = await this.requireApplication(id);
+
+    return this.prisma.serviceApplication.update({
+      where: { id },
+      data: {
+        status: 'rejected',
+        statusLabel: dto.statusLabel ?? 'Not approved',
+        rejection: dto.reason,
+        timeline: this.appended(application, {
+          label: 'Not approved',
+          occurredAt: new Date().toISOString(),
+          note: dto.reason,
+        }),
+      },
+    });
+  }
+
+  /** Approves an application and, if one was issued, attaches the certificate. */
+  async approve(id: string, dto: ApproveApplicationDto): Promise<ServiceApplication> {
+    const application = await this.requireApplication(id);
+
+    return this.prisma.serviceApplication.update({
+      where: { id },
+      data: {
+        status: 'approved',
+        statusLabel: dto.statusLabel ?? 'Certificate ready',
+        ...(dto.certificateUrl && {
+          documents: [...application.documents, dto.certificateUrl],
+        }),
+        timeline: this.appended(application, {
+          label: 'Certificate ready',
+          occurredAt: new Date().toISOString(),
+          ...(dto.note !== undefined && { note: dto.note }),
+        }),
       },
     });
   }

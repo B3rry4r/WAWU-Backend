@@ -21,6 +21,8 @@ import {
 } from './flutterwave-client.interface';
 import type { CreateContentDto } from './dto/create-content.dto';
 import type { RateContentDto } from './dto/rate-content.dto';
+import { netOfCommission } from '../common/money';
+import { NotificationService } from '../notification/notification.service';
 import type { VerifyUnlockDto } from './dto/verify-unlock.dto';
 
 /** Standard commission rate (conventions.md § Identity & format canon). */
@@ -84,6 +86,7 @@ export class ContentPieceService {
   constructor(
     private readonly prisma: PrismaService,
     @Inject(FLUTTERWAVE_CLIENT) private readonly flutterwave: FlutterwaveClient,
+    private readonly notifications: NotificationService,
   ) {}
 
   /** Snapshotted at transaction time, never recomputed later (conventions.md). */
@@ -569,10 +572,23 @@ export class ContentPieceService {
     // so an unconditional update would let both proceed. Unlocking is
     // idempotent so a lost race is harmless here, but the same shape guards
     // the paid-credit path in credit-purchase where it is not.
-    await this.prisma.purchase.updateMany({
+    const settled = await this.prisma.purchase.updateMany({
       where: { id: purchase.id, status: 'pending' },
       data: { status: 'completed', flutterwaveTxId: result.transactionId },
     });
+
+    // "You sold something" — to the CREATOR, after settlement, and only for
+    // the caller that won the pending->completed flip so the browser
+    // /verify and the Flutterwave webhook cannot both announce the same
+    // sale. A failed verification threw above and never gets here.
+    if (settled.count > 0) {
+      await this.notifications.emit({
+        kind: 'sale',
+        userWawuId: purchase.creatorWawuId,
+        contentTitle: content.title,
+        netAmount: netOfCommission(purchase.amount, purchase.commissionRate),
+      });
+    }
 
     return { purchased: true, fullAssetUrl: content.fullAssetUrl };
   }
