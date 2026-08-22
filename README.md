@@ -139,6 +139,62 @@ Idempotent: an existing admin with that email is left untouched. Pass
 `ADMIN_SEED_RESET_PASSWORD=true` to re-hash the password and revoke that
 admin's outstanding tokens.
 
+## Payments
+
+### Flutterwave webhook (required — not optional)
+
+```
+POST /api/hub/webhooks/flutterwave
+```
+
+Every money flow in this backend — tips, paid content unlocks, credit packs,
+creator subscriptions and upgrades, paid DMs, CAC applications, WAWUPay bills,
+WAWUCare plans and both WAWU Legal payment stages — used to be confirmed
+**only** by the customer's browser POSTing to a `/verify` endpoint after the
+Flutterwave modal closed. Close the tab, drop off Wi-Fi, or crash on the
+redirect and the customer is charged while the system grants nothing. This
+endpoint is the provider-driven half of that confirmation, and it is what
+stops purchases getting stranded in `pending`.
+
+- **Auth**: no JWT and no user. The only credential is the `verif-hash`
+  header, which Flutterwave sets to the *verbatim* value of the "Secret hash"
+  field on the dashboard. `FlutterwaveSignatureGuard` compares it to
+  `FLUTTERWAVE_SECRET_HASH` in constant time and **fails closed** — if the env
+  var is unset the endpoint answers 401 rather than accepting everything.
+- **Trust**: the payload is never evidence. Its `amount`, `status` and
+  `currency` are logged, not believed. Settlement is delegated to the same
+  `/verify` service methods the browser calls, each of which re-verifies the
+  transaction against Flutterwave and compares the amount Flutterwave reports
+  to the amount this server stored (`PendingCharge.expectedAmount`,
+  `Purchase.amount`, `CreditPurchase.amount`, …). A ₦1 payment cannot buy an
+  ₦18,999 tier through this door either.
+- **Exactly-once**: `PaymentWebhookReceipt.deliveryKey` (`<event>:<tx_ref>`) is
+  unique, and the insert is the claim — a duplicate delivery loses it and
+  never reaches settlement. The webhook racing the browser's `/verify` is
+  caught one layer down, by conditional writes in each settle path.
+- **Status codes are the retry contract**: `200` handled (settled, refused,
+  duplicate, unmatched or ignored — do not redeliver); `401` signature missing
+  or wrong (never processed); `5xx` we could not finish, please redeliver.
+
+### Deploy checklist
+
+1. Set `FLUTTERWAVE_SECRET_KEY` to a real key. The app **refuses to boot** in
+   production without one, because the mock adapter approves every charge for
+   free (`src/common/flutterwave/require-payment-config.ts`).
+2. Set `FLUTTERWAVE_SECRET_HASH` to a strong random value.
+3. In the Flutterwave dashboard → **Settings → Webhooks**, paste the *same*
+   value into "Secret hash" and set the webhook URL to
+   `https://<host>/api/hub/webhooks/flutterwave`. Skipping this leaves the
+   backend dependent on the browser again — silently.
+4. Confirm the URL is reachable without auth from outside your VPC and is not
+   behind the JWT-protected path or a WAF rule that strips `verif-hash`.
+5. Run `npx prisma migrate deploy` so `PaymentWebhookReceipt` exists.
+6. `PaymentWebhookReceipt` is the operator's audit trail: rows with status
+   `unmatched`, `rejected` or `failed` are the reconciliation queue.
+7. Other required env vars: `DATABASE_URL`, `HUB_API_PORT`, `CORS_ORIGIN`
+   (mandatory in production), `WAWU_ID_JWKS_URL`, `WAWU_ID_BASE_URL`,
+   `WAWU_ID_INTERNAL_SERVICE_KEY`, `FLUTTERWAVE_PUBLIC_KEY`, `WAWU_ADMIN_KEY`.
+
 ---
 
 <p align="center">

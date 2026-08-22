@@ -14,6 +14,8 @@ import {
   FLUTTERWAVE_CLIENT,
   type FlutterwaveClient,
 } from './flutterwave-client.interface';
+import { NotificationService } from '../notification/notification.service';
+import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import type { SendDmDto } from './dto/send-dm.dto';
 import type { VerifyDmDto } from './dto/verify-dm.dto';
 import type { RespondDmDto } from './dto/respond-dm.dto';
@@ -115,6 +117,8 @@ export class DirectMessageService {
   constructor(
     private readonly prisma: PrismaService,
     @Inject(FLUTTERWAVE_CLIENT) private readonly flutterwave: FlutterwaveClient,
+    private readonly notifications: NotificationService,
+    private readonly blockedAccounts: BlockedAccountService,
   ) {}
 
   /**
@@ -150,6 +154,19 @@ export class DirectMessageService {
     if (creatorWawuId === senderWawuId) {
       throw new BadRequestException('Cannot send a paid DM to yourself');
     }
+
+    // THE blocking gate. Enforced here — at send-init, before the
+    // Flutterwave charge is created — and deliberately not at
+    // /send/verify: by verify time the fan has already been charged, and
+    // refusing there would take their money for a message that is never
+    // delivered. Symmetric: a creator who blocked this fan cannot be
+    // messaged by them, and a fan who blocked this creator cannot pay them
+    // either.
+    await this.blockedAccounts.assertNotBlocked(
+      senderWawuId,
+      creatorWawuId,
+      'You cannot send a paid direct message to this account.',
+    );
 
     const creatorState = await this.prisma.creatorState.findUnique({
       where: { wawuUserId: creatorWawuId },
@@ -228,16 +245,32 @@ export class DirectMessageService {
     // Consumed on resolution either way — a second verify against the same
     // messageId has nothing left to match (mirrors CreatorSubscription's
     // documented precedent).
-    await this.prisma.pendingCharge.deleteMany({ where: { txRef: messageId } });
+    const claim = await this.prisma.pendingCharge.deleteMany({
+      where: { txRef: messageId },
+    });
 
     if (!verified) {
       throw new BadRequestException('Payment verification failed');
     }
 
+    if (claim.count === 0) {
+      // The browser's /verify and the Flutterwave webhook can settle the same
+      // charge concurrently; only the caller that removed the pending row may
+      // create the DM. The other returns the DM that now exists rather than
+      // colliding on its primary key.
+      const settled = await this.prisma.directMessage.findUnique({
+        where: { id: messageId },
+      });
+      if (settled) return settled;
+      throw new NotFoundException(
+        'No matching DM send attempt found for this reference',
+      );
+    }
+
     const sentAt = new Date();
     const deadlineAt = new Date(sentAt.getTime() + ONE_DAY_MS);
 
-    return this.prisma.directMessage.create({
+    const created = await this.prisma.directMessage.create({
       data: {
         id: messageId,
         creatorWawuId: pending.creatorWawuId,
@@ -252,6 +285,19 @@ export class DirectMessageService {
         flutterwaveTxRef: pending.txRef,
       },
     });
+
+    // "Someone paid to message you" — to the CREATOR, and only on the branch
+    // that actually created the DM. The early-return above (webhook and
+    // browser settling the same charge) returns an already-created DM and
+    // must not announce it a second time. A failed verification threw before
+    // this point, so an unpaid DM never produces a notification.
+    await this.notifications.emit({
+      kind: 'dm_received',
+      userWawuId: created.creatorWawuId,
+      amount: created.amount,
+    });
+
+    return created;
   }
 
   /**

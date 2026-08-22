@@ -1,10 +1,11 @@
 import { Module } from '@nestjs/common';
 import { SchedulerService } from './scheduler.service';
+import { NotificationModule } from '../notification/notification.module';
 
 /**
  * Time-based work for the whole API. Registered once in AppModule alongside
  * ScheduleModule.forRoot(); see SchedulerService for what each sweep does and
  * why the subscription one stops short of taking a renewal payment.
  */
-@Module({ providers: [SchedulerService] })
+@Module({ imports: [NotificationModule], providers: [SchedulerService] })
 export class SchedulerModule {}

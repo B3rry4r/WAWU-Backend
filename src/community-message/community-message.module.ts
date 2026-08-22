@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { CreditSpendModule } from '../credit-spend/credit-spend.module';
 import { CommunityMessageController } from './community-message.controller';
 import { CommunityMessageService } from './community-message.service';
+import { NotificationModule } from '../notification/notification.module';
 
 /**
  * CommunityMessage resource module. PrismaService comes from the globally
@@ -14,7 +15,7 @@ import { CommunityMessageService } from './community-message.service';
  * instead (see community-message.service.ts's doc comment).
  */
 @Module({
-  imports: [CreditSpendModule],
+  imports: [NotificationModule, CreditSpendModule],
   controllers: [CommunityMessageController],
   providers: [CommunityMessageService],
 })

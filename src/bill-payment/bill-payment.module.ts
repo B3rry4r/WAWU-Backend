@@ -4,10 +4,11 @@ import { FlutterwaveCheckoutVerifier } from '../common/flutterwave/checkout-veri
 import { FlutterwaveBillsClient } from './flutterwave-bills.client';
 import { BillPaymentService } from './bill-payment.service';
 import { BillPaymentController } from './bill-payment.controller';
+import { BillPaymentOpsController } from './bill-payment-ops.controller';
 
 @Module({
   imports: [PrismaModule],
-  controllers: [BillPaymentController],
+  controllers: [BillPaymentController, BillPaymentOpsController],
   providers: [BillPaymentService, FlutterwaveBillsClient, FlutterwaveCheckoutVerifier],
   exports: [BillPaymentService],
 })

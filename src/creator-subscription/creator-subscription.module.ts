@@ -6,6 +6,7 @@ import { FLUTTERWAVE_CLIENT } from './flutterwave-client.interface';
 import { RealFlutterwaveAdapter } from './real-flutterwave.adapter';
 import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';
 import { shouldUseMockFlutterwave } from '../common/flutterwave/require-payment-config';
+import { NotificationModule } from '../notification/notification.module';
 
 /**
  * registry.json "CreatorSubscription" resource module. PrismaService comes
@@ -24,6 +25,7 @@ import { shouldUseMockFlutterwave } from '../common/flutterwave/require-payment-
  * else inject the `FLUTTERWAVE_CLIENT` token, never either adapter directly.
  */
 @Module({
+  imports: [NotificationModule],
   controllers: [CreatorSubscriptionController],
   providers: [
     CreatorSubscriptionService,
@@ -42,5 +44,7 @@ import { shouldUseMockFlutterwave } from '../common/flutterwave/require-payment-
       inject: [MockFlutterwaveAdapter, RealFlutterwaveAdapter],
     },
   ],
+  // Exported for PaymentWebhookModule (provider-driven subscription settlement).
+  exports: [CreatorSubscriptionService],
 })
 export class CreatorSubscriptionModule {}

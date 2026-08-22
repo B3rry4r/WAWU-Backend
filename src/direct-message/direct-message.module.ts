@@ -6,6 +6,8 @@ import { FLUTTERWAVE_CLIENT } from './flutterwave-client.interface';
 import { RealFlutterwaveAdapter } from './real-flutterwave.adapter';
 import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';
 import { shouldUseMockFlutterwave } from '../common/flutterwave/require-payment-config';
+import { NotificationModule } from '../notification/notification.module';
+import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 
 /**
  * registry.json "DirectMessage" resource module. PrismaService comes from
@@ -26,6 +28,7 @@ import { shouldUseMockFlutterwave } from '../common/flutterwave/require-payment-
  * never either adapter directly.
  */
 @Module({
+  imports: [NotificationModule, BlockedAccountModule],
   controllers: [DirectMessageController],
   providers: [
     DirectMessageService,
@@ -44,5 +47,7 @@ import { shouldUseMockFlutterwave } from '../common/flutterwave/require-payment-
       inject: [MockFlutterwaveAdapter, RealFlutterwaveAdapter],
     },
   ],
+  // Exported for PaymentWebhookModule (provider-driven paid-DM settlement).
+  exports: [DirectMessageService],
 })
 export class DirectMessageModule {}

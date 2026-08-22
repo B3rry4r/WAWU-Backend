@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -13,7 +14,16 @@ import {
   type BillItem,
   type Biller,
 } from './flutterwave-bills.client';
-import type { InitBillDto } from './dto/bill.dto';
+import type { InitBillDto, RecordRefundDto } from './dto/bill.dto';
+
+/**
+ * How long a bill may sit in `paid` — money taken, biller not yet paid —
+ * before it is treated as stuck and surfaced to an operator. Delivery is a
+ * single synchronous call, so anything still `paid` after this did not
+ * simply take a while: the process died between banking the payment and
+ * recording the outcome.
+ */
+const STUCK_AFTER_MINUTES = 15;
 
 /**
  * WAWUPay.
@@ -122,10 +132,21 @@ export class BillPaymentService {
     // Money is in. From here the customer is owed either the bill or a refund,
     // so the payment is banked before the biller is called: if the process dies
     // mid-delivery we can still see that we hold their money.
-    const paid = await this.prisma.billPayment.update({
-      where: { id: record.id },
+    // Conditional flip. The `status !== 'pending'` read above is not a lock,
+    // and since the Flutterwave webhook landed there are two callers that can
+    // reach here for the same charge at once. Only the one that actually moves
+    // the row out of `pending` may call the biller — delivering a bill twice
+    // sends real money out twice.
+    const claimed = await this.prisma.billPayment.updateMany({
+      where: { id: record.id, status: 'pending' },
       data: { status: 'paid', flutterwaveTxId: verified.transactionId },
     });
+    if (claimed.count === 0) {
+      const settled = await this.prisma.billPayment.findUnique({
+        where: { id: record.id },
+      });
+      return this.toResponse(settled ?? record);
+    }
 
     try {
       const result = await this.bills.payBill({
@@ -162,6 +183,125 @@ export class BillPaymentService {
     }
   }
 
+  // ---------------------------------------------------------------------
+  // Operator recovery. Reached only through AdminKeyGuard.
+  // ---------------------------------------------------------------------
+
+  /**
+   * Everything the customer has paid for and not received.
+   *
+   * `paid` was a silent dead end: if the process died between banking the
+   * payment and recording the biller's answer, the row stayed `paid` forever
+   * with nothing anywhere looking for it. `failed` is included because it
+   * means the same thing in money terms — we hold their cash and they got
+   * nothing.
+   */
+  async listStuck() {
+    const cutoff = new Date(Date.now() - STUCK_AFTER_MINUTES * 60_000);
+    const rows = await this.prisma.billPayment.findMany({
+      where: {
+        OR: [
+          { status: 'paid', createdAt: { lt: cutoff } },
+          { status: 'failed' },
+        ],
+      },
+      orderBy: { createdAt: 'asc' },
+      take: 200,
+    });
+    return rows.map((r) => ({
+      ...this.toResponse(r),
+      buyerWawuId: r.buyerWawuId,
+      flutterwaveTxRef: r.flutterwaveTxRef,
+    }));
+  }
+
+  /**
+   * Asks Flutterwave what actually happened to a stuck bill and records the
+   * answer.
+   *
+   * This is a read, not a retry: re-sending the payment could top the
+   * customer up twice. `billStatus` looks the bill up by the same reference
+   * WAWU sent, so a delivery that succeeded and whose response was lost gets
+   * recognised as delivered rather than refunded by mistake.
+   */
+  async reconcile(billPaymentId: string) {
+    const record = await this.prisma.billPayment.findUnique({
+      where: { id: billPaymentId },
+    });
+    if (!record) throw new NotFoundException('Bill payment not found.');
+    if (record.status !== 'paid' && record.status !== 'failed') {
+      return { billPayment: this.toResponse(record), providerStatus: null, changed: false };
+    }
+
+    const result = await this.bills.billStatus(record.flutterwaveTxRef);
+    const providerStatus = readProviderStatus(result);
+
+    if (providerStatus === 'successful') {
+      const delivered = await this.prisma.billPayment.update({
+        where: { id: record.id },
+        data: {
+          status: 'delivered',
+          providerStatus,
+          deliveredAt: record.deliveredAt ?? new Date(),
+        },
+      });
+      return { billPayment: this.toResponse(delivered), providerStatus, changed: true };
+    }
+
+    if (providerStatus === 'failed') {
+      const failed = await this.prisma.billPayment.update({
+        where: { id: record.id },
+        data: {
+          status: 'failed',
+          providerStatus,
+          failureReason:
+            record.failureReason ?? 'The biller reported the payment as failed.',
+        },
+      });
+      return { billPayment: this.toResponse(failed), providerStatus, changed: true };
+    }
+
+    // Still in flight, or a shape we do not recognise. Left alone rather than
+    // guessed at — the row stays visible in listStuck().
+    return { billPayment: this.toResponse(record), providerStatus, changed: false };
+  }
+
+  /**
+   * Records a refund that has already been paid back to the customer.
+   *
+   * The status transition only. No money moves here and none can: there is no
+   * Flutterwave refund adapter in this codebase, so this endpoint is a
+   * bookkeeping entry for a transfer a human made, which is why the reference
+   * of that transfer is required.
+   */
+  async recordRefund(billPaymentId: string, dto: RecordRefundDto) {
+    const record = await this.prisma.billPayment.findUnique({
+      where: { id: billPaymentId },
+    });
+    if (!record) throw new NotFoundException('Bill payment not found.');
+    if (record.status === 'refunded') {
+      throw new ConflictException('This bill has already been recorded as refunded.');
+    }
+    if (record.status !== 'paid' && record.status !== 'failed') {
+      throw new BadRequestException(
+        `Only a bill WAWU was paid for and did not deliver can be refunded, not one that is ${record.status}.`,
+      );
+    }
+
+    const refunded = await this.prisma.billPayment.update({
+      where: { id: record.id },
+      data: {
+        status: 'refunded',
+        refundReference: dto.refundReference,
+        refundedAt: new Date(),
+      },
+    });
+    this.logger.log(
+      `Bill ${record.id} marked refunded against real-world reference ${dto.refundReference}.`,
+    );
+    return this.toResponse(refunded);
+  }
+
   async listMine(buyerWawuId: string, page: number, perPage: number) {
     const where = { buyerWawuId };
     const [items, total] = await this.prisma.$transaction([
@@ -193,6 +333,8 @@ export class BillPaymentService {
     failureReason: string | null;
     createdAt: Date;
     deliveredAt: Date | null;
+    refundReference: string | null;
+    refundedAt: Date | null;
   }) {
     return {
       id: r.id,
@@ -206,6 +348,27 @@ export class BillPaymentService {
       failureReason: r.failureReason,
       createdAt: r.createdAt.toISOString(),
       deliveredAt: r.deliveredAt?.toISOString() ?? null,
+      refundReference: r.refundReference,
+      refundedAt: r.refundedAt?.toISOString() ?? null,
     };
   }
+}
+
+/**
+ * Flutterwave's bill-status payload is loosely typed and has been both an
+ * object and a single-element array. Anything not clearly successful or
+ * failed is reported as unknown so the caller leaves the row alone.
+ */
+function readProviderStatus(
+  payload: unknown,
+): 'successful' | 'failed' | 'unknown' {
+  const data = Array.isArray(payload) ? payload[0] : payload;
+  if (!data || typeof data !== 'object') return 'unknown';
+  const raw = (data as { status?: unknown }).status;
+  const status = typeof raw === 'string' ? raw.toLowerCase() : '';
+  if (['successful', 'success', 'completed', 'delivered'].includes(status)) {
+    return 'successful';
+  }
+  if (['failed', 'failure', 'reversed'].includes(status)) return 'failed';
+  return 'unknown';
 }

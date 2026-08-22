@@ -16,6 +16,13 @@ import type { VerifyCreditPurchaseDto } from './dto/verify-credit-purchase.dto';
 /** 7 days, mirrors CreditsStateService's own trial window constant (wave 0). */
 const TRIAL_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
 
+/**
+ * `CreditPurchase.amount` is whole naira (every pack price is). Cost basis is
+ * carried in kobo so the per-credit maths on a ₦1,000/120 pack stays exact
+ * integer arithmetic instead of drifting through 8.3333 floats.
+ */
+const KOBO_PER_NAIRA = 100;
+
 export interface FlutterwaveConfigResponse {
   flutterwaveConfig: {
     txRef: string;
@@ -154,20 +161,60 @@ export class CreditPurchaseService {
       return { creditBalance: existing?.creditBalance ?? 0 };
     }
 
-    // Credit the balance — upsert since CreditsState may not exist yet for
-    // this user (credits-state's own getOrCreate is the *read*-path
-    // originator; this is the *write*-path originator for a user who buys
-    // credits before ever reading GET /credits).
-    const updated = await this.prisma.creditsState.upsert({
-      where: { userWawuId },
-      create: {
-        userWawuId,
-        creditBalance: purchase.creditsGranted,
-        trialEndsAt: new Date(Date.now() + TRIAL_DURATION_MS),
-      },
-      update: {
-        creditBalance: { increment: purchase.creditsGranted },
-      },
+    // Credit the balance AND open the cost-basis lot in one transaction.
+    //
+    // The lot is what makes the community host's 90% payable (docs/01_SPEC.md
+    // §1 row 4). It records the exact kobo WAWU banked for exactly these
+    // credits; spends draw it down FIFO and carry its cost basis onto
+    // CreditSpendEarning (see src/credit-spend/credit-spend.service.ts).
+    //
+    // It is created HERE and nowhere else, and only on a verified,
+    // `completed` charge — which is precisely the refund/failure guarantee
+    // the model needs: a pending or failed purchase opens no lot, so its
+    // credits can never be spent, so no host share can ever have been
+    // counted against money that did not clear. A failed verify above has
+    // already flipped the row to `failed` and returned before reaching this
+    // point.
+    //
+    // Upsert on the balance, since CreditsState may not exist yet for this
+    // user (credits-state's own getOrCreate is the *read*-path originator;
+    // this is the *write*-path originator for a user who buys credits before
+    // ever reading GET /credits). The two writes are transactional because a
+    // balance credited without its lot would be spendable credits with no
+    // cost basis — the host would silently earn ₦0 on money WAWU banked.
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const state = await tx.creditsState.upsert({
+        where: { userWawuId },
+        create: {
+          userWawuId,
+          creditBalance: purchase.creditsGranted,
+          trialEndsAt: new Date(Date.now() + TRIAL_DURATION_MS),
+        },
+        update: {
+          creditBalance: { increment: purchase.creditsGranted },
+        },
+      });
+
+      // `CreditLot.creditPurchaseId` is unique, so this is the second,
+      // structural guard against a double-verify minting a second lot (the
+      // claim above is the first). `createMany ... skipDuplicates` keeps a
+      // replay idempotent instead of 500-ing on the constraint.
+      await tx.creditLot.createMany({
+        data: [
+          {
+            creditPurchaseId: purchase.id,
+            userWawuId,
+            creditsGranted: purchase.creditsGranted,
+            creditsRemaining: purchase.creditsGranted,
+            grossKobo: purchase.amount * KOBO_PER_NAIRA,
+            allocatedKobo: 0,
+            purchasedAt: purchase.purchasedAt,
+          },
+        ],
+        skipDuplicates: true,
+      });
+
+      return state;
     });
 
     return { creditBalance: updated.creditBalance };

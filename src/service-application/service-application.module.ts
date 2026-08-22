@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ServiceApplicationController } from './service-application.controller';
+import { ServiceApplicationAliasController } from './service-application-alias.controller';
+import { ServiceApplicationOpsController } from './service-application-ops.controller';
 import { ServiceApplicationService } from './service-application.service';
 import { FLUTTERWAVE_CLIENT } from './flutterwave-client.interface';
 import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';
@@ -28,7 +30,11 @@ function usesMockFlutterwave(): boolean {
 }
 
 @Module({
-  controllers: [ServiceApplicationController],
+  controllers: [
+    ServiceApplicationController,
+    ServiceApplicationAliasController,
+    ServiceApplicationOpsController,
+  ],
   providers: [
     ServiceApplicationService,
     {
@@ -36,5 +42,7 @@ function usesMockFlutterwave(): boolean {
       useClass: usesMockFlutterwave() ? MockFlutterwaveAdapter : RealFlutterwaveAdapter,
     },
   ],
+  // Exported for PaymentWebhookModule (provider-driven CAC settlement).
+  exports: [ServiceApplicationService],
 })
 export class ServiceApplicationModule {}

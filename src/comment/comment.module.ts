@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { CommentController } from './comment.controller';
 import { CommentService } from './comment.service';
+import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 
 /**
  * registry.json "Comment" resource module. PrismaService comes from the
@@ -8,6 +9,7 @@ import { CommentService } from './comment.service';
  * re-imported here.
  */
 @Module({
+  imports: [BlockedAccountModule],
   controllers: [CommentController],
   providers: [CommentService],
 })

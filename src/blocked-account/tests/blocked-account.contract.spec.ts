@@ -132,6 +132,19 @@ describe('BlockedAccount contract', () => {
   }, 30000);
 
   afterAll(async () => {
+    // Blocks are no longer inert. Until this change nothing in the codebase
+    // READ BlockedAccount, so leaving this spec's fixture rows behind was
+    // harmless; now a leftover block between two seeded users 403s paid DMs,
+    // tips, follows and comments in every suite that runs after this one.
+    // The spec cleans up after itself.
+    await prisma?.blockedAccount.deleteMany({
+      where: {
+        OR: [
+          { userWawuId: PLAIN_USER.sub, blockedWawuId: { in: [CREATOR_BASIC.sub, CREATOR_PRO.sub] } },
+          { userWawuId: CREATOR_PRO.sub, blockedWawuId: PLAIN_USER.sub },
+        ],
+      },
+    });
     await app?.close();
     mockWawuId?.kill();
   });

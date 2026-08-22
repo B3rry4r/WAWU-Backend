@@ -49,3 +49,23 @@ export class VerifyBillDto {
 export class ListBillersQueryDto {
   @IsOptional() @IsString() @MaxLength(4) country?: string;
 }
+
+/**
+ * Operator action: record a refund that has ALREADY been paid back to the
+ * customer.
+ *
+ * `FulfilmentStatus.refunded` had no writer anywhere, while the failure
+ * message the customer sees says verbatim "our team will refund you". This
+ * closes that, but it does not perform a refund: nothing in this codebase can
+ * move money back to a card — there is no Flutterwave refund adapter — so the
+ * reference of the refund a human actually made is mandatory. Without one the
+ * status would be a claim about money that never moved, which is exactly the
+ * lie this endpoint exists to stop.
+ */
+export class RecordRefundDto {
+  /**
+   * The provider/bank reference for the refund that was actually sent. Not
+   * optional, on purpose.
+   */
+  @IsString() @IsNotEmpty() @MaxLength(120) refundReference!: string;
+}

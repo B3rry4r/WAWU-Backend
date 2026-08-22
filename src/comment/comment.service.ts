@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type { Comment } from '../common/types';
 import type { CreateCommentDto } from './dto/create-comment.dto';
@@ -10,16 +11,24 @@ import type { CreateCommentDto } from './dto/create-comment.dto';
  */
 @Injectable()
 export class CommentService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly blockedAccounts: BlockedAccountService,
+  ) {}
 
-  private async assertContentExists(contentId: string): Promise<void> {
+  /**
+   * Returns the row rather than void so `create` can gate on the creator
+   * without a second query — see the blocking check there.
+   */
+  private async assertContentExists(contentId: string): Promise<{ id: string; creatorWawuId: string }> {
     const content = await this.prisma.contentPiece.findUnique({
       where: { id: contentId },
-      select: { id: true },
+      select: { id: true, creatorWawuId: true },
     });
     if (!content) {
       throw new NotFoundException('Content not found');
     }
+    return content;
   }
 
   async list(contentId: string, page: number, perPage: number): Promise<Paginated<Comment>> {
@@ -39,7 +48,16 @@ export class CommentService {
   }
 
   async create(contentId: string, authorWawuId: string, dto: CreateCommentDto): Promise<Comment> {
-    await this.assertContentExists(contentId);
+    const content = await this.assertContentExists(contentId);
+
+    // Blocking gate. Reading a public content page is still allowed (the
+    // list endpoint above is untouched) — what a block stops is talking AT
+    // the other party. Symmetric, like every other block check.
+    await this.blockedAccounts.assertNotBlocked(
+      authorWawuId,
+      content.creatorWawuId,
+      'You cannot comment on this content.',
+    );
 
     if (dto.replyToId) {
       const parent = await this.prisma.comment.findUnique({

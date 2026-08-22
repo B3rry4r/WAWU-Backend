@@ -51,12 +51,13 @@ import { HealthPlanModule } from './health-plan/health-plan.module';
 import { LegalModule } from './legal/legal.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { SchedulerModule } from './scheduler/scheduler.module';
+import { PaymentWebhookModule } from './payment-webhook/payment-webhook.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 // Phase 5 build (waves 0-3, all 39 registry resources) is now complete.
-// Remaining SEAMs: the deferred Flutterwave webhook + scheduled-job cron
-// pass (declared/scheduled-jobs.json — spans CreatorSubscription +
-// DirectMessage, both now built), then Phase 6 (wire frontend).
+// The deferred Flutterwave webhook has now shipped as PaymentWebhookModule
+// (POST /api/hub/webhooks/flutterwave) alongside the scheduled-job cron pass,
+// so payment confirmation no longer depends on the customer's browser.
 
 @Module({
   imports: [
@@ -174,6 +175,12 @@ import { APP_GUARD } from '@nestjs/core';
     CommunityMessageModule,
     CreatorEarningsModule,
     DirectMessageModule,
+    // LAST on purpose. PaymentWebhookModule imports every money module so it
+    // can reuse their /verify settlement, and every one of them is already
+    // registered above — Nest dedupes, so the load-bearing controller order
+    // (MentorModule / ServiceApplicationModule before PartnerServiceModule's
+    // `@Get(':id')` catch-all) is unaffected.
+    PaymentWebhookModule,
   ],
   controllers: [AppController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],

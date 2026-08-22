@@ -547,6 +547,9 @@ model CreditPurchase {
   amount           Int
   status           TransactionStatus @default(pending)
   purchasedAt      DateTime          @default(now())
+  /// The cost-basis lot this purchase opens. Created ONLY when the charge is
+  /// verified `completed` — see CreditLot.
+  lot              CreditLot?
 
   @@index([userWawuId])
   @@index([status])
@@ -557,17 +560,114 @@ model CreditPurchase {
 /// added since there is no natural key — (userWawuId, communityId, spentAt)
 /// is not guaranteed unique to the second.
 model CreditSpend {
-  id            String    @id @default(uuid())
+  id            String              @id @default(uuid())
   userWawuId    String
   communityId   String
-  community     Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
-  creditsSpent  Int       @default(1)
+  community     Community           @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  creditsSpent  Int                 @default(1)
   creatorWawuId String
-  spentAt       DateTime  @default(now())
+  spentAt       DateTime            @default(now())
+  /// What the host actually earned for this spend. Written in the same
+  /// transaction as the row above — see CreditSpendEarning.
+  earning       CreditSpendEarning?
 
   @@index([userWawuId])
   @@index([communityId])
   @@index([creatorWawuId])
+}
+
+/// ONE PURCHASED PACK OF CREDITS, AS A COST-BASIS LOT.
+///
+/// Why this table exists at all: docs/01_SPEC.md §1 row 4 sells community
+/// credits at "Creator 90% / WAWU 10%", and §3 calls that "deliberately a
+/// better split than every other stream". Nothing could pay it, because a
+/// credit is bought in a PACK and spent one at a time, and CreditSpend had
+/// no way to say what naira a single spent credit represented. The three
+/// packs are NOT the same price per credit — ₦500/50 = ₦10.00,
+/// ₦1,000/120 = ₦8.33…, ₦2,000/300 = ₦6.66… — so "the" per-credit price
+/// does not exist platform-wide; it only exists per purchase.
+///
+/// So each completed CreditPurchase opens a lot carrying the exact money
+/// WAWU actually collected (`grossKobo`) and the credits it bought
+/// (`creditsGranted`). Spends draw the lot down oldest-first (FIFO) and
+/// each drawn credit carries its own lot's cost basis into
+/// CreditSpendEarning. See src/credit-spend/credit-spend.service.ts for
+/// the full reasoning, including why FIFO and not a blended rate.
+///
+/// INVARIANT: `allocatedKobo <= grossKobo` and
+/// `creditsRemaining + creditsConsumed = creditsGranted` for every lot, so
+/// the sum of every host share ever computed can never exceed 90% of the
+/// money WAWU actually banked. That is the whole point of the model.
+model CreditLot {
+  id               String         @id @default(uuid())
+  /// One lot per completed purchase. The @unique is the idempotency key:
+  /// a re-verified purchase cannot open a second lot and mint free money.
+  creditPurchaseId String         @unique
+  creditPurchase   CreditPurchase @relation(fields: [creditPurchaseId], references: [id], onDelete: Cascade)
+  userWawuId       String
+  creditsGranted   Int
+  /// Credits in this lot not yet consumed by a spend. Drawn down by a
+  /// conditional UPDATE guarded on `creditsRemaining >= n`, so two
+  /// concurrent sends can never consume the same credit.
+  creditsRemaining Int
+  /// Integer minor units (kobo). The naira WAWU actually collected for this
+  /// pack — never a list price, never a per-credit rate.
+  grossKobo        Int
+  /// Kobo of `grossKobo` already attributed to spends. Distributed by
+  /// largest-remainder so a fully consumed lot allocates EXACTLY grossKobo:
+  /// no kobo invented, none lost.
+  allocatedKobo    Int            @default(0)
+  purchasedAt      DateTime       @default(now())
+
+  @@index([userWawuId, purchasedAt])
+}
+
+/// WHAT ONE COMMUNITY HOST EARNED FROM ONE SPENT CREDIT.
+///
+/// Materialised at spend time rather than derived at read time, because it
+/// is NOT derivable later: the answer depends on which lots were open at
+/// that moment, and lots get consumed. This is the same reason
+/// Purchase.commissionRate is snapshotted rather than recomputed.
+///
+/// This table is a HOST EARNINGS ledger, not a wallet and not a balance.
+/// It never grants anybody a spendable naira figure, it is never summed
+/// into anything a member sees, and no user-facing surface turns a credit
+/// COUNT into naira because of it (CLAUDE.md, non-negotiable). It exists so
+/// GET /content/mine/earnings can tell a host the truth about the 90% the
+/// product already promised them on six screens.
+model CreditSpendEarning {
+  id                String      @id @default(uuid())
+  creditSpendId     String      @unique
+  creditSpend       CreditSpend @relation(fields: [creditSpendId], references: [id], onDelete: Cascade)
+  /// Denormalised from CreditSpend so the earnings rollup is one indexed
+  /// read, matching how Purchase/DirectMessage are aggregated.
+  creatorWawuId     String
+  communityId       String
+  /// Credits this message cost (CommunityMessage.costInCredits).
+  creditsSpent      Int
+  /// How many of those credits were backed by a completed purchase.
+  /// `creditsSpent - creditsFunded` were trial-covered or otherwise
+  /// unbacked, and are worth exactly ₦0 to the host because WAWU collected
+  /// exactly ₦0 for them.
+  creditsFunded     Int
+  /// Kobo WAWU collected for the funded credits. Sum of the largest-
+  /// remainder allocations taken out of `lots`.
+  grossKobo         Int
+  /// 90% of grossKobo, floored to the kobo (docs/01_SPEC.md §1 row 4).
+  hostShareKobo     Int
+  /// grossKobo - hostShareKobo. Always >= 10% — the floor above rounds the
+  /// residual kobo to WAWU, so a payout can never exceed what was banked.
+  platformShareKobo Int
+  /// Which lot(s) funded this spend, oldest first. Audit trail: a host
+  /// share can always be traced back to the Flutterwave charge that paid
+  /// for it. A plain id array rather than a relation — this is read by
+  /// humans doing a reconciliation, never joined in a hot path, and an
+  /// implicit m2m join table would be three tables of machinery for that.
+  lotIds            String[]
+  earnedAt          DateTime    @default(now())
+
+  @@index([creatorWawuId])
+  @@index([creatorWawuId, earnedAt])
 }
 
 // -----------------------------------------------------------------------------
@@ -619,9 +719,19 @@ model CreatorSubscription {
   renewalAttempts        Int                @default(0)
   cancelsAt              DateTime?
   cardLast4              String?
+  /// Scheduled tier change. A downgrade (Pro -> Basic) does NOT take effect
+  /// on the day it is requested: the annual term has already been paid in
+  /// full and DELETE/downgrade give no refund, so revoking Pro immediately
+  /// would confiscate something the creator bought. `pendingTier` records
+  /// the tier the subscription moves to, and `tierChangesAt` records when
+  /// (always the end of the paid term). Both are cleared the moment the
+  /// change is applied. Null/null means "no change scheduled".
+  pendingTier            CreatorTier?
+  tierChangesAt          DateTime?
 
   @@index([status])
   @@index([currentPeriodEnd])
+  @@index([tierChangesAt])
 }
 
 /// `score` is a periodically-recomputed cache (views + purchases*weight +
@@ -937,6 +1047,14 @@ model BillPayment {
   createdAt   DateTime         @default(now())
   deliveredAt DateTime?
 
+  /// Set only by the operator refund endpoint, which RECORDS a refund that was
+  /// actually paid back to the customer by hand. Nothing in this codebase can
+  /// move money back to a card — there is no Flutterwave refund adapter — so
+  /// `refundReference` is the real-world reference of that manual refund and
+  /// `status = refunded` is never written without one.
+  refundReference String?
+  refundedAt      DateTime?
+
   @@index([buyerWawuId])
   @@index([status])
   @@index([status, createdAt])
@@ -970,6 +1088,11 @@ model HealthSubscription {
   startsAt  DateTime?
   expiresAt DateTime?
   createdAt DateTime         @default(now())
+
+  /// Same contract as BillPayment: written only when a human has actually
+  /// refunded the customer, and never without the reference of that refund.
+  refundReference String?
+  refundedAt      DateTime?
 
   @@index([wawuUserId])
   @@index([status])
@@ -1043,6 +1166,13 @@ model LegalRequest {
   servicePaidAt  DateTime?
   deliverableUrl String?
   deliveredAt    DateTime?
+
+  /// Why WAWU closed the matter without delivering it. Required by the ops
+  /// cancel endpoint, because "cancelled" with no reason is what strands a
+  /// client who has already paid. It does NOT imply a refund: money already
+  /// taken is refunded by hand, and nothing here claims otherwise.
+  cancellationReason String?
+  cancelledAt        DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1268,4 +1398,49 @@ model AdminVerificationAudit {
   @@index([subjectWawuUserId])
   @@index([actedByAdminId])
   @@index([actedAt])
+}
+
+/// Inbound Flutterwave webhook deliveries — audit trail AND the exactly-once
+/// claim for settlement driven by the provider rather than by the browser.
+///
+/// A NEW table on purpose. 28 of the 39 wire types are bare Prisma re-exports
+/// returned by spread, so adding a column to Purchase / PendingCharge /
+/// BillPayment to track webhook state would silently widen a live app
+/// response. Nothing here is ever returned to the app.
+model PaymentWebhookReceipt {
+  id String @id @default(uuid())
+
+  /// `${event}:${txRef}` — one settlement attempt per event per charge.
+  /// UNIQUE, and the atomic `create` against it IS the claim: a duplicate
+  /// delivery loses the insert race (P2002) and never reaches settlement.
+  deliveryKey String @unique
+
+  /// Flutterwave's event name, e.g. `charge.completed`.
+  event         String
+  /// The `tx_ref` this backend issued when the charge was opened.
+  txRef         String
+  /// Flutterwave's own transaction id from the payload. Only ever used as the
+  /// id to re-verify AGAINST Flutterwave — never as proof of anything.
+  transactionId String?
+
+  /// received | settled | rejected | unmatched | ignored | failed.
+  /// `received` and `failed` are non-terminal: a redelivery may reclaim them
+  /// so a transient outage cannot permanently swallow a real payment.
+  status String @default("received")
+
+  /// Which money flow the tx_ref resolved to (`tip`, `credit-purchase`,
+  /// `subscription`, `dm`, `bill`, `health`, `legal-consultation`, …).
+  flow   String?
+  /// Why it ended where it did — refusal reason, biller error, etc.
+  detail String?
+
+  /// The raw body as delivered, kept for reconciliation with Flutterwave.
+  payload Json
+
+  receivedAt DateTime  @default(now())
+  settledAt  DateTime?
+
+  @@index([txRef])
+  @@index([status])
+  @@index([receivedAt])
 }

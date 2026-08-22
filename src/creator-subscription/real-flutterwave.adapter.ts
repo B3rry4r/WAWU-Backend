@@ -23,7 +23,8 @@ interface FlutterwaveVerifyApiResponse {
     status?: string;
     amount?: number;
     currency?: string;
-    card?: { last_4digits?: string };
+    card?: { last_4digits?: string; token?: string };
+    customer?: { email?: string };
   };
 }
 
@@ -127,6 +128,10 @@ export class RealFlutterwaveAdapter implements FlutterwaveClient {
       transactionId:
         data.id !== undefined ? String(data.id) : params.transactionId,
       cardLast4: data.card?.last_4digits,
+      // The reusable token, captured at the one moment Flutterwave hands it
+      // over. Without this there is nothing legitimate to charge on a retry.
+      cardToken: data.card?.token,
+      customerEmail: data.customer?.email,
     };
   }
 
@@ -189,26 +194,38 @@ export class RealFlutterwaveAdapter implements FlutterwaveClient {
       );
     }
 
-    // Conceptual Flutterwave tokenized-charge call
-    // (`POST /v3/tokenized-charges/{token}`) — retries the renewal against
-    // the card already on file rather than opening the inline SDK again.
+    if (!params.email) {
+      throw new BadGatewayException(
+        'Flutterwave requires the cardholder email to charge a saved card',
+      );
+    }
+
+    // Flutterwave tokenized-charge: `POST /v3/tokenized-charges` with the
+    // token, email and amount in the BODY.
+    //
+    // This previously POSTed to `/tokenized-charges/{ref}` with the ref in
+    // the path and no email, and the ref itself was a locally invented
+    // `flw-cust-<wawuUserId>` string. Both were wrong: the path form is not
+    // an endpoint Flutterwave exposes, and a token Flutterwave never issued
+    // cannot resolve to a card. The retry path could therefore never have
+    // succeeded in production.
     let response: Response;
     try {
-      response = await fetch(
-        `${FLUTTERWAVE_API_BASE}/tokenized-charges/${encodeURIComponent(params.flutterwaveCustomerRef)}`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${secretKey}`,
-            'content-type': 'application/json',
-          },
-          body: JSON.stringify({
-            amount: params.amount,
-            currency: 'NGN',
-            tx_ref: `wawu-sub-${params.purpose}-${randomUUID()}`,
-          }),
+      response = await fetch(`${FLUTTERWAVE_API_BASE}/tokenized-charges`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${secretKey}`,
+          'content-type': 'application/json',
         },
-      );
+        body: JSON.stringify({
+          token: params.flutterwaveCustomerRef,
+          email: params.email,
+          amount: params.amount,
+          currency: 'NGN',
+          country: 'NG',
+          tx_ref: `wawu-sub-${params.purpose}-${randomUUID()}`,
+        }),
+      });
     } catch (error) {
       this.logger.error(
         'Flutterwave tokenized-charge call failed',

@@ -36,6 +36,7 @@ const REPO_ROOT = path.resolve(__dirname, '../../../');
 
 const USER_PLAIN = '00000000-0000-4000-8000-000000000001'; // plain user
 const USER_CREATOR_BASIC = '00000000-0000-4000-8000-000000000002'; // Basic creator, KYC pending
+const ADMIN_KEY = 'service-application-contract-spec-key';
 
 async function isMockWawuIdUp(): Promise<boolean> {
   try {
@@ -77,8 +78,12 @@ describe('ServiceApplication contract', () => {
   let tokenCreatorBasic: string;
 
   const createdIds: string[] = [];
+  let previousAdminKey: string | undefined;
 
   beforeAll(async () => {
+    previousAdminKey = process.env.WAWU_ADMIN_KEY;
+    process.env.WAWU_ADMIN_KEY = ADMIN_KEY;
+
     if (!(await isMockWawuIdUp())) {
       mockWawuIdProcess = spawn('node', ['mock-wawu-id/server.js'], {
         cwd: REPO_ROOT,
@@ -113,6 +118,8 @@ describe('ServiceApplication contract', () => {
       await prisma.serviceApplication.deleteMany({ where: { id: { in: createdIds } } });
     }
     if (app) await app.close();
+    if (previousAdminKey === undefined) delete process.env.WAWU_ADMIN_KEY;
+    else process.env.WAWU_ADMIN_KEY = previousAdminKey;
     // Deliberately NOT killing mockWawuIdProcess — shared local dependency
     // other concurrently-running agents' test suites may still be using.
   });
@@ -292,6 +299,249 @@ describe('ServiceApplication contract', () => {
 
     it('401s with no Authorization header', async () => {
       await request(app.getHttpServer()).get('/api/hub/services/applications/ffffffff-0000-4000-8000-000000009999').expect(401);
+    });
+  });
+
+  /**
+   * The shipped web app posts pension/loan applications to
+   * `/api/hub/service-applications/partner/apply`
+   * (WAWU-Web `src/lib/api/lifestyle.ts` → `applyForPartnerService`), a path
+   * that has never existed — every other call in that file uses the
+   * `services/` prefix. Pension registration 404'd for every user. The alias
+   * accepts what the shipped client sends; the canonical route is unchanged.
+   */
+  describe('POST /service-applications/partner/apply (alias for the shipped app)', () => {
+    it('the path the app actually calls now resolves', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/hub/service-applications/partner/apply')
+        .set('Authorization', `Bearer ${tokenPlain}`)
+        .send({ kind: 'pension', note: 'I want to open an ARM pension account.' })
+        .expect(201);
+
+      expect(res.body.data).toMatchObject({ kind: 'pension', title: 'Pensions' });
+      expect(res.body.data.reference).toMatch(/^WA-PEN-\d{5}$/);
+      createdIds.push(res.body.data.id);
+    });
+
+    it('the canonical path still works and behaves identically', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/hub/services/partner/apply')
+        .set('Authorization', `Bearer ${tokenPlain}`)
+        .send({ kind: 'pension', note: 'Same request, canonical path.' })
+        .expect(201);
+      expect(res.body.data).toMatchObject({ kind: 'pension', title: 'Pensions' });
+      createdIds.push(res.body.data.id);
+    });
+
+    it('401s with no Authorization header', async () => {
+      await request(app.getHttpServer())
+        .post('/api/hub/service-applications/partner/apply')
+        .send({ kind: 'pension', note: 'No token on this one.' })
+        .expect(401);
+    });
+  });
+
+  describe('the applicant\'s own words survive', () => {
+    it('keeps the partner-service note instead of discarding it', async () => {
+      const note = 'I run a shea butter export business and want a pension I can pay into monthly.';
+      const res = await request(app.getHttpServer())
+        .post('/api/hub/services/partner/apply')
+        .set('Authorization', `Bearer ${tokenPlain}`)
+        .send({ kind: 'pension', note, documents: ['https://storage.wawu.test/id.pdf'] })
+        .expect(201);
+      createdIds.push(res.body.data.id);
+
+      // `note` passed a @MinLength(10) check and was then written nowhere at
+      // all. It now lands in the timeline entry the tracking screen reads.
+      const notes = (res.body.data.timeline as { note?: string }[]).map((t) => t.note);
+      expect(notes).toContain(note);
+      expect(res.body.data.documents).toEqual(['https://storage.wawu.test/id.pdf']);
+    });
+
+    it('keeps the NEPC documents the apply screen forces the applicant to upload', async () => {
+      const documents = [
+        'https://storage.wawu.test/nepc/cac-certificate.pdf',
+        'https://storage.wawu.test/nepc/sample.jpg',
+        'https://storage.wawu.test/nepc/bank-reference.pdf',
+      ];
+      const res = await request(app.getHttpServer())
+        .post('/api/hub/services/nepc/apply')
+        .set('Authorization', `Bearer ${tokenPlain}`)
+        .send({
+          rcNumber: 'RC-7742119',
+          exportCategory: 'Agro commodities',
+          mainProduct: 'Shea butter',
+          targetMarkets: ['UK'],
+          yearlyVolume: '10 tonnes',
+          documents,
+        })
+        .expect(201);
+      createdIds.push(res.body.data.id);
+
+      expect(res.body.data.documents).toEqual(documents);
+    });
+
+    it('still accepts a NEPC application with no documents (the shipped client sends none)', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/hub/services/nepc/apply')
+        .set('Authorization', `Bearer ${tokenPlain}`)
+        .send({
+          rcNumber: 'RC-1',
+          exportCategory: 'Agro',
+          mainProduct: 'Shea',
+          targetMarkets: ['UK'],
+          yearlyVolume: '1 tonne',
+        })
+        .expect(201);
+      createdIds.push(res.body.data.id);
+      expect(res.body.data.documents).toEqual([]);
+    });
+  });
+
+  describe('the CAC certificate date', () => {
+    it('is set when payment is verified — the success screen used to render "By "', async () => {
+      const applied = await request(app.getHttpServer())
+        .post('/api/hub/services/cac/apply')
+        .set('Authorization', `Bearer ${tokenPlain}`)
+        .send({ registrationType: 'business-name', names: ['Okeke Farms Enugu'], nature: 'Agriculture' })
+        .expect(201);
+
+      const verified = await request(app.getHttpServer())
+        .post('/api/hub/services/cac/apply/verify')
+        .set('Authorization', `Bearer ${tokenPlain}`)
+        .send({ transaction_id: 'FLW_TXN_54321', tx_ref: applied.body.data.flutterwaveConfig.txRef });
+
+      expect([200, 201]).toContain(verified.status);
+      createdIds.push(verified.body.data.id);
+
+      expect(verified.body.data.certificateExpectedBy).toEqual(expect.any(String));
+      const expected = new Date(verified.body.data.certificateExpectedBy);
+      expect(expected.getTime()).toBeGreaterThan(Date.now());
+    });
+  });
+
+  /**
+   * An application only ever reached `submitted`/`under_review`: nothing
+   * appended to `timeline`, nothing set `rejection`, nothing set
+   * `certificateExpectedBy`. The tracking screen could not show a date or a
+   * refusal because no code path could produce one.
+   */
+  describe('operator progression', () => {
+    async function anApplication(): Promise<string> {
+      const res = await request(app.getHttpServer())
+        .post('/api/hub/services/nepc/apply')
+        .set('Authorization', `Bearer ${tokenPlain}`)
+        .send({
+          rcNumber: 'RC-OPS',
+          exportCategory: 'Agro',
+          mainProduct: 'Shea',
+          targetMarkets: ['UK'],
+          yearlyVolume: '2 tonnes',
+        })
+        .expect(201);
+      createdIds.push(res.body.data.id);
+      return res.body.data.id as string;
+    }
+
+    it('401s without the operator key', async () => {
+      const id = await anApplication();
+      await request(app.getHttpServer())
+        .post(`/api/hub/services/ops/applications/${id}/progress`)
+        .send({ label: 'Under review' })
+        .expect(401);
+    });
+
+    it('a user token is not an operator key', async () => {
+      const id = await anApplication();
+      await request(app.getHttpServer())
+        .post(`/api/hub/services/ops/applications/${id}/progress`)
+        .set('Authorization', `Bearer ${tokenPlain}`)
+        .send({ label: 'Under review' })
+        .expect(401);
+    });
+
+    it('appends a timeline step and can set the expected certificate date', async () => {
+      const id = await anApplication();
+      const res = await request(app.getHttpServer())
+        .post(`/api/hub/services/ops/applications/${id}/progress`)
+        .set('x-wawu-admin-key', ADMIN_KEY)
+        .send({
+          label: 'Under review',
+          note: 'An export agent is checking your documents.',
+          status: 'under_review',
+          statusLabel: 'Under review',
+          certificateExpectedBy: '2026-09-04',
+        })
+        .expect(200);
+
+      expect(res.body.data).toMatchObject({ status: 'under_review', statusLabel: 'Under review' });
+      expect(res.body.data.certificateExpectedBy).toContain('2026-09-04');
+      expect(res.body.data.timeline).toHaveLength(2);
+      expect(res.body.data.timeline[1]).toMatchObject({
+        label: 'Under review',
+        note: 'An export agent is checking your documents.',
+      });
+    });
+
+    it('records a refusal the applicant can read', async () => {
+      const id = await anApplication();
+      const reason = 'Your bank reference letter is older than three months.';
+      const res = await request(app.getHttpServer())
+        .post(`/api/hub/services/ops/applications/${id}/reject`)
+        .set('x-wawu-admin-key', ADMIN_KEY)
+        .send({ reason })
+        .expect(200);
+
+      expect(res.body.data).toMatchObject({ status: 'rejected', rejection: reason });
+      expect(res.body.data.timeline.at(-1)).toMatchObject({ note: reason });
+    });
+
+    it('refuses a rejection with no reason', async () => {
+      const id = await anApplication();
+      await request(app.getHttpServer())
+        .post(`/api/hub/services/ops/applications/${id}/reject`)
+        .set('x-wawu-admin-key', ADMIN_KEY)
+        .send({ reason: 'no' })
+        .expect(400);
+    });
+
+    it('approves and attaches the issued certificate', async () => {
+      const id = await anApplication();
+      const res = await request(app.getHttpServer())
+        .post(`/api/hub/services/ops/applications/${id}/approve`)
+        .set('x-wawu-admin-key', ADMIN_KEY)
+        .send({
+          note: 'Download it from your services list.',
+          certificateUrl: 'https://storage.wawu.test/nepc/certificate.pdf',
+        })
+        .expect(200);
+
+      expect(res.body.data).toMatchObject({ status: 'approved', statusLabel: 'Certificate ready' });
+      expect(res.body.data.documents).toContain('https://storage.wawu.test/nepc/certificate.pdf');
+    });
+
+    it('404s on an application that does not exist', async () => {
+      await request(app.getHttpServer())
+        .post('/api/hub/services/ops/applications/ffffffff-0000-4000-8000-000000009999/progress')
+        .set('x-wawu-admin-key', ADMIN_KEY)
+        .send({ label: 'Under review' })
+        .expect(404);
+    });
+
+    it('the applicant sees the progression on their own tracking read', async () => {
+      const id = await anApplication();
+      await request(app.getHttpServer())
+        .post(`/api/hub/services/ops/applications/${id}/progress`)
+        .set('x-wawu-admin-key', ADMIN_KEY)
+        .send({ label: 'Names checked', status: 'under_review', statusLabel: 'Under review' })
+        .expect(200);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/hub/services/applications/${id}`)
+        .set('Authorization', `Bearer ${tokenPlain}`)
+        .expect(200);
+      expect(res.body.data.statusLabel).toBe('Under review');
+      expect(res.body.data.timeline.at(-1).label).toBe('Names checked');
     });
   });
 });

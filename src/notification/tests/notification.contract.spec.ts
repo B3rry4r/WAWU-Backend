@@ -32,6 +32,10 @@ const PLAIN_USER = { email: 'user@test.wawu.dev', sub: '00000000-0000-4000-8000-
 const CREATOR_BASIC = { email: 'creator-basic@test.wawu.dev', sub: '00000000-0000-4000-8000-000000000002' };
 const CREATOR_PRO = { email: 'creator-pro@test.wawu.dev', sub: '00000000-0000-4000-8000-000000000003' };
 
+// prisma/seed.ts § NOTIFICATION_SALE_FOR_PRO / NOTIFICATION_FOLLOW_FOR_BASIC.
+const SEEDED_SALE_FOR_PRO = 'a0000000-0000-4000-8000-000000000001';
+const SEEDED_FOLLOW_FOR_BASIC = 'a0000000-0000-4000-8000-000000000002';
+
 let mockWawuId: ChildProcessWithoutNullStreams | undefined;
 
 async function waitForMockWawuId(): Promise<void> {
@@ -99,6 +103,20 @@ describe('Notification contract', () => {
       tokenFor(CREATOR_BASIC.email),
       tokenFor(CREATOR_PRO.email),
     ]);
+
+    // This spec asserts exact counts against the two SEEDED notifications.
+    // That held only while `prisma.notification.create` existed nowhere in
+    // src/ — now that NotificationService.emit() is wired into sales, tips,
+    // paid DMs, follows and the cron sweeps, any suite that ran before this
+    // one may legitimately have written more rows for the same seeded users.
+    // Reset to the seed fixture so these assertions test the read path, not
+    // whatever the rest of the suite happened to emit first.
+    await prisma.notification.deleteMany({
+      where: {
+        userWawuId: { in: [PLAIN_USER.sub, CREATOR_BASIC.sub, CREATOR_PRO.sub] },
+        id: { notIn: [SEEDED_SALE_FOR_PRO, SEEDED_FOLLOW_FOR_BASIC] },
+      },
+    });
   }, 30000);
 
   afterAll(async () => {

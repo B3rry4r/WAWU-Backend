@@ -1,5 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { NotificationService } from '../notification/notification.service';
+import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 
 /**
  * FollowRelationship resource — registry.json "FollowRelationship". Both
@@ -9,7 +11,11 @@ import { PrismaService } from '../common/prisma/prisma.service';
  */
 @Injectable()
 export class FollowRelationshipService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationService,
+    private readonly blockedAccounts: BlockedAccountService,
+  ) {}
 
   private async assertFollowableCreator(followerWawuId: string, followingWawuId: string): Promise<void> {
     if (followerWawuId === followingWawuId) {
@@ -39,16 +45,36 @@ export class FollowRelationshipService {
     return { following: existing !== null };
   }
 
+  /**
+   * Blocking gate: neither party can follow the other once either has
+   * blocked. BlockedAccountService.create() already severs any existing edge
+   * in both directions, so this stops it being re-made.
+   *
+   * `createMany({ skipDuplicates: true })` replaces the previous upsert
+   * because it is equally race-safe (ON CONFLICT DO NOTHING) but its `count`
+   * tells us whether the follow is NEW — which is the difference between
+   * notifying the creator once and notifying them on every idempotent
+   * re-tap of a Follow button.
+   */
   async follow(followerWawuId: string, followingWawuId: string): Promise<{ following: true }> {
     await this.assertFollowableCreator(followerWawuId, followingWawuId);
+    await this.blockedAccounts.assertNotBlocked(
+      followerWawuId,
+      followingWawuId,
+      'You cannot follow this account.',
+    );
 
-    await this.prisma.followRelationship.upsert({
-      where: {
-        followerWawuId_followingWawuId: { followerWawuId, followingWawuId },
-      },
-      update: {},
-      create: { followerWawuId, followingWawuId },
+    const { count } = await this.prisma.followRelationship.createMany({
+      data: [{ followerWawuId, followingWawuId }],
+      skipDuplicates: true,
     });
+
+    if (count > 0) {
+      await this.notifications.emit({
+        kind: 'new_follower',
+        userWawuId: followingWawuId,
+      });
+    }
 
     return { following: true };
   }
