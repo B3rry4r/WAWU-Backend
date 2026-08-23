@@ -1802,3 +1802,81 @@ model AdminEventReview {
   @@index([reviewedByAdminId])
   @@index([reviewedAt])
 }
+
+// -----------------------------------------------------------------------------
+// Professional profiles
+// -----------------------------------------------------------------------------
+
+/// What a professional is offering their credential as evidence OF.
+///
+/// The split is the whole point. Legal, health, finance and insurance have a
+/// body that issues a licence and can be rung up to confirm it. Technology,
+/// beauty and most other categories have no such body, and demanding a
+/// licence there would mean reviewers either reject everyone in tech for
+/// lacking a document that does not exist, or wave anyone through. So the
+/// evidence a reviewer is looking for is recorded per application.
+enum ProfessionalCredentialKind {
+  /// A practising licence from a named issuing body. Required in a regulated
+  /// category, and the reviewer's job is to confirm it with that body.
+  licence
+  /// A qualification or certification with no licensing regime behind it.
+  qualification
+  /// Work history and samples. The reviewer is exercising judgment, not
+  /// checking a register — only ever acceptable outside regulated categories.
+  portfolio
+}
+
+/// A creator's application to be listed as a professional in ONE category,
+/// and once approved, the listing itself.
+///
+/// Per category, deliberately: a licence is field-specific, and a certified
+/// nurse must not surface under Legal Services. The verification ladder's
+/// `certified_professional` rung is global and answers "is this person a
+/// qualified professional at all" — this answers "at WHAT", which is the
+/// question a buyer browsing a category is actually asking.
+///
+/// Contact runs through paid DMs. There is no booking, no scheduling, no
+/// escrow and no invoicing here: the conversation starts on WAWU and the
+/// engagement itself is arranged between the two people. That keeps this a
+/// directory plus a paid introduction rather than a marketplace holding money
+/// against delivered professional work, which is a different product with
+/// different obligations.
+model ProfessionalProfile {
+  id         String @id @default(uuid())
+  wawuUserId String
+  /// An explore category id (`legal_services`, `technology`, …). Not an enum:
+  /// the taxonomy is app-defined and moves without a migration.
+  category   String
+
+  /// "Corporate lawyer, 11 years" — the one line under their name.
+  headline String
+  /// What they actually do, in their own words.
+  about    String
+  /// Discrete things they will take on. Shown as chips on the card.
+  services String[] @default([])
+
+  credentialKind ProfessionalCredentialKind
+  /// Required when the category is regulated; enforced in the DTO, which owns
+  /// the regulated list, not the database.
+  licenceNumber  String?
+  issuingBody    String?
+  /// Object-storage URLs from POST /uploads/presign.
+  documents      String[]                   @default([])
+
+  status          ReviewStatus @default(pending)
+  rejectionReason String?
+  submittedAt     DateTime     @default(now())
+  reviewedAt      DateTime?
+
+  /// Hidden from the directory without deleting the record — a professional
+  /// who is too busy to take work, or one an admin has pulled. Distinct from
+  /// `status`: this is availability, that is whether they were ever approved.
+  listed Boolean @default(true)
+
+  /// One application per person per category. A rejected application is
+  /// edited and resubmitted in place rather than piling up duplicates, which
+  /// is also what stops someone spamming a queue a human has to work.
+  @@unique([wawuUserId, category])
+  @@index([category, status])
+  @@index([status])
+}
