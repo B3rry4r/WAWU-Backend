@@ -234,6 +234,29 @@ app.patch("/internal/users/:userId/verification-tier", requireServiceKey, (req, 
   res.json({ ok: true, userId: user.sub, verificationTier: user.verificationTier });
 });
 
+// Mirrors WAWU-ID's POST /internal/users/lookup — display name and badge
+// tier for a set of ids, so a sibling service can render real people in a
+// list. Unknown ids are omitted, never returned as nulls.
+app.post("/internal/users/lookup", requireServiceKey, (req, res) => {
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids : null;
+  if (!ids || ids.length === 0) {
+    return res.status(400).json({ message: "ids must be a non-empty array" });
+  }
+  if (ids.length > 100) {
+    return res.status(400).json({ message: "ids must contain at most 100 entries" });
+  }
+  const wanted = new Set(ids);
+  const data = Object.values(USERS)
+    .filter((u) => wanted.has(u.sub))
+    .map((u) => ({
+      id: u.sub,
+      firstName: u.firstName ?? null,
+      lastName: u.lastName ?? null,
+      verificationTier: u.verificationTier,
+    }));
+  res.json({ data });
+});
+
 app.get("/health", (_req, res) => res.json({ ok: true, service: "mock-wawu-id" }));
 
 const PORT = process.env.MOCK_WAWU_ID_PORT || 4001;

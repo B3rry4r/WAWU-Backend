@@ -32,6 +32,7 @@ import { MentorModule } from './mentor/mentor.module';
 import { ServiceApplicationModule } from './service-application/service-application.module';
 import { VerificationSubmissionModule } from './verification-submission/verification-submission.module';
 import { FollowRelationshipModule } from './follow-relationship/follow-relationship.module';
+import { CreatorDiscoveryModule } from './creator-discovery/creator-discovery.module';
 import { BlockedAccountModule } from './blocked-account/blocked-account.module';
 import { ContentPieceModule } from './content-piece/content-piece.module';
 import { CreditPurchaseModule } from './credit-purchase/credit-purchase.module';
@@ -213,6 +214,7 @@ import { APP_GUARD } from '@nestjs/core';
     SavedItemModule,
     PurchaseModule,
     VerificationSubmissionModule,
+    CreatorDiscoveryModule,
     FollowRelationshipModule,
     BlockedAccountModule,
     ContentPieceModule,
