@@ -40,6 +40,13 @@ export interface CreatorProfile {
    */
   dmEnabled: boolean;
   dmPrice: number | null;
+  /**
+   * Hours the creator has to reply before the payer is automatically
+   * refunded. Buyer-facing because it is a term of the sale: the reply
+   * window is the promise the money is being exchanged for, and it is no
+   * longer a fixed 24 across the platform, so the buyer cannot assume it.
+   */
+  dmResponseHours: number;
   evgScore: number;
   contentCount: number;
   followerCount: number;

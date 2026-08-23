@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { DirectMessageController } from './direct-message.controller';
 import { DirectMessageService } from './direct-message.service';
+import { DmRefundService } from './dm-refund.service';
 import { CreatorAccountGuard } from './guards/creator-account-guard';
 import { FLUTTERWAVE_CLIENT } from './flutterwave-client.interface';
 import { RealFlutterwaveAdapter } from './real-flutterwave.adapter';
@@ -32,6 +33,7 @@ import { BlockedAccountModule } from '../blocked-account/blocked-account.module'
   controllers: [DirectMessageController],
   providers: [
     DirectMessageService,
+    DmRefundService,
     CreatorAccountGuard,
     RealFlutterwaveAdapter,
     MockFlutterwaveAdapter,
@@ -47,7 +49,9 @@ import { BlockedAccountModule } from '../blocked-account/blocked-account.module'
       inject: [MockFlutterwaveAdapter, RealFlutterwaveAdapter],
     },
   ],
-  // Exported for PaymentWebhookModule (provider-driven paid-DM settlement).
-  exports: [DirectMessageService],
+  // DirectMessageService is exported for PaymentWebhookModule (provider-driven
+  // paid-DM settlement); DmRefundService for SchedulerModule, which runs it,
+  // and for the admin finance queue, which retries what it could not settle.
+  exports: [DirectMessageService, DmRefundService],
 })
 export class DirectMessageModule {}

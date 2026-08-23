@@ -38,6 +38,7 @@ export class CreatorStateService {
     slotsUsed: number;
     dmPrice: number | null;
     dmEnabled: boolean;
+    dmResponseHours: number;
   }, hasSubmitted = true): CreatorStateResponse {
     return {
       ...state,
@@ -70,7 +71,15 @@ export class CreatorStateService {
     }
     const updated = await this.prisma.creatorState.update({
       where: { wawuUserId },
-      data: { dmEnabled: dto.dmEnabled, dmPrice: dto.dmPrice },
+      data: {
+        dmEnabled: dto.dmEnabled,
+        dmPrice: dto.dmPrice,
+        // Omitted means "unchanged". Changing it never moves a deadline
+        // already sold — each DM carries the window it was paid against.
+        ...(dto.dmResponseHours === undefined
+          ? {}
+          : { dmResponseHours: dto.dmResponseHours }),
+      },
     });
     // Must pass `hasSubmitted` through, exactly as getState does. Letting it
     // default to `true` made this endpoint report 'pending' for an account

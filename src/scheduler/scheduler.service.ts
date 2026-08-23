@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { NotificationService } from '../notification/notification.service';
+import { DmRefundService } from '../direct-message/dm-refund.service';
 import type { NotificationEvent } from '../notification/notification-event';
 
 /**
@@ -10,8 +11,8 @@ import type { NotificationEvent } from '../notification/notification-event';
  * Nothing in this API ran on a schedule at all — no cron, no queue, no
  * webhook — so:
  *   1. A paid DM the creator never answered was never refunded, despite the
- *      24-hour guarantee shown to the sender at checkout. The money sat as
- *      `held` earnings forever and the creator effectively kept it.
+ *      reply-window guarantee shown to the sender at checkout. The money sat
+ *      as `held` earnings forever and the creator effectively kept it.
  *   2. A subscription never charged again at `currentPeriodEnd`, so year two
  *      was free and a Pro creator's 10% commission rate persisted indefinitely.
  *
@@ -25,65 +26,55 @@ export class SchedulerService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationService,
+    private readonly dmRefunds: DmRefundService,
   ) {}
 
   /**
-   * Refund paid DMs whose 24-hour reply window has passed unanswered.
+   * Expire paid DMs whose reply window has passed unanswered, and get the
+   * payer's money back.
    *
-   * `deadlineAt` is set once at creation and never recomputed (registry
-   * note), so this is a pure "past deadline and still awaiting" sweep. The
-   * status flip is what stops the amount counting as held creator earnings
-   * and is what the fan's thread renders as refunded.
+   * This used to end at the status flip. It marked the DM `refunded`, logged
+   * the ids "awaiting Flutterwave refund calls", and told the payer their
+   * money was on its way — while no refund call existed anywhere in the
+   * codebase. The entitlement was reversed and the money never moved.
    *
-   * NOTE: this reverses the ENTITLEMENT. Moving the money back to the payer's
-   * card additionally needs a Flutterwave refund call, which no adapter in
-   * this codebase exposes yet — `refundedDms` is logged so those rows can be
-   * reconciled by hand until it does.
+   * Now the flip only records the DEBT (`refundStatus: owed`), and
+   * DmRefundService is what discharges it. The payer is told once the money
+   * is actually back, not when we decided it should be.
+   *
+   * `deadlineAt` is set once at creation from the window the payer was
+   * quoted, and never recomputed, so this stays a pure "past deadline and
+   * still awaiting" sweep.
    */
   @Cron(CronExpression.EVERY_10_MINUTES, { name: 'refund-expired-dms' })
   async refundExpiredDms(): Promise<void> {
     const now = new Date();
     const expired = await this.prisma.directMessage.findMany({
       where: { status: 'awaiting_response', deadlineAt: { lt: now } },
-      select: { id: true, amount: true, senderWawuId: true },
+      select: { id: true },
       take: 500,
     });
-    if (expired.length === 0) return;
 
-    const result = await this.prisma.directMessage.updateMany({
-      where: {
-        id: { in: expired.map((d) => d.id) },
-        // Re-checked in the write so a creator replying in the same instant
-        // wins the race rather than being refunded out from under them.
-        status: 'awaiting_response',
-        deadlineAt: { lt: now },
-      },
-      data: { status: 'refunded' },
-    });
+    if (expired.length > 0) {
+      const result = await this.prisma.directMessage.updateMany({
+        where: {
+          id: { in: expired.map((d) => d.id) },
+          // Re-checked in the write so a creator replying in the same instant
+          // wins the race rather than being refunded out from under them.
+          status: 'awaiting_response',
+          deadlineAt: { lt: now },
+        },
+        data: { status: 'refunded', refundStatus: 'owed' },
+      });
+      if (result.count > 0) {
+        this.logger.log(`${result.count} paid DM(s) expired unanswered`);
+      }
+    }
 
-    this.logger.log(
-      `Refunded ${result.count} expired paid DM(s) — awaiting Flutterwave refund calls: ${expired
-        .map((d) => d.id)
-        .join(', ')}`,
-    );
-
-    // Tell the FAN their money is coming back. Read the rows again rather
-    // than trusting the pre-update snapshot: a creator who replied in the
-    // same instant wins the race (the status guard in the WHERE above), and
-    // that DM must not be announced as refunded. Rows already `refunded`
-    // are never re-selected by the sweep, so this cannot fire twice for the
-    // same DM on a later run.
-    const settled = await this.prisma.directMessage.findMany({
-      where: { id: { in: expired.map((d) => d.id) }, status: 'refunded' },
-      select: { amount: true, senderWawuId: true },
-    });
-    await this.notifications.emitMany(
-      settled.map((dm) => ({
-        kind: 'dm_refunded' as const,
-        userWawuId: dm.senderWawuId,
-        amount: dm.amount,
-      })),
-    );
+    // Always run, even when nothing expired this pass: rows left `owed` by an
+    // earlier failure, and the backlog the migration enrolled, are owed money
+    // too and nothing else would ever pick them up.
+    await this.dmRefunds.processOwedRefunds();
   }
 
   /**

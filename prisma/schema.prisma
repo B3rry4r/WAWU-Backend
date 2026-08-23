@@ -112,6 +112,31 @@ enum DmStatus {
   refunded
 }
 
+/// Where a paid DM's MONEY is, as distinct from where the message is.
+/// `DmStatus.refunded` only ever meant "the entitlement was reversed" — the
+/// creator stops being owed it and the thread renders as refunded. It said
+/// nothing about whether the payer's card was actually credited, because
+/// nothing in this codebase could do that. These two facts are now tracked
+/// separately, because they genuinely can disagree: Flutterwave can refuse a
+/// refund on a transaction it has already settled, and a system that treats
+/// "I decided to refund you" as "you have your money" is one that lies to
+/// the payer at exactly the moment they are owed the truth.
+enum DmRefundStatus {
+  /// The default. Nothing is owed back — the DM was answered, or is still
+  /// inside its window.
+  not_owed
+  /// Owed and not yet sent. The sweep sets this; the refund executor works
+  /// through them.
+  owed
+  /// Flutterwave accepted it but has not confirmed settlement.
+  submitted
+  /// Money is back with the payer. Only now is the payer told.
+  settled
+  /// Flutterwave refused, or we ran out of attempts. Needs a human — this is
+  /// what the finance queue lists.
+  failed
+}
+
 enum PenaltyState {
   none
   warned
@@ -215,6 +240,10 @@ model CreatorState {
   slotsUsed        Int          @default(0)
   dmPrice          Int?
   dmEnabled        Boolean      @default(false)
+  /// Hours the creator has to reply before the payer is refunded. 24 was
+  /// hardcoded, which is right for a fan message and wrong for a
+  /// professional quoting on a case. Bounded in the DTO, not here.
+  dmResponseHours  Int          @default(24)
 
   @@index([tier])
   @@index([kycStatus])
@@ -429,12 +458,39 @@ model DirectMessage {
   responseText     String?
   /// Payment lookup key — see Purchase.flutterwaveTxRef.
   flutterwaveTxRef String    @unique
+  /// Flutterwave's own numeric transaction id, captured at verify time.
+  /// REQUIRED to refund: POST /v3/transactions/:id/refund is keyed by this,
+  /// not by tx_ref. It was being discarded, which is the concrete reason no
+  /// expired DM could ever be refunded even once an adapter existed.
+  /// Nullable because rows created before this column shipped never had it.
+  flutterwaveTxId  String?
+
+  /// How long the creator had to reply, snapshotted in hours at the moment
+  /// the payer was charged. Stored rather than recomputed so that changing
+  /// the setting never moves a deadline someone has already paid against.
+  responseWindowHours Int    @default(24)
+
+  refundStatus     DmRefundStatus @default(not_owed)
+  /// Flutterwave's refund id, for reconciliation against their dashboard.
+  refundReference  String?
+  /// When the money was confirmed back with the payer — NOT when we decided.
+  refundedAt       DateTime?
+  refundAttempts   Int       @default(0)
+  /// Why the last attempt failed, verbatim from Flutterwave where possible.
+  /// Read by a human working the finance queue, so it keeps their wording.
+  refundError      String?
+  /// Set when a refund attempt is in flight, cleared when it resolves. Two
+  /// schedulers (or a scheduler and a hand-run retry) must never both be
+  /// calling Flutterwave for the same transaction — a double refund is real
+  /// money out the door and Flutterwave will happily process one.
+  refundLockedAt   DateTime?
 
   reports DmReport[]
 
   @@index([creatorWawuId])
   @@index([senderWawuId])
   @@index([status, deadlineAt])
+  @@index([refundStatus, refundLockedAt])
 }
 
 /// Rolling per-creator stats maintained by the DM-deadline-sweep cron job

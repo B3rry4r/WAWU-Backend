@@ -5,6 +5,7 @@ import { ContentPieceService } from '../content-piece/content-piece.service';
 import { CreditPurchaseService } from '../credit-purchase/credit-purchase.service';
 import { CreatorSubscriptionService } from '../creator-subscription/creator-subscription.service';
 import { DirectMessageService } from '../direct-message/direct-message.service';
+import { DmRefundService } from '../direct-message/dm-refund.service';
 import {
   CAC_TX_REF_PREFIX,
   ServiceApplicationService,
@@ -19,6 +20,16 @@ import { LegalRequestsService } from '../legal/legal.service';
  * — this backend settles exactly one kind of thing.
  */
 const SETTLING_EVENT = 'charge.completed';
+/**
+ * Flutterwave confirming a refund it accepted earlier has now settled.
+ *
+ * This is the other half of paid-DM refunds: their refund API returns 200 for
+ * "accepted", and the money reaching the payer's card is a separate,
+ * later event. Without this the DM would sit at `submitted` forever and the
+ * payer would never be told their money arrived, which is a quieter version
+ * of the same failure as telling them too early.
+ */
+const REFUND_SETTLED_EVENT = 'refund.completed';
 
 /** Terminal receipt states — a redelivery of one of these does nothing. */
 const TERMINAL = new Set(['settled', 'rejected', 'ignored']);
@@ -119,6 +130,7 @@ export class PaymentWebhookService {
     private readonly creditPurchases: CreditPurchaseService,
     private readonly subscriptions: CreatorSubscriptionService,
     private readonly directMessages: DirectMessageService,
+    private readonly dmRefunds: DmRefundService,
     private readonly serviceApplications: ServiceApplicationService,
     private readonly bills: BillPaymentService,
     private readonly health: HealthPlanService,
@@ -260,11 +272,59 @@ export class PaymentWebhookService {
    * matter who makes it. The receipt bookkeeping around this method belongs to
    * the caller — `handle()` above, and AdminPaymentsService.reverify().
    */
+  /**
+   * A refund Flutterwave has now actually paid out.
+   *
+   * Matched on the refund id we stored when they accepted it, falling back to
+   * the DM's original tx_ref — Flutterwave's refund payloads have carried the
+   * parent transaction's reference in `tx_ref` rather than the refund's own,
+   * and a webhook that cannot find its row is a payer who is never told.
+   *
+   * Idempotent through DmRefundService.markSettled, which only writes from a
+   * non-settled state and only notifies when that write happened, so a
+   * redelivered webhook cannot announce the same refund twice.
+   */
+  private async settleRefund(
+    txRef: string,
+    transactionId: string | null,
+  ): Promise<WebhookResult> {
+    if (transactionId) {
+      const byRefundId = await this.dmRefunds.settleFromWebhook(transactionId);
+      if (byRefundId) {
+        return { outcome: 'settled', flow: 'dm_refund', detail: null };
+      }
+    }
+
+    const dm = await this.prisma.directMessage.findFirst({
+      where: { flutterwaveTxRef: txRef, refundStatus: 'submitted' },
+      select: { refundReference: true },
+    });
+    if (dm?.refundReference) {
+      const settled = await this.dmRefunds.settleFromWebhook(
+        dm.refundReference,
+      );
+      if (settled) {
+        return { outcome: 'settled', flow: 'dm_refund', detail: null };
+      }
+    }
+
+    // Not ours, or already settled by the executor's own poll. Neither is a
+    // fault, and neither should retry.
+    return {
+      outcome: 'ignored',
+      flow: null,
+      detail: 'No paid-DM refund is awaiting settlement for this reference',
+    };
+  }
+
   async settle(
     event: string,
     txRef: string,
     transactionId: string | null,
   ): Promise<WebhookResult> {
+    if (event === REFUND_SETTLED_EVENT) {
+      return this.settleRefund(txRef, transactionId);
+    }
     if (event !== SETTLING_EVENT) {
       return {
         outcome: 'ignored',

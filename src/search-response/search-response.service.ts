@@ -389,6 +389,7 @@ export class SearchResponseService {
         // same creator opened directly.
         dmEnabled: state.dmEnabled,
         dmPrice: state.dmPrice,
+        dmResponseHours: state.dmResponseHours,
         evgScore: scoreMap.get(id) ?? 0,
         contentCount: contentCountMap.get(id) ?? 0,
         followerCount: followerCountMap.get(id) ?? 0,
