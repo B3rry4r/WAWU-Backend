@@ -9,6 +9,11 @@ export const UPLOAD_FOLDERS = [
   'content/full',
   'kyc/id-document',
   'service-application/document',
+  // A practising licence or qualification supporting a professional-profile
+  // application. Its own prefix rather than reusing service-application: a
+  // different reviewer opens it, under a different role, and mixing the two
+  // would widen who can read a practising certificate.
+  'professional/document',
   'avatars',
   // A community's own cover image, and a photo posted into a room. Two
   // destinations, not one: the cover is written by the host alone, a message
@@ -54,6 +59,7 @@ export const FOLDER_CONTENT_TYPES: Record<UploadFolder, readonly string[]> = {
   'content/full': [...IMAGE, ...DOC, ...AV, ...OFFICE],
   'kyc/id-document': [...IMAGE, ...DOC],
   'service-application/document': [...IMAGE, ...DOC],
+  'professional/document': [...IMAGE, ...DOC],
   avatars: IMAGE,
   // Images only, deliberately. A community image is rendered in place by
   // every client (serveAs() returns inline: true for image/*), which is
