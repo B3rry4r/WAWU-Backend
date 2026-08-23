@@ -183,6 +183,7 @@ export class UserProfileService {
       // their absence made paid messaging unusable.
       dmEnabled: creatorState.dmEnabled,
       dmPrice: creatorState.dmPrice,
+      dmResponseHours: creatorState.dmResponseHours,
       evgScore: evgScore?.score ?? 0,
       contentCount,
       followerCount,

@@ -9,7 +9,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import type { Paginated } from '../common/interceptors/response.interceptor';
-import type { DirectMessage } from '../common/types';
+import { toWireDm, type DirectMessage } from '../common/types';
 import {
   FLUTTERWAVE_CLIENT,
   type FlutterwaveClient,
@@ -20,7 +20,9 @@ import type { SendDmDto } from './dto/send-dm.dto';
 import type { VerifyDmDto } from './dto/verify-dm.dto';
 import type { RespondDmDto } from './dto/respond-dm.dto';
 
-const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+const ONE_HOUR_MS = 60 * 60 * 1000;
+/** Fallback only, for a creator row written before dmResponseHours existed. */
+const DEFAULT_RESPONSE_WINDOW_HOURS = 24;
 
 export interface DmSendInitResponse {
   flutterwaveConfig: {
@@ -39,6 +41,13 @@ interface PendingDmAttempt {
   text: string;
   /** Snapshotted CreatorState.dmPrice at send time — registry note. */
   amount: number;
+  /**
+   * Snapshotted CreatorState.dmResponseHours at send time, for the same
+   * reason as the price: the payer is quoted a reply window at checkout, and
+   * a creator widening their window afterwards must not retroactively extend
+   * a deadline that someone has already paid against.
+   */
+  responseWindowHours: number;
 }
 
 /**
@@ -88,6 +97,7 @@ export class DirectMessageService {
           txRef: attempt.txRef,
           creatorWawuId: attempt.creatorWawuId,
           text: attempt.text,
+          responseWindowHours: attempt.responseWindowHours,
         },
       },
     });
@@ -104,6 +114,7 @@ export class DirectMessageService {
       txRef?: string;
       creatorWawuId?: string;
       text?: string;
+      responseWindowHours?: number;
     };
     return {
       txRef: ctx.txRef ?? '',
@@ -111,6 +122,9 @@ export class DirectMessageService {
       senderWawuId: row.wawuUserId,
       text: ctx.text ?? '',
       amount: row.expectedAmount,
+      // A charge opened before this field existed still has to settle.
+      responseWindowHours:
+        ctx.responseWindowHours ?? DEFAULT_RESPONSE_WINDOW_HOURS,
     };
   }
 
@@ -170,7 +184,7 @@ export class DirectMessageService {
 
     const creatorState = await this.prisma.creatorState.findUnique({
       where: { wawuUserId: creatorWawuId },
-      select: { dmPrice: true, dmEnabled: true },
+      select: { dmPrice: true, dmEnabled: true, dmResponseHours: true },
     });
     if (!creatorState) {
       throw new NotFoundException('Creator not found');
@@ -182,6 +196,8 @@ export class DirectMessageService {
     }
 
     const amount = creatorState.dmPrice;
+    const responseWindowHours =
+      creatorState.dmResponseHours ?? DEFAULT_RESPONSE_WINDOW_HOURS;
     const threadId = randomUUID();
     const charge = this.flutterwave.initCharge({
       amount,
@@ -195,6 +211,7 @@ export class DirectMessageService {
       senderWawuId,
       text: dto.text,
       amount,
+      responseWindowHours,
     });
 
     return {
@@ -261,14 +278,18 @@ export class DirectMessageService {
       const settled = await this.prisma.directMessage.findUnique({
         where: { id: messageId },
       });
-      if (settled) return settled;
+      if (settled) return toWireDm(settled);
       throw new NotFoundException(
         'No matching DM send attempt found for this reference',
       );
     }
 
     const sentAt = new Date();
-    const deadlineAt = new Date(sentAt.getTime() + ONE_DAY_MS);
+    const responseWindowHours =
+      pending.responseWindowHours ?? DEFAULT_RESPONSE_WINDOW_HOURS;
+    const deadlineAt = new Date(
+      sentAt.getTime() + responseWindowHours * ONE_HOUR_MS,
+    );
 
     const created = await this.prisma.directMessage.create({
       data: {
@@ -283,6 +304,11 @@ export class DirectMessageService {
         respondedAt: null,
         responseText: null,
         flutterwaveTxRef: pending.txRef,
+        // Captured HERE or never: Flutterwave's refund endpoint is keyed by
+        // this id, and after this request nothing else knows it. Discarding
+        // it is the concrete reason no expired DM could be refunded.
+        flutterwaveTxId: result.transactionId,
+        responseWindowHours,
       },
     });
 
@@ -297,7 +323,7 @@ export class DirectMessageService {
       amount: created.amount,
     });
 
-    return created;
+    return toWireDm(created);
   }
 
   /**
@@ -340,12 +366,16 @@ export class DirectMessageService {
       );
     }
     if (dm.deadlineAt.getTime() < Date.now()) {
+      // Quote the window this message was actually sold under, not a
+      // hardcoded 24 — the creator may have been on a longer one, and
+      // telling them a number that does not match their own settings reads
+      // as a bug in the product rather than a missed deadline.
       throw new ConflictException(
-        'The 24-hour response window for this direct message has passed.',
+        `The ${dm.responseWindowHours}-hour response window for this direct message has passed.`,
       );
     }
 
-    return this.prisma.directMessage.update({
+    const responded = await this.prisma.directMessage.update({
       where: { id: messageId },
       data: {
         status: 'responded',
@@ -353,6 +383,7 @@ export class DirectMessageService {
         responseText: dto.text,
       },
     });
+    return toWireDm(responded);
   }
 
   /** GET /dm/inbox (roles: creator) — the creator's own incoming DMs. */
@@ -370,7 +401,7 @@ export class DirectMessageService {
       }),
       this.prisma.directMessage.count({ where: { creatorWawuId } }),
     ]);
-    return { items, currentPage: page, perPage, total };
+    return { items: items.map(toWireDm), currentPage: page, perPage, total };
   }
 
   /** GET /dm/threads (roles: any) — the caller's own sent DMs. */
@@ -388,7 +419,7 @@ export class DirectMessageService {
       }),
       this.prisma.directMessage.count({ where: { senderWawuId } }),
     ]);
-    return { items, currentPage: page, perPage, total };
+    return { items: items.map(toWireDm), currentPage: page, perPage, total };
   }
 
   /**
@@ -417,6 +448,6 @@ export class DirectMessageService {
     ) {
       throw new NotFoundException('Direct message not found');
     }
-    return dm;
+    return toWireDm(dm);
   }
 }

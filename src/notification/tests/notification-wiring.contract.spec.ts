@@ -32,6 +32,7 @@ import { DirectMessageModule } from '../../direct-message/direct-message.module'
 import { FollowRelationshipModule } from '../../follow-relationship/follow-relationship.module';
 import { CommunityMessageModule } from '../../community-message/community-message.module';
 import { CreatorSubscriptionModule } from '../../creator-subscription/creator-subscription.module';
+import { DmRefundService } from '../../direct-message/dm-refund.service';
 import { SchedulerService } from '../../scheduler/scheduler.service';
 import { MOCK_FAILURE_TRANSACTION_ID } from '../../purchase/mock-flutterwave.adapter';
 import { MOCK_CARD_TOKEN } from '../../creator-subscription/mock-flutterwave.adapter';
@@ -181,7 +182,11 @@ describe('Notification wiring (contract)', () => {
     notifications = moduleRef.get(NotificationService);
     // Constructed directly rather than via SchedulerModule so no @Cron is
     // ever registered by a test run — the sweeps are invoked explicitly.
-    scheduler = new SchedulerService(prisma, notifications);
+    scheduler = new SchedulerService(
+      prisma,
+      notifications,
+      moduleRef.get(DmRefundService),
+    );
 
     await clearEmitted();
   }, 40000);
@@ -480,7 +485,19 @@ describe('Notification wiring (contract)', () => {
 
   // -------------------------------------------------------------------------
   describe('the scheduled sweeps', () => {
-    const makeDm = (id: string, deadlineAt: Date, senderWawuId: string) =>
+    /**
+     * `flutterwaveTxId` matters here. The sweep no longer announces a refund
+     * by itself — it records the debt, and the executor announces it once
+     * Flutterwave has actually paid. Without a transaction id there is no
+     * refund to send, the row escalates to the finance queue, and the payer
+     * is correctly NOT told their money is back.
+     */
+    const makeDm = (
+      id: string,
+      deadlineAt: Date,
+      senderWawuId: string,
+      flutterwaveTxId: string | null = `sweep-tx-${id}`,
+    ) =>
       prisma.directMessage.create({
         data: {
           id,
@@ -492,10 +509,11 @@ describe('Notification wiring (contract)', () => {
           sentAt: new Date(deadlineAt.getTime() - 24 * HOUR),
           deadlineAt,
           flutterwaveTxRef: `sweep-${id}`,
+          flutterwaveTxId,
         },
       });
 
-    it('refundExpiredDms writes dm_refunded to the FAN who paid', async () => {
+    it('refundExpiredDms refunds the FAN who paid and tells them once it settles', async () => {
       await prisma.directMessage.deleteMany({ where: { id: SYNTHETIC_DM_EXPIRED } });
       await makeDm(SYNTHETIC_DM_EXPIRED, new Date(Date.now() - HOUR), USER_PLAIN);
 
@@ -510,6 +528,26 @@ describe('Notification wiring (contract)', () => {
 
       const dm = await prisma.directMessage.findUnique({ where: { id: SYNTHETIC_DM_EXPIRED } });
       expect(dm?.status).toBe('refunded');
+      // And the money actually moved, which is the whole point: the message
+      // above is only allowed to exist because this is `settled`.
+      expect(dm?.refundStatus).toBe('settled');
+      expect(dm?.refundedAt).not.toBeNull();
+    });
+
+    it('refundExpiredDms does NOT tell the fan when the refund could not be sent', async () => {
+      // The failure this feature was built to remove. A DM with no captured
+      // transaction id cannot be refunded by API; the debt is real and goes
+      // to the finance queue, and the payer must not be told otherwise.
+      await prisma.directMessage.deleteMany({ where: { id: SYNTHETIC_DM_EXPIRED } });
+      await makeDm(SYNTHETIC_DM_EXPIRED, new Date(Date.now() - HOUR), USER_PLAIN, null);
+
+      await scheduler.refundExpiredDms();
+
+      expect(await emittedFor(USER_PLAIN, 'dm_refunded')).toHaveLength(0);
+      const dm = await prisma.directMessage.findUnique({ where: { id: SYNTHETIC_DM_EXPIRED } });
+      expect(dm?.status).toBe('refunded');
+      expect(dm?.refundStatus).toBe('failed');
+      expect(dm?.refundError).toContain('cannot be refunded automatically');
     });
 
     it('refundExpiredDms is suppressed for a fan who turned `refunds` off', async () => {

@@ -7,6 +7,9 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { PaymentWebhookService } from '../../payment-webhook/payment-webhook.service';
+import { DmRefundService } from '../../direct-message/dm-refund.service';
+import type { DmRefundStatus } from '../../../generated/prisma/enums';
+import { AdminDmRefundQueueQueryDto } from './dto/admin-dm-refund-queue-query.dto';
 import type { Paginated } from '../../common/interceptors/response.interceptor';
 import type { PaymentWebhookReceiptModel } from '../../../generated/prisma/models';
 import {
@@ -69,6 +72,7 @@ export class AdminPaymentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly webhooks: PaymentWebhookService,
+    private readonly dmRefunds: DmRefundService,
   ) {}
 
   /**
@@ -269,6 +273,115 @@ export class AdminPaymentsService {
       reverifyBlockedReason: blocked,
     };
   }
+  /**
+   * Paid DMs whose refund could not be sent automatically.
+   *
+   * This queue exists because a refund that fails is not an error to log —
+   * it is money the platform owes a named person and has not returned. The
+   * old sweep had no such surface: it wrote "awaiting Flutterwave refund
+   * calls" into the process log and the debt left the system entirely.
+   *
+   * `refundError` is Flutterwave's own wording, passed through unedited,
+   * because the person working this queue is about to go and look for that
+   * exact transaction in Flutterwave's dashboard.
+   */
+  async listDmRefunds(query: AdminDmRefundQueueQueryDto) {
+    const status = query.status ?? 'failed';
+    const page = query.page ?? 1;
+    const perPage = query.perPage ?? 20;
+
+    const where = { refundStatus: status as DmRefundStatus };
+    const [rows, total] = await Promise.all([
+      this.prisma.directMessage.findMany({
+        where,
+        orderBy: { deadlineAt: 'asc' },
+        skip: (page - 1) * perPage,
+        take: perPage,
+        select: {
+          id: true,
+          senderWawuId: true,
+          creatorWawuId: true,
+          amount: true,
+          sentAt: true,
+          deadlineAt: true,
+          refundStatus: true,
+          refundAttempts: true,
+          refundError: true,
+          refundReference: true,
+          refundedAt: true,
+          flutterwaveTxRef: true,
+          flutterwaveTxId: true,
+        },
+      }),
+      this.prisma.directMessage.count({ where }),
+    ]);
+
+    const now = Date.now();
+    return {
+      items: rows.map((r) => ({
+        ...r,
+        /** How long this person has been waiting for their money back. */
+        owedForHours: Math.max(
+          0,
+          Math.round((now - r.deadlineAt.getTime()) / 3_600_000),
+        ),
+        /** False when there is no transaction id — the API cannot help. */
+        retryable: r.flutterwaveTxId !== null,
+      })),
+      currentPage: page,
+      perPage,
+      total,
+    };
+  }
+
+  /**
+   * Put a failed refund back in the queue for another automatic attempt.
+   *
+   * Deliberately NOT "mark as refunded", for the same reason this surface
+   * has no "mark as paid": a control that lets an operator assert money
+   * moved, without money moving, reintroduces exactly the lie this whole
+   * change removes. The only way a DM reaches `settled` is Flutterwave
+   * confirming it.
+   *
+   * Resets the attempt counter, because a human retrying is a statement that
+   * whatever blocked it has been dealt with.
+   */
+  async retryDmRefund(id: string) {
+    const dm = await this.prisma.directMessage.findUnique({
+      where: { id },
+      select: { id: true, refundStatus: true, flutterwaveTxId: true },
+    });
+    if (!dm) throw new NotFoundException('Direct message not found');
+    if (dm.refundStatus !== 'failed') {
+      throw new ConflictException(
+        `This refund is ${dm.refundStatus}, not failed — there is nothing to retry.`,
+      );
+    }
+    if (!dm.flutterwaveTxId) {
+      throw new ConflictException(
+        'No Flutterwave transaction id was captured for this payment, so it cannot be retried automatically. Refund it from the Flutterwave dashboard using the transaction reference.',
+      );
+    }
+
+    await this.prisma.directMessage.update({
+      where: { id },
+      data: {
+        refundStatus: 'owed',
+        refundAttempts: 0,
+        refundError: null,
+        refundLockedAt: null,
+      },
+    });
+
+    // Run it now rather than waiting up to ten minutes for the next sweep —
+    // someone is watching this screen having just clicked the button.
+    const summary = await this.dmRefunds.processOwedRefunds();
+    const after = await this.prisma.directMessage.findUniqueOrThrow({
+      where: { id },
+      select: { refundStatus: true, refundError: true, refundReference: true },
+    });
+    return { ...after, run: summary };
+  }
 }
 
 /**
@@ -370,4 +483,5 @@ function messageOf(e: unknown): string {
     return e.message;
   }
   return e instanceof Error ? e.message : String(e);
+
 }

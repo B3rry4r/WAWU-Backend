@@ -15,14 +15,16 @@ import { AdminRolesGuard } from '../auth/guards/admin-roles.guard';
 import { AdminRoles } from '../auth/decorators/admin-roles.decorator';
 import { AdminPaymentsService } from './admin-payments.service';
 import { AdminReceiptQueueQueryDto } from './dto/admin-receipt-queue-query.dto';
+import { AdminDmRefundQueueQueryDto } from './dto/admin-dm-refund-queue-query.dto';
 
 /**
  * Payment reconciliation — `/api/hub/admin/payments/*` once the global prefix
  * is applied.
  *
  * ── ROLE MATRIX (documented, and enforced per handler) ────────────────────
- *   list, detail, re-verify — superadmin, finance
- *   reviewer, support       — refused entirely, on every route here
+ *   list, detail, re-verify           — superadmin, finance
+ *   dm-refunds list, dm-refunds retry — superadmin, finance
+ *   reviewer, support                 — refused entirely, on every route here
  *
  * The same two roles on all three routes, deliberately. Reconciliation is a
  * money function: the list carries customer emails and charge amounts, the
@@ -92,5 +94,33 @@ export class AdminPaymentsController {
   @HttpCode(HttpStatus.OK)
   reverify(@Param('id', ParseUUIDPipe) id: string) {
     return this.service.reverify(id);
+  }
+
+  /**
+   * Paid DMs whose refund could not be sent. Defaults to `?status=failed`,
+   * the slice that needs a person.
+   *
+   * Declared before `dm-refunds/:id/retry` for the same declaration-order
+   * reason the receipts routes are.
+   */
+  @AdminRoles(AdminRole.superadmin, AdminRole.finance)
+  @Get('dm-refunds')
+  listDmRefunds(@Query() query: AdminDmRefundQueueQueryDto) {
+    return this.service.listDmRefunds(query);
+  }
+
+  /**
+   * Try the refund again, through the same executor the scheduler uses.
+   *
+   * There is deliberately no "mark as refunded" here. An operator asserting
+   * that money moved, without money moving, is precisely the failure this
+   * feature was built to remove — it would just relocate the lie from the
+   * cron job to a button.
+   */
+  @AdminRoles(AdminRole.superadmin, AdminRole.finance)
+  @Post('dm-refunds/:id/retry')
+  @HttpCode(HttpStatus.OK)
+  retryDmRefund(@Param('id', ParseUUIDPipe) id: string) {
+    return this.service.retryDmRefund(id);
   }
 }

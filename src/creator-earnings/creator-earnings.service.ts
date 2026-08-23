@@ -241,8 +241,17 @@ export class CreatorEarningsService {
 
     for (const group of dmTotals) {
       const net = (group._sum.amount ?? 0) * (1 - commissionRate);
-      if (group.status === DmStatus.responded) dmPayable += net;
-      else dmHeld += net;
+      if (group.status === DmStatus.responded) {
+        dmPayable += net;
+      } else if (group.status === DmStatus.awaiting_response) {
+        dmHeld += net;
+      }
+      // `refunded` contributes NOTHING, to either figure. It used to fall
+      // into `held` via a bare else, so an expired DM sat in the creator's
+      // balance as money they were still owed — forever, since nothing ever
+      // moved it out. The payer is getting that money back; it was never the
+      // creator's to hold. It is also dropped from the `dm` stream total
+      // below for the same reason.
     }
 
     const dmSales: SaleRow[] = recentDms.map((dm) => {
@@ -312,6 +321,9 @@ export class CreatorEarningsService {
         earningsNaira: round2(tipsTotal),
       },
       {
+        // Payable + held, and refunds are in neither — a refunded DM is not
+        // earnings, so counting it here would make the stream breakdown
+        // disagree with the totals directly above it.
         stream: 'dm',
         amount: round2(dmPayable + dmHeld),
         earningsNaira: round2(dmPayable + dmHeld),

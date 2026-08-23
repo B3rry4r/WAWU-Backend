@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AdminAuthModule } from '../auth/admin-auth.module';
 import { PaymentWebhookModule } from '../../payment-webhook/payment-webhook.module';
+import { DirectMessageModule } from '../../direct-message/direct-message.module';
 import { AdminPaymentsController } from './admin-payments.controller';
 import { AdminPaymentsService } from './admin-payments.service';
 
@@ -26,6 +27,11 @@ import { AdminPaymentsService } from './admin-payments.service';
  * load-bearing controller order there (MentorModule / ServiceApplicationModule
  * before PartnerServiceModule's `@Get(':id')` catch-all) is untouched.
  *
+ * DirectMessageModule is imported for DmRefundService, so the "retry this
+ * refund" control runs the SAME executor the scheduler does rather than a
+ * second, admin-only path to move money. PaymentWebhookModule already pulls
+ * it in transitively; naming it here is what makes the dependency legible.
+ *
  * PrismaService arrives from the global PrismaModule, same as every resource
  * module. Nothing belonging to the app is imported for WRITING, and nothing is
  * modified: the only change made outside this directory was dropping the
@@ -33,7 +39,7 @@ import { AdminPaymentsService } from './admin-payments.service';
  * could be reused instead of copied.
  */
 @Module({
-  imports: [AdminAuthModule, PaymentWebhookModule],
+  imports: [AdminAuthModule, PaymentWebhookModule, DirectMessageModule],
   controllers: [AdminPaymentsController],
   providers: [AdminPaymentsService],
 })

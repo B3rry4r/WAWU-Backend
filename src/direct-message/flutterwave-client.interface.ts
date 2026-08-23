@@ -37,9 +37,36 @@ export interface VerifyChargeParams {
   txRef: string;
 }
 
+export interface RefundChargeParams {
+  /** Flutterwave's own numeric transaction id — NOT tx_ref. Their refund
+   *  endpoint is keyed by id, which is why DirectMessage now stores it. */
+  transactionId: string;
+  /** Naira. Flutterwave supports partial refunds; a paid DM is always full. */
+  amount: number;
+}
+
+/**
+ * `submitted` is a real and distinct outcome, not a nicety: Flutterwave
+ * accepts a refund and settles it asynchronously, so a 200 from their API
+ * means "we have it", not "the payer has their money". Collapsing it into
+ * `settled` is how a system ends up telling someone their refund arrived
+ * before it has. The webhook, or a later poll, moves it to `settled`.
+ */
+export interface FlutterwaveRefundResult {
+  status: 'settled' | 'submitted' | 'failed';
+  /** Flutterwave's refund id, where they returned one. */
+  reference: string | null;
+  /** Their failure text, kept verbatim for whoever works the finance queue. */
+  message: string | null;
+  /** True when retrying cannot help — already refunded, or not refundable.
+   *  Distinguishes "give up and escalate" from "try again in ten minutes". */
+  permanent: boolean;
+}
+
 export interface FlutterwaveClient {
   initCharge(params: InitChargeParams): FlutterwaveChargeInit;
   verifyCharge(params: VerifyChargeParams): Promise<FlutterwaveVerifyResult>;
+  refundCharge(params: RefundChargeParams): Promise<FlutterwaveRefundResult>;
 }
 
 /** DI token — swapped between RealFlutterwaveAdapter and MockFlutterwaveAdapter in DirectMessageModule. */

@@ -3,8 +3,10 @@ import { Injectable } from '@nestjs/common';
 import type {
   FlutterwaveChargeInit,
   FlutterwaveClient,
+  FlutterwaveRefundResult,
   FlutterwaveVerifyResult,
   InitChargeParams,
+  RefundChargeParams,
   VerifyChargeParams,
 } from './flutterwave-client.interface';
 
@@ -24,6 +26,13 @@ import type {
  *   without any network call.
  */
 export const MOCK_FAILURE_TRANSACTION_ID = 'mock-flw-tx-fail';
+
+/** Refund is refused, but retrying might work — a 5xx or a network blip. */
+export const MOCK_REFUND_RETRYABLE_TRANSACTION_ID = 'mock-flw-refund-retry';
+/** Refund is refused for good — already refunded, or not refundable. */
+export const MOCK_REFUND_PERMANENT_TRANSACTION_ID = 'mock-flw-refund-nope';
+/** Refund is accepted but not yet settled, which is Flutterwave's norm. */
+export const MOCK_REFUND_PENDING_TRANSACTION_ID = 'mock-flw-refund-pending';
 
 @Injectable()
 export class MockFlutterwaveAdapter implements FlutterwaveClient {
@@ -68,5 +77,42 @@ export class MockFlutterwaveAdapter implements FlutterwaveClient {
       txRef: params.txRef,
       transactionId: params.transactionId,
     };
+  }
+
+  /**
+   * Refunds succeed by default; three sentinel transaction ids expose the
+   * outcomes that actually need testing. `submitted` is one of them because
+   * it is Flutterwave's normal answer, not an edge case, and the whole point
+   * of this change is that the payer is not told anything until it settles.
+   */
+  async refundCharge(
+    params: RefundChargeParams,
+  ): Promise<FlutterwaveRefundResult> {
+    if (params.transactionId === MOCK_REFUND_RETRYABLE_TRANSACTION_ID) {
+      return {
+        status: 'failed',
+        reference: null,
+        message: 'Flutterwave is temporarily unavailable',
+        permanent: false,
+      };
+    }
+    if (params.transactionId === MOCK_REFUND_PERMANENT_TRANSACTION_ID) {
+      return {
+        status: 'failed',
+        reference: null,
+        message: 'Transaction has already been refunded',
+        permanent: true,
+      };
+    }
+    // A refund id is unique PER REFUND, not per transaction — that is what
+    // Flutterwave returns, and the webhook path looks a DM up by it. A mock
+    // that reuses one id across refunds lets a webhook settle the wrong
+    // payer's message, which is a bug the mock would otherwise hide.
+    const reference = `mock-refund-${randomUUID()}`;
+
+    if (params.transactionId === MOCK_REFUND_PENDING_TRANSACTION_ID) {
+      return { status: 'submitted', reference, message: null, permanent: false };
+    }
+    return { status: 'settled', reference, message: null, permanent: false };
   }
 }
