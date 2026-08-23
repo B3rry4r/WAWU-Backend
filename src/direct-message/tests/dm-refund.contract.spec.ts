@@ -63,9 +63,11 @@ describe('Paid DM refunds (contract)', () => {
 
   beforeEach(() => {
     emitted = [];
-    jest.spyOn(notifications, 'emit').mockImplementation((event: never) => {
+    // `emit` resolves to the created Notification row; these tests only care
+    // that it was called and with what, so null stands in for the row.
+    jest.spyOn(notifications, 'emit').mockImplementation((event) => {
       emitted.push(event);
-      return Promise.resolve();
+      return Promise.resolve(null);
     });
   });
 
