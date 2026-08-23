@@ -6,6 +6,7 @@ import { AdminAuthModule } from './admin/auth/admin-auth.module';
 import { AdminContentReviewModule } from './admin/content-review/admin-content-review.module';
 import { AdminKycReviewModule } from './admin/kyc-review/admin-kyc-review.module';
 import { AdminVerificationReviewModule } from './admin/verification-review/admin-verification-review.module';
+import { AdminProfessionalReviewModule } from './admin/professional-review/admin-professional-review.module';
 import { AdminPaymentsModule } from './admin/payments/admin-payments.module';
 import { AdminCreatorsModule } from './admin/creators/admin-creators.module';
 import { AdminEventsModule } from './admin/events/admin-events.module';
@@ -33,6 +34,7 @@ import { ServiceApplicationModule } from './service-application/service-applicat
 import { VerificationSubmissionModule } from './verification-submission/verification-submission.module';
 import { FollowRelationshipModule } from './follow-relationship/follow-relationship.module';
 import { CreatorDiscoveryModule } from './creator-discovery/creator-discovery.module';
+import { ProfessionalModule } from './professional/professional.module';
 import { BlockedAccountModule } from './blocked-account/blocked-account.module';
 import { ContentPieceModule } from './content-piece/content-piece.module';
 import { CreditPurchaseModule } from './credit-purchase/credit-purchase.module';
@@ -133,6 +135,7 @@ import { APP_GUARD } from '@nestjs/core';
     // <- PartnerServiceModule ordering below is untouched.
     AdminKycReviewModule,
     AdminVerificationReviewModule,
+    AdminProfessionalReviewModule,
     // Admin payment reconciliation (the read side of PaymentWebhookReceipt,
     // which shipped with a writer and no reader) and admin creator lookup (the
     // support screen for "I paid and I cannot upload", which had no endpoint at
@@ -215,6 +218,7 @@ import { APP_GUARD } from '@nestjs/core';
     PurchaseModule,
     VerificationSubmissionModule,
     CreatorDiscoveryModule,
+    ProfessionalModule,
     FollowRelationshipModule,
     BlockedAccountModule,
     ContentPieceModule,
