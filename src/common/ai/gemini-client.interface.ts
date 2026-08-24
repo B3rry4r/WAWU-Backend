@@ -35,8 +35,17 @@ export interface GeminiBrief {
   risks: string[];
 }
 
+/** One turn of the legal chat. */
+export interface GeminiChatRequest {
+  instruction: string;
+  /** Oldest first. `role` is 'user' for the client, 'model' for the AI. */
+  history: Array<{ role: 'user' | 'model'; text: string }>;
+}
+
 export interface GeminiClient {
   generateBrief(request: GeminiBriefRequest): Promise<GeminiBrief>;
+  /** Plain text — this one is a conversation, not a structured document. */
+  chat(request: GeminiChatRequest): Promise<string>;
 }
 
 export const GEMINI_CLIENT = Symbol('GEMINI_CLIENT');

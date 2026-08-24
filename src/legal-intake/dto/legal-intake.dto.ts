@@ -6,6 +6,8 @@ import {
   IsOptional,
   IsString,
   IsUrl,
+  MaxLength,
+  MinLength,
 } from 'class-validator';
 import { LEGAL_MATTER_VALUES } from '../legal-intake-questions';
 
@@ -39,4 +41,17 @@ export class IntakeQueueQueryDto {
   @IsString()
   @IsIn(['completed', 'converted'])
   status?: string;
+}
+
+export class SendChatMessageDto {
+  /**
+   * Bounded at both ends. A minimum because an empty turn burns a model call
+   * and tells the consultant nothing; a maximum because this is a chat box,
+   * and somebody pasting a whole contract into it should attach the document
+   * instead — where the consultant can actually open it.
+   */
+  @IsString()
+  @MinLength(1)
+  @MaxLength(4000)
+  body!: string;
 }

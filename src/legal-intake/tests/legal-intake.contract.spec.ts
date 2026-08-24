@@ -108,9 +108,24 @@ describe('Legal intake (contract)', () => {
   }, 40000);
 
   afterEach(async () => {
+    const intakes = await prisma.legalIntake.findMany({
+      where: { wawuUserId: { in: [USER_PLAIN, USER_CREATOR_PRO] } },
+      select: { legalRequestId: true },
+    });
+    const requestIds = intakes
+      .map((i) => i.legalRequestId)
+      .filter((v): v is string => Boolean(v));
     await prisma.legalIntake.deleteMany({
       where: { wawuUserId: { in: [USER_PLAIN, USER_CREATOR_PRO] } },
     });
+    if (requestIds.length > 0) {
+      await prisma.legalChatMessage.deleteMany({
+        where: { legalRequestId: { in: requestIds } },
+      });
+      await prisma.legalRequest.deleteMany({
+        where: { id: { in: requestIds } },
+      });
+    }
     created.length = 0;
   });
 
@@ -299,6 +314,40 @@ describe('Legal intake (contract)', () => {
       expect(questions).toContain('How long has it been owed?');
       // And it records what wrote the analysis.
       expect(brief.generatedBy).toContain('gemini');
+    },
+    45000,
+  );
+
+  itNeedsGemini(
+    'opens a real legal request, so the matter enters the consultant queue',
+    async () => {
+      // The join the whole feature turns on. Without it the intake was a
+      // survey that ended in a thank-you: a brief was written, the client was
+      // told a consultant would read it, and nothing entered the queue a
+      // consultant works.
+      const intake = await start('debt_recovery');
+      await answer(intake.id, fullDebtAnswers).expect(200);
+
+      const res = await request(app.getHttpServer())
+        .post(`/legal/intake/${intake.id}/complete`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(201);
+
+      expect(res.body.data.status).toBe('converted');
+      const requestId = res.body.data.legalRequestId;
+      expect(requestId).toBeTruthy();
+
+      const opened = await prisma.legalRequest.findUniqueOrThrow({
+        where: { id: requestId },
+      });
+      expect(opened.wawuUserId).toBe(USER_PLAIN);
+      expect(opened.serviceCode).toBe('debt-recovery');
+      // Always awaiting_quote: profiling first means nobody is priced before
+      // a human has read what they need.
+      expect(opened.status).toBe('awaiting_quote');
+      // And the brief travels with the matter.
+      const details = opened.details as { brief?: { matterLabel?: string } };
+      expect(details.brief?.matterLabel).toBe('Debt recovery');
     },
     45000,
   );

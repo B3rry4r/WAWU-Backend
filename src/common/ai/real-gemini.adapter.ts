@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import type {
   GeminiBrief,
   GeminiBriefRequest,
+  GeminiChatRequest,
   GeminiClient,
 } from './gemini-client.interface';
 
@@ -134,6 +135,68 @@ export class RealGeminiAdapter implements GeminiClient {
     }
 
     return normaliseBrief(parsed);
+  }
+  /**
+   * One conversational turn.
+   *
+   * No response schema here — this is prose to a person, not a document for a
+   * dashboard to render. Temperature stays low for the same reason the brief's
+   * does: the client is asking about their own legal position, and a confident
+   * invention is worse than a plain "the consultant will confirm that".
+   */
+  async chat(request: GeminiChatRequest): Promise<string> {
+    const key = process.env.GEMINI_API_KEY;
+    if (!key) {
+      throw new Error(
+        'GEMINI_API_KEY is not set. Legal chat cannot answer without it.',
+      );
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    let response: Response;
+    try {
+      response = await fetch(
+        `${API_BASE}/${encodeURIComponent(GEMINI_MODEL)}:generateContent`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': key,
+          },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: request.instruction }] },
+            contents: request.history.map((m) => ({
+              role: m.role,
+              parts: [{ text: m.text }],
+            })),
+            generationConfig: { temperature: 0.3, maxOutputTokens: 700 },
+          }),
+          signal: controller.signal,
+        },
+      );
+    } catch (error) {
+      throw new Error(
+        `Gemini chat failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (!response.ok) {
+      this.logger.error(`Gemini chat returned HTTP ${response.status}`);
+      throw new Error(`Gemini chat returned HTTP ${response.status}`);
+    }
+
+    const payload = (await response.json()) as GeminiApiResponse;
+    if (payload.promptFeedback?.blockReason) {
+      throw new Error(
+        `Gemini blocked the request: ${payload.promptFeedback.blockReason}`,
+      );
+    }
+    const text = payload.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    if (!text) throw new Error('Gemini chat returned no content');
+    return text;
   }
 }
 

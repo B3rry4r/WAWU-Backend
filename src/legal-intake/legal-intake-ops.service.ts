@@ -55,7 +55,12 @@ export class LegalIntakeOpsService {
       // `in_progress` is excluded on purpose: a half-finished intake is
       // somebody still typing, not work waiting for a consultant, and putting
       // it in the queue would have people chasing clients mid-sentence.
-      where: { status: (status as 'completed') ?? 'completed' },
+      //
+      // `converted` is the default rather than `completed`: completing an
+      // intake opens its request in the same transaction, so a `completed`
+      // row that never converted means that creation failed. Worth being able
+      // to filter for, but not the normal queue.
+      where: { status: (status as 'converted') ?? 'converted' },
       orderBy: { completedAt: 'asc' },
       take: 100,
     });
