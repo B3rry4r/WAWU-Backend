@@ -13,6 +13,7 @@ import {
   GEMINI_CLIENT,
   type GeminiClient,
 } from '../common/ai/gemini-client.interface';
+import { GEMINI_MODEL } from '../common/ai/real-gemini.adapter';
 import {
   BRIEF_INSTRUCTION,
   renderFacts,
@@ -44,7 +45,10 @@ export interface IntakeView {
   brief: LegalBrief | null;
 }
 
-const MODEL_LABEL = process.env.GEMINI_MODEL ?? 'gemini-2.0-flash';
+// Imported, not re-derived. This had its own copy of the default, so the
+// brief recorded `generatedBy: gemini-2.0-flash` while the adapter was free
+// to call something else entirely — a provenance field that quietly lied
+// about which model wrote the analysis a lawyer was reading.
 
 /**
  * Legal profiling.
@@ -203,7 +207,7 @@ export class LegalIntakeService {
       facts,
       documentCount: intake.documents.length,
       analysis,
-      generatedBy: MODEL_LABEL,
+      generatedBy: GEMINI_MODEL,
       generatedAt: new Date().toISOString(),
     };
 

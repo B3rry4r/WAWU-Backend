@@ -14,6 +14,11 @@ export const UPLOAD_FOLDERS = [
   // different reviewer opens it, under a different role, and mixing the two
   // would widen who can read a practising certificate.
   'professional/document',
+  // Whatever a client attaches to a legal intake — a contract, a demand
+  // letter, a court document. Its own prefix: only the consultant working
+  // that matter should ever be able to read it, and sharing a prefix with
+  // another surface widens who can.
+  'legal/document',
   'avatars',
   // A community's own cover image, and a photo posted into a room. Two
   // destinations, not one: the cover is written by the host alone, a message
@@ -60,6 +65,7 @@ export const FOLDER_CONTENT_TYPES: Record<UploadFolder, readonly string[]> = {
   'kyc/id-document': [...IMAGE, ...DOC],
   'service-application/document': [...IMAGE, ...DOC],
   'professional/document': [...IMAGE, ...DOC],
+  'legal/document': [...IMAGE, ...DOC],
   avatars: IMAGE,
   // Images only, deliberately. A community image is rendered in place by
   // every client (serveAs() returns inline: true for image/*), which is
