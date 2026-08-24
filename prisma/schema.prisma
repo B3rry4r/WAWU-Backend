@@ -1937,3 +1937,37 @@ model LegalIntake {
   @@index([wawuUserId, status])
   @@index([status, completedAt])
 }
+
+/// Who said it.
+enum LegalChatAuthor {
+  client
+  /// Gemini, answering before a human joins. Labelled as such in every
+  /// surface — a client must always know whether they are reading a lawyer.
+  ai
+  /// A WAWU Legal consultant, from the dashboard.
+  consultant
+}
+
+/// One message in the conversation attached to a legal matter.
+///
+/// The conversation runs in ONE thread across the handover: the AI opens it
+/// after the client has paid for their consultation, works through what the
+/// brief left unclear, and a consultant then continues in the same place. The
+/// client is not moved to a different screen and does not repeat themselves,
+/// which is the entire point of profiling first.
+///
+/// `authorRole` is never inferred at render time. A message a model wrote is
+/// stored as having been written by a model, permanently, because "was this
+/// legal advice from a person" is a question that gets asked long afterwards
+/// and the answer has to come from the record rather than from styling.
+model LegalChatMessage {
+  id             String          @id @default(uuid())
+  legalRequestId String
+  authorRole     LegalChatAuthor
+  /// The admin id, when a consultant wrote it. Null for client and AI.
+  authorAdminId  String?
+  body           String
+  createdAt      DateTime        @default(now())
+
+  @@index([legalRequestId, createdAt])
+}

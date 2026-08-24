@@ -24,10 +24,13 @@ import {
   isQuestionVisible,
   LEGAL_MATTER_VALUES,
   matterLabel,
+  MATTER_TO_SERVICE_CODE,
   questionsForMatter,
   validQuestionIds,
   type IntakeQuestion,
+  type LegalMatter,
 } from './legal-intake-questions';
+import { legalService } from '../legal/legal-catalogue';
 import type { SaveAnswersDto } from './dto/legal-intake.dto';
 
 /** What the app renders: the questions plus what has been answered so far. */
@@ -43,6 +46,12 @@ export interface IntakeView {
   /** Ids still needed before the intake can be completed. */
   outstandingRequired: string[];
   brief: LegalBrief | null;
+  /**
+   * The request this intake became. Set on completion — the profiling is not
+   * a survey that ends in a thank-you, it is how a matter enters the legal
+   * lifecycle, and this is the id the client's own matter screen uses.
+   */
+  legalRequestId: string | null;
 }
 
 // Imported, not re-derived. This had its own copy of the default, so the
@@ -164,7 +173,9 @@ export class LegalIntakeService {
   async complete(wawuUserId: string, id: string): Promise<IntakeView> {
     const intake = await this.findOwned(wawuUserId, id);
     if (intake.status !== 'in_progress') {
-      throw new ConflictException('This intake is already complete.');
+      throw new ConflictException(
+        'This intake is already complete and has been sent to a consultant.',
+      );
     }
 
     const answers = intake.answers as Record<string, unknown>;
@@ -211,14 +222,64 @@ export class LegalIntakeService {
       generatedAt: new Date().toISOString(),
     };
 
-    const updated = await this.prisma.legalIntake.update({
-      where: { id },
-      data: {
-        status: 'completed',
-        completedAt: new Date(),
-        brief: brief as never,
-      },
+    /**
+     * The profiling becomes a REQUEST, in one transaction with the brief.
+     *
+     * This is the join the whole feature turns on, and without it the intake
+     * was a survey that ended in a thank-you: a brief was written, the client
+     * was told a consultant would read it, and nothing entered the queue a
+     * consultant actually works. `legalRequestId` was a column nothing wrote.
+     *
+     * The matter maps to a catalogue service so the request lands in the
+     * existing lifecycle — pricing, engagement letter, delivery — rather than
+     * beside it. The consultant refines the exact service; a client should
+     * not have to know that "contract drafting or review" is two priced lines
+     * before anybody has heard their problem.
+     *
+     * The brief and the answers travel INTO the request's own `details`, so
+     * the matter carries its own context even if it is later reassigned.
+     */
+    const serviceCode = MATTER_TO_SERVICE_CODE[intake.matter as LegalMatter];
+    const service = legalService(serviceCode);
+    if (!service) {
+      // A matter that maps to nothing is a data bug, not a client error.
+      this.logger.error(
+        `Matter ${intake.matter} maps to unknown service ${serviceCode}`,
+      );
+      throw new ServiceUnavailableException(
+        'We could not open your matter just now. Your answers are saved — please try again in a moment.',
+      );
+    }
+
+    const [, updated] = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.legalRequest.create({
+        data: {
+          wawuUserId,
+          serviceCode: service.code,
+          serviceName: service.name,
+          category: service.category,
+          path: service.path,
+          details: { intakeId: intake.id, brief, answers } as never,
+          documents: intake.documents,
+          // Always `awaiting_quote`, whatever the catalogue price says. The
+          // point of profiling first is that nobody is quoted before a human
+          // has read what they need — starting a profiled matter at `quoted`
+          // would put the price back in front of the understanding.
+          status: 'awaiting_quote',
+        },
+      });
+      const intakeRow = await tx.legalIntake.update({
+        where: { id },
+        data: {
+          status: 'converted',
+          completedAt: new Date(),
+          brief: brief as never,
+          legalRequestId: created.id,
+        },
+      });
+      return [created, intakeRow] as const;
     });
+
     return this.toView(updated);
   }
 
@@ -259,6 +320,7 @@ export class LegalIntakeService {
     answers: unknown;
     documents: string[];
     brief: unknown;
+    legalRequestId?: string | null;
   }): IntakeView {
     const answers = (intake.answers ?? {}) as Record<string, unknown>;
     return {
@@ -276,6 +338,7 @@ export class LegalIntakeService {
       ),
       outstandingRequired: this.outstandingRequired(intake.matter, answers),
       brief: (intake.brief as LegalBrief | null) ?? null,
+      legalRequestId: intake.legalRequestId ?? null,
     };
   }
 }

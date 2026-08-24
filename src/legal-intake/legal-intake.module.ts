@@ -6,6 +6,7 @@ import { LegalIntakeController } from './legal-intake.controller';
 import { LegalIntakeOpsController } from './legal-intake-ops.controller';
 import { LegalIntakeService } from './legal-intake.service';
 import { LegalIntakeOpsService } from './legal-intake-ops.service';
+import { LegalChatService } from './legal-chat.service';
 
 /**
  * Legal profiling. AiModule supplies the Gemini client that writes the brief;
@@ -21,7 +22,7 @@ import { LegalIntakeOpsService } from './legal-intake-ops.service';
 @Module({
   imports: [AiModule, WawuAuthModule, AdminAuthModule],
   controllers: [LegalIntakeController, LegalIntakeOpsController],
-  providers: [LegalIntakeService, LegalIntakeOpsService],
-  exports: [LegalIntakeService],
+  providers: [LegalIntakeService, LegalIntakeOpsService, LegalChatService],
+  exports: [LegalIntakeService, LegalChatService],
 })
 export class LegalIntakeModule {}

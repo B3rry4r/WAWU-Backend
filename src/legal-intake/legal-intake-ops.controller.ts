@@ -1,8 +1,10 @@
 import {
+  Body,
   Controller,
   Get,
   Param,
   ParseUUIDPipe,
+  Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -11,7 +13,13 @@ import { AdminAuthGuard } from '../admin/auth/guards/admin-auth.guard';
 import { AdminRolesGuard } from '../admin/auth/guards/admin-roles.guard';
 import { AdminRoles } from '../admin/auth/decorators/admin-roles.decorator';
 import { LegalIntakeOpsService } from './legal-intake-ops.service';
-import { IntakeQueueQueryDto } from './dto/legal-intake.dto';
+import {
+  IntakeQueueQueryDto,
+  SendChatMessageDto,
+} from './dto/legal-intake.dto';
+import { LegalChatService } from './legal-chat.service';
+import { CurrentAdmin } from '../admin/auth/decorators/current-admin.decorator';
+import type { AdminUserView } from '../admin/auth/admin-user-view.type';
 
 /**
  * WAWU Legal's side of profiling — `/api/hub/legal/ops/intakes`.
@@ -21,9 +29,9 @@ import { IntakeQueueQueryDto } from './dto/legal-intake.dto';
  * somebody to explain their problem twice.
  *
  * ── ROLE MATRIX (documented, and enforced per handler) ────────────────────
- *   queue, detail — superadmin, support
- *   finance       — refused
- *   reviewer      — refused
+ *   queue, detail, chat read, chat reply — superadmin, support
+ *   finance                              — refused
+ *   reviewer                             — refused
  *
  * Narrower than the legal-requests queue next door, and deliberately. That
  * queue returns a redacted list for pricing and closing, so `finance` belongs
@@ -42,7 +50,10 @@ import { IntakeQueueQueryDto } from './dto/legal-intake.dto';
 @UseGuards(AdminAuthGuard, AdminRolesGuard)
 @Controller('legal/ops/intakes')
 export class LegalIntakeOpsController {
-  constructor(private readonly service: LegalIntakeOpsService) {}
+  constructor(
+    private readonly service: LegalIntakeOpsService,
+    private readonly chat: LegalChatService,
+  ) {}
 
   /** Completed intakes waiting for a consultant, longest wait first. */
   @AdminRoles(AdminRole.superadmin, AdminRole.support)
@@ -56,5 +67,34 @@ export class LegalIntakeOpsController {
   @Get(':id')
   detail(@Param('id', ParseUUIDPipe) id: string) {
     return this.service.detail(id);
+  }
+
+  /**
+   * The client's conversation, as the consultant sees it — including whatever
+   * the assistant said before they joined. A consultant picking up a matter
+   * needs to know what the client has already been told.
+   */
+  @AdminRoles(AdminRole.superadmin, AdminRole.support)
+  @Get('chat/:requestId')
+  thread(@Param('requestId', ParseUUIDPipe) requestId: string) {
+    return this.chat.getThreadForOps(requestId);
+  }
+
+  /**
+   * Reply as the consultant.
+   *
+   * This is the handover, and it is one-way: from the first consultant
+   * message on, the assistant stops answering and every later client message
+   * is for the human. A model still replying alongside a lawyer in the same
+   * thread is how a client ends up unable to tell which messages were advice.
+   */
+  @AdminRoles(AdminRole.superadmin, AdminRole.support)
+  @Post('chat/:requestId')
+  reply(
+    @Param('requestId', ParseUUIDPipe) requestId: string,
+    @Body() dto: SendChatMessageDto,
+    @CurrentAdmin() admin: AdminUserView,
+  ) {
+    return this.chat.sendAsConsultant(requestId, admin.id, dto.body);
   }
 }

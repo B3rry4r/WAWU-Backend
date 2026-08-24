@@ -12,7 +12,12 @@ import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { LegalIntakeService } from './legal-intake.service';
-import { SaveAnswersDto, StartIntakeDto } from './dto/legal-intake.dto';
+import {
+  SaveAnswersDto,
+  SendChatMessageDto,
+  StartIntakeDto,
+} from './dto/legal-intake.dto';
+import { LegalChatService } from './legal-chat.service';
 import { LEGAL_MATTERS } from './legal-intake-questions';
 
 /**
@@ -35,7 +40,10 @@ import { LEGAL_MATTERS } from './legal-intake-questions';
 @UseGuards(WawuAuthGuard)
 @Controller('legal/intake')
 export class LegalIntakeController {
-  constructor(private readonly service: LegalIntakeService) {}
+  constructor(
+    private readonly service: LegalIntakeService,
+    private readonly chat: LegalChatService,
+  ) {}
 
   /** The fourteen things somebody can say they need. Step one of the flow. */
   @Get('matters')
@@ -79,5 +87,30 @@ export class LegalIntakeController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.service.complete(user.sub, id);
+  }
+
+  /**
+   * The conversation on a matter this intake became.
+   *
+   * Under `/legal/intake/` rather than `/legal/requests/` on purpose: this is
+   * the same continuous thing the client started when they answered the first
+   * question, and splitting it across two prefixes is how the profiling ended
+   * up feeling detached from the service in the first place.
+   */
+  @Get('chat/:requestId')
+  thread(
+    @CurrentUser() user: WawuJwtClaims,
+    @Param('requestId', ParseUUIDPipe) requestId: string,
+  ) {
+    return this.chat.getThread(user.sub, requestId);
+  }
+
+  @Post('chat/:requestId')
+  sendMessage(
+    @CurrentUser() user: WawuJwtClaims,
+    @Param('requestId', ParseUUIDPipe) requestId: string,
+    @Body() dto: SendChatMessageDto,
+  ) {
+    return this.chat.send(user.sub, requestId, dto.body);
   }
 }
