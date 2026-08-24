@@ -6,8 +6,21 @@ import type {
 } from './gemini-client.interface';
 
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
-/** Flash: this is a short structured summarisation job on a latency budget. */
-const MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.0-flash';
+/**
+ * Flash, because this is a short structured summarisation job on a latency
+ * budget — somebody is watching a spinner that says "preparing your summary".
+ *
+ * Pinned to an explicit version rather than a floating alias. A brief is read
+ * by a lawyer before they advise a client, and a model silently changing
+ * underneath that is not something to discover from a support ticket.
+ * Overridable by GEMINI_MODEL so the pin can be moved without a deploy of
+ * this file.
+ *
+ * NOTE ON VERSIONS: gemini-2.0-flash was SHUT DOWN on 1 June 2026, along with
+ * 2.0-flash-lite; 1.0 and 1.5 went earlier. Anything on this codebase that
+ * still names a 2.x model is broken rather than merely old.
+ */
+export const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-3.7-flash';
 const TIMEOUT_MS = 20_000;
 
 interface GeminiApiResponse {
@@ -75,7 +88,7 @@ export class RealGeminiAdapter implements GeminiClient {
     let response: Response;
     try {
       response = await fetch(
-        `${API_BASE}/${encodeURIComponent(MODEL)}:generateContent`,
+        `${API_BASE}/${encodeURIComponent(GEMINI_MODEL)}:generateContent`,
         {
           method: 'POST',
           headers: {
