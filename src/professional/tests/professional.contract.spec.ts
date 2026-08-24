@@ -359,4 +359,35 @@ describe('Professional profiles (contract)', () => {
       .send({ listed: false })
       .expect(403);
   });
+
+  it('an admin decision response carries no licence number', async () => {
+    // Declaring a narrow return type does NOT narrow the object: prisma
+    // resolves the full row and TypeScript accepts a wider one where a
+    // narrower is declared, so the column would ship regardless. This asserts
+    // the runtime shape, which is the only thing a buyer's browser sees.
+    await post(
+      creatorToken,
+      application({
+        category: 'legal_services',
+        credentialKind: 'licence',
+        licenceNumber: 'SCN/2014/99999',
+        issuingBody: 'Nigerian Bar Association',
+      }),
+    ).expect(201);
+
+    const row = await prisma.professionalProfile.findFirstOrThrow({
+      where: { wawuUserId: USER_CREATOR_PRO, category: 'legal_services' },
+    });
+    await prisma.professionalProfile.update({
+      where: { id: row.id },
+      data: { status: 'approved', reviewedAt: new Date() },
+    });
+
+    const res = await request(app.getHttpServer())
+      .get(`/professionals/${row.id}`)
+      .expect(200);
+    expect(JSON.stringify(res.body)).not.toContain('SCN/2014/99999');
+    expect(res.body.data.licenceNumber).toBeUndefined();
+  });
+
 });
