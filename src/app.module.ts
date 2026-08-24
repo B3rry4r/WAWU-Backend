@@ -56,6 +56,7 @@ import { StorageModule } from './storage/storage.module';
 import { BillPaymentModule } from './bill-payment/bill-payment.module';
 import { HealthPlanModule } from './health-plan/health-plan.module';
 import { LegalModule } from './legal/legal.module';
+import { LegalIntakeModule } from './legal-intake/legal-intake.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { SchedulerModule } from './scheduler/scheduler.module';
 import { PaymentWebhookModule } from './payment-webhook/payment-webhook.module';
@@ -83,6 +84,7 @@ import { APP_GUARD } from '@nestjs/core';
     // Lifestyle Services: WAWUPay, WAWUCare, WAWU Legal.
     BillPaymentModule,
     HealthPlanModule,
+    LegalIntakeModule,
     LegalModule,
     WawuAuthModule,
     // Admin surface. Position is deliberate: immediately after the auth
