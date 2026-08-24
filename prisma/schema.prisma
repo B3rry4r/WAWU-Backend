@@ -1880,3 +1880,60 @@ model ProfessionalProfile {
   @@index([category, status])
   @@index([status])
 }
+
+// -----------------------------------------------------------------------------
+// Legal intake — profiling before anybody talks about money
+// -----------------------------------------------------------------------------
+
+enum LegalIntakeStatus {
+  in_progress
+  completed
+  /// Turned into a LegalRequest. Kept rather than deleted: the brief is what
+  /// the consultant read before the first message, and "what did we know when
+  /// we advised" is a question that gets asked after things go wrong.
+  converted
+}
+
+/// One person's answers to the legal profiling questions, and the brief those
+/// answers produce.
+///
+/// The point of this table is ORDER. Before it, a client picked a service and
+/// was quoted a consultation fee, so the first thing WAWU said to somebody
+/// with a legal problem was a price. Now the profiling happens first, the
+/// consultant reads a brief before the conversation starts, and the client
+/// does not repeat their story to a human who has not been told it.
+///
+/// `answers` is Json because the question set is adaptive — a debt-recovery
+/// intake and a trademark intake genuinely do not collect the same fields, and
+/// modelling fourteen matter types as columns would be a table of nulls. The
+/// SHAPE is not freeform though: every key is a question id from
+/// legal-intake-questions.ts, and the service validates against it.
+model LegalIntake {
+  id         String            @id @default(uuid())
+  wawuUserId String
+  /// One of the fourteen matter types the first question offers. Not a
+  /// catalogue service code — that is resolved when the request is created,
+  /// because "Contract Drafting / Review" is one thing to a client and two
+  /// priced services to operations.
+  matter     String
+  status     LegalIntakeStatus @default(in_progress)
+
+  /// Question id -> answer. Answers are strings, string arrays, or null for a
+  /// question the person chose to skip.
+  answers   Json     @default("{}")
+  /// Object-storage URLs for anything they attached.
+  documents String[] @default([])
+
+  /// The consultant-facing brief, assembled on completion. Stored rather than
+  /// recomputed so it cannot drift from what the consultant actually read.
+  brief Json?
+
+  /// Set when this intake becomes a real request.
+  legalRequestId String? @unique
+
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([wawuUserId, status])
+  @@index([status, completedAt])
+}
