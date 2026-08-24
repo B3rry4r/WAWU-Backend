@@ -7,7 +7,15 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { WawuIdClient } from '../../common/auth/wawu-id.client';
 import { StorageService } from '../../storage/storage.service';
 import { isRegulatedCategory } from '../../professional/professional-categories';
+import type { ReviewStatus } from '../../../generated/prisma/enums';
 import type { AdminProfessionalQueueQueryDto } from './dto/professional-review.dto';
+import type { Paginated } from '../../common/interceptors/response.interceptor';
+import type {
+  AdminProfessionalDecisionView,
+  AdminProfessionalDetailView,
+  AdminProfessionalDocumentUrlView,
+  AdminProfessionalQueueItemView,
+} from './admin-professional-view.type';
 
 /**
  * Reviewing professional applications.
@@ -34,7 +42,34 @@ export class AdminProfessionalReviewService {
     private readonly storage: StorageService,
   ) {}
 
-  async queue(query: AdminProfessionalQueueQueryDto) {
+  /**
+   * Narrow a stored row to what a decision may return.
+   *
+   * Declaring the return type is NOT enough on its own: `prisma.update`
+   * resolves to the full row, TypeScript accepts a wider object where a
+   * narrower one is declared, and the extra columns — the licence number
+   * among them — go out over the wire regardless. Hazard H-1 in one line.
+   * So the object is built by hand.
+   */
+  private toDecision(row: {
+    id: string;
+    status: ReviewStatus;
+    rejectionReason: string | null;
+    reviewedAt: Date | null;
+    listed: boolean;
+  }): AdminProfessionalDecisionView {
+    return {
+      id: row.id,
+      status: row.status,
+      rejectionReason: row.rejectionReason,
+      reviewedAt: row.reviewedAt,
+      listed: row.listed,
+    };
+  }
+
+  async queue(
+    query: AdminProfessionalQueueQueryDto,
+  ): Promise<Paginated<AdminProfessionalQueueItemView>> {
     const status = query.status ?? 'pending';
     const page = query.page ?? 1;
     const perPage = query.perPage ?? 20;
@@ -98,7 +133,7 @@ export class AdminProfessionalReviewService {
   }
 
   /** One application in full, with the evidence a decision rests on. */
-  async detail(id: string) {
+  async detail(id: string): Promise<AdminProfessionalDetailView> {
     const row = await this.prisma.professionalProfile.findUnique({
       where: { id },
     });
@@ -157,7 +192,10 @@ export class AdminProfessionalReviewService {
    * reviewer's browser history, or a screenshot of the queue, does not carry
    * a working link to someone's practising certificate.
    */
-  async documentUrl(id: string, documentUrl: string) {
+  async documentUrl(
+    id: string,
+    documentUrl: string,
+  ): Promise<AdminProfessionalDocumentUrlView> {
     const row = await this.prisma.professionalProfile.findUnique({
       where: { id },
       select: { documents: true },
@@ -180,7 +218,7 @@ export class AdminProfessionalReviewService {
    * tried again. Reversed, an approved listing would exist with no badge
    * behind it and nothing to detect the mismatch.
    */
-  async approve(id: string) {
+  async approve(id: string): Promise<AdminProfessionalDecisionView> {
     const row = await this.prisma.professionalProfile.findUnique({
       where: { id },
       select: { id: true, status: true, wawuUserId: true },
@@ -195,15 +233,17 @@ export class AdminProfessionalReviewService {
       'certified_professional',
     );
 
-    return this.prisma.professionalProfile.update({
-      where: { id },
-      data: {
-        status: 'approved',
-        reviewedAt: new Date(),
-        rejectionReason: null,
-        listed: true,
-      },
-    });
+    return this.toDecision(
+      await this.prisma.professionalProfile.update({
+        where: { id },
+        data: {
+          status: 'approved',
+          reviewedAt: new Date(),
+          rejectionReason: null,
+          listed: true,
+        },
+      }),
+    );
   }
 
   /**
@@ -213,7 +253,10 @@ export class AdminProfessionalReviewService {
    * may already hold from another category, and silently downgrading someone
    * because one application in one field did not stand up would be wrong.
    */
-  async reject(id: string, reason: string) {
+  async reject(
+    id: string,
+    reason: string,
+  ): Promise<AdminProfessionalDecisionView> {
     const row = await this.prisma.professionalProfile.findUnique({
       where: { id },
       select: { status: true },
@@ -223,15 +266,17 @@ export class AdminProfessionalReviewService {
       throw new ConflictException(`This application is already ${row.status}.`);
     }
 
-    return this.prisma.professionalProfile.update({
-      where: { id },
-      data: {
-        status: 'rejected',
-        rejectionReason: reason,
-        reviewedAt: new Date(),
-        listed: false,
-      },
-    });
+    return this.toDecision(
+      await this.prisma.professionalProfile.update({
+        where: { id },
+        data: {
+          status: 'rejected',
+          rejectionReason: reason,
+          reviewedAt: new Date(),
+          listed: false,
+        },
+      }),
+    );
   }
 
   /**
@@ -241,7 +286,7 @@ export class AdminProfessionalReviewService {
    * and the record of it should survive. This is the control for a complaint
    * that needs acting on before it can be investigated properly.
    */
-  async unlist(id: string) {
+  async unlist(id: string): Promise<AdminProfessionalDecisionView> {
     const row = await this.prisma.professionalProfile.findUnique({
       where: { id },
       select: { status: true },
@@ -252,9 +297,11 @@ export class AdminProfessionalReviewService {
         'Only an approved listing can be pulled from the directory.',
       );
     }
-    return this.prisma.professionalProfile.update({
-      where: { id },
-      data: { listed: false },
-    });
+    return this.toDecision(
+      await this.prisma.professionalProfile.update({
+        where: { id },
+        data: { listed: false },
+      }),
+    );
   }
 }
