@@ -15,7 +15,7 @@ import type { CreateContentDto } from '../dto/create-content.dto';
  */
 type Counts = { free: number; paid: number };
 
-function buildService(tier: 'basic' | 'pro', counts: Counts) {
+function buildService(tier: 'basic' | 'pro' | 'pro_max', counts: Counts) {
   const state = {
     wawuUserId: 'creator-1',
     tier,

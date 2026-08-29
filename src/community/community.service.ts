@@ -118,7 +118,7 @@ export class CommunityService {
    *     scheduler clears this flag) creator cannot open one. Message mirrors
    *     ContentPieceService.create's upload gate verbatim in shape.
    *
-   *  3. kind === 'private' requires tier === 'pro'. A Basic creator asking
+   *  3. kind === 'private' requires a paid tier — Pro or Pro Max. A Basic creator asking
    *     for a private community is refused with the tier named, never
    *     silently downgraded to an open one — quietly handing someone an
    *     open community when they asked for a private one publishes what they
@@ -162,7 +162,10 @@ export class CommunityService {
       );
     }
 
-    if (dto.kind === 'private' && creatorState.tier !== 'pro') {
+    // Any PAID tier, not Pro specifically. Pro Max includes everything in
+    // Pro, so testing `!== 'pro'` would have refused the most expensive plan
+    // on the platform a feature its own copy sells.
+    if (dto.kind === 'private' && creatorState.tier === 'basic') {
       throw new ForbiddenException(
         'Private communities are a Pro-tier feature. Your Basic plan can host open communities — upgrade to Pro to host a private one.',
       );

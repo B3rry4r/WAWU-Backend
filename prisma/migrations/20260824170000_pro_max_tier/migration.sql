@@ -1,0 +1,13 @@
+-- Pro Max: a third creator tier.
+--
+-- ADDITIVE. Adding a value to an enum does not touch a single existing row:
+-- every current subscription stays `basic` or `pro` and keeps behaving
+-- exactly as it did.
+--
+-- NOTE ON PRICE. Pro moves from ₦18,999 to ₦14,999 in application code, not
+-- here. Price is not a column — `CreatorSubscription` stores the tier and the
+-- price table is read at charge time — so an existing Pro subscriber is
+-- billed the new price at their next renewal and nothing has to be
+-- backfilled. The commission rate they were sold IS stored per row
+-- (`commissionRateOverride`), and that is untouched.
+ALTER TYPE "CreatorTier" ADD VALUE IF NOT EXISTS 'pro_max';

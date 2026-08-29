@@ -15,7 +15,9 @@ import type { LearnEntitlement } from '../common/types';
 @UseGuards(WawuAuthGuard)
 @Controller('learn/entitlement')
 export class LearnEntitlementController {
-  constructor(private readonly learnEntitlementService: LearnEntitlementService) {}
+  constructor(
+    private readonly learnEntitlementService: LearnEntitlementService,
+  ) {}
 
   @Get()
   get(@CurrentUser() user: WawuJwtClaims): Promise<LearnEntitlement> {

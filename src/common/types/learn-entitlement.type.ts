@@ -4,7 +4,7 @@
  * CourseEnrollment rows. Wire-response interface only.
  */
 export interface LearnEntitlement {
-  tier: 'basic' | 'pro';
+  tier: 'basic' | 'pro' | 'pro_max';
   /** derived from CreatorState.tier: basic=1, pro=3 per registry note. */
   freeCoursesTotal: number;
   freeCoursesUsed: number;

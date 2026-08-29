@@ -44,7 +44,9 @@ async function login(identifier: string): Promise<string> {
     body: JSON.stringify({ identifier }),
   });
   if (!res.ok) {
-    throw new Error(`mock-wawu-id login failed for ${identifier}: ${res.status}`);
+    throw new Error(
+      `mock-wawu-id login failed for ${identifier}: ${res.status}`,
+    );
   }
   const body = (await res.json()) as { accessToken: string };
   return body.accessToken;
@@ -81,11 +83,22 @@ describe('LearnEntitlement (contract)', () => {
     proCreatorToken = await login('creator-pro@test.wawu.dev');
 
     const moduleRef = await Test.createTestingModule({
-      imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, WawuAuthModule, LearnEntitlementModule],
+      imports: [
+        ConfigModule.forRoot({ isGlobal: true }),
+        PrismaModule,
+        WawuAuthModule,
+        LearnEntitlementModule,
+      ],
     }).compile();
 
     app = moduleRef.createNestApplication();
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
+    app.useGlobalPipes(
+      new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
+    );
     app.useGlobalFilters(new AllExceptionsFilter());
     app.useGlobalInterceptors(new ResponseInterceptor());
     await app.init();

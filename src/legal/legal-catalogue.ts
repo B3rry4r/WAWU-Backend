@@ -27,8 +27,29 @@ export interface LegalService {
   blurb: string;
   /** Naira. `null` means WAWU bills after reviewing the request. */
   priceNaira: number | null;
-  /** What the intake form must collect before the request can be submitted. */
+  /**
+   * This service needs supporting documents.
+   *
+   * It does NOT mean "show a bare file picker". Which documents depends
+   * entirely on the filing, and a screen that says "upload what we need"
+   * without naming anything is asking the client to guess at their own
+   * expense. Either send them to a dedicated flow that names each document
+   * (`applyHref`), or through profiling, where the matter-specific questions
+   * establish what is actually required and the consultant asks for exactly
+   * that in the chat.
+   */
   requiresDocuments?: boolean;
+  /**
+   * A purpose-built apply flow that already exists for this service.
+   *
+   * CAC registration is the case this exists for. It needs three proposed
+   * names, the nature of the business and three NAMED documents — and
+   * `/services/cac/apply` already collects all of that. The legal catalogue
+   * was offering a second, worse version of the same filing: a bare uploader
+   * with no name fields at all, which cannot produce a CAC filing no matter
+   * what is attached to it.
+   */
+  applyHref?: string;
 }
 
 export const CONSULTATION_FEES = {
@@ -69,6 +90,7 @@ export const LEGAL_SERVICES: LegalService[] = [
     blurb: 'Register your business name with the Corporate Affairs Commission.',
     priceNaira: null,
     requiresDocuments: true,
+    applyHref: '/services/cac/apply',
   },
   {
     code: 'tax-registration',

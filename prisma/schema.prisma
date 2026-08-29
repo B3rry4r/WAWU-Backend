@@ -55,6 +55,11 @@ enum AccountType {
 enum CreatorTier {
   basic
   pro
+  /// Everything in Pro, plus music distribution through Ditto. Priced and
+  /// sold as a third tier rather than an add-on, so it is a tier value and
+  /// not a flag — a creator is on one plan at a time and the whole billing,
+  /// proration and downgrade machinery already reasons about tiers.
+  pro_max
 }
 
 /// Shared by CreatorState.kycStatus, KycSubmission.status and

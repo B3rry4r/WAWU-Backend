@@ -1,11 +1,20 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import type { LearnEntitlement } from '../common/types';
+import type { CreatorTier } from '../../generated/prisma/enums';
 
-/** basic=1, pro=3 free course slots per subscription tier (docs/01_SPEC.md §4, never invent a different split). */
-const FREE_COURSES_BY_TIER: Record<'basic' | 'pro', number> = {
+/**
+ * Free course slots per tier.
+ *
+ * Basic 1, Pro 2, Pro Max 3 — from the plan copy, which sells Pro as "up to 2
+ * training courses" and Pro Max as "up to 3". Pro previously gave 3; that is
+ * the figure that moved when Pro Max was introduced above it, and it is the
+ * one thing in this change that takes something away from an existing tier.
+ */
+const FREE_COURSES_BY_TIER: Record<CreatorTier, number> = {
   basic: 1,
-  pro: 3,
+  pro: 2,
+  pro_max: 3,
 };
 
 /**
@@ -39,7 +48,10 @@ export class LearnEntitlementService {
     const tier = creatorState?.tier ?? 'basic';
     const freeCoursesTotal = creatorState ? FREE_COURSES_BY_TIER[tier] : 0;
     const enrolledCourseIds = enrollments.map((e) => e.courseId);
-    const freeCoursesUsed = Math.min(enrolledCourseIds.length, freeCoursesTotal);
+    const freeCoursesUsed = Math.min(
+      enrolledCourseIds.length,
+      freeCoursesTotal,
+    );
 
     return {
       tier,
