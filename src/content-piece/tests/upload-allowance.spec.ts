@@ -88,8 +88,13 @@ function dto(accessType: 'free' | 'paid'): CreateContentDto {
 
 describe('ContentPieceService upload allowances', () => {
   it('matches the tiers advertised on the pricing card', () => {
+    // These three are the numbers on the pricing page. If a plan's copy
+    // changes, this test is the thing that says so before a creator finds out
+    // by being refused an upload they were sold.
     expect(UPLOAD_ALLOWANCE_BY_TIER.basic).toEqual({ free: 1, paid: 5, total: 6 });
-    expect(UPLOAD_ALLOWANCE_BY_TIER.pro).toEqual({ free: 2, paid: 13, total: 15 });
+    expect(UPLOAD_ALLOWANCE_BY_TIER.pro).toEqual({ free: 2, paid: 10, total: 12 });
+    // Pro Max buys distribution, equipment and support — not more slots.
+    expect(UPLOAD_ALLOWANCE_BY_TIER.pro_max).toEqual({ free: 2, paid: 10, total: 12 });
   });
 
   it('claims a slot when the upload is within allowance', async () => {

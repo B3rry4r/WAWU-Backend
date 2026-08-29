@@ -1658,6 +1658,10 @@ enum EventStatus {
   published
   rejected
   removed
+  /// Called off by the organiser after publication. Every ticket is voided
+  /// and every order refunded; the event stays readable so a ticket holder
+  /// can see what happened to the thing they paid for.
+  cancelled
 }
 
 /// A user-submitted event. Created `pending`; invisible on every public read
@@ -1723,6 +1727,28 @@ model Event {
 
   speakers EventSpeaker[]
   going    EventGoing[]
+
+  /// Ticketing. An event with no ticket types is exactly the free,
+  /// interest-only event this table held before ticketing existed — the
+  /// "Going" signal still works and nothing is charged.
+  ticketTypes EventTicketType[]
+  orders      EventOrder[]
+  tickets     EventTicket[]
+  referrals   EventReferral[]
+
+  /// Banner image. Object-storage URL from POST /uploads/presign.
+  bannerUrl String?
+  /// What the event is ABOUT, as the Events section filters on.
+  category  EventCategory @default(other)
+  /// How to reach the organiser. Shown on the public page.
+  contactEmail String?
+  contactPhone String?
+
+  /// Set when an organiser calls off a published event. Distinct from
+  /// `removed`, which is a takedown by an admin: a cancellation refunds every
+  /// ticket sold and the record stays visible to the people who bought one.
+  cancelledAt   DateTime?
+  cancelReason  String?
 
   @@index([hostWawuId])
   @@index([status])
@@ -1975,4 +2001,179 @@ model LegalChatMessage {
   createdAt      DateTime        @default(now())
 
   @@index([legalRequestId, createdAt])
+}
+
+// -----------------------------------------------------------------------------
+// Event ticketing
+// -----------------------------------------------------------------------------
+
+/// The ten categories the Events section filters by. Distinct from
+/// `EventType` (workshop/summit/webinar/meetup/competition), which describes
+/// the FORMAT of a gathering; this describes its subject. Both are kept:
+/// "a music summit" and "a fashion meetup" are different facts.
+enum EventCategory {
+  music
+  business
+  training
+  conference
+  church
+  entertainment
+  fashion
+  community
+  lifestyle
+  other
+}
+
+/// Ticket tiers an organiser may offer. A closed set rather than free text so
+/// the buyer-facing sort order is stable and a typo cannot create a tier
+/// nobody can filter.
+enum TicketTier {
+  regular
+  vip
+  vvip
+  early_bird
+  group
+  free
+}
+
+/// Where an order's MONEY is. Deliberately not merged with ticket status: an
+/// order is paid or not, while each ticket inside it is separately valid,
+/// checked in or void.
+enum EventOrderStatus {
+  /// Charge opened, nothing collected yet.
+  pending
+  paid
+  /// The buyer has been refunded — organiser cancellation, or a manual one.
+  refunded
+  failed
+}
+
+/// Where one ticket IS. A refunded order voids its tickets; a checked-in
+/// ticket cannot be checked in twice.
+enum EventTicketStatus {
+  valid
+  checked_in
+  /// The event was cancelled or the order refunded. Cannot be scanned in.
+  void
+}
+
+/// One priced tier on one event.
+///
+/// `sold` is a stored counter rather than a count of rows, because it is read
+/// on every page view of a popular event and incremented inside the purchase
+/// transaction — a COUNT over tickets would be both slower and racier at
+/// exactly the moment it matters, which is two people buying the last seat.
+model EventTicketType {
+  id      String     @id @default(uuid())
+  eventId String
+  tier    TicketTier
+  /// The organiser's own label — "Early bird", "Table of 10".
+  name    String
+  /// Naira. Zero for a `free` tier, and only for a free tier.
+  priceNaira Int
+  /// How many exist. Not nullable: an unlimited tier is a venue with no
+  /// capacity, which is a physical impossibility somebody has to answer for.
+  quantity   Int
+  sold       Int @default(0)
+  /// When this tier may be bought. Null start means "from publication",
+  /// null end means "until the event begins".
+  salesStartAt DateTime?
+  salesEndAt   DateTime?
+
+  event   Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  orders  EventOrder[]
+  tickets EventTicket[]
+
+  @@index([eventId])
+}
+
+/// One purchase: N tickets of one tier, one payment.
+model EventOrder {
+  id           String @id @default(uuid())
+  eventId      String
+  ticketTypeId String
+  buyerWawuId  String
+
+  quantity Int
+  /// Naira the buyer was charged, in total. Snapshotted — a later price
+  /// change must never alter what somebody already paid.
+  amountNaira Int
+  /// WAWU's cut, snapshotted at purchase time for the same reason
+  /// Purchase.commissionRate is: a creator who upgrades to Pro should not
+  /// retroactively change the split on tickets already sold.
+  commissionRate Decimal @db.Decimal(5, 4)
+
+  status EventOrderStatus @default(pending)
+
+  /// Payment lookup keys — see Purchase.flutterwaveTxRef and
+  /// DirectMessage.flutterwaveTxId. The numeric id is REQUIRED to refund.
+  flutterwaveTxRef String  @unique
+  flutterwaveTxId  String?
+
+  /// Which referral link brought this sale, if any.
+  referralCode String?
+
+  refundedAt      DateTime?
+  refundReference String?
+  refundError     String?
+
+  createdAt DateTime @default(now())
+
+  event      Event           @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  ticketType EventTicketType @relation(fields: [ticketTypeId], references: [id])
+  tickets    EventTicket[]
+
+  @@index([eventId, status])
+  @@index([buyerWawuId])
+  @@index([referralCode])
+}
+
+/// One admittance. One row per seat, not per order, because each is scanned
+/// separately and a group of five arriving at different times is normal.
+model EventTicket {
+  id           String @id @default(uuid())
+  orderId      String
+  eventId      String
+  ticketTypeId String
+
+  /// What the QR encodes. Opaque and unguessable — a sequential id would let
+  /// anybody mint a valid-looking ticket by counting.
+  code String @unique
+
+  status      EventTicketStatus @default(valid)
+  checkedInAt DateTime?
+  /// The WAWU id of the organiser or staff member who scanned it.
+  checkedInBy String?
+
+  createdAt DateTime @default(now())
+
+  order      EventOrder      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  event      Event           @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  ticketType EventTicketType @relation(fields: [ticketTypeId], references: [id])
+
+  @@index([eventId, status])
+  @@index([orderId])
+}
+
+/// A shareable link that attributes sales to whoever shared it.
+///
+/// Commission is deliberately NOT settled here. The brief says the reward is
+/// configured later, so this records who drove what and stops short of
+/// paying anybody — a payout path nobody has specified is a payout path that
+/// will be wrong.
+model EventReferral {
+  id      String @id @default(uuid())
+  eventId String
+  /// The code in the URL. Unguessable, for the same reason a ticket code is.
+  code    String @unique
+  /// Who this link is for — "Ada on Instagram". Free text, organiser-set.
+  label   String
+  /// The WAWU account it belongs to, when the referrer has one.
+  ownerWawuId String?
+
+  createdAt DateTime @default(now())
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId])
 }
