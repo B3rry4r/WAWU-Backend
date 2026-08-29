@@ -9,6 +9,6 @@ import { CreatorTier } from '../../../generated/prisma/enums';
  * (conventions.md § Identity & format canon).
  */
 export class SubscribeDto {
-  @IsEnum(CreatorTier, { message: 'tier must be one of: basic, pro' })
+  @IsEnum(CreatorTier, { message: 'tier must be one of: basic, pro, pro_max' })
   tier!: CreatorTier;
 }

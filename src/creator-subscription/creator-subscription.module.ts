@@ -37,10 +37,7 @@ import { NotificationModule } from '../notification/notification.module';
       useFactory: (
         mock: MockFlutterwaveAdapter,
         real: RealFlutterwaveAdapter,
-      ) =>
-        shouldUseMockFlutterwave()
-          ? mock
-          : real,
+      ) => (shouldUseMockFlutterwave() ? mock : real),
       inject: [MockFlutterwaveAdapter, RealFlutterwaveAdapter],
     },
   ],

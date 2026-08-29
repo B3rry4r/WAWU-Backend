@@ -22,17 +22,38 @@ import type { UpdateCardDto } from './dto/update-card.dto';
 import { NotificationService } from '../notification/notification.service';
 
 /**
- * Annual subscription prices, naira — confirmed against
- * design/screens/WAWU Subscription Management.dc.html ("Basic is ₦5,999",
- * "Pro, one year ₦18,999"). Never accepted from the client
+ * Annual subscription prices, naira. Never accepted from the client
  * (conventions.md § Identity & format canon).
+ *
+ * Pro dropped from ₦18,999 to ₦14,999 when Pro Max was introduced above it.
+ * Price is read here at charge time rather than stored on the subscription,
+ * so an existing Pro subscriber is simply billed the new figure at their next
+ * renewal — there is nothing to backfill. What IS stored per row is the
+ * commission rate they were sold (`commissionRateOverride`), which is
+ * untouched by a price change.
  */
 const PRICE_TABLE: Record<CreatorTier, number> = {
   basic: 5999,
-  pro: 18999,
+  pro: 14999,
+  pro_max: 29999,
 };
 
-/** Pro-tier commission override (CLAUDE.md: 85/15 standard, 90/10 Pro). */
+/**
+ * Tiers in ascending order. Upgrade and downgrade both read this rather than
+ * comparing strings, so adding a fourth tier later does not mean hunting for
+ * every `=== 'pro'` in the file.
+ */
+const TIER_ORDER: CreatorTier[] = ['basic', 'pro', 'pro_max'];
+
+export function tierRank(tier: CreatorTier): number {
+  return TIER_ORDER.indexOf(tier);
+}
+
+/**
+ * The paid-tier commission override (CLAUDE.md: 85/15 standard, 90/10 Pro).
+ * Pro Max keeps the same 90/10 — it sells more services, not a better split,
+ * and inventing a third rate would be inventing a rate.
+ */
 const PRO_COMMISSION_RATE_OVERRIDE = 0.1;
 
 /**
@@ -52,7 +73,7 @@ const PRO_COMMISSION_RATE_OVERRIDE = 0.1;
  * other three services compute. See the final report.
  */
 function commissionRateOverrideFor(tier: CreatorTier): number | null {
-  return tier === 'pro' ? PRO_COMMISSION_RATE_OVERRIDE : null;
+  return tier === 'basic' ? null : PRO_COMMISSION_RATE_OVERRIDE;
 }
 
 /**
@@ -155,13 +176,15 @@ export class CreatorSubscriptionService {
     txRef: string,
     wawuUserId: string,
   ): Promise<(PendingAttempt & { expectedAmount: number }) | null> {
-    const row = await this.prisma.pendingCharge.findUnique({ where: { txRef } });
+    const row = await this.prisma.pendingCharge.findUnique({
+      where: { txRef },
+    });
     if (!row || row.wawuUserId !== wawuUserId) return null;
     const ctx = (row.context ?? {}) as { tier?: CreatorTier; planId?: string };
     return {
       kind: row.kind as PendingAttemptKind,
       wawuUserId: row.wawuUserId,
-      tier: (ctx.tier ?? 'basic') as CreatorTier,
+      tier: ctx.tier ?? 'basic',
       planId: ctx.planId ?? '',
       expectedAmount: row.expectedAmount,
     };
@@ -502,12 +525,17 @@ export class CreatorSubscriptionService {
     }
 
     // pending.kind === 'upgrade'
+    //
+    // The tier comes off the PENDING CHARGE, not a constant. Hardcoding 'pro'
+    // here would have taken a Pro Max payment and granted Pro — the client
+    // charged ₦29,999 for the tier below the one they bought.
+    const upgradeTo = pending.tier;
     const row = await this.prisma.creatorSubscription.update({
       where: { creatorWawuId: wawuUserId },
       data: {
-        tier: 'pro',
+        tier: upgradeTo,
         status: 'active',
-        commissionRateOverride: commissionRateOverrideFor('pro'),
+        commissionRateOverride: commissionRateOverrideFor(upgradeTo),
         flutterwavePlanId: pending.planId,
         flutterwaveCustomerRef: result.cardToken ?? undefined,
         cardLast4: result.cardLast4 ?? undefined,
@@ -523,7 +551,7 @@ export class CreatorSubscriptionService {
 
     await this.prisma.creatorState.update({
       where: { wawuUserId },
-      data: { tier: 'pro' },
+      data: { tier: upgradeTo },
     });
 
     return this.toResponse(row);
@@ -545,10 +573,22 @@ export class CreatorSubscriptionService {
    * (never a ₦0 charge) rather than allowing a zero-amount Flutterwave
    * charge in the rare case the period is already essentially over.
    */
-  async upgrade(creatorWawuId: string): Promise<FlutterwaveConfigResponse> {
+  async upgrade(
+    creatorWawuId: string,
+    to: CreatorTier = 'pro',
+  ): Promise<FlutterwaveConfigResponse> {
     const existing = await this.loadSubscription(creatorWawuId);
-    if (existing.tier === 'pro') {
-      throw new BadRequestException('This subscription is already Pro.');
+    // Rank rather than string equality, so Basic -> Pro, Basic -> Pro Max and
+    // Pro -> Pro Max all work through one path. Comparing against 'pro' meant
+    // a Pro subscriber could never reach Pro Max: the guard read "already
+    // Pro" and refused.
+    if (to === 'basic') {
+      throw new BadRequestException('Basic is not an upgrade. Use downgrade.');
+    }
+    if (tierRank(existing.tier) >= tierRank(to)) {
+      throw new BadRequestException(
+        `This subscription is already ${existing.tier === 'pro_max' ? 'Pro Max' : 'Pro'}.`,
+      );
     }
     if (existing.status !== 'active') {
       throw new BadRequestException(
@@ -562,16 +602,21 @@ export class CreatorSubscriptionService {
       365,
       Math.max(0, Math.ceil(msRemaining / ONE_DAY_MS)),
     );
-    const credit = Math.round((daysRemaining / 365) * PRICE_TABLE.basic);
-    const dueToday = Math.max(PRICE_TABLE.pro - credit, 1);
+    // Credit against what they are ACTUALLY on, not against Basic. A Pro
+    // subscriber moving to Pro Max has paid ₦14,999, and crediting them
+    // ₦5,999 of it would quietly charge them for a year they already own.
+    const credit = Math.round(
+      (daysRemaining / 365) * PRICE_TABLE[existing.tier],
+    );
+    const dueToday = Math.max(PRICE_TABLE[to] - credit, 1);
 
     const plan = await this.flutterwave.createOrReusePlan({
-      tier: 'pro',
-      amount: PRICE_TABLE.pro,
+      tier: to,
+      amount: PRICE_TABLE[to],
     });
     const charge = this.flutterwave.initCharge({
       amount: dueToday,
-      purpose: 'upgrade-pro',
+      purpose: `upgrade-${to}`,
       wawuUserId: creatorWawuId,
       planId: plan.planId,
     });
@@ -579,7 +624,7 @@ export class CreatorSubscriptionService {
     await this.recordPendingCharge(charge.txRef, {
       kind: 'upgrade',
       wawuUserId: creatorWawuId,
-      tier: 'pro',
+      tier: to,
       planId: plan.planId,
       expectedAmount: charge.amount,
     });
@@ -624,7 +669,7 @@ export class CreatorSubscriptionService {
    */
   async downgrade(creatorWawuId: string): Promise<CreatorSubscriptionResponse> {
     const existing = await this.loadSubscription(creatorWawuId);
-    if (existing.tier !== 'pro') {
+    if (existing.tier === 'basic') {
       throw new BadRequestException('This subscription is already Basic.');
     }
     if (existing.status !== 'active') {

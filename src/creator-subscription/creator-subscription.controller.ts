@@ -15,6 +15,7 @@ import { PaginationQueryDto } from '../common/dto/pagination.dto';
 import { CreatorSubscriptionService } from './creator-subscription.service';
 import { CreatorAccountGuard } from './guards/creator-account-guard';
 import { SubscribeDto } from './dto/subscribe.dto';
+import { UpgradeSubscriptionDto } from './dto/upgrade.dto';
 import { VerifySubscriptionDto } from './dto/verify-subscription.dto';
 import { UpdateCardDto } from './dto/update-card.dto';
 
@@ -53,8 +54,11 @@ export class CreatorSubscriptionController {
 
   @Post('upgrade')
   @UseGuards(CreatorAccountGuard)
-  upgrade(@CurrentUser() user: WawuJwtClaims) {
-    return this.creatorSubscriptionService.upgrade(user.sub);
+  upgrade(
+    @CurrentUser() user: WawuJwtClaims,
+    @Body() dto: UpgradeSubscriptionDto,
+  ) {
+    return this.creatorSubscriptionService.upgrade(user.sub, dto.to ?? 'pro');
   }
 
   @Post('downgrade')

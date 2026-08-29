@@ -83,7 +83,7 @@ describe('ContentPiece (contract)', () => {
    * `slotsUsed` climbed by one on every single run of the suite.
    */
   let seededCreatorState: {
-    tier: 'basic' | 'pro';
+    tier: 'basic' | 'pro' | 'pro_max';
     subscriptionPaid: boolean;
     kycStatus: string;
     slotsUsed: number;

@@ -206,7 +206,7 @@ describe('Community (contract)', () => {
     const ownProfiles: Array<{
       sub: string;
       accountType: 'user' | 'creator';
-      state?: { tier: 'basic' | 'pro'; subscriptionPaid: boolean };
+      state?: { tier: 'basic' | 'pro' | 'pro_max'; subscriptionPaid: boolean };
     }> = [
       { sub: ownPlain.sub, accountType: 'user' },
       {
