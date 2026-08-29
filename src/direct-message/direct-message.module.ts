@@ -52,6 +52,9 @@ import { BlockedAccountModule } from '../blocked-account/blocked-account.module'
   // DirectMessageService is exported for PaymentWebhookModule (provider-driven
   // paid-DM settlement); DmRefundService for SchedulerModule, which runs it,
   // and for the admin finance queue, which retries what it could not settle.
-  exports: [DirectMessageService, DmRefundService],
+  // FLUTTERWAVE_CLIENT is exported so event ticketing can reuse this exact
+  // charge/verify/refund boundary rather than standing up a second one. A
+  // cancelled event's refunds then behave identically to a missed DM's.
+  exports: [DirectMessageService, DmRefundService, FLUTTERWAVE_CLIENT],
 })
 export class DirectMessageModule {}

@@ -1,4 +1,5 @@
 import type {
+  EventCategory,
   EventFormat,
   EventStatus,
   EventType,
@@ -15,13 +16,18 @@ import type {
  * here on purpose.
  *
  * ── WHAT IS DELIBERATELY ABSENT ──────────────────────────────────────────────
- * There is no price, amount, currency, ticket, purchase, order or credit field
- * on any shape below, and there must never be one. docs/01_SPEC.md cut event
- * TICKETS; reinstating Events (product-owner decision, 22 Aug 2026) did not
- * reinstate those. `goingCount` is an interest signal — a count of people, not
- * a count of sales — and `externalUrl` is where the organiser's own
- * registration lives, off this platform. If a field here starts to look like
- * ticketing, that is a spec conflict and the spec wins.
+ * TICKETING IS BACK, by product-owner decision (29 Aug 2026), reversing the
+ * cut that docs/01_SPEC.md recorded and the "there must never be a price
+ * field here" note that used to sit in this comment. That note was correct
+ * when written and is now wrong; leaving it would have the file argue with
+ * itself.
+ *
+ * The shapes below still carry no money, and that is now a SEPARATION rather
+ * than a prohibition. An event is the thing; tickets, orders and check-ins
+ * are their own models with their own module, so an event that sells nothing
+ * — still the common case — is unchanged. `goingCount` remains an interest
+ * signal, a count of people rather than a count of sales, and `externalUrl`
+ * is still there for an organiser who sells somewhere else.
  */
 
 /** One speaker. `initials` is derived from `name`, never stored (law 13). */
@@ -63,6 +69,15 @@ export interface EventView {
   address: string | null;
   /** The organiser's own page. Any registration — paid or not — happens THERE. */
   externalUrl: string | null;
+  /** Banner image, object-storage URL. */
+  bannerUrl: string | null;
+  /** What the event is about — the Events section's filter. */
+  category: EventCategory;
+  contactEmail: string | null;
+  contactPhone: string | null;
+  /** Set when the organiser called it off; every ticket is voided. */
+  cancelledAt: Date | null;
+  cancelReason: string | null;
 
   /** True when the host has posted a recap. Derived, matching the old EventItem.recap. */
   hasRecap: boolean;

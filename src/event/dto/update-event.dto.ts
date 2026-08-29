@@ -3,6 +3,7 @@ import {
   ArrayMaxSize,
   IsArray,
   IsDateString,
+  IsEmail,
   IsEnum,
   IsOptional,
   IsString,
@@ -11,6 +12,7 @@ import {
   MaxLength,
   ValidateNested,
 } from 'class-validator';
+import { EventCategory } from '../../../generated/prisma/enums';
 import { EventFormat, EventType } from '../../../generated/prisma/enums';
 import { EventSpeakerDto } from './create-event.dto';
 
@@ -97,6 +99,25 @@ export class UpdateEventDto {
   @IsUrl({ protocols: ['http', 'https'], require_protocol: true })
   @MaxLength(500)
   externalUrl?: string;
+
+  /** Banner image. Object-storage URL from POST /uploads/presign. */
+  @IsOptional()
+  @IsUrl()
+  bannerUrl?: string;
+
+  /** What the event is about. Defaults to `other` when not stated. */
+  @IsOptional()
+  @IsEnum(EventCategory)
+  category?: EventCategory;
+
+  @IsOptional()
+  @IsEmail()
+  contactEmail?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(32)
+  contactPhone?: string;
 
   /**
    * The post-event write-up. Update-only, not part of create: a recap is

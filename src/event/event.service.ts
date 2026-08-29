@@ -159,6 +159,10 @@ export class EventService {
         location: dto.location.trim(),
         address: dto.address?.trim() ?? null,
         externalUrl: dto.externalUrl ?? null,
+        bannerUrl: dto.bannerUrl ?? null,
+        category: dto.category ?? 'other',
+        contactEmail: dto.contactEmail ?? null,
+        contactPhone: dto.contactPhone ?? null,
         // status defaults to `pending` in the schema and is deliberately not
         // named here — there is no argument this method could ever take that
         // would make it anything else.
@@ -239,6 +243,14 @@ export class EventService {
             : {}),
           ...(dto.externalUrl !== undefined
             ? { externalUrl: dto.externalUrl }
+            : {}),
+          ...(dto.bannerUrl !== undefined ? { bannerUrl: dto.bannerUrl } : {}),
+          ...(dto.category !== undefined ? { category: dto.category } : {}),
+          ...(dto.contactEmail !== undefined
+            ? { contactEmail: dto.contactEmail }
+            : {}),
+          ...(dto.contactPhone !== undefined
+            ? { contactPhone: dto.contactPhone }
             : {}),
           ...(dto.recapUrl !== undefined ? { recapUrl: dto.recapUrl } : {}),
           ...(dto.recapText !== undefined
@@ -382,6 +394,12 @@ export class EventService {
       location: row.location,
       address: row.address,
       externalUrl: row.externalUrl,
+      bannerUrl: row.bannerUrl,
+      category: row.category,
+      contactEmail: row.contactEmail,
+      contactPhone: row.contactPhone,
+      cancelledAt: row.cancelledAt,
+      cancelReason: row.cancelReason,
       hasRecap: Boolean(row.recapUrl ?? row.recapText),
       recapUrl: row.recapUrl,
       recapText: row.recapText,
