@@ -32,7 +32,7 @@ import { NotificationService } from '../notification/notification.service';
  * commission rate they were sold (`commissionRateOverride`), which is
  * untouched by a price change.
  */
-const PRICE_TABLE: Record<CreatorTier, number> = {
+export const PRICE_TABLE: Record<CreatorTier, number> = {
   basic: 5999,
   pro: 14999,
   pro_max: 29999,

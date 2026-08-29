@@ -38,7 +38,29 @@ app.use((req, res, next) => {
 const PRIVATE_KEY = fs.readFileSync(path.join(__dirname, "private.pem"), "utf8");
 const PUBLIC_KEY = fs.readFileSync(path.join(__dirname, "public.pem"), "utf8");
 const KID = "mock-wawu-id-key-1";
-const INTERNAL_SERVICE_KEY = process.env.WAWU_ID_INTERNAL_SERVICE_KEY || "dev-internal-service-key-not-secret";
+// The internal service key MUST match what the Hub API sends, and the Hub
+// API reads it from the repo's own .env. Defaulting to a literal here is how
+// this drifts: the key silently disagrees, /internal/users/lookup 401s, and
+// every screen that resolves a real name quietly falls back to the handle —
+// which reads as a name-resolution bug rather than a misconfigured mock.
+// So read the same .env, and say out loud which key is in use.
+function serviceKeyFromRepoEnv() {
+  try {
+    const envFile = fs.readFileSync(path.join(__dirname, "..", ".env"), "utf8");
+    const line = envFile
+      .split("\n")
+      .find((l) => l.trim().startsWith("WAWU_ID_INTERNAL_SERVICE_KEY="));
+    if (!line) return null;
+    return line.slice(line.indexOf("=") + 1).trim().replace(/^["']|["']$/g, "") || null;
+  } catch {
+    return null;
+  }
+}
+
+const INTERNAL_SERVICE_KEY =
+  process.env.WAWU_ID_INTERNAL_SERVICE_KEY ||
+  serviceKeyFromRepoEnv() ||
+  "dev-internal-service-key-not-secret";
 
 // Seed test users — the new backend's own seed script mirrors these
 // wawuUserId values when creating CreatorState/KYC/Subscription rows,
@@ -258,6 +280,12 @@ app.post("/internal/users/lookup", requireServiceKey, (req, res) => {
 });
 
 app.get("/health", (_req, res) => res.json({ ok: true, service: "mock-wawu-id" }));
+
+console.log(
+  INTERNAL_SERVICE_KEY === "dev-internal-service-key-not-secret"
+    ? "mock-wawu-id: WARNING — using the built-in service key. If the Hub API's .env sets WAWU_ID_INTERNAL_SERVICE_KEY, /internal/* will 401 and names will fall back to handles."
+    : "mock-wawu-id: internal service key loaded (matches the Hub API .env)",
+);
 
 const PORT = process.env.MOCK_WAWU_ID_PORT || 4001;
 app.listen(PORT, () => {

@@ -670,8 +670,8 @@ describe('Admin creator lookup contract', () => {
         currentPeriodEnd: '2027-03-01T00:00:00.000Z',
         cardLast4: '4242',
       });
-      // Pro is 15 slots, so the derivation is not hardcoded to basic.
-      expect(res.body.data.uploads).toMatchObject({ slotsTotal: 15, freeSlots: 2, paidSlots: 13 });
+      // Pro is 12 slots, so the derivation is not hardcoded to basic.
+      expect(res.body.data.uploads).toMatchObject({ slotsTotal: 12, freeSlots: 2, paidSlots: 10 });
     });
 
     it('reports the verification badge as the HIGHEST approved rung, kept apart from kycStatus', async () => {

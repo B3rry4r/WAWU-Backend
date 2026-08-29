@@ -1,6 +1,7 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
+import { resolveInternalServiceKey } from '../../common/tests/internal-service-key';
 import { ConfigModule } from '@nestjs/config';
 import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -33,13 +34,13 @@ const MOCK_WAWU_ID_URL = process.env.WAWU_ID_BASE_URL ?? 'http://localhost:4001'
  * threw, and the endpoint 500'd. The test was correct; the harness was reading
  * a key for a different server.
  *
- * Pinned here (and exported into the environment below, before ConfigModule
- * compiles) so both sides of the call always agree regardless of ambient
- * `.env`. Override via MOCK_WAWU_ID_INTERNAL_SERVICE_KEY if the mock is
- * started with a non-default key.
+ * Resolved exactly as mock-wawu-id resolves it, then exported into the
+ * environment below before ConfigModule compiles, so the app and the mock
+ * always send the same key. Hardcoding the dev default here used to be
+ * enough; it stopped being enough once the mock started reading the repo
+ * `.env` — see resolveInternalServiceKey for what that mismatch costs.
  */
-const MOCK_INTERNAL_SERVICE_KEY =
-  process.env.MOCK_WAWU_ID_INTERNAL_SERVICE_KEY ?? 'dev-internal-service-key-not-secret';
+const MOCK_INTERNAL_SERVICE_KEY = resolveInternalServiceKey();
 
 // Seeded wawuUserIds (mirrors mock-wawu-id/server.js and prisma/seed.ts).
 const USER_PLAIN = '00000000-0000-4000-8000-000000000001'; // verificationTier: verified_user

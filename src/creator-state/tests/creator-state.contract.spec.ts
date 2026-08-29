@@ -255,7 +255,7 @@ describe('CreatorState (contract)', () => {
       });
     });
 
-    it('200s with slotsTotal=15 for a pro creator', async () => {
+    it('200s with the Pro allowance (12 slots) for a pro creator', async () => {
       const res = await request(app.getHttpServer())
         .get('/creator/state')
         .set('Authorization', `Bearer ${signToken(OWN_CREATOR_PRO)}`)
@@ -264,7 +264,7 @@ describe('CreatorState (contract)', () => {
       expect(res.body.data).toMatchObject({
         wawuUserId: OWN_CREATOR_PRO,
         tier: 'pro',
-        slotsTotal: 15,
+        slotsTotal: 12,
       });
     });
 

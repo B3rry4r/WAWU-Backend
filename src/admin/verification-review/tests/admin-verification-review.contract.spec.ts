@@ -2,6 +2,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
+import { resolveInternalServiceKey } from '../../../common/tests/internal-service-key';
 import { PrismaModule } from '../../../common/prisma/prisma.module';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { AllExceptionsFilter } from '../../../common/filters/all-exceptions.filter';
@@ -43,11 +44,11 @@ import { AdminVerificationReviewModule } from '../admin-verification-review.modu
 const MOCK_WAWU_ID_URL = process.env.WAWU_ID_BASE_URL ?? 'http://localhost:4001';
 
 /**
- * The mock's default internal service key. WawuIdClient reads it in its
- * constructor, so it has to be in process.env before ConfigModule compiles.
+ * The internal service key the mock is running with, resolved the same way
+ * the mock resolves it. WawuIdClient reads it in its constructor, so it has
+ * to be in process.env before ConfigModule compiles.
  */
-const MOCK_INTERNAL_SERVICE_KEY =
-  process.env.MOCK_WAWU_ID_INTERNAL_SERVICE_KEY ?? 'dev-internal-service-key-not-secret';
+const MOCK_INTERNAL_SERVICE_KEY = resolveInternalServiceKey();
 
 /** Seeded WAWU ID identities. mock-wawu-id keys its login on the email. */
 const APPLICANT_KNOWN = '00000000-0000-4000-8000-000000000003';
