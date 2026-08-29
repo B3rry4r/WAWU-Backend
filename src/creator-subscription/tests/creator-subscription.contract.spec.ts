@@ -20,6 +20,7 @@ import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
 import { CreatorSubscriptionModule } from '../creator-subscription.module';
+import { PRICE_TABLE } from '../creator-subscription.service';
 import {
   MOCK_CARD_TOKEN,
   MOCK_FAILURE_TRANSACTION_ID,
@@ -33,8 +34,16 @@ const USER_PLAIN = '00000000-0000-4000-8000-000000000001';
 const USER_CREATOR_BASIC = '00000000-0000-4000-8000-000000000002';
 const USER_CREATOR_PRO = '00000000-0000-4000-8000-000000000003';
 
-const BASIC_ANNUAL_PRICE = 5999;
-const PRO_ANNUAL_PRICE = 18999;
+/*
+ * Prices come from the service's own table rather than being copied here.
+ * They were copied, and when the plans were repriced the copy went stale and
+ * three unrelated tests failed on a number nobody had touched. Assertions
+ * below are about "the charge is for the plan's price", which is what these
+ * names now mean; the published figures themselves are pinned once, in the
+ * `published prices` test, so a reprice fails in ONE readable place.
+ */
+const BASIC_ANNUAL_PRICE = PRICE_TABLE.basic;
+const PRO_ANNUAL_PRICE = PRICE_TABLE.pro;
 
 const MOCK_WAWU_ID_PORT = process.env.WAWU_ID_JWKS_URL
   ? new URL(process.env.WAWU_ID_JWKS_URL).port
@@ -627,7 +636,7 @@ describe('CreatorSubscription (contract)', () => {
       expect([200, 201]).toContain(res.status);
 
       // Still Pro TODAY — the annual term is paid for and nothing is
-      // refunded, so the 90/10 split, the 15 upload slots and private
+      // refunded, so the 90/10 split, the Pro upload slots and private
       // communities all survive to the end of the term (docs/01_SPEC.md §4).
       expect(res.body.data).toEqual(
         expect.objectContaining({
@@ -646,7 +655,14 @@ describe('CreatorSubscription (contract)', () => {
         where: { wawuUserId: USER_CREATOR_PRO },
       });
       expect(state.tier).toBe('pro');
-      expect(uploadAllowanceFor(state.tier).total).toBe(15);
+      // Still on the PRO allowance, not the Basic one — the point of the test
+      // is that a scheduled downgrade takes nothing away before it lands.
+      expect(uploadAllowanceFor(state.tier).total).toBe(
+        uploadAllowanceFor('pro').total,
+      );
+      expect(uploadAllowanceFor(state.tier).total).toBeGreaterThan(
+        uploadAllowanceFor('basic').total,
+      );
     });
 
     it('is idempotent — downgrading again returns the same scheduled row (200)', async () => {
@@ -664,11 +680,12 @@ describe('CreatorSubscription (contract)', () => {
         where: { creatorWawuId: USER_CREATOR_PRO },
         data: { currentPeriodEnd: past, tierChangesAt: past },
       });
-      // 12 live pieces on a 15-slot Pro plan, dropping to a 6-slot Basic
-      // plan — the sharp edge.
+      // A full Pro plan dropping to a smaller Basic one — the sharp edge.
+      // slotsUsed is set to the Pro total so the overflow is exact whatever
+      // the plans are repriced to.
       await prisma.creatorState.update({
         where: { wawuUserId: USER_CREATOR_PRO },
-        data: { tier: 'pro', slotsUsed: 12 },
+        data: { tier: 'pro', slotsUsed: uploadAllowanceFor('pro').total },
       });
       const contentBefore = await prisma.contentPiece.findMany({
         where: { creatorWawuId: USER_CREATOR_PRO },
@@ -1101,6 +1118,24 @@ describe('CreatorSubscription (contract)', () => {
           nextPage: null,
         }),
       );
+    });
+  });
+  /**
+   * The published prices, pinned.
+   *
+   * Every other assertion in this file reads PRICE_TABLE, so a reprice does
+   * not scatter failures across unrelated tests. That is only safe if ONE
+   * test still knows the real numbers — otherwise a typo in the table would
+   * be asserted against itself and pass. This is that test. Changing a price
+   * means changing it here too, deliberately, against the plan copy.
+   */
+  describe('published prices', () => {
+    it('charges the figures the plans are sold at', () => {
+      expect(PRICE_TABLE).toEqual({
+        basic: 5999,
+        pro: 14999,
+        pro_max: 29999,
+      });
     });
   });
 });

@@ -141,7 +141,7 @@ describe('LearnEntitlement (contract)', () => {
       });
     });
 
-    it('returns 3 free-course slots for a Pro-tier creator (200)', async () => {
+    it('returns 2 free-course slots for a Pro-tier creator (200)', async () => {
       const res = await request(app.getHttpServer())
         .get('/learn/entitlement')
         .set('Authorization', `Bearer ${proCreatorToken}`)
@@ -149,7 +149,7 @@ describe('LearnEntitlement (contract)', () => {
 
       expect(res.body.data).toEqual({
         tier: 'pro',
-        freeCoursesTotal: 3,
+        freeCoursesTotal: 2,
         freeCoursesUsed: 0,
         enrolledCourseIds: [],
       });

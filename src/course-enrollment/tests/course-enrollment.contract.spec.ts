@@ -21,7 +21,7 @@ import { CourseEnrollmentModule } from '../course-enrollment.module';
 // (see WAWU-Hub-API build task brief / src/learn-entitlement's contract spec).
 const USER_PLAIN = '00000000-0000-4000-8000-000000000001'; // plain user, already enrolled in the export course via seed
 const USER_CREATOR_BASIC = '00000000-0000-4000-8000-000000000002'; // Basic tier (1 free-course slot), no enrollments seeded
-const USER_CREATOR_PRO = '00000000-0000-4000-8000-000000000003'; // Pro tier (3 free-course slots), no enrollments seeded
+const USER_CREATOR_PRO = '00000000-0000-4000-8000-000000000003'; // Pro tier (2 free-course slots), no enrollments seeded
 
 const LEARN_COURSE_EXPORT = '50000000-0000-4000-8000-000000000001'; // USER_PLAIN is already enrolled here (seed)
 const LEARN_COURSE_SOCIAL = '50000000-0000-4000-8000-000000000002'; // unenrolled by anyone at seed time
@@ -180,7 +180,7 @@ describe('CourseEnrollment (contract)', () => {
       expect(res.body.data).toBeNull();
     });
 
-    it('enrols a Pro-tier creator (3 slots) and reflects both freeCoursesUsed and enrolledCourseIds (200)', async () => {
+    it('enrols a Pro-tier creator (2 slots) and reflects both freeCoursesUsed and enrolledCourseIds (200)', async () => {
       const res = await request(app.getHttpServer())
         .post(`/learn/courses/${LEARN_COURSE_SOCIAL}/enrol`)
         .set('Authorization', `Bearer ${proCreatorToken}`)
@@ -188,7 +188,7 @@ describe('CourseEnrollment (contract)', () => {
 
       expect(res.body.data).toEqual({
         tier: 'pro',
-        freeCoursesTotal: 3,
+        freeCoursesTotal: 2,
         freeCoursesUsed: 1,
         enrolledCourseIds: [LEARN_COURSE_SOCIAL],
         externalHostUrl: expect.any(String),
