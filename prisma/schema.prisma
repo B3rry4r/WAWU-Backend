@@ -473,22 +473,22 @@ model DirectMessage {
   /// How long the creator had to reply, snapshotted in hours at the moment
   /// the payer was charged. Stored rather than recomputed so that changing
   /// the setting never moves a deadline someone has already paid against.
-  responseWindowHours Int    @default(24)
+  responseWindowHours Int @default(24)
 
-  refundStatus     DmRefundStatus @default(not_owed)
+  refundStatus    DmRefundStatus @default(not_owed)
   /// Flutterwave's refund id, for reconciliation against their dashboard.
-  refundReference  String?
+  refundReference String?
   /// When the money was confirmed back with the payer — NOT when we decided.
-  refundedAt       DateTime?
-  refundAttempts   Int       @default(0)
+  refundedAt      DateTime?
+  refundAttempts  Int            @default(0)
   /// Why the last attempt failed, verbatim from Flutterwave where possible.
   /// Read by a human working the finance queue, so it keeps their wording.
-  refundError      String?
+  refundError     String?
   /// Set when a refund attempt is in flight, cleared when it resolves. Two
   /// schedulers (or a scheduler and a hand-run retry) must never both be
   /// calling Flutterwave for the same transaction — a double refund is real
   /// money out the door and Flutterwave will happily process one.
-  refundLockedAt   DateTime?
+  refundLockedAt  DateTime?
 
   reports DmReport[]
 
@@ -1737,9 +1737,9 @@ model Event {
   referrals   EventReferral[]
 
   /// Banner image. Object-storage URL from POST /uploads/presign.
-  bannerUrl String?
+  bannerUrl    String?
   /// What the event is ABOUT, as the Events section filters on.
-  category  EventCategory @default(other)
+  category     EventCategory @default(other)
   /// How to reach the organiser. Shown on the public page.
   contactEmail String?
   contactPhone String?
@@ -1747,8 +1747,8 @@ model Event {
   /// Set when an organiser calls off a published event. Distinct from
   /// `removed`, which is a takedown by an admin: a cancellation refunds every
   /// ticket sold and the record stays visible to the people who bought one.
-  cancelledAt   DateTime?
-  cancelReason  String?
+  cancelledAt  DateTime?
+  cancelReason String?
 
   @@index([hostWawuId])
   @@index([status])
@@ -2064,17 +2064,17 @@ enum EventTicketStatus {
 /// transaction — a COUNT over tickets would be both slower and racier at
 /// exactly the moment it matters, which is two people buying the last seat.
 model EventTicketType {
-  id      String     @id @default(uuid())
-  eventId String
-  tier    TicketTier
+  id           String     @id @default(uuid())
+  eventId      String
+  tier         TicketTier
   /// The organiser's own label — "Early bird", "Table of 10".
-  name    String
+  name         String
   /// Naira. Zero for a `free` tier, and only for a free tier.
-  priceNaira Int
+  priceNaira   Int
   /// How many exist. Not nullable: an unlimited tier is a venue with no
   /// capacity, which is a physical impossibility somebody has to answer for.
-  quantity   Int
-  sold       Int @default(0)
+  quantity     Int
+  sold         Int        @default(0)
   /// When this tier may be bought. Null start means "from publication",
   /// null end means "until the event begins".
   salesStartAt DateTime?
@@ -2094,10 +2094,10 @@ model EventOrder {
   ticketTypeId String
   buyerWawuId  String
 
-  quantity Int
+  quantity       Int
   /// Naira the buyer was charged, in total. Snapshotted — a later price
   /// change must never alter what somebody already paid.
-  amountNaira Int
+  amountNaira    Int
   /// WAWU's cut, snapshotted at purchase time for the same reason
   /// Purchase.commissionRate is: a creator who upgrades to Pro should not
   /// retroactively change the split on tickets already sold.
@@ -2162,12 +2162,12 @@ model EventTicket {
 /// paying anybody — a payout path nobody has specified is a payout path that
 /// will be wrong.
 model EventReferral {
-  id      String @id @default(uuid())
-  eventId String
+  id          String  @id @default(uuid())
+  eventId     String
   /// The code in the URL. Unguessable, for the same reason a ticket code is.
-  code    String @unique
+  code        String  @unique
   /// Who this link is for — "Ada on Instagram". Free text, organiser-set.
-  label   String
+  label       String
   /// The WAWU account it belongs to, when the referrer has one.
   ownerWawuId String?
 
@@ -2176,4 +2176,216 @@ model EventReferral {
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
   @@index([eventId])
+}
+
+// -----------------------------------------------------------------------------
+// WAWU Commerce — the first-party equipment storefront
+//
+// Added 30 Aug 2026 on product-owner brief. This is NOT the WAWUBasket /
+// WAWUBeauty handoff that ShopKind and MarketplaceSave model: those are
+// separate apps WAWU links out to, and this brief is explicit that WAWU sells
+// this stock itself. Hence a real Product table rather than another save-only
+// pointer at somebody else's catalogue.
+//
+// WHAT IS DELIBERATELY ABSENT IN THIS MVP, and why:
+//
+//   - No seller/vendor. Stock is uploaded from the admin dashboard, so WAWU is
+//     the seller and there is no revenue split to snapshot. When third-party
+//     sellers arrive they need a `sellerWawuId` and a commission rate ON THE
+//     ORDER ITEM, for the same reason Purchase and EventOrder carry theirs.
+//   - No delivery fee and no courier integration. The brief says logistics is
+//     handled physically, off-platform. A fee computed with no rate card would
+//     be a number invented at checkout, so the total IS the subtotal and the
+//     dashboard tracks dispatch by hand.
+//   - No product reviews, and therefore no rating. The brief's product card
+//     shows a star rating; there is no review system to derive one from, and a
+//     seeded 4.8 is fabricated social proof on something people spend real
+//     money against. `ratingAvg` exists, stays null, and the card renders
+//     nothing when it is null.
+//   - No wallet. Orders are paid by card, like everything else here.
+// -----------------------------------------------------------------------------
+
+/// The eleven top-level aisles from the brief. A closed set so a browse-by-
+/// category filter cannot be defeated by a typo in an admin form; the finer
+/// grain ("Microphones", "Gimbals") is `Product.subcategory`, which is free
+/// text because that list is long, uneven, and still moving.
+enum ProductCategory {
+  audio_music
+  video_film
+  lighting_studio
+  photography
+  computing
+  art_design
+  gaming_streaming
+  content_creation
+  live_events
+  professional
+  power_accessories
+}
+
+/// draft  — being written in the dashboard, invisible to shoppers
+/// live   — on the storefront
+/// hidden — pulled from the storefront WITHOUT deleting it, because an order
+///          item points at it and a deleted product is an order nobody can
+///          explain later
+enum ProductStatus {
+  draft
+  live
+  hidden
+}
+
+/// Where an order's MONEY is. Separate from fulfilment for the same reason
+/// EventOrder splits order status from ticket status: a paid order that has
+/// not shipped and a shipped order that was refunded are both normal, and one
+/// column cannot say both.
+enum ShopOrderStatus {
+  pending
+  paid
+  failed
+  cancelled
+  refunded
+}
+
+/// Where the GOODS are. Driven entirely by a human in the dashboard, because
+/// the brief says logistics is physical and off-platform.
+///
+/// NOT the existing `FulfilmentStatus`, which despite the name is a PAYMENT
+/// lifecycle for bills and insurance (pending/paid/failed/refunded with
+/// `delivered` mixed in). Reusing it would put money states on a column that
+/// answers "where is the package", and the two move independently — a paid
+/// order that has not shipped and a shipped order that was refunded are both
+/// ordinary.
+enum ShopFulfilment {
+  awaiting_dispatch
+  dispatched
+  delivered
+}
+
+model Product {
+  id          String  @id @default(uuid())
+  name        String
+  /// Stable, human-readable, and unique — it is in the storefront URL, so it
+  /// must not change under a link somebody shared.
+  slug        String  @unique
+  brand       String?
+  description String
+
+  category    ProductCategory
+  /// e.g. "Microphones". Free text; see the ProductCategory comment.
+  subcategory String
+
+  priceNaira     Int
+  /// The "was" price, for a product on offer. Null means not on offer — it is
+  /// NOT allowed to equal or undercut priceNaira, which would be a fake
+  /// discount, and the service refuses that.
+  compareAtNaira Int?
+
+  /// Units on hand. Decremented by a CONDITIONAL write inside the order
+  /// transaction — two people buying the last one is the normal case for
+  /// anything worth selling, and a read-then-write sells it twice.
+  stock Int @default(0)
+
+  /// Ordered. The first is the card image; the rest are the gallery.
+  images String[]
+
+  /// The brief's "WAWU VERIFIED ✓" — an editorial claim WAWU stands behind
+  /// about the item being genuine, set by an admin. Not a creator badge and
+  /// not related to the verification ladder.
+  wawuVerified Boolean @default(false)
+  /// The brief's "WAWU PICKS" shelf.
+  wawuPick     Boolean @default(false)
+
+  /// Null until a review system exists. See the header comment — this is not
+  /// to be seeded.
+  ratingAvg   Decimal? @db.Decimal(2, 1)
+  ratingCount Int      @default(0)
+
+  status ProductStatus @default(draft)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  cartItems  CartItem[]
+  orderItems ShopOrderItem[]
+
+  @@index([status, category])
+  @@index([status, wawuPick])
+}
+
+/// The brief calls this "ADD TO WOW". One row per product per person; adding
+/// the same thing twice raises the quantity rather than making a second row.
+model CartItem {
+  id         String   @id @default(uuid())
+  userWawuId String
+  productId  String
+  quantity   Int      @default(1)
+  addedAt    DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([userWawuId, productId])
+  @@index([userWawuId])
+}
+
+model ShopOrder {
+  id          String          @id @default(uuid())
+  buyerWawuId String
+  status      ShopOrderStatus @default(pending)
+
+  /// No delivery fee is charged, so these are equal today. Both exist because
+  /// the day a fee is introduced, an order needs to record what the goods cost
+  /// separately from what was charged — reconstructing that later is guesswork.
+  subtotalNaira Int
+  totalNaira    Int
+
+  /// DELIVERY IS THE LOAD-BEARING PART OF THIS TABLE.
+  /// Logistics is manual: a person reads these fields and physically takes the
+  /// package somewhere. An order missing a phone number is a package that
+  /// cannot be delivered, so name, phone and address are required columns
+  /// rather than an optional blob.
+  deliveryName    String
+  deliveryPhone   String
+  deliveryAddress String
+  deliveryCity    String
+  deliveryState   String
+  /// "Gate is behind the pharmacy." Optional, and often the difference.
+  deliveryNote    String?
+
+  fulfilment   ShopFulfilment @default(awaiting_dispatch)
+  dispatchedAt DateTime?
+  deliveredAt  DateTime?
+  /// Free text a human types: courier and waybill. Not a tracking integration.
+  trackingNote String?
+
+  flutterwaveTxRef String  @unique
+  flutterwaveTxId  String?
+  /// Set when a refund could not be sent and needs a person. Internal — this
+  /// must never reach a shipped app response.
+  refundError      String?
+
+  createdAt DateTime  @default(now())
+  paidAt    DateTime?
+
+  items ShopOrderItem[]
+
+  @@index([buyerWawuId, status])
+  @@index([status, fulfilment])
+}
+
+/// One line. Everything a buyer was shown is SNAPSHOTTED here, because a
+/// product's name and price are edited in the dashboard and an order has to
+/// keep saying what was actually bought and what was actually paid.
+model ShopOrderItem {
+  id        String @id @default(uuid())
+  orderId   String
+  productId String
+
+  nameSnapshot       String
+  priceNairaSnapshot Int
+  quantity           Int
+
+  order   ShopOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product   @relation(fields: [productId], references: [id])
+
+  @@index([orderId])
 }

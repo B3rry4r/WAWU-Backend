@@ -45,3 +45,4 @@ export * from './privacy-settings.type';
 export * from './blocked-account.type';
 export * from './data-export-request.type';
 export * from './account.type';
+export * from './shop.type';
