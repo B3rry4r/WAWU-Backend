@@ -53,6 +53,7 @@ import { CreatorEarningsModule } from './creator-earnings/creator-earnings.modul
 import { DirectMessageModule } from './direct-message/direct-message.module';
 import { EventModule } from './event/event.module';
 import { EventTicketingModule } from './event-ticketing/event-ticketing.module';
+import { ShopModule } from './shop/shop.module';
 import { StorageModule } from './storage/storage.module';
 import { BillPaymentModule } from './bill-payment/bill-payment.module';
 import { HealthPlanModule } from './health-plan/health-plan.module';
@@ -255,6 +256,7 @@ import { APP_GUARD } from '@nestjs/core';
     // guards, two role vocabularies, one set of tables.
     EventModule,
     EventTicketingModule,
+    ShopModule,
     // LAST on purpose. PaymentWebhookModule imports every money module so it
     // can reuse their /verify settlement, and every one of them is already
     // registered above — Nest dedupes, so the load-bearing controller order
