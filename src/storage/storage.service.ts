@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   Logger,
+  PayloadTooLargeException,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import {
@@ -16,7 +17,10 @@ import {
   S3Client,
   PutObjectCommand,
   GetObjectCommand,
+  HeadObjectCommand,
 } from '@aws-sdk/client-s3';
+import { PrismaService } from '../common/prisma/prisma.service';
+import { storageAllowanceFor } from '../common/creator-tier-allowance';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 /**
@@ -32,13 +36,41 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
  * presigned PUT URL, uploads the bytes straight to storage, and then sends
  * the returned object URL back on the normal create/submit call.
  */
+
+/**
+ * How long after presign a `pending` row is settled against the bucket. See
+ * reconcileStale for why this is much longer than the 300s URL expiry.
+ */
+const RECONCILE_GRACE_MS = 15 * 60 * 1000;
+
+export interface StorageUsage {
+  usedBytes: number;
+  limitBytes: number;
+  remainingBytes: number;
+  tier: string | null;
+}
+
+/** Sizes in refusal messages are for a person to read, not a machine. */
+export function formatBytes(bytes: number): string {
+  if (bytes >= 1024 ** 3) {
+    const gb = bytes / 1024 ** 3;
+    return `${gb >= 10 ? Math.round(gb) : Math.round(gb * 10) / 10}GB`;
+  }
+  if (bytes >= 1024 ** 2) return `${Math.round(bytes / 1024 ** 2)}MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)}KB`;
+  return `${bytes} bytes`;
+}
+
 @Injectable()
 export class StorageService {
   private readonly logger = new Logger(StorageService.name);
   private readonly client: S3Client | null;
   private readonly bucket: string;
 
-  constructor(private readonly config: ConfigService) {
+  constructor(
+    private readonly config: ConfigService,
+    private readonly prisma: PrismaService,
+  ) {
     const endpoint = this.config.get<string>('STORAGE_ENDPOINT');
     const accessKeyId = this.config.get<string>('STORAGE_ACCESS_KEY_ID');
     const secretAccessKey = this.config.get<string>('STORAGE_SECRET_ACCESS_KEY');
@@ -115,6 +147,23 @@ export class StorageService {
     // caller name it would hand back the control the allowlist just took.
     const safeExt = EXTENSION_FOR_CONTENT_TYPE[contentType];
     const key = `${folder}/${wawuId}/${randomUUID()}.${safeExt}`;
+
+    // The quota is checked BEFORE the URL is signed, and the reservation is
+    // written before it is handed out. Signing first and recording after
+    // would leave a signed URL for space the account does not have every time
+    // the write failed.
+    const usage = await this.usageFor(wawuId);
+    if (usage.usedBytes + contentLength > usage.limitBytes) {
+      throw new PayloadTooLargeException(
+        `This file needs ${formatBytes(contentLength)}, but only ${formatBytes(
+          Math.max(0, usage.remainingBytes),
+        )} of your ${formatBytes(usage.limitBytes)} storage is free. Delete something, or move up a plan for more space.`,
+      );
+    }
+
+    await this.prisma.storageObject.create({
+      data: { wawuUserId: wawuId, key, bytes: contentLength, contentType, folder },
+    });
 
     const uploadUrl = await getSignedUrl(
       this.client,
@@ -194,6 +243,99 @@ export class StorageService {
         ResponseContentDisposition: inline ? 'inline' : 'attachment',
       }),
       { expiresIn: 604800 },
+    );
+  }
+
+  /**
+   * What this account is using, and what it is allowed.
+   *
+   * Every figure here has a writer: `usedBytes` is a SUM over rows created at
+   * presign time, and `limitBytes` derives from the creator tier. Neither is a
+   * stored counter, so neither can drift away from the objects it describes.
+   *
+   * `pending` counts toward usage alongside `confirmed`. A pending row is
+   * space that has been signed for and may land at any moment; excluding it
+   * would let one account presign its whole quota many times over in the
+   * seconds before the first upload finishes.
+   */
+  async usageFor(wawuId: string): Promise<StorageUsage> {
+    await this.reconcileStale(wawuId);
+
+    const [agg, state] = await Promise.all([
+      this.prisma.storageObject.aggregate({
+        _sum: { bytes: true },
+        where: { wawuUserId: wawuId, status: { in: ['pending', 'confirmed'] } },
+      }),
+      this.prisma.creatorState.findUnique({
+        where: { wawuUserId: wawuId },
+        select: { tier: true },
+      }),
+    ]);
+
+    const usedBytes = agg._sum.bytes ?? 0;
+    const limitBytes = storageAllowanceFor(state?.tier);
+    return {
+      usedBytes,
+      limitBytes,
+      remainingBytes: Math.max(0, limitBytes - usedBytes),
+      tier: state?.tier ?? null,
+    };
+  }
+
+  /**
+   * Settles `pending` rows whose presign window has long closed by asking the
+   * bucket whether the object is actually there.
+   *
+   * This is the price of the browser uploading straight to storage: the API is
+   * never told whether the PUT succeeded. Without this, one abandoned upload
+   * would hold its bytes against the account permanently.
+   *
+   * The grace period is far longer than the 300s URL expiry on purpose. The
+   * signature only has to be VALID when the request starts — a large file that
+   * began uploading at 299s can still be in flight minutes later, and marking
+   * it abandoned would uncount bytes that are about to exist.
+   */
+  private async reconcileStale(wawuId: string): Promise<void> {
+    if (!this.client) return;
+
+    const cutoff = new Date(Date.now() - RECONCILE_GRACE_MS);
+    const stale = await this.prisma.storageObject.findMany({
+      where: { wawuUserId: wawuId, status: 'pending', createdAt: { lt: cutoff } },
+      select: { id: true, key: true },
+      take: 50,
+    });
+    if (stale.length === 0) return;
+
+    await Promise.all(
+      stale.map(async (row) => {
+        let landed: boolean;
+        try {
+          await this.client!.send(
+            new HeadObjectCommand({ Bucket: this.bucket, Key: row.key }),
+          );
+          landed = true;
+        } catch (err) {
+          const status = (err as { $metadata?: { httpStatusCode?: number } })
+            .$metadata?.httpStatusCode;
+          // Only a definite 404/403 means "not there". Anything else is the
+          // bucket being unreachable, and guessing "abandoned" from an outage
+          // would silently hand back quota for files that still exist.
+          if (status !== 404 && status !== 403) {
+            this.logger.warn(
+              `Could not reconcile storage object ${row.key}: ${String(err)}`,
+            );
+            return;
+          }
+          landed = false;
+        }
+
+        await this.prisma.storageObject.update({
+          where: { id: row.id },
+          data: landed
+            ? { status: 'confirmed', confirmedAt: new Date() }
+            : { status: 'abandoned' },
+        });
+      }),
     );
   }
 }

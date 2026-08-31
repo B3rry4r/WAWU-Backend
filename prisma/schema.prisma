@@ -2389,3 +2389,59 @@ model ShopOrderItem {
 
   @@index([orderId])
 }
+
+/// One object in bucket storage, so a per-account storage quota can be a
+/// MEASURED figure rather than a guess.
+///
+/// Nothing recorded bytes before this. `contentLength` was signed into the
+/// presigned PUT (so storage rejects a file of any other size) and then
+/// thrown away, which caps a single upload and caps a total of nothing.
+///
+/// A row is written at PRESIGN, before the bytes exist, because that is the
+/// only moment the API is in the loop — the browser PUTs straight to storage
+/// and never calls back. `pending` rows therefore include uploads that were
+/// abandoned, so they are reconciled against the bucket (HeadObject) once
+/// their presign window has closed: present -> confirmed, absent ->
+/// abandoned. Counting pending rows toward the quota until then is
+/// deliberate; the alternative is a window in which a user can presign
+/// unlimited space at once.
+model StorageObject {
+  id          String              @id @default(uuid())
+  wawuUserId  String
+  /// The object key. Unique so a reconcile is idempotent.
+  key         String              @unique
+  bytes       Int
+  contentType String
+  folder      String
+  status      StorageObjectStatus @default(pending)
+  createdAt   DateTime            @default(now())
+  /// When the object was proven to exist in the bucket. Null while pending.
+  confirmedAt DateTime?
+
+  @@index([wawuUserId, status])
+  @@index([status, createdAt])
+}
+
+enum StorageObjectStatus {
+  pending
+  confirmed
+  abandoned
+}
+
+/// A Pro Max creator's explicit opt-in to Ditto Music distribution.
+///
+/// Its own row rather than a flag on CreatorState because opting in is NOT a
+/// property of the plan. Pro Max INCLUDES distribution; it does not enrol
+/// anybody in a third party's service, and paying must never be read as
+/// consent to be signed up elsewhere. So the row exists only when the creator
+/// pressed the button, and its absence on a paid Pro Max account is the
+/// normal state, not missing data.
+///
+/// `emailedAt` is null when the invite could not be emailed — a phone-OTP
+/// signup has no address. The link is always shown in the app as well, so a
+/// null here means "no copy in their inbox", never "they cannot reach it".
+model DittoOptIn {
+  wawuUserId String    @id
+  optedInAt  DateTime  @default(now())
+  emailedAt  DateTime?
+}

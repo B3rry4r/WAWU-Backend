@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, HttpStatus, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Post, UseGuards } from '@nestjs/common';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
@@ -23,5 +23,20 @@ export class StorageController {
   @HttpCode(HttpStatus.OK)
   presign(@CurrentUser() user: WawuJwtClaims, @Body() dto: PresignUploadDto) {
     return this.storage.presignUpload(user.sub, dto.folder, dto.contentType, dto.extension, dto.contentLength);
+  }
+
+  /**
+   * GET /uploads/usage — how much space this account has used of its
+   * allowance.
+   *
+   * Its own endpoint rather than a field on creator state, because storage is
+   * not a creator-only concern: an account that has never subscribed still
+   * uploads a KYC document and an avatar, and still has a 2GB ceiling. Hanging
+   * it off creator state would leave every non-creator unable to see a limit
+   * that applies to them.
+   */
+  @Get('usage')
+  usage(@CurrentUser() user: WawuJwtClaims) {
+    return this.storage.usageFor(user.sub);
   }
 }

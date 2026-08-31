@@ -93,8 +93,10 @@ describe('ContentPieceService upload allowances', () => {
     // by being refused an upload they were sold.
     expect(UPLOAD_ALLOWANCE_BY_TIER.basic).toEqual({ free: 1, paid: 5, total: 6 });
     expect(UPLOAD_ALLOWANCE_BY_TIER.pro).toEqual({ free: 2, paid: 10, total: 12 });
-    // Pro Max buys distribution, equipment and support — not more slots.
-    expect(UPLOAD_ALLOWANCE_BY_TIER.pro_max).toEqual({ free: 2, paid: 10, total: 12 });
+    // Pro Max: 15 total, set by the product owner on 31 Aug 2026. The three
+    // extra over Pro are PAID slots — free stays at 2, because free slots are
+    // for publishing before you pay, not a thing the tier sells.
+    expect(UPLOAD_ALLOWANCE_BY_TIER.pro_max).toEqual({ free: 2, paid: 13, total: 15 });
   });
 
   it('claims a slot when the upload is within allowance', async () => {

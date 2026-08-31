@@ -1,6 +1,7 @@
 import { ConfigService } from '@nestjs/config';
 import { StorageService } from '../storage.service';
 import { serveAs } from '../dto/presign-upload.dto';
+import type { PrismaService } from '../../common/prisma/prisma.service';
 
 /**
  * Regression cover for the bug that made EVERY upload in the product fail.
@@ -26,7 +27,18 @@ function serviceWith(): StorageService {
     STORAGE_REGION: 'sjc',
   };
   const config = { get: (k: string) => values[k] } as unknown as ConfigService;
-  return new StorageService(config);
+  // An empty account on the default quota. These tests are about the SHAPE of
+  // the signed URL, so the store only has to be big enough to say "yes".
+  const prisma = {
+    storageObject: {
+      aggregate: async () => ({ _sum: { bytes: 0 } }),
+      create: async () => ({}),
+      findMany: async () => [],
+      update: async () => ({}),
+    },
+    creatorState: { findUnique: async () => null },
+  } as unknown as PrismaService;
+  return new StorageService(config, prisma);
 }
 
 describe('StorageService presigning', () => {
