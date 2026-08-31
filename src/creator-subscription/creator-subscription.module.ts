@@ -7,6 +7,8 @@ import { RealFlutterwaveAdapter } from './real-flutterwave.adapter';
 import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';
 import { shouldUseMockFlutterwave } from '../common/flutterwave/require-payment-config';
 import { NotificationModule } from '../notification/notification.module';
+import { DittoService } from './ditto/ditto.service';
+import { DittoInviteClient } from './ditto/ditto-invite.client';
 
 /**
  * registry.json "CreatorSubscription" resource module. PrismaService comes
@@ -30,6 +32,8 @@ import { NotificationModule } from '../notification/notification.module';
   providers: [
     CreatorSubscriptionService,
     CreatorAccountGuard,
+    DittoService,
+    DittoInviteClient,
     RealFlutterwaveAdapter,
     MockFlutterwaveAdapter,
     {

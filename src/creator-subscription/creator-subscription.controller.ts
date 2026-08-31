@@ -18,6 +18,7 @@ import { SubscribeDto } from './dto/subscribe.dto';
 import { UpgradeSubscriptionDto } from './dto/upgrade.dto';
 import { VerifySubscriptionDto } from './dto/verify-subscription.dto';
 import { UpdateCardDto } from './dto/update-card.dto';
+import { DittoService } from './ditto/ditto.service';
 
 /**
  * registry.json "CreatorSubscription" — task brief's frozen endpoint list.
@@ -31,7 +32,33 @@ import { UpdateCardDto } from './dto/update-card.dto';
 export class CreatorSubscriptionController {
   constructor(
     private readonly creatorSubscriptionService: CreatorSubscriptionService,
+    private readonly ditto: DittoService,
   ) {}
+
+  /**
+   * GET /creator-subscription/ditto — whether this creator has opted in to
+   * Ditto Music distribution, and the link once they have.
+   *
+   * Not folded into GET /creator-subscription: the opt-in is a consent record,
+   * not a property of the plan, and the signup link must not be handed to
+   * every Pro Max subscriber who merely loads their billing page.
+   */
+  @Get('ditto')
+  @UseGuards(CreatorAccountGuard)
+  dittoState(@CurrentUser() user: WawuJwtClaims) {
+    return this.ditto.stateFor(user.sub);
+  }
+
+  /**
+   * POST /creator-subscription/ditto/opt-in — the explicit act. Nothing else
+   * in the codebase writes this row, so paying for Pro Max can never enrol
+   * somebody by itself.
+   */
+  @Post('ditto/opt-in')
+  @UseGuards(CreatorAccountGuard)
+  dittoOptIn(@CurrentUser() user: WawuJwtClaims) {
+    return this.ditto.optIn(user.sub);
+  }
 
   @Get()
   @UseGuards(CreatorAccountGuard)
