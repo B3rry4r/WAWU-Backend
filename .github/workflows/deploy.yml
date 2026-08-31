@@ -59,13 +59,35 @@ jobs:
         run: npm run db:seed
 
       - name: Start mock WAWU ID
-        # The contract tests do a real JWKS handshake against this.
+        # The contract tests do a real JWKS handshake against this service, so
+        # it has to be genuinely running and genuinely signing.
         run: |
-          cd mock-wawu-id && npm ci --no-audit --no-fund
+          cd mock-wawu-id
+          npm ci --no-audit --no-fund
+
+          # THE SIGNING KEYPAIR IS NOT IN THE REPO, AND SHOULD NOT BE.
+          # private.pem is gitignored — correctly, it is a private key even
+          # for a mock — so a fresh checkout does not have it and the mock
+          # dies on startup with ENOENT. Every contract test then fails with
+          # "mock-wawu-id did not become healthy in time", which points at a
+          # timeout rather than at the missing file.
+          #
+          # BOTH halves are regenerated, not just the private one: public.pem
+          # IS committed, and a new private key with the old public key would
+          # make the mock sign with one key while its JWKS advertises another
+          # — every signature check would fail, which is a far more confusing
+          # failure than the mock simply not starting.
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out private.pem -quiet
+          openssl rsa -in private.pem -pubout -out public.pem 2>/dev/null
+
           nohup node server.js > /tmp/mock.log 2>&1 &
           for i in $(seq 1 30); do
-            curl -sf http://localhost:4001/health && break || sleep 1
+            curl -sf http://localhost:4001/health >/dev/null && echo "mock up" && exit 0
+            sleep 1
           done
+          echo "mock-wawu-id never became healthy. Its log:" >&2
+          cat /tmp/mock.log >&2
+          exit 1
 
       - run: npx tsc --noEmit
 
