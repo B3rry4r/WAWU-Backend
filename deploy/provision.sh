@@ -78,12 +78,22 @@ if [[ -f /root/.ssh/authorized_keys ]]; then
 fi
 # The app user needs a shell to run the deploy script over SSH.
 usermod --shell /bin/bash "$APP_USER"
+# ...and membership of systemd-journal, so a failed deploy can print its own
+# logs. Without it deploy.sh's failure path prints "No journal files were
+# opened due to insufficient permissions", which tells nobody anything.
+usermod -aG systemd-journal "$APP_USER"
 
 echo "==> sudoers: restart only, nothing else"
 cat > /etc/sudoers.d/wawu-deploy <<'SUDOEOF'
-# The deploy user may restart its own services and nothing more. A full
-# NOPASSWD:ALL here would make the CI key equivalent to root.
-wawu ALL=(root) NOPASSWD: /usr/bin/systemctl restart wawu-hub-api, /usr/bin/systemctl restart wawu-id, /usr/bin/systemctl status wawu-hub-api, /usr/bin/systemctl status wawu-id, /usr/bin/systemctl is-active wawu-hub-api, /usr/bin/systemctl is-active wawu-id
+# RESTART ONLY. Two commands, no wildcards, no flags.
+#
+# sudoers matches the whole command line, so a rule for `systemctl is-active`
+# does not cover `systemctl is-active --quiet`. Rather than widening the rule
+# with a wildcard, reads were moved off sudo entirely in deploy.sh — they do
+# not need root. A NOPASSWD:ALL here would have made the CI key equivalent to
+# root, which would undo the whole point of keeping secrets off CI.
+wawu ALL=(root) NOPASSWD: /usr/bin/systemctl restart wawu-hub-api
+wawu ALL=(root) NOPASSWD: /usr/bin/systemctl restart wawu-id
 SUDOEOF
 chmod 0440 /etc/sudoers.d/wawu-deploy
 visudo -c -f /etc/sudoers.d/wawu-deploy

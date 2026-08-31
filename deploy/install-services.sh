@@ -28,7 +28,7 @@ echo "==> systemd units"
 #                      reads the database" and "an RCE in a dependency reads
 #                      almost nothing".
 write_unit () {
-  local name=$1 dir=$2 envfile=$3 desc=$4
+  local name=$1 dir=$2 envfile=$3 desc=$4 entry=$5
   cat > /etc/systemd/system/${name}.service <<UNIT
 [Unit]
 Description=${desc}
@@ -41,9 +41,14 @@ User=${APP_USER}
 Group=${APP_USER}
 WorkingDirectory=${dir}
 EnvironmentFile=${envfile}
-ExecStart=/usr/bin/node dist/main.js
+ExecStart=/usr/bin/node ${entry}
 Restart=always
 RestartSec=3
+# Give up after 5 failures in 60s instead of restarting for ever. A unit that
+# can never start — a missing entry file, a bad env var — otherwise loops
+# silently at 20 restarts a minute and buries the real error in the journal.
+StartLimitBurst=5
+StartLimitIntervalSec=60
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=${name}
@@ -65,8 +70,13 @@ WantedBy=multi-user.target
 UNIT
 }
 
-write_unit wawu-hub-api /srv/wawu/hub-api  /etc/wawu/hub-api.env  "WAWU Hub API"
-write_unit wawu-id      /srv/wawu/wawu-id  /etc/wawu/wawu-id.env  "WAWU ID (identity service)"
+# THE ENTRY PATH IS dist/src/main.js, NOT dist/main.js.
+# prisma.config.ts and scripts/ live outside src/, so tsc's rootDir becomes
+# the project root and the whole tree is nested one level deeper than a
+# textbook Nest layout. Guessing dist/main.js here is what made the first
+# deploy crash-loop 54 times before anybody looked at the journal.
+write_unit wawu-hub-api /srv/wawu/hub-api  /etc/wawu/hub-api.env  "WAWU Hub API"              dist/src/main.js
+write_unit wawu-id      /srv/wawu/wawu-id  /etc/wawu/wawu-id.env  "WAWU ID (identity service)" dist/main.js
 
 systemctl daemon-reload
 systemctl enable wawu-hub-api wawu-id >/dev/null
