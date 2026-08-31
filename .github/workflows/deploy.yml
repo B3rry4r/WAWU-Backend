@@ -1,0 +1,126 @@
+name: Deploy Hub API
+
+# Auto-deploys main. A push that fails the test job never reaches the droplet.
+on:
+  push:
+    branches: [main]
+  # So a deploy can be re-run without an empty commit — the button you want
+  # at 2am when the droplet was down during the last push.
+  workflow_dispatch:
+
+concurrency:
+  # One deploy at a time. Two overlapping rsyncs into the same directory,
+  # each followed by `prisma migrate deploy`, is how a half-written release
+  # gets restarted.
+  group: deploy-hub-api
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: wawu_hub_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports: ['5432:5432']
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/wawu_hub_test?schema=public
+      WAWU_ID_JWKS_URL: http://localhost:4001/.well-known/jwks.json
+      WAWU_ID_BASE_URL: http://localhost:4001
+      ADMIN_JWT_SECRET: ci-only-admin-secret-not-a-real-one-000000
+      ADMIN_JWT_REFRESH_SECRET: ci-only-admin-refresh-secret-not-a-real-one-0
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --no-audit --no-fund
+
+      - name: Prisma generate + migrate
+        run: |
+          npx prisma generate
+          npx prisma migrate deploy
+
+      - name: Seed
+        run: npm run db:seed
+
+      - name: Start mock WAWU ID
+        # The contract tests do a real JWKS handshake against this.
+        run: |
+          cd mock-wawu-id && npm ci --no-audit --no-fund
+          nohup node server.js > /tmp/mock.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4001/health && break || sleep 1
+          done
+
+      - run: npx tsc --noEmit
+
+      - name: Contract tests
+        run: npx jest --runInBand --forceExit
+
+  deploy:
+    name: Deploy to droplet
+    needs: test
+    runs-on: ubuntu-latest
+    # Only main reaches the droplet, even if the workflow is dispatched
+    # from a branch by mistake.
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load SSH key
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "${{ secrets.DROPLET_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # Pinning the host key rather than StrictHostKeyChecking=no: without
+          # it, CI would accept ANY host answering on that IP, which is the
+          # whole point of the check.
+          printf '%s\n' "${{ secrets.DROPLET_HOST_KEY }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Rsync source to droplet
+        run: |
+          rsync -az --delete \
+            --exclude '.git' \
+            --exclude 'node_modules' \
+            --exclude 'dist' \
+            --exclude 'generated' \
+            --exclude 'mock-wawu-id/node_modules' \
+            --exclude '.env' \
+            -e "ssh -i ~/.ssh/id_ed25519" \
+            ./ wawu@${{ secrets.DROPLET_HOST }}:/srv/wawu/hub-api/
+
+      - name: Install, migrate, build, restart
+        run: |
+          ssh -i ~/.ssh/id_ed25519 wawu@${{ secrets.DROPLET_HOST }} \
+            'bash /srv/wawu/hub-api/deploy/deploy.sh hub-api'
+
+      - name: Smoke test the live service
+        # A deploy that "succeeded" but serves 502 is not a deploy. This is the
+        # check that turns the run red when the box is broken.
+        run: |
+          for i in $(seq 1 15); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' https://${{ secrets.API_DOMAIN }}/api/hub/shop/products || true)
+            echo "attempt $i: HTTP $code"
+            # 200 = serving. 401 also proves the app is up and authenticating.
+            if [ "$code" = "200" ] || [ "$code" = "401" ]; then exit 0; fi
+            sleep 4
+          done
+          echo "Service did not answer after the deploy." >&2
+          exit 1

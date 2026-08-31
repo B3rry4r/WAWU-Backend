@@ -9,3 +9,10 @@ coverage/
 .DS_Store
 mock-wawu-id/node_modules/
 mock-wawu-id/private.pem
+
+# Deploy SSH keypair (DigitalOcean). The PRIVATE half of this must never be
+# committed — it is root access to the droplet. Generated locally, downloaded
+# by the operator, and kept in GitHub Actions secrets. Both halves are ignored
+# so a stray `git add -A` cannot pick either up.
+wawu_do_deploy
+wawu_do_deploy.pub
