@@ -124,7 +124,7 @@ Repo → Settings → Secrets and variables → Actions:
 | `DROPLET_SSH_KEY` | the **whole** `wawu_do_deploy` private file, `-----BEGIN` line included |
 | `DROPLET_HOST` | droplet IP |
 | `DROPLET_HOST_KEY` | output of `ssh-keyscan -t ed25519 DROPLET_IP` |
-| `API_DOMAIN` | `api.YOURDOMAIN` |
+| `API_DOMAIN` | `api.wawuafrica.com` |
 
 `DROPLET_HOST_KEY` is not optional busywork: without it the workflow would
 have to accept any host answering on that IP, which defeats the check.
@@ -139,6 +139,26 @@ contract suite) and only then rsyncs. It finishes by curling the live domain
 `systemctl restart` returned.
 
 ---
+
+## Live as of 31 Aug 2026
+
+| | |
+|---|---|
+| Droplet | `134.122.18.234` (NYC1) |
+| Hub API | https://api.wawuafrica.com |
+| WAWU ID | https://id.wawuafrica.com |
+| Database | managed Postgres NYC3, `wawu_hub` + `wawu_id`, `sslmode=verify-full` |
+| Spaces | `wawu` in SFO3 |
+| TLS | Let's Encrypt, auto-renewing |
+
+Secrets were carried over from the Railway deployment (`wawu-api` and
+`WAWU-ID` services) rather than regenerated, so the RS256 keypair, the
+Flutterwave test credentials and the Resend/Termii keys are the same ones that
+were already in use. That matters for RS256 specifically: tokens issued by the
+Railway deployment remain valid here.
+
+`GEMINI_API_KEY` was never in Railway — the Legal AI intake postdates that
+deployment. It is the one key still unset, and only that feature depends on it.
 
 ## Spaces
 
