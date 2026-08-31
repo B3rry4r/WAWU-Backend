@@ -56,7 +56,7 @@ export const CONSULTATION_FEES = {
   chat: { medium: 'chat' as const, label: 'Chat', minutes: 60, feeNaira: 25_000 },
   zoom: { medium: 'zoom' as const, label: 'Zoom call', minutes: 60, feeNaira: 45_000 },
   /**
-   * Physical consultations are booked by email and the fee is negotiated per
+   * Physical consultations are arranged directly and the fee is negotiated per
    * matter, so there is no number to charge up front. The request is recorded
    * and WAWU makes contact rather than opening a checkout that cannot price
    * itself.

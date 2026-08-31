@@ -220,7 +220,8 @@ export class LegalRequestsService {
     const option = CONSULTATION_FEES[dto.medium as ConsultationMediumId];
 
     // Chat and Zoom happen at a specific hour, so one has to be chosen. A
-    // physical consultation is arranged by email and books no slot.
+    // physical consultation is arranged directly and books no slot.
+    // (Not 'by email' — this service has no mail transport at all.)
     let scheduledFor: Date | null = null;
     if (option.feeNaira !== null) {
       if (!dto.scheduledFor) {
@@ -245,7 +246,7 @@ export class LegalRequestsService {
       }
     } else if (dto.scheduledFor) {
       throw new BadRequestException(
-        'In-person consultations are arranged by email, so they cannot be booked to a slot here.',
+        'In-person consultations are arranged directly, so they cannot be booked to a slot here.',
       );
     }
 
@@ -261,8 +262,15 @@ export class LegalRequestsService {
       return {
         request: this.toResponse(updated),
         flutterwaveConfig: null,
+        // NO EMAIL IS PROMISED HERE. This backend has no mail transport at
+        // all — grep resend/nodemailer/sendMail/MailService across src returns
+        // nothing — so the previous wording ("booked by email", "our team will
+        // contact you") was a guarantee nothing implements. What is TRUE is
+        // what this write does: the request is recorded and appears in the
+        // legal ops queue (GET /legal/ops/requests), which a consultant works.
+        // Say that instead. See .legacy-repair/repair-order.md R4.
         message:
-          'In-person consultations are booked by email and priced per matter. Our team will contact you to arrange it.',
+          'Your request is with our legal team. In-person consultations are priced per matter and arranged with you directly.',
       };
     }
 

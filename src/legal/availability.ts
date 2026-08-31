@@ -22,7 +22,7 @@ export const CONSULTATION_HOURS = {
   weekdays: [1, 2, 3, 4, 5],
   /** How far ahead the calendar runs. */
   horizonDays: 21,
-  /** Physical consultations are arranged by email, so they book no slot. */
+  /** Physical consultations are arranged directly, so they book no slot. */
   slotMinutes: 60,
 } as const;
 

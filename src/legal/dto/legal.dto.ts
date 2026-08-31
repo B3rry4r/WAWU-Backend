@@ -31,7 +31,7 @@ export class BookConsultationDto {
 
   /**
    * The slot the client picked, from GET /legal/availability. Required for
-   * chat and Zoom; physical consultations are arranged by email and book no
+   * chat and Zoom; physical consultations are arranged directly and book no
    * slot, so it is optional here and rejected in the service for physical.
    */
   @IsOptional()
