@@ -83,7 +83,15 @@ export type NotificationEvent =
       contentTitle: string;
       reason?: string | null;
     }
-  /** Manual KYC review concluded. Recipient: the creator. (Emitted from feat/admin-surface.) */
+  /**
+   * Manual KYC review concluded. Recipient: the creator.
+   *
+   * Emitted by KycSubmissionService.review() — the single transition both the
+   * admin queue and POST /kyc/:id/review delegate to. This comment previously
+   * claimed "(Emitted from feat/admin-surface.)" and nothing emitted it at all;
+   * the kind was declared and rendered with no writer for the life of the
+   * module (legacy-app-repair, 2026-08-31).
+   */
   | { kind: 'kyc_verified'; userWawuId: string; approved: boolean };
 
 /** The row `emit()` will write, before it reaches Prisma. */

@@ -315,6 +315,49 @@ describe('KycSubmission contract', () => {
         .expect(404);
     });
 
+    /**
+     * THE NOTIFICATION IS THE POINT OF THE REVIEW, FROM THE CREATOR'S SIDE.
+     *
+     * KYC is the gate on being paid, and the KYC screen promises "we will
+     * notify you". For the life of this module nothing emitted it: the kind
+     * was declared in NotificationKind, the web client rendered it, and the
+     * review transition wrote two rows and returned. A creator was approved
+     * and never told.
+     *
+     * This asserts a CAPABILITY — "the creator is told" — not the absence of
+     * an error. It fails if the emit is ever removed, which is what makes the
+     * promise on the screen safe to keep making.
+     */
+    it('NOTIFIES the creator of the outcome — the promise the KYC screen makes', async () => {
+      await prisma.notification.deleteMany({
+        where: { userWawuId: USER_CREATOR_BASIC, kind: 'kyc_verified' },
+      });
+
+      await request(app.getHttpServer())
+        .post(`/api/hub/kyc/${KYC_BASIC_ID}/review`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ decision: 'rejected', rejectionReason: 'BVN does not match the account holder name' })
+        .expect(200);
+
+      const notes = await prisma.notification.findMany({
+        where: { userWawuId: USER_CREATOR_BASIC, kind: 'kyc_verified' },
+      });
+      expect(notes).toHaveLength(1);
+
+      // Reset so the lifecycle test below still starts from `pending`.
+      await prisma.kycSubmission.update({
+        where: { id: KYC_BASIC_ID },
+        data: { status: 'pending', reviewedAt: null, rejectionReason: null },
+      });
+      await prisma.creatorState.update({
+        where: { wawuUserId: USER_CREATOR_BASIC },
+        data: { kycStatus: 'pending' },
+      });
+      await prisma.notification.deleteMany({
+        where: { userWawuId: USER_CREATOR_BASIC, kind: 'kyc_verified' },
+      });
+    });
+
     it('rejects the pending submission for a valid admin request, and flips CreatorState.kycStatus to rejected', async () => {
       const res = await request(app.getHttpServer())
         .post(`/api/hub/kyc/${KYC_BASIC_ID}/review`)

@@ -1,0 +1,99 @@
+{
+  "repo": "WAWU-Hub-API",
+  "stack": "node",
+  "files": {
+    "source": [
+      "src/**/*.ts",
+      "src/**/*.tsx"
+    ],
+    "test": [
+      "test/**",
+      "e2e/**",
+      "**/*.test.ts",
+      "**/*.test.tsx",
+      "**/*.spec.ts"
+    ],
+    "exclude": [
+      "**/*.d.ts",
+      "**/node_modules/**",
+      ".next/**",
+      "dist/**",
+      "generated/**",
+      "build/**",
+      "**/mocks/**"
+    ]
+  },
+  "gates": {
+    "deferrals": {
+      "enabled": true,
+      "include_tests": false
+    },
+    "fake_data": {
+      "enabled": true,
+      "allow_paths": [
+        "src/**/mock-*.adapter.ts",
+        "src/**/*.module.ts"
+      ]
+    },
+    "wire_types": {
+      "enabled": true,
+      "data_layer": [
+        "src/common/types/**",
+        "src/**/dto/**",
+        "src/**/*-view.type.ts",
+        "src/**/real-*.adapter.ts",
+        "src/**/*-client.ts",
+        "src/**/*.interface.ts"
+      ]
+    },
+    "forks": {
+      "enabled": true,
+      "min_name_length": 4,
+      "ignore_names": [
+        "State",
+        "Result",
+        "Data",
+        "Item",
+        "Model",
+        "Props",
+        "Params"
+      ]
+    },
+    "hardcoded_signals": {
+      "enabled": true,
+      "token_layer": [
+        "src/theme/**",
+        "src/styles/tokens*"
+      ],
+      "check_colors": true,
+      "allow_paths": []
+    },
+    "dead_controls": {
+      "enabled": true
+    },
+    "product_invariants": {
+      "enabled": true,
+      "banned": [
+        {
+          "pattern": "\\blorem ipsum\\b",
+          "ruling": "EXAMPLE-1",
+          "why": "replace with a real product rule this project has actually made. See references/writing-a-gate.md."
+        }
+      ]
+    },
+    "pipeline_open_items": {
+      "enabled": false,
+      "require_pipeline": false,
+      "pipeline_dirs": [
+        ".pipeline"
+      ],
+      "_why": "Only fires if you're using the contract-driven-backend / admin-surface-extension pipeline skills. Leave disabled otherwise."
+    },
+    "provisional": {
+      "enabled": true
+    },
+    "unbacked_promises": {
+      "enabled": true
+    }
+  }
+}

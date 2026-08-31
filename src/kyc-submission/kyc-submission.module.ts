@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { NotificationModule } from '../notification/notification.module';
 import { KycSubmissionController } from './kyc-submission.controller';
 import { KycSubmissionService } from './kyc-submission.service';
 import { KycAdminGuard } from './guards/admin.guard';
@@ -17,7 +18,7 @@ import { StorageModule } from '../storage/storage.module';
  * precedent for a resource with no WawuIdClient dependency of its own.
  */
 @Module({
-  imports: [StorageModule],
+  imports: [StorageModule, NotificationModule],
   controllers: [KycSubmissionController],
   providers: [KycSubmissionService, KycAdminGuard],
 })

@@ -1,0 +1,868 @@
+{
+  "accepted": {
+    "03f227ec145e3b97": {
+      "evidence": "export interface DmSendInitResponse {",
+      "gate": "wire_types",
+      "message": "response shape 'DmSendInitResponse' hand-declared outside the data layer",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Third-party (Flutterwave/Gemini) response shape declared beside its adapter. The adapter IS the data layer boundary for an external API; hoisting it to common/types would put a vendor's schema in this platform's own type surface.",
+      "where": "src/direct-message/direct-message.service.ts:27"
+    },
+    "07c5651c78fb6ba4": {
+      "evidence": "* build task's scope rule \u2014 not sharing a class with another resource's",
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/kyc-submission/guards/admin.guard.ts:14"
+    },
+    "0a0c8367db5311c4": {
+      "evidence": "interface VerifyResponse {",
+      "gate": "wire_types",
+      "message": "response shape 'VerifyResponse' hand-declared outside the data layer",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Third-party (Flutterwave/Gemini) response shape declared beside its adapter. The adapter IS the data layer boundary for an external API; hoisting it to common/types would put a vendor's schema in this platform's own type surface.",
+      "where": "src/common/flutterwave/checkout-verifier.ts:12"
+    },
+    "0d6549fc67a2d20a": {
+      "evidence": "/** DI token \u2014 swapped between RealFlutterwaveAdapter and MockFlutterwaveAdapter in DirectMessageModule. */",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/direct-message/flutterwave-client.interface.ts:72"
+    },
+    "125d7419783e363f": {
+      "evidence": "export const MOCK_FLUTTERWAVE_FAIL_TXN_ID = 'MOCK_TXN_FAIL';",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_FLUTTERWAVE_FAIL_TXN_ID'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/service-application/mock-flutterwave.adapter.ts:9"
+    },
+    "132b0aa29d755a30": {
+      "evidence": "* It is dead code, not a fallback \u2014 nothing wires it into a route, and",
+      "gate": "deferrals",
+      "message": "known dead code left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/common/guards/admin-key.guard.ts:28"
+    },
+    "1396b66b3933993a": {
+      "evidence": "* events and is out of scope for this module.",
+      "gate": "deferrals",
+      "message": "scope declaration left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/evg-score/evg-score.service.ts:10"
+    },
+    "1409ada8d343acc6": {
+      "evidence": "mock: MockFlutterwaveAdapter,",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/direct-message/direct-message.module.ts:43"
+    },
+    "14531751d7b336a2": {
+      "evidence": "// The protection it existed for now happens at READ time, where it",
+      "gate": "deferrals",
+      "message": "temporary implementation left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/storage/storage.service.ts:137"
+    },
+    "15df39f278ac5395": {
+      "evidence": "cardToken: MOCK_CARD_TOKEN,",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_CARD_TOKEN'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/creator-subscription/mock-flutterwave.adapter.ts:87"
+    },
+    "1626df8d520a864a": {
+      "evidence": "*   - Term still running (`active`, `currentPeriodEnd` in the future):",
+      "gate": "deferrals",
+      "message": "deferral left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/creator-subscription/creator-subscription.service.ts:826"
+    },
+    "178e6e88acc24baf": {
+      "evidence": "src/content-piece/flutterwave-client.interface.ts:22, src/creator-subscription/flutterwave-client.interface.ts:45, src/credit-purchase/flutterwave-client.interface.ts:29, src/direct-message/flutterwav",
+      "gate": "forks",
+      "message": "interface 'FlutterwaveVerifyResult' is declared in 5 files - one of them is a fork",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Same-named interface declared in a client module and its server counterpart. Not a fork of one component; two sides of a wire contract. Drains when the dashboard's generated contract is extended to the app client.",
+      "where": "src/content-piece/flutterwave-client.interface.ts:22"
+    },
+    "17d08a1835e47f95": {
+      "evidence": "// The tier comes off the PENDING CHARGE, not a constant. Hardcoding 'pro'",
+      "gate": "deferrals",
+      "message": "placeholder implementation left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/creator-subscription/creator-subscription.service.ts:529"
+    },
+    "19962616ce6035dc": {
+      "evidence": "if (params.transactionId === MOCK_FAILURE_TRANSACTION_ID || !initialized) {",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_FAILURE_TRANSACTION_ID'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/creator-subscription/mock-flutterwave.adapter.ts:70"
+    },
+    "1bd3d3bd99076ba4": {
+      "evidence": "if (params.transactionId === MOCK_FAILURE_TRANSACTION_ID || !initialized) {",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_FAILURE_TRANSACTION_ID'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/direct-message/mock-flutterwave.adapter.ts:63"
+    },
+    "1de7f475d3ffcb6a": {
+      "evidence": "* Trivially callable from another module: NotificationModule is @Global()",
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/notification/notification.service.ts:105"
+    },
+    "1f9218348808db6a": {
+      "evidence": "* doesn't accept it today; wire it back in once search-history",
+      "gate": "deferrals",
+      "message": "deferred wiring left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/search-response/search-response.service.ts:138"
+    },
+    "229855010314cbae": {
+      "evidence": "* view/purchase/comment events) belongs to whichever resource owns those",
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/evg-score/evg-score.service.ts:9"
+    },
+    "23cd461ab5a1e115": {
+      "evidence": "* belongs to the module that declares it; providing the service alone brings",
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/admin/verification-review/admin-verification-review.module.ts:34"
+    },
+    "2ebea7359d37a6a9": {
+      "evidence": "export class MockFlutterwaveAdapter implements FlutterwaveClient {",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/direct-message/mock-flutterwave.adapter.ts:38"
+    },
+    "37a8b086aff5ccc8": {
+      "evidence": "if (params.transactionId === MOCK_REFUND_PENDING_TRANSACTION_ID) {",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_REFUND_PENDING_TRANSACTION_ID'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/direct-message/mock-flutterwave.adapter.ts:113"
+    },
+    "39ee8da41c6ff046": {
+      "evidence": "// no Prisma model of its own to add one to (out of scope per task",
+      "gate": "deferrals",
+      "message": "scope declaration left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/search-response/search-response.service.ts:153"
+    },
+    "3df106880fe876f1": {
+      "evidence": "export interface FlutterwaveConfigResponse {",
+      "gate": "wire_types",
+      "message": "response shape 'FlutterwaveConfigResponse' hand-declared outside the data layer",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Third-party (Flutterwave/Gemini) response shape declared beside its adapter. The adapter IS the data layer boundary for an external API; hoisting it to common/types would put a vendor's schema in this platform's own type surface.",
+      "where": "src/creator-subscription/creator-subscription.service.ts:100"
+    },
+    "3e0a3d6d91e9c53f": {
+      "evidence": "src/content-piece/flutterwave-client.interface.ts:30, src/creator-subscription/flutterwave-client.interface.ts:74, src/credit-purchase/flutterwave-client.interface.ts:37, src/direct-message/flutterwav",
+      "gate": "forks",
+      "message": "interface 'InitChargeParams' is declared in 5 files - one of them is a fork",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Same-named interface declared in a client module and its server counterpart. Not a fork of one component; two sides of a wire contract. Drains when the dashboard's generated contract is extended to the app client.",
+      "where": "src/content-piece/flutterwave-client.interface.ts:30"
+    },
+    "4014333a48291e2e": {
+      "evidence": "// Cleared on resubmission: the previous reason belongs to the previous",
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/professional/professional.service.ts:118"
+    },
+    "40273e7abb134cbf": {
+      "evidence": "src/content-piece/flutterwave-client.interface.ts:15, src/creator-subscription/flutterwave-client.interface.ts:38, src/credit-purchase/flutterwave-client.interface.ts:22, src/direct-message/flutterwav",
+      "gate": "forks",
+      "message": "interface 'FlutterwaveChargeInit' is declared in 6 files - one of them is a fork",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Same-named interface declared in a client module and its server counterpart. Not a fork of one component; two sides of a wire contract. Drains when the dashboard's generated contract is extended to the app client.",
+      "where": "src/content-piece/flutterwave-client.interface.ts:15"
+    },
+    "42e20483b9da61a5": {
+      "evidence": "* not yet implement this route -- it only implements",
+      "gate": "deferrals",
+      "message": "deferred wiring left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/account/wawu-id-account.client.ts:12"
+    },
+    "4931d7321443c29b": {
+      "evidence": "inject: [MockFlutterwaveAdapter, RealFlutterwaveAdapter],",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/content-piece/content-piece.module.ts:38"
+    },
+    "4bee7a62a8d3a40e": {
+      "evidence": "if (params.flutterwaveCustomerRef === MOCK_RETRY_FAILURE_CUSTOMER_REF) {",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_RETRY_FAILURE_CUSTOMER_REF'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/creator-subscription/mock-flutterwave.adapter.ts:110"
+    },
+    "4dce81655348a55e": {
+      "evidence": "// always someone replaying another payment's id at a different resource.",
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/common/flutterwave/checkout-verifier.ts:73"
+    },
+    "518690805d36a6e5": {
+      "evidence": "if (params.transactionId === MOCK_REFUND_RETRYABLE_TRANSACTION_ID) {",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_REFUND_RETRYABLE_TRANSACTION_ID'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/direct-message/mock-flutterwave.adapter.ts:91"
+    },
+    "57cd8f45c5d37de0": {
+      "evidence": "export interface EnrolResponse extends LearnEntitlement {",
+      "gate": "wire_types",
+      "message": "response shape 'EnrolResponse' hand-declared outside the data layer",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Third-party (Flutterwave/Gemini) response shape declared beside its adapter. The adapter IS the data layer boundary for an external API; hoisting it to common/types would put a vendor's schema in this platform's own type surface.",
+      "where": "src/course-enrollment/course-enrollment.service.ts:14"
+    },
+    "592a8fbe35f13b62": {
+      "evidence": "* status to `refunded` itself here \u2014 that write belongs to the future",
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/direct-message/direct-message.service.ts:342"
+    },
+    "59830daf048f779f": {
+      "evidence": "if (params.transactionId === MOCK_REFUND_PERMANENT_TRANSACTION_ID) {",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_REFUND_PERMANENT_TRANSACTION_ID'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/direct-message/mock-flutterwave.adapter.ts:99"
+    },
+    "5aec565a4a618b39": {
+      "evidence": "inject: [MockFlutterwaveAdapter, RealFlutterwaveAdapter],",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/purchase/purchase.module.ts:45"
+    },
+    "5b7f95326158da3d": {
+      "evidence": "export const MOCK_FAILURE_TRANSACTION_ID = 'mock-flw-tx-fail';",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_FAILURE_TRANSACTION_ID'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/content-piece/mock-flutterwave.adapter.ts:17"
+    },
+    "5be86dfb192853ce": {
+      "evidence": "src/content-piece/content-piece.service.ts:33, src/creator-subscription/creator-subscription.service.ts:100, src/credit-purchase/credit-purchase.service.ts:26, src/purchase/purchase.service.ts:23",
+      "gate": "forks",
+      "message": "interface 'FlutterwaveConfigResponse' is declared in 4 files - one of them is a fork",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Same-named interface declared in a client module and its server counterpart. Not a fork of one component; two sides of a wire contract. Drains when the dashboard's generated contract is extended to the app client.",
+      "where": "src/content-piece/content-piece.service.ts:33"
+    },
+    "5c712f6793450397": {
+      "evidence": "* relevant methods are private, and importing another resource's",
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/search-response/search-response.service.ts:232"
+    },
+    "5e176427b3deedd7": {
+      "evidence": "* change, which is out of scope (schema is frozen per task brief). This",
+      "gate": "deferrals",
+      "message": "scope declaration left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/content-piece/content-piece.service.ts:639"
+    },
+    "5eb9b9a738a3d2be": {
+      "evidence": "import { VERIFICATION_TIER_VALUES, type CreateVerificationSubmissionDto } from './dto/create-verification-submission.dto';",
+      "gate": "wire_types",
+      "message": "response shape 'CreateVerificationSubmissionDto' hand-declared outside the data layer",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Third-party (Flutterwave/Gemini) response shape declared beside its adapter. The adapter IS the data layer boundary for an external API; hoisting it to common/types would put a vendor's schema in this platform's own type surface.",
+      "where": "src/verification-submission/verification-submission.service.ts:6"
+    },
+    "6295c70f3cdd7ffa": {
+      "evidence": "MockFlutterwaveAdapter,",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/content-piece/content-piece.module.ts:28"
+    },
+    "66b61dda549d46f2": {
+      "evidence": "/** DI token \u2014 swapped between RealFlutterwaveAdapter and MockFlutterwaveAdapter in ContentPieceModule. */",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/content-piece/flutterwave-client.interface.ts:46"
+    },
+    "67aad8ea7457ea82": {
+      "evidence": "useClass: usesMockFlutterwave() ? MockFlutterwaveAdapter : RealFlutterwaveAdapter,",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/service-application/service-application.module.ts:53"
+    },
+    "69c0d8185d8b1117": {
+      "evidence": "* ContentPiece resource (POST/DELETE /content/:id/save) \u2014 out of scope",
+      "gate": "deferrals",
+      "message": "scope declaration left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/saved-item/saved-item.controller.ts:11"
+    },
+    "6bc9c64c6d1bca3f": {
+      "evidence": "/** DI token \u2014 swapped between RealFlutterwaveAdapter and MockFlutterwaveAdapter in CreditPurchaseModule. */",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/credit-purchase/flutterwave-client.interface.ts:53"
+    },
+    "6d7eddb4b426c50e": {
+      "evidence": "export class MockFlutterwaveAdapter implements FlutterwaveClient {",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/service-application/mock-flutterwave.adapter.ts:20"
+    },
+    "6e7ad05b88166c2f": {
+      "evidence": "mock: MockFlutterwaveAdapter,",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/content-piece/content-piece.module.ts:32"
+    },
+    "6feafe376aff1bd0": {
+      "evidence": "if (params.transactionId === MOCK_FLUTTERWAVE_FAIL_TXN_ID) {",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_FLUTTERWAVE_FAIL_TXN_ID'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/service-application/mock-flutterwave.adapter.ts:38"
+    },
+    "7002f568f5f4fd49": {
+      "evidence": "export const MOCK_REFUND_PENDING_TRANSACTION_ID = 'mock-flw-refund-pending';",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_REFUND_PENDING_TRANSACTION_ID'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/direct-message/mock-flutterwave.adapter.ts:35"
+    },
+    "728210d663cb1509": {
+      "evidence": "*   cross-restart cache would need a schema column, which is out of scope",
+      "gate": "deferrals",
+      "message": "scope declaration left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/creator-subscription/flutterwave-client.interface.ts:25"
+    },
+    "742423ffc592c1d7": {
+      "evidence": "if (params.transactionId === MOCK_FAILURE_TRANSACTION_ID || !initialized) {",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_FAILURE_TRANSACTION_ID'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/credit-purchase/mock-flutterwave.adapter.ts:53"
+    },
+    "77944dd31889d592": {
+      "evidence": "customerEmail: MOCK_CUSTOMER_EMAIL,",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_CUSTOMER_EMAIL'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/creator-subscription/mock-flutterwave.adapter.ts:88"
+    },
+    "77e2b2ca3645c78f": {
+      "evidence": "import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';",
+      "gate": "fake_data",
+      "message": "production file imports a 'mock' source",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/creator-subscription/creator-subscription.module.ts:7"
+    },
+    "78063630d45c19a3": {
+      "evidence": "const MOCK_CUSTOMER_EMAIL = 'mock-cardholder@test.wawu.dev';",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_CUSTOMER_EMAIL'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/creator-subscription/mock-flutterwave.adapter.ts:39"
+    },
+    "784c4172556bc8eb": {
+      "evidence": "inject: [MockFlutterwaveAdapter, RealFlutterwaveAdapter],",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/direct-message/direct-message.module.ts:49"
+    },
+    "7d4e8c07c7bd762f": {
+      "evidence": "if (params.transactionId === MOCK_FAILURE_TRANSACTION_ID || !initialized) {",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_FAILURE_TRANSACTION_ID'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/content-piece/mock-flutterwave.adapter.ts:45"
+    },
+    "7e96934ebc941035": {
+      "evidence": "mock: MockFlutterwaveAdapter,",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/credit-purchase/credit-purchase.module.ts:29"
+    },
+    "80f54740b92c1c94": {
+      "evidence": "* decided on. Not required to be in the future: an event whose start passes",
+      "gate": "deferrals",
+      "message": "deferral left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/event/dto/create-event.dto.ts:92"
+    },
+    "87548e51e0afcc2c": {
+      "evidence": "export const MOCK_REFUND_PERMANENT_TRANSACTION_ID = 'mock-flw-refund-nope';",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_REFUND_PERMANENT_TRANSACTION_ID'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/direct-message/mock-flutterwave.adapter.ts:33"
+    },
+    "8937e5d62eeb55b1": {
+      "evidence": "export class MockFlutterwaveAdapter implements FlutterwaveClient {",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/creator-subscription/mock-flutterwave.adapter.ts:42"
+    },
+    "90fd38906fad1132": {
+      "evidence": "MockFlutterwaveAdapter,",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/purchase/purchase.module.ts:35"
+    },
+    "913fcae6db48b5db": {
+      "evidence": "* TODO: mock-wawu-id/server.js (this sandbox's local WAWU ID stand-in) does",
+      "gate": "deferrals",
+      "message": "todo left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/account/wawu-id-account.client.ts:11"
+    },
+    "98954fdf3156d370": {
+      "evidence": "process.env.MOCK_WAWU_ID_INTERNAL_SERVICE_KEY ??",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_WAWU_ID_INTERNAL_SERVICE_KEY'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/common/tests/internal-service-key.ts:25"
+    },
+    "9937c667d3ffa0ad": {
+      "evidence": "/** DI token \u2014 swapped between RealFlutterwaveAdapter and MockFlutterwaveAdapter in CreatorSubscriptionModule. */",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/creator-subscription/flutterwave-client.interface.ts:136"
+    },
+    "9a31396fc48188a8": {
+      "evidence": "import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';",
+      "gate": "fake_data",
+      "message": "production file imports a 'mock' source",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/direct-message/direct-message.module.ts:8"
+    },
+    "9b87af5693bd8882": {
+      "evidence": "src/content-piece/flutterwave-client.interface.ts:41, src/creator-subscription/flutterwave-client.interface.ts:127, src/credit-purchase/flutterwave-client.interface.ts:48, src/direct-message/flutterwa",
+      "gate": "forks",
+      "message": "interface 'FlutterwaveClient' is declared in 6 files - one of them is a fork",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Same-named interface declared in a client module and its server counterpart. Not a fork of one component; two sides of a wire contract. Drains when the dashboard's generated contract is extended to the app client.",
+      "where": "src/content-piece/flutterwave-client.interface.ts:41"
+    },
+    "a107e03aaa7f6443": {
+      "evidence": "import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';",
+      "gate": "fake_data",
+      "message": "production file imports a 'mock' source",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/content-piece/content-piece.module.ts:8"
+    },
+    "a1e9bf3a55c1c694": {
+      "evidence": "src/content-piece/flutterwave-client.interface.ts:36, src/creator-subscription/flutterwave-client.interface.ts:82, src/credit-purchase/flutterwave-client.interface.ts:43, src/direct-message/flutterwav",
+      "gate": "forks",
+      "message": "interface 'VerifyChargeParams' is declared in 5 files - one of them is a fork",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Same-named interface declared in a client module and its server counterpart. Not a fork of one component; two sides of a wire contract. Drains when the dashboard's generated contract is extended to the app client.",
+      "where": "src/content-piece/flutterwave-client.interface.ts:36"
+    },
+    "a2c5587f44aab9ca": {
+      "evidence": "inject: [MockFlutterwaveAdapter, RealFlutterwaveAdapter],",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/credit-purchase/credit-purchase.module.ts:35"
+    },
+    "a45872113e68ce1a": {
+      "evidence": "/** DI token \u2014 swapped between RealFlutterwaveAdapter and MockFlutterwaveAdapter in PurchaseModule. */",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/purchase/flutterwave-client.interface.ts:52"
+    },
+    "aadc71a989745365": {
+      "evidence": "export const MOCK_FAILURE_TRANSACTION_ID = 'mock-flw-tx-fail';",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_FAILURE_TRANSACTION_ID'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/credit-purchase/mock-flutterwave.adapter.ts:25"
+    },
+    "ababc6da3762d876": {
+      "evidence": "export const MOCK_PUBLIC_KEY = 'FLWPUBK_TEST-mock0000000000000000000000-X';",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_PUBLIC_KEY'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/creator-subscription/mock-flutterwave.adapter.ts:30"
+    },
+    "ac56e14d96c8d750": {
+      "evidence": "* a cross-cutting decision for a later wave, not this agent's to make",
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/verification-submission/guards/admin.guard.ts:21"
+    },
+    "ae1e696bcf5f59b7": {
+      "evidence": "export interface FlutterwaveConfigResponse {",
+      "gate": "wire_types",
+      "message": "response shape 'FlutterwaveConfigResponse' hand-declared outside the data layer",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Third-party (Flutterwave/Gemini) response shape declared beside its adapter. The adapter IS the data layer boundary for an external API; hoisting it to common/types would put a vendor's schema in this platform's own type surface.",
+      "where": "src/credit-purchase/credit-purchase.service.ts:26"
+    },
+    "aebe0a988626ee95": {
+      "evidence": "src/content-piece/mock-flutterwave.adapter.ts:20, src/creator-subscription/mock-flutterwave.adapter.ts:42, src/credit-purchase/mock-flutterwave.adapter.ts:28, src/direct-message/mock-flutterwave.adapt",
+      "gate": "forks",
+      "message": "class 'MockFlutterwaveAdapter' is declared in 6 files - one of them is a fork",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Same-named interface declared in a client module and its server counterpart. Not a fork of one component; two sides of a wire contract. Drains when the dashboard's generated contract is extended to the app client.",
+      "where": "src/content-piece/mock-flutterwave.adapter.ts:20"
+    },
+    "b28d37d1c85f18b0": {
+      "evidence": "export class MockFlutterwaveAdapter implements FlutterwaveClient {",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/content-piece/mock-flutterwave.adapter.ts:20"
+    },
+    "b61e2508449c24a0": {
+      "evidence": "export const MOCK_FAILURE_TRANSACTION_ID = 'mock-flw-tx-fail';",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_FAILURE_TRANSACTION_ID'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/creator-subscription/mock-flutterwave.adapter.ts:28"
+    },
+    "b6cc90cd59d0df9f": {
+      "evidence": "MockFlutterwaveAdapter,",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/credit-purchase/credit-purchase.module.ts:25"
+    },
+    "b7bffa59d00f3f1c": {
+      "evidence": "src/community/guards/creator-account-guard.ts:31, src/content-piece/guards/creator-account-guard.ts:20, src/creator-earnings/guards/creator-account-guard.ts:22, src/creator-no-response-tracker/guards/",
+      "gate": "forks",
+      "message": "class 'CreatorAccountGuard' is declared in 6 files - one of them is a fork",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Same-named interface declared in a client module and its server counterpart. Not a fork of one component; two sides of a wire contract. Drains when the dashboard's generated contract is extended to the app client.",
+      "where": "src/community/guards/creator-account-guard.ts:31"
+    },
+    "b87480f2b18d12d0": {
+      "evidence": "* (wave 0, already built) \u2014 out of scope here per task brief \u00a7 SCOPE.",
+      "gate": "deferrals",
+      "message": "scope declaration left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/content-piece/content-piece.service.ts:76"
+    },
+    "bbbd7cca101d1363": {
+      "evidence": "mock: MockFlutterwaveAdapter,",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/purchase/purchase.module.ts:39"
+    },
+    "bd1f05cb72c3699d": {
+      "evidence": "* the projection means a new column is invisible on the wire until",
+      "gate": "deferrals",
+      "message": "deferred wiring left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/creator-subscription/creator-subscription.service.ts:204"
+    },
+    "c38ce6a7f5f51dca": {
+      "evidence": "export interface FlutterwaveConfigResponse {",
+      "gate": "wire_types",
+      "message": "response shape 'FlutterwaveConfigResponse' hand-declared outside the data layer",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Third-party (Flutterwave/Gemini) response shape declared beside its adapter. The adapter IS the data layer boundary for an external API; hoisting it to common/types would put a vendor's schema in this platform's own type surface.",
+      "where": "src/content-piece/content-piece.service.ts:33"
+    },
+    "c3efbdd0bfcddd86": {
+      "evidence": "import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';",
+      "gate": "fake_data",
+      "message": "production file imports a 'mock' source",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/service-application/service-application.module.ts:9"
+    },
+    "c5ca85fa1318eccf": {
+      "evidence": "import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';",
+      "gate": "fake_data",
+      "message": "production file imports a 'mock' source",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/purchase/purchase.module.ts:6"
+    },
+    "cbc3a51cae99f054": {
+      "evidence": "* (one copy per resource dir) rather than importing another resource's copy",
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/community/guards/creator-account-guard.ts:21"
+    },
+    "cc0ad1b641f47ceb": {
+      "evidence": "* This wave only exposes the read; the write path (recompute on",
+      "gate": "deferrals",
+      "message": "scope declaration left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/evg-score/evg-score.service.ts:8"
+    },
+    "d057b62223dabfac": {
+      "evidence": "export class MockFlutterwaveAdapter implements FlutterwaveClient {",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/credit-purchase/mock-flutterwave.adapter.ts:28"
+    },
+    "d0dc57ba38629c2b": {
+      "evidence": "MockFlutterwaveAdapter,",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/direct-message/direct-message.module.ts:39"
+    },
+    "d4c796567e0ced0f": {
+      "evidence": "src/content-piece/real-flutterwave.adapter.ts:33, src/creator-subscription/real-flutterwave.adapter.ts:57, src/credit-purchase/real-flutterwave.adapter.ts:34, src/direct-message/real-flutterwave.adapt",
+      "gate": "forks",
+      "message": "class 'RealFlutterwaveAdapter' is declared in 6 files - one of them is a fork",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Same-named interface declared in a client module and its server counterpart. Not a fork of one component; two sides of a wire contract. Drains when the dashboard's generated contract is extended to the app client.",
+      "where": "src/content-piece/real-flutterwave.adapter.ts:33"
+    },
+    "d68cd048714338ac": {
+      "evidence": "export const MOCK_RETRY_FAILURE_CUSTOMER_REF = 'mock-flw-customer-retry-fails';",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_RETRY_FAILURE_CUSTOMER_REF'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/creator-subscription/mock-flutterwave.adapter.ts:29"
+    },
+    "d789145730428ba0": {
+      "evidence": "export class MockFlutterwaveAdapter implements FlutterwaveClient {",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/purchase/mock-flutterwave.adapter.ts:28"
+    },
+    "db56191c6eeea388": {
+      "evidence": "inject: [MockFlutterwaveAdapter, RealFlutterwaveAdapter],",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/creator-subscription/creator-subscription.module.ts:41"
+    },
+    "dcd636b7fee6f68e": {
+      "evidence": "export interface FlutterwaveConfigResponse {",
+      "gate": "wire_types",
+      "message": "response shape 'FlutterwaveConfigResponse' hand-declared outside the data layer",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Third-party (Flutterwave/Gemini) response shape declared beside its adapter. The adapter IS the data layer boundary for an external API; hoisting it to common/types would put a vendor's schema in this platform's own type surface.",
+      "where": "src/purchase/purchase.service.ts:23"
+    },
+    "dcf0d536baa23849": {
+      "evidence": "* account has no CreatorState row: the perk belongs to the creator",
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/learn-entitlement/learn-entitlement.service.ts:32"
+    },
+    "ddfa06d37d37f2a1": {
+      "evidence": "export const MOCK_CARD_TOKEN = 'flw-t1nf-mock0000000000000000000000-m03k';",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_CARD_TOKEN'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/creator-subscription/mock-flutterwave.adapter.ts:38"
+    },
+    "dfa8ffad2078edfc": {
+      "evidence": "mock: MockFlutterwaveAdapter,",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/creator-subscription/creator-subscription.module.ts:38"
+    },
+    "e20e046458923da9": {
+      "evidence": "* `req.user` belongs to the SSO flow and is written only by the wawu-jwt",
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/admin/auth/decorators/current-admin.decorator.ts:10"
+    },
+    "e76f534caa62745f": {
+      "evidence": "* diagnosis. `.settle()` on the returned dispatch is never called here \u2014",
+      "gate": "deferrals",
+      "message": "known dead code left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/admin/payments/admin-payments.service.ts:246"
+    },
+    "f095a6edf452f5d7": {
+      "evidence": "//   - the 402 gate is never reached, so a host can never be locked out",
+      "gate": "deferrals",
+      "message": "known dead code left as prose - resolve it or baseline it with a reason",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
+      "where": "src/community-message/community-message.service.ts:359"
+    },
+    "f37a21a4176d12ee": {
+      "evidence": "export const MOCK_FAILURE_TRANSACTION_ID = 'mock-flw-tx-fail';",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_FAILURE_TRANSACTION_ID'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/direct-message/mock-flutterwave.adapter.ts:28"
+    },
+    "f5582aba775b715f": {
+      "evidence": "import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';",
+      "gate": "fake_data",
+      "message": "production file imports a 'mock' source",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/credit-purchase/credit-purchase.module.ts:6"
+    },
+    "f5986e841177d5e3": {
+      "evidence": "export const MOCK_REFUND_RETRYABLE_TRANSACTION_ID = 'mock-flw-refund-retry';",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_REFUND_RETRYABLE_TRANSACTION_ID'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/direct-message/mock-flutterwave.adapter.ts:31"
+    },
+    "f62fab5f1776e267": {
+      "evidence": "export const MOCK_FAILURE_TRANSACTION_ID = 'mock-flw-tx-fail';",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_FAILURE_TRANSACTION_ID'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/purchase/mock-flutterwave.adapter.ts:25"
+    },
+    "f820d20d6e660e90": {
+      "evidence": "publicKey: MOCK_PUBLIC_KEY,",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_PUBLIC_KEY'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/creator-subscription/mock-flutterwave.adapter.ts:61"
+    },
+    "f8dadd0c12f477bc": {
+      "evidence": "src/content-piece/real-flutterwave.adapter.ts:13, src/creator-subscription/real-flutterwave.adapter.ts:18, src/credit-purchase/real-flutterwave.adapter.ts:13, src/direct-message/real-flutterwave.adapt",
+      "gate": "forks",
+      "message": "interface 'FlutterwaveVerifyApiResponse' is declared in 5 files - one of them is a fork",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Same-named interface declared in a client module and its server counterpart. Not a fork of one component; two sides of a wire contract. Drains when the dashboard's generated contract is extended to the app client.",
+      "where": "src/content-piece/real-flutterwave.adapter.ts:13"
+    },
+    "fac4498534c0cb3c": {
+      "evidence": "if (params.transactionId === MOCK_FAILURE_TRANSACTION_ID || !initialized) {",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_FAILURE_TRANSACTION_ID'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
+      "where": "src/purchase/mock-flutterwave.adapter.ts:53"
+    },
+    "fcb5a4eb9ed96ab8": {
+      "evidence": "MockFlutterwaveAdapter,",
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "owner": "legacy-app-repair 2026-08-31",
+      "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
+      "where": "src/creator-subscription/creator-subscription.module.ts:34"
+    }
+  }
+}

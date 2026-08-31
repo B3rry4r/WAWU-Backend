@@ -1,4 +1,8 @@
 import { Module } from '@nestjs/common';
+// KycSubmissionService is provided here as a second instance (see the service
+// doc comment), so this module owes its dependencies too — including the
+// notification emit added to review().
+import { NotificationModule } from '../../notification/notification.module';
 import { AdminAuthModule } from '../auth/admin-auth.module';
 import { StorageModule } from '../../storage/storage.module';
 import { KycSubmissionService } from '../../kyc-submission/kyc-submission.service';
@@ -32,7 +36,7 @@ import { AdminKycReviewService } from './admin-kyc-review.service';
  * it.
  */
 @Module({
-  imports: [AdminAuthModule, StorageModule],
+  imports: [AdminAuthModule, StorageModule, NotificationModule],
   controllers: [AdminKycReviewController],
   providers: [AdminKycReviewService, KycSubmissionService],
 })

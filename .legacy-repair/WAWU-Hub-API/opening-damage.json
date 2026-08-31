@@ -1,0 +1,996 @@
+{
+  "failures": [
+    {
+      "gate": "deferrals",
+      "message": "todo left as prose - resolve it or baseline it with a reason",
+      "path": "src/account/wawu-id-account.client.ts",
+      "line": 11,
+      "evidence": " * TODO: mock-wawu-id/server.js (this sandbox's local WAWU ID stand-in) does",
+      "severity": "fail",
+      "key": "913fcae6db48b5db"
+    },
+    {
+      "gate": "deferrals",
+      "message": "deferred wiring left as prose - resolve it or baseline it with a reason",
+      "path": "src/account/wawu-id-account.client.ts",
+      "line": 12,
+      "evidence": " * not yet implement this route -- it only implements",
+      "severity": "fail",
+      "key": "42e20483b9da61a5"
+    },
+    {
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "path": "src/admin/auth/decorators/current-admin.decorator.ts",
+      "line": 10,
+      "evidence": " * `req.user` belongs to the SSO flow and is written only by the wawu-jwt",
+      "severity": "fail",
+      "key": "e20e046458923da9"
+    },
+    {
+      "gate": "deferrals",
+      "message": "known dead code left as prose - resolve it or baseline it with a reason",
+      "path": "src/admin/payments/admin-payments.service.ts",
+      "line": 246,
+      "evidence": "   * diagnosis. `.settle()` on the returned dispatch is never called here \u2014",
+      "severity": "fail",
+      "key": "e76f534caa62745f"
+    },
+    {
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "path": "src/admin/verification-review/admin-verification-review.module.ts",
+      "line": 34,
+      "evidence": " * belongs to the module that declares it; providing the service alone brings",
+      "severity": "fail",
+      "key": "23cd461ab5a1e115"
+    },
+    {
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "path": "src/common/flutterwave/checkout-verifier.ts",
+      "line": 73,
+      "evidence": "      // always someone replaying another payment's id at a different resource.",
+      "severity": "fail",
+      "key": "4dce81655348a55e"
+    },
+    {
+      "gate": "deferrals",
+      "message": "known dead code left as prose - resolve it or baseline it with a reason",
+      "path": "src/common/guards/admin-key.guard.ts",
+      "line": 28,
+      "evidence": " * It is dead code, not a fallback \u2014 nothing wires it into a route, and",
+      "severity": "fail",
+      "key": "132b0aa29d755a30"
+    },
+    {
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "path": "src/community/guards/creator-account-guard.ts",
+      "line": 21,
+      "evidence": " * (one copy per resource dir) rather than importing another resource's copy",
+      "severity": "fail",
+      "key": "cbc3a51cae99f054"
+    },
+    {
+      "gate": "deferrals",
+      "message": "known dead code left as prose - resolve it or baseline it with a reason",
+      "path": "src/community-message/community-message.service.ts",
+      "line": 359,
+      "evidence": "    //   - the 402 gate is never reached, so a host can never be locked out",
+      "severity": "fail",
+      "key": "f095a6edf452f5d7"
+    },
+    {
+      "gate": "deferrals",
+      "message": "scope declaration left as prose - resolve it or baseline it with a reason",
+      "path": "src/content-piece/content-piece.service.ts",
+      "line": 76,
+      "evidence": " * (wave 0, already built) \u2014 out of scope here per task brief \u00a7 SCOPE.",
+      "severity": "fail",
+      "key": "b87480f2b18d12d0"
+    },
+    {
+      "gate": "deferrals",
+      "message": "scope declaration left as prose - resolve it or baseline it with a reason",
+      "path": "src/content-piece/content-piece.service.ts",
+      "line": 639,
+      "evidence": "   * change, which is out of scope (schema is frozen per task brief). This",
+      "severity": "fail",
+      "key": "5e176427b3deedd7"
+    },
+    {
+      "gate": "deferrals",
+      "message": "deferred wiring left as prose - resolve it or baseline it with a reason",
+      "path": "src/creator-subscription/creator-subscription.service.ts",
+      "line": 204,
+      "evidence": "   * the projection means a new column is invisible on the wire until",
+      "severity": "fail",
+      "key": "bd1f05cb72c3699d"
+    },
+    {
+      "gate": "deferrals",
+      "message": "placeholder implementation left as prose - resolve it or baseline it with a reason",
+      "path": "src/creator-subscription/creator-subscription.service.ts",
+      "line": 529,
+      "evidence": "    // The tier comes off the PENDING CHARGE, not a constant. Hardcoding 'pro'",
+      "severity": "fail",
+      "key": "17d08a1835e47f95"
+    },
+    {
+      "gate": "deferrals",
+      "message": "deferral left as prose - resolve it or baseline it with a reason",
+      "path": "src/creator-subscription/creator-subscription.service.ts",
+      "line": 826,
+      "evidence": "   *   - Term still running (`active`, `currentPeriodEnd` in the future):",
+      "severity": "fail",
+      "key": "1626df8d520a864a"
+    },
+    {
+      "gate": "deferrals",
+      "message": "scope declaration left as prose - resolve it or baseline it with a reason",
+      "path": "src/creator-subscription/flutterwave-client.interface.ts",
+      "line": 25,
+      "evidence": " *   cross-restart cache would need a schema column, which is out of scope",
+      "severity": "fail",
+      "key": "728210d663cb1509"
+    },
+    {
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "path": "src/direct-message/direct-message.service.ts",
+      "line": 342,
+      "evidence": "   * status to `refunded` itself here \u2014 that write belongs to the future",
+      "severity": "fail",
+      "key": "592a8fbe35f13b62"
+    },
+    {
+      "gate": "deferrals",
+      "message": "deferral left as prose - resolve it or baseline it with a reason",
+      "path": "src/event/dto/create-event.dto.ts",
+      "line": 92,
+      "evidence": "   * decided on. Not required to be in the future: an event whose start passes",
+      "severity": "fail",
+      "key": "80f54740b92c1c94"
+    },
+    {
+      "gate": "deferrals",
+      "message": "scope declaration left as prose - resolve it or baseline it with a reason",
+      "path": "src/evg-score/evg-score.service.ts",
+      "line": 8,
+      "evidence": " * This wave only exposes the read; the write path (recompute on",
+      "severity": "fail",
+      "key": "cc0ad1b641f47ceb"
+    },
+    {
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "path": "src/evg-score/evg-score.service.ts",
+      "line": 9,
+      "evidence": " * view/purchase/comment events) belongs to whichever resource owns those",
+      "severity": "fail",
+      "key": "229855010314cbae"
+    },
+    {
+      "gate": "deferrals",
+      "message": "scope declaration left as prose - resolve it or baseline it with a reason",
+      "path": "src/evg-score/evg-score.service.ts",
+      "line": 10,
+      "evidence": " * events and is out of scope for this module.",
+      "severity": "fail",
+      "key": "1396b66b3933993a"
+    },
+    {
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "path": "src/kyc-submission/guards/admin.guard.ts",
+      "line": 14,
+      "evidence": " * build task's scope rule \u2014 not sharing a class with another resource's",
+      "severity": "fail",
+      "key": "07c5651c78fb6ba4"
+    },
+    {
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "path": "src/learn-entitlement/learn-entitlement.service.ts",
+      "line": 32,
+      "evidence": "   * account has no CreatorState row: the perk belongs to the creator",
+      "severity": "fail",
+      "key": "dcf0d536baa23849"
+    },
+    {
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "path": "src/notification/notification.service.ts",
+      "line": 105,
+      "evidence": "   * Trivially callable from another module: NotificationModule is @Global()",
+      "severity": "fail",
+      "key": "1de7f475d3ffcb6a"
+    },
+    {
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "path": "src/professional/professional.service.ts",
+      "line": 118,
+      "evidence": "      // Cleared on resubmission: the previous reason belongs to the previous",
+      "severity": "fail",
+      "key": "4014333a48291e2e"
+    },
+    {
+      "gate": "deferrals",
+      "message": "scope declaration left as prose - resolve it or baseline it with a reason",
+      "path": "src/saved-item/saved-item.controller.ts",
+      "line": 11,
+      "evidence": " * ContentPiece resource (POST/DELETE /content/:id/save) \u2014 out of scope",
+      "severity": "fail",
+      "key": "69c0d8185d8b1117"
+    },
+    {
+      "gate": "deferrals",
+      "message": "deferred wiring left as prose - resolve it or baseline it with a reason",
+      "path": "src/search-response/search-response.service.ts",
+      "line": 138,
+      "evidence": "   * doesn't accept it today; wire it back in once search-history",
+      "severity": "fail",
+      "key": "1f9218348808db6a"
+    },
+    {
+      "gate": "deferrals",
+      "message": "scope declaration left as prose - resolve it or baseline it with a reason",
+      "path": "src/search-response/search-response.service.ts",
+      "line": 153,
+      "evidence": "      // no Prisma model of its own to add one to (out of scope per task",
+      "severity": "fail",
+      "key": "39ee8da41c6ff046"
+    },
+    {
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "path": "src/search-response/search-response.service.ts",
+      "line": 232,
+      "evidence": "   * relevant methods are private, and importing another resource's",
+      "severity": "fail",
+      "key": "5c712f6793450397"
+    },
+    {
+      "gate": "deferrals",
+      "message": "temporary implementation left as prose - resolve it or baseline it with a reason",
+      "path": "src/storage/storage.service.ts",
+      "line": 137,
+      "evidence": "        // The protection it existed for now happens at READ time, where it",
+      "severity": "fail",
+      "key": "14531751d7b336a2"
+    },
+    {
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "path": "src/verification-submission/guards/admin.guard.ts",
+      "line": 21,
+      "evidence": " * a cross-cutting decision for a later wave, not this agent's to make",
+      "severity": "fail",
+      "key": "ac56e14d96c8d750"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_WAWU_ID_INTERNAL_SERVICE_KEY'",
+      "path": "src/common/tests/internal-service-key.ts",
+      "line": 25,
+      "evidence": "    process.env.MOCK_WAWU_ID_INTERNAL_SERVICE_KEY ??",
+      "severity": "fail",
+      "key": "98954fdf3156d370"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file imports a 'mock' source",
+      "path": "src/content-piece/content-piece.module.ts",
+      "line": 8,
+      "evidence": "import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';",
+      "severity": "fail",
+      "key": "a107e03aaa7f6443"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/content-piece/content-piece.module.ts",
+      "line": 28,
+      "evidence": "    MockFlutterwaveAdapter,",
+      "severity": "fail",
+      "key": "6295c70f3cdd7ffa"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/content-piece/content-piece.module.ts",
+      "line": 32,
+      "evidence": "        mock: MockFlutterwaveAdapter,",
+      "severity": "fail",
+      "key": "6e7ad05b88166c2f"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/content-piece/content-piece.module.ts",
+      "line": 38,
+      "evidence": "      inject: [MockFlutterwaveAdapter, RealFlutterwaveAdapter],",
+      "severity": "fail",
+      "key": "4931d7321443c29b"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/content-piece/flutterwave-client.interface.ts",
+      "line": 46,
+      "evidence": "/** DI token \u2014 swapped between RealFlutterwaveAdapter and MockFlutterwaveAdapter in ContentPieceModule. */",
+      "severity": "fail",
+      "key": "66b61dda549d46f2"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_FAILURE_TRANSACTION_ID'",
+      "path": "src/content-piece/mock-flutterwave.adapter.ts",
+      "line": 17,
+      "evidence": "export const MOCK_FAILURE_TRANSACTION_ID = 'mock-flw-tx-fail';",
+      "severity": "fail",
+      "key": "5b7f95326158da3d"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/content-piece/mock-flutterwave.adapter.ts",
+      "line": 20,
+      "evidence": "export class MockFlutterwaveAdapter implements FlutterwaveClient {",
+      "severity": "fail",
+      "key": "b28d37d1c85f18b0"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_FAILURE_TRANSACTION_ID'",
+      "path": "src/content-piece/mock-flutterwave.adapter.ts",
+      "line": 45,
+      "evidence": "    if (params.transactionId === MOCK_FAILURE_TRANSACTION_ID || !initialized) {",
+      "severity": "fail",
+      "key": "7d4e8c07c7bd762f"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file imports a 'mock' source",
+      "path": "src/creator-subscription/creator-subscription.module.ts",
+      "line": 7,
+      "evidence": "import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';",
+      "severity": "fail",
+      "key": "77e2b2ca3645c78f"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/creator-subscription/creator-subscription.module.ts",
+      "line": 34,
+      "evidence": "    MockFlutterwaveAdapter,",
+      "severity": "fail",
+      "key": "fcb5a4eb9ed96ab8"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/creator-subscription/creator-subscription.module.ts",
+      "line": 38,
+      "evidence": "        mock: MockFlutterwaveAdapter,",
+      "severity": "fail",
+      "key": "dfa8ffad2078edfc"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/creator-subscription/creator-subscription.module.ts",
+      "line": 41,
+      "evidence": "      inject: [MockFlutterwaveAdapter, RealFlutterwaveAdapter],",
+      "severity": "fail",
+      "key": "db56191c6eeea388"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/creator-subscription/flutterwave-client.interface.ts",
+      "line": 136,
+      "evidence": "/** DI token \u2014 swapped between RealFlutterwaveAdapter and MockFlutterwaveAdapter in CreatorSubscriptionModule. */",
+      "severity": "fail",
+      "key": "9937c667d3ffa0ad"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_FAILURE_TRANSACTION_ID'",
+      "path": "src/creator-subscription/mock-flutterwave.adapter.ts",
+      "line": 28,
+      "evidence": "export const MOCK_FAILURE_TRANSACTION_ID = 'mock-flw-tx-fail';",
+      "severity": "fail",
+      "key": "b61e2508449c24a0"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_RETRY_FAILURE_CUSTOMER_REF'",
+      "path": "src/creator-subscription/mock-flutterwave.adapter.ts",
+      "line": 29,
+      "evidence": "export const MOCK_RETRY_FAILURE_CUSTOMER_REF = 'mock-flw-customer-retry-fails';",
+      "severity": "fail",
+      "key": "d68cd048714338ac"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_PUBLIC_KEY'",
+      "path": "src/creator-subscription/mock-flutterwave.adapter.ts",
+      "line": 30,
+      "evidence": "export const MOCK_PUBLIC_KEY = 'FLWPUBK_TEST-mock0000000000000000000000-X';",
+      "severity": "fail",
+      "key": "ababc6da3762d876"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_CARD_TOKEN'",
+      "path": "src/creator-subscription/mock-flutterwave.adapter.ts",
+      "line": 38,
+      "evidence": "export const MOCK_CARD_TOKEN = 'flw-t1nf-mock0000000000000000000000-m03k';",
+      "severity": "fail",
+      "key": "ddfa06d37d37f2a1"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_CUSTOMER_EMAIL'",
+      "path": "src/creator-subscription/mock-flutterwave.adapter.ts",
+      "line": 39,
+      "evidence": "const MOCK_CUSTOMER_EMAIL = 'mock-cardholder@test.wawu.dev';",
+      "severity": "fail",
+      "key": "78063630d45c19a3"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/creator-subscription/mock-flutterwave.adapter.ts",
+      "line": 42,
+      "evidence": "export class MockFlutterwaveAdapter implements FlutterwaveClient {",
+      "severity": "fail",
+      "key": "8937e5d62eeb55b1"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_PUBLIC_KEY'",
+      "path": "src/creator-subscription/mock-flutterwave.adapter.ts",
+      "line": 61,
+      "evidence": "      publicKey: MOCK_PUBLIC_KEY,",
+      "severity": "fail",
+      "key": "f820d20d6e660e90"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_FAILURE_TRANSACTION_ID'",
+      "path": "src/creator-subscription/mock-flutterwave.adapter.ts",
+      "line": 70,
+      "evidence": "    if (params.transactionId === MOCK_FAILURE_TRANSACTION_ID || !initialized) {",
+      "severity": "fail",
+      "key": "19962616ce6035dc"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_CARD_TOKEN'",
+      "path": "src/creator-subscription/mock-flutterwave.adapter.ts",
+      "line": 87,
+      "evidence": "      cardToken: MOCK_CARD_TOKEN,",
+      "severity": "fail",
+      "key": "15df39f278ac5395"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_CUSTOMER_EMAIL'",
+      "path": "src/creator-subscription/mock-flutterwave.adapter.ts",
+      "line": 88,
+      "evidence": "      customerEmail: MOCK_CUSTOMER_EMAIL,",
+      "severity": "fail",
+      "key": "77944dd31889d592"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_RETRY_FAILURE_CUSTOMER_REF'",
+      "path": "src/creator-subscription/mock-flutterwave.adapter.ts",
+      "line": 110,
+      "evidence": "    if (params.flutterwaveCustomerRef === MOCK_RETRY_FAILURE_CUSTOMER_REF) {",
+      "severity": "fail",
+      "key": "4bee7a62a8d3a40e"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_PUBLIC_KEY'",
+      "path": "src/creator-subscription/mock-flutterwave.adapter.ts",
+      "line": 117,
+      "evidence": "        publicKey: MOCK_PUBLIC_KEY,",
+      "severity": "fail",
+      "key": "f820d20d6e660e90"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_PUBLIC_KEY'",
+      "path": "src/creator-subscription/mock-flutterwave.adapter.ts",
+      "line": 126,
+      "evidence": "      publicKey: MOCK_PUBLIC_KEY,",
+      "severity": "fail",
+      "key": "f820d20d6e660e90"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file imports a 'mock' source",
+      "path": "src/credit-purchase/credit-purchase.module.ts",
+      "line": 6,
+      "evidence": "import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';",
+      "severity": "fail",
+      "key": "f5582aba775b715f"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/credit-purchase/credit-purchase.module.ts",
+      "line": 25,
+      "evidence": "    MockFlutterwaveAdapter,",
+      "severity": "fail",
+      "key": "b6cc90cd59d0df9f"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/credit-purchase/credit-purchase.module.ts",
+      "line": 29,
+      "evidence": "        mock: MockFlutterwaveAdapter,",
+      "severity": "fail",
+      "key": "7e96934ebc941035"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/credit-purchase/credit-purchase.module.ts",
+      "line": 35,
+      "evidence": "      inject: [MockFlutterwaveAdapter, RealFlutterwaveAdapter],",
+      "severity": "fail",
+      "key": "a2c5587f44aab9ca"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/credit-purchase/flutterwave-client.interface.ts",
+      "line": 53,
+      "evidence": "/** DI token \u2014 swapped between RealFlutterwaveAdapter and MockFlutterwaveAdapter in CreditPurchaseModule. */",
+      "severity": "fail",
+      "key": "6bc9c64c6d1bca3f"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_FAILURE_TRANSACTION_ID'",
+      "path": "src/credit-purchase/mock-flutterwave.adapter.ts",
+      "line": 25,
+      "evidence": "export const MOCK_FAILURE_TRANSACTION_ID = 'mock-flw-tx-fail';",
+      "severity": "fail",
+      "key": "aadc71a989745365"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/credit-purchase/mock-flutterwave.adapter.ts",
+      "line": 28,
+      "evidence": "export class MockFlutterwaveAdapter implements FlutterwaveClient {",
+      "severity": "fail",
+      "key": "d057b62223dabfac"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_FAILURE_TRANSACTION_ID'",
+      "path": "src/credit-purchase/mock-flutterwave.adapter.ts",
+      "line": 53,
+      "evidence": "    if (params.transactionId === MOCK_FAILURE_TRANSACTION_ID || !initialized) {",
+      "severity": "fail",
+      "key": "742423ffc592c1d7"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file imports a 'mock' source",
+      "path": "src/direct-message/direct-message.module.ts",
+      "line": 8,
+      "evidence": "import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';",
+      "severity": "fail",
+      "key": "9a31396fc48188a8"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/direct-message/direct-message.module.ts",
+      "line": 39,
+      "evidence": "    MockFlutterwaveAdapter,",
+      "severity": "fail",
+      "key": "d0dc57ba38629c2b"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/direct-message/direct-message.module.ts",
+      "line": 43,
+      "evidence": "        mock: MockFlutterwaveAdapter,",
+      "severity": "fail",
+      "key": "1409ada8d343acc6"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/direct-message/direct-message.module.ts",
+      "line": 49,
+      "evidence": "      inject: [MockFlutterwaveAdapter, RealFlutterwaveAdapter],",
+      "severity": "fail",
+      "key": "784c4172556bc8eb"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/direct-message/flutterwave-client.interface.ts",
+      "line": 72,
+      "evidence": "/** DI token \u2014 swapped between RealFlutterwaveAdapter and MockFlutterwaveAdapter in DirectMessageModule. */",
+      "severity": "fail",
+      "key": "0d6549fc67a2d20a"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_FAILURE_TRANSACTION_ID'",
+      "path": "src/direct-message/mock-flutterwave.adapter.ts",
+      "line": 28,
+      "evidence": "export const MOCK_FAILURE_TRANSACTION_ID = 'mock-flw-tx-fail';",
+      "severity": "fail",
+      "key": "f37a21a4176d12ee"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_REFUND_RETRYABLE_TRANSACTION_ID'",
+      "path": "src/direct-message/mock-flutterwave.adapter.ts",
+      "line": 31,
+      "evidence": "export const MOCK_REFUND_RETRYABLE_TRANSACTION_ID = 'mock-flw-refund-retry';",
+      "severity": "fail",
+      "key": "f5986e841177d5e3"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_REFUND_PERMANENT_TRANSACTION_ID'",
+      "path": "src/direct-message/mock-flutterwave.adapter.ts",
+      "line": 33,
+      "evidence": "export const MOCK_REFUND_PERMANENT_TRANSACTION_ID = 'mock-flw-refund-nope';",
+      "severity": "fail",
+      "key": "87548e51e0afcc2c"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_REFUND_PENDING_TRANSACTION_ID'",
+      "path": "src/direct-message/mock-flutterwave.adapter.ts",
+      "line": 35,
+      "evidence": "export const MOCK_REFUND_PENDING_TRANSACTION_ID = 'mock-flw-refund-pending';",
+      "severity": "fail",
+      "key": "7002f568f5f4fd49"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/direct-message/mock-flutterwave.adapter.ts",
+      "line": 38,
+      "evidence": "export class MockFlutterwaveAdapter implements FlutterwaveClient {",
+      "severity": "fail",
+      "key": "2ebea7359d37a6a9"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_FAILURE_TRANSACTION_ID'",
+      "path": "src/direct-message/mock-flutterwave.adapter.ts",
+      "line": 63,
+      "evidence": "    if (params.transactionId === MOCK_FAILURE_TRANSACTION_ID || !initialized) {",
+      "severity": "fail",
+      "key": "1bd3d3bd99076ba4"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_REFUND_RETRYABLE_TRANSACTION_ID'",
+      "path": "src/direct-message/mock-flutterwave.adapter.ts",
+      "line": 91,
+      "evidence": "    if (params.transactionId === MOCK_REFUND_RETRYABLE_TRANSACTION_ID) {",
+      "severity": "fail",
+      "key": "518690805d36a6e5"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_REFUND_PERMANENT_TRANSACTION_ID'",
+      "path": "src/direct-message/mock-flutterwave.adapter.ts",
+      "line": 99,
+      "evidence": "    if (params.transactionId === MOCK_REFUND_PERMANENT_TRANSACTION_ID) {",
+      "severity": "fail",
+      "key": "59830daf048f779f"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_REFUND_PENDING_TRANSACTION_ID'",
+      "path": "src/direct-message/mock-flutterwave.adapter.ts",
+      "line": 113,
+      "evidence": "    if (params.transactionId === MOCK_REFUND_PENDING_TRANSACTION_ID) {",
+      "severity": "fail",
+      "key": "37a8b086aff5ccc8"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/purchase/flutterwave-client.interface.ts",
+      "line": 52,
+      "evidence": "/** DI token \u2014 swapped between RealFlutterwaveAdapter and MockFlutterwaveAdapter in PurchaseModule. */",
+      "severity": "fail",
+      "key": "a45872113e68ce1a"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_FAILURE_TRANSACTION_ID'",
+      "path": "src/purchase/mock-flutterwave.adapter.ts",
+      "line": 25,
+      "evidence": "export const MOCK_FAILURE_TRANSACTION_ID = 'mock-flw-tx-fail';",
+      "severity": "fail",
+      "key": "f62fab5f1776e267"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/purchase/mock-flutterwave.adapter.ts",
+      "line": 28,
+      "evidence": "export class MockFlutterwaveAdapter implements FlutterwaveClient {",
+      "severity": "fail",
+      "key": "d789145730428ba0"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_FAILURE_TRANSACTION_ID'",
+      "path": "src/purchase/mock-flutterwave.adapter.ts",
+      "line": 53,
+      "evidence": "    if (params.transactionId === MOCK_FAILURE_TRANSACTION_ID || !initialized) {",
+      "severity": "fail",
+      "key": "fac4498534c0cb3c"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file imports a 'mock' source",
+      "path": "src/purchase/purchase.module.ts",
+      "line": 6,
+      "evidence": "import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';",
+      "severity": "fail",
+      "key": "c5ca85fa1318eccf"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/purchase/purchase.module.ts",
+      "line": 35,
+      "evidence": "    MockFlutterwaveAdapter,",
+      "severity": "fail",
+      "key": "90fd38906fad1132"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/purchase/purchase.module.ts",
+      "line": 39,
+      "evidence": "        mock: MockFlutterwaveAdapter,",
+      "severity": "fail",
+      "key": "bbbd7cca101d1363"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/purchase/purchase.module.ts",
+      "line": 45,
+      "evidence": "      inject: [MockFlutterwaveAdapter, RealFlutterwaveAdapter],",
+      "severity": "fail",
+      "key": "5aec565a4a618b39"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_FLUTTERWAVE_FAIL_TXN_ID'",
+      "path": "src/service-application/mock-flutterwave.adapter.ts",
+      "line": 9,
+      "evidence": "export const MOCK_FLUTTERWAVE_FAIL_TXN_ID = 'MOCK_TXN_FAIL';",
+      "severity": "fail",
+      "key": "125d7419783e363f"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/service-application/mock-flutterwave.adapter.ts",
+      "line": 20,
+      "evidence": "export class MockFlutterwaveAdapter implements FlutterwaveClient {",
+      "severity": "fail",
+      "key": "6d7eddb4b426c50e"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MOCK_FLUTTERWAVE_FAIL_TXN_ID'",
+      "path": "src/service-application/mock-flutterwave.adapter.ts",
+      "line": 38,
+      "evidence": "    if (params.transactionId === MOCK_FLUTTERWAVE_FAIL_TXN_ID) {",
+      "severity": "fail",
+      "key": "6feafe376aff1bd0"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file imports a 'mock' source",
+      "path": "src/service-application/service-application.module.ts",
+      "line": 9,
+      "evidence": "import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';",
+      "severity": "fail",
+      "key": "c3efbdd0bfcddd86"
+    },
+    {
+      "gate": "fake_data",
+      "message": "production file references fixture identifier 'MockFlutterwaveAdapter'",
+      "path": "src/service-application/service-application.module.ts",
+      "line": 53,
+      "evidence": "      useClass: usesMockFlutterwave() ? MockFlutterwaveAdapter : RealFlutterwaveAdapter,",
+      "severity": "fail",
+      "key": "67aad8ea7457ea82"
+    },
+    {
+      "gate": "wire_types",
+      "message": "response shape 'VerifyResponse' hand-declared outside the data layer",
+      "path": "src/common/flutterwave/checkout-verifier.ts",
+      "line": 12,
+      "evidence": "interface VerifyResponse {",
+      "severity": "fail",
+      "key": "0a0c8367db5311c4"
+    },
+    {
+      "gate": "wire_types",
+      "message": "response shape 'FlutterwaveConfigResponse' hand-declared outside the data layer",
+      "path": "src/content-piece/content-piece.service.ts",
+      "line": 33,
+      "evidence": "export interface FlutterwaveConfigResponse {",
+      "severity": "fail",
+      "key": "c38ce6a7f5f51dca"
+    },
+    {
+      "gate": "wire_types",
+      "message": "response shape 'EnrolResponse' hand-declared outside the data layer",
+      "path": "src/course-enrollment/course-enrollment.service.ts",
+      "line": 14,
+      "evidence": "export interface EnrolResponse extends LearnEntitlement {",
+      "severity": "fail",
+      "key": "57cd8f45c5d37de0"
+    },
+    {
+      "gate": "wire_types",
+      "message": "response shape 'FlutterwaveConfigResponse' hand-declared outside the data layer",
+      "path": "src/creator-subscription/creator-subscription.service.ts",
+      "line": 100,
+      "evidence": "export interface FlutterwaveConfigResponse {",
+      "severity": "fail",
+      "key": "3df106880fe876f1"
+    },
+    {
+      "gate": "wire_types",
+      "message": "response shape 'FlutterwaveConfigResponse' hand-declared outside the data layer",
+      "path": "src/credit-purchase/credit-purchase.service.ts",
+      "line": 26,
+      "evidence": "export interface FlutterwaveConfigResponse {",
+      "severity": "fail",
+      "key": "ae1e696bcf5f59b7"
+    },
+    {
+      "gate": "wire_types",
+      "message": "response shape 'DmSendInitResponse' hand-declared outside the data layer",
+      "path": "src/direct-message/direct-message.service.ts",
+      "line": 27,
+      "evidence": "export interface DmSendInitResponse {",
+      "severity": "fail",
+      "key": "03f227ec145e3b97"
+    },
+    {
+      "gate": "wire_types",
+      "message": "response shape 'FlutterwaveConfigResponse' hand-declared outside the data layer",
+      "path": "src/purchase/purchase.service.ts",
+      "line": 23,
+      "evidence": "export interface FlutterwaveConfigResponse {",
+      "severity": "fail",
+      "key": "dcd636b7fee6f68e"
+    },
+    {
+      "gate": "wire_types",
+      "message": "response shape 'CreateVerificationSubmissionDto' hand-declared outside the data layer",
+      "path": "src/verification-submission/verification-submission.service.ts",
+      "line": 6,
+      "evidence": "import { VERIFICATION_TIER_VALUES, type CreateVerificationSubmissionDto } from './dto/create-verification-submission.dto';",
+      "severity": "fail",
+      "key": "5eb9b9a738a3d2be"
+    },
+    {
+      "gate": "forks",
+      "message": "class 'CreatorAccountGuard' is declared in 6 files - one of them is a fork",
+      "path": "src/community/guards/creator-account-guard.ts",
+      "line": 31,
+      "evidence": "src/community/guards/creator-account-guard.ts:31, src/content-piece/guards/creator-account-guard.ts:20, src/creator-earnings/guards/creator-account-guard.ts:22, src/creator-no-response-tracker/guards/creator-account-guard.ts:18, src/creator-subscription/guards/creator-account-guard.ts:23, src/direct-message/guards/creator-account-guard.ts:28",
+      "severity": "fail",
+      "key": "b7bffa59d00f3f1c"
+    },
+    {
+      "gate": "forks",
+      "message": "class 'MockFlutterwaveAdapter' is declared in 6 files - one of them is a fork",
+      "path": "src/content-piece/mock-flutterwave.adapter.ts",
+      "line": 20,
+      "evidence": "src/content-piece/mock-flutterwave.adapter.ts:20, src/creator-subscription/mock-flutterwave.adapter.ts:42, src/credit-purchase/mock-flutterwave.adapter.ts:28, src/direct-message/mock-flutterwave.adapter.ts:38, src/purchase/mock-flutterwave.adapter.ts:28, src/service-application/mock-flutterwave.adapter.ts:20",
+      "severity": "fail",
+      "key": "aebe0a988626ee95"
+    },
+    {
+      "gate": "forks",
+      "message": "class 'RealFlutterwaveAdapter' is declared in 6 files - one of them is a fork",
+      "path": "src/content-piece/real-flutterwave.adapter.ts",
+      "line": 33,
+      "evidence": "src/content-piece/real-flutterwave.adapter.ts:33, src/creator-subscription/real-flutterwave.adapter.ts:57, src/credit-purchase/real-flutterwave.adapter.ts:34, src/direct-message/real-flutterwave.adapter.ts:46, src/purchase/real-flutterwave.adapter.ts:32, src/service-application/real-flutterwave.adapter.ts:32",
+      "severity": "fail",
+      "key": "d4c796567e0ced0f"
+    },
+    {
+      "gate": "forks",
+      "message": "interface 'FlutterwaveChargeInit' is declared in 6 files - one of them is a fork",
+      "path": "src/content-piece/flutterwave-client.interface.ts",
+      "line": 15,
+      "evidence": "src/content-piece/flutterwave-client.interface.ts:15, src/creator-subscription/flutterwave-client.interface.ts:38, src/credit-purchase/flutterwave-client.interface.ts:22, src/direct-message/flutterwave-client.interface.ts:14, src/purchase/flutterwave-client.interface.ts:21, src/service-application/flutterwave-client.interface.ts:21",
+      "severity": "fail",
+      "key": "40273e7abb134cbf"
+    },
+    {
+      "gate": "forks",
+      "message": "interface 'FlutterwaveClient' is declared in 6 files - one of them is a fork",
+      "path": "src/content-piece/flutterwave-client.interface.ts",
+      "line": 41,
+      "evidence": "src/content-piece/flutterwave-client.interface.ts:41, src/creator-subscription/flutterwave-client.interface.ts:127, src/credit-purchase/flutterwave-client.interface.ts:48, src/direct-message/flutterwave-client.interface.ts:66, src/purchase/flutterwave-client.interface.ts:47, src/service-application/flutterwave-client.interface.ts:35",
+      "severity": "fail",
+      "key": "9b87af5693bd8882"
+    },
+    {
+      "gate": "forks",
+      "message": "interface 'FlutterwaveConfigResponse' is declared in 4 files - one of them is a fork",
+      "path": "src/content-piece/content-piece.service.ts",
+      "line": 33,
+      "evidence": "src/content-piece/content-piece.service.ts:33, src/creator-subscription/creator-subscription.service.ts:100, src/credit-purchase/credit-purchase.service.ts:26, src/purchase/purchase.service.ts:23",
+      "severity": "fail",
+      "key": "5be86dfb192853ce"
+    },
+    {
+      "gate": "forks",
+      "message": "interface 'FlutterwaveVerifyApiResponse' is declared in 5 files - one of them is a fork",
+      "path": "src/content-piece/real-flutterwave.adapter.ts",
+      "line": 13,
+      "evidence": "src/content-piece/real-flutterwave.adapter.ts:13, src/creator-subscription/real-flutterwave.adapter.ts:18, src/credit-purchase/real-flutterwave.adapter.ts:13, src/direct-message/real-flutterwave.adapter.ts:25, src/purchase/real-flutterwave.adapter.ts:13",
+      "severity": "fail",
+      "key": "f8dadd0c12f477bc"
+    },
+    {
+      "gate": "forks",
+      "message": "interface 'FlutterwaveVerifyResult' is declared in 5 files - one of them is a fork",
+      "path": "src/content-piece/flutterwave-client.interface.ts",
+      "line": 22,
+      "evidence": "src/content-piece/flutterwave-client.interface.ts:22, src/creator-subscription/flutterwave-client.interface.ts:45, src/credit-purchase/flutterwave-client.interface.ts:29, src/direct-message/flutterwave-client.interface.ts:21, src/purchase/flutterwave-client.interface.ts:28",
+      "severity": "fail",
+      "key": "178e6e88acc24baf"
+    },
+    {
+      "gate": "forks",
+      "message": "interface 'InitChargeParams' is declared in 5 files - one of them is a fork",
+      "path": "src/content-piece/flutterwave-client.interface.ts",
+      "line": 30,
+      "evidence": "src/content-piece/flutterwave-client.interface.ts:30, src/creator-subscription/flutterwave-client.interface.ts:74, src/credit-purchase/flutterwave-client.interface.ts:37, src/direct-message/flutterwave-client.interface.ts:29, src/purchase/flutterwave-client.interface.ts:36",
+      "severity": "fail",
+      "key": "3e0a3d6d91e9c53f"
+    },
+    {
+      "gate": "forks",
+      "message": "interface 'VerifyChargeParams' is declared in 5 files - one of them is a fork",
+      "path": "src/content-piece/flutterwave-client.interface.ts",
+      "line": 36,
+      "evidence": "src/content-piece/flutterwave-client.interface.ts:36, src/creator-subscription/flutterwave-client.interface.ts:82, src/credit-purchase/flutterwave-client.interface.ts:43, src/direct-message/flutterwave-client.interface.ts:35, src/purchase/flutterwave-client.interface.ts:42",
+      "severity": "fail",
+      "key": "a1e9bf3a55c1c694"
+    }
+  ],
+  "warnings": [],
+  "accepted": []
+}

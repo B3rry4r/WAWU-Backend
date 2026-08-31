@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { NotificationService } from '../../notification/notification.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StorageService } from '../../storage/storage.service';
 import { uploadAllowanceFor } from '../../common/creator-tier-allowance';
@@ -49,6 +50,7 @@ export class AdminContentReviewService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly notifications: NotificationService,
     private readonly storage: StorageService,
   ) {}
 
@@ -202,6 +204,28 @@ export class AdminContentReviewService {
       const updated = await tx.contentPiece.findUniqueOrThrow({ where: { id } });
       return { content: updated, review: reviewRow };
     });
+
+    // TELL THE CREATOR THEY WERE TURNED DOWN, and why.
+    //
+    // Emitted AFTER the transaction commits, deliberately: a notification for
+    // a decision that then rolled back is worse than a late one, and emit()
+    // swallows its own failures so it can never take the moderation write with
+    // it.
+    //
+    // Nothing emitted this before. The kind was declared, the web client
+    // rendered it, and grep found zero writers — so a creator's upload was
+    // rejected, their slot returned, and the only signal was a number quietly
+    // changing on a screen they had no reason to reopen. The reason the
+    // reviewer is REQUIRED to type was written to an audit row only they could
+    // read. Found during legacy-app-repair, 2026-08-31.
+    if (decision === 'rejected') {
+      await this.notifications.emit({
+        kind: 'content_rejected',
+        userWawuId: content.creatorWawuId,
+        contentTitle: content.title,
+        reason,
+      });
+    }
 
     return {
       content: await this.toDetail(content),

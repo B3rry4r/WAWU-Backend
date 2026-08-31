@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { NotificationModule } from '../../notification/notification.module';
 import { AdminAuthModule } from '../auth/admin-auth.module';
 import { StorageModule } from '../../storage/storage.module';
 import { AdminContentReviewController } from './admin-content-review.controller';
@@ -21,7 +22,7 @@ import { AdminContentReviewService } from './admin-content-review.service';
  * none is modified.
  */
 @Module({
-  imports: [AdminAuthModule, StorageModule],
+  imports: [AdminAuthModule, StorageModule, NotificationModule],
   controllers: [AdminContentReviewController],
   providers: [AdminContentReviewService],
 })

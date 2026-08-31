@@ -1,0 +1,56 @@
+name: Gates
+
+# The executable form of the project's build laws.
+#
+# Every rule this repo has about stubs, fixtures, dead controls, forked
+# components and hand-typed wire shapes lives in scripts/gates/ as code that
+# exits non-zero. A rule that lives only in a skill file, a CLAUDE.md, or a
+# code review is a rule that gets re-broken by the next agent within the hour;
+# this workflow is what makes them stick to any contributor, human or model,
+# on any model tier, forever.
+#
+# Adopting an existing violation is deliberate: `python3 scripts/gates/run.py
+# --accept` writes it to scripts/gates/baseline.json, where it needs an owner
+# and a reason. Nothing else silences a gate.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  gates:
+    name: Executable gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run gates
+        run: python3 scripts/gates/run.py
+
+      - name: Machine-readable report
+        if: always()
+        run: python3 scripts/gates/run.py --json > gate-report.json || true
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-report
+          path: gate-report.json
+
+  baseline-hygiene:
+    name: Baseline entries have an owner and a reason
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check baseline
+        run: python3 scripts/gates/check_baseline.py

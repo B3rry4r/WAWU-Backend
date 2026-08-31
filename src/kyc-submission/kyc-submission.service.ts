@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { NotificationService } from '../notification/notification.service';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 
@@ -26,6 +27,7 @@ import type { ReviewKycSubmissionDto } from './dto/review-kyc-submission.dto';
 export class KycSubmissionService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly notifications: NotificationService,
     private readonly storage: StorageService,
   ) {}
 
@@ -166,6 +168,26 @@ export class KycSubmissionService {
     await this.prisma.creatorState.update({
       where: { wawuUserId: submission.wawuUserId },
       data: { kycStatus: dto.decision },
+    });
+
+    // TELL THE CREATOR. This is the whole point of the review from their side:
+    // KYC is the gate on being PAID, so the person waiting on it has the
+    // strongest reason on the platform to expect to hear back — and the KYC
+    // screen promises "we will notify you".
+    //
+    // Until now nothing emitted this. The kind was declared, the web client
+    // rendered it, and `grep "kind: 'kyc_verified'"` returned zero writers:
+    // a creator was approved and never told. Found by the unbacked_promises
+    // gate during legacy-app-repair, 2026-08-31.
+    //
+    // Emitted HERE rather than in AdminKycReviewService because both the admin
+    // queue and the original POST /kyc/:id/review route delegate to this one
+    // method — putting it in the caller would notify from one path and not the
+    // other.
+    await this.notifications.emit({
+      kind: 'kyc_verified',
+      userWawuId: submission.wawuUserId,
+      approved: dto.decision === 'approved',
     });
 
     return updated;
