@@ -70,7 +70,13 @@ NODE_ENV=production
 HUB_API_PORT=3001
 
 # From the managed database page. Use the PRIVATE host and keep sslmode=require.
-DATABASE_URL=postgresql://USER:PASS@private-db-host:25060/wawu?sslmode=require
+# sslmode=verify-full needs DigitalOcean's CA. Plain sslmode=require FAILS
+# with "self-signed certificate in certificate chain" — Prisma validates the
+# chain even on `require`, unlike libpq. Get the CA once:
+#   openssl s_client -starttls postgres -connect HOST:25060 -showcerts </dev/null 2>/dev/null \
+#     | awk '/BEGIN CERT/,/END CERT/' | csplit -sz -f /tmp/c- - '/BEGIN CERT/' '{*}'
+#   cp /tmp/c-01 /etc/wawu/do-ca.crt   # the LAST cert is the Project CA
+DATABASE_URL='postgresql://USER:PASS@db-host:25060/wawu_hub?sslmode=verify-full&sslrootcert=/etc/wawu/do-ca.crt'
 
 # The identity service, reached over loopback — not through nginx.
 WAWU_ID_BASE_URL=http://127.0.0.1:3002
