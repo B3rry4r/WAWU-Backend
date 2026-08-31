@@ -58,8 +58,51 @@ export class BillPaymentService {
     return this.bills.listCategories(country);
   }
 
-  listBillers(category: string, country = 'NG'): Promise<Biller[]> {
-    return this.bills.listBillers(category, country);
+  /**
+   * Billers in a category.
+   *
+   * `category` is the provider's CODE (AIRTIME, INTSERVICE, CABLEBILLS). If a
+   * caller sends the display NAME instead, the provider answers "Invalid
+   * category code" and the whole screen dead-ends — which is exactly what
+   * happened to Internet Service, Cable Bill Payment, Mobile Data Service and
+   * Utility Bills. Airtime alone survived, because its name equals its code.
+   *
+   * So a rejected value is looked up against the category list and retried
+   * once. The lookup costs nothing on the happy path (it only runs after a
+   * failure) and it means a client that sends a name gets billers rather than
+   * a provider error it cannot act on.
+   */
+  async listBillers(category: string, country = 'NG'): Promise<Biller[]> {
+    try {
+      return await this.bills.listBillers(category, country);
+    } catch (err) {
+      const resolved = await this.resolveCategoryCode(category, country);
+      // Only retry when the lookup found a DIFFERENT value; retrying the same
+      // string would just repeat the same failure and double the latency.
+      if (!resolved || resolved === category) throw err;
+      return this.bills.listBillers(resolved, country);
+    }
+  }
+
+  /** Matches a display name (or a differently-cased code) to a category code. */
+  private async resolveCategoryCode(
+    value: string,
+    country: string,
+  ): Promise<string | null> {
+    let categories: BillCategory[];
+    try {
+      categories = await this.bills.listCategories(country);
+    } catch {
+      // The original error is the useful one; a failure to look up the code is
+      // not worth replacing it with.
+      return null;
+    }
+    const wanted = value.trim().toLowerCase();
+    const hit = categories.find(
+      (c) =>
+        c.code?.toLowerCase() === wanted || c.name?.toLowerCase() === wanted,
+    );
+    return hit?.code ?? null;
   }
 
   listItems(billerCode: string): Promise<BillItem[]> {
