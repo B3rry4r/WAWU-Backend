@@ -52,6 +52,7 @@ import { CommunityMessageModule } from './community-message/community-message.mo
 import { CreatorEarningsModule } from './creator-earnings/creator-earnings.module';
 import { DirectMessageModule } from './direct-message/direct-message.module';
 import { ReferralModule } from './referral/referral.module';
+import { PaymentLinkModule } from './payment-link/payment-link.module';
 import { EventModule } from './event/event.module';
 import { EventTicketingModule } from './event-ticketing/event-ticketing.module';
 import { ShopModule } from './shop/shop.module';
@@ -258,6 +259,7 @@ import { APP_GUARD } from '@nestjs/core';
     CreatorEarningsModule,
     DirectMessageModule,
     ReferralModule,
+    PaymentLinkModule,
     // Events, app-facing half -- reinstated 22 Aug 2026 by product-owner
     // decision, reversing the "no Events section" line in WAWU-Web/CLAUDE.md
     // and docs/00_PLATFORM_MAP.md (both amended with that date rather than
