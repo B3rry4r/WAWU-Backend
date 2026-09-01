@@ -8,6 +8,8 @@ import { DirectMessageModule } from '../direct-message/direct-message.module';
 import { ServiceApplicationModule } from '../service-application/service-application.module';
 import { BillPaymentModule } from '../bill-payment/bill-payment.module';
 import { HealthPlanModule } from '../health-plan/health-plan.module';
+import { ShopModule } from '../shop/shop.module';
+import { EventTicketingModule } from '../event-ticketing/event-ticketing.module';
 import { LegalModule } from '../legal/legal.module';
 import { PaymentWebhookController } from './payment-webhook.controller';
 import { PaymentWebhookService } from './payment-webhook.service';
@@ -39,6 +41,8 @@ import { FlutterwaveSignatureGuard } from './guards/flutterwave-signature.guard'
     BillPaymentModule,
     HealthPlanModule,
     LegalModule,
+    ShopModule,
+    EventTicketingModule,
   ],
   controllers: [PaymentWebhookController],
   providers: [PaymentWebhookService, FlutterwaveSignatureGuard],

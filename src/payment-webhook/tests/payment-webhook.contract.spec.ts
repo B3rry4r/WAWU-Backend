@@ -393,6 +393,95 @@ describe('PaymentWebhook (contract)', () => {
       expect(purchase.status).toBe('completed');
     });
 
+    it('routes a SHOP order to its own flow instead of leaving a paid buyer unmatched', async () => {
+      // Shop and event tickets were both built after this router and neither
+      // was added to it. Until that was fixed, a shopper whose browser never
+      // came back had paid and received nothing: the delivery was recorded
+      // `unmatched` and no second path existed to settle it.
+      //
+      // This asserts the ROUTING, which is what was missing. Whether the
+      // charge then verifies with Flutterwave is the settle step's own
+      // business and is covered by the shop's contract tests.
+      const product = await prisma.product.create({
+        data: {
+          name: 'Webhook test mic',
+          slug: `webhook-test-mic-${randomUUID().slice(0, 8)}`,
+          description: 'Seeded for the webhook routing test.',
+          category: 'audio_music',
+          subcategory: 'microphones',
+          priceNaira: 1000,
+          stock: 5,
+          status: 'live',
+        },
+      });
+      const txRef = `wawu-shop-${randomUUID()}`;
+      createdTxRefs.push(txRef);
+      const order = await prisma.shopOrder.create({
+        data: {
+          buyerWawuId: USER_PLAIN,
+          subtotalNaira: 1000,
+          totalNaira: 1000,
+          status: 'pending',
+          flutterwaveTxRef: txRef,
+          deliveryName: 'Test Buyer',
+          deliveryPhone: '08030000000',
+          deliveryAddress: '1 Test Street',
+          deliveryCity: 'Lagos',
+          deliveryState: 'Lagos',
+        },
+      });
+
+      const res = await deliver(chargeCompleted(txRef, 'flw-tx-shop-1', 1000)).expect(200);
+      expect(res.body.data.flow).toBe('shop-order');
+      expect(res.body.data.outcome).not.toBe('unmatched');
+
+      await prisma.shopOrder.delete({ where: { id: order.id } });
+      await prisma.product.delete({ where: { id: product.id } });
+    });
+
+    it('routes an EVENT TICKET order to its own flow', async () => {
+      // Seeded here rather than relying on one existing: this suite must not
+      // pass or fail on what happens to be in the database.
+      const event = await prisma.event.create({
+        data: {
+          hostWawuId: USER_PLAIN,
+          name: 'Webhook test event',
+          description: 'Seeded for the webhook routing test.',
+          hostOrg: 'WAWU QA',
+          format: 'online',
+          type: 'workshop',
+          startsAt: new Date(Date.now() + 86400000),
+          location: 'Online',
+          status: 'published',
+        },
+      });
+      const ticketType = await prisma.eventTicketType.create({
+        data: { eventId: event.id, name: 'Webhook test tier', priceNaira: 1000, quantity: 10, tier: 'regular' },
+      });
+      const txRef = `wawu-ticket-${randomUUID()}`;
+      createdTxRefs.push(txRef);
+      const order = await prisma.eventOrder.create({
+        data: {
+          eventId: event.id,
+          ticketTypeId: ticketType.id,
+          buyerWawuId: USER_PLAIN,
+          quantity: 1,
+          amountNaira: 1000,
+          commissionRate: 0.15,
+          status: 'pending',
+          flutterwaveTxRef: txRef,
+        },
+      });
+
+      const res = await deliver(chargeCompleted(txRef, 'flw-tx-ticket-1', 1000)).expect(200);
+      expect(res.body.data.flow).toBe('event-ticket-order');
+      expect(res.body.data.outcome).not.toBe('unmatched');
+
+      await prisma.eventOrder.delete({ where: { id: order.id } });
+      await prisma.eventTicketType.delete({ where: { id: ticketType.id } });
+      await prisma.event.delete({ where: { id: event.id } });
+    });
+
     it('records an unknown tx_ref as unmatched rather than inventing a settlement', async () => {
       const txRef = `mock-${randomUUID()}`;
       createdTxRefs.push(txRef);

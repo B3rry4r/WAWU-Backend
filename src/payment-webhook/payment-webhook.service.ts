@@ -12,6 +12,8 @@ import {
 } from '../service-application/service-application.service';
 import { BillPaymentService } from '../bill-payment/bill-payment.service';
 import { HealthPlanService } from '../health-plan/health-plan.service';
+import { ShopService } from '../shop/shop.service';
+import { EventTicketingService } from '../event-ticketing/event-ticketing.service';
 import { LegalRequestsService } from '../legal/legal.service';
 
 /**
@@ -135,6 +137,8 @@ export class PaymentWebhookService {
     private readonly bills: BillPaymentService,
     private readonly health: HealthPlanService,
     private readonly legal: LegalRequestsService,
+    private readonly shop: ShopService,
+    private readonly tickets: EventTicketingService,
   ) {}
 
   /** Narrow the untrusted body by hand — no DTO, because Flutterwave sends far
@@ -529,6 +533,37 @@ export class PaymentWebhookService {
             legalService.id,
             transactionId,
           ),
+      };
+    }
+
+    // WAWU Commerce orders.
+    //
+    // Shop and event tickets were both built AFTER this router and neither was
+    // added to it, so until now a shopper or a ticket buyer whose browser
+    // never came back had paid and received nothing, with no second path to
+    // settle them. Every other money flow in the product had one.
+    const shopOrder = await this.prisma.shopOrder.findFirst({
+      where: { flutterwaveTxRef: txRef },
+      select: { id: true, buyerWawuId: true },
+    });
+    if (shopOrder) {
+      return {
+        flow: 'shop-order',
+        settle: () =>
+          this.shop.verifyOrder(shopOrder.buyerWawuId, shopOrder.id, dto),
+      };
+    }
+
+    // Event tickets.
+    const eventOrder = await this.prisma.eventOrder.findFirst({
+      where: { flutterwaveTxRef: txRef },
+      select: { id: true, buyerWawuId: true },
+    });
+    if (eventOrder) {
+      return {
+        flow: 'event-ticket-order',
+        settle: () =>
+          this.tickets.verifyOrder(eventOrder.buyerWawuId, eventOrder.id, dto),
       };
     }
 
