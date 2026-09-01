@@ -7,6 +7,7 @@ import { RealFlutterwaveAdapter } from './real-flutterwave.adapter';
 import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';
 import { shouldUseMockFlutterwave } from '../common/flutterwave/require-payment-config';
 import { NotificationModule } from '../notification/notification.module';
+import { ReferralModule } from '../referral/referral.module';
 import { DittoService } from './ditto/ditto.service';
 import { DittoInviteClient } from './ditto/ditto-invite.client';
 
@@ -27,7 +28,7 @@ import { DittoInviteClient } from './ditto/ditto-invite.client';
  * else inject the `FLUTTERWAVE_CLIENT` token, never either adapter directly.
  */
 @Module({
-  imports: [NotificationModule],
+  imports: [NotificationModule, ReferralModule],
   controllers: [CreatorSubscriptionController],
   providers: [
     CreatorSubscriptionService,

@@ -20,6 +20,7 @@ import type { SubscribeDto } from './dto/subscribe.dto';
 import type { VerifySubscriptionDto } from './dto/verify-subscription.dto';
 import type { UpdateCardDto } from './dto/update-card.dto';
 import { NotificationService } from '../notification/notification.service';
+import { ReferralService } from '../referral/referral.service';
 
 /**
  * Annual subscription prices, naira. Never accepted from the client
@@ -159,7 +160,7 @@ export class CreatorSubscriptionService {
    */
   private async recordPendingCharge(
     txRef: string,
-    attempt: PendingAttempt & { expectedAmount: number },
+    attempt: PendingAttempt & { expectedAmount: number; referralCode?: string | null },
   ): Promise<void> {
     await this.prisma.pendingCharge.create({
       data: {
@@ -167,7 +168,14 @@ export class CreatorSubscriptionService {
         kind: attempt.kind,
         wawuUserId: attempt.wawuUserId,
         expectedAmount: attempt.expectedAmount,
-        context: { tier: attempt.tier, planId: attempt.planId },
+        context: {
+          tier: attempt.tier,
+          planId: attempt.planId,
+          // Carried through so verify can redeem the code against the charge
+          // it actually discounted, rather than trusting the client to resend
+          // it at settlement.
+          ...(attempt.referralCode ? { referralCode: attempt.referralCode } : {}),
+        },
       },
     });
   }
@@ -175,18 +183,23 @@ export class CreatorSubscriptionService {
   private async takePendingCharge(
     txRef: string,
     wawuUserId: string,
-  ): Promise<(PendingAttempt & { expectedAmount: number }) | null> {
+  ): Promise<(PendingAttempt & { expectedAmount: number; referralCode: string | null }) | null> {
     const row = await this.prisma.pendingCharge.findUnique({
       where: { txRef },
     });
     if (!row || row.wawuUserId !== wawuUserId) return null;
-    const ctx = (row.context ?? {}) as { tier?: CreatorTier; planId?: string };
+    const ctx = (row.context ?? {}) as {
+      tier?: CreatorTier;
+      planId?: string;
+      referralCode?: string;
+    };
     return {
       kind: row.kind as PendingAttemptKind,
       wawuUserId: row.wawuUserId,
       tier: ctx.tier ?? 'basic',
       planId: ctx.planId ?? '',
       expectedAmount: row.expectedAmount,
+      referralCode: ctx.referralCode ?? null,
     };
   }
 
@@ -194,6 +207,7 @@ export class CreatorSubscriptionService {
     private readonly prisma: PrismaService,
     @Inject(FLUTTERWAVE_CLIENT) private readonly flutterwave: FlutterwaveClient,
     private readonly notifications: NotificationService,
+    private readonly referral: ReferralService,
   ) {}
 
   /**
@@ -348,7 +362,22 @@ export class CreatorSubscriptionService {
       );
     }
 
-    const amount = PRICE_TABLE[dto.tier];
+    // The code is validated and PRICED here, and redeemed only once the money
+    // has actually moved (see verify) — an abandoned checkout must not burn a
+    // use of a single-use code.
+    let amount = PRICE_TABLE[dto.tier];
+    let referralCode: string | null = null;
+    if (dto.referralCode) {
+      const validated = await this.referral.validate(dto.referralCode, PRICE_TABLE);
+      if (validated.tier !== dto.tier) {
+        throw new BadRequestException(
+          `That code applies to the ${validated.tier.replace('_', ' ')} plan.`,
+        );
+      }
+      amount = validated.priceNaira;
+      referralCode = validated.code;
+    }
+
     const plan = await this.flutterwave.createOrReusePlan({
       tier: dto.tier,
       amount,
@@ -366,6 +395,7 @@ export class CreatorSubscriptionService {
       tier: dto.tier,
       planId: plan.planId,
       expectedAmount: charge.amount,
+      referralCode,
     });
 
     return {
@@ -422,6 +452,13 @@ export class CreatorSubscriptionService {
     }
 
     const now = new Date();
+
+    // The code is spent HERE, not at checkout: the money has moved, so this is
+    // the first moment a use has actually been taken. redeem() is idempotent,
+    // so a browser verify racing the webhook cannot consume two.
+    if (pending.referralCode) {
+      await this.referral.redeem(pending.referralCode, wawuUserId, pending.tier);
+    }
 
     if (pending.kind === 'subscribe') {
       // Subscription row, entitlement gate and account type are written in ONE

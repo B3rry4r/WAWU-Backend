@@ -2445,3 +2445,79 @@ model DittoOptIn {
   optedInAt  DateTime  @default(now())
   emailedAt  DateTime?
 }
+
+/// A referral code: a discount on ONE plan, and a way in while public signup
+/// is closed.
+///
+/// It does two jobs deliberately, because they are the same act. A blog is
+/// given a code so its readers can join at a price, and a hand-picked creator
+/// is given one so they can join at all — the code is the invitation and the
+/// price in one object, rather than two systems that have to agree.
+///
+/// `discountPercent` is allowed to be 0. A code that takes nothing off is not
+/// a broken code: it is how a creator is let through the closed door at the
+/// normal price, which is a thing the product owner asked for explicitly.
+model ReferralCode {
+  /// Stored and matched UPPERCASE. Codes are read off a blog post and typed
+  /// by hand, so case is a typo waiting to happen, not a distinction.
+  code            String      @id
+  /// Who it is for — "Blog X", "Cohort 1". For whoever is reading the list
+  /// later trying to remember what it was.
+  label           String
+  /// 0-100. Bounded in the DTO, and again here by the service.
+  discountPercent Int
+  /// The plan it applies to. A code is issued against a price, and the prices
+  /// differ per tier, so a code that applied to all of them would mean three
+  /// different discounts.
+  tier            CreatorTier
+  active          Boolean     @default(true)
+  /// Null means unlimited. A blog code is unlimited; a code for one named
+  /// creator is not.
+  maxUses         Int?
+  usedCount       Int         @default(0)
+  expiresAt       DateTime?
+  createdAt       DateTime    @default(now())
+  createdByAdmin  String?
+
+  redemptions ReferralRedemption[]
+
+  @@index([active])
+}
+
+/// One account's use of one code.
+///
+/// Its own table rather than a counter alone, so "who came in through this
+/// code" is answerable — that is the entire point of giving a blog a code —
+/// and so the same account cannot spend one code twice.
+model ReferralRedemption {
+  id         String   @id @default(uuid())
+  code       String
+  wawuUserId String
+  redeemedAt DateTime @default(now())
+
+  referralCode ReferralCode @relation(fields: [code], references: [code], onDelete: Cascade)
+
+  @@unique([code, wawuUserId])
+  @@index([wawuUserId])
+}
+
+/// Platform-wide switches an admin can flip without a deploy.
+///
+/// A single row, pinned to id 1. Typed columns rather than a key/value table:
+/// a stringly-typed settings bag means every reader parses it its own way and
+/// a typo becomes a silent default.
+model PlatformSettings {
+  id Int @id @default(1)
+
+  /// When false, a REGULAR (non-creator) account cannot be created — the
+  /// product is onboarding creators first. Creator signup is unaffected.
+  ///
+  /// Named for the half it actually gates. "publicSignupEnabled" read as
+  /// though it closed the whole door, which would have been the wrong thing
+  /// for the next person to implement against.
+  ///
+  /// Flipped from the dashboard, not from a deploy.
+  userSignupEnabled Boolean @default(true)
+
+  updatedAt DateTime @updatedAt
+}
