@@ -416,6 +416,41 @@ describe('Events contract (app-facing)', () => {
       });
     });
 
+    it('accepts ?category and filters on it', async () => {
+      // The regression this pins: the column, the submit form and the browse
+      // chips all shipped, but ListEventsQueryDto had no `category`, so the
+      // global forbidNonWhitelisted pipe answered every browse-by-category
+      // request with 400 "property category should not exist" before the
+      // service ever ran.
+      const res = await http()
+        .get('/api/hub/events')
+        .query({ perPage: 100, category: 'music' })
+        .set(auth(strangerToken))
+        .expect(200);
+
+      expect(
+        res.body.data.every((e: { category: string }) => e.category === 'music'),
+      ).toBe(true);
+    });
+
+    it('rejects a category that is not one of the enum values', async () => {
+      await http()
+        .get('/api/hub/events')
+        .query({ category: 'not-a-category' })
+        .set(auth(strangerToken))
+        .expect(400);
+    });
+
+    it('combines category with the format and type filters', async () => {
+      // Three independent axes: a music event can be online or in person, and
+      // a workshop or a summit. One `filter` string could not ask this.
+      await http()
+        .get('/api/hub/events')
+        .query({ perPage: 100, category: 'music', format: 'online', type: 'workshop' })
+        .set(auth(strangerToken))
+        .expect(200);
+    });
+
     it('defaults to upcoming, and ?view=past returns the other half', async () => {
       const upcoming = await http()
         .get('/api/hub/events')

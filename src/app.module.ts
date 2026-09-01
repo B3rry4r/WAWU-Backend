@@ -80,6 +80,23 @@ import { APP_GUARD } from '@nestjs/core';
       { name: 'medium', ttl: 60_000, limit: 200 },
     ]),
     ScheduleModule.forRoot(),
+    // MUST stay ahead of SchedulerModule, and of everything else that pulls in
+    // DirectMessageModule (SchedulerModule, PaymentWebhookModule, ShopModule,
+    // EventTicketingModule, AdminPaymentsModule).
+    //
+    // Both this and DirectMessageController are `@Controller('dm')`, and
+    // DirectMessage owns `@Get(':messageId')` behind a ParseUUIDPipe — a
+    // parameter route swallows every literal sibling registered after it. So
+    // GET /dm/response-stats answered 400 "Validation failed (uuid is
+    // expected)" in production, while its own contract test stayed green:
+    // that test boots this module alone, where there is nothing to shadow it.
+    //
+    // Controller order is decided by FIRST ENCOUNTER during the walk of this
+    // array, not by where a module is listed — SchedulerModule imports
+    // DirectMessageModule, so DirectMessage's controller was mounting at
+    // position 11. route-shadowing.regression.spec.ts boots the whole
+    // AppModule and fails if this moves back down.
+    CreatorNoResponseTrackerModule,
     SchedulerModule,
     PrismaModule,
     StorageModule,
@@ -194,7 +211,6 @@ import { APP_GUARD } from '@nestjs/core';
     AccountModule,
     CommentModule,
     CourseLessonModule,
-    CreatorNoResponseTrackerModule,
     CreatorStateModule,
     CreditSpendModule,
     CreditsStateModule,

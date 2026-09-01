@@ -1,6 +1,6 @@
 import { Transform } from 'class-transformer';
 import { IsBoolean, IsEnum, IsIn, IsOptional } from 'class-validator';
-import { EventFormat, EventType } from '../../../generated/prisma/enums';
+import { EventCategory, EventFormat, EventType } from '../../../generated/prisma/enums';
 import { PaginationQueryDto } from '../../common/dto/pagination.dto';
 
 /**
@@ -32,6 +32,14 @@ export class ListEventsQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsEnum(EventType)
   type?: EventType;
+
+  /**
+   * The browse-by-category chip row. Independent of `format` and `type`: a
+   * music event can be online or in person, and a workshop or a summit.
+   */
+  @IsOptional()
+  @IsEnum(EventCategory)
+  category?: EventCategory;
 
   /**
    * The featured rail is `?featured=true&perPage=1`, not a second endpoint and

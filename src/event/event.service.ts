@@ -68,6 +68,10 @@ export class EventService {
       status: 'published' as const,
       ...(query.format ? { format: query.format } : {}),
       ...(query.type ? { type: query.type } : {}),
+      // The column, the submit form and the browse chips all existed; only
+      // the query did not, so every ?category= request 400'd on the global
+      // forbidNonWhitelisted pipe before reaching this method.
+      ...(query.category ? { category: query.category } : {}),
       ...(query.featured === undefined ? {} : { featured: query.featured }),
       ...timeWindow(query.view),
     };
