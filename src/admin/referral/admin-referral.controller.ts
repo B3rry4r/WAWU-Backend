@@ -32,7 +32,6 @@ import {
  * action.
  */
 @UseGuards(AdminAuthGuard, AdminRolesGuard)
-@AdminRoles(AdminRole.superadmin)
 @Controller('admin/referral')
 export class AdminReferralController {
   constructor(
@@ -40,33 +39,39 @@ export class AdminReferralController {
     private readonly referral: ReferralService,
   ) {}
 
+  @AdminRoles(AdminRole.superadmin)
   @Get('codes')
   list() {
     return this.admin.list();
   }
 
+  @AdminRoles(AdminRole.superadmin)
   @Post('codes')
   create(@CurrentAdmin() admin: AdminUserView, @Body() dto: CreateReferralCodeDto) {
     return this.admin.create(dto, admin.id);
   }
 
+  @AdminRoles(AdminRole.superadmin)
   @Patch('codes/:code')
   update(@Param('code') code: string, @Body() dto: UpdateReferralCodeDto) {
     return this.admin.update(code, dto);
   }
 
+  @AdminRoles(AdminRole.superadmin)
   @Post('codes/:code/deactivate')
   @HttpCode(HttpStatus.OK)
   deactivate(@Param('code') code: string) {
     return this.admin.deactivate(code);
   }
 
+  @AdminRoles(AdminRole.superadmin)
   @Get('signup-state')
   async signupState() {
     return { userSignupEnabled: await this.referral.userSignupEnabled() };
   }
 
   /** The toggle. Flipped from here, never from a deploy. */
+  @AdminRoles(AdminRole.superadmin)
   @Patch('signup-state')
   setSignupState(@Body() dto: UserSignupDto) {
     return this.referral.setUserSignupEnabled(dto.userSignupEnabled);
