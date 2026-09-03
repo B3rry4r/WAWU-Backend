@@ -183,6 +183,28 @@ describe('KycSubmission contract', () => {
       await request(app.getHttpServer()).get('/api/hub/kyc').expect(401);
     });
 
+    it('answers a CREATOR who has not subscribed yet, rather than refusing them', async () => {
+      // The gate keyed on CreatorState, which only exists once a subscription
+      // is paid for — so every creator who had signed up and not yet paid saw
+      // "Could not load your verification status" with a Try again button
+      // that could never work. KYC is the gate on getting PAID, so it is the
+      // last thing that should be unreachable before somebody has spent
+      // anything.
+      const sub = 'c9000000-0000-4000-8000-000000000009';
+      await prisma.userProfile.upsert({
+        where: { wawuUserId: sub },
+        update: { accountType: 'creator' },
+        create: { wawuUserId: sub, accountType: 'creator', interests: [] },
+      });
+      const res = await request(app.getHttpServer())
+        .get('/api/hub/kyc')
+        .set('Authorization', `Bearer ${await mintTokenFor(sub)}`)
+        .expect(200);
+      // No submission yet is `null`, which the client reads as "not started".
+      expect(res.body.data).toBeNull();
+      await prisma.userProfile.delete({ where: { wawuUserId: sub } });
+    });
+
     it('403s for a plain user with no CreatorState row', async () => {
       const res = await request(app.getHttpServer())
         .get('/api/hub/kyc')

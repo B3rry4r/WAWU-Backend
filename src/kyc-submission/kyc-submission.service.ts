@@ -38,8 +38,22 @@ export class KycSubmissionService {
    * both GET /kyc and POST /kyc are ["creator"].
    */
   private async requireCreator(wawuUserId: string): Promise<void> {
-    const state = await this.prisma.creatorState.findUnique({ where: { wawuUserId } });
-    if (!state) {
+    // Gate on ACCOUNT TYPE, not on the CreatorState row.
+    //
+    // CreatorState is only written when a subscription is paid for, so keying
+    // on it here refused every creator who had signed up and not yet paid —
+    // which is every new creator. The verification screen showed "Could not
+    // load your verification status" with a Try again button that could never
+    // work, and KYC is the gate on getting PAID, so it is the last thing that
+    // should be unreachable before somebody has spent anything.
+    //
+    // Same fix as CreatorStateService.getState. A plain user is still refused;
+    // an unpaid creator is not.
+    const profile = await this.prisma.userProfile.findUnique({
+      where: { wawuUserId },
+      select: { accountType: true },
+    });
+    if (profile?.accountType !== 'creator') {
       throw new ForbiddenException('This account has no creator state — a creator account type is required.');
     }
   }
