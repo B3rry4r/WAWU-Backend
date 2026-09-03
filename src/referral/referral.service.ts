@@ -175,4 +175,39 @@ export class ReferralService {
       throw new ForbiddenException('That code is not valid.');
     }
   }
+
+  /**
+   * Remembers the code an account arrived with, and hands it back later.
+   *
+   * The browser copy is the fast path; this is the one that survives a new
+   * tab, a different device, or a cleared cache. Both exist because the code
+   * is applied before the account exists (no one to attach it to yet) and
+   * needed after it does.
+   */
+  async claim(wawuUserId: string, rawCode: string): Promise<void> {
+    const code = ReferralService.normalise(rawCode);
+    // Validated first, so a typo or a withdrawn code is not stored and then
+    // surfaced later as a discount that will not apply.
+    const row = await this.prisma.referralCode.findUnique({ where: { code } });
+    if (!row || !row.active) return;
+
+    await this.prisma.referralClaim.upsert({
+      where: { wawuUserId },
+      create: { wawuUserId, code },
+      update: { code, claimedAt: new Date() },
+    });
+  }
+
+  /** The code this account arrived with, if it is still usable. */
+  async claimedCode(wawuUserId: string): Promise<string | null> {
+    const claim = await this.prisma.referralClaim.findUnique({ where: { wawuUserId } });
+    if (!claim) return null;
+    // A code that has since been deactivated, expired or used up must not be
+    // shown as a live discount.
+    const row = await this.prisma.referralCode.findUnique({ where: { code: claim.code } });
+    if (!row || !row.active) return null;
+    if (row.expiresAt && row.expiresAt.getTime() < Date.now()) return null;
+    if (row.maxUses !== null && row.usedCount >= row.maxUses) return null;
+    return claim.code;
+  }
 }

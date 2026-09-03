@@ -2521,3 +2521,21 @@ model PlatformSettings {
 
   updatedAt DateTime @updatedAt
 }
+
+/// The code somebody arrived with, remembered against their account.
+///
+/// A referral code is applied at SIGN-UP and spent at CHECKOUT, and between
+/// those two moments people leave for their email client to fetch a
+/// verification code. Holding it only in the browser meant a new tab, a
+/// different device or a cleared cache lost it, and the tier screen quietly
+/// showed full price — which is exactly what happened with a 100%-off code.
+///
+/// One row per account: arriving with a second code replaces the first, so
+/// the most recent invitation is the one that applies.
+model ReferralClaim {
+  wawuUserId String   @id
+  code       String
+  claimedAt  DateTime @default(now())
+
+  @@index([code])
+}

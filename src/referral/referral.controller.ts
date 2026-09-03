@@ -1,4 +1,8 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Post, Query, UseGuards } from '@nestjs/common';
+import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
+import { ValidateReferralQueryDto as ClaimReferralDto } from './dto/referral.dto';
 import { ReferralService } from './referral.service';
 import { ValidateReferralQueryDto } from './dto/referral.dto';
 import { PRICE_TABLE } from '../creator-subscription/creator-subscription.service';
@@ -31,5 +35,28 @@ export class ReferralController {
   @Get('validate')
   validate(@Query() query: ValidateReferralQueryDto) {
     return this.referral.validate(query.code, PRICE_TABLE);
+  }
+
+  /**
+   * POST /referral/claim — remember the code this account arrived with.
+   *
+   * Called once, right after the account exists. The code was applied before
+   * there was anybody to attach it to, so it lived only in the browser until
+   * now — and a browser copy does not survive the trip to an email client and
+   * back in a new tab.
+   */
+  @UseGuards(WawuAuthGuard)
+  @Post('claim')
+  @HttpCode(HttpStatus.OK)
+  async claim(@CurrentUser() user: WawuJwtClaims, @Body() dto: ClaimReferralDto) {
+    await this.referral.claim(user.sub, dto.code);
+    return { claimed: true };
+  }
+
+  /** GET /referral/mine — the code this account arrived with, if still usable. */
+  @UseGuards(WawuAuthGuard)
+  @Get('mine')
+  async mine(@CurrentUser() user: WawuJwtClaims) {
+    return { code: await this.referral.claimedCode(user.sub) };
   }
 }
