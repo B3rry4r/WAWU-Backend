@@ -9,6 +9,8 @@ export interface WawuJwtClaims {
   email: string | null;
   phone: string;
   firstName: string;
+  /** Optional; null for signups that never supplied one. */
+  middleName?: string | null;
   lastName: string;
   country: string;
   verificationTier: string;

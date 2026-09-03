@@ -7,6 +7,7 @@ import {
   IsUrl,
   Matches,
   MaxLength,
+  MinLength,
 } from 'class-validator';
 import { AccountType } from '../../../generated/prisma/enums';
 
@@ -28,6 +29,34 @@ export class UpdateUserProfileDto {
   @IsOptional()
   @IsEnum(AccountType)
   accountType?: AccountType | null;
+
+  /**
+   * The three name parts.
+   *
+   * Names are WAWU ID's, not this service's, so these are PROXIED there
+   * rather than stored here. They live on this DTO because the profile screen
+   * is where somebody edits their name, and making them save it through a
+   * second endpoint would be an implementation detail leaking into a form.
+   *
+   * All three move together: a partial update would let a surname change
+   * land while a first name failed.
+   */
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(80)
+  firstName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  middleName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(80)
+  lastName?: string;
 
   @IsOptional()
   @IsArray()

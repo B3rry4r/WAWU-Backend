@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import { AccountType, ContentStatus } from '../../generated/prisma/enums';
+import { WawuIdClient } from '../common/auth/wawu-id.client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import type {
@@ -21,7 +22,10 @@ import type { UpdateUserProfileDto } from './dto/update-user-profile.dto';
  */
 @Injectable()
 export class UserProfileService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly wawuId: WawuIdClient,
+  ) {}
 
   async getMe(user: WawuJwtClaims): Promise<UserProfileWithClaims> {
     const profile = await this.prisma.userProfile.findUnique({
@@ -59,6 +63,27 @@ export class UserProfileService {
     wawuUserId: string,
     dto: UpdateUserProfileDto,
   ): Promise<UserProfile> {
+    // The name goes to WAWU ID FIRST, and a failure there stops the whole
+    // update. Names are checked against a government ID at KYC, so a rename
+    // that silently did not take is worse than one that visibly failed: the
+    // person believes it is fixed and their payout is still held.
+    //
+    // All three parts move together. `middleName` may be an empty string,
+    // which CLEARS it — somebody who typed one by mistake has to be able to
+    // remove it — so only `undefined` means "not editing the name".
+    if (dto.firstName !== undefined || dto.lastName !== undefined) {
+      if (!dto.firstName?.trim() || !dto.lastName?.trim()) {
+        throw new BadRequestException(
+          'A first name and a last name are both required.',
+        );
+      }
+      await this.wawuId.updateName(wawuUserId, {
+        firstName: dto.firstName,
+        middleName: dto.middleName,
+        lastName: dto.lastName,
+      });
+    }
+
     try {
       return await this.prisma.userProfile.upsert({
         where: { wawuUserId },

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadGatewayException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 /**
@@ -138,6 +138,35 @@ export class WawuIdClient {
         `Failed to elevate verification tier for ${userId}: ${res.status} ${await res.text()}`,
       );
       throw new Error('WAWU ID verification-tier update failed');
+    }
+  }
+
+  /**
+   * Updates a user's own name in WAWU ID.
+   *
+   * Names live there, not here, so this is a proxy for the profile screen's
+   * edit. Errors are RAISED rather than swallowed: unlike a best-effort
+   * notification, somebody pressing Save on their own name has to be told
+   * whether it saved — silently keeping the old one is how a KYC mismatch
+   * outlives the attempt to fix it.
+   */
+  async updateName(
+    userId: string,
+    parts: { firstName: string; middleName?: string; lastName: string },
+  ): Promise<void> {
+    const res = await fetch(`${this.baseUrl}/internal/users/${userId}/name`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Service-Key': this.serviceKey,
+      },
+      body: JSON.stringify(parts),
+    });
+    if (!res.ok) {
+      this.logger.error(
+        `Failed to update name for ${userId}: ${res.status} ${await res.text()}`,
+      );
+      throw new BadGatewayException('Your name could not be saved. Try again in a moment.');
     }
   }
 }
