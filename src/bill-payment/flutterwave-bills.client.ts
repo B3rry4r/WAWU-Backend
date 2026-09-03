@@ -161,4 +161,35 @@ export class FlutterwaveBillsClient {
       `/bills/${encodeURIComponent(reference)}?verbose=1`,
     );
   }
+
+  /**
+   * WAWU's own NGN float, in naira.
+   *
+   * Bills are paid out of the merchant AVAILABLE balance, not the customer's
+   * card. Card charges land in `ledger` first and settle to `available` on
+   * Flutterwave's own cycle, so a busy day can leave money banked and
+   * unspendable — and a top-up attempted against it fails with "Insufficient
+   * funds in your wallet" AFTER the customer has already been charged.
+   *
+   * Returns null when the balance cannot be read. A provider hiccup must not
+   * become a refusal to take orders; the pre-flight check treats null as
+   * "unknown, proceed" and the existing failure path still catches it.
+   */
+  async availableNgn(): Promise<number | null> {
+    try {
+      const res = await fetch(`${BASE}/balances/NGN`, {
+        headers: { Authorization: `Bearer ${this.secret()}` },
+      });
+      const payload = (await res.json().catch(() => ({}))) as {
+        status?: string;
+        data?: { available_balance?: number };
+      };
+      if (!res.ok || payload.status !== 'success') return null;
+      const value = payload.data?.available_balance;
+      return typeof value === 'number' ? value : null;
+    } catch (e) {
+      this.logger.warn(`Could not read NGN balance: ${String(e)}`);
+      return null;
+    }
+  }
 }

@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ServiceUnavailableException,
   ConflictException,
   Injectable,
   Logger,
@@ -122,6 +123,26 @@ export class BillPaymentService {
 
   /** Records the intent and returns what the client needs to open checkout. */
   async init(buyerWawuId: string, dto: InitBillDto) {
+    // REFUSE BEFORE TAKING MONEY, not after.
+    //
+    // A bill is paid out of WAWU's own Flutterwave float, not the customer's
+    // card. Card charges land in `ledger` and settle to `available` on
+    // Flutterwave's cycle, so the float can be empty while money sits banked.
+    // When that happened the customer was charged, the top-up failed with
+    // "Insufficient funds in your wallet", and they were told a refund was
+    // coming — money taken, nothing delivered, a manual refund owed.
+    //
+    // Checking here costs one request and turns that into a message before
+    // anybody pays. A null reading means the balance could not be read, which
+    // must NOT stop the shop: the existing post-charge failure path still
+    // catches a genuine shortfall.
+    const available = await this.bills.availableNgn();
+    if (available !== null && available < dto.amount) {
+      throw new ServiceUnavailableException(
+        'Bill payments are briefly unavailable while we top up. Nothing has been charged. Please try again shortly.',
+      );
+    }
+
     const txRef = `wawu-bill-${randomUUID()}`;
 
     const record = await this.prisma.billPayment.create({
@@ -225,8 +246,14 @@ export class BillPaymentService {
         data: { status: 'failed', failureReason: reason.slice(0, 500) },
       });
       // The customer paid, so this is not a plain error: it is a refund owed.
+      // The customer paid, so this is not a plain error: it is a refund owed.
+      // The wording says what happens next in their terms — the old copy
+      // ("our team will refund you") gave a reference and no timeframe, which
+      // reads as a brush-off when you have just lost money.
       throw new BadRequestException(
-        `We took your payment but ${record.billerName} could not complete it. Reference ${failed.flutterwaveTxRef}. Our team will refund you.`,
+        `Your payment went through but ${record.billerName} could not deliver it, so nothing was bought. ` +
+          `You will be refunded in full within 3 working days. ` +
+          `Quote ${failed.flutterwaveTxRef} if you need to chase it.`,
       );
     }
   }
