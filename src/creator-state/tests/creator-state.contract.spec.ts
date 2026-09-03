@@ -61,11 +61,16 @@ const OWN_CREATOR_PRO = 'c5000000-0000-4000-8000-000000000003'; // pro, paid, ky
 // Basic + paid, but has never opened a KYC submission: the stored `pending`
 // must surface as `not_started` (see CreatorStateService.toResponse).
 const OWN_CREATOR_NO_KYC = 'c5000000-0000-4000-8000-000000000004';
+// A creator account that has NOT subscribed yet: accountType creator, no
+// CreatorState row. Every creator is in this state between signing up and
+// paying, and it used to 403.
+const OWN_CREATOR_NO_STATE = 'c5000000-0000-4000-8000-000000000005';
 const OWNED_SUBS = [
   OWN_PLAIN,
   OWN_CREATOR_BASIC,
   OWN_CREATOR_PRO,
   OWN_CREATOR_NO_KYC,
+  OWN_CREATOR_NO_STATE,
 ];
 
 describe('CreatorState (contract)', () => {
@@ -141,6 +146,16 @@ describe('CreatorState (contract)', () => {
         wawuUserId: OWN_PLAIN,
         accountType: 'user',
         bio: 'Fixture for creator-state.contract.spec.ts.',
+        interests: [],
+      },
+    });
+    await prisma.userProfile.upsert({
+      where: { wawuUserId: OWN_CREATOR_NO_STATE },
+      update: { accountType: 'creator' },
+      create: {
+        wawuUserId: OWN_CREATOR_NO_STATE,
+        accountType: 'creator',
+        bio: 'Creator who has not subscribed yet.',
         interests: [],
       },
     });
@@ -291,6 +306,18 @@ describe('CreatorState (contract)', () => {
     it('401s with no Authorization header', async () => {
       const res = await request(app.getHttpServer()).get('/creator/state').expect(401);
       expect(res.body.data).toBeNull();
+    });
+
+    it('answers a CREATOR with no subscription yet, rather than refusing them', async () => {
+      // Every creator is in this state between signing up and paying, and
+      // production had eight creator accounts against one CreatorState row.
+      // It used to 403, and the app rendered the raw sentence with a Try
+      // again button that could never work.
+      const res = await request(app.getHttpServer())
+        .get('/creator/state')
+        .set('Authorization', `Bearer ${signToken(OWN_CREATOR_NO_STATE)}`)
+        .expect(200);
+      expect(res.body.data).toMatchObject({ subscriptionPaid: false, slotsUsed: 0 });
     });
 
     it('403s for a plain-user account (no CreatorState row — not the creator role)', async () => {

@@ -51,14 +51,71 @@ export class CreatorStateService {
   }
 
   async getState(wawuUserId: string): Promise<CreatorStateResponse> {
-    const [state, submissionCount] = await Promise.all([
+    const [state, submissionCount, profile] = await Promise.all([
       this.prisma.creatorState.findUnique({ where: { wawuUserId } }),
       this.prisma.kycSubmission.count({ where: { wawuUserId } }),
+      this.prisma.userProfile.findUnique({
+        where: { wawuUserId },
+        select: { accountType: true },
+      }),
     ]);
     if (!state) {
-      throw new ForbiddenException('This account has no creator state — a creator account type is required.');
+      // The route carries only WawuAuthGuard, so until now the CreatorState
+      // row was doing two jobs at once: the data AND the authorisation. That
+      // is why its absence had to be a 403.
+      //
+      // Splitting them: a PLAIN USER still gets 403, because this is not
+      // their area. A CREATOR account with no row is a creator who has not
+      // subscribed yet, which is a normal state and gets a real answer.
+      if (profile?.accountType !== 'creator') {
+        throw new ForbiddenException(
+          'This account has no creator state — a creator account type is required.',
+        );
+      }
+      // A creator who has not subscribed YET is a normal account, not an
+      // error. CreatorState is only written when a subscription is paid for,
+      // so between signing up as a creator and paying there is no row — which
+      // is every new creator, for as long as it takes them to decide.
+      //
+      // This used to throw, and the app rendered the raw sentence with a "Try
+      // again" button that could never work. Production had eight creator
+      // accounts and ONE CreatorState row: every one of the other seven was
+      // looking at that screen.
+      //
+      // CreatorAccountGuard has already established this caller IS a creator
+      // account, so nothing is being handed to somebody who is not one. The
+      // unpaid shape reports subscriptionPaid: false, which is exactly what
+      // every gate downstream already keys on to withhold uploading.
+      return this.unsubscribedState(wawuUserId, submissionCount > 0);
     }
     return this.toResponse(state, submissionCount > 0);
+  }
+
+  /**
+   * What a creator account looks like before it has paid for anything.
+   *
+   * `tier` reports `basic` because the column is not nullable and every
+   * consumer reads it for a label. It is never mistaken for an entitlement:
+   * `subscriptionPaid: false` is what decides that, and `slotsUsed: 0` means
+   * nothing has been published against it either.
+   */
+  private unsubscribedState(
+    wawuUserId: string,
+    hasSubmitted: boolean,
+  ): CreatorStateResponse {
+    return this.toResponse(
+      {
+        wawuUserId,
+        tier: 'basic',
+        subscriptionPaid: false,
+        kycStatus: 'pending',
+        slotsUsed: 0,
+        dmPrice: null,
+        dmEnabled: false,
+        dmResponseHours: 24,
+      },
+      hasSubmitted,
+    );
   }
 
   async updateDmSettings(wawuUserId: string, dto: UpdateDmSettingsDto): Promise<CreatorStateResponse> {
