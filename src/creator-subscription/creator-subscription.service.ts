@@ -107,6 +107,19 @@ export interface FlutterwaveConfigResponse {
   };
 }
 
+/**
+ * What POST /creator-subscription answers with.
+ *
+ * A discriminated union on `free`, matching event ticketing's own free-tier
+ * shape. A fully discounted plan is already granted by the time this returns,
+ * so there is no config to open a checkout with and nothing to verify —
+ * handing back a ₦0 charge config instead would send the client to a
+ * Flutterwave page that cannot complete.
+ */
+export type SubscribeResponse =
+  | ({ free?: false } & FlutterwaveConfigResponse)
+  | { free: true; subscription: CreatorSubscriptionResponse };
+
 type PendingAttemptKind = 'subscribe' | 'upgrade';
 
 interface PendingAttempt {
@@ -349,7 +362,7 @@ export class CreatorSubscriptionService {
   async subscribe(
     wawuUserId: string,
     dto: SubscribeDto,
-  ): Promise<FlutterwaveConfigResponse> {
+  ): Promise<SubscribeResponse> {
     const existing = await this.prisma.creatorSubscription.findUnique({
       where: { creatorWawuId: wawuUserId },
     });
@@ -376,6 +389,31 @@ export class CreatorSubscriptionService {
       }
       amount = validated.priceNaira;
       referralCode = validated.code;
+    }
+
+    // A FULLY DISCOUNTED plan never opens a checkout.
+    //
+    // A 100% referral code prices the plan at ₦0, and Flutterwave cannot take
+    // ₦0 — the charge is refused, so the payer is left on a checkout that
+    // cannot complete and the subscription is never granted. That is not
+    // hypothetical: the first code the owner issued is 100% off, and nobody
+    // holding it could finish signing up.
+    //
+    // Granting straight away is also the honest answer: there is nothing to
+    // verify later, because no money is moving.
+    if (amount === 0) {
+      if (referralCode) {
+        await this.referral.redeem(referralCode, wawuUserId, dto.tier);
+      }
+      const row = await this.grantSubscription(
+        wawuUserId,
+        // No Flutterwave plan is created for a free subscription: a Payment
+        // Plan exists to bill somebody on a schedule, and this bills nobody.
+        { tier: dto.tier, planId: '' },
+        { cardToken: null, cardLast4: null },
+        new Date(),
+      );
+      return { free: true as const, subscription: this.toResponse(row) };
     }
 
     const plan = await this.flutterwave.createOrReusePlan({
@@ -469,94 +507,12 @@ export class CreatorSubscriptionService {
       // creator-subscription, content-piece, direct-message,
       // creator-no-response-tracker), which is exactly the production bug this
       // replaces.
-      const row = await this.prisma.$transaction(async (tx) => {
-        const subscription = await tx.creatorSubscription.upsert({
-          where: { creatorWawuId: wawuUserId },
-          create: {
-            creatorWawuId: wawuUserId,
-            tier: pending.tier,
-            status: 'active',
-            commissionRateOverride: commissionRateOverrideFor(pending.tier),
-            // Flutterwave's own reusable card token, not a string this
-            // backend invented. `flw-cust-${wawuUserId}` used to go here and
-            // was the only thing retry-payment had to charge — see
-            // retryPayment()'s doc comment. Null when the charge produced no
-            // token (non-card method); retry-payment refuses rather than
-            // charging a reference that cannot resolve.
-            flutterwaveCustomerRef: result.cardToken ?? null,
-            flutterwavePlanId: pending.planId,
-            currentPeriodEnd: new Date(now.getTime() + ONE_YEAR_MS),
-            renewalAttempts: 0,
-            cancelsAt: null,
-            cardLast4: result.cardLast4 ?? null,
-            pendingTier: null,
-            tierChangesAt: null,
-          },
-          update: {
-            tier: pending.tier,
-            status: 'active',
-            commissionRateOverride: commissionRateOverrideFor(pending.tier),
-            flutterwaveCustomerRef: result.cardToken ?? undefined,
-            flutterwavePlanId: pending.planId,
-            currentPeriodEnd: new Date(now.getTime() + ONE_YEAR_MS),
-            renewalAttempts: 0,
-            cancelsAt: null,
-            cardLast4: result.cardLast4 ?? undefined,
-            // A freshly paid term supersedes anything that was scheduled
-            // against the term it replaces.
-            pendingTier: null,
-            tierChangesAt: null,
-          },
-        });
-
-        // This is the ONLY code path allowed to set
-        // CreatorState.subscriptionPaid = true (task brief — no other
-        // dev-only toggle exists in this resource). CreatorState may not
-        // exist yet for a first-time subscriber (creating it here, not in
-        // UserProfile/CreatorState's own resources, mirrors how
-        // CreditPurchase.verifyPurchase is the write-path originator for
-        // CreditsState).
-        await tx.creatorState.upsert({
-          where: { wawuUserId },
-          create: {
-            wawuUserId,
-            tier: pending.tier,
-            subscriptionPaid: true,
-            kycStatus: 'pending',
-            slotsUsed: 0,
-            dmPrice: null,
-            dmEnabled: false,
-          },
-          update: {
-            tier: pending.tier,
-            subscriptionPaid: true,
-          },
-        });
-
-        // Promote the account. Paying for a creator subscription IS choosing
-        // a creator account — CreatorAccountGuard reads UserProfile
-        // .accountType and nothing else, so without this the payer is locked
-        // out of Earnings, Subscription management, uploads and paid DMs
-        // despite a successful charge. A first-time subscriber may have no
-        // UserProfile row at all (it is created on the first PATCH
-        // /users/me, which onboarding may not have reached), so this upserts
-        // with the model's own minimums: `accountType` is required and
-        // `interests` is a String[]; every other column is nullable and is
-        // deliberately left for the profile screen to fill in. Only ever
-        // written UP to 'creator' — nothing here or anywhere else in this
-        // service demotes (see cancel()/downgrade()/retryPayment()).
-        await tx.userProfile.upsert({
-          where: { wawuUserId },
-          create: {
-            wawuUserId,
-            accountType: AccountType.creator,
-            interests: [],
-          },
-          update: { accountType: AccountType.creator },
-        });
-
-        return subscription;
-      });
+      const row = await this.grantSubscription(
+        wawuUserId,
+        pending,
+        { cardToken: result.cardToken, cardLast4: result.cardLast4 },
+        now,
+      );
 
       return this.toResponse(row);
     }
@@ -981,5 +937,112 @@ export class CreatorSubscriptionService {
     perPage: number,
   ): Paginated<never> {
     return { items: [], currentPage: page, perPage, total: 0 };
+  }
+
+  /**
+   * Writes the subscription, the entitlement gate and the account type in ONE
+   * transaction.
+   *
+   * Extracted so a FULLY DISCOUNTED subscription can be granted without a
+   * charge. A 100%-off referral code prices the plan at ₦0, and Flutterwave
+   * cannot take ₦0 — the checkout is either refused or, worse, accepted as a
+   * zero charge that looks real in a reconciliation report. So that path
+   * grants directly and must run exactly the same writes as a paid one, not
+   * a second copy of them that can drift.
+   */
+  private async grantSubscription(
+    wawuUserId: string,
+    pending: { tier: CreatorTier; planId: string },
+    card: { cardToken?: string | null; cardLast4?: string | null },
+    now: Date,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+        const subscription = await tx.creatorSubscription.upsert({
+          where: { creatorWawuId: wawuUserId },
+          create: {
+            creatorWawuId: wawuUserId,
+            tier: pending.tier,
+            status: 'active',
+            commissionRateOverride: commissionRateOverrideFor(pending.tier),
+            // Flutterwave's own reusable card token, not a string this
+            // backend invented. `flw-cust-${wawuUserId}` used to go here and
+            // was the only thing retry-payment had to charge — see
+            // retryPayment()'s doc comment. Null when the charge produced no
+            // token (non-card method); retry-payment refuses rather than
+            // charging a reference that cannot resolve.
+            flutterwaveCustomerRef: card.cardToken ?? null,
+            flutterwavePlanId: pending.planId,
+            currentPeriodEnd: new Date(now.getTime() + ONE_YEAR_MS),
+            renewalAttempts: 0,
+            cancelsAt: null,
+            cardLast4: card.cardLast4 ?? null,
+            pendingTier: null,
+            tierChangesAt: null,
+          },
+          update: {
+            tier: pending.tier,
+            status: 'active',
+            commissionRateOverride: commissionRateOverrideFor(pending.tier),
+            flutterwaveCustomerRef: card.cardToken ?? undefined,
+            flutterwavePlanId: pending.planId,
+            currentPeriodEnd: new Date(now.getTime() + ONE_YEAR_MS),
+            renewalAttempts: 0,
+            cancelsAt: null,
+            cardLast4: card.cardLast4 ?? undefined,
+            // A freshly paid term supersedes anything that was scheduled
+            // against the term it replaces.
+            pendingTier: null,
+            tierChangesAt: null,
+          },
+        });
+
+        // This is the ONLY code path allowed to set
+        // CreatorState.subscriptionPaid = true (task brief — no other
+        // dev-only toggle exists in this resource). CreatorState may not
+        // exist yet for a first-time subscriber (creating it here, not in
+        // UserProfile/CreatorState's own resources, mirrors how
+        // CreditPurchase.verifyPurchase is the write-path originator for
+        // CreditsState).
+        await tx.creatorState.upsert({
+          where: { wawuUserId },
+          create: {
+            wawuUserId,
+            tier: pending.tier,
+            subscriptionPaid: true,
+            kycStatus: 'pending',
+            slotsUsed: 0,
+            dmPrice: null,
+            dmEnabled: false,
+          },
+          update: {
+            tier: pending.tier,
+            subscriptionPaid: true,
+          },
+        });
+
+        // Promote the account. Paying for a creator subscription IS choosing
+        // a creator account — CreatorAccountGuard reads UserProfile
+        // .accountType and nothing else, so without this the payer is locked
+        // out of Earnings, Subscription management, uploads and paid DMs
+        // despite a successful charge. A first-time subscriber may have no
+        // UserProfile row at all (it is created on the first PATCH
+        // /users/me, which onboarding may not have reached), so this upserts
+        // with the model's own minimums: `accountType` is required and
+        // `interests` is a String[]; every other column is nullable and is
+        // deliberately left for the profile screen to fill in. Only ever
+        // written UP to 'creator' — nothing here or anywhere else in this
+        // service demotes (see cancel()/downgrade()/retryPayment()).
+        await tx.userProfile.upsert({
+          where: { wawuUserId },
+          create: {
+            wawuUserId,
+            accountType: AccountType.creator,
+            interests: [],
+          },
+          update: { accountType: AccountType.creator },
+        });
+
+      return subscription;
+    });
   }
 }
