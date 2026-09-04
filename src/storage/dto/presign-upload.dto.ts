@@ -20,6 +20,10 @@ export const UPLOAD_FOLDERS = [
   // another surface widens who can.
   'legal/document',
   'avatars',
+  // The wide image behind a profile header and on that creator's cards. Its
+  // own prefix rather than reusing avatars: different shape, different place
+  // on screen, and a creator replacing one must not disturb the other.
+  'profile/cover',
   // A community's own cover image, and a photo posted into a room. Two
   // destinations, not one: the cover is written by the host alone, a message
   // photo by any member, so they never share a prefix.
@@ -67,6 +71,7 @@ export const FOLDER_CONTENT_TYPES: Record<UploadFolder, readonly string[]> = {
   'professional/document': [...IMAGE, ...DOC],
   'legal/document': [...IMAGE, ...DOC],
   avatars: IMAGE,
+  'profile/cover': IMAGE,
   // Images only, deliberately. A community image is rendered in place by
   // every client (serveAs() returns inline: true for image/*), which is
   // exactly the case the allowlist above exists to keep documents and

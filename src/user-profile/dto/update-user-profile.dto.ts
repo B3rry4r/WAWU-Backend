@@ -94,8 +94,28 @@ export class UpdateUserProfileDto {
    */
   @IsOptional() @IsString() @MaxLength(50) xHandle?: string | null;
   @IsOptional() @IsString() @MaxLength(50) tiktokHandle?: string | null;
-  @IsOptional() @IsUrl({}, { message: 'youtubeUrl must be a full link' }) @MaxLength(200) youtubeUrl?: string | null;
-  @IsOptional() @IsUrl({}, { message: 'facebookUrl must be a full link' }) @MaxLength(200) facebookUrl?: string | null;
-  @IsOptional() @IsUrl({}, { message: 'linkedinUrl must be a full link' }) @MaxLength(200) linkedinUrl?: string | null;
+  /*
+    HANDLES, NOT LINKS.
+
+    These three demanded a full "https://linkedin.com/in/you" while instagram,
+    x and tiktok on the SAME FORM took a bare handle. Nobody knows their
+    LinkedIn URL from memory. They now accept either: a handle is expanded to
+    the canonical profile URL by toProfileUrl in the service, and a pasted
+    link is stored untouched.
+
+    websiteUrl keeps @IsUrl, and should: a personal site has no handle to
+    expand and no base to hang one off.
+  */
+  @IsOptional() @IsString() @MaxLength(200) youtubeUrl?: string | null;
+  @IsOptional() @IsString() @MaxLength(200) facebookUrl?: string | null;
+  @IsOptional() @IsString() @MaxLength(200) linkedinUrl?: string | null;
   @IsOptional() @IsUrl({}, { message: 'websiteUrl must be a full link' }) @MaxLength(200) websiteUrl?: string | null;
+
+  /**
+   * Both are keys handed back by POST /uploads/presign, so they are our own
+   * storage URLs rather than anything a client composes. @IsUrl keeps a
+   * malformed value out of a field the profile header renders directly.
+   */
+  @IsOptional() @IsUrl({}, { message: 'avatarUrl must be a full link' }) @MaxLength(500) avatarUrl?: string | null;
+  @IsOptional() @IsUrl({}, { message: 'coverUrl must be a full link' }) @MaxLength(500) coverUrl?: string | null;
 }

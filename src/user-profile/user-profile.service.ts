@@ -14,6 +14,7 @@ import type {
   UserProfileWithClaims,
 } from '../common/types';
 import type { UpdateUserProfileDto } from './dto/update-user-profile.dto';
+import { normaliseHandle, toProfileUrl } from './social-handles';
 
 /**
  * registry.json "UserProfile". Owns GET/PATCH /users/me and the public
@@ -48,6 +49,8 @@ export class UserProfileService {
       instagramHandle: null,
       xHandle: null,
       tiktokHandle: null,
+      avatarUrl: null,
+      coverUrl: null,
       youtubeUrl: null,
       facebookUrl: null,
       linkedinUrl: null,
@@ -100,19 +103,26 @@ export class UserProfileService {
           ...(dto.bio !== undefined && { bio: dto.bio }),
           ...(dto.handle !== undefined && { handle: dto.handle }),
           ...Object.fromEntries(
-            ([
-              'xHandle',
-              'tiktokHandle',
-              'youtubeUrl',
-              'facebookUrl',
-              'linkedinUrl',
-              'websiteUrl',
-            ] as const)
+            (['websiteUrl', 'avatarUrl', 'coverUrl'] as const)
               .filter((k) => dto[k] !== undefined)
               .map((k) => [k, dto[k]]),
           ),
-          ...(dto.instagramHandle !== undefined && {
-            instagramHandle: dto.instagramHandle,
+          // Handles are stored bare, so a typed "@ada" and a typed "ada" do
+          // not become two different profiles pointing at the same person.
+          ...Object.fromEntries(
+            (['xHandle', 'tiktokHandle', 'instagramHandle'] as const)
+              .filter((k) => dto[k] !== undefined)
+              .map((k) => [k, normaliseHandle(dto[k])]),
+          ),
+          // These three take a handle OR a link. See social-handles.ts.
+          ...(dto.youtubeUrl !== undefined && {
+            youtubeUrl: toProfileUrl(dto.youtubeUrl, 'youtube'),
+          }),
+          ...(dto.facebookUrl !== undefined && {
+            facebookUrl: toProfileUrl(dto.facebookUrl, 'facebook'),
+          }),
+          ...(dto.linkedinUrl !== undefined && {
+            linkedinUrl: toProfileUrl(dto.linkedinUrl, 'linkedin'),
           }),
           ...(dto.whatsappHandle !== undefined && {
             whatsappHandle: dto.whatsappHandle,
@@ -124,14 +134,16 @@ export class UserProfileService {
           handle: dto.handle ?? null,
           bio: dto.bio ?? null,
           interests: dto.interests ?? [],
-          instagramHandle: dto.instagramHandle ?? null,
-          xHandle: dto.xHandle ?? null,
-          tiktokHandle: dto.tiktokHandle ?? null,
-          youtubeUrl: dto.youtubeUrl ?? null,
-          facebookUrl: dto.facebookUrl ?? null,
-          linkedinUrl: dto.linkedinUrl ?? null,
+          instagramHandle: normaliseHandle(dto.instagramHandle),
+          xHandle: normaliseHandle(dto.xHandle),
+          tiktokHandle: normaliseHandle(dto.tiktokHandle),
+          youtubeUrl: toProfileUrl(dto.youtubeUrl, 'youtube'),
+          facebookUrl: toProfileUrl(dto.facebookUrl, 'facebook'),
+          linkedinUrl: toProfileUrl(dto.linkedinUrl, 'linkedin'),
           websiteUrl: dto.websiteUrl ?? null,
           whatsappHandle: dto.whatsappHandle ?? null,
+          avatarUrl: dto.avatarUrl ?? null,
+          coverUrl: dto.coverUrl ?? null,
         },
       });
     } catch (error) {

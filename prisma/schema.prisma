@@ -218,6 +218,11 @@ model UserProfile {
   /// reaper sends it exactly once; a null here on an old unpaid account means
   /// nobody has been told yet, which is the state that must never delete.
   unpaidWarnedAt  DateTime?
+  /// Profile picture. Creators could not set one at all: the avatar was a
+  /// generated initial with no upload behind it anywhere in the product.
+  avatarUrl       String?
+  /// The wide image behind a profile header and on the creator's cards.
+  coverUrl        String?
   handle          String?     @unique
   bio             String?
   interests       String[]
