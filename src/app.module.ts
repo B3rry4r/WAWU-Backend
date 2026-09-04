@@ -63,6 +63,7 @@ import { LegalModule } from './legal/legal.module';
 import { LegalIntakeModule } from './legal-intake/legal-intake.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { SchedulerModule } from './scheduler/scheduler.module';
+import { AccountPurgeModule } from './account-purge/account-purge.module';
 import { PaymentWebhookModule } from './payment-webhook/payment-webhook.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
@@ -100,6 +101,7 @@ import { APP_GUARD } from '@nestjs/core';
     // AppModule and fails if this moves back down.
     CreatorNoResponseTrackerModule,
     SchedulerModule,
+    AccountPurgeModule,
     PrismaModule,
     StorageModule,
     // Lifestyle Services: WAWUPay, WAWUCare, WAWU Legal.

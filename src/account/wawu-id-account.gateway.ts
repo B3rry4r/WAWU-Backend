@@ -10,7 +10,10 @@
  * a deletion method today.
  */
 export interface WawuIdAccountGateway {
+  /** Starts the grace period: pending_deletion, sessions revoked. */
   scheduleAccountDeletion(wawuUserId: string): Promise<{ scheduled: boolean }>;
+  /** Ends it: PII scrubbed, row anonymized. */
+  finalizeAccountDeletion(wawuUserId: string): Promise<{ finalized: boolean }>;
 }
 
 export const WAWU_ID_ACCOUNT_GATEWAY = Symbol('WAWU_ID_ACCOUNT_GATEWAY');

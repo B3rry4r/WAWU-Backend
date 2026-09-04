@@ -44,9 +44,23 @@ export class WawuIdAccountClient implements WawuIdAccountGateway {
       resolveServiceKey(this.config.get<string>('WAWU_ID_INTERNAL_SERVICE_KEY'));
   }
 
+  /**
+   * Starts the grace period at WAWU ID.
+   *
+   * This used to call `DELETE /internal/users/:id?mode=soft`. WAWU ID accepts
+   * only `hard` or `anonymize`, so every call 400'd - and AccountService
+   * catches that, logs it, and still answers the user with a
+   * deletionScheduledAt. Somebody asking to delete their account was told it
+   * was scheduled while their identity was never touched.
+   *
+   * The route that actually exists for this is mark-deletion, which is what
+   * WAWU ID's own doc comment says the hub should call: it marks the account
+   * pending_deletion, stamps deletedAt and revokes every session, then the
+   * hub finalizes with anonymize once the grace period is up.
+   */
   async scheduleAccountDeletion(wawuUserId: string): Promise<{ scheduled: boolean }> {
-    const res = await fetch(`${this.baseUrl}/internal/users/${wawuUserId}?mode=soft`, {
-      method: 'DELETE',
+    const res = await fetch(`${this.baseUrl}/internal/users/${wawuUserId}/mark-deletion`, {
+      method: 'POST',
       headers: { 'X-Service-Key': this.serviceKey },
     });
     if (!res.ok) {
@@ -54,5 +68,23 @@ export class WawuIdAccountClient implements WawuIdAccountGateway {
       throw new Error('WAWU ID account deletion failed');
     }
     return { scheduled: true };
+  }
+
+  /**
+   * Finishes the job once the grace period has passed: scrubs the PII, bans
+   * the row and revokes what is left. Anonymize rather than hard delete, so
+   * rows elsewhere that legitimately reference this id (someone else's
+   * purchase, an admin audit entry) do not lose their foreign key.
+   */
+  async finalizeAccountDeletion(wawuUserId: string): Promise<{ finalized: boolean }> {
+    const res = await fetch(`${this.baseUrl}/internal/users/${wawuUserId}?mode=anonymize`, {
+      method: 'DELETE',
+      headers: { 'X-Service-Key': this.serviceKey },
+    });
+    if (!res.ok) {
+      this.logger.error(`WAWU ID anonymize failed for ${wawuUserId}: ${res.status}`);
+      throw new Error('WAWU ID anonymize failed');
+    }
+    return { finalized: true };
   }
 }

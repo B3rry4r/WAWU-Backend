@@ -214,6 +214,10 @@ enum ShopKind {
 model UserProfile {
   wawuUserId      String      @id
   accountType     AccountType
+  /// When the one "your unpaid account closes soon" email was sent. Set so the
+  /// reaper sends it exactly once; a null here on an old unpaid account means
+  /// nobody has been told yet, which is the state that must never delete.
+  unpaidWarnedAt  DateTime?
   handle          String?     @unique
   bio             String?
   interests       String[]

@@ -28,6 +28,7 @@ describe('Account (contract)', () => {
   let accessToken: string;
   const mockGateway: jest.Mocked<WawuIdAccountGateway> = {
     scheduleAccountDeletion: jest.fn().mockResolvedValue({ scheduled: true }),
+    finalizeAccountDeletion: jest.fn().mockResolvedValue({ finalized: true }),
   };
 
   beforeAll(async () => {
