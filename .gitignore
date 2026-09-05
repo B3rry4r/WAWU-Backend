@@ -8,7 +8,11 @@ generated/
 coverage/
 .DS_Store
 mock-wawu-id/node_modules/
+# The mock WAWU ID's signing pair. BOTH halves: the server makes them on
+# first run and derives the public one from the private one every start, so
+# committing either is how they end up disagreeing.
 mock-wawu-id/private.pem
+mock-wawu-id/public.pem
 
 # Deploy SSH keypair (DigitalOcean). The PRIVATE half of this must never be
 # committed — it is root access to the droplet. Generated locally, downloaded

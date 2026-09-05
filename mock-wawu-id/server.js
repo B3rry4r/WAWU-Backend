@@ -35,8 +35,50 @@ app.use((req, res, next) => {
   next();
 });
 
-const PRIVATE_KEY = fs.readFileSync(path.join(__dirname, "private.pem"), "utf8");
-const PUBLIC_KEY = fs.readFileSync(path.join(__dirname, "public.pem"), "utf8");
+/**
+ * The signing pair, generated on first run.
+ *
+ * This used to read two files that had to already be there, with
+ * private.pem gitignored and public.pem COMMITTED. Two ways that goes wrong,
+ * and both happened:
+ *
+ *  - A fresh clone has the public key and no private one, so the mock cannot
+ *    start at all.
+ *  - Regenerate the private key locally and the committed public one no
+ *    longer matches it. The mock then signs tokens the Hub cannot verify, and
+ *    every request 401s while the JWKS endpoint, the kid and the token all
+ *    look perfectly correct. That cost an afternoon once.
+ *
+ * A local test double's keypair is not something to keep in a repo. It is
+ * made here if it is missing, and the two halves cannot disagree because they
+ * are always written together.
+ */
+function loadOrCreateKeypair() {
+  const privPath = path.join(__dirname, "private.pem");
+  const pubPath = path.join(__dirname, "public.pem");
+  if (fs.existsSync(privPath)) {
+    const privateKey = fs.readFileSync(privPath, "utf8");
+    // The public half is derived, never read from disk, so a stale
+    // public.pem cannot put the two out of step.
+    const publicKey = crypto
+      .createPublicKey(privateKey)
+      .export({ type: "spki", format: "pem" })
+      .toString();
+    fs.writeFileSync(pubPath, publicKey);
+    return { privateKey, publicKey };
+  }
+  const { privateKey, publicKey } = crypto.generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: "pkcs8", format: "pem" },
+    publicKeyEncoding: { type: "spki", format: "pem" },
+  });
+  fs.writeFileSync(privPath, privateKey);
+  fs.writeFileSync(pubPath, publicKey);
+  console.log("[mock-wawu-id] generated a new signing keypair");
+  return { privateKey, publicKey };
+}
+
+const { privateKey: PRIVATE_KEY, publicKey: PUBLIC_KEY } = loadOrCreateKeypair();
 const KID = "mock-wawu-id-key-1";
 // The internal service key MUST match what the Hub API sends, and the Hub
 // API reads it from the repo's own .env. Defaulting to a literal here is how
