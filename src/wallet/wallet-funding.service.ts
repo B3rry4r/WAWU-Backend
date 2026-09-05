@@ -66,19 +66,36 @@ export class WalletFundingService {
     }
   }
 
-  /** A sale's creator share, at the rate locked in when it was sold. */
+  /**
+   * A sale's creator share, at the rate locked in when it was sold.
+   *
+   * THE LIMIT APPLIES TO UNFUNDED ROWS, and it has to.
+   *
+   * This first took the 100 oldest completed purchases and filtered the
+   * already-funded ones out afterwards. That works exactly until 100 sales
+   * have been paid: from then on every run reads the same 100 funded rows,
+   * finds nothing to do, and no creator is ever paid again. The sweep would
+   * have looked healthy the whole time.
+   *
+   * So the exclusion is in the query. Raw SQL because the ledger has no
+   * relation to Purchase - it references source rows across several tables by
+   * (sourceType, sourceId) - and Prisma cannot express "rows with no matching
+   * entry" across an unmodelled join.
+   */
   private async fundPurchases(): Promise<void> {
-    const rows = await this.prisma.purchase.findMany({
-      where: { status: 'completed' },
-      select: {
-        id: true,
-        creatorWawuId: true,
-        amount: true,
-        commissionRate: true,
-      },
-      orderBy: { purchasedAt: 'asc' },
-      take: WalletFundingService.MAX_PER_RUN,
-    });
+    const rows = await this.prisma.$queryRaw<
+      Array<{ id: string; creatorWawuId: string; amount: number; commissionRate: unknown }>
+    >`
+      SELECT p."id", p."creatorWawuId", p."amount", p."commissionRate"
+        FROM "Purchase" p
+       WHERE p."status" = 'completed'
+         AND NOT EXISTS (
+               SELECT 1 FROM "WalletLedgerEntry" e
+                WHERE e."sourceType" = 'purchase' AND e."sourceId" = p."id"
+             )
+       ORDER BY p."purchasedAt" ASC
+       LIMIT ${WalletFundingService.MAX_PER_RUN}
+    `;
     await this.credit(
       rows.map((r) => ({
         reference: `purchase:${r.id}`,
@@ -94,12 +111,21 @@ export class WalletFundingService {
 
   /** A paid message, once the creator has actually replied to it. */
   private async fundAnsweredDms(): Promise<void> {
-    const rows = await this.prisma.directMessage.findMany({
-      where: { status: 'responded' },
-      select: { id: true, creatorWawuId: true, amount: true },
-      orderBy: { respondedAt: 'asc' },
-      take: WalletFundingService.MAX_PER_RUN,
-    });
+    // Same reason as fundPurchases: the limit has to apply to what is still
+    // unpaid, or the sweep stalls the moment 100 messages have been settled.
+    const rows = await this.prisma.$queryRaw<
+      Array<{ id: string; creatorWawuId: string; amount: number }>
+    >`
+      SELECT d."id", d."creatorWawuId", d."amount"
+        FROM "DirectMessage" d
+       WHERE d."status" = 'responded'
+         AND NOT EXISTS (
+               SELECT 1 FROM "WalletLedgerEntry" e
+                WHERE e."sourceType" = 'direct_message' AND e."sourceId" = d."id"
+             )
+       ORDER BY d."respondedAt" ASC
+       LIMIT ${WalletFundingService.MAX_PER_RUN}
+    `;
     if (rows.length === 0) return;
 
     // DirectMessage carries no snapshotted rate, unlike Purchase, so the
