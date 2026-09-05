@@ -15,6 +15,20 @@ export interface CreatorProfile {
   wawuUserId: string;
   handle: string | null;
   bio: string | null;
+  /**
+   * The profile picture and the cover, as ANYBODY looking at this creator
+   * needs them.
+   *
+   * They were missing from this aggregate while being present on the profile
+   * row and on GET /users/me, so uploading a picture worked, saving it worked,
+   * and the owner could see it on their own screen. Everyone ELSE got null,
+   * because this is the only endpoint that serves somebody else's profile.
+   * The web client already reads `avatarUrl` off this response and falls back
+   * to initials, so the failure was silent: no error, just a platform where
+   * nobody's photograph ever appeared to anybody.
+   */
+  avatarUrl: string | null;
+  coverUrl: string | null;
   interests: string[];
   instagramHandle: string | null;
   whatsappHandle: string | null;

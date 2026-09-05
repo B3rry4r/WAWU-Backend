@@ -374,6 +374,10 @@ export class SearchResponseService {
         wawuUserId: profile.wawuUserId,
         handle: profile.handle,
         bio: profile.bio,
+        // Same omission as the public profile had: search returned every
+        // creator without a face, so a results list was a column of initials.
+        avatarUrl: profile.avatarUrl,
+        coverUrl: profile.coverUrl,
         interests: profile.interests,
         instagramHandle: profile.instagramHandle,
         xHandle: profile.xHandle,

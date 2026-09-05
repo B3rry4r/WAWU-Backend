@@ -206,6 +206,8 @@ export class UserProfileService {
       wawuUserId: profile.wawuUserId,
       handle: profile.handle,
       bio: profile.bio,
+      avatarUrl: profile.avatarUrl,
+      coverUrl: profile.coverUrl,
       interests: profile.interests,
       instagramHandle: profile.instagramHandle,
       xHandle: profile.xHandle,

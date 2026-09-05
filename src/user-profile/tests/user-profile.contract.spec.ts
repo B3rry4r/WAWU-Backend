@@ -336,6 +336,49 @@ describe('UserProfile (contract)', () => {
       );
     });
 
+    /*
+      THE PICTURE HAS TO BE IN THE RESPONSE, not merely in the database.
+
+      avatarUrl and coverUrl were on the profile row and on GET /users/me, but
+      this aggregate did not carry them, and this is the ONLY endpoint that
+      serves somebody else's profile. So uploading worked, saving worked, the
+      owner saw their own picture, and every other person on the platform saw
+      initials. Nothing failed: the web client reads `avatarUrl` off this
+      response and falls back to initials when it is missing, so the bug was
+      invisible from both ends.
+
+      Asserting the shape is not enough here either. The value has to come
+      back, or a null would satisfy the test while nobody's photograph ever
+      appeared.
+    */
+    it('carries the profile picture and the cover, which is the only way anyone else sees them', async () => {
+      const avatarUrl = 'https://wawu.sfo3.digitaloceanspaces.com/avatars/x/a.jpg?sig=1';
+      const coverUrl = 'https://wawu.sfo3.digitaloceanspaces.com/profile/cover/x/c.jpg?sig=2';
+      const before = await prisma.userProfile.findUnique({
+        where: { wawuUserId: USER_CREATOR_PRO },
+        select: { avatarUrl: true, coverUrl: true },
+      });
+      await prisma.userProfile.update({
+        where: { wawuUserId: USER_CREATOR_PRO },
+        data: { avatarUrl, coverUrl },
+      });
+
+      try {
+        const res = await request(app.getHttpServer())
+          .get(`/users/${USER_CREATOR_PRO}/public-profile`)
+          .set('Authorization', `Bearer ${creatorProToken}`)
+          .expect(200);
+
+        expect(res.body.data.avatarUrl).toBe(avatarUrl);
+        expect(res.body.data.coverUrl).toBe(coverUrl);
+      } finally {
+        await prisma.userProfile.update({
+          where: { wawuUserId: USER_CREATOR_PRO },
+          data: { avatarUrl: before?.avatarUrl ?? null, coverUrl: before?.coverUrl ?? null },
+        });
+      }
+    });
+
     it('404s for a wawuId with no UserProfile row at all', async () => {
       const res = await request(app.getHttpServer())
         .get(`/users/${randomUUID()}/public-profile`)
