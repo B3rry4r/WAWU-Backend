@@ -14,6 +14,7 @@ import { BillPaymentService } from '../bill-payment/bill-payment.service';
 import { HealthPlanService } from '../health-plan/health-plan.service';
 import { ShopService } from '../shop/shop.service';
 import { EventTicketingService } from '../event-ticketing/event-ticketing.service';
+import { WalletService } from '../wallet/wallet.service';
 import { LegalRequestsService } from '../legal/legal.service';
 
 /**
@@ -22,6 +23,16 @@ import { LegalRequestsService } from '../legal/legal.service';
  * — this backend settles exactly one kind of thing.
  */
 const SETTLING_EVENT = 'charge.completed';
+
+/**
+ * Money going OUT, rather than a customer paying in.
+ *
+ * These carry `data.reference` and no `tx_ref` at all, so the parser below has
+ * to look in a different place or every one of them is dropped as unkeyable.
+ * They settle a wallet movement: a creator's earning arriving in their wallet,
+ * or a withdrawal reaching their bank.
+ */
+const TRANSFER_EVENTS = new Set(['transfer.completed', 'transfer.failed']);
 /**
  * Flutterwave confirming a refund it accepted earlier has now settled.
  *
@@ -54,6 +65,10 @@ interface ParsedDelivery {
   event: string;
   txRef: string;
   transactionId: string | null;
+  /** Flutterwave's own word for how a TRANSFER ended, e.g. "SUCCESSFUL". */
+  transferStatus?: string;
+  /** Their sentence for why it did not, when it did not. */
+  transferMessage?: string;
 }
 
 /** A settlement path we can hand a tx_ref to. */
@@ -139,11 +154,22 @@ export class PaymentWebhookService {
     private readonly legal: LegalRequestsService,
     private readonly shop: ShopService,
     private readonly tickets: EventTicketingService,
+    private readonly wallet: WalletService,
   ) {}
 
   /** Narrow the untrusted body by hand — no DTO, because Flutterwave sends far
    * more fields than we model and the global `forbidNonWhitelisted` pipe would
    * reject a perfectly valid delivery. */
+  /**
+   * Public so the admin replay can rebuild a delivery from the payload it
+   * stored. Without it a replayed TRANSFER has no status to settle on, and
+   * transfers are the one flow where the outcome lives in the body rather
+   * than in a second call to Flutterwave.
+   */
+  parseDelivery(body: unknown): ParsedDelivery | null {
+    return this.parse(body);
+  }
+
   private parse(body: unknown): ParsedDelivery | null {
     if (!body || typeof body !== 'object') return null;
     const root = body as Record<string, unknown>;
@@ -153,7 +179,11 @@ export class PaymentWebhookService {
     // the instrument, NOT the event name. Only `event` decides settlement.
     const event = typeof root.event === 'string' ? root.event : 'unknown';
 
-    const txRefRaw = data.tx_ref ?? root.txRef ?? root.tx_ref;
+    // A transfer identifies itself by OUR reference, which we generated and
+    // sent, rather than by a tx_ref it never had.
+    const txRefRaw = TRANSFER_EVENTS.has(event)
+      ? (data.reference ?? root.reference)
+      : (data.tx_ref ?? root.txRef ?? root.tx_ref);
     if (typeof txRefRaw !== 'string' || txRefRaw.length === 0) return null;
 
     const idRaw = data.id ?? root.id;
@@ -161,6 +191,18 @@ export class PaymentWebhookService {
       typeof idRaw === 'string' || typeof idRaw === 'number'
         ? String(idRaw)
         : null;
+
+    if (TRANSFER_EVENTS.has(event)) {
+      return {
+        event,
+        txRef: txRefRaw,
+        transactionId,
+        transferStatus: String(data.status ?? '').toUpperCase(),
+        ...(typeof data.complete_message === 'string'
+          ? { transferMessage: data.complete_message }
+          : {}),
+      };
+    }
 
     return { event, txRef: txRefRaw, transactionId };
   }
@@ -228,7 +270,7 @@ export class PaymentWebhookService {
 
     // ---- Settle. -----------------------------------------------------------
     try {
-      const result = await this.settle(event, txRef, transactionId);
+      const result = await this.settle(event, txRef, transactionId, parsed);
       await this.prisma.paymentWebhookReceipt.update({
         where: { id: receiptId },
         data: {
@@ -325,9 +367,27 @@ export class PaymentWebhookService {
     event: string,
     txRef: string,
     transactionId: string | null,
+    parsed: ParsedDelivery,
   ): Promise<WebhookResult> {
     if (event === REFUND_SETTLED_EVENT) {
       return this.settleRefund(txRef, transactionId);
+    }
+    if (TRANSFER_EVENTS.has(event)) {
+      // Flutterwave reports the outcome in data.status; the event name alone
+      // does not distinguish a completed transfer from a failed one, because
+      // some accounts receive both outcomes as `transfer.completed`.
+      const status = parsed.transferStatus ?? '';
+      const succeeded = event === 'transfer.completed' && status === 'SUCCESSFUL';
+      const { settled } = await this.wallet.settleFromWebhook({
+        reference: txRef,
+        succeeded,
+        ...(parsed.transferMessage ? { failureReason: parsed.transferMessage } : {}),
+      });
+      return {
+        outcome: settled ? 'settled' : 'duplicate',
+        flow: 'wallet-transfer',
+        detail: succeeded ? 'Transfer completed' : `Transfer ${status || 'failed'}`,
+      };
     }
     if (event !== SETTLING_EVENT) {
       return {

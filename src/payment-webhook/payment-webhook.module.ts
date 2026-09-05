@@ -14,6 +14,7 @@ import { LegalModule } from '../legal/legal.module';
 import { PaymentWebhookController } from './payment-webhook.controller';
 import { PaymentWebhookService } from './payment-webhook.service';
 import { FlutterwaveSignatureGuard } from './guards/flutterwave-signature.guard';
+import { WalletModule } from '../wallet/wallet.module';
 
 /**
  * Inbound Flutterwave webhooks — the half of payment confirmation that does
@@ -31,6 +32,7 @@ import { FlutterwaveSignatureGuard } from './guards/flutterwave-signature.guard'
  */
 @Module({
   imports: [
+    WalletModule,
     PrismaModule,
     PurchaseModule,
     ContentPieceModule,

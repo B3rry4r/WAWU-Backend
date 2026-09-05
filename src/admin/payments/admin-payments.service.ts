@@ -180,6 +180,14 @@ export class AdminPaymentsService {
         receipt.event,
         receipt.txRef,
         receipt.transactionId,
+        // Rebuilt from the payload this receipt stored. A transfer carries its
+        // outcome in the body, so replaying one without this would have no
+        // status to settle on.
+        this.webhooks.parseDelivery(receipt.payload) ?? {
+          event: receipt.event,
+          txRef: receipt.txRef,
+          transactionId: receipt.transactionId,
+        },
       );
 
       const updated = await this.prisma.paymentWebhookReceipt.update({

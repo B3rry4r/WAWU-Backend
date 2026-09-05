@@ -2550,3 +2550,96 @@ model ReferralClaim {
 
   @@index([code])
 }
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// WALLETS
+///
+/// A creator's wallet is an account at FLUTTERWAVE MFB, opened in their name
+/// through Flutterwave's Payout Subaccount API. Flutterwave custodies the
+/// money under their own CBN banking licence; WAWU never holds it, and never
+/// operates a balance of its own. That distinction is the whole reason this
+/// can exist at all - see docs and the wallet scope.
+///
+/// So none of these tables ARE the balance. Flutterwave's is authoritative;
+/// these record what WAWU asked for and what it was told happened, which is
+/// what makes "where did this money go" answerable.
+/// ─────────────────────────────────────────────────────────────────────────
+model CreatorWallet {
+  wawuUserId       String   @id
+  /// Flutterwave's PSA… identifier. Used to DEBIT the wallet on withdrawal.
+  accountReference String   @unique
+  /// Flutterwave's internal id. Used to CREDIT the wallet from our balance.
+  barterId         String   @unique
+  /// The creator's own account number at Flutterwave MFB. Anyone can pay into
+  /// it directly, which is the wallet's second purpose.
+  nuban            String?
+  bankName         String?
+  bankCode         String?
+  status           String   @default("active")
+  createdAt        DateTime @default(now())
+
+  @@index([status])
+}
+
+enum WalletEntryKind {
+  /// A creator's share of a sale, moved from WAWU's balance into their wallet.
+  earning
+  /// Money leaving the wallet for their bank account.
+  withdrawal
+  /// An earning taken back, e.g. a refunded purchase.
+  reversal
+}
+
+enum WalletEntryStatus {
+  pending
+  completed
+  failed
+}
+
+/// Every movement WAWU initiated, one row each, before it is attempted.
+///
+/// `reference` is the idempotency key and it is UNIQUE: a retried request
+/// finds the row rather than moving the money twice. Nothing here is trusted
+/// as a balance - it is the record of an instruction and its outcome.
+model WalletLedgerEntry {
+  id            String            @id @default(uuid())
+  wawuUserId    String
+  kind          WalletEntryKind
+  /// Whole naira, like every other amount in this codebase.
+  amount        Int
+  status        WalletEntryStatus @default(pending)
+  /// Our own reference, sent to Flutterwave and echoed back on the webhook.
+  reference     String            @unique
+  /// Flutterwave's transfer id, once it has one.
+  transferId    String?
+  /// What produced this entry: purchase, direct_message, credit_spend.
+  sourceType    String?
+  sourceId      String?
+  failureReason String?
+  createdAt     DateTime          @default(now())
+  settledAt     DateTime?
+
+  @@index([wawuUserId, createdAt])
+  @@index([status])
+  @@index([sourceType, sourceId])
+}
+
+/// A withdrawal's banking details, kept beside its ledger entry.
+///
+/// Separate from WalletLedgerEntry because only withdrawals have a
+/// destination, and an account number belongs with the one movement that used
+/// it rather than nullable on every earning row.
+model WalletWithdrawal {
+  id            String   @id @default(uuid())
+  wawuUserId    String
+  /// The ledger entry this discharges.
+  entryId       String   @unique
+  amount        Int
+  bankCode      String
+  accountNumber String
+  /// Resolved from the bank before sending, never typed by the creator.
+  accountName   String
+  createdAt     DateTime @default(now())
+
+  @@index([wawuUserId, createdAt])
+}
