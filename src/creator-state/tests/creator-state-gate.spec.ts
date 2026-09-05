@@ -10,7 +10,12 @@ import { CreatorStateService } from '../creator-state.service';
  * no error on any screen. So the cases below are the whole point.
  */
 describe('creator state gate, with no row yet', () => {
-  function build(opts: { accountType?: string | null; subscriptions?: number }) {
+  function build(opts: {
+    accountType?: string | null;
+    subscriptions?: number;
+    tier?: string;
+    status?: string;
+  }) {
     const prisma = {
       creatorState: { findUnique: jest.fn().mockResolvedValue(null) },
       kycSubmission: { count: jest.fn().mockResolvedValue(0) },
@@ -19,7 +24,13 @@ describe('creator state gate, with no row yet', () => {
           opts.accountType === undefined ? null : { accountType: opts.accountType },
         ),
       },
-      creatorSubscription: { count: jest.fn().mockResolvedValue(opts.subscriptions ?? 0) },
+      creatorSubscription: {
+        findUnique: jest.fn().mockResolvedValue(
+          opts.subscriptions
+            ? { tier: opts.tier ?? 'basic', status: opts.status ?? 'active' }
+            : null,
+        ),
+      },
     };
     return new CreatorStateService(prisma as never);
   }
@@ -35,6 +46,29 @@ describe('creator state gate, with no row yet', () => {
     // "user" for a real creator, and they are shown the app as a reader.
     // A subscription is proof; nobody buys a creator plan by accident.
     const state = await build({ accountType: 'user', subscriptions: 1 }).getState('u1');
+    expect(state.tier).toBe('basic');
+  });
+
+  it('does not ask somebody who has already paid to pay again', async () => {
+    // An active subscription with no CreatorState row is a creator whose
+    // entitlement row was lost. Reporting them unpaid sends someone who has
+    // been charged back to the paywall to buy the plan they already hold.
+    const state = await build({
+      accountType: 'creator',
+      subscriptions: 1,
+      tier: 'pro',
+      status: 'active',
+    }).getState('u1');
+    expect(state.subscriptionPaid).toBe(true);
+    expect(state.tier).toBe('pro');
+  });
+
+  it('treats a cancelled subscription as unpaid, but still a creator', async () => {
+    const state = await build({
+      accountType: 'user',
+      subscriptions: 1,
+      status: 'cancelled',
+    }).getState('u1');
     expect(state.subscriptionPaid).toBe(false);
     expect(state.tier).toBe('basic');
   });

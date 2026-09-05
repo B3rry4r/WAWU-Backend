@@ -51,15 +51,20 @@ export class CreatorStateService {
   }
 
   async getState(wawuUserId: string): Promise<CreatorStateResponse> {
-    const [state, submissionCount, profile, subscriptionCount] = await Promise.all([
+    const [state, submissionCount, profile, subscription] = await Promise.all([
       this.prisma.creatorState.findUnique({ where: { wawuUserId } }),
       this.prisma.kycSubmission.count({ where: { wawuUserId } }),
       this.prisma.userProfile.findUnique({
         where: { wawuUserId },
         select: { accountType: true },
       }),
-      // Evidence, as opposed to a flag. See the gate below.
-      this.prisma.creatorSubscription.count({ where: { creatorWawuId: wawuUserId } }),
+      // Evidence, as opposed to a flag. See the gate below. The row itself
+      // rather than a count, because if it says ACTIVE the state built below
+      // has to reflect that they have already paid.
+      this.prisma.creatorSubscription.findUnique({
+        where: { creatorWawuId: wawuUserId },
+        select: { tier: true, status: true },
+      }),
     ]);
     if (!state) {
       // The route carries only WawuAuthGuard, so until now the CreatorState
@@ -83,7 +88,7 @@ export class CreatorStateService {
         creator plan by accident. So either the flag says creator, or they have
         paid for creator access at some point, and either is enough.
       */
-      const isCreator = profile?.accountType === 'creator' || subscriptionCount > 0;
+      const isCreator = profile?.accountType === 'creator' || subscription !== null;
       if (!isCreator) {
         throw new ForbiddenException(
           'This account has no creator state — a creator account type is required.',
@@ -103,7 +108,22 @@ export class CreatorStateService {
       // account, so nothing is being handed to somebody who is not one. The
       // unpaid shape reports subscriptionPaid: false, which is exactly what
       // every gate downstream already keys on to withhold uploading.
-      return this.unsubscribedState(wawuUserId, submissionCount > 0);
+      /*
+        An ACTIVE subscription with no CreatorState row is a creator who has
+        paid and whose entitlement row was lost. Reporting them unpaid here
+        would send somebody who has already been charged back to the paywall
+        to buy the plan they are holding.
+
+        The subscription is the record of the purchase, so it decides paid and
+        it decides the tier. Everything else stays at its unstarted default:
+        nothing has been published or configured against a row that is gone.
+      */
+      const paid = subscription?.status === 'active';
+      return this.unsubscribedState(
+        wawuUserId,
+        submissionCount > 0,
+        paid ? subscription.tier : undefined,
+      );
     }
     return this.toResponse(state, submissionCount > 0);
   }
@@ -119,12 +139,14 @@ export class CreatorStateService {
   private unsubscribedState(
     wawuUserId: string,
     hasSubmitted: boolean,
+    /** Set only when a live subscription proves they have already paid. */
+    paidTier?: CreatorTier,
   ): CreatorStateResponse {
     return this.toResponse(
       {
         wawuUserId,
-        tier: 'basic',
-        subscriptionPaid: false,
+        tier: paidTier ?? 'basic',
+        subscriptionPaid: paidTier !== undefined,
         kycStatus: 'pending',
         slotsUsed: 0,
         dmPrice: null,
