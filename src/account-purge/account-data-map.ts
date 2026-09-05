@@ -88,6 +88,17 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'ShopOrder', column: 'buyerWawuId', disposition: 'OWNED' },
   { model: 'EventOrder', column: 'buyerWawuId', disposition: 'OWNED' },
   { model: 'Purchase', column: 'buyerWawuId', disposition: 'OWNED' },
+  // ── the wallet ──────────────────────────────────────────────────────────
+  // A withdrawal's banking details and the ledger of what moved are this
+  // account's own records, so they go with it. The wallet ROW goes too, but
+  // note what that does and does not do: it removes WAWU's pointer to the
+  // account. The account itself is at Flutterwave MFB in the creator's name
+  // and is Flutterwave's to close, which is why account deletion has to drain
+  // a wallet before it runs rather than leaving money behind a deleted row.
+  { model: 'WalletWithdrawal', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'WalletLedgerEntry', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'CreatorWallet', column: 'wawuUserId', disposition: 'OWNED' },
+
   // Last: everything above may reference these.
   { model: 'CreatorState', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'UserProfile', column: 'wawuUserId', disposition: 'OWNED' },

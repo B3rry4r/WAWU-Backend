@@ -217,13 +217,17 @@ describe('Admin payments reconciliation contract', () => {
         },
         {
           id: RECEIPT_IGNORED,
-          deliveryKey: `transfer.completed:${TX_PREFIX}ignored`,
-          event: 'transfer.completed',
+          // WAS transfer.completed, chosen as an example of an event we do
+          // not settle. It IS one now: transfers settle creator wallet
+          // movements. This fixture needs an event that is still genuinely
+          // unhandled, or it stops testing what it is named after.
+          deliveryKey: `charge.pending:${TX_PREFIX}ignored`,
+          event: 'charge.pending',
           txRef: `${TX_PREFIX}ignored`,
           transactionId: 'flw-tx-apx-ignored',
           status: 'ignored',
           flow: null,
-          detail: 'Event transfer.completed is not a settlement event',
+          detail: 'Event charge.pending is not a settlement event',
           payload: chargeCompletedPayload(`${TX_PREFIX}ignored`, 'flw-tx-apx-ignored', 500),
           receivedAt: new Date('2026-08-06T00:00:00.000Z'),
         },
