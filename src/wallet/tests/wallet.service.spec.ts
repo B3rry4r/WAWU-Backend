@@ -324,3 +324,72 @@ describe('wallet', () => {
     });
   });
 });
+
+/**
+ * The country code Flutterwave will actually accept.
+ *
+ * Added after a real call failed with "country length must be 2 characters
+ * long": WAWU ID's claim carries "Nigeria", Flutterwave wants "NG", and the
+ * mock ignored the field entirely so nothing local caught it.
+ */
+describe('country codes', () => {
+  const { toAlpha2 } = jest.requireActual<typeof import('../country-code')>('../country-code');
+
+  it('turns the name WAWU ID stores into the code Flutterwave wants', () => {
+    expect(toAlpha2('Nigeria')).toBe('NG');
+    expect(toAlpha2('Ghana')).toBe('GH');
+    expect(toAlpha2('South Africa')).toBe('ZA');
+  });
+
+  it('passes a code straight through, in either case', () => {
+    expect(toAlpha2('NG')).toBe('NG');
+    expect(toAlpha2('ng')).toBe('NG');
+  });
+
+  it('falls back rather than failing the call', () => {
+    // A wrong country on an NGN wallet at a Nigerian bank costs nothing; a
+    // creator who cannot be paid because their profile said something we did
+    // not predict costs them.
+    expect(toAlpha2('Wakanda')).toBe('NG');
+    expect(toAlpha2('')).toBe('NG');
+    expect(toAlpha2(null)).toBe('NG');
+  });
+});
+
+/**
+ * The service against the REAL mock adapter, not a stub.
+ *
+ * The suite above stubs the gateway, which is right for testing money rules
+ * and useless for catching a payload Flutterwave would reject. This one runs
+ * the actual mock, which now refuses what Flutterwave refuses - and would have
+ * caught "country length must be 2 characters long" before production did.
+ */
+describe('opening a wallet through the real mock adapter', () => {
+  const { FlutterwaveWalletMock } =
+    jest.requireActual<typeof import('../flutterwave-wallet.mock')>('../flutterwave-wallet.mock');
+
+  function serviceWithRealMock() {
+    const prisma = {
+      creatorWallet: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => data),
+      },
+      creatorState: { findUnique: jest.fn().mockResolvedValue({ kycStatus: 'approved' }) },
+      walletLedgerEntry: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    return new WalletService(prisma as never, new FlutterwaveWalletMock() as never);
+  }
+
+  const CLAIMS = {
+    sub: 'u9', firstName: 'Ada', lastName: 'Okeke',
+    email: 'ada@example.com', phone: '+2348000000000',
+    // What WAWU ID actually stores: a full name, not a code.
+    country: 'Nigeria',
+  };
+
+  it('opens for a creator whose profile says "Nigeria"', async () => {
+    const wallet = await serviceWithRealMock().getWallet(CLAIMS);
+    expect(wallet.accountNumber).toBeTruthy();
+    expect(wallet.bankName).toBe('Flutterwave MFB');
+  });
+});

@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { toAlpha2 } from './country-code';
 import {
   FLUTTERWAVE_WALLET_GATEWAY,
   type FlutterwaveWalletGateway,
@@ -125,7 +126,8 @@ export class WalletService {
         // duplicate, so this is namespaced per account rather than the
         // creator's own address, which they may share with another product.
         email: claims.email ?? `${wawuUserId}@wallet.wawuafrica.com`,
-        country: claims.country || 'NG',
+        // Flutterwave wants ISO alpha-2; the claim is a full name.
+        country: toAlpha2(claims.country),
         phone: claims.phone,
       });
     }

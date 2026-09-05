@@ -26,7 +26,21 @@ import type {
 export class FlutterwaveWalletMock implements FlutterwaveWalletGateway {
   private readonly balances = new Map<string, number>();
 
-  createWallet(input: { accountName: string; email: string }): Promise<PsaWallet> {
+  createWallet(input: {
+    accountName: string;
+    email: string;
+    country: string;
+  }): Promise<PsaWallet> {
+    // The mock REFUSES what Flutterwave refuses. It used to ignore `country`
+    // entirely, so a full country name passed every local test and then failed
+    // on the first real call with "country length must be 2 characters long".
+    // A mock more permissive than the thing it stands in for hides exactly the
+    // bugs it exists to catch.
+    if (!/^[A-Z]{2}$/.test(input.country ?? '')) {
+      return Promise.reject(
+        new Error('Flutterwave refused that: country length must be 2 characters long'),
+      );
+    }
     const ref = `PSA${randomUUID().replace(/-/g, '').slice(0, 16).toUpperCase()}`;
     this.balances.set(ref, 0);
     return Promise.resolve({
