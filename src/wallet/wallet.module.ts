@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { WalletService } from './wallet.service';
+import { WalletFundingService } from './wallet-funding.service';
 import { WalletController } from './wallet.controller';
 import { FlutterwaveWalletClient } from './flutterwave-wallet.client';
 import { FlutterwaveWalletMock } from './flutterwave-wallet.mock';
@@ -20,6 +21,7 @@ import { shouldUseMockFlutterwave } from '../common/flutterwave/require-payment-
   controllers: [WalletController],
   providers: [
     WalletService,
+    WalletFundingService,
     {
       provide: FLUTTERWAVE_WALLET_GATEWAY,
       useClass: shouldUseMockFlutterwave() ? FlutterwaveWalletMock : FlutterwaveWalletClient,

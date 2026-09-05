@@ -61,6 +61,12 @@ export class FlutterwaveWalletMock implements FlutterwaveWalletGateway {
     return Promise.resolve({ accountNumber, accountName: 'ADA OKEKE' });
   }
 
+  transferByReference(): Promise<{ status: string } | null> {
+    // The mock has no queue of in-flight transfers: everything it accepted, it
+    // completed. Reconciliation against it therefore always settles.
+    return Promise.resolve({ status: 'SUCCESSFUL' });
+  }
+
   banks(): Promise<Bank[]> {
     return Promise.resolve([
       { code: '044', name: 'Access Bank' },

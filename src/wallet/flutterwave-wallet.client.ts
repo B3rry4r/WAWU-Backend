@@ -175,6 +175,23 @@ export class FlutterwaveWalletClient implements FlutterwaveWalletGateway {
     return { accountNumber: d.account_number, accountName: d.account_name };
   }
 
+  async transferByReference(
+    reference: string,
+  ): Promise<{ status: string; message?: string } | null> {
+    const d = await this.call<Array<{ status?: string; complete_message?: string }>>(
+      `/transfers?reference=${encodeURIComponent(reference)}`,
+      { method: 'GET' },
+    );
+    const row = Array.isArray(d) ? d[0] : (d as unknown as { status?: string });
+    if (!row) return null;
+    return {
+      status: String(row.status ?? '').toUpperCase(),
+      ...(typeof (row as { complete_message?: string }).complete_message === 'string'
+        ? { message: (row as { complete_message?: string }).complete_message }
+        : {}),
+    };
+  }
+
   async banks(): Promise<Bank[]> {
     const d = await this.call<Array<{ code: string; name: string }>>('/banks/NG', {
       method: 'GET',

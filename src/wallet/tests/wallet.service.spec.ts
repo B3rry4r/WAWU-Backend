@@ -26,6 +26,8 @@ describe('wallet', () => {
     entries?: Record<string, unknown>;
     fundThrows?: Error;
     kyc?: string;
+    transferLookup?: { status: string; message?: string } | null;
+    stale?: Array<{ id: string; reference: string }>;
     withdrawThrows?: (Error & { status?: number }) | undefined;
   } = {}) {
     const created: Record<string, unknown>[] = [];
@@ -56,7 +58,7 @@ describe('wallet', () => {
           return { ...data };
         }),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-        findMany: jest.fn().mockResolvedValue([]),
+        findMany: jest.fn().mockResolvedValue(opts.stale ?? []),
       },
       creatorState: {
         findUnique: jest.fn().mockResolvedValue(
@@ -80,6 +82,9 @@ describe('wallet', () => {
       withdraw: opts.withdrawThrows
         ? jest.fn().mockRejectedValue(opts.withdrawThrows)
         : jest.fn().mockResolvedValue({ transferId: 't2', status: 'NEW' }),
+      transferByReference: jest.fn().mockResolvedValue(
+        opts.transferLookup === undefined ? { status: 'SUCCESSFUL' } : opts.transferLookup,
+      ),
       resolveAccount: jest.fn().mockResolvedValue({
         accountNumber: '0690000040', accountName: 'ADA OKEKE',
       }),
@@ -205,6 +210,44 @@ describe('wallet', () => {
       ).rejects.toThrow();
       // "We could not ask" is not "it did not happen".
       expect(updated.some((u) => u.status === 'failed')).toBe(false);
+    });
+  });
+
+  // ── reconciling what the webhook never told us ──────────────────────────
+  describe('reconciling', () => {
+    const stale = [{ id: 'e1', reference: 'wawu-wd-1' }];
+
+    it('leaves a transfer that is still in flight alone', async () => {
+      const { service, prisma } = build({ stale, transferLookup: { status: 'NEW' } });
+      const out = await service.reconcilePending();
+      // Marking a live transfer failed is how somebody gets paid twice.
+      expect(out.settled).toBe(0);
+      expect(prisma.walletLedgerEntry.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('settles one Flutterwave says succeeded', async () => {
+      const { service } = build({ stale, transferLookup: { status: 'SUCCESSFUL' } });
+      await expect(service.reconcilePending()).resolves.toMatchObject({ settled: 1 });
+    });
+
+    it('fails one Flutterwave has never heard of, because it never landed', async () => {
+      const { service, prisma } = build({ stale, transferLookup: null });
+      await service.reconcilePending();
+      expect(prisma.walletLedgerEntry.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ failureReason: 'Never reached Flutterwave' }),
+        }),
+      );
+    });
+
+    it('only looks at entries past the grace period', async () => {
+      const { service, prisma } = build({ stale: [] });
+      await service.reconcilePending(30 * 60 * 1000);
+      const where = prisma.walletLedgerEntry.findMany.mock.calls[0][0].where;
+      expect(where.status).toBe('pending');
+      // A transfer is genuinely pending for a while; reconciling one that is
+      // still moving would mark it failed and invite a second attempt.
+      expect(where.createdAt.lt).toBeInstanceOf(Date);
     });
   });
 

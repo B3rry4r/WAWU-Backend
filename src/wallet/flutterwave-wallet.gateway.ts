@@ -74,6 +74,16 @@ export interface FlutterwaveWalletGateway {
 
   /** The banks a creator can withdraw to. */
   banks(): Promise<Bank[]>;
+
+  /**
+   * What became of one transfer, asked directly rather than waited for.
+   *
+   * The webhook is the normal path; this is what settles a movement when the
+   * webhook never arrives, which does happen. Returns null when Flutterwave
+   * has no record of the reference at all - which is itself the answer:
+   * the request never landed, and the money never moved.
+   */
+  transferByReference(reference: string): Promise<{ status: string; message?: string } | null>;
 }
 
 export const FLUTTERWAVE_WALLET_GATEWAY = Symbol('FLUTTERWAVE_WALLET_GATEWAY');

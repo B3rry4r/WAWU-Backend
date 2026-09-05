@@ -358,6 +358,62 @@ export class WalletService {
     return { settled: count > 0 };
   }
 
+  /**
+   * Settles movements the webhook never told us about.
+   *
+   * Every "we could not confirm" path in this service leaves an entry PENDING
+   * rather than guessing, which is correct and also leaves somebody's money in
+   * limbo until something asks. This is that something: it takes pending
+   * entries past a grace period and asks Flutterwave outright what became of
+   * them.
+   *
+   * The grace period is deliberate. A transfer is genuinely pending for a
+   * while, and reconciling one that is still in flight would mark a live
+   * transfer failed and invite a second attempt.
+   */
+  async reconcilePending(olderThanMs = 30 * 60 * 1000, take = 100): Promise<{ checked: number; settled: number }> {
+    const cutoff = new Date(Date.now() - olderThanMs);
+    const stale = await this.prisma.walletLedgerEntry.findMany({
+      where: { status: 'pending', createdAt: { lt: cutoff } },
+      select: { id: true, reference: true },
+      take,
+    });
+
+    let settled = 0;
+    for (const entry of stale) {
+      try {
+        const result = await this.flw.transferByReference(entry.reference);
+        if (result === null) {
+          // Flutterwave has never heard of it, so the request never landed and
+          // no money moved. Safe to fail, and safe to retry afterwards.
+          const { count } = await this.prisma.walletLedgerEntry.updateMany({
+            where: { id: entry.id, status: 'pending' },
+            data: {
+              status: 'failed',
+              failureReason: 'Never reached Flutterwave',
+              settledAt: new Date(),
+            },
+          });
+          settled += count;
+          continue;
+        }
+        if (result.status === 'SUCCESSFUL' || result.status === 'FAILED') {
+          const { settled: did } = await this.settleFromWebhook({
+            reference: entry.reference,
+            succeeded: result.status === 'SUCCESSFUL',
+            ...(result.message ? { failureReason: result.message } : {}),
+          });
+          if (did) settled += 1;
+        }
+        // Anything else (NEW, PENDING) is still in flight. Leave it.
+      } catch (e) {
+        // Could not ask. Still not evidence, so still pending.
+        this.logger.warn(`Could not reconcile ${entry.reference}: ${(e as Error).message}`);
+      }
+    }
+    return { checked: stale.length, settled };
+  }
+
   /** Banks a creator can withdraw to. */
   banks() {
     return this.flw.banks();
