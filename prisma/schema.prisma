@@ -983,6 +983,8 @@ model CourseEnrollment {
 model Playbook {
   id              String    @id @default(uuid())
   title           String
+  /// Who wrote it. A real book has an author on the cover.
+  author          String?
   pages           Int
   format          String
   description     String

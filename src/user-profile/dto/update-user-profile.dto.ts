@@ -112,10 +112,20 @@ export class UpdateUserProfileDto {
   @IsOptional() @IsUrl({}, { message: 'websiteUrl must be a full link' }) @MaxLength(200) websiteUrl?: string | null;
 
   /**
-   * Both are keys handed back by POST /uploads/presign, so they are our own
-   * storage URLs rather than anything a client composes. @IsUrl keeps a
-   * malformed value out of a field the profile header renders directly.
+   * Both come from POST /uploads/presign, so they are our own storage URLs
+   * rather than anything a client composes. @IsUrl keeps a malformed value out
+   * of a field the profile header renders directly.
+   *
+   * THE LENGTH CAP IS 2048, NOT 500. A presigned S3 URL carries the signature,
+   * the credential scope, the expiry and the signed-header list in its query
+   * string: a real one measured 541 characters. At 500 this endpoint rejected
+   * every avatar and cover with "must be shorter than or equal to 500
+   * characters", so the image uploaded and then the save failed - which is
+   * exactly how it was reported.
+   *
+   * 2048 is the conventional ceiling for a URL and leaves room for a longer
+   * key or an extra signed header without landing back here.
    */
-  @IsOptional() @IsUrl({}, { message: 'avatarUrl must be a full link' }) @MaxLength(500) avatarUrl?: string | null;
-  @IsOptional() @IsUrl({}, { message: 'coverUrl must be a full link' }) @MaxLength(500) coverUrl?: string | null;
+  @IsOptional() @IsUrl({}, { message: 'avatarUrl must be a full link' }) @MaxLength(2048) avatarUrl?: string | null;
+  @IsOptional() @IsUrl({}, { message: 'coverUrl must be a full link' }) @MaxLength(2048) coverUrl?: string | null;
 }
