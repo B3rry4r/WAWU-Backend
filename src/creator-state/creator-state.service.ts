@@ -51,13 +51,15 @@ export class CreatorStateService {
   }
 
   async getState(wawuUserId: string): Promise<CreatorStateResponse> {
-    const [state, submissionCount, profile] = await Promise.all([
+    const [state, submissionCount, profile, subscriptionCount] = await Promise.all([
       this.prisma.creatorState.findUnique({ where: { wawuUserId } }),
       this.prisma.kycSubmission.count({ where: { wawuUserId } }),
       this.prisma.userProfile.findUnique({
         where: { wawuUserId },
         select: { accountType: true },
       }),
+      // Evidence, as opposed to a flag. See the gate below.
+      this.prisma.creatorSubscription.count({ where: { creatorWawuId: wawuUserId } }),
     ]);
     if (!state) {
       // The route carries only WawuAuthGuard, so until now the CreatorState
@@ -67,7 +69,22 @@ export class CreatorStateService {
       // Splitting them: a PLAIN USER still gets 403, because this is not
       // their area. A CREATOR account with no row is a creator who has not
       // subscribed yet, which is a normal state and gets a real answer.
-      if (profile?.accountType !== 'creator') {
+      /*
+        A FLAG, OR PROOF.
+
+        accountType alone was the whole test, and it is a single column that
+        one lost write at signup leaves saying "user" for a creator. When that
+        happened to somebody who had not subscribed yet there was no row to
+        fall back on either, so this 403'd, the client cleared their creator
+        state, and a creator account was shown the app in plain user mode with
+        nothing on any screen explaining why.
+
+        A CreatorSubscription is proof rather than a claim: nobody buys a
+        creator plan by accident. So either the flag says creator, or they have
+        paid for creator access at some point, and either is enough.
+      */
+      const isCreator = profile?.accountType === 'creator' || subscriptionCount > 0;
+      if (!isCreator) {
         throw new ForbiddenException(
           'This account has no creator state — a creator account type is required.',
         );
