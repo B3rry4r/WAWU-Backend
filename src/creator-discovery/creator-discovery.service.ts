@@ -121,9 +121,13 @@ export class CreatorDiscoveryService {
 
       return {
         wawuId: p.wawuUserId,
-        // Handle, then the id, rather than an empty string — a card with a
-        // blank name reads as a broken row.
-        name: fullName || p.handle || p.wawuUserId,
+        // Handle, then nothing. The old fallback ended at `p.wawuUserId`, so a
+        // profile with no name and no handle was advertised on Explore as a
+        // followable creator called
+        // "55d03d5d6-77c2-4761-9297-8c0aaf845426". It was reasoned as better
+        // than a blank row; a raw uuid where a person's name goes is worse
+        // than either, and such a row is dropped below instead.
+        name: fullName || p.handle || '',
         handle: p.handle,
         field: p.interests[0] ?? null,
         pieceCount: pieceCountBy.get(p.wawuUserId) ?? 0,
@@ -132,6 +136,22 @@ export class CreatorDiscoveryService {
       };
     });
 
-    return { items, currentPage: page, perPage, total };
+    /*
+      A CREATOR NOBODY CAN NAME IS NOT DISCOVERABLE.
+
+      Discovery is a list of people to follow. A row with neither a name from
+      WAWU ID nor a handle cannot be told apart from any other by the person
+      reading it, and it used to be shown as its own uuid. Dropping it is the
+      honest answer: the account still exists, its profile still opens by URL,
+      it is simply not offered as somebody to follow until it can be named.
+
+      `total` is left as the query counted it rather than adjusted down. It is
+      the number of creators matching the filter, which is what paging is built
+      on; quietly shrinking it here would make the last page short and the
+      cursor arithmetic wrong.
+    */
+    const named = items.filter((i) => i.name !== '');
+
+    return { items: named, currentPage: page, perPage, total };
   }
 }
