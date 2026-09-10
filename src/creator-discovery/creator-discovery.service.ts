@@ -36,6 +36,19 @@ const DEFAULT_PER_PAGE = 24;
  * list still renders, with handles standing in for names — a directory that
  * disappears because a sibling service is briefly unreachable is worse than a
  * directory showing handles.
+ *
+ * A row here is also a promise that there is something to browse. It used to
+ * be every `accountType: creator` profile, which meant an account that had
+ * only just picked "creator" at signup, with no paid subscription and no
+ * upload, showed up next to people with real catalogues, and clicking
+ * through led nowhere. Uploading itself requires
+ * `CreatorState.subscriptionPaid` (see `ContentPieceService.create`), so a
+ * creator who has not paid, or has paid but not published yet, can never have
+ * a live `ContentPiece` — requiring at least one is therefore the single
+ * filter that excludes both "never finished onboarding/paying" and "nothing
+ * to show yet", with no second table to join. KYC is deliberately NOT part of
+ * this filter: it gates earning, not visibility, and "paid + uploading + KYC
+ * pending" is a normal state (CLAUDE.md), not a reason to hide someone.
  */
 @Injectable()
 export class CreatorDiscoveryService {
@@ -48,8 +61,27 @@ export class CreatorDiscoveryService {
     const page = query.page ?? 1;
     const perPage = query.perPage ?? DEFAULT_PER_PAGE;
 
+    // Every creator with at least one live piece, and how many. Computed
+    // up front (rather than scoped to the page, as it used to be) because it
+    // now also decides WHO is eligible to appear at all, not just what
+    // number is printed on their card.
+    const liveCounts = await this.prisma.contentPiece.groupBy({
+      by: ['creatorWawuId'],
+      where: { status: ContentStatus.live },
+      _count: { _all: true },
+    });
+    const pieceCountBy = new Map(
+      liveCounts.map((c) => [c.creatorWawuId, c._count._all]),
+    );
+    const eligibleIds = [...pieceCountBy.keys()];
+
+    if (eligibleIds.length === 0) {
+      return { items: [], currentPage: page, perPage, total: 0 };
+    }
+
     const where = {
       accountType: AccountType.creator,
+      wawuUserId: { in: eligibleIds },
       ...(query.category
         ? {
             interests: {
@@ -89,13 +121,8 @@ export class CreatorDiscoveryService {
 
     const ids = profiles.map((p) => p.wawuUserId);
 
-    const [identities, pieceCounts, following] = await Promise.all([
+    const [identities, following] = await Promise.all([
       this.wawuId.lookupPublicIdentities(ids),
-      this.prisma.contentPiece.groupBy({
-        by: ['creatorWawuId'],
-        where: { creatorWawuId: { in: ids }, status: ContentStatus.live },
-        _count: { _all: true },
-      }),
       requesterWawuId
         ? this.prisma.followRelationship.findMany({
             where: {
@@ -107,9 +134,6 @@ export class CreatorDiscoveryService {
         : Promise.resolve([]),
     ]);
 
-    const pieceCountBy = new Map(
-      pieceCounts.map((c) => [c.creatorWawuId, c._count._all]),
-    );
     const followingSet = new Set(following.map((f) => f.followingWawuId));
 
     const items: CreatorDiscoveryItem[] = profiles.map((p) => {

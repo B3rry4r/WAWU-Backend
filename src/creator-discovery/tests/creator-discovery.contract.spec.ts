@@ -19,6 +19,10 @@ import { CreatorDiscoveryModule } from '../creator-discovery.module';
 const USER_PLAIN = '00000000-0000-4000-8000-000000000001';
 const USER_CREATOR_BASIC = '00000000-0000-4000-8000-000000000002';
 const USER_CREATOR_PRO = '00000000-0000-4000-8000-000000000003';
+// Not part of the shared seed: a "creator" account type with no CreatorState
+// and no ContentPiece, the exact shape of "picked creator at signup and never
+// finished onboarding or paid".
+const USER_CREATOR_EMPTY = '00000000-0000-4000-8000-000000000004';
 
 const MOCK_WAWU_ID_PORT = process.env.WAWU_ID_JWKS_URL
   ? new URL(process.env.WAWU_ID_JWKS_URL).port
@@ -103,6 +107,9 @@ describe('CreatorDiscovery (contract)', () => {
     await prisma.followRelationship.deleteMany({
       where: { followerWawuId: USER_PLAIN, followingWawuId: USER_CREATOR_PRO },
     });
+    await prisma.userProfile.deleteMany({
+      where: { wawuUserId: USER_CREATOR_EMPTY },
+    });
     await app?.close();
     if (ownedMockWawuId && mockWawuId) mockWawuId.kill();
   }, 30000);
@@ -122,6 +129,32 @@ describe('CreatorDiscovery (contract)', () => {
     for (const id of ids) {
       expect(id).toMatch(/^[0-9a-f-]{36}$/);
     }
+  });
+
+  it('excludes a creator account with no live content, however it got that way', async () => {
+    // Deliberately no CreatorState and no ContentPiece row — the shape of a
+    // "creator" account that never finished onboarding, never paid, or paid
+    // and never published. It has a handle, so the id-as-name filter would
+    // not catch it; only the live-content filter does.
+    await prisma.userProfile.upsert({
+      where: { wawuUserId: USER_CREATOR_EMPTY },
+      update: {
+        accountType: 'creator',
+        handle: 'seeded-empty-creator',
+        interests: [],
+      },
+      create: {
+        wawuUserId: USER_CREATOR_EMPTY,
+        accountType: 'creator',
+        handle: 'seeded-empty-creator',
+        interests: [],
+      },
+    });
+
+    const res = await request(app.getHttpServer()).get('/creators').expect(200);
+
+    const ids = res.body.data.map((c: { wawuId: string }) => c.wawuId);
+    expect(ids).not.toContain(USER_CREATOR_EMPTY);
   });
 
   it('resolves the real display name and badge tier from WAWU ID', async () => {
