@@ -1,0 +1,43 @@
+name: Re-sign content URLs
+
+# Manual only — this is a one-off backfill (see scripts/resign-content-urls.ts's
+# own doc comment), not something that should run on every push. Trigger it
+# from the Actions tab: this workflow → Run workflow.
+on:
+  workflow_dispatch:
+
+concurrency:
+  # One run at a time. Two overlapping runs would just re-sign the same rows
+  # twice — harmless, but pointless — so this is tidiness, not correctness.
+  group: resign-content-urls
+  cancel-in-progress: false
+
+jobs:
+  resign:
+    name: Re-sign existing content URLs on the droplet
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Load SSH key
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "${{ secrets.DROPLET_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "${{ secrets.DROPLET_HOST_KEY }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      # Runs IN PLACE against whatever is already deployed at
+      # /srv/wawu/hub-api (deploy.yml's own rsync target) — no second
+      # checkout, no separate copy of the source. STORAGE_* and DATABASE_URL
+      # come from /etc/wawu/hub-api.env, the same file deploy.sh sources on
+      # every deploy; nothing here is a new secret.
+      - name: Run the re-sign script on the droplet
+        run: |
+          ssh -i ~/.ssh/id_ed25519 wawu@${{ secrets.DROPLET_HOST }} '
+            set -euo pipefail
+            cd /srv/wawu/hub-api
+            set -a
+            source /etc/wawu/hub-api.env
+            set +a
+            npm run resign:content-urls
+          '
