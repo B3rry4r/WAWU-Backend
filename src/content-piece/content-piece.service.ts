@@ -164,6 +164,11 @@ export class ContentPieceService {
     if (!content) {
       throw new NotFoundException('Content not found');
     }
+    // Removed is gone for everyone, owner included — there is no undelete,
+    // so an owner-exception here would resurrect a piece nothing else can see.
+    if (content.status === 'removed') {
+      throw new NotFoundException('Content not found');
+    }
     if (
       content.status !== 'live' &&
       content.creatorWawuId !== requesterWawuId
@@ -189,6 +194,11 @@ export class ContentPieceService {
       scope === 'mine'
         ? {
             creatorWawuId: requesterWawuId ?? '__none__',
+            // Registry note says "any status", written before `removed`
+            // existed: a piece the creator deleted must disappear from their
+            // own shelf immediately, same as everywhere else, or `delete()`
+            // does nothing the creator can actually see.
+            status: { not: 'removed' as const },
             ...(category ? { category } : {}),
           }
         : { status: 'live' as const, ...(category ? { category } : {}) };
@@ -226,7 +236,6 @@ export class ContentPieceService {
     } else {
       [items, total] = await chronological();
     }
-
 
     const unlockedSet = await this.resolveUnlockedSet(
       requesterWawuId,
@@ -310,6 +319,92 @@ export class ContentPieceService {
     return this.list(creatorWawuId, 'mine', undefined, page, perPage);
   }
 
+  /**
+   * A named creator's own published shelf — what GET /users/:wawuId/content
+   * (UserProfileController) reads. Distinct from `listMine`: that one is
+   * always the CALLER's own content in any status; this one is a THIRD
+   * PARTY's content, so it is fixed to `status: 'live'` (a stranger never
+   * sees a pending or rejected draft) regardless of who is asking.
+   *
+   * `requesterWawuId` still flows through to `resolveUnlockedSet` /
+   * `toResponse`, so `fullAssetUrl` on a paid piece is locked unless THIS
+   * caller purchased it — visiting someone else's profile never unlocks
+   * their paid work.
+   */
+  async listByCreator(
+    creatorWawuId: string,
+    requesterWawuId: string | undefined,
+    page: number,
+    perPage: number,
+  ): Promise<Paginated<ContentPieceResponse>> {
+    const where = { creatorWawuId, status: 'live' as const };
+
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.contentPiece.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * perPage,
+        take: perPage,
+      }),
+      this.prisma.contentPiece.count({ where }),
+    ]);
+
+    const unlockedSet = await this.resolveUnlockedSet(
+      requesterWawuId,
+      items.map((i) => i.id),
+    );
+    return {
+      items: items.map((item) =>
+        this.toResponse(item, unlockedSet.has(item.id)),
+      ),
+      currentPage: page,
+      perPage,
+      total,
+    };
+  }
+
+  /**
+   * DELETE /content/:id — a creator removing their own piece.
+   *
+   * Never a hard delete: `Purchase.content` is `onDelete: Restrict` (see
+   * that model's own comment), so `contentPiece.delete()` here would 500 the
+   * instant one buyer existed. Setting `status: 'removed'` is the same
+   * answer whether or not anyone bought it — no branch on purchase history
+   * to get wrong.
+   *
+   * The slot ledger mirrors `AdminContentReviewService.reject()` exactly:
+   * conditional decrement (`slotsUsed: { gt: 0 }`) in the same transaction,
+   * and skipped for a piece that already occupies no slot. A `rejected`
+   * piece already had its slot returned at review time (`occupiesASlot` in
+   * `create()` never counted it); returning it again here would let one
+   * upload free two slots.
+   */
+  async delete(id: string, requesterWawuId: string): Promise<void> {
+    const existing = await this.prisma.contentPiece.findUnique({
+      where: { id },
+    });
+    if (!existing || existing.status === 'removed') {
+      throw new NotFoundException('Content not found');
+    }
+    if (existing.creatorWawuId !== requesterWawuId) {
+      throw new ForbiddenException('You can only delete your own content.');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.contentPiece.update({
+        where: { id },
+        data: { status: 'removed' },
+      });
+
+      if (existing.status !== 'rejected') {
+        await tx.creatorState.updateMany({
+          where: { wawuUserId: existing.creatorWawuId, slotsUsed: { gt: 0 } },
+          data: { slotsUsed: { decrement: 1 } },
+        });
+      }
+    });
+  }
+
   private slugify(title: string): string {
     return (
       title
@@ -362,21 +457,26 @@ export class ContentPieceService {
     // inside one transaction. Counting outside it would let two uploads sent
     // at the same moment both read "2 used" and both be written.
     const created = await this.prisma.$transaction(async (tx) => {
-      // A REJECTED piece occupies no slot, of either kind.
+      // A REJECTED or REMOVED piece occupies no slot, of either kind.
       //
-      // POST /admin/content/:id/reject gives the slot back by decrementing
-      // CreatorState.slotsUsed, which restores the TOTAL cap. The per-kind
-      // caps below are counted from ContentPiece rows instead, so without this
-      // filter they would go on counting the rejected row and the return would
-      // be only half a return: a Basic creator (1 free) whose first upload is
-      // rejected would get the total slot back and still be refused another
-      // free upload. Worse, `isFirstUpload` derives from these same counts, so
-      // they would also stop being a first-time uploader — forcing their first
-      // visible piece to be PAID, in direct contradiction of the spec's
-      // first-upload-must-be-free rule.
+      // POST /admin/content/:id/reject and DELETE /content/:id both give the
+      // slot back by decrementing CreatorState.slotsUsed, which restores the
+      // TOTAL cap. The per-kind caps below are counted from ContentPiece rows
+      // instead, so without this filter they would go on counting the
+      // rejected/removed row and the return would be only half a return: a
+      // Basic creator (1 free) whose only upload is rejected, or whose only
+      // paid upload they delete, would get the total slot back and still be
+      // refused another upload of the same kind. Worse, `isFirstUpload`
+      // derives from these same counts, so they would also stop being a
+      // first-time uploader — forcing their first visible piece to be PAID,
+      // in direct contradiction of the spec's first-upload-must-be-free rule.
       //
       // Two definitions of "used" that disagree are worse than either alone.
-      const occupiesASlot = { status: { not: 'rejected' as const } };
+      const occupiesASlot = {
+        status: {
+          notIn: ['rejected', 'removed'] as ('rejected' | 'removed')[],
+        },
+      };
       const [freeUsed, paidUsed] = await Promise.all([
         tx.contentPiece.count({
           where: { creatorWawuId, accessType: 'free', ...occupiesASlot },
@@ -410,7 +510,10 @@ export class ContentPieceService {
       // Claims the slot conditionally, so the total cap holds even if the
       // per-kind counts above were read concurrently by another request.
       const claimed = await tx.creatorState.updateMany({
-        where: { wawuUserId: creatorWawuId, slotsUsed: { lt: allowance.total } },
+        where: {
+          wawuUserId: creatorWawuId,
+          slotsUsed: { lt: allowance.total },
+        },
         data: { slotsUsed: { increment: 1 } },
       });
       if (claimed.count === 0) {

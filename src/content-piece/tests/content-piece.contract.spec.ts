@@ -153,7 +153,15 @@ describe('ContentPiece (contract)', () => {
     // in seed.ts's known-id set -- delete them so other suites sharing
     // wawu_hub_test (e.g. list-scoped assertions) see a stable dataset.
     const created = await prisma?.contentPiece.findMany({
-      where: { title: { in: ['Contract Test Upload', 'Unlock Flow Fixture'] } },
+      where: {
+        title: {
+          in: [
+            'Contract Test Upload',
+            'Unlock Flow Fixture',
+            'Delete Flow Fixture',
+          ],
+        },
+      },
       select: { id: true },
     });
     const createdIds = (created ?? []).map((c) => c.id);
@@ -756,6 +764,177 @@ describe('ContentPiece (contract)', () => {
         .post(`/content/${CONTENT_MAKEUP_VIDEO}/rate`)
         .send({ rating: 3 })
         .expect(401);
+    });
+  });
+
+  /**
+   * DELETE /content/:id — a creator removing their own piece. Never a hard
+   * delete: `Purchase.content` is `onDelete: Restrict`, so this sets
+   * `status: 'removed'` instead (see ContentPieceService.delete's own
+   * comment). Each fixture is created fresh per test via POST /content
+   * (title 'Delete Flow Fixture', cleaned up in this suite's top-level
+   * afterAll) rather than reusing a seeded id, because a piece can only be
+   * deleted once.
+   */
+  describe('DELETE /content/:id', () => {
+    async function createFixture(): Promise<string> {
+      // Paid, not free: the seeded USER_CREATOR_BASIC already has its one
+      // Basic-tier free slot spent (CONTENT_MAKEUP_VIDEO), so a free fixture
+      // here would 403 on the allowance check this suite isn't testing.
+      const res = await request(app.getHttpServer())
+        .post('/content')
+        .set('Authorization', `Bearer ${creatorToken}`)
+        .send({
+          contentType: 'video',
+          title: 'Delete Flow Fixture',
+          description: 'A test upload the delete-flow suite removes.',
+          category: 'beauty',
+          accessType: 'paid',
+          price: 500,
+          previewAsset:
+            'https://storage.seed.local/content/delete-flow-preview.mp4',
+          fullAsset: 'https://storage.seed.local/content/delete-flow-full.mp4',
+        });
+      if (res.status !== 201 && res.status !== 200) {
+        throw new Error(
+          `createFixture POST /content failed: ${res.status} ${JSON.stringify(res.body)}`,
+        );
+      }
+      return res.body.data.id as string;
+    }
+
+    it('soft-deletes the piece and returns its upload slot (204)', async () => {
+      const id = await createFixture();
+      const before = await prisma.creatorState.findUniqueOrThrow({
+        where: { wawuUserId: USER_CREATOR_BASIC },
+      });
+
+      const res = await request(app.getHttpServer())
+        .delete(`/content/${id}`)
+        .set('Authorization', `Bearer ${creatorToken}`)
+        .expect(204);
+      expect(res.body).toEqual({});
+
+      const stored = await prisma.contentPiece.findUniqueOrThrow({
+        where: { id },
+      });
+      expect(stored.status).toBe('removed');
+
+      const after = await prisma.creatorState.findUniqueOrThrow({
+        where: { wawuUserId: USER_CREATOR_BASIC },
+      });
+      expect(after.slotsUsed).toBe(before.slotsUsed - 1);
+    });
+
+    it('disappears from GET /content/mine immediately', async () => {
+      const id = await createFixture();
+      await request(app.getHttpServer())
+        .delete(`/content/${id}`)
+        .set('Authorization', `Bearer ${creatorToken}`)
+        .expect(204);
+
+      const res = await request(app.getHttpServer())
+        .get('/content/mine')
+        .set('Authorization', `Bearer ${creatorToken}`)
+        .expect(200);
+      const ids = res.body.data.map((c: { id: string }) => c.id);
+      expect(ids).not.toContain(id);
+    });
+
+    it('404s GET /content/:id for the removed piece, even for its owner', async () => {
+      const id = await createFixture();
+      await request(app.getHttpServer())
+        .delete(`/content/${id}`)
+        .set('Authorization', `Bearer ${creatorToken}`)
+        .expect(204);
+
+      await request(app.getHttpServer())
+        .get(`/content/${id}`)
+        .set('Authorization', `Bearer ${creatorToken}`)
+        .expect(404);
+    });
+
+    it('does not return a slot twice for an already-rejected piece', async () => {
+      const id = await createFixture();
+      // Simulate what POST /admin/content/:id/reject already did: rejected,
+      // slot already returned. delete() must not return it again.
+      await prisma.contentPiece.update({
+        where: { id },
+        data: { status: 'rejected' },
+      });
+      const before = await prisma.creatorState.findUniqueOrThrow({
+        where: { wawuUserId: USER_CREATOR_BASIC },
+      });
+
+      await request(app.getHttpServer())
+        .delete(`/content/${id}`)
+        .set('Authorization', `Bearer ${creatorToken}`)
+        .expect(204);
+
+      const after = await prisma.creatorState.findUniqueOrThrow({
+        where: { wawuUserId: USER_CREATOR_BASIC },
+      });
+      expect(after.slotsUsed).toBe(before.slotsUsed);
+
+      // The fixture's own slot was never returned (that's what this test
+      // just proved) — release it directly so it does not sit consumed for
+      // the rest of the suite's paid-slot allowance.
+      await prisma.creatorState.updateMany({
+        where: { wawuUserId: USER_CREATOR_BASIC, slotsUsed: { gt: 0 } },
+        data: { slotsUsed: { decrement: 1 } },
+      });
+    });
+
+    it("403s deleting someone else's content", async () => {
+      const id = await createFixture();
+      await request(app.getHttpServer())
+        .delete(`/content/${id}`)
+        .set('Authorization', `Bearer ${userToken}`)
+        .expect(403);
+
+      const stored = await prisma.contentPiece.findUniqueOrThrow({
+        where: { id },
+      });
+      expect(stored.status).not.toBe('removed');
+
+      // Cleanup, as the real owner, so this fixture's slot goes back to the
+      // shared allowance for the rest of the suite.
+      await request(app.getHttpServer())
+        .delete(`/content/${id}`)
+        .set('Authorization', `Bearer ${creatorToken}`)
+        .expect(204);
+    });
+
+    it('404s deleting content that does not exist', async () => {
+      await request(app.getHttpServer())
+        .delete(`/content/${NONEXISTENT_CONTENT_ID}`)
+        .set('Authorization', `Bearer ${creatorToken}`)
+        .expect(404);
+    });
+
+    it('404s deleting an already-removed piece (no double-decrement via a repeat call)', async () => {
+      const id = await createFixture();
+      await request(app.getHttpServer())
+        .delete(`/content/${id}`)
+        .set('Authorization', `Bearer ${creatorToken}`)
+        .expect(204);
+
+      await request(app.getHttpServer())
+        .delete(`/content/${id}`)
+        .set('Authorization', `Bearer ${creatorToken}`)
+        .expect(404);
+    });
+
+    it('401s with no Authorization header', async () => {
+      const id = await createFixture();
+      await request(app.getHttpServer()).delete(`/content/${id}`).expect(401);
+
+      // Cleanup: the unauthenticated attempt above correctly did nothing, so
+      // release this fixture's slot as its real owner.
+      await request(app.getHttpServer())
+        .delete(`/content/${id}`)
+        .set('Authorization', `Bearer ${creatorToken}`)
+        .expect(204);
     });
   });
 });
