@@ -352,8 +352,10 @@ describe('UserProfile (contract)', () => {
       appeared.
     */
     it('carries the profile picture and the cover, which is the only way anyone else sees them', async () => {
-      const avatarUrl = 'https://wawu.sfo3.digitaloceanspaces.com/avatars/x/a.jpg?sig=1';
-      const coverUrl = 'https://wawu.sfo3.digitaloceanspaces.com/profile/cover/x/c.jpg?sig=2';
+      const avatarUrl =
+        'https://wawu.sfo3.digitaloceanspaces.com/avatars/x/a.jpg?sig=1';
+      const coverUrl =
+        'https://wawu.sfo3.digitaloceanspaces.com/profile/cover/x/c.jpg?sig=2';
       const before = await prisma.userProfile.findUnique({
         where: { wawuUserId: USER_CREATOR_PRO },
         select: { avatarUrl: true, coverUrl: true },
@@ -374,7 +376,10 @@ describe('UserProfile (contract)', () => {
       } finally {
         await prisma.userProfile.update({
           where: { wawuUserId: USER_CREATOR_PRO },
-          data: { avatarUrl: before?.avatarUrl ?? null, coverUrl: before?.coverUrl ?? null },
+          data: {
+            avatarUrl: before?.avatarUrl ?? null,
+            coverUrl: before?.coverUrl ?? null,
+          },
         });
       }
     });
@@ -400,6 +405,95 @@ describe('UserProfile (contract)', () => {
     it('401s with no Authorization header', async () => {
       await request(app.getHttpServer())
         .get(`/users/${USER_CREATOR_PRO}/public-profile`)
+        .expect(401);
+    });
+  });
+
+  /**
+   * GET /users/:wawuId/content — the profile Content tab's actual data
+   * source. Before this endpoint existed, `content: []` was hardcoded on the
+   * frontend because `public-profile` returns only `contentCount`, so every
+   * creator's tab read "Nothing published yet" regardless of what they had
+   * live. Fixtures are the same seeded ContentPiece rows content-piece's own
+   * contract suite uses: CONTENT_CAC_COURSE (paid, USER_CREATOR_PRO, already
+   * purchased by USER_PLAIN), CONTENT_PDF_TEMPLATE (paid, USER_CREATOR_PRO,
+   * never purchased by USER_PLAIN).
+   */
+  describe('GET /users/:wawuId/content', () => {
+    const CONTENT_CAC_COURSE = '10000000-0000-4000-8000-000000000001';
+    const CONTENT_PDF_TEMPLATE = '10000000-0000-4000-8000-000000000003';
+
+    it('lists only LIVE content for a creator, newest first', async () => {
+      const res = await request(app.getHttpServer())
+        .get(`/users/${USER_CREATOR_PRO}/content`)
+        .set('Authorization', `Bearer ${userToken}`)
+        .expect(200);
+
+      const ids = res.body.data.map((c: { id: string }) => c.id);
+      expect(ids).toEqual(
+        expect.arrayContaining([CONTENT_CAC_COURSE, CONTENT_PDF_TEMPLATE]),
+      );
+      for (const item of res.body.data) {
+        expect(item.status).toBe('live');
+      }
+    });
+
+    it('locks a paid piece the caller has not purchased, unlocks one they have', async () => {
+      const res = await request(app.getHttpServer())
+        .get(`/users/${USER_CREATOR_PRO}/content`)
+        .set('Authorization', `Bearer ${userToken}`)
+        .expect(200);
+
+      const purchased = res.body.data.find(
+        (c: { id: string }) => c.id === CONTENT_CAC_COURSE,
+      );
+      const notPurchased = res.body.data.find(
+        (c: { id: string }) => c.id === CONTENT_PDF_TEMPLATE,
+      );
+
+      expect(purchased.fullAssetLocked).toBe(false);
+      expect(purchased.fullAssetUrl).toEqual(expect.any(String));
+      expect(notPurchased.fullAssetLocked).toBe(true);
+      expect(notPurchased.fullAssetUrl).toBeNull();
+    });
+
+    it('free content is never locked, whoever asks', async () => {
+      const res = await request(app.getHttpServer())
+        .get(`/users/${USER_CREATOR_BASIC}/content`)
+        .set('Authorization', `Bearer ${userToken}`)
+        .expect(200);
+
+      const free = res.body.data.find(
+        (c: { accessType: string }) => c.accessType === 'free',
+      );
+      expect(free).toBeDefined();
+      expect(free.fullAssetLocked).toBe(false);
+    });
+
+    it('paginates like every other list endpoint', async () => {
+      const res = await request(app.getHttpServer())
+        .get(`/users/${USER_CREATOR_PRO}/content`)
+        .query({ page: 1, perPage: 1 })
+        .set('Authorization', `Bearer ${userToken}`)
+        .expect(200);
+
+      expect(res.body.data).toHaveLength(1);
+      expect(res.body.pagination.total).toBeGreaterThan(1);
+    });
+
+    it('is empty, not an error, for a creator with nothing live', async () => {
+      const res = await request(app.getHttpServer())
+        .get(`/users/${randomUUID()}/content`)
+        .set('Authorization', `Bearer ${userToken}`)
+        .expect(200);
+
+      expect(res.body.data).toEqual([]);
+      expect(res.body.pagination.total).toBe(0);
+    });
+
+    it('401s with no Authorization header', async () => {
+      await request(app.getHttpServer())
+        .get(`/users/${USER_CREATOR_PRO}/content`)
         .expect(401);
     });
   });

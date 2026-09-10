@@ -3,6 +3,8 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   ParseUUIDPipe,
   Post,
@@ -76,6 +78,15 @@ export class ContentPieceController {
     @CurrentUser() user: WawuJwtClaims,
   ) {
     return this.contentPieceService.findOne(id, user.sub);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: WawuJwtClaims,
+  ): Promise<void> {
+    await this.contentPieceService.delete(id, user.sub);
   }
 
   @Post()

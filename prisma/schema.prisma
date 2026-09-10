@@ -97,6 +97,13 @@ enum ContentStatus {
   pending
   live
   rejected
+  /// Creator-initiated delete. Never a hard DELETE: Purchase.content is
+  /// `onDelete: Restrict` on purpose ("Content that has been sold must be
+  /// unpublished, never hard-deleted" — see that model's own comment), so a
+  /// piece with buyers cannot be removed from the table at all. This status
+  /// is the uniform answer for every piece, sold or not, rather than two
+  /// different delete behaviours depending on purchase history.
+  removed
 }
 
 enum PurchaseType {

@@ -47,7 +47,11 @@ describe('StorageService presigning', () => {
   describe('upload URLs', () => {
     it('carries no checksum parameter', async () => {
       const { uploadUrl } = await service.presignUpload(
-        'user-1', 'kyc/id-document', 'image/jpeg', 'jpeg', 12345,
+        'user-1',
+        'kyc/id-document',
+        'image/jpeg',
+        'jpeg',
+        12345,
       );
       const q = new URL(uploadUrl).searchParams;
       expect(q.get('x-amz-checksum-crc32')).toBeNull();
@@ -57,7 +61,11 @@ describe('StorageService presigning', () => {
 
     it('signs only headers a browser actually sends', async () => {
       const { uploadUrl } = await service.presignUpload(
-        'user-1', 'kyc/id-document', 'image/jpeg', 'jpeg', 12345,
+        'user-1',
+        'kyc/id-document',
+        'image/jpeg',
+        'jpeg',
+        12345,
       );
       const signed = new URL(uploadUrl).searchParams.get('X-Amz-SignedHeaders');
       // A browser sets Content-Length itself and forbids scripts from setting
@@ -71,7 +79,11 @@ describe('StorageService presigning', () => {
     it('names the object from the validated type, not the caller extension', async () => {
       const { key } = await service.presignUpload(
         // A caller claiming an .html extension for an allowed image type.
-        'user-1', 'content/preview', 'image/png', 'html', 100,
+        'user-1',
+        'content/preview',
+        'image/png',
+        'html',
+        100,
       );
       expect(key.endsWith('.png')).toBe(true);
       expect(key).not.toContain('html');
@@ -84,8 +96,20 @@ describe('StorageService presigning', () => {
     });
 
     it('namespaces the key by the caller, so one account cannot overwrite another', async () => {
-      const a = await service.presignUpload('user-a', 'avatars', 'image/png', 'png', 10);
-      const b = await service.presignUpload('user-b', 'avatars', 'image/png', 'png', 10);
+      const a = await service.presignUpload(
+        'user-a',
+        'avatars',
+        'image/png',
+        'png',
+        10,
+      );
+      const b = await service.presignUpload(
+        'user-b',
+        'avatars',
+        'image/png',
+        'png',
+        10,
+      );
       expect(a.key.startsWith('avatars/user-a/')).toBe(true);
       expect(b.key.startsWith('avatars/user-b/')).toBe(true);
     });
@@ -114,13 +138,18 @@ describe('StorageService presigning', () => {
 
     it('always sends a KYC document as an attachment', async () => {
       const url = await service.signedReadUrl('kyc/id-document/user-1/id.jpg');
-      expect(new URL(url).searchParams.get('response-content-disposition')).toBe('attachment');
+      expect(
+        new URL(url).searchParams.get('response-content-disposition'),
+      ).toBe('attachment');
     });
 
     it('expires a KYC read URL far sooner than a content one', async () => {
       const kyc = await service.signedReadUrl('kyc/id-document/user-1/id.jpg');
-      const content = await service.readUrlFor('content/preview/user-1/cover.png');
-      const secs = (u: string) => Number(new URL(u).searchParams.get('X-Amz-Expires'));
+      const content = await service.readUrlFor(
+        'content/preview/user-1/cover.png',
+      );
+      const secs = (u: string) =>
+        Number(new URL(u).searchParams.get('X-Amz-Expires'));
       expect(secs(kyc)).toBeLessThan(secs(content));
     });
   });
@@ -130,7 +159,13 @@ describe('StorageService presigning', () => {
       ['a.png', 'image/png', true],
       ['a.jpg', 'image/jpeg', true],
       ['a.pdf', 'application/pdf', false],
-      ['a.mp4', 'video/mp4', false],
+      // Video and audio render in place — a content piece's own player, not a
+      // download prompt. Content-Type was already right; only the
+      // disposition was wrong, and it broke every <video>/<audio> preview.
+      ['a.mp4', 'video/mp4', true],
+      ['a.mov', 'video/quicktime', true],
+      ['a.webm', 'video/webm', true],
+      ['a.mp3', 'audio/mpeg', true],
       ['a.html', 'application/octet-stream', false],
       ['no-extension', 'application/octet-stream', false],
     ])('%s -> %s (inline: %s)', (key, contentType, inline) => {

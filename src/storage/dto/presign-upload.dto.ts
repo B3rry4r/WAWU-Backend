@@ -1,4 +1,12 @@
-import { IsIn, IsInt, IsString, Matches, Max, MaxLength, Min } from 'class-validator';
+import {
+  IsIn,
+  IsInt,
+  IsString,
+  Matches,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 /**
  * Upload destinations the client may ask for. Closed set: a caller cannot
@@ -108,8 +116,10 @@ export const EXTENSION_FOR_CONTENT_TYPE: Record<string, string> = {
   'audio/mp4': 'm4a',
   'audio/aac': 'aac',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
+    'docx',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation':
+    'pptx',
   'text/csv': 'csv',
   'application/zip': 'zip',
 };
@@ -126,11 +136,21 @@ const CONTENT_TYPE_FOR_EXTENSION: Record<string, string> = Object.fromEntries(
 export function serveAs(key: string): { contentType: string; inline: boolean } {
   const ext = key.split('.').pop()?.toLowerCase() ?? '';
   const contentType = CONTENT_TYPE_FOR_EXTENSION[ext];
-  if (!contentType) return { contentType: 'application/octet-stream', inline: false };
-  // Only images render in place — a cover, a preview thumbnail, an avatar.
+  if (!contentType)
+    return { contentType: 'application/octet-stream', inline: false };
+  // Images, video and audio render in place — a cover, a preview thumbnail, an
+  // avatar, or a content piece's own player. `Content-Disposition: attachment`
+  // on a video/audio object makes a browser refuse to stream it into a
+  // `<video>`/`<audio>` element at all (it offers a download instead of
+  // playing), which is exactly the "preview never plays" failure this fixes:
+  // the Content-Type was already correct, the disposition was not.
   // Everything else is a file you receive, including every PDF: an inline PDF
   // is a document viewer pointed at user-supplied bytes.
-  return { contentType, inline: contentType.startsWith('image/') };
+  const inline =
+    contentType.startsWith('image/') ||
+    contentType.startsWith('video/') ||
+    contentType.startsWith('audio/');
+  return { contentType, inline };
 }
 
 export class PresignUploadDto {
