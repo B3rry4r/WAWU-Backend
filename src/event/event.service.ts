@@ -414,6 +414,7 @@ export class EventService {
       speakers: row.speakers.map((s) => ({
         name: s.name,
         title: s.title,
+        photoUrl: s.photoUrl,
         initials: initialsFor(s.name),
         order: s.order,
       })),
@@ -457,6 +458,7 @@ function speakerRows(speakers: EventSpeakerDto[] | undefined) {
   return (speakers ?? []).map((s, i) => ({
     name: s.name.trim(),
     title: s.title?.trim() || null,
+    photoUrl: s.photoUrl?.trim() || null,
     order: s.order ?? i,
   }));
 }

@@ -34,6 +34,8 @@ import type {
 export interface EventSpeakerView {
   name: string;
   title: string | null;
+  /** Object-storage URL. Null renders as the initials chip instead. */
+  photoUrl: string | null;
   /** Up to two letters, for the avatar chip the old EventsUI rendered. */
   initials: string;
   order: number;

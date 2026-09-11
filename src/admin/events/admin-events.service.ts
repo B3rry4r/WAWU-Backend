@@ -420,6 +420,7 @@ export class AdminEventsService {
       speakers: row.speakers.map((s) => ({
         name: s.name,
         title: s.title,
+        photoUrl: s.photoUrl,
         initials: initialsFor(s.name),
         order: s.order,
       })),

@@ -289,8 +289,42 @@ describe('Events contract (app-facing)', () => {
         .expect(201);
 
       expect(res.body.data.speakers).toEqual([
-        { name: 'Adaeze Okonkwo', title: 'Founder', initials: 'AO', order: 0 },
-        { name: 'Chidi', title: null, initials: 'C', order: 1 },
+        {
+          name: 'Adaeze Okonkwo',
+          title: 'Founder',
+          photoUrl: null,
+          initials: 'AO',
+          order: 0,
+        },
+        { name: 'Chidi', title: null, photoUrl: null, initials: 'C', order: 1 },
+      ]);
+    });
+
+    it('stores a speaker photo when one is supplied', async () => {
+      const res = await http()
+        .post('/api/hub/events')
+        .set(auth(hostToken))
+        .send(
+          validEventBody({
+            speakers: [
+              {
+                name: 'Adaeze Okonkwo',
+                title: 'Founder',
+                photoUrl: 'https://cdn.example.com/event/speaker/adaeze.jpg',
+              },
+            ],
+          }),
+        )
+        .expect(201);
+
+      expect(res.body.data.speakers).toEqual([
+        {
+          name: 'Adaeze Okonkwo',
+          title: 'Founder',
+          photoUrl: 'https://cdn.example.com/event/speaker/adaeze.jpg',
+          initials: 'AO',
+          order: 0,
+        },
       ]);
     });
 
@@ -429,7 +463,9 @@ describe('Events contract (app-facing)', () => {
         .expect(200);
 
       expect(
-        res.body.data.every((e: { category: string }) => e.category === 'music'),
+        res.body.data.every(
+          (e: { category: string }) => e.category === 'music',
+        ),
       ).toBe(true);
     });
 
@@ -446,7 +482,12 @@ describe('Events contract (app-facing)', () => {
       // a workshop or a summit. One `filter` string could not ask this.
       await http()
         .get('/api/hub/events')
-        .query({ perPage: 100, category: 'music', format: 'online', type: 'workshop' })
+        .query({
+          perPage: 100,
+          category: 'music',
+          format: 'online',
+          type: 'workshop',
+        })
         .set(auth(strangerToken))
         .expect(200);
     });
@@ -741,7 +782,13 @@ describe('Events contract (app-facing)', () => {
         .send({ location: 'Kano' })
         .expect(200);
       expect(untouched.body.data.speakers).toEqual([
-        { name: 'Zainab Bello', title: 'Host', initials: 'ZB', order: 0 },
+        {
+          name: 'Zainab Bello',
+          title: 'Host',
+          photoUrl: null,
+          initials: 'ZB',
+          order: 0,
+        },
       ]);
 
       const replaced = await http()
@@ -750,7 +797,13 @@ describe('Events contract (app-facing)', () => {
         .send({ speakers: [{ name: 'Chidi Umeh' }] })
         .expect(200);
       expect(replaced.body.data.speakers).toEqual([
-        { name: 'Chidi Umeh', title: null, initials: 'CU', order: 0 },
+        {
+          name: 'Chidi Umeh',
+          title: null,
+          photoUrl: null,
+          initials: 'CU',
+          order: 0,
+        },
       ]);
       expect(
         await prisma.eventSpeaker.count({ where: { eventId: EV_PENDING } }),
