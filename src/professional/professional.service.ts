@@ -22,6 +22,8 @@ export interface ProfessionalListItem {
   headline: string;
   services: string[];
   verification: string;
+  /** Profile picture. Null is normal: not every creator has uploaded one. */
+  avatarUrl: string | null;
   /** Live pieces, so a browser can see they are actually active on WAWU. */
   pieceCount: number;
   /** Whether they can be paid-messaged right now, and what it costs. */
@@ -235,7 +237,7 @@ export class ProfessionalService {
       this.wawuId.lookupPublicIdentities(ids),
       this.prisma.userProfile.findMany({
         where: { wawuUserId: { in: ids } },
-        select: { wawuUserId: true, handle: true },
+        select: { wawuUserId: true, handle: true, avatarUrl: true },
       }),
       this.prisma.creatorState.findMany({
         where: { wawuUserId: { in: ids } },
@@ -254,6 +256,7 @@ export class ProfessionalService {
     ]);
 
     const handleBy = new Map(profiles.map((p) => [p.wawuUserId, p.handle]));
+    const avatarBy = new Map(profiles.map((p) => [p.wawuUserId, p.avatarUrl]));
     const stateBy = new Map(states.map((s) => [s.wawuUserId, s]));
     const pieceBy = new Map(
       pieceCounts.map((c) => [c.creatorWawuId, c._count._all]),
@@ -277,6 +280,7 @@ export class ProfessionalService {
         headline: r.headline,
         services: r.services,
         verification: identity?.verificationTier ?? 'basic',
+        avatarUrl: avatarBy.get(r.wawuUserId) ?? null,
         pieceCount: pieceBy.get(r.wawuUserId) ?? 0,
         // A professional who never switched paid messages on, or never set a
         // price, cannot be contacted. Reported honestly rather than rendering
@@ -301,7 +305,7 @@ export class ProfessionalService {
       this.wawuId.lookupPublicIdentities([row.wawuUserId]),
       this.prisma.userProfile.findUnique({
         where: { wawuUserId: row.wawuUserId },
-        select: { handle: true, bio: true },
+        select: { handle: true, bio: true, avatarUrl: true },
       }),
       this.prisma.creatorState.findUnique({
         where: { wawuUserId: row.wawuUserId },
@@ -328,6 +332,7 @@ export class ProfessionalService {
       about: row.about,
       services: row.services,
       verification: identity?.verificationTier ?? 'basic',
+      avatarUrl: profile?.avatarUrl ?? null,
       /**
        * The issuing body is public; the licence NUMBER is not. A buyer is
        * entitled to know who certified this person so they can check the

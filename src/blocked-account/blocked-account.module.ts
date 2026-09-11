@@ -1,6 +1,7 @@
 import { Global, Module } from '@nestjs/common';
 import { BlockedAccountController } from './blocked-account.controller';
 import { BlockedAccountService } from './blocked-account.service';
+import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 
 /**
  * registry.json "BlockedAccount" resource module. PrismaService comes from
@@ -17,9 +18,14 @@ import { BlockedAccountService } from './blocked-account.service';
  * @Global() provider is only visible once the module is somewhere in the
  * graph, and the per-resource contract specs each build a testing module
  * from just their own resource's module.
+ *
+ * WawuAuthModule supplies WawuIdClient, which list() batch-calls to attach
+ * each row's blocked-user identity (same source CreatorDiscoveryService
+ * already uses).
  */
 @Global()
 @Module({
+  imports: [WawuAuthModule],
   controllers: [BlockedAccountController],
   providers: [BlockedAccountService],
   exports: [BlockedAccountService],

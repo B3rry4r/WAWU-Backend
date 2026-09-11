@@ -10,6 +10,7 @@ export interface CreatorDiscoveryItem {
   /** Real display name from WAWU ID, falling back to the handle. */
   name: string;
   handle: string | null;
+  avatarUrl: string | null;
   /** What they do — their first interest. Null when they have listed none. */
   field: string | null;
   /** Live pieces only. A draft or rejected upload is not something to browse. */
@@ -105,7 +106,7 @@ export class CreatorDiscoveryService {
     const [profiles, total] = await Promise.all([
       this.prisma.userProfile.findMany({
         where,
-        select: { wawuUserId: true, handle: true, interests: true },
+        select: { wawuUserId: true, handle: true, interests: true, avatarUrl: true },
         // A stable order, so page 2 is not page 1 again. `handle` is unique
         // where set; wawuUserId breaks the tie for profiles without one.
         orderBy: [{ handle: 'asc' }, { wawuUserId: 'asc' }],
@@ -153,6 +154,7 @@ export class CreatorDiscoveryService {
         // than either, and such a row is dropped below instead.
         name: fullName || p.handle || '',
         handle: p.handle,
+        avatarUrl: p.avatarUrl,
         field: p.interests[0] ?? null,
         pieceCount: pieceCountBy.get(p.wawuUserId) ?? 0,
         verification: identity?.verificationTier ?? 'basic',

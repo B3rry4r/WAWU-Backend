@@ -1,4 +1,24 @@
 import type { CommunityMessageModel } from '../../../generated/prisma/models';
 
-/** Prisma model IS the wire shape for CommunityMessage — thin re-export. */
-export type CommunityMessage = CommunityMessageModel;
+/** The sender's public identity, batch-looked-up alongside a page of messages. */
+export interface CommunityMessageSender {
+  wawuId: string;
+  /** Real display name from WAWU ID, falling back to the handle, then ''. */
+  name: string;
+  handle: string | null;
+  avatarUrl: string | null;
+}
+
+/**
+ * Prisma model plus one ADDITIVE, optional field. This used to be a bare
+ * `export type CommunityMessage = CommunityMessageModel` — every row carried
+ * only `senderWawuId`, with no name/handle/avatar for the client to render
+ * (list() never joined UserProfile or called WawuIdClient). `sender` is
+ * populated by CommunityMessageService.list() from a batched lookup, same
+ * pattern as DirectMessage's `otherParty`; `create()`'s return still omits
+ * it (optional, so a bare Prisma row still satisfies the type) since the
+ * sender there is always the caller, who already knows who they are.
+ */
+export type CommunityMessage = CommunityMessageModel & {
+  sender?: CommunityMessageSender;
+};
