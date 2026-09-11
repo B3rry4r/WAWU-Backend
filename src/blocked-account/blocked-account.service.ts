@@ -6,7 +6,8 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import type { Paginated } from '../common/interceptors/response.interceptor';
-import type { BlockedAccount } from '../common/types';
+import type { BlockedAccount, BlockedAccountUser } from '../common/types';
+import { WawuIdClient } from '../common/auth/wawu-id.client';
 import type { CreateBlockedAccountDto } from './dto/create-blocked-account.dto';
 
 /**
@@ -31,7 +32,50 @@ import type { CreateBlockedAccountDto } from './dto/create-blocked-account.dto';
  */
 @Injectable()
 export class BlockedAccountService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly wawuId: WawuIdClient,
+  ) {}
+
+  /**
+   * Batch identity lookup for a page of blocked accounts — same shape as
+   * CreatorDiscoveryService.list() and DirectMessageService's
+   * lookupOtherParties: one WawuIdClient.lookupPublicIdentities call plus
+   * one userProfile.findMany, merged by id. Called once per page in list(),
+   * not once per row.
+   */
+  private async lookupBlockedUsers(
+    blockedIds: string[],
+  ): Promise<Map<string, BlockedAccountUser>> {
+    const unique = [...new Set(blockedIds)];
+    const out = new Map<string, BlockedAccountUser>();
+    if (unique.length === 0) return out;
+
+    const [identities, profiles] = await Promise.all([
+      this.wawuId.lookupPublicIdentities(unique),
+      this.prisma.userProfile.findMany({
+        where: { wawuUserId: { in: unique } },
+        select: { wawuUserId: true, handle: true, avatarUrl: true },
+      }),
+    ]);
+    const profileBy = new Map(profiles.map((p) => [p.wawuUserId, p]));
+
+    for (const id of unique) {
+      const identity = identities.get(id);
+      const profile = profileBy.get(id);
+      const fullName = [identity?.firstName, identity?.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+      out.set(id, {
+        wawuId: id,
+        name: fullName || profile?.handle || '',
+        handle: profile?.handle ?? null,
+        avatarUrl: profile?.avatarUrl ?? null,
+      });
+    }
+    return out;
+  }
 
   /**
    * POST /settings/privacy/blocked — block an account.
@@ -108,7 +152,15 @@ export class BlockedAccountService {
       this.prisma.blockedAccount.count({ where: { userWawuId } }),
     ]);
 
-    return { items, currentPage: page, perPage, total };
+    const blockedUsers = await this.lookupBlockedUsers(
+      items.map((i) => i.blockedWawuId),
+    );
+    const enriched: BlockedAccount[] = items.map((i) => ({
+      ...i,
+      blockedUser: blockedUsers.get(i.blockedWawuId),
+    }));
+
+    return { items: enriched, currentPage: page, perPage, total };
   }
 
   /**

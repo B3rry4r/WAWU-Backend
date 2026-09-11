@@ -14,7 +14,8 @@ import {
 } from '../credit-spend/credit-spend.service';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type { CommunityKind } from '../../generated/prisma/enums';
-import type { CommunityMessage } from '../common/types';
+import type { CommunityMessage, CommunityMessageSender } from '../common/types';
+import { WawuIdClient } from '../common/auth/wawu-id.client';
 import { NotificationService } from '../notification/notification.service';
 import type { CreateCommunityMessageDto } from './dto/create-community-message.dto';
 
@@ -142,7 +143,48 @@ export class CommunityMessageService {
     private readonly prisma: PrismaService,
     private readonly creditSpendService: CreditSpendService,
     private readonly notifications: NotificationService,
+    private readonly wawuId: WawuIdClient,
   ) {}
+
+  /**
+   * Batch sender-identity lookup for a page of messages — same shape as
+   * CreatorDiscoveryService.list() and DirectMessageService's
+   * lookupOtherParties: one WawuIdClient.lookupPublicIdentities call plus
+   * one userProfile.findMany, merged by id. Called once per page in list(),
+   * not once per row.
+   */
+  private async lookupSenders(
+    senderIds: string[],
+  ): Promise<Map<string, CommunityMessageSender>> {
+    const unique = [...new Set(senderIds)];
+    const out = new Map<string, CommunityMessageSender>();
+    if (unique.length === 0) return out;
+
+    const [identities, profiles] = await Promise.all([
+      this.wawuId.lookupPublicIdentities(unique),
+      this.prisma.userProfile.findMany({
+        where: { wawuUserId: { in: unique } },
+        select: { wawuUserId: true, handle: true, avatarUrl: true },
+      }),
+    ]);
+    const profileBy = new Map(profiles.map((p) => [p.wawuUserId, p]));
+
+    for (const id of unique) {
+      const identity = identities.get(id);
+      const profile = profileBy.get(id);
+      const fullName = [identity?.firstName, identity?.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+      out.set(id, {
+        wawuId: id,
+        name: fullName || profile?.handle || '',
+        handle: profile?.handle ?? null,
+        avatarUrl: profile?.avatarUrl ?? null,
+      });
+    }
+    return out;
+  }
 
   private async assertCommunityExists(
     communityId: string,
@@ -308,7 +350,13 @@ export class CommunityMessageService {
       this.prisma.communityMessage.count({ where: { communityId } }),
     ]);
 
-    return { items, currentPage: page, perPage, total };
+    const senders = await this.lookupSenders(items.map((m) => m.senderWawuId));
+    const enriched: CommunityMessage[] = items.map((m) => ({
+      ...m,
+      sender: senders.get(m.senderWawuId),
+    }));
+
+    return { items: enriched, currentPage: page, perPage, total };
   }
 
   /**

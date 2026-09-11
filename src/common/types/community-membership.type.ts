@@ -15,4 +15,6 @@ export type CommunityMembership = CommunityMembershipModel;
  */
 export type CommunityJoinRequest = CommunityMembership & {
   handle: string | null;
+  /** UserProfile.avatarUrl. Genuinely nullable: not every requester has one. */
+  avatarUrl: string | null;
 };

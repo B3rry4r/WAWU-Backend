@@ -3,6 +3,7 @@ import { CreditSpendModule } from '../credit-spend/credit-spend.module';
 import { CommunityMessageController } from './community-message.controller';
 import { CommunityMessageService } from './community-message.service';
 import { NotificationModule } from '../notification/notification.module';
+import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 
 /**
  * CommunityMessage resource module. PrismaService comes from the globally
@@ -12,10 +13,12 @@ import { NotificationModule } from '../notification/notification.module';
  * credit-spend.module.ts's own doc comment). CreditsStateModule is
  * deliberately NOT imported: it doesn't export CreditsStateService, so this
  * resource reads/writes the CreditsState table directly via PrismaService
- * instead (see community-message.service.ts's doc comment).
+ * instead (see community-message.service.ts's doc comment). WawuAuthModule
+ * supplies WawuIdClient, which list() batch-calls to attach each message's
+ * sender identity (same source CreatorDiscoveryService already uses).
  */
 @Module({
-  imports: [NotificationModule, CreditSpendModule],
+  imports: [NotificationModule, CreditSpendModule, WawuAuthModule],
   controllers: [CommunityMessageController],
   providers: [CommunityMessageService],
 })

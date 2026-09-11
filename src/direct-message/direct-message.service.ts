@@ -9,7 +9,8 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import type { Paginated } from '../common/interceptors/response.interceptor';
-import { toWireDm, type DirectMessage } from '../common/types';
+import { toWireDm, type DirectMessage, type DmOtherParty } from '../common/types';
+import { WawuIdClient } from '../common/auth/wawu-id.client';
 import {
   FLUTTERWAVE_CLIENT,
   type FlutterwaveClient,
@@ -133,7 +134,49 @@ export class DirectMessageService {
     @Inject(FLUTTERWAVE_CLIENT) private readonly flutterwave: FlutterwaveClient,
     private readonly notifications: NotificationService,
     private readonly blockedAccounts: BlockedAccountService,
+    private readonly wawuId: WawuIdClient,
   ) {}
+
+  /**
+   * Batch profile lookup for the "other party" in a page of DM threads —
+   * same shape as CreatorDiscoveryService.list() and
+   * ProfessionalService.list(): one WawuIdClient.lookupPublicIdentities call
+   * for names/badge tiers plus one userProfile.findMany for handle/avatar,
+   * merged by id. `inbox()`/`threads()` call this once per page (not once
+   * per row), and `findOne()` calls it with a single id.
+   */
+  private async lookupOtherParties(
+    otherPartyIds: string[],
+  ): Promise<Map<string, DmOtherParty>> {
+    const unique = [...new Set(otherPartyIds)];
+    const out = new Map<string, DmOtherParty>();
+    if (unique.length === 0) return out;
+
+    const [identities, profiles] = await Promise.all([
+      this.wawuId.lookupPublicIdentities(unique),
+      this.prisma.userProfile.findMany({
+        where: { wawuUserId: { in: unique } },
+        select: { wawuUserId: true, handle: true, avatarUrl: true },
+      }),
+    ]);
+    const profileBy = new Map(profiles.map((p) => [p.wawuUserId, p]));
+
+    for (const id of unique) {
+      const identity = identities.get(id);
+      const profile = profileBy.get(id);
+      const fullName = [identity?.firstName, identity?.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+      out.set(id, {
+        wawuId: id,
+        name: fullName || profile?.handle || '',
+        handle: profile?.handle ?? null,
+        avatarUrl: profile?.avatarUrl ?? null,
+      });
+    }
+    return out;
+  }
 
   /**
    * POST /dm/:creatorWawuId/send (roles: any). Inits the Flutterwave charge
@@ -386,7 +429,12 @@ export class DirectMessageService {
     return toWireDm(responded);
   }
 
-  /** GET /dm/inbox (roles: creator) — the creator's own incoming DMs. */
+  /**
+   * GET /dm/inbox (roles: creator) — the creator's own incoming DMs. The
+   * OTHER party on this view is always the sender (the fan who paid), so the
+   * batch lookup is keyed on `senderWawuId` across the whole page — one
+   * lookup call, not one per row.
+   */
   async inbox(
     creatorWawuId: string,
     page: number,
@@ -401,10 +449,24 @@ export class DirectMessageService {
       }),
       this.prisma.directMessage.count({ where: { creatorWawuId } }),
     ]);
-    return { items: items.map(toWireDm), currentPage: page, perPage, total };
+    const otherParties = await this.lookupOtherParties(
+      items.map((i) => i.senderWawuId),
+    );
+    return {
+      items: items.map((i) =>
+        toWireDm(i, otherParties.get(i.senderWawuId) ?? null),
+      ),
+      currentPage: page,
+      perPage,
+      total,
+    };
   }
 
-  /** GET /dm/threads (roles: any) — the caller's own sent DMs. */
+  /**
+   * GET /dm/threads (roles: any) — the caller's own sent DMs. The OTHER
+   * party on this view is always the creator being messaged, so the batch
+   * lookup is keyed on `creatorWawuId` across the whole page.
+   */
   async threads(
     senderWawuId: string,
     page: number,
@@ -419,7 +481,17 @@ export class DirectMessageService {
       }),
       this.prisma.directMessage.count({ where: { senderWawuId } }),
     ]);
-    return { items: items.map(toWireDm), currentPage: page, perPage, total };
+    const otherParties = await this.lookupOtherParties(
+      items.map((i) => i.creatorWawuId),
+    );
+    return {
+      items: items.map((i) =>
+        toWireDm(i, otherParties.get(i.creatorWawuId) ?? null),
+      ),
+      currentPage: page,
+      perPage,
+      total,
+    };
   }
 
   /**
@@ -448,6 +520,11 @@ export class DirectMessageService {
     ) {
       throw new NotFoundException('Direct message not found');
     }
-    return toWireDm(dm);
+    // Whichever one the caller isn't — the fan sees the creator, the
+    // creator sees the fan, same rule as inbox()/threads() above.
+    const otherPartyId =
+      dm.senderWawuId === callerWawuId ? dm.creatorWawuId : dm.senderWawuId;
+    const otherParties = await this.lookupOtherParties([otherPartyId]);
+    return toWireDm(dm, otherParties.get(otherPartyId) ?? null);
   }
 }

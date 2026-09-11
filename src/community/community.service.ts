@@ -402,16 +402,20 @@ export class CommunityService {
         ? []
         : await this.prisma.userProfile.findMany({
             where: { wawuUserId: { in: items.map((m) => m.userWawuId) } },
-            select: { wawuUserId: true, handle: true },
+            select: { wawuUserId: true, handle: true, avatarUrl: true },
           });
     const handleFor = new Map(
       profiles.map((p) => [p.wawuUserId, p.handle] as const),
+    );
+    const avatarFor = new Map(
+      profiles.map((p) => [p.wawuUserId, p.avatarUrl] as const),
     );
 
     return {
       items: items.map((m) => ({
         ...m,
         handle: handleFor.get(m.userWawuId) ?? null,
+        avatarUrl: avatarFor.get(m.userWawuId) ?? null,
       })),
       currentPage: page,
       perPage,

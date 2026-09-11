@@ -9,11 +9,15 @@ import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';
 import { shouldUseMockFlutterwave } from '../common/flutterwave/require-payment-config';
 import { NotificationModule } from '../notification/notification.module';
 import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
+import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 
 /**
  * registry.json "DirectMessage" resource module. PrismaService comes from
  * the globally-registered PrismaModule (conventions.md § ORM / database) —
- * not re-imported here.
+ * not re-imported here. WawuAuthModule supplies WawuIdClient, which
+ * inbox()/threads()/findOne() batch-call to attach the other party's real
+ * name to a thread row (same source CreatorDiscoveryService and
+ * ProfessionalService already use).
  *
  * FlutterwaveClient DI-token swap: identical rationale/wiring to
  * src/purchase/purchase.module.ts and
@@ -29,7 +33,7 @@ import { BlockedAccountModule } from '../blocked-account/blocked-account.module'
  * never either adapter directly.
  */
 @Module({
-  imports: [NotificationModule, BlockedAccountModule],
+  imports: [NotificationModule, BlockedAccountModule, WawuAuthModule],
   controllers: [DirectMessageController],
   providers: [
     DirectMessageService,
