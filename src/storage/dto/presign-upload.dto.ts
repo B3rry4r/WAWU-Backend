@@ -37,6 +37,11 @@ export const UPLOAD_FOLDERS = [
   // photo by any member, so they never share a prefix.
   'community/image',
   'community/message',
+  // A speaker's photo on a submitted event. Its own prefix: set by the host
+  // (never the speaker themselves, who may have no WAWU account at all) and
+  // shown publicly once the event is approved, same visibility as the
+  // banner image.
+  'event/speaker',
 ] as const;
 
 export type UploadFolder = (typeof UPLOAD_FOLDERS)[number];
@@ -86,6 +91,7 @@ export const FOLDER_CONTENT_TYPES: Record<UploadFolder, readonly string[]> = {
   // markup out of.
   'community/image': IMAGE,
   'community/message': IMAGE,
+  'event/speaker': IMAGE,
 };
 
 /**

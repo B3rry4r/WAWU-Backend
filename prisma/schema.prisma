@@ -1787,6 +1787,9 @@ model EventSpeaker {
   event   Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
   name    String
   title   String?
+  /// Object-storage URL from POST /uploads/presign (folder "event/speaker").
+  /// Optional — a speaker with no photo still renders, as initials.
+  photoUrl String?
   order   Int
 
   @@index([eventId])

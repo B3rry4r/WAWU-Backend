@@ -35,6 +35,11 @@ export class EventSpeakerDto {
   @MaxLength(160)
   title?: string;
 
+  /** Object-storage URL from POST /uploads/presign (folder "event/speaker"). */
+  @IsOptional()
+  @IsUrl()
+  photoUrl?: string;
+
   /** Display order. Defaulted by position when omitted. */
   @IsOptional()
   @Type(() => Number)
