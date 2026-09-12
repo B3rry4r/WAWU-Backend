@@ -1,8 +1,9 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
+import { WawuIdClient } from '../common/auth/wawu-id.client';
 import type { Paginated } from '../common/interceptors/response.interceptor';
-import type { Comment } from '../common/types';
+import type { Comment, CommentAuthor } from '../common/types';
 import type { CreateCommentDto } from './dto/create-comment.dto';
 
 /**
@@ -14,7 +15,50 @@ export class CommentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly blockedAccounts: BlockedAccountService,
+    private readonly wawuId: WawuIdClient,
   ) {}
+
+  /**
+   * Batch author-identity lookup for a page of comments — same shape as
+   * CommunityMessageService.lookupSenders / DirectMessageService
+   * .lookupOtherParties: one WawuIdClient.lookupPublicIdentities call plus
+   * one userProfile.findMany, merged by id. Called once per page in list(),
+   * not once per row — this is the fix for comments rendering a bare
+   * `authorWawuId` (a UUID) where a name belongs, which `list()` had never
+   * resolved at all.
+   */
+  private async lookupAuthors(
+    authorIds: string[],
+  ): Promise<Map<string, CommentAuthor>> {
+    const unique = [...new Set(authorIds)];
+    const out = new Map<string, CommentAuthor>();
+    if (unique.length === 0) return out;
+
+    const [identities, profiles] = await Promise.all([
+      this.wawuId.lookupPublicIdentities(unique),
+      this.prisma.userProfile.findMany({
+        where: { wawuUserId: { in: unique } },
+        select: { wawuUserId: true, handle: true, avatarUrl: true },
+      }),
+    ]);
+    const profileBy = new Map(profiles.map((p) => [p.wawuUserId, p]));
+
+    for (const id of unique) {
+      const identity = identities.get(id);
+      const profile = profileBy.get(id);
+      const fullName = [identity?.firstName, identity?.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+      out.set(id, {
+        wawuId: id,
+        name: fullName || profile?.handle || '',
+        handle: profile?.handle ?? null,
+        avatarUrl: profile?.avatarUrl ?? null,
+      });
+    }
+    return out;
+  }
 
   /**
    * Returns the row rather than void so `create` can gate on the creator
@@ -44,7 +88,13 @@ export class CommentService {
       this.prisma.comment.count({ where: { contentId } }),
     ]);
 
-    return { items, currentPage: page, perPage, total };
+    const authors = await this.lookupAuthors(items.map((c) => c.authorWawuId));
+    const enriched: Comment[] = items.map((c) => ({
+      ...c,
+      author: authors.get(c.authorWawuId),
+    }));
+
+    return { items: enriched, currentPage: page, perPage, total };
   }
 
   async create(contentId: string, authorWawuId: string, dto: CreateCommentDto): Promise<Comment> {
