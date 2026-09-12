@@ -5,8 +5,13 @@ import request from 'supertest';
 import { AllExceptionsFilter } from '../../common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../../common/interceptors/response.interceptor';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
+import { PrismaModule } from '../../common/prisma/prisma.module';
+import { PrismaService } from '../../common/prisma/prisma.service';
 import { AccountModule } from '../account.module';
-import { WAWU_ID_ACCOUNT_GATEWAY, WawuIdAccountGateway } from '../wawu-id-account.gateway';
+import {
+  WAWU_ID_ACCOUNT_GATEWAY,
+  WawuIdAccountGateway,
+} from '../wawu-id-account.gateway';
 
 /**
  * Contract tests for the Account resource (registry.json: DELETE /account,
@@ -19,12 +24,14 @@ import { WAWU_ID_ACCOUNT_GATEWAY, WawuIdAccountGateway } from '../wawu-id-accoun
  * behind an interface so contract tests can stub them" rule) since no live
  * WAWU ID internal deletion endpoint exists in this sandbox.
  */
-const MOCK_WAWU_ID_BASE_URL = process.env.WAWU_ID_BASE_URL_TEST ?? 'http://localhost:4001';
+const MOCK_WAWU_ID_BASE_URL =
+  process.env.WAWU_ID_BASE_URL_TEST ?? 'http://localhost:4001';
 const PLAIN_USER_IDENTIFIER = 'user@test.wawu.dev';
 const PLAIN_USER_SUB = '00000000-0000-4000-8000-000000000001';
 
 describe('Account (contract)', () => {
   let app: INestApplication;
+  let prisma: PrismaService;
   let accessToken: string;
   const mockGateway: jest.Mocked<WawuIdAccountGateway> = {
     scheduleAccountDeletion: jest.fn().mockResolvedValue({ scheduled: true }),
@@ -48,15 +55,27 @@ describe('Account (contract)', () => {
     accessToken = loginBody.accessToken;
 
     const moduleRef = await Test.createTestingModule({
-      imports: [ConfigModule.forRoot({ isGlobal: true }), WawuAuthModule, AccountModule],
+      imports: [
+        ConfigModule.forRoot({ isGlobal: true }),
+        PrismaModule,
+        WawuAuthModule,
+        AccountModule,
+      ],
     })
       .overrideProvider(WAWU_ID_ACCOUNT_GATEWAY)
       .useValue(mockGateway)
       .compile();
 
     app = moduleRef.createNestApplication();
+    prisma = app.get(PrismaService);
     app.setGlobalPrefix('api/hub');
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
+    app.useGlobalPipes(
+      new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
+    );
     app.useGlobalFilters(new AllExceptionsFilter());
     app.useGlobalInterceptors(new ResponseInterceptor());
     await app.init();
@@ -91,7 +110,43 @@ describe('Account (contract)', () => {
       expect(scheduledAt).toBeGreaterThan(before + expectedMs - 60_000);
       expect(scheduledAt).toBeLessThan(before + expectedMs + 60_000);
 
-      expect(mockGateway.scheduleAccountDeletion).toHaveBeenCalledWith(PLAIN_USER_SUB);
+      expect(mockGateway.scheduleAccountDeletion).toHaveBeenCalledWith(
+        PLAIN_USER_SUB,
+      );
+    });
+
+    it('marks every content piece the caller owns as removed', async () => {
+      const id = 'ffffffff-0000-4000-8000-ffffffffffff';
+      await prisma.contentPiece.create({
+        data: {
+          id,
+          slug: 'fixture-account-contract-spec',
+          creatorWawuId: PLAIN_USER_SUB,
+          contentType: 'video',
+          title: 'FIXTURE: account.contract.spec.ts',
+          description: 'Owned by account.contract.spec.ts; deleted below.',
+          category: 'beauty',
+          tags: [],
+          accessType: 'free',
+          price: 0,
+          previewAssetUrl: 'https://storage.test/fixture-preview.mp4',
+          status: 'live',
+        },
+      });
+
+      try {
+        await request(app.getHttpServer())
+          .delete('/api/hub/account')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .expect(200);
+
+        const piece = await prisma.contentPiece.findUniqueOrThrow({
+          where: { id },
+        });
+        expect(piece.status).toBe('removed');
+      } finally {
+        await prisma.contentPiece.delete({ where: { id } });
+      }
     });
 
     it('invalid payload (unwhitelisted body field) -> 400', async () => {
@@ -106,7 +161,9 @@ describe('Account (contract)', () => {
     });
 
     it('missing auth -> 401', async () => {
-      const res = await request(app.getHttpServer()).delete('/api/hub/account').expect(401);
+      const res = await request(app.getHttpServer())
+        .delete('/api/hub/account')
+        .expect(401);
 
       expect(res.body.statusCode).toBe(401);
       expect(res.body.data).toBeNull();
