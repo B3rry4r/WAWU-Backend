@@ -77,7 +77,9 @@ async function login(identifier: string): Promise<string> {
     body: JSON.stringify({ identifier }),
   });
   if (!res.ok) {
-    throw new Error(`mock-wawu-id login failed for ${identifier}: ${res.status}`);
+    throw new Error(
+      `mock-wawu-id login failed for ${identifier}: ${res.status}`,
+    );
   }
   const body = (await res.json()) as { accessToken: string };
   return body.accessToken;
@@ -95,11 +97,15 @@ describe('Comment (contract)', () => {
   /** Removes every row this spec owns. Also run before creating them, so an
    *  aborted previous run cannot leave a fixture behind that skews the counts. */
   async function dropOwnedFixtures(): Promise<void> {
-    await prisma.comment.deleteMany({ where: { contentId: { in: OWNED_CONTENT_IDS } } });
+    await prisma.comment.deleteMany({
+      where: { contentId: { in: OWNED_CONTENT_IDS } },
+    });
     // Purchase -> ContentPiece is onDelete: Restrict (README § Test hygiene),
     // but this spec never creates a purchase against its own content, so the
     // content delete is unblocked.
-    await prisma.contentPiece.deleteMany({ where: { id: { in: OWNED_CONTENT_IDS } } });
+    await prisma.contentPiece.deleteMany({
+      where: { id: { in: OWNED_CONTENT_IDS } },
+    });
   }
 
   beforeAll(async () => {
@@ -123,11 +129,22 @@ describe('Comment (contract)', () => {
     creatorToken = await login('creator-basic@test.wawu.dev');
 
     const moduleRef = await Test.createTestingModule({
-      imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, WawuAuthModule, CommentModule],
+      imports: [
+        ConfigModule.forRoot({ isGlobal: true }),
+        PrismaModule,
+        WawuAuthModule,
+        CommentModule,
+      ],
     }).compile();
 
     app = moduleRef.createNestApplication();
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
+    app.useGlobalPipes(
+      new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
+    );
     app.useGlobalFilters(new AllExceptionsFilter());
     app.useGlobalInterceptors(new ResponseInterceptor());
     await app.init();
@@ -150,7 +167,8 @@ describe('Comment (contract)', () => {
           creatorWawuId: USER_CREATOR_BASIC,
           contentType: 'video',
           title: 'FIXTURE: comment.contract.spec.ts',
-          description: 'Owned by comment.contract.spec.ts; deleted in afterAll.',
+          description:
+            'Owned by comment.contract.spec.ts; deleted in afterAll.',
           category: 'beauty',
           tags: [],
           accessType: 'free',
@@ -240,12 +258,19 @@ describe('Comment (contract)', () => {
         OWN_COMMENT_OLDEST,
       ]);
 
-      const oldest = res.body.data.find((c: { id: string }) => c.id === OWN_COMMENT_OLDEST);
+      const oldest = res.body.data.find(
+        (c: { id: string }) => c.id === OWN_COMMENT_OLDEST,
+      );
       expect(oldest).toBeDefined();
       expect(oldest.contentId).toBe(OWN_CONTENT_READ);
       expect(oldest.authorWawuId).toBe(USER_PLAIN);
       expect(oldest.text).toBe('FIXTURE: oldest comment');
       expect(oldest.replyToId).toBeNull();
+      // list() resolves `author` from authorWawuId (CommentService.lookupAuthors)
+      // rather than leaving the client to render the bare id it used to.
+      expect(oldest.author).toEqual(
+        expect.objectContaining({ wawuId: USER_PLAIN }),
+      );
     });
 
     it('honours page/perPage — page 1 of 2 carries the two newest, page 2 the rest', async () => {
@@ -278,7 +303,9 @@ describe('Comment (contract)', () => {
         perPage: 2,
         total: 3,
       });
-      expect(second.body.data.map((c: { id: string }) => c.id)).toEqual([OWN_COMMENT_OLDEST]);
+      expect(second.body.data.map((c: { id: string }) => c.id)).toEqual([
+        OWN_COMMENT_OLDEST,
+      ]);
     });
 
     it('returns an empty page past the end without inventing rows', async () => {
@@ -307,7 +334,9 @@ describe('Comment (contract)', () => {
     });
 
     it('401s with no Authorization header', async () => {
-      await request(app.getHttpServer()).get(`/content/${OWN_CONTENT_READ}/comments`).expect(401);
+      await request(app.getHttpServer())
+        .get(`/content/${OWN_CONTENT_READ}/comments`)
+        .expect(401);
     });
   });
 
@@ -329,7 +358,9 @@ describe('Comment (contract)', () => {
       );
       expect(res.body.data.id).toEqual(expect.any(String));
 
-      const stored = await prisma.comment.findUnique({ where: { id: res.body.data.id } });
+      const stored = await prisma.comment.findUnique({
+        where: { id: res.body.data.id },
+      });
       expect(stored).not.toBeNull();
     });
 
