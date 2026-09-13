@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
@@ -64,7 +69,9 @@ export class CommentService {
    * Returns the row rather than void so `create` can gate on the creator
    * without a second query — see the blocking check there.
    */
-  private async assertContentExists(contentId: string): Promise<{ id: string; creatorWawuId: string }> {
+  private async assertContentExists(
+    contentId: string,
+  ): Promise<{ id: string; creatorWawuId: string }> {
     const content = await this.prisma.contentPiece.findUnique({
       where: { id: contentId },
       select: { id: true, creatorWawuId: true },
@@ -75,7 +82,31 @@ export class CommentService {
     return content;
   }
 
-  async list(contentId: string, page: number, perPage: number): Promise<Paginated<Comment>> {
+  /**
+   * Finds the comment and asserts it belongs to `contentId` — the same shape
+   * as the `replyToId` check in `create()`, reused here so a caller cannot
+   * like a comment by guessing an id under the wrong content path.
+   */
+  private async assertCommentOnContent(
+    contentId: string,
+    commentId: string,
+  ): Promise<{ id: string }> {
+    const comment = await this.prisma.comment.findUnique({
+      where: { id: commentId },
+      select: { id: true, contentId: true },
+    });
+    if (!comment || comment.contentId !== contentId) {
+      throw new NotFoundException('Comment not found');
+    }
+    return comment;
+  }
+
+  async list(
+    contentId: string,
+    requesterWawuId: string,
+    page: number,
+    perPage: number,
+  ): Promise<Paginated<Comment>> {
     await this.assertContentExists(contentId);
 
     const [items, total] = await this.prisma.$transaction([
@@ -88,16 +119,88 @@ export class CommentService {
       this.prisma.comment.count({ where: { contentId } }),
     ]);
 
-    const authors = await this.lookupAuthors(items.map((c) => c.authorWawuId));
+    const [authors, likedIds] = await Promise.all([
+      this.lookupAuthors(items.map((c) => c.authorWawuId)),
+      this.prisma.commentLike
+        .findMany({
+          where: {
+            userWawuId: requesterWawuId,
+            commentId: { in: items.map((c) => c.id) },
+          },
+          select: { commentId: true },
+        })
+        .then((rows) => new Set(rows.map((r) => r.commentId))),
+    ]);
     const enriched: Comment[] = items.map((c) => ({
       ...c,
       author: authors.get(c.authorWawuId),
+      likedByMe: likedIds.has(c.id),
     }));
 
     return { items: enriched, currentPage: page, perPage, total };
   }
 
-  async create(contentId: string, authorWawuId: string, dto: CreateCommentDto): Promise<Comment> {
+  /**
+   * POST/DELETE .../comments/:commentId/like. Both idempotent: liking an
+   * already-liked comment, or unliking one that isn't, changes nothing and
+   * still returns the current, real count — the response is always the
+   * server's own truth, never an assumption about what the caller's request
+   * did.
+   *
+   * `CommentLike`'s unique (user, comment) constraint is what makes the
+   * "already liked" case safe to just swallow rather than pre-checking: two
+   * concurrent likes from the same user race on the same constraint, and only
+   * one can ever win, so `Comment.likes` can't be double-incremented under
+   * concurrency the way a read-then-write would allow.
+   */
+  async setLiked(
+    contentId: string,
+    commentId: string,
+    userWawuId: string,
+    liked: boolean,
+  ): Promise<{ likes: number; likedByMe: boolean }> {
+    await this.assertCommentOnContent(contentId, commentId);
+
+    if (liked) {
+      try {
+        await this.prisma.$transaction([
+          this.prisma.commentLike.create({ data: { userWawuId, commentId } }),
+          this.prisma.comment.update({
+            where: { id: commentId },
+            data: { likes: { increment: 1 } },
+          }),
+        ]);
+      } catch (e) {
+        const isDuplicateLike =
+          e instanceof Prisma.PrismaClientKnownRequestError &&
+          e.code === 'P2002';
+        if (!isDuplicateLike) throw e;
+        // Already liked by this user — no-op, per the idempotency contract.
+      }
+    } else {
+      const { count } = await this.prisma.commentLike.deleteMany({
+        where: { userWawuId, commentId },
+      });
+      if (count > 0) {
+        await this.prisma.comment.update({
+          where: { id: commentId },
+          data: { likes: { decrement: 1 } },
+        });
+      }
+    }
+
+    const comment = await this.prisma.comment.findUniqueOrThrow({
+      where: { id: commentId },
+      select: { likes: true },
+    });
+    return { likes: comment.likes, likedByMe: liked };
+  }
+
+  async create(
+    contentId: string,
+    authorWawuId: string,
+    dto: CreateCommentDto,
+  ): Promise<Comment> {
     const content = await this.assertContentExists(contentId);
 
     // Blocking gate. Reading a public content page is still allowed (the
@@ -115,7 +218,9 @@ export class CommentService {
         select: { id: true, contentId: true },
       });
       if (!parent || parent.contentId !== contentId) {
-        throw new BadRequestException('replyToId must reference an existing comment on this content');
+        throw new BadRequestException(
+          'replyToId must reference an existing comment on this content',
+        );
       }
     }
 

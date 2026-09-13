@@ -398,8 +398,27 @@ model Comment {
   likes        Int          @default(0)
   createdAt    DateTime     @default(now())
 
+  likedBy CommentLike[]
+
   @@index([contentId])
   @@index([authorWawuId])
+}
+
+/// One user's like on one comment. Mirrors SavedItem's shape exactly: a plain
+/// join table with a unique (user, target) pair, rather than a boolean or a
+/// bare counter, so "did THIS caller like THIS comment" is an answerable
+/// question and POST/DELETE are naturally idempotent (the unique constraint
+/// is what makes a repeat POST a no-op instead of a double-count).
+model CommentLike {
+  id         String   @id @default(uuid())
+  userWawuId String
+  commentId  String
+  comment    Comment  @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  likedAt    DateTime @default(now())
+
+  @@unique([userWawuId, commentId])
+  @@index([userWawuId])
+  @@index([commentId])
 }
 
 // -----------------------------------------------------------------------------

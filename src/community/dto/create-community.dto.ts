@@ -61,6 +61,13 @@ export class CreateCommunityDto {
    * `POST /uploads/presign` for the `community/image` folder. Optional — a
    * community without one is normal and the client falls back to its
    * placeholder tile, so hosting is never blocked on finding a picture.
+   *
+   * No `@MaxLength` here, matching every other asset-URL field in this
+   * backend (CreateContentDto's previewAssetUrl/fullAssetUrl, CreateEventDto's
+   * bannerUrl — neither caps length). A presigned S3 GET URL carries the
+   * bucket, region, path and a full signed query string, routinely well past
+   * 500 characters; a cap this field alone had meant every community created
+   * with a picture 400'd against this backend's own presign output.
    */
   @IsOptional()
   @IsUrl(
@@ -69,9 +76,12 @@ export class CreateCommunityDto {
     // that also accepts a bare word like "not-a-url" as a hostname, so the
     // scheme is required and restricted — an `imageUrl` is a thing a browser
     // will be pointed at, and `javascript:` is not one of the two answers.
-    { require_tld: false, require_protocol: true, protocols: ['http', 'https'] },
+    {
+      require_tld: false,
+      require_protocol: true,
+      protocols: ['http', 'https'],
+    },
     { message: 'imageUrl must be a full link' },
   )
-  @MaxLength(500)
   imageUrl?: string;
 }

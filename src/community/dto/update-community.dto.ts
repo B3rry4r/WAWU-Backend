@@ -56,9 +56,12 @@ export class UpdateCommunityDto {
     // that also accepts a bare word like "not-a-url" as a hostname, so the
     // scheme is required and restricted — an `imageUrl` is a thing a browser
     // will be pointed at, and `javascript:` is not one of the two answers.
-    { require_tld: false, require_protocol: true, protocols: ['http', 'https'] },
+    {
+      require_tld: false,
+      require_protocol: true,
+      protocols: ['http', 'https'],
+    },
     { message: 'imageUrl must be a full link' },
   )
-  @MaxLength(500)
   imageUrl?: string | null;
 }

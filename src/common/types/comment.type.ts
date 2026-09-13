@@ -14,8 +14,12 @@ export interface CommentAuthor {
 }
 
 /**
- * Prisma model plus the resolved author. Optional so `create()`'s bare-row
- * return (the author is always the caller themselves there — no lookup
- * needed) still typechecks; `list()` always attaches it.
+ * Prisma model plus the resolved author and the caller's own like state.
+ * Both optional so `create()`'s bare-row return (the author is always the
+ * caller themselves there, no lookup needed; a just-posted comment is never
+ * self-liked) still typechecks; `list()` always attaches both.
  */
-export type Comment = CommentModel & { author?: CommentAuthor };
+export type Comment = CommentModel & {
+  author?: CommentAuthor;
+  likedByMe?: boolean;
+};

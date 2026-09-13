@@ -399,4 +399,128 @@ describe('Comment (contract)', () => {
         .expect(401);
     });
   });
+
+  describe('POST/DELETE /content/:id/comments/:commentId/like', () => {
+    // OWN_COMMENT_PARENT (on the write fixture) rather than a comment on
+    // OWN_CONTENT_READ: the GET describe block above asserts exact totals
+    // and list membership for that content, and liking never touches either,
+    // but keeping every mutation on the write fixture is the one rule this
+    // whole file follows (see the fixtures' own doc comment).
+    afterEach(async () => {
+      await prisma.commentLike.deleteMany({
+        where: { commentId: OWN_COMMENT_PARENT },
+      });
+      await prisma.comment.update({
+        where: { id: OWN_COMMENT_PARENT },
+        data: { likes: 0 },
+      });
+    });
+
+    it('likes a comment: increments likes and reports likedByMe (200)', async () => {
+      const res = await request(app.getHttpServer())
+        .post(
+          `/content/${OWN_CONTENT_WRITE}/comments/${OWN_COMMENT_PARENT}/like`,
+        )
+        .set('Authorization', `Bearer ${userToken}`)
+        .expect(200);
+
+      expect(res.body.data).toEqual({ likes: 1, likedByMe: true });
+
+      const stored = await prisma.comment.findUniqueOrThrow({
+        where: { id: OWN_COMMENT_PARENT },
+      });
+      expect(stored.likes).toBe(1);
+    });
+
+    it('is idempotent: liking an already-liked comment does not double the count', async () => {
+      await request(app.getHttpServer())
+        .post(
+          `/content/${OWN_CONTENT_WRITE}/comments/${OWN_COMMENT_PARENT}/like`,
+        )
+        .set('Authorization', `Bearer ${userToken}`)
+        .expect(200);
+
+      const res = await request(app.getHttpServer())
+        .post(
+          `/content/${OWN_CONTENT_WRITE}/comments/${OWN_COMMENT_PARENT}/like`,
+        )
+        .set('Authorization', `Bearer ${userToken}`)
+        .expect(200);
+
+      expect(res.body.data).toEqual({ likes: 1, likedByMe: true });
+    });
+
+    it('unlikes a comment: decrements likes back down', async () => {
+      await request(app.getHttpServer())
+        .post(
+          `/content/${OWN_CONTENT_WRITE}/comments/${OWN_COMMENT_PARENT}/like`,
+        )
+        .set('Authorization', `Bearer ${userToken}`)
+        .expect(200);
+
+      const res = await request(app.getHttpServer())
+        .delete(
+          `/content/${OWN_CONTENT_WRITE}/comments/${OWN_COMMENT_PARENT}/like`,
+        )
+        .set('Authorization', `Bearer ${userToken}`)
+        .expect(200);
+
+      expect(res.body.data).toEqual({ likes: 0, likedByMe: false });
+    });
+
+    it('is idempotent: unliking a comment nobody has liked does not go negative', async () => {
+      const res = await request(app.getHttpServer())
+        .delete(
+          `/content/${OWN_CONTENT_WRITE}/comments/${OWN_COMMENT_PARENT}/like`,
+        )
+        .set('Authorization', `Bearer ${userToken}`)
+        .expect(200);
+
+      expect(res.body.data).toEqual({ likes: 0, likedByMe: false });
+    });
+
+    it('404s when the comment does not belong to the given content', async () => {
+      await request(app.getHttpServer())
+        .post(
+          `/content/${OWN_CONTENT_READ}/comments/${OWN_COMMENT_PARENT}/like`,
+        )
+        .set('Authorization', `Bearer ${userToken}`)
+        .expect(404);
+    });
+
+    it('401s with no Authorization header', async () => {
+      await request(app.getHttpServer())
+        .post(
+          `/content/${OWN_CONTENT_WRITE}/comments/${OWN_COMMENT_PARENT}/like`,
+        )
+        .expect(401);
+    });
+
+    it('reflects likedByMe on the list read for the liking user only', async () => {
+      await request(app.getHttpServer())
+        .post(
+          `/content/${OWN_CONTENT_WRITE}/comments/${OWN_COMMENT_PARENT}/like`,
+        )
+        .set('Authorization', `Bearer ${userToken}`)
+        .expect(200);
+
+      const asLiker = await request(app.getHttpServer())
+        .get(`/content/${OWN_CONTENT_WRITE}/comments`)
+        .set('Authorization', `Bearer ${userToken}`)
+        .expect(200);
+      const likerRow = asLiker.body.data.find(
+        (c: { id: string }) => c.id === OWN_COMMENT_PARENT,
+      );
+      expect(likerRow.likedByMe).toBe(true);
+
+      const asOther = await request(app.getHttpServer())
+        .get(`/content/${OWN_CONTENT_WRITE}/comments`)
+        .set('Authorization', `Bearer ${creatorToken}`)
+        .expect(200);
+      const otherRow = asOther.body.data.find(
+        (c: { id: string }) => c.id === OWN_COMMENT_PARENT,
+      );
+      expect(otherRow.likedByMe).toBe(false);
+    });
+  });
 });
