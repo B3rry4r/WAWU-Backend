@@ -1342,6 +1342,11 @@ model AdminUser {
 enum AdminContentDecision {
   approved
   rejected
+  /// A LIVE (or any non-removed) piece taken down by a moderator outside the
+  /// pending-review flow — e.g. a creator's account was deleted before this
+  /// backend removed content at deletion time, and the piece was left
+  /// stranded live with nobody left to have rejected it from `pending`.
+  removed
 }
 
 /// Moderation audit trail for ContentPiece — admin-surface-extension Phase 6.

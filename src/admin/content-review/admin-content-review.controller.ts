@@ -1,4 +1,15 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { AdminRole } from '../../../generated/prisma/enums';
 import { AdminAuthGuard } from '../auth/guards/admin-auth.guard';
 import { AdminRolesGuard } from '../auth/guards/admin-roles.guard';
@@ -8,15 +19,16 @@ import type { AdminUserView } from '../auth/admin-user-view.type';
 import { AdminContentReviewService } from './admin-content-review.service';
 import { AdminContentQueueQueryDto } from './dto/admin-content-queue-query.dto';
 import { RejectContentDto } from './dto/reject-content.dto';
+import { TakeDownContentDto } from './dto/take-down-content.dto';
 
 /**
  * Content moderation — `/api/hub/admin/content/*` once the global prefix is
  * applied.
  *
  * ── ROLE MATRIX (documented, and enforced per handler) ────────────────────
- *   read  (queue, detail)  — superadmin, reviewer, support
- *   write (approve, reject) — superadmin, reviewer
- *   finance                 — refused entirely, on every route here
+ *   read  (queue, detail)              — superadmin, reviewer, support
+ *   write (approve, reject, take-down) — superadmin, reviewer
+ *   finance                            — refused entirely, on every route here
  *
  * Support can read because "where is my upload?" is a support ticket and
  * answering it should not require a reviewer. Finance is refused rather than
@@ -92,5 +104,22 @@ export class AdminContentReviewController {
     @CurrentAdmin() admin: AdminUserView,
   ) {
     return this.service.reject(id, dto, admin);
+  }
+
+  /**
+   * Any non-removed status → removed, reason required. The takedown lever
+   * for content stranded live with no pending review to reject it from and,
+   * often, no creator account left behind it — see AdminContentReviewService
+   * .takeDown for why that gap exists.
+   */
+  @AdminRoles(AdminRole.superadmin, AdminRole.reviewer)
+  @Post(':id/take-down')
+  @HttpCode(HttpStatus.OK)
+  takeDown(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: TakeDownContentDto,
+    @CurrentAdmin() admin: AdminUserView,
+  ) {
+    return this.service.takeDown(id, dto, admin);
   }
 }

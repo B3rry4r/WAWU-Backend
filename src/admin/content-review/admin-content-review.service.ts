@@ -21,6 +21,7 @@ import {
 } from './admin-content-view.type';
 import type { AdminContentQueueQueryDto } from './dto/admin-content-queue-query.dto';
 import type { RejectContentDto } from './dto/reject-content.dto';
+import type { TakeDownContentDto } from './dto/take-down-content.dto';
 
 /** Sensitive documents are handed out on the shortest URL StorageService offers. */
 const SIGNED_URL_TTL_SECONDS = 900;
@@ -156,6 +157,87 @@ export class AdminContentReviewService {
     admin: AdminUserView,
   ): Promise<AdminContentDecisionView> {
     return this.decide(id, admin, 'rejected', dto.reason.trim());
+  }
+
+  /**
+   * POST /admin/content/:id/take-down — any non-removed status -> removed.
+   *
+   * The remediation path `decide()` cannot offer: that one only ever acts on
+   * `pending`, because approve/reject exist to resolve a review that is
+   * waiting on someone. A LIVE piece has nothing waiting on it, and
+   * `deleteAccount()` (account.service.ts) only removes a creator's content
+   * from the moment it runs forward — an account deleted before that fix
+   * shipped left its pieces exactly where they were, live, with no creator
+   * left to delete them and no pending review left to reject. This is the
+   * one lever an admin has for that piece, or any other live piece that
+   * needs to come down outside the review flow.
+   *
+   * Reuses the same status and the same slot-return rule
+   * ContentPieceService.delete() uses for a creator's own delete, so an
+   * admin takedown and a self-delete leave identical bookkeeping behind.
+   */
+  async takeDown(
+    id: string,
+    dto: TakeDownContentDto,
+    admin: AdminUserView,
+  ): Promise<AdminContentDecisionView> {
+    const existing = await this.prisma.contentPiece.findUnique({
+      where: { id },
+    });
+    if (!existing) {
+      throw new NotFoundException('Content not found.');
+    }
+    if (existing.status === 'removed') {
+      throw new BadRequestException('This piece has already been removed.');
+    }
+
+    const { content, review } = await this.prisma.$transaction(async (tx) => {
+      // Conditional on NOT already removed, not merely on the read above: a
+      // second admin (or ContentPieceService.delete, if the creator is
+      // somehow still around) acting on the same piece at the same instant
+      // must not both return the slot and both write an audit row.
+      const claimed = await tx.contentPiece.updateMany({
+        where: { id, status: { not: 'removed' } },
+        data: { status: 'removed' },
+      });
+      if (claimed.count === 0) {
+        throw new BadRequestException('This piece has already been removed.');
+      }
+
+      let slotReturned = false;
+      if (existing.status !== 'rejected') {
+        const returned = await tx.creatorState.updateMany({
+          where: { wawuUserId: existing.creatorWawuId, slotsUsed: { gt: 0 } },
+          data: { slotsUsed: { decrement: 1 } },
+        });
+        slotReturned = returned.count > 0;
+      }
+
+      const reviewRow = await tx.adminContentReview.create({
+        data: {
+          contentId: id,
+          creatorWawuId: existing.creatorWawuId,
+          decision: 'removed',
+          previousStatus: existing.status,
+          newStatus: 'removed',
+          reason: dto.reason.trim(),
+          slotReturned,
+          reviewedByAdminId: admin.id,
+          reviewedByAdminEmail: admin.email,
+          reviewedByAdminRole: admin.role,
+        },
+      });
+
+      const updated = await tx.contentPiece.findUniqueOrThrow({
+        where: { id },
+      });
+      return { content: updated, review: reviewRow };
+    });
+
+    return {
+      content: await this.toDetail(content),
+      review: toAdminContentReviewEntryView(review),
+    };
   }
 
   private async decide(
