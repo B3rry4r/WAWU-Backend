@@ -43,11 +43,16 @@ export interface ColumnRule {
 export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // ── the account's own contributions to shared surfaces ──────────────────
   { model: 'Comment', column: 'authorWawuId', disposition: 'AUTHORED' },
-  { model: 'CommunityMessage', column: 'senderWawuId', disposition: 'AUTHORED' },
+  {
+    model: 'CommunityMessage',
+    column: 'senderWawuId',
+    disposition: 'AUTHORED',
+  },
   { model: 'DmReport', column: 'reporterWawuId', disposition: 'AUTHORED' },
 
   // ── things that exist only because this account exists ──────────────────
   { model: 'SavedItem', column: 'userWawuId', disposition: 'OWNED' },
+  { model: 'CommentLike', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'MarketplaceSave', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CartItem', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'EventGoing', column: 'userWawuId', disposition: 'OWNED' },
@@ -62,10 +67,22 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'CreditPurchase', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CreditLot', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CreditSpend', column: 'userWawuId', disposition: 'OWNED' },
-  { model: 'FollowRelationship', column: 'followerWawuId', disposition: 'OWNED' },
-  { model: 'ServiceApplication', column: 'applicantWawuId', disposition: 'OWNED' },
+  {
+    model: 'FollowRelationship',
+    column: 'followerWawuId',
+    disposition: 'OWNED',
+  },
+  {
+    model: 'ServiceApplication',
+    column: 'applicantWawuId',
+    disposition: 'OWNED',
+  },
   { model: 'MentorRequest', column: 'requesterWawuId', disposition: 'OWNED' },
-  { model: 'VerificationSubmission', column: 'wawuUserId', disposition: 'OWNED' },
+  {
+    model: 'VerificationSubmission',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
   { model: 'KycSubmission', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'PendingCharge', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'HealthSubscription', column: 'wawuUserId', disposition: 'OWNED' },
@@ -77,8 +94,16 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'ReferralRedemption', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'ReferralClaim', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'EventReferral', column: 'ownerWawuId', disposition: 'OWNED' },
-  { model: 'CreatorSubscription', column: 'creatorWawuId', disposition: 'OWNED' },
-  { model: 'CreatorNoResponseTracker', column: 'creatorWawuId', disposition: 'OWNED' },
+  {
+    model: 'CreatorSubscription',
+    column: 'creatorWawuId',
+    disposition: 'OWNED',
+  },
+  {
+    model: 'CreatorNoResponseTracker',
+    column: 'creatorWawuId',
+    disposition: 'OWNED',
+  },
   { model: 'EvgScore', column: 'creatorWawuId', disposition: 'OWNED' },
   { model: 'ContentPiece', column: 'creatorWawuId', disposition: 'OWNED' },
   { model: 'Community', column: 'hostWawuId', disposition: 'OWNED' },
@@ -106,18 +131,50 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // ── somebody else's record that names this account ──────────────────────
   // Deleting these would delete another person's history, not this one's.
   { model: 'Purchase', column: 'creatorWawuId', disposition: 'COUNTERPARTY' },
-  { model: 'CreditSpend', column: 'creatorWawuId', disposition: 'COUNTERPARTY' },
-  { model: 'CreditSpendEarning', column: 'creatorWawuId', disposition: 'COUNTERPARTY' },
-  { model: 'DirectMessage', column: 'creatorWawuId', disposition: 'COUNTERPARTY' },
-  { model: 'FollowRelationship', column: 'followingWawuId', disposition: 'COUNTERPARTY' },
-  { model: 'BlockedAccount', column: 'blockedWawuId', disposition: 'COUNTERPARTY' },
+  {
+    model: 'CreditSpend',
+    column: 'creatorWawuId',
+    disposition: 'COUNTERPARTY',
+  },
+  {
+    model: 'CreditSpendEarning',
+    column: 'creatorWawuId',
+    disposition: 'COUNTERPARTY',
+  },
+  {
+    model: 'DirectMessage',
+    column: 'creatorWawuId',
+    disposition: 'COUNTERPARTY',
+  },
+  {
+    model: 'FollowRelationship',
+    column: 'followingWawuId',
+    disposition: 'COUNTERPARTY',
+  },
+  {
+    model: 'BlockedAccount',
+    column: 'blockedWawuId',
+    disposition: 'COUNTERPARTY',
+  },
 
   // ── admin audit trail, kept on purpose ──────────────────────────────────
   { model: 'AdminKycAudit', column: 'subjectWawuUserId', disposition: 'AUDIT' },
-  { model: 'AdminVerificationAudit', column: 'subjectWawuUserId', disposition: 'AUDIT' },
-  { model: 'AdminVerificationAudit', column: 'tierElevatedAtWawuId', disposition: 'AUDIT' },
+  {
+    model: 'AdminVerificationAudit',
+    column: 'subjectWawuUserId',
+    disposition: 'AUDIT',
+  },
+  {
+    model: 'AdminVerificationAudit',
+    column: 'tierElevatedAtWawuId',
+    disposition: 'AUDIT',
+  },
   { model: 'AdminOpsAudit', column: 'subjectWawuId', disposition: 'AUDIT' },
-  { model: 'AdminContentReview', column: 'creatorWawuId', disposition: 'AUDIT' },
+  {
+    model: 'AdminContentReview',
+    column: 'creatorWawuId',
+    disposition: 'AUDIT',
+  },
   { model: 'AdminEventReview', column: 'hostWawuId', disposition: 'AUDIT' },
 ];
 
@@ -126,12 +183,17 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
  * the drift test can tell "not a user id" from "nobody has classified this
  * yet" - the second must fail the build, the first must not.
  */
-export const NOT_A_USER_REFERENCE: ReadonlyArray<{ model: string; column: string }> = [
+export const NOT_A_USER_REFERENCE: ReadonlyArray<{
+  model: string;
+  column: string;
+}> = [
   { model: 'Product', column: 'wawuPick' },
   { model: 'Product', column: 'wawuVerified' },
 ];
 
 /** The rows a purge actually removes. */
 export function rowsToDelete(): ColumnRule[] {
-  return ACCOUNT_DATA_MAP.filter((r) => r.disposition === 'OWNED' || r.disposition === 'AUTHORED');
+  return ACCOUNT_DATA_MAP.filter(
+    (r) => r.disposition === 'OWNED' || r.disposition === 'AUTHORED',
+  );
 }
