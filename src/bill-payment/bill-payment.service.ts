@@ -7,6 +7,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import type { BillPayment } from '../../generated/prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import {
   AdminOpsAuditService,
@@ -22,13 +24,23 @@ import {
 import type { InitBillDto, RecordRefundDto } from './dto/bill.dto';
 
 /**
- * How long a bill may sit in `paid` — money taken, biller not yet paid —
- * before it is treated as stuck and surfaced to an operator. Delivery is a
- * single synchronous call, so anything still `paid` after this did not
- * simply take a while: the process died between banking the payment and
- * recording the outcome.
+ * How long a bill may sit in `paid` — money taken, biller not yet called —
+ * before it is treated as stuck and surfaced to an operator. Calling the
+ * biller is a single synchronous request, so anything still `paid` after
+ * this did not simply take a while: the process died between banking the
+ * payment and making that call.
  */
 const STUCK_AFTER_MINUTES = 15;
+
+/**
+ * How long a bill may sit in `processing` — the biller ACCEPTED the request,
+ * but Flutterwave has not yet confirmed the top-up actually landed — before
+ * an operator should look at it. Longer than `STUCK_AFTER_MINUTES` on
+ * purpose: this is Flutterwave's own documented asynchronous settlement
+ * window, not a dead process, so a short timer would flood the stuck queue
+ * with rows that are still genuinely in flight.
+ */
+const PROCESSING_STUCK_AFTER_MINUTES = 30;
 
 /**
  * WAWUPay.
@@ -43,6 +55,13 @@ const STUCK_AFTER_MINUTES = 15;
  * That state is recorded as `paid` (money in, nothing delivered) rather than
  * being collapsed into a success or thrown away, so it can be reconciled or
  * refunded instead of quietly vanishing.
+ *
+ * Nor is a biller's OWN "accepted" reply proof of delivery. Flutterwave's
+ * Bills API documents step 3's call as asynchronous: the response confirms
+ * the request was received, not that the top-up landed. A non-throwing call
+ * moves the row to `processing`, and `reconcilePendingDeliveries()` (or an
+ * operator's manual `reconcile()`) is what later turns that into `delivered`
+ * or `failed` once Flutterwave actually confirms the outcome.
  */
 @Injectable()
 export class BillPaymentService {
@@ -225,17 +244,23 @@ export class BillPaymentService {
         amount: record.amount,
         reference: record.flutterwaveTxRef,
       });
-      const delivered = await this.prisma.billPayment.update({
+      // Flutterwave's own documentation is explicit that this response only
+      // means the request was ACCEPTED: delivery is asynchronous and "you
+      // cannot rely on immediate confirmation." Recording this as `delivered`
+      // right away is exactly the bug that let a customer be charged, see a
+      // "delivered" receipt, and never actually receive the airtime when the
+      // async step subsequently failed with nothing anywhere set up to catch
+      // it. `processing` is the honest state: accepted, not yet confirmed.
+      const processing = await this.prisma.billPayment.update({
         where: { id: record.id },
         data: {
-          status: 'delivered',
+          status: 'processing',
           providerReference: result.reference ?? result.tx_ref ?? null,
           providerStatus: result.code ?? null,
           fee: Math.round(Number(result.fee ?? 0)),
-          deliveredAt: new Date(),
         },
       });
-      return this.toResponse(delivered);
+      return this.toResponse(processing);
     } catch (e) {
       const reason = e instanceof Error ? e.message : 'Delivery failed';
       this.logger.error(
@@ -267,17 +292,23 @@ export class BillPaymentService {
    * Everything the customer has paid for and not received.
    *
    * `paid` was a silent dead end: if the process died between banking the
-   * payment and recording the biller's answer, the row stayed `paid` forever
-   * with nothing anywhere looking for it. `failed` is included because it
-   * means the same thing in money terms — we hold their cash and they got
-   * nothing.
+   * payment and calling the biller, the row stayed `paid` forever with
+   * nothing anywhere looking for it. `processing` is included past its own,
+   * longer cutoff for the same reason: a request the biller accepted but
+   * never confirmed is just as stuck, only on a slower clock. `failed` is
+   * included unconditionally because it means the same thing in money terms
+   * — we hold their cash and they got nothing.
    */
   async listStuck() {
     const cutoff = new Date(Date.now() - STUCK_AFTER_MINUTES * 60_000);
+    const processingCutoff = new Date(
+      Date.now() - PROCESSING_STUCK_AFTER_MINUTES * 60_000,
+    );
     const rows = await this.prisma.billPayment.findMany({
       where: {
         OR: [
           { status: 'paid', createdAt: { lt: cutoff } },
+          { status: 'processing', createdAt: { lt: processingCutoff } },
           { status: 'failed' },
         ],
       },
@@ -299,19 +330,63 @@ export class BillPaymentService {
    * customer up twice. `billStatus` looks the bill up by the same reference
    * WAWU sent, so a delivery that succeeded and whose response was lost gets
    * recognised as delivered rather than refunded by mistake.
+   *
+   * `processing` is reconcilable for the same reason `paid` is: it is the
+   * normal resting state of a bill whose acceptance Flutterwave has not yet
+   * turned into a confirmed outcome, and an operator needs to be able to push
+   * on it without waiting for the automated sweep's next pass.
    */
   async reconcile(billPaymentId: string, admin: AdminActor) {
     const record = await this.prisma.billPayment.findUnique({
       where: { id: billPaymentId },
     });
     if (!record) throw new NotFoundException('Bill payment not found.');
-    if (record.status !== 'paid' && record.status !== 'failed') {
-      return { billPayment: this.toResponse(record), providerStatus: null, changed: false };
+    if (
+      record.status !== 'paid' &&
+      record.status !== 'processing' &&
+      record.status !== 'failed'
+    ) {
+      return {
+        billPayment: this.toResponse(record),
+        providerStatus: null,
+        changed: false,
+      };
     }
 
     const result = await this.bills.billStatus(record.flutterwaveTxRef);
     const providerStatus = readProviderStatus(result);
+    const settled = await this.settleFromProviderStatus(record, providerStatus);
 
+    if (settled.changed) {
+      await this.audit.record(admin, {
+        resource: 'bill_payment',
+        resourceId: settled.record.id,
+        subjectWawuId: settled.record.buyerWawuId,
+        action: 'bill_reconciled',
+        detail: {
+          providerStatus,
+          previousStatus: record.status,
+          newStatus: settled.record.status,
+        },
+      });
+    }
+    return {
+      billPayment: this.toResponse(settled.record),
+      providerStatus,
+      changed: settled.changed,
+    };
+  }
+
+  /**
+   * The write half of reconciliation, shared between an operator's manual
+   * `reconcile()` call and the automated sweep below. Pure state transition,
+   * no audit trail — callers that need one (a human acting) record it
+   * themselves; the sweep (nothing human decided anything) does not.
+   */
+  private async settleFromProviderStatus(
+    record: BillPayment,
+    providerStatus: 'successful' | 'failed' | 'unknown',
+  ): Promise<{ record: BillPayment; changed: boolean }> {
     if (providerStatus === 'successful') {
       const delivered = await this.prisma.billPayment.update({
         where: { id: record.id },
@@ -321,14 +396,7 @@ export class BillPaymentService {
           deliveredAt: record.deliveredAt ?? new Date(),
         },
       });
-      await this.audit.record(admin, {
-        resource: 'bill_payment',
-        resourceId: delivered.id,
-        subjectWawuId: delivered.buyerWawuId,
-        action: 'bill_reconciled',
-        detail: { providerStatus, previousStatus: record.status, newStatus: 'delivered' },
-      });
-      return { billPayment: this.toResponse(delivered), providerStatus, changed: true };
+      return { record: delivered, changed: true };
     }
 
     if (providerStatus === 'failed') {
@@ -338,23 +406,67 @@ export class BillPaymentService {
           status: 'failed',
           providerStatus,
           failureReason:
-            record.failureReason ?? 'The biller reported the payment as failed.',
+            record.failureReason ??
+            'The biller reported the payment as failed.',
         },
       });
-      await this.audit.record(admin, {
-        resource: 'bill_payment',
-        resourceId: failed.id,
-        subjectWawuId: failed.buyerWawuId,
-        action: 'bill_reconciled',
-        detail: { providerStatus, previousStatus: record.status, newStatus: 'failed' },
-      });
-      return { billPayment: this.toResponse(failed), providerStatus, changed: true };
+      return { record: failed, changed: true };
     }
 
     // Still in flight, or a shape we do not recognise. Left alone rather than
-    // guessed at — the row stays visible in listStuck(). No audit row: nothing
-    // changed, and the trail records actions, not attempts.
-    return { billPayment: this.toResponse(record), providerStatus, changed: false };
+    // guessed at — the row stays visible in listStuck().
+    return { record, changed: false };
+  }
+
+  /**
+   * Automated reconciliation. Nobody is meant to have to open the stuck queue
+   * for a bill to eventually settle: this asks Flutterwave about every
+   * `processing`/`paid` row past its stuck cutoff and resolves what it can,
+   * the same way an operator's manual reconcile does, minus the audit trail
+   * (no human made a decision here). Rows Flutterwave still reports as in
+   * flight, or whose answer we cannot fetch, are left alone for the next pass
+   * or for an operator to reach through `listStuck()`.
+   */
+  @Cron(CronExpression.EVERY_10_MINUTES, { name: 'reconcile-pending-bills' })
+  async reconcilePendingDeliveries(): Promise<void> {
+    const cutoff = new Date(Date.now() - STUCK_AFTER_MINUTES * 60_000);
+    const processingCutoff = new Date(
+      Date.now() - PROCESSING_STUCK_AFTER_MINUTES * 60_000,
+    );
+    const rows = await this.prisma.billPayment.findMany({
+      where: {
+        OR: [
+          { status: 'paid', createdAt: { lt: cutoff } },
+          { status: 'processing', createdAt: { lt: processingCutoff } },
+        ],
+      },
+      take: 200,
+    });
+    if (rows.length === 0) return;
+
+    let settledCount = 0;
+    for (const record of rows) {
+      try {
+        const result = await this.bills.billStatus(record.flutterwaveTxRef);
+        const providerStatus = readProviderStatus(result);
+        const settled = await this.settleFromProviderStatus(
+          record,
+          providerStatus,
+        );
+        if (settled.changed) settledCount += 1;
+      } catch (e) {
+        // One bill's provider lookup failing must not stop the rest of the
+        // sweep from running; it stays visible for the next pass either way.
+        this.logger.warn(
+          `Could not reconcile bill ${record.id}: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+    if (settledCount > 0) {
+      this.logger.log(
+        `Automatically reconciled ${settledCount} pending bill(s).`,
+      );
+    }
   }
 
   /**
@@ -375,7 +487,9 @@ export class BillPaymentService {
     });
     if (!record) throw new NotFoundException('Bill payment not found.');
     if (record.status === 'refunded') {
-      throw new ConflictException('This bill has already been recorded as refunded.');
+      throw new ConflictException(
+        'This bill has already been recorded as refunded.',
+      );
     }
     if (record.status !== 'paid' && record.status !== 'failed') {
       throw new BadRequestException(
