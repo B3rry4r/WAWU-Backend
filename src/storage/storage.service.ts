@@ -8,6 +8,7 @@ import {
 import {
   FOLDER_CONTENT_TYPES,
   EXTENSION_FOR_CONTENT_TYPE,
+  UPLOAD_FOLDERS,
   serveAs,
   type UploadFolder,
 } from './dto/presign-upload.dto';
@@ -50,6 +51,39 @@ export interface StorageUsage {
   tier: string | null;
 }
 
+/**
+ * Recovers the object key from whatever is stored on a row.
+ *
+ * `presignUpload().fileUrl` is `readUrlFor(key)` — an absolute,
+ * already-signed, SEVEN-DAY read URL. Persisting that (rather than the bare
+ * key) is what several resources do at create time, which means the stored
+ * value goes dead exactly a week after upload even though the object it
+ * points at is still sitting in the bucket untouched. Re-signing on the way
+ * out needs the key back, and this is how: the grammar is closed and
+ * server-generated — `<folder>/<wawuId>/<uuid>.<ext>` with `folder` drawn
+ * from UPLOAD_FOLDERS (presignUpload) — so this is a match against a known
+ * shape, not a guess at bucket layout. Anything that does not match is
+ * passed through unchanged; nothing stored is ever rewritten.
+ */
+export function objectKeyFrom(stored: string): string {
+  if (!stored.startsWith('http://') && !stored.startsWith('https://'))
+    return stored;
+
+  let pathname: string;
+  try {
+    pathname = decodeURIComponent(new URL(stored).pathname);
+  } catch {
+    return stored;
+  }
+
+  for (const folder of UPLOAD_FOLDERS) {
+    const marker = `/${folder}/`;
+    const at = pathname.indexOf(marker);
+    if (at !== -1) return pathname.slice(at + 1);
+  }
+  return stored;
+}
+
 /** Sizes in refusal messages are for a person to read, not a machine. */
 export function formatBytes(bytes: number): string {
   if (bytes >= 1024 ** 3) {
@@ -73,7 +107,9 @@ export class StorageService {
   ) {
     const endpoint = this.config.get<string>('STORAGE_ENDPOINT');
     const accessKeyId = this.config.get<string>('STORAGE_ACCESS_KEY_ID');
-    const secretAccessKey = this.config.get<string>('STORAGE_SECRET_ACCESS_KEY');
+    const secretAccessKey = this.config.get<string>(
+      'STORAGE_SECRET_ACCESS_KEY',
+    );
     this.bucket = this.config.get<string>('STORAGE_BUCKET') ?? '';
 
     // Storage is optional at boot so the rest of the API still runs in
@@ -94,7 +130,8 @@ export class StorageService {
       // Railway Buckets use virtual-hosted-style URLs (bucket as subdomain),
       // which is the S3 default. Buckets created before that change need
       // path-style — set STORAGE_FORCE_PATH_STYLE=true for those.
-      forcePathStyle: this.config.get<string>('STORAGE_FORCE_PATH_STYLE') === 'true',
+      forcePathStyle:
+        this.config.get<string>('STORAGE_FORCE_PATH_STYLE') === 'true',
       // MUST stay 'WHEN_REQUIRED'. Since v3.729 the SDK defaults to
       // 'WHEN_SUPPORTED', which adds an integrity checksum to every
       // PutObject. Presigning has no body to checksum, so it hashed NOTHING
@@ -162,7 +199,13 @@ export class StorageService {
     }
 
     await this.prisma.storageObject.create({
-      data: { wawuUserId: wawuId, key, bytes: contentLength, contentType, folder },
+      data: {
+        wawuUserId: wawuId,
+        key,
+        bytes: contentLength,
+        contentType,
+        folder,
+      },
     });
 
     const uploadUrl = await getSignedUrl(
@@ -247,6 +290,31 @@ export class StorageService {
   }
 
   /**
+   * Re-signs a value a caller stored earlier via `readUrlFor` — the fix for
+   * the 7-day expiry above. Recovers the key with `objectKeyFrom` and signs
+   * it fresh, so a piece served a week (or a year) after upload plays exactly
+   * as it did on day one.
+   *
+   * Returns the ORIGINAL value, not null, on any failure (storage
+   * unconfigured/unreachable, or `stored` not recognised as one of this
+   * service's own URLs): a possibly-stale link is still a link, and a public
+   * feed rendering nothing beats it 500ing because storage hiccuped.
+   */
+  async freshUrlFor(stored: string | null): Promise<string | null> {
+    if (!stored) return stored;
+    if (!this.client) return stored;
+    const key = objectKeyFrom(stored);
+    try {
+      return await this.readUrlFor(key);
+    } catch (e) {
+      this.logger.warn(
+        `Could not refresh storage URL for ${key}: ${String(e)}`,
+      );
+      return stored;
+    }
+  }
+
+  /**
    * What this account is using, and what it is allowed.
    *
    * Every figure here has a writer: `usedBytes` is a SUM over rows created at
@@ -300,7 +368,11 @@ export class StorageService {
 
     const cutoff = new Date(Date.now() - RECONCILE_GRACE_MS);
     const stale = await this.prisma.storageObject.findMany({
-      where: { wawuUserId: wawuId, status: 'pending', createdAt: { lt: cutoff } },
+      where: {
+        wawuUserId: wawuId,
+        status: 'pending',
+        createdAt: { lt: cutoff },
+      },
       select: { id: true, key: true },
       take: 50,
     });

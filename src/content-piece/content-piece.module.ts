@@ -8,6 +8,7 @@ import { RealFlutterwaveAdapter } from './real-flutterwave.adapter';
 import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';
 import { shouldUseMockFlutterwave } from '../common/flutterwave/require-payment-config';
 import { NotificationModule } from '../notification/notification.module';
+import { StorageModule } from '../storage/storage.module';
 
 /**
  * registry.json "ContentPiece" resource module. PrismaService comes from
@@ -19,7 +20,7 @@ import { NotificationModule } from '../notification/notification.module';
  * ContentPiece's own unlock/verify flow).
  */
 @Module({
-  imports: [NotificationModule],
+  imports: [NotificationModule, StorageModule],
   controllers: [ContentPieceController, PublicContentController],
   providers: [
     ContentPieceService,
@@ -31,10 +32,7 @@ import { NotificationModule } from '../notification/notification.module';
       useFactory: (
         mock: MockFlutterwaveAdapter,
         real: RealFlutterwaveAdapter,
-      ) =>
-        shouldUseMockFlutterwave()
-          ? mock
-          : real,
+      ) => (shouldUseMockFlutterwave() ? mock : real),
       inject: [MockFlutterwaveAdapter, RealFlutterwaveAdapter],
     },
   ],
