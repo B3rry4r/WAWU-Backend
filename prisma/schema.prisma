@@ -1109,10 +1109,16 @@ model DataExportRequest {
 // ---------------------------------------------------------------------------
 
 /// Payment taken, fulfilment still owed. `paid` means WAWU has the money but
-/// the partner has not delivered yet — the state a refund sweep looks for.
+/// the partner has not called the biller yet. `processing` means the biller
+/// ACCEPTED the request — Flutterwave's Bills API confirms receipt
+/// synchronously but settles the actual top-up asynchronously, so acceptance
+/// is not proof of delivery and must not be recorded as one. A row is a
+/// refund candidate the moment it reaches `paid`, and stays one all the way
+/// through `processing` until it resolves to `delivered` or `failed`.
 enum FulfilmentStatus {
   pending
   paid
+  processing
   delivered
   failed
   refunded
