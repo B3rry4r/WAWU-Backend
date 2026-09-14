@@ -1,9 +1,13 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { NotificationService } from '../../notification/notification.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { StorageService } from '../../storage/storage.service';
+import { objectKeyFrom, StorageService } from '../../storage/storage.service';
 import { uploadAllowanceFor } from '../../common/creator-tier-allowance';
-import { UPLOAD_FOLDERS } from '../../storage/dto/presign-upload.dto';
 import type { Paginated } from '../../common/interceptors/response.interceptor';
 import type { ContentPieceModel } from '../../../generated/prisma/models';
 import type { AdminUserView } from '../auth/admin-user-view.type';
@@ -62,7 +66,9 @@ export class AdminContentReviewService {
    * exists to answer; the all-statuses browse is a separate screen (C2 in
    * .pipeline/derived-surface.json) and is deliberately not folded in here.
    */
-  async queue(query: AdminContentQueueQueryDto): Promise<Paginated<AdminContentQueueItemView>> {
+  async queue(
+    query: AdminContentQueueQueryDto,
+  ): Promise<Paginated<AdminContentQueueItemView>> {
     const where = { status: 'pending' as const };
     const [rows, total] = await this.prisma.$transaction([
       this.prisma.contentPiece.findMany({
@@ -74,9 +80,13 @@ export class AdminContentReviewService {
       this.prisma.contentPiece.count({ where }),
     ]);
 
-    const creators = await this.resolveCreators(rows.map((r) => r.creatorWawuId));
+    const creators = await this.resolveCreators(
+      rows.map((r) => r.creatorWawuId),
+    );
     const items = await Promise.all(
-      rows.map(async (row) => this.toQueueItem(row, creators.get(row.creatorWawuId))),
+      rows.map(async (row) =>
+        this.toQueueItem(row, creators.get(row.creatorWawuId)),
+      ),
     );
 
     return { items, currentPage: query.page, perPage: query.perPage, total };
@@ -84,7 +94,9 @@ export class AdminContentReviewService {
 
   /** GET /admin/content/:id — any status, so a reviewer can reach a decision they already made. */
   async detail(id: string): Promise<AdminContentDetailView> {
-    const content = await this.prisma.contentPiece.findUnique({ where: { id } });
+    const content = await this.prisma.contentPiece.findUnique({
+      where: { id },
+    });
     if (!content) {
       throw new NotFoundException('Content not found.');
     }
@@ -100,7 +112,10 @@ export class AdminContentReviewService {
    * been spent, and silently overselling a paid entitlement is worse than
    * asking the creator to resubmit through the upload flow they already have.
    */
-  async approve(id: string, admin: AdminUserView): Promise<AdminContentDecisionView> {
+  async approve(
+    id: string,
+    admin: AdminUserView,
+  ): Promise<AdminContentDecisionView> {
     return this.decide(id, admin, 'approved', null);
   }
 
@@ -135,7 +150,11 @@ export class AdminContentReviewService {
    * the free/paid sub-cap is not. Correcting that means editing an existing
    * service, which this module is forbidden to do.
    */
-  async reject(id: string, dto: RejectContentDto, admin: AdminUserView): Promise<AdminContentDecisionView> {
+  async reject(
+    id: string,
+    dto: RejectContentDto,
+    admin: AdminUserView,
+  ): Promise<AdminContentDecisionView> {
     return this.decide(id, admin, 'rejected', dto.reason.trim());
   }
 
@@ -145,7 +164,9 @@ export class AdminContentReviewService {
     decision: 'approved' | 'rejected',
     reason: string | null,
   ): Promise<AdminContentDecisionView> {
-    const existing = await this.prisma.contentPiece.findUnique({ where: { id } });
+    const existing = await this.prisma.contentPiece.findUnique({
+      where: { id },
+    });
     if (!existing) {
       throw new NotFoundException('Content not found.');
     }
@@ -155,7 +176,8 @@ export class AdminContentReviewService {
       );
     }
 
-    const newStatus = decision === 'approved' ? ('live' as const) : ('rejected' as const);
+    const newStatus =
+      decision === 'approved' ? ('live' as const) : ('rejected' as const);
 
     const { content, review } = await this.prisma.$transaction(async (tx) => {
       // Conditional on status, not an unconditional update: two reviewers
@@ -167,7 +189,9 @@ export class AdminContentReviewService {
         data: { status: newStatus },
       });
       if (claimed.count === 0) {
-        throw new BadRequestException('This piece was reviewed by someone else a moment ago.');
+        throw new BadRequestException(
+          'This piece was reviewed by someone else a moment ago.',
+        );
       }
 
       // The slot ledger only moves on a rejection, and only downward from a
@@ -201,7 +225,9 @@ export class AdminContentReviewService {
         },
       });
 
-      const updated = await tx.contentPiece.findUniqueOrThrow({ where: { id } });
+      const updated = await tx.contentPiece.findUniqueOrThrow({
+        where: { id },
+      });
       return { content: updated, review: reviewRow };
     });
 
@@ -235,21 +261,28 @@ export class AdminContentReviewService {
 
   // ── views ────────────────────────────────────────────────────────────────
 
-  private async toDetail(content: ContentPieceModel): Promise<AdminContentDetailView> {
-    const [creators, lessons, completedPurchaseCount, history] = await Promise.all([
-      this.resolveCreators([content.creatorWawuId]),
-      this.prisma.courseLesson.findMany({
-        where: { contentId: content.id },
-        orderBy: { order: 'asc' },
-      }),
-      this.prisma.purchase.count({
-        where: { contentId: content.id, type: 'content', status: 'completed' },
-      }),
-      this.prisma.adminContentReview.findMany({
-        where: { contentId: content.id },
-        orderBy: { reviewedAt: 'desc' },
-      }),
-    ]);
+  private async toDetail(
+    content: ContentPieceModel,
+  ): Promise<AdminContentDetailView> {
+    const [creators, lessons, completedPurchaseCount, history] =
+      await Promise.all([
+        this.resolveCreators([content.creatorWawuId]),
+        this.prisma.courseLesson.findMany({
+          where: { contentId: content.id },
+          orderBy: { order: 'asc' },
+        }),
+        this.prisma.purchase.count({
+          where: {
+            contentId: content.id,
+            type: 'content',
+            status: 'completed',
+          },
+        }),
+        this.prisma.adminContentReview.findMany({
+          where: { contentId: content.id },
+          orderBy: { reviewedAt: 'desc' },
+        }),
+      ]);
 
     return {
       ...(await this.toQueueItem(content, creators.get(content.creatorWawuId))),
@@ -287,7 +320,10 @@ export class AdminContentReviewService {
       status: content.status,
       creatorFirstUploadFree: content.creatorFirstUploadFree,
       createdAt: content.createdAt,
-      waitingHours: Math.max(0, Math.floor((Date.now() - content.createdAt.getTime()) / MS_PER_HOUR)),
+      waitingHours: Math.max(
+        0,
+        Math.floor((Date.now() - content.createdAt.getTime()) / MS_PER_HOUR),
+      ),
       creator: creator ?? emptyCreatorView(content.creatorWawuId),
       assets: await this.signAssets(content),
     };
@@ -304,7 +340,9 @@ export class AdminContentReviewService {
    * see the same word the creator sees on their own screen, not a second
    * definition of it. Nothing here is written back.
    */
-  private async resolveCreators(wawuUserIds: string[]): Promise<Map<string, AdminContentCreatorView>> {
+  private async resolveCreators(
+    wawuUserIds: string[],
+  ): Promise<Map<string, AdminContentCreatorView>> {
     const ids = [...new Set(wawuUserIds)];
     if (ids.length === 0) return new Map();
 
@@ -360,7 +398,9 @@ export class AdminContentReviewService {
    * and the error, deliberately not the URL — a signed URL is a bearer token
    * for the object, and a log line is a place it outlives the request).
    */
-  private async signAssets(content: ContentPieceModel): Promise<AdminContentAssetsView> {
+  private async signAssets(
+    content: ContentPieceModel,
+  ): Promise<AdminContentAssetsView> {
     const [previewUrl, fullUrl] = await Promise.all([
       this.signAsset(content.previewAssetUrl),
       this.signAsset(content.fullAssetUrl),
@@ -380,42 +420,6 @@ export class AdminContentReviewService {
       return null;
     }
   }
-}
-
-/**
- * Recovers the object key from whatever is stored on the piece.
- *
- * KYC stores a bare key, so `signedReadUrl` can sign it directly. Content does
- * not: the upload flow persists `presignUpload().fileUrl`, which is
- * `readUrlFor(key)` — an absolute, already-signed, SEVEN-DAY read URL
- * (storage.service.ts). `signedReadUrl` returns any `http(s)` input verbatim,
- * so handing it the stored value would have this admin surface serving the
- * long-lived URL the brief forbids, and serving a dead one once the piece has
- * been waiting more than a week.
- *
- * So the key is recovered from the URL path before signing. The grammar is
- * closed and server-generated — `<folder>/<wawuId>/<uuid>.<ext>` with `folder`
- * drawn from UPLOAD_FOLDERS (storage.service.ts:presignUpload) — so this is a
- * match against a known shape, not a guess at bucket layout. Anything that
- * does not match is passed through unchanged and `signedReadUrl` decides what
- * to do with it; nothing stored is ever rewritten.
- */
-export function objectKeyFrom(stored: string): string {
-  if (!stored.startsWith('http://') && !stored.startsWith('https://')) return stored;
-
-  let pathname: string;
-  try {
-    pathname = decodeURIComponent(new URL(stored).pathname);
-  } catch {
-    return stored;
-  }
-
-  for (const folder of UPLOAD_FOLDERS) {
-    const marker = `/${folder}/`;
-    const at = pathname.indexOf(marker);
-    if (at !== -1) return pathname.slice(at + 1);
-  }
-  return stored;
 }
 
 /**

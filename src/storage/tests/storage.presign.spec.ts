@@ -1,5 +1,5 @@
 import { ConfigService } from '@nestjs/config';
-import { StorageService } from '../storage.service';
+import { StorageService, objectKeyFrom } from '../storage.service';
 import { serveAs } from '../dto/presign-upload.dto';
 import type { PrismaService } from '../../common/prisma/prisma.service';
 
@@ -151,6 +151,64 @@ describe('StorageService presigning', () => {
       const secs = (u: string) =>
         Number(new URL(u).searchParams.get('X-Amz-Expires'));
       expect(secs(kyc)).toBeLessThan(secs(content));
+    });
+  });
+
+  /**
+   * Regression cover for the bug behind "a video shows in the feed but will
+   * not play": `readUrlFor`'s 604800s (7-day) signature was being persisted
+   * as the permanent value of `previewAssetUrl`/`fullAssetUrl`, so any piece
+   * read more than a week after upload served a dead link even though the
+   * object itself was untouched in the bucket. Confirmed live: a piece
+   * created 2026-09-05 came back 403 from storage on 2026-09-14.
+   */
+  describe('objectKeyFrom', () => {
+    it("recovers the key from one of this service's own long-lived read URLs", () => {
+      const stored =
+        'https://example-bucket.t3.storageapi.dev/content/preview/user-1/c06414e0.png' +
+        '?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=deadbeef';
+      expect(objectKeyFrom(stored)).toBe('content/preview/user-1/c06414e0.png');
+    });
+
+    it('recovers the key regardless of how expired the stored signature is', () => {
+      const longExpired =
+        'https://example-bucket.t3.storageapi.dev/content/full/user-1/lecture.mp4' +
+        '?X-Amz-Date=20200101T000000Z&X-Amz-Expires=604800&X-Amz-Signature=old';
+      expect(objectKeyFrom(longExpired)).toBe(
+        'content/full/user-1/lecture.mp4',
+      );
+    });
+
+    it('leaves a bare key unchanged', () => {
+      expect(objectKeyFrom('content/preview/user-1/c06414e0.png')).toBe(
+        'content/preview/user-1/c06414e0.png',
+      );
+    });
+
+    it('leaves a URL that is not one of ours unchanged', () => {
+      const external = 'https://cdn.example.com/some/other/image.png';
+      expect(objectKeyFrom(external)).toBe(external);
+    });
+  });
+
+  describe('freshUrlFor', () => {
+    it('re-signs a stale stored URL, recovering the same object', async () => {
+      const stale = await service.readUrlFor(
+        'content/preview/user-1/video.mp4',
+      );
+      const fresh = await service.freshUrlFor(stale);
+      expect(fresh).not.toBeNull();
+      expect(new URL(fresh!).pathname).toBe(new URL(stale).pathname);
+      expect(new URL(fresh!).searchParams.get('X-Amz-Expires')).toBe('604800');
+    });
+
+    it('passes a genuinely external URL through untouched', async () => {
+      const external = 'https://cdn.example.com/hotlinked.png';
+      await expect(service.freshUrlFor(external)).resolves.toBe(external);
+    });
+
+    it('passes null through as null', async () => {
+      await expect(service.freshUrlFor(null)).resolves.toBeNull();
     });
   });
 

@@ -23,6 +23,7 @@ import type { CreateContentDto } from './dto/create-content.dto';
 import type { RateContentDto } from './dto/rate-content.dto';
 import { netOfCommission } from '../common/money';
 import { NotificationService } from '../notification/notification.service';
+import { StorageService } from '../storage/storage.service';
 import type { VerifyUnlockDto } from './dto/verify-unlock.dto';
 
 /** Standard commission rate (conventions.md § Identity & format canon). */
@@ -87,6 +88,7 @@ export class ContentPieceService {
     private readonly prisma: PrismaService,
     @Inject(FLUTTERWAVE_CLIENT) private readonly flutterwave: FlutterwaveClient,
     private readonly notifications: NotificationService,
+    private readonly storage: StorageService,
   ) {}
 
   /** Snapshotted at transaction time, never recomputed later (conventions.md). */
@@ -110,16 +112,30 @@ export class ContentPieceService {
    * note: "server-gated: present only if free or requester has completed
    * Purchase") are computed per-requester at read time here — never a
    * derived stored column, and never trusted from any client input.
+   *
+   * Both asset URLs are also RE-SIGNED here, not passed through as stored.
+   * What gets persisted at upload time is `presignUpload().fileUrl` — an
+   * already-signed URL good for 7 days — so a piece read any time after that
+   * window served a dead link forever even though the object itself was
+   * fine. StorageService.freshUrlFor recovers the key and signs a new one on
+   * every read, the same fix already in place for the admin review queue
+   * (admin-content-review.service.ts), just never applied to the surface
+   * everyone actually watches content on.
    */
-  private toResponse(
+  private async toResponse(
     content: ContentRow,
     unlocked: boolean,
-  ): ContentPieceResponse {
+  ): Promise<ContentPieceResponse> {
     const isFree = content.accessType === 'free';
     const locked = !isFree && !unlocked;
+    const [previewAssetUrl, fullAssetUrl] = await Promise.all([
+      this.storage.freshUrlFor(content.previewAssetUrl),
+      locked ? null : this.storage.freshUrlFor(content.fullAssetUrl),
+    ]);
     return {
       ...content,
-      fullAssetUrl: locked ? null : content.fullAssetUrl,
+      previewAssetUrl: previewAssetUrl as string,
+      fullAssetUrl,
       fullAssetLocked: locked,
     } as ContentPieceResponse;
   }
@@ -242,8 +258,8 @@ export class ContentPieceService {
       items.map((i) => i.id),
     );
     return {
-      items: items.map((item) =>
-        this.toResponse(item, unlockedSet.has(item.id)),
+      items: await Promise.all(
+        items.map((item) => this.toResponse(item, unlockedSet.has(item.id))),
       ),
       currentPage: page,
       perPage,
@@ -354,8 +370,8 @@ export class ContentPieceService {
       items.map((i) => i.id),
     );
     return {
-      items: items.map((item) =>
-        this.toResponse(item, unlockedSet.has(item.id)),
+      items: await Promise.all(
+        items.map((item) => this.toResponse(item, unlockedSet.has(item.id))),
       ),
       currentPage: page,
       perPage,
@@ -659,7 +675,10 @@ export class ContentPieceService {
     }
 
     if (purchase.status === 'completed') {
-      return { purchased: true, fullAssetUrl: content.fullAssetUrl };
+      return {
+        purchased: true,
+        fullAssetUrl: await this.storage.freshUrlFor(content.fullAssetUrl),
+      };
     }
     if (purchase.status === 'failed') {
       throw new BadRequestException(
@@ -708,7 +727,10 @@ export class ContentPieceService {
       });
     }
 
-    return { purchased: true, fullAssetUrl: content.fullAssetUrl };
+    return {
+      purchased: true,
+      fullAssetUrl: await this.storage.freshUrlFor(content.fullAssetUrl),
+    };
   }
 
   async save(contentId: string, userWawuId: string): Promise<SavedItem> {

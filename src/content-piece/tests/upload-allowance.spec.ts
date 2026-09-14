@@ -27,7 +27,9 @@ function buildService(tier: 'basic' | 'pro' | 'pro_max', counts: Counts) {
   const tx = {
     contentPiece: {
       count: jest.fn(({ where }: { where: { accessType?: string } }) =>
-        Promise.resolve(where.accessType === 'free' ? counts.free : counts.paid),
+        Promise.resolve(
+          where.accessType === 'free' ? counts.free : counts.paid,
+        ),
       ),
       create: jest.fn(({ data }: { data: Record<string, unknown> }) => {
         created.push(data);
@@ -68,6 +70,12 @@ function buildService(tier: 'basic' | 'pro' | 'pro_max', counts: Counts) {
     // NotificationService — the upload path emits nothing; only the paid
     // unlock settlement does (see ContentPieceService.verifyUnlock).
     { emit: jest.fn() } as never,
+    // StorageService — toResponse() re-signs asset URLs on the way out;
+    // these tests assert on upload-slot arithmetic, not URL signing, so the
+    // fake just hands back whatever it was given.
+    {
+      freshUrlFor: jest.fn((url: string | null) => Promise.resolve(url)),
+    } as never,
   );
   return { service, state, tx, created };
 }
@@ -83,7 +91,7 @@ function dto(accessType: 'free' | 'paid'): CreateContentDto {
     price: accessType === 'paid' ? 2000 : 0,
     previewAsset: 'https://cdn.example.com/preview.jpg',
     fullAsset: 'https://cdn.example.com/full.mp4',
-  } as CreateContentDto;
+  };
 }
 
 describe('ContentPieceService upload allowances', () => {
@@ -91,12 +99,24 @@ describe('ContentPieceService upload allowances', () => {
     // These three are the numbers on the pricing page. If a plan's copy
     // changes, this test is the thing that says so before a creator finds out
     // by being refused an upload they were sold.
-    expect(UPLOAD_ALLOWANCE_BY_TIER.basic).toEqual({ free: 1, paid: 5, total: 6 });
-    expect(UPLOAD_ALLOWANCE_BY_TIER.pro).toEqual({ free: 2, paid: 10, total: 12 });
+    expect(UPLOAD_ALLOWANCE_BY_TIER.basic).toEqual({
+      free: 1,
+      paid: 5,
+      total: 6,
+    });
+    expect(UPLOAD_ALLOWANCE_BY_TIER.pro).toEqual({
+      free: 2,
+      paid: 10,
+      total: 12,
+    });
     // Pro Max: 15 total, set by the product owner on 31 Aug 2026. The three
     // extra over Pro are PAID slots — free stays at 2, because free slots are
     // for publishing before you pay, not a thing the tier sells.
-    expect(UPLOAD_ALLOWANCE_BY_TIER.pro_max).toEqual({ free: 2, paid: 13, total: 15 });
+    expect(UPLOAD_ALLOWANCE_BY_TIER.pro_max).toEqual({
+      free: 2,
+      paid: 13,
+      total: 15,
+    });
   });
 
   it('claims a slot when the upload is within allowance', async () => {
