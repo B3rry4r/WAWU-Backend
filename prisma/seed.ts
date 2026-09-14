@@ -69,7 +69,6 @@ const MESSAGE_FOUNDERS_2 = '22000000-0000-4000-8000-000000000002';
 const PARTNER_SERVICE_CAC = '30000000-0000-4000-8000-000000000001';
 const PARTNER_SERVICE_NEPC = '30000000-0000-4000-8000-000000000002';
 const PARTNER_SERVICE_TRADEMARK = '30000000-0000-4000-8000-000000000003';
-const PARTNER_SERVICE_BILLS_PAYMENT = '30000000-0000-4000-8000-000000000004';
 const MENTOR_AMARA = '40000000-0000-4000-8000-000000000001';
 const MENTOR_TUNDE = '40000000-0000-4000-8000-000000000002';
 const LEARN_COURSE_EXPORT = '50000000-0000-4000-8000-000000000001';
@@ -725,47 +724,16 @@ async function main() {
     },
   });
 
-  // WAWUPay bills, catalogued here so /services/pay's own live-check
-  // (useServiceLive("pay"), matched by slug) resolves against a real row
-  // instead of falling through to "not found -> not live" against the real
-  // backend. The page's own switched-off flag is a separate, deliberate
-  // gate on top of this — see bill-payment.service.ts for the delivery-
-  // confirmation fix this status depends on being correct.
-  await prisma.partnerService.upsert({
-    where: { id: PARTNER_SERVICE_BILLS_PAYMENT },
-    update: {
-      id: PARTNER_SERVICE_BILLS_PAYMENT,
-      slug: 'pay',
-      name: 'Bills Payment',
-      tagline: 'Airtime, data, electricity and cable',
-      blurb:
-        'Pay any bill without leaving WAWU. Confirm the meter or number first, pay with your card, and the top-up lands straight away.',
-      icon: 'zap',
-      status: PartnerServiceStatus.live,
-      turnaround: 'Instant',
-      priceFrom: 'No added fee',
-      partner: 'Flutterwave',
-      comingNote: null,
-      ctaLabel: 'Pay a bill',
-      ctaHref: '/services/pay',
-    },
-    create: {
-      id: PARTNER_SERVICE_BILLS_PAYMENT,
-      slug: 'pay',
-      name: 'Bills Payment',
-      tagline: 'Airtime, data, electricity and cable',
-      blurb:
-        'Pay any bill without leaving WAWU. Confirm the meter or number first, pay with your card, and the top-up lands straight away.',
-      icon: 'zap',
-      status: PartnerServiceStatus.live,
-      turnaround: 'Instant',
-      priceFrom: 'No added fee',
-      partner: 'Flutterwave',
-      comingNote: null,
-      ctaLabel: 'Pay a bill',
-      ctaHref: '/services/pay',
-    },
-  });
+  // NOT NEEDED, NOT ADDED: a live PartnerService row for slug 'pay' already
+  // exists in the real database — seeded via idempotent SQL migrations
+  // (20260818230000_partner_service_catalogue, ON CONFLICT ("slug") DO
+  // UPDATE), which this dev/test-only seed script runs AFTER. A block here
+  // that upserted by a hardcoded id instead of by slug found no row (wrong
+  // key) and tried to INSERT a second one, which failed on the slug's unique
+  // constraint every single run — the actual cause of every "Deploy Hub API"
+  // failure from the moment this was added until it was removed. Checked
+  // against prisma/migrations/*/migration.sql before writing this comment,
+  // not just this file, which is the check that was skipped the first time.
 
   await prisma.partnerService.upsert({
     where: { id: PARTNER_SERVICE_TRADEMARK },
