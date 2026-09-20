@@ -19,9 +19,10 @@ import type { ReviewKycSubmissionDto } from './dto/review-kyc-submission.dto';
  * verification tier]"). No WawuIdClient involvement anywhere in this
  * service, unlike VerificationSubmission.
  *
- * Both gates from CLAUDE.md are independent: this resource is the manual
- * review workflow that flips CreatorState.kycStatus (the "canEarn" gate).
- * subscriptionPaid (the "canUpload" gate) is untouched by anything here.
+ * This resource is the manual review workflow that flips
+ * CreatorState.kycStatus, the "canEarn" gate. It is the only creator gate
+ * left: the "canUpload" gate was a paid subscription and went with it. KYC
+ * itself is untouched.
  */
 @Injectable()
 export class KycSubmissionService {

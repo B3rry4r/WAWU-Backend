@@ -9,9 +9,9 @@ import { AllExceptionsFilter } from '../../../common/filters/all-exceptions.filt
 import { ResponseInterceptor } from '../../../common/interceptors/response.interceptor';
 import { AdminAuthModule } from '../../auth/admin-auth.module';
 import { AdminPaymentsModule } from '../admin-payments.module';
-import { CreatorSubscriptionModule } from '../../../creator-subscription/creator-subscription.module';
-import { FLUTTERWAVE_CLIENT } from '../../../creator-subscription/flutterwave-client.interface';
-import type { FlutterwaveClient } from '../../../creator-subscription/flutterwave-client.interface';
+import { CreditPurchaseModule } from '../../../credit-purchase/credit-purchase.module';
+import { FLUTTERWAVE_CLIENT } from '../../../credit-purchase/flutterwave-client.interface';
+import type { FlutterwaveClient } from '../../../credit-purchase/flutterwave-client.interface';
 
 /**
  * Contract tests for the admin payment-reconciliation surface
@@ -123,7 +123,7 @@ async function loginToWawuId(identifier: string): Promise<string> {
 describe('Admin payments reconciliation contract', () => {
   let app: INestApplication;
   let prisma: PrismaService;
-  let subscriptionFlutterwave: FlutterwaveClient;
+  let creditsFlutterwave: FlutterwaveClient;
 
   let superToken: string;
   let financeToken: string;
@@ -136,6 +136,7 @@ describe('Admin payments reconciliation contract', () => {
   /** Throwaway ids created by the settlement tests, torn down in afterAll. */
   const createdTxRefs: string[] = [];
   const createdReceiptIds: string[] = [];
+  const createdCreditPurchaseIds: string[] = [];
   const throwawayUsers: string[] = [];
 
   const http = () => request(app.getHttpServer());
@@ -245,27 +246,40 @@ describe('Admin payments reconciliation contract', () => {
    * has seen `initCharge` for, so the settle path's re-verification against
    * Flutterwave genuinely succeeds rather than being stubbed past.
    */
-  async function openStuckSubscriptionReceipt(expectedAmountOverride?: number) {
+  /** The `starter` pack, from CreditPurchaseService's own PACK_TABLE. */
+  const CREDIT_PACK_AMOUNT = 500;
+  const CREDIT_PACK_CREDITS = 50;
+
+  const creditBalanceOf = async (userWawuId: string): Promise<number> =>
+    (await prisma.creditsState.findUnique({ where: { userWawuId } }))
+      ?.creditBalance ?? 0;
+
+  async function openStuckCreditPurchaseReceipt(storedAmountOverride?: number) {
     const wawuUserId = randomUUID();
     throwawayUsers.push(wawuUserId);
 
-    const charge = subscriptionFlutterwave.initCharge({
-      amount: 5999,
-      purpose: 'subscribe-basic',
+    const charge = creditsFlutterwave.initCharge({
+      amount: CREDIT_PACK_AMOUNT,
+      purpose: 'credit-purchase',
       wawuUserId,
-      planId: 'plan-test',
     });
     createdTxRefs.push(charge.txRef);
 
-    await prisma.pendingCharge.create({
+    // What CreditPurchaseService.create writes, written directly: no HTTP and
+    // no seeded account touched, so the settlement assertions are exact.
+    // `storedAmountOverride` raises the amount the server expects ABOVE what
+    // Flutterwave will confirm, which is what the underpayment test needs.
+    const purchase = await prisma.creditPurchase.create({
       data: {
-        txRef: charge.txRef,
-        kind: 'subscribe',
-        wawuUserId,
-        expectedAmount: expectedAmountOverride ?? charge.amount,
-        context: { tier: 'basic', planId: 'plan-test' },
+        userWawuId: wawuUserId,
+        pack: 'starter',
+        creditsGranted: CREDIT_PACK_CREDITS,
+        flutterwaveTxRef: charge.txRef,
+        amount: storedAmountOverride ?? CREDIT_PACK_AMOUNT,
+        status: 'pending',
       },
     });
+    createdCreditPurchaseIds.push(purchase.id);
 
     const transactionId = `flw-tx-${charge.txRef}`;
     const receipt = await prisma.paymentWebhookReceipt.create({
@@ -276,12 +290,17 @@ describe('Admin payments reconciliation contract', () => {
         transactionId,
         status: 'unmatched',
         detail: 'No money flow owns this tx_ref',
-        payload: chargeCompletedPayload(charge.txRef, transactionId, 5999),
+        payload: chargeCompletedPayload(charge.txRef, transactionId, CREDIT_PACK_AMOUNT),
       },
     });
     createdReceiptIds.push(receipt.id);
 
-    return { wawuUserId, txRef: charge.txRef, receiptId: receipt.id };
+    return {
+      wawuUserId,
+      txRef: charge.txRef,
+      receiptId: receipt.id,
+      purchaseId: purchase.id,
+    };
   }
 
   beforeAll(async () => {
@@ -315,10 +334,10 @@ describe('Admin payments reconciliation contract', () => {
 
     prisma = moduleRef.get(PrismaService);
 
-    // The same MockFlutterwaveAdapter instance the CreatorSubscription flow
-    // uses, so a charge opened here is one the settlement path can verify.
-    subscriptionFlutterwave = moduleRef
-      .select(CreatorSubscriptionModule)
+    // The same MockFlutterwaveAdapter instance the CreditPurchase flow uses,
+    // so a charge opened here is one the settlement path can verify.
+    creditsFlutterwave = moduleRef
+      .select(CreditPurchaseModule)
       .get<FlutterwaveClient>(FLUTTERWAVE_CLIENT);
 
     const argon2 = await import('argon2');
@@ -348,10 +367,13 @@ describe('Admin payments reconciliation contract', () => {
       await prisma.paymentWebhookReceipt.deleteMany({ where: { id: { in: STATIC_RECEIPT_IDS } } });
       await prisma.paymentWebhookReceipt.deleteMany({ where: { id: { in: createdReceiptIds } } });
       await prisma.pendingCharge.deleteMany({ where: { txRef: { in: createdTxRefs } } });
-      if (throwawayUsers.length) {
-        await prisma.creatorSubscription.deleteMany({
-          where: { creatorWawuId: { in: throwawayUsers } },
+      if (createdCreditPurchaseIds.length) {
+        await prisma.creditPurchase.deleteMany({
+          where: { id: { in: createdCreditPurchaseIds } },
         });
+      }
+      if (throwawayUsers.length) {
+        await prisma.creditsState.deleteMany({ where: { userWawuId: { in: throwawayUsers } } });
         await prisma.creatorState.deleteMany({ where: { wawuUserId: { in: throwawayUsers } } });
         await prisma.userProfile.deleteMany({ where: { wawuUserId: { in: throwawayUsers } } });
         await prisma.pendingCharge.deleteMany({ where: { wawuUserId: { in: throwawayUsers } } });
@@ -530,7 +552,7 @@ describe('Admin payments reconciliation contract', () => {
     });
 
     it('reports a stuck receipt as settleable NOW, because a flow owns the tx_ref today', async () => {
-      const { receiptId } = await openStuckSubscriptionReceipt();
+      const { receiptId } = await openStuckCreditPurchaseReceipt();
 
       const res = await http()
         .get(`/api/hub/admin/payments/receipts/${receiptId}`)
@@ -541,7 +563,7 @@ describe('Admin payments reconciliation contract', () => {
       // because the webhook beat its own PendingCharge insert, and nothing
       // stored on it will ever say the charge turned up a second later.
       expect(res.body.data.diagnosis).toMatchObject({
-        currentlyOwnedBy: 'subscription-subscribe',
+        currentlyOwnedBy: 'credit-purchase',
         looksSettleableNow: true,
         reverifiable: true,
       });
@@ -585,39 +607,28 @@ describe('Admin payments reconciliation contract', () => {
      * grant happens exactly once.
      */
     it('settles a genuinely stuck receipt, and grants EXACTLY once', async () => {
-      const { wawuUserId, txRef, receiptId } = await openStuckSubscriptionReceipt();
+      const { wawuUserId, receiptId, purchaseId } =
+        await openStuckCreditPurchaseReceipt();
 
       // Nothing has been granted yet.
-      expect(
-        await prisma.creatorSubscription.count({ where: { creatorWawuId: wawuUserId } }),
-      ).toBe(0);
+      expect(await creditBalanceOf(wawuUserId)).toBe(0);
 
       // ---- first re-verify: the grant ------------------------------------
       const first = await reverify(financeToken, receiptId).expect(200);
       expect(first.body.data).toMatchObject({
         outcome: 'settled',
-        flow: 'subscription-subscribe',
+        flow: 'credit-purchase',
         granted: true,
       });
       expect(first.body.data.receipt).toMatchObject({ id: receiptId, status: 'settled' });
       expect(first.body.data.receipt.settledAt).not.toBeNull();
 
       // Everything the browser's own /verify would have granted, granted here.
-      const subscriptions = await prisma.creatorSubscription.findMany({
-        where: { creatorWawuId: wawuUserId },
-      });
-      expect(subscriptions).toHaveLength(1);
-      expect(subscriptions[0]).toMatchObject({ tier: 'basic', status: 'active' });
-
-      const state = await prisma.creatorState.findUnique({ where: { wawuUserId } });
-      expect(state?.subscriptionPaid).toBe(true);
-      const profile = await prisma.userProfile.findUnique({ where: { wawuUserId } });
-      expect(profile?.accountType).toBe('creator');
-
-      // The charge is consumed — the claim that makes a second grant impossible.
-      expect(await prisma.pendingCharge.findUnique({ where: { txRef } })).toBeNull();
-
-      const grantedPeriodEnd = subscriptions[0].currentPeriodEnd;
+      expect(await creditBalanceOf(wawuUserId)).toBe(CREDIT_PACK_CREDITS);
+      expect(
+        (await prisma.creditPurchase.findUniqueOrThrow({ where: { id: purchaseId } }))
+          .status,
+      ).toBe('completed');
 
       // ---- LAYER 1: the endpoint refuses a second re-verify ---------------
       const second = await reverify(financeToken, receiptId).expect(409);
@@ -627,40 +638,31 @@ describe('Admin payments reconciliation contract', () => {
       // The receipt is pushed back to a reverifiable status directly in the
       // database, so this call genuinely re-enters the settlement path. If
       // re-verify had reimplemented settlement rather than reusing it, this is
-      // where a second grant would appear.
+      // where a second pack of credits would appear.
       await prisma.paymentWebhookReceipt.update({
         where: { id: receiptId },
         data: { status: 'failed', detail: 'forced back for the exactly-once assertion' },
       });
 
-      const third = await reverify(financeToken, receiptId).expect(200);
-      expect(third.body.data.granted).toBe(false);
-      // Nothing owns the tx_ref any more: the PendingCharge was consumed by
-      // the first settlement, which IS the exactly-once guarantee.
-      expect(third.body.data.outcome).toBe('unmatched');
+      await reverify(financeToken, receiptId).expect(200);
 
-      const after = await prisma.creatorSubscription.findMany({
-        where: { creatorWawuId: wawuUserId },
-      });
-      expect(after).toHaveLength(1);
-      expect(after[0].currentPeriodEnd).toEqual(grantedPeriodEnd);
-      expect(await prisma.pendingCharge.findUnique({ where: { txRef } })).toBeNull();
+      // The purchase row is already `completed`, and that status is the claim
+      // the settle path checks before crediting anything. One pack, still.
+      expect(await creditBalanceOf(wawuUserId)).toBe(CREDIT_PACK_CREDITS);
     });
 
-    it('does not grant when the charge is genuinely underpaid — the expectedAmount control still holds', async () => {
+    it('does not grant when the charge is genuinely underpaid — the stored-amount control still holds', async () => {
       // The server stored an expectation of ₦18,999; Flutterwave will report
-      // the ₦5,999 that was actually charged. There is no admin control that
+      // the ₦500 that was actually charged. There is no admin control that
       // can wave this through, which is the entire reason this endpoint
       // re-runs verification instead of offering "mark as paid".
-      const { wawuUserId, receiptId } = await openStuckSubscriptionReceipt(18999);
+      const { wawuUserId, receiptId } = await openStuckCreditPurchaseReceipt(18999);
 
       const res = await reverify(superToken, receiptId).expect(200);
       expect(res.body.data).toMatchObject({ outcome: 'rejected', granted: false });
       expect(res.body.data.detail).toContain('verification failed');
 
-      expect(
-        await prisma.creatorSubscription.count({ where: { creatorWawuId: wawuUserId } }),
-      ).toBe(0);
+      expect(await creditBalanceOf(wawuUserId)).toBe(0);
       const receipt = await prisma.paymentWebhookReceipt.findUniqueOrThrow({
         where: { id: receiptId },
       });

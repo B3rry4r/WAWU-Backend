@@ -15,8 +15,8 @@ import { MOCK_FAILURE_TRANSACTION_ID } from '../mock-flutterwave.adapter';
 // Seeded WAWU IDs — mirror mock-wawu-id/server.js and prisma/seed.ts exactly
 // (see WAWU-Hub-API build task brief).
 const USER_PLAIN = '00000000-0000-4000-8000-000000000001'; // plain user
-const USER_CREATOR_BASIC = '00000000-0000-4000-8000-000000000002'; // Basic tier, subscriptionPaid, kyc pending
-const USER_CREATOR_PRO = '00000000-0000-4000-8000-000000000003'; // Pro tier, subscriptionPaid, kyc approved
+const USER_CREATOR_BASIC = '00000000-0000-4000-8000-000000000002'; // creator, kyc pending
+const USER_CREATOR_PRO = '00000000-0000-4000-8000-000000000003'; // creator, kyc approved
 const NONEXISTENT_WAWU_ID = 'ffffffff-0000-4000-8000-000000000099';
 
 const MOCK_WAWU_ID_PORT = process.env.WAWU_ID_JWKS_URL
@@ -116,7 +116,7 @@ describe('Purchase (contract)', () => {
   });
 
   describe('POST /tips', () => {
-    it('creates a pending tip and returns flutterwaveConfig for a Basic-tier creator (200/201, 0.15 commission)', async () => {
+    it('creates a pending tip and returns flutterwaveConfig for a creator (200/201, 0.15 commission)', async () => {
       const res = await request(app.getHttpServer())
         .post('/tips')
         .set('Authorization', `Bearer ${userToken}`)
@@ -150,7 +150,7 @@ describe('Purchase (contract)', () => {
       expect(Number(stored?.commissionRate)).toBeCloseTo(0.15);
     });
 
-    it('snapshots the 0.10 Pro-tier commission rate for an active Pro creator', async () => {
+    it('snapshots the SAME 0.15 rate for every creator — the 0.10 Pro rate went with the plan that sold it', async () => {
       const res = await request(app.getHttpServer())
         .post('/tips')
         .set('Authorization', `Bearer ${userToken}`)
@@ -162,7 +162,7 @@ describe('Purchase (contract)', () => {
       const stored = await prisma.purchase.findFirst({
         where: { flutterwaveTxRef: config.txRef },
       });
-      expect(Number(stored?.commissionRate)).toBeCloseTo(0.1);
+      expect(Number(stored?.commissionRate)).toBeCloseTo(0.15);
     });
 
     it('rejects tipping yourself (400)', async () => {

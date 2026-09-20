@@ -43,10 +43,10 @@ export type NotificationPrismaClient = PrismaService | Prisma.TransactionClient;
  *                     platform.
  *   communityDigest — a periodic digest job that does not exist.
  *
- * Money-settlement kinds (sale, tip_received, dm_received,
- * subscription_renewal) are intentionally NOT suppressible by any flag: they
- * are the record of a completed transaction, and no notification preference
- * should be able to hide the fact that money changed hands.
+ * Money-settlement kinds (sale, tip_received, dm_received) are intentionally
+ * NOT suppressible by any flag: they are the record of a completed
+ * transaction, and no notification preference should be able to hide the fact
+ * that money changed hands.
  */
 const SETTINGS_GATE: Partial<
   Record<NotificationKind, keyof NotificationSettings>

@@ -1,5 +1,5 @@
 // Run against wawu_hub_test (set DATABASE_URL before invoking jest, per the
-// task brief), mirroring src/creator-subscription/tests's own precedent —
+// task brief), mirroring the other resources' own precedent —
 // PrismaService reads process.env.DATABASE_URL directly (not via
 // ConfigService), so this must be set before PrismaModule/PrismaService is
 // ever instantiated below.
@@ -24,8 +24,8 @@ import { MOCK_FAILURE_TRANSACTION_ID } from '../mock-flutterwave.adapter';
 // Seeded WAWU IDs — mirror mock-wawu-id/server.js and prisma/seed.ts exactly
 // (see WAWU-Hub-API build task brief).
 const USER_PLAIN = '00000000-0000-4000-8000-000000000001'; // Adaeze Okonkwo — plain user
-const USER_CREATOR_BASIC = '00000000-0000-4000-8000-000000000002'; // Chidi Umeh — Basic tier, dmPrice 100
-const USER_CREATOR_PRO = '00000000-0000-4000-8000-000000000003'; // Zainab Bello — Pro tier, dmPrice 300
+const USER_CREATOR_BASIC = '00000000-0000-4000-8000-000000000002'; // Chidi Umeh — creator, dmPrice 100
+const USER_CREATOR_PRO = '00000000-0000-4000-8000-000000000003'; // Zainab Bello — creator, dmPrice 300
 
 // Seeded DirectMessage row (prisma/seed.ts): plain -> pro creator, ₦300,
 // awaiting_response, deadline 24h from seed-run time.
@@ -78,7 +78,7 @@ describe('DirectMessage (contract)', () => {
   // Snapshot of the seeded CreatorState rows this suite reads (and, in one
   // test, temporarily mutates) — restored in afterAll so reruns of this
   // suite, and any other resource's suite sharing wawu_hub_test, see stable
-  // seeded state (mirrors src/creator-subscription/tests's own documented
+  // seeded state (mirrors the other resource suites' own documented
   // precedent).
   let originalBasicState: Awaited<
     ReturnType<PrismaService['creatorState']['findUniqueOrThrow']>

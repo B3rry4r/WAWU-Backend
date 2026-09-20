@@ -79,13 +79,12 @@ async function login(identifier: string): Promise<string> {
 }
 
 /**
- * The POST/PATCH gate matrix needs identities the seed does not provide (an
- * UNPAID creator) and, more importantly, identities no OTHER spec can move
- * under it. Several specs mutate the three seeded accounts against this
- * shared wawu_hub_test database — creator-subscription's subscribe flow
- * promotes the seeded plain user to a creator account, and the seeded Basic
- * creator's tier/slots are edited elsewhere — so pinning "Basic is refused a
- * private community" to a seeded row makes the result depend on test order.
+ * The POST/PATCH gate matrix needs identities the seed does not provide (a
+ * creator with no CreatorState row) and, more importantly, identities no
+ * OTHER spec can move under it. Several specs mutate the three seeded
+ * accounts against this shared wawu_hub_test database — the seeded creator's
+ * slots are edited elsewhere — so pinning a gate result to a seeded row makes
+ * it depend on test order.
  *
  * Each gate test therefore runs against a throwaway WAWU ID registered by
  * this spec, with a UserProfile + CreatorState this spec owns outright and
@@ -199,31 +198,21 @@ describe('Community (contract)', () => {
 
     prisma = moduleRef.get(PrismaService);
 
-    // The gate matrix, as four rows this spec fully controls. NOTE both
-    // paid creators are deliberately kycStatus='pending': KYC gates EARNING,
-    // never hosting (CLAUDE.md — the two creator gates are independent), and
-    // that independence is exactly what these tests exist to pin.
+    // The gate matrix, as four rows this spec fully controls. The creators
+    // are deliberately kycStatus='pending': KYC gates EARNING, never hosting
+    // (CLAUDE.md — the creator gates are independent), and that independence
+    // is exactly what these tests exist to pin. `ownUnpaid` is now a creator
+    // with NO CreatorState row at all, which is what a brand-new creator
+    // looks like: hosting is no longer bought, so it must be allowed.
     const ownProfiles: Array<{
       sub: string;
       accountType: 'user' | 'creator';
-      state?: { tier: 'basic' | 'pro' | 'pro_max'; subscriptionPaid: boolean };
+      state?: boolean;
     }> = [
       { sub: ownPlain.sub, accountType: 'user' },
-      {
-        sub: ownUnpaid.sub,
-        accountType: 'creator',
-        state: { tier: 'basic', subscriptionPaid: false },
-      },
-      {
-        sub: ownBasic.sub,
-        accountType: 'creator',
-        state: { tier: 'basic', subscriptionPaid: true },
-      },
-      {
-        sub: ownPro.sub,
-        accountType: 'creator',
-        state: { tier: 'pro', subscriptionPaid: true },
-      },
+      { sub: ownUnpaid.sub, accountType: 'creator' },
+      { sub: ownBasic.sub, accountType: 'creator', state: true },
+      { sub: ownPro.sub, accountType: 'creator', state: true },
     ];
     for (const { sub, accountType, state } of ownProfiles) {
       await prisma.userProfile.upsert({
@@ -239,11 +228,9 @@ describe('Community (contract)', () => {
       if (state) {
         await prisma.creatorState.upsert({
           where: { wawuUserId: sub },
-          update: state,
+          update: { kycStatus: 'pending' },
           create: {
             wawuUserId: sub,
-            tier: state.tier,
-            subscriptionPaid: state.subscriptionPaid,
             kycStatus: 'pending',
             slotsUsed: 0,
             dmPrice: null,
@@ -595,46 +582,45 @@ describe('Community (contract)', () => {
       );
     });
 
-    it('403s a creator whose subscription is unpaid', async () => {
+    it('lets a creator with no CreatorState row host, because hosting is not bought', async () => {
+      // This used to 403 with "A paid subscription is required to host a
+      // community". Subscriptions are gone, and a brand-new creator has no
+      // CreatorState row at all, so refusing them would be the payment gate
+      // under another name. The account-type gate above is what still holds.
       const res = await request(app.getHttpServer())
         .post('/communities')
         .set('Authorization', `Bearer ${ownUnpaidCreatorToken}`)
         .send({
-          name: 'Unpaid creator community',
-          description: 'Hosting is a paid-plan feature.',
+          name: 'TEST: Brand New Creator Community',
+          description: 'Hosting needs a creator account and nothing else.',
           kind: 'open',
-        })
-        .expect(403);
+        });
 
-      expect(res.body.message).toBe(
-        'A paid subscription is required to host a community (CreatorState.subscriptionPaid=false).',
-      );
+      expect([200, 201]).toContain(res.status);
+      createdCommunityIds.push(res.body.data.id);
 
       const rows = await prisma.community.count({
         where: { hostWawuId: ownUnpaidCreatorSub },
       });
-      expect(rows).toBe(0);
+      expect(rows).toBe(1);
     });
 
-    it('creates an open community for a paid Basic creator whose KYC is still PENDING (the two gates are independent)', async () => {
+    it('creates an open community for a creator whose KYC is still PENDING (KYC gates earning, not hosting)', async () => {
       // The precondition is asserted, not assumed: the whole point of this
-      // test is that "paid + KYC pending" is a normal, allowed state, and
-      // this exact independence has been got wrong in this codebase before.
+      // test is that "publishing + KYC pending" is a normal, allowed state,
+      // and this exact independence has been got wrong in this codebase
+      // before. KYC is untouched by the subscription teardown.
       const state = await prisma.creatorState.findUnique({
         where: { wawuUserId: ownBasicCreatorSub },
       });
-      expect(state).toMatchObject({
-        tier: 'basic',
-        subscriptionPaid: true,
-        kycStatus: 'pending',
-      });
+      expect(state).toMatchObject({ kycStatus: 'pending' });
 
       const res = await request(app.getHttpServer())
         .post('/communities')
         .set('Authorization', `Bearer ${ownBasicCreatorToken}`)
         .send({
           name: 'TEST: Basic Creator Open Community',
-          description: 'Opened by a paid Basic creator with KYC pending.',
+          description: 'Opened by a creator with KYC pending.',
           kind: 'open',
         });
 
@@ -644,7 +630,7 @@ describe('Community (contract)', () => {
       expect(res.body.data).toEqual({
         id: expect.any(String),
         name: 'TEST: Basic Creator Open Community',
-        description: 'Opened by a paid Basic creator with KYC pending.',
+        description: 'Opened by a creator with KYC pending.',
         hostWawuId: ownBasicCreatorSub,
         kind: 'open',
         // No image was sent, so the room has none and the client falls back
@@ -677,26 +663,27 @@ describe('Community (contract)', () => {
       expect(hostMembership).toBeNull();
     });
 
-    it('403s a Basic creator asking for a PRIVATE community, naming the tier required', async () => {
+    it('lets any creator host a PRIVATE community, because there is no tier left to sell it', async () => {
+      // This used to 403 with "Private communities are a Pro-tier feature".
+      // The tier that sold it is gone, so the check went with it rather than
+      // being reinterpreted against something else.
       const res = await request(app.getHttpServer())
         .post('/communities')
         .set('Authorization', `Bearer ${ownBasicCreatorToken}`)
         .send({
           name: 'TEST: Basic Creator Private Attempt',
-          description: 'Private hosting is Pro-only per docs/01_SPEC.md.',
+          description: 'Private hosting is open to every creator account.',
           kind: 'private',
-        })
-        .expect(403);
+        });
 
-      expect(res.body.message).toBe(
-        'Private communities are a Pro-tier feature. Your Basic plan can host open communities — upgrade to Pro to host a private one.',
-      );
+      expect([200, 201]).toContain(res.status);
+      createdCommunityIds.push(res.body.data.id);
 
-      // Refused, not silently downgraded to an open community.
-      const leaked = await prisma.community.findFirst({
+      // Created as asked for, never silently downgraded to an open community.
+      const stored = await prisma.community.findFirst({
         where: { name: 'TEST: Basic Creator Private Attempt' },
       });
-      expect(leaked).toBeNull();
+      expect(stored).toMatchObject({ kind: 'private' });
     });
 
     it('creates a PRIVATE community for a Pro creator', async () => {
@@ -705,7 +692,7 @@ describe('Community (contract)', () => {
         .set('Authorization', `Bearer ${ownProCreatorToken}`)
         .send({
           name: 'TEST: Pro Creator Private Community',
-          description: 'Private hosting is included on the Pro tier.',
+          description: 'Private hosting is open to every creator account.',
           kind: 'private',
         });
 

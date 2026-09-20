@@ -27,9 +27,8 @@ import { CommunityMessageModule } from '../../community-message/community-messag
  * branch. `CommunityMessageService.assertMember` requires
  * `status === 'joined'`, so a pending member could neither read nor post: a
  * private community was a room nobody could ever be admitted to. Private
- * hosting is the Pro tier's headline differentiator (WAWU-Web
- * docs/01_SPEC.md:81) and is advertised on the pricing card, so creators
- * were paying extra for a dead end.
+ * hosting is open to every creator account (WAWU-Web docs/01_SPEC.md:81),
+ * so it was a dead end for everybody who used it.
  *
  * The tests below therefore do not stop at "the row says joined". The
  * central one requests -> is refused a post -> is approved -> POSTS
@@ -230,23 +229,19 @@ describe('Community join requests (contract)', () => {
       ],
     });
 
-    // Both creators are paid with kycStatus 'pending' on purpose: KYC gates
-    // EARNING, never hosting or moderating (CLAUDE.md — the two creator
-    // gates are independent).
+    // Both creators have kycStatus 'pending' on purpose: KYC gates EARNING,
+    // never hosting or moderating (CLAUDE.md — the creator gates are
+    // independent).
     await prisma.creatorState.createMany({
       data: [
         {
           wawuUserId: hostSub,
-          tier: 'pro',
-          subscriptionPaid: true,
           kycStatus: 'pending',
           slotsUsed: 0,
           dmEnabled: false,
         },
         {
           wawuUserId: otherHostSub,
-          tier: 'basic',
-          subscriptionPaid: true,
           kycStatus: 'pending',
           slotsUsed: 0,
           dmEnabled: false,

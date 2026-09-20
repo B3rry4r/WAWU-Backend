@@ -83,8 +83,6 @@ describe('ContentPiece (contract)', () => {
    * `slotsUsed` climbed by one on every single run of the suite.
    */
   let seededCreatorState: {
-    tier: 'basic' | 'pro' | 'pro_max';
-    subscriptionPaid: boolean;
     kycStatus: string;
     slotsUsed: number;
     dmPrice: number | null;
@@ -137,8 +135,6 @@ describe('ContentPiece (contract)', () => {
     });
     if (state) {
       seededCreatorState = {
-        tier: state.tier,
-        subscriptionPaid: state.subscriptionPaid,
         kycStatus: state.kycStatus,
         slotsUsed: state.slotsUsed,
         dmPrice: state.dmPrice,
@@ -287,7 +283,7 @@ describe('ContentPiece (contract)', () => {
   });
 
   describe('POST /content', () => {
-    it('creates content for a creator account (subscriptionPaid=true)', async () => {
+    it('creates content for a creator account, with no payment gate in the way', async () => {
       const res = await request(app.getHttpServer())
         .post('/content')
         .set('Authorization', `Bearer ${creatorToken}`)
@@ -778,9 +774,9 @@ describe('ContentPiece (contract)', () => {
    */
   describe('DELETE /content/:id', () => {
     async function createFixture(): Promise<string> {
-      // Paid, not free: the seeded USER_CREATOR_BASIC already has its one
-      // Basic-tier free slot spent (CONTENT_MAKEUP_VIDEO), so a free fixture
-      // here would 403 on the allowance check this suite isn't testing.
+      // Paid, not free: the seeded USER_CREATOR_BASIC has already published
+      // (CONTENT_MAKEUP_VIDEO), so this is not a first upload and the
+      // first-upload-must-be-free rule does not apply to it.
       const res = await request(app.getHttpServer())
         .post('/content')
         .set('Authorization', `Bearer ${creatorToken}`)

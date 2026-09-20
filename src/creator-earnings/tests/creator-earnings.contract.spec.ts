@@ -23,8 +23,8 @@ import { CreatorEarningsModule } from '../creator-earnings.module';
 // (see src/course-enrollment/tests/course-enrollment.contract.spec.ts's own
 // precedent comment).
 const USER_PLAIN = '00000000-0000-4000-8000-000000000001'; // plain user, not a creator
-const USER_CREATOR_BASIC = '00000000-0000-4000-8000-000000000002'; // Basic tier -> 0.15 commission
-const USER_CREATOR_PRO = '00000000-0000-4000-8000-000000000003'; // Pro tier, subscriptionPaid -> 0.10 commission
+const USER_CREATOR_BASIC = '00000000-0000-4000-8000-000000000002'; // creator -> 0.15 commission
+const USER_CREATOR_PRO = '00000000-0000-4000-8000-000000000003'; // creator -> 0.15 commission
 
 // Seeded Community (prisma/seed.ts COMMUNITY_FOUNDERS) — reused only as a
 // valid FK target for test CreditSpend rows, never mutated itself.
@@ -367,7 +367,7 @@ describe('CreatorEarnings (contract)', () => {
       }
     });
 
-    it('applies the 0.10 Pro-tier commission live to a DM for a Pro creator (not the 0.15 standard rate)', async () => {
+    it('applies the same 0.15 commission live to a DM for every creator (there is no second rate)', async () => {
       const before = await request(app.getHttpServer())
         .get('/content/mine/earnings')
         .set('Authorization', `Bearer ${proCreatorToken}`)
@@ -393,9 +393,10 @@ describe('CreatorEarnings (contract)', () => {
         .set('Authorization', `Bearer ${proCreatorToken}`)
         .expect(200);
 
-      // 1000 * (1 - 0.10) = 900, NOT 1000 * (1 - 0.15) = 850.
+      // 1000 * (1 - 0.15) = 850. This creator used to be charged 0.10 by
+      // virtue of a paid Pro plan; that plan is gone, so is that rate.
       expect(after.body.data.payable - before.body.data.payable).toBeCloseTo(
-        900,
+        850,
         5,
       );
     });

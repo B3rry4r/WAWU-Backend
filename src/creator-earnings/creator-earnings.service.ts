@@ -20,7 +20,6 @@ import type {
  * constants module that doesn't exist yet.
  */
 const STANDARD_COMMISSION_RATE = 0.15;
-const PRO_COMMISSION_RATE = 0.1;
 
 /**
  * WAWU Credits are 90/10 for EVERY creator on every tier (docs/01_SPEC.md

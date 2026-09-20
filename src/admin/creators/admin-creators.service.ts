@@ -35,17 +35,17 @@ type KycSafeRow = {
  * and I cannot upload".
  *
  * Before this, there was nothing to open. `/creator` (creator state),
- * `/creator-subscription` and `/content/mine/earnings` are all self-scoped to
+ * `/creator/state` and `/content/mine/earnings` are all self-scoped to
  * the caller's own token, so an operator holding a support ticket could not reach
  * a single one of the four tables that answer it.
  *
  * ── EVERY NUMBER HERE IS READ, NOT INVENTED ──────────────────────────────
- *  - `subscriptionPaid` and `kycStatus` are the CreatorState columns verbatim,
- *    the same ones the guards check, so this screen and the creator's actual
+ *  - `kycStatus` is the CreatorState column verbatim, the same one the
+ *    earning path checks, so this screen and the creator's actual
  *    capabilities cannot disagree.
  *  - `not_started` reproduces `CreatorStateService`'s synthesis (hazard H-5)
  *    rather than inventing a fifth word for the same state.
- *  - `slotsTotal` is `uploadAllowanceFor(tier)`, the shared helper, because it
+ *  - `slotsTotal` is `uploadAllowanceFor()`, the shared helper, because it
  *    is derived and not stored.
  *  - earnings come from `CreatorEarningsService` — the very service that
  *    answers the creator's own screen — and are not recomputed here.

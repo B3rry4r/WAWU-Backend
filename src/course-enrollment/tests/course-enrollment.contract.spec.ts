@@ -20,8 +20,8 @@ import { CourseEnrollmentModule } from '../course-enrollment.module';
 // Seeded WAWU IDs — mirror mock-wawu-id/server.js and prisma/seed.ts exactly
 // (see WAWU-Hub-API build task brief / src/learn-entitlement's contract spec).
 const USER_PLAIN = '00000000-0000-4000-8000-000000000001'; // plain user, already enrolled in the export course via seed
-const USER_CREATOR_BASIC = '00000000-0000-4000-8000-000000000002'; // Basic tier (1 free-course slot), no enrollments seeded
-const USER_CREATOR_PRO = '00000000-0000-4000-8000-000000000003'; // Pro tier (2 free-course slots), no enrollments seeded
+const USER_CREATOR_BASIC = '00000000-0000-4000-8000-000000000002'; // creator (1 free-course slot), no enrollments seeded
+const USER_CREATOR_PRO = '00000000-0000-4000-8000-000000000003'; // creator (1 free-course slot), no enrollments seeded
 
 const LEARN_COURSE_EXPORT = '50000000-0000-4000-8000-000000000001'; // USER_PLAIN is already enrolled here (seed)
 const LEARN_COURSE_SOCIAL = '50000000-0000-4000-8000-000000000002'; // unenrolled by anyone at seed time
@@ -141,14 +141,13 @@ describe('CourseEnrollment (contract)', () => {
       expect(res.body.data).toBeNull();
     });
 
-    it('enrols a Basic-tier creator (1 slot) and returns the fresh LearnEntitlement + externalHostUrl (200)', async () => {
+    it('enrols a creator (1 slot) and returns the fresh LearnEntitlement + externalHostUrl (200)', async () => {
       const res = await request(app.getHttpServer())
         .post(`/learn/courses/${LEARN_COURSE_SOCIAL}/enrol`)
         .set('Authorization', `Bearer ${basicCreatorToken}`)
         .expect(200);
 
       expect(res.body.data).toEqual({
-        tier: 'basic',
         freeCoursesTotal: 1,
         freeCoursesUsed: 1,
         enrolledCourseIds: [LEARN_COURSE_SOCIAL],
@@ -156,14 +155,13 @@ describe('CourseEnrollment (contract)', () => {
       });
     });
 
-    it('is idempotent: re-enrolling the same Basic-tier creator in the same course does not error and does not double-spend the slot', async () => {
+    it('is idempotent: re-enrolling the same creator in the same course does not error and does not double-spend the slot', async () => {
       const res = await request(app.getHttpServer())
         .post(`/learn/courses/${LEARN_COURSE_SOCIAL}/enrol`)
         .set('Authorization', `Bearer ${basicCreatorToken}`)
         .expect(200);
 
       expect(res.body.data).toEqual({
-        tier: 'basic',
         freeCoursesTotal: 1,
         freeCoursesUsed: 1,
         enrolledCourseIds: [LEARN_COURSE_SOCIAL],
@@ -171,7 +169,7 @@ describe('CourseEnrollment (contract)', () => {
       });
     });
 
-    it("403s a Basic-tier creator's 2nd distinct-course enrol attempt — slot already spent", async () => {
+    it("403s a creator's 2nd distinct-course enrol attempt — slot already spent", async () => {
       const res = await request(app.getHttpServer())
         .post(`/learn/courses/${LEARN_COURSE_EXPORT}/enrol`)
         .set('Authorization', `Bearer ${basicCreatorToken}`)
@@ -180,15 +178,14 @@ describe('CourseEnrollment (contract)', () => {
       expect(res.body.data).toBeNull();
     });
 
-    it('enrols a Pro-tier creator (2 slots) and reflects both freeCoursesUsed and enrolledCourseIds (200)', async () => {
+    it('gives every other creator the SAME 1 slot, because the tier ladder is gone (200)', async () => {
       const res = await request(app.getHttpServer())
         .post(`/learn/courses/${LEARN_COURSE_SOCIAL}/enrol`)
         .set('Authorization', `Bearer ${proCreatorToken}`)
         .expect(200);
 
       expect(res.body.data).toEqual({
-        tier: 'pro',
-        freeCoursesTotal: 2,
+        freeCoursesTotal: 1,
         freeCoursesUsed: 1,
         enrolledCourseIds: [LEARN_COURSE_SOCIAL],
         externalHostUrl: expect.any(String),

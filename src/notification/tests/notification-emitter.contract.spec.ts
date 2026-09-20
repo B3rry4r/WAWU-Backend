@@ -39,15 +39,6 @@ const ONE_OF_EVERY_KIND = (userWawuId: string): NotificationEvent[] => [
   { kind: 'dm_refunded', userWawuId, amount: 300 },
   { kind: 'credits_low', userWawuId, creditsCount: 4 },
   { kind: 'trial_ending', userWawuId, creditsCount: 12 },
-  {
-    kind: 'subscription_renewal',
-    userWawuId,
-    state: 'renewed',
-    tier: 'pro',
-    amount: 18999,
-    nextRenewalAt: new Date('2027-08-22T00:00:00.000Z'),
-  },
-  { kind: 'subscription_renewal', userWawuId, state: 'past_due', tier: 'basic' },
   { kind: 'new_follower', userWawuId },
   { kind: 'content_published', userWawuId, contentTitle: 'Owambe Makeup' },
   { kind: 'content_rejected', userWawuId, contentTitle: 'Owambe Makeup', reason: 'Audio is inaudible.' },
@@ -211,16 +202,10 @@ describe('NotificationService.emit (contract)', () => {
         notifications.emit({ kind: 'sale', userWawuId: RECIPIENT_MUTED, contentTitle: 'X', netAmount: 100 }),
         notifications.emit({ kind: 'tip_received', userWawuId: RECIPIENT_MUTED, netAmount: 100 }),
         notifications.emit({ kind: 'dm_received', userWawuId: RECIPIENT_MUTED, amount: 300 }),
-        notifications.emit({
-          kind: 'subscription_renewal',
-          userWawuId: RECIPIENT_MUTED,
-          state: 'past_due',
-          tier: 'basic',
-        }),
       ]);
 
       expect(rows.every((r) => r !== null)).toBe(true);
-      expect(await prisma.notification.count({ where: { userWawuId: RECIPIENT_MUTED } })).toBe(4);
+      expect(await prisma.notification.count({ where: { userWawuId: RECIPIENT_MUTED } })).toBe(3);
     });
 
     it('a user with no NotificationSettings row falls back to the model defaults (gated kinds allowed)', async () => {

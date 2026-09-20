@@ -57,7 +57,8 @@ const TEST_REFRESH_SECRET = 'admin-content-review-refresh-secret-0123456789';
 // ── suite-owned content fixtures ────────────────────────────────────────────
 const CREATOR = '1c000000-0000-4000-8000-0000000000c1';
 const CREATOR_STARTING_SLOTS = 3;
-const CREATOR_TIER = 'basic' as const;
+/** The flat per-account cap — see src/common/creator-allowance.ts. */
+const CREATOR_SLOTS_TOTAL = 5;
 
 const PIECE_PENDING_OLD = '1c000000-0000-4000-8000-000000000001';
 const PIECE_PENDING_NEW = '1c000000-0000-4000-8000-000000000002';
@@ -128,11 +129,9 @@ describe('Admin content review contract', () => {
     await prisma.contentPiece.deleteMany({ where: { id: { in: PIECE_IDS } } });
     await prisma.creatorState.upsert({
       where: { wawuUserId: CREATOR },
-      update: { slotsUsed: CREATOR_STARTING_SLOTS, tier: CREATOR_TIER, subscriptionPaid: true },
+      update: { slotsUsed: CREATOR_STARTING_SLOTS },
       create: {
         wawuUserId: CREATOR,
-        tier: CREATOR_TIER,
-        subscriptionPaid: true,
         slotsUsed: CREATOR_STARTING_SLOTS,
       },
     });
@@ -338,12 +337,10 @@ describe('Admin content review contract', () => {
         wawuUserId: CREATOR,
         handle: 'contract-content-creator',
         accountType: 'creator',
-        tier: CREATOR_TIER,
-        subscriptionPaid: true,
         slotsUsed: CREATOR_STARTING_SLOTS,
         // Derived with the same uploadAllowanceFor() the app uses — never a
-        // second definition (law 13). basic = 6.
-        slotsTotal: 6,
+        // second definition (law 13). Flat per account now, no tier ladder.
+        slotsTotal: CREATOR_SLOTS_TOTAL,
       });
       // Hazard H-5: the app synthesizes 'not_started' for a creator who has
       // never submitted KYC. A reviewer must see the same word the creator

@@ -27,7 +27,6 @@ export type NotificationKind =
   | 'dm_refunded'
   | 'credits_low'
   | 'content_rejected'
-  | 'subscription_renewal'
   | 'new_follower'
   | 'tip_received'
   | 'trial_ending';
@@ -61,17 +60,6 @@ export type NotificationEvent =
   | { kind: 'credits_low'; userWawuId: string; creditsCount: number }
   /** The 7-day WAWU Credits trial is about to end. Recipient: the fan. Always a COUNT. */
   | { kind: 'trial_ending'; userWawuId: string; creditsCount: number }
-  /** Subscription billing news. Recipient: the creator. */
-  | {
-      kind: 'subscription_renewal';
-      userWawuId: string;
-      state: 'renewed' | 'past_due' | 'expired';
-      tier: string;
-      /** Only meaningful for `renewed`. */
-      amount?: number;
-      /** Only meaningful for `renewed`. */
-      nextRenewalAt?: Date;
-    }
   /** Somebody followed this creator. Recipient: the creator. */
   | { kind: 'new_follower'; userWawuId: string }
   /** Admin review approved an upload. Recipient: the creator. (Emitted from feat/admin-surface.) */
@@ -148,11 +136,6 @@ const MONTHS = [
 
 function formatDate(date: Date): string {
   return `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
-}
-
-/** "Basic"/"Pro" for copy — the DB stores the lowercase enum value. */
-function tierLabel(tier: string): string {
-  return tier.charAt(0).toUpperCase() + tier.slice(1);
 }
 
 /**
@@ -255,42 +238,6 @@ export function composeNotification(
         amount: null,
         creditsCount: event.creditsCount,
         actionLabel: 'Buy credits',
-      };
-
-    case 'subscription_renewal':
-      if (event.state === 'renewed') {
-        const until = event.nextRenewalAt
-          ? ` Next renewal ${formatDate(event.nextRenewalAt)}.`
-          : '';
-        return {
-          ...base,
-          title: 'Subscription renewed',
-          body: `Your ${tierLabel(event.tier)} creator subscription renewed for ${formatNaira(event.amount ?? 0)}.${until}`,
-          tone: 'success',
-          amount: event.amount != null ? Math.round(event.amount) : null,
-          creditsCount: null,
-          actionLabel: null,
-        };
-      }
-      if (event.state === 'past_due') {
-        return {
-          ...base,
-          title: 'Subscription needs attention',
-          body: `Your ${tierLabel(event.tier)} creator subscription did not renew. Update your card to keep uploading.`,
-          tone: 'warning',
-          amount: null,
-          creditsCount: null,
-          actionLabel: 'Retry payment',
-        };
-      }
-      return {
-        ...base,
-        title: 'Subscription ended',
-        body: `Your ${tierLabel(event.tier)} creator subscription has ended. Resubscribe to start uploading again.`,
-        tone: 'neutral',
-        amount: null,
-        creditsCount: null,
-        actionLabel: 'Resubscribe',
       };
 
     case 'new_follower':

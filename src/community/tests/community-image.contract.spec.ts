@@ -29,7 +29,7 @@ import { CommunityMessageModule } from '../../community-message/community-messag
  *
  * Every identity, community and credits row below is registered/created by
  * this spec and deleted in afterAll. Nothing here touches the three shared
- * seeded accounts, whose tier, balance and account type other specs mutate
+ * seeded accounts, whose balance and account type other specs mutate
  * (README § Why not parallel).
  */
 
@@ -204,11 +204,9 @@ describe('Community images (contract)', () => {
       });
       await prisma.creatorState.upsert({
         where: { wawuUserId: sub },
-        update: { tier: 'basic', subscriptionPaid: true },
+        update: { kycStatus: 'pending' },
         create: {
           wawuUserId: sub,
-          tier: 'basic',
-          subscriptionPaid: true,
           kycStatus: 'pending',
           slotsUsed: 0,
           dmPrice: null,

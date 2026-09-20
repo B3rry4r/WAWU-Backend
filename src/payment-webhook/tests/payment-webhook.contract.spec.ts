@@ -11,9 +11,6 @@ import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
 import { PaymentWebhookModule } from '../payment-webhook.module';
-import { CreatorSubscriptionModule } from '../../creator-subscription/creator-subscription.module';
-import { FLUTTERWAVE_CLIENT as SUBSCRIPTION_FLUTTERWAVE_CLIENT } from '../../creator-subscription/flutterwave-client.interface';
-import type { FlutterwaveClient as SubscriptionFlutterwaveClient } from '../../creator-subscription/flutterwave-client.interface';
 
 /**
  * PaymentWebhook (contract).
@@ -97,7 +94,6 @@ describe('PaymentWebhook (contract)', () => {
   let prisma: PrismaService;
   let mockWawuId: ChildProcess | undefined;
   let ownedMockWawuId = false;
-  let subscriptionFlutterwave: SubscriptionFlutterwaveClient;
   let userToken: string;
 
   const originalSecretHash = process.env.FLUTTERWAVE_SECRET_HASH;
@@ -146,12 +142,6 @@ describe('PaymentWebhook (contract)', () => {
     await app.init();
 
     prisma = moduleRef.get(PrismaService);
-
-    // The same MockFlutterwaveAdapter instance the CreatorSubscription flow
-    // uses, so a charge opened here is one the settlement path can verify.
-    subscriptionFlutterwave = moduleRef
-      .select(CreatorSubscriptionModule)
-      .get<SubscriptionFlutterwaveClient>(SUBSCRIPTION_FLUTTERWAVE_CLIENT);
   }, 30000);
 
   afterAll(async () => {
@@ -168,9 +158,6 @@ describe('PaymentWebhook (contract)', () => {
         });
       }
       if (throwawayUsers.length) {
-        await prisma.creatorSubscription.deleteMany({
-          where: { creatorWawuId: { in: throwawayUsers } },
-        });
         await prisma.creatorState.deleteMany({
           where: { wawuUserId: { in: throwawayUsers } },
         });
@@ -201,30 +188,28 @@ describe('PaymentWebhook (contract)', () => {
   });
 
   /**
-   * Opens a real subscription charge for a throwaway creator, straight through
-   * the same PendingCharge bridge POST /creator-subscription writes. No HTTP
-   * and no seeded account touched, so the settlement assertions are exact.
+   * A PendingCharge no flow owns, for the signature tests.
+   *
+   * Those tests assert that a REFUSED delivery settles nothing, so the charge
+   * only has to exist and still be there afterwards. This used to be a real
+   * subscription charge; there is no subscription flow any more, and a charge
+   * nobody can settle is the stricter fixture for "settled nothing" anyway.
    */
-  async function openSubscriptionCharge(expectedAmountOverride?: number) {
+  async function openUnroutedCharge() {
     const wawuUserId = randomUUID();
     throwawayUsers.push(wawuUserId);
-    const charge = subscriptionFlutterwave.initCharge({
-      amount: 5999,
-      purpose: 'subscribe-basic',
-      wawuUserId,
-      planId: 'plan-test',
-    });
-    createdTxRefs.push(charge.txRef);
+    const txRef = `mock-unrouted-${randomUUID()}`;
+    createdTxRefs.push(txRef);
     await prisma.pendingCharge.create({
       data: {
-        txRef: charge.txRef,
-        kind: 'subscribe',
+        txRef,
+        kind: 'dm',
         wawuUserId,
-        expectedAmount: expectedAmountOverride ?? charge.amount,
-        context: { tier: 'basic', planId: 'plan-test' },
+        expectedAmount: 5999,
+        context: {},
       },
     });
-    return { wawuUserId, txRef: charge.txRef };
+    return { wawuUserId, txRef };
   }
 
   /** Opens a real ₦500 / 50-credit purchase for the seeded plain user. */
@@ -264,7 +249,7 @@ describe('PaymentWebhook (contract)', () => {
 
   describe('signature verification', () => {
     it('rejects an unsigned delivery with 401 and records nothing', async () => {
-      const { txRef } = await openSubscriptionCharge();
+      const { txRef } = await openUnroutedCharge();
 
       await deliver(chargeCompleted(txRef, 'flw-tx-unsigned', 5999), null).expect(
         401,
@@ -280,7 +265,7 @@ describe('PaymentWebhook (contract)', () => {
     });
 
     it('rejects a wrongly-signed delivery with 401 and records nothing', async () => {
-      const { txRef } = await openSubscriptionCharge();
+      const { txRef } = await openUnroutedCharge();
 
       await deliver(
         chargeCompleted(txRef, 'flw-tx-badhash', 5999),
@@ -296,7 +281,7 @@ describe('PaymentWebhook (contract)', () => {
     });
 
     it('rejects a hash of the right length but wrong bytes (constant-time compare still refuses)', async () => {
-      const { txRef } = await openSubscriptionCharge();
+      const { txRef } = await openUnroutedCharge();
       const sameLengthWrong = 'X'.repeat(SECRET_HASH.length);
 
       await deliver(
@@ -310,7 +295,7 @@ describe('PaymentWebhook (contract)', () => {
     });
 
     it('fails CLOSED when FLUTTERWAVE_SECRET_HASH is unset — an unconfigured server settles nothing', async () => {
-      const { txRef } = await openSubscriptionCharge();
+      const { txRef } = await openUnroutedCharge();
       delete process.env.FLUTTERWAVE_SECRET_HASH;
       try {
         // Even the "correct" hash cannot get in, because there is nothing to
@@ -326,55 +311,17 @@ describe('PaymentWebhook (contract)', () => {
       expect(
         await prisma.paymentWebhookReceipt.count({ where: { txRef } }),
       ).toBe(0);
+      // The charge is still sitting there unsettled, which is the whole point.
       expect(
-        await prisma.creatorSubscription.findUnique({
-          where: { creatorWawuId: (await prisma.pendingCharge.findUniqueOrThrow({ where: { txRef } })).wawuUserId },
-        }),
-      ).toBeNull();
+        await prisma.pendingCharge.findUnique({ where: { txRef } }),
+      ).not.toBeNull();
     });
   });
 
   // ----------------------------------------------------------------- settling
 
   describe('settlement', () => {
-    it('settles a pending charge with no browser involved (subscription granted end to end)', async () => {
-      const { wawuUserId, txRef } = await openSubscriptionCharge();
-
-      const res = await deliver(
-        chargeCompleted(txRef, 'flw-tx-settle-1', 5999),
-      ).expect(200);
-
-      expect(res.body.data).toMatchObject({
-        outcome: 'settled',
-        flow: 'subscription-subscribe',
-      });
-
-      // Everything the browser's /verify would have granted, granted here.
-      const subscription = await prisma.creatorSubscription.findUnique({
-        where: { creatorWawuId: wawuUserId },
-      });
-      expect(subscription).toMatchObject({ tier: 'basic', status: 'active' });
-
-      const creatorState = await prisma.creatorState.findUnique({
-        where: { wawuUserId },
-      });
-      expect(creatorState?.subscriptionPaid).toBe(true);
-
-      const profile = await prisma.userProfile.findUnique({
-        where: { wawuUserId },
-      });
-      expect(profile?.accountType).toBe('creator');
-
-      // The pending charge is consumed, and the delivery is on the record.
-      expect(await prisma.pendingCharge.findUnique({ where: { txRef } })).toBeNull();
-      const receipt = await prisma.paymentWebhookReceipt.findUniqueOrThrow({
-        where: { deliveryKey: `charge.completed:${txRef}` },
-      });
-      expect(receipt.status).toBe('settled');
-      expect(receipt.settledAt).not.toBeNull();
-    });
-
-    it('settles a credit purchase and grants the pack exactly once', async () => {
+    it('settles a credit purchase with no browser involved, and records the delivery', async () => {
       const before = await balance();
       const { txRef, purchaseId } = await openCreditPurchase();
 
@@ -386,11 +333,19 @@ describe('PaymentWebhook (contract)', () => {
         flow: 'credit-purchase',
       });
 
+      // Everything the browser's /verify would have granted, granted here.
       expect(await balance()).toBe(before + 50);
       const purchase = await prisma.creditPurchase.findUniqueOrThrow({
         where: { id: purchaseId },
       });
       expect(purchase.status).toBe('completed');
+
+      // And the delivery is on the record.
+      const receipt = await prisma.paymentWebhookReceipt.findUniqueOrThrow({
+        where: { deliveryKey: `charge.completed:${txRef}` },
+      });
+      expect(receipt.status).toBe('settled');
+      expect(receipt.settledAt).not.toBeNull();
     });
 
     it('routes a SHOP order to its own flow instead of leaving a paid buyer unmatched', async () => {
@@ -499,7 +454,7 @@ describe('PaymentWebhook (contract)', () => {
     });
 
     it('ignores an event that is not charge.completed, leaving the charge pending', async () => {
-      const { txRef } = await openSubscriptionCharge();
+      const { txRef } = await openUnroutedCharge();
 
       const body = chargeCompleted(txRef, 'flw-tx-transfer', 5999);
       body.event = 'transfer.completed';
@@ -586,53 +541,42 @@ describe('PaymentWebhook (contract)', () => {
       expect(purchase.status).toBe('completed');
     });
 
-    it('settles a subscription exactly once when the webhook races itself', async () => {
-      const { wawuUserId, txRef } = await openSubscriptionCharge();
-      const body = chargeCompleted(txRef, 'flw-tx-sub-race', 5999);
-
-      const responses = await Promise.all([
-        deliver(body),
-        deliver(body),
-        deliver(body),
-      ]);
-      for (const r of responses) expect(r.status).toBe(200);
-      expect(
-        responses
-          .map((r) => (r.body.data as { outcome: string }).outcome)
-          .filter((o) => o === 'settled'),
-      ).toHaveLength(1);
-
-      expect(
-        await prisma.creatorSubscription.count({
-          where: { creatorWawuId: wawuUserId },
-        }),
-      ).toBe(1);
-      expect(await prisma.pendingCharge.findUnique({ where: { txRef } })).toBeNull();
-    });
   });
 
   // ------------------------------------------------------------------- amount
 
   describe('amount', () => {
-    it('refuses a payment below PendingCharge.expectedAmount and grants nothing', async () => {
-      // The charge Flutterwave will confirm is ₦5,999; the server intended to
-      // charge ₦18,999. This is the ₦1-buys-Pro attack, arriving by webhook.
-      const { wawuUserId, txRef } = await openSubscriptionCharge(18999);
+    /**
+     * Raises what the server expects to be paid ABOVE what Flutterwave will
+     * confirm, so the verify comparison has to refuse. `CreditPurchase.amount`
+     * is the stored expectation the settle path checks (`result.amount >=
+     * purchase.amount` in CreditPurchaseService.verifyPurchase).
+     */
+    async function openUnderpaidCreditPurchase() {
+      const { txRef, purchaseId } = await openCreditPurchase();
+      await prisma.creditPurchase.update({
+        where: { id: purchaseId },
+        data: { amount: 18999 },
+      });
+      return { txRef, purchaseId };
+    }
+
+    it('refuses a payment below the amount the server stored, and grants nothing', async () => {
+      // The charge Flutterwave will confirm is ₦500; the server intended to
+      // charge ₦18,999. This is the ₦1-buys-everything attack, by webhook.
+      const before = await balance();
+      const { txRef, purchaseId } = await openUnderpaidCreditPurchase();
 
       const res = await deliver(
         chargeCompleted(txRef, 'flw-tx-underpaid', 18999),
       ).expect(200);
 
       expect(res.body.data.outcome).toBe('rejected');
-
+      expect(await balance()).toBe(before);
       expect(
-        await prisma.creatorSubscription.findUnique({
-          where: { creatorWawuId: wawuUserId },
-        }),
-      ).toBeNull();
-      expect(
-        await prisma.creatorState.findUnique({ where: { wawuUserId } }),
-      ).toBeNull();
+        (await prisma.creditPurchase.findUniqueOrThrow({ where: { id: purchaseId } }))
+          .status,
+      ).not.toBe('completed');
 
       const receipt = await prisma.paymentWebhookReceipt.findUniqueOrThrow({
         where: { deliveryKey: `charge.completed:${txRef}` },
@@ -642,20 +586,17 @@ describe('PaymentWebhook (contract)', () => {
     });
 
     it('ignores the amount in the webhook body entirely — an inflated payload buys nothing', async () => {
-      const { wawuUserId, txRef } = await openSubscriptionCharge(18999);
+      const before = await balance();
+      const { txRef } = await openUnderpaidCreditPurchase();
 
-      // The body claims ₦18,999 was paid. Flutterwave says ₦5,999. The body
+      // The body claims ₦999,999 was paid. Flutterwave says ₦500. The body
       // loses, because the body is never evidence.
       const res = await deliver(
         chargeCompleted(txRef, 'flw-tx-liar', 999999),
       ).expect(200);
 
       expect(res.body.data.outcome).toBe('rejected');
-      expect(
-        await prisma.creatorSubscription.findUnique({
-          where: { creatorWawuId: wawuUserId },
-        }),
-      ).toBeNull();
+      expect(await balance()).toBe(before);
     });
   });
 });

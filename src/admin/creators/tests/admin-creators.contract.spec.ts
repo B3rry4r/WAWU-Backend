@@ -16,14 +16,14 @@ import { AdminCreatorsModule } from '../admin-creators.module';
  * Three things are load-bearing here, and none of them is "the endpoint
  * returns 200":
  *
- *  1. The two gates stay INDEPENDENT. `subscriptionPaid` (upload) and
- *     `kycStatus` (earning) are asserted as separate fields on an account that
- *     is paid, uploading and KYC-pending — the state CLAUDE.md calls normal —
- *     and the response is asserted to contain no merged `verified` boolean
- *     anywhere. The verification-tier badge is asserted as its own third field.
- *  2. The scheduled downgrade is visible. `pendingTier` / `tierChangesAt` are
- *     invisible to every other endpoint in this backend, and a Pro creator with
- *     a booked downgrade is a support call nobody could previously answer.
+ *  1. The EARNING gate and the verification badge stay INDEPENDENT.
+ *     `kycStatus` is asserted as its own field, the badge as its own, and the
+ *     response is asserted to contain no merged `verified` boolean anywhere.
+ *     The upload gate that used to sit beside them was a paid subscription;
+ *     it is gone, and no field reports a fixed value in its place.
+ *  2. A creator row with no UserProfile still opens rather than 404ing. That
+ *     shape 403s the account out of every CreatorAccountGuard in the
+ *     codebase, and is exactly the support call this screen answers.
  *  3. Search refuses what it cannot do. This backend stores no email and no
  *     phone for a creator account, so an operator pasting either gets a 400
  *     that explains why — never a 200 with an empty list, which reads as "this
@@ -139,9 +139,6 @@ describe('Admin creator lookup contract', () => {
     await prisma.verificationSubmission.deleteMany({
       where: { wawuUserId: { in: FIXTURE_IDS } },
     });
-    await prisma.creatorSubscription.deleteMany({
-      where: { creatorWawuId: { in: FIXTURE_IDS } },
-    });
     await prisma.creatorState.deleteMany({ where: { wawuUserId: { in: FIXTURE_IDS } } });
     await prisma.userProfile.deleteMany({ where: { wawuUserId: { in: FIXTURE_IDS } } });
   }
@@ -194,8 +191,6 @@ describe('Admin creator lookup contract', () => {
       data: [
         {
           wawuUserId: CREATOR_PAID_NO_KYC,
-          tier: 'basic',
-          subscriptionPaid: true,
           kycStatus: 'pending',
           slotsUsed: 2,
           dmEnabled: true,
@@ -203,60 +198,24 @@ describe('Admin creator lookup contract', () => {
         },
         {
           wawuUserId: CREATOR_PAID_KYC_PENDING,
-          tier: 'basic',
-          subscriptionPaid: true,
           kycStatus: 'pending',
           slotsUsed: 1,
         },
         {
           wawuUserId: CREATOR_PRO_DOWNGRADING,
-          tier: 'pro',
-          subscriptionPaid: true,
           kycStatus: 'approved',
           slotsUsed: 4,
         },
         {
           wawuUserId: CREATOR_UNPAID,
-          tier: 'basic',
-          subscriptionPaid: false,
           kycStatus: 'rejected',
           slotsUsed: 0,
         },
         // No UserProfile for this one, on purpose.
         {
           wawuUserId: ORPHANED_STATE,
-          tier: 'basic',
-          subscriptionPaid: true,
           kycStatus: 'pending',
           slotsUsed: 0,
-        },
-      ],
-    });
-
-    await prisma.creatorSubscription.createMany({
-      data: [
-        {
-          creatorWawuId: CREATOR_PAID_NO_KYC,
-          tier: 'basic',
-          status: 'active',
-          currentPeriodEnd: new Date('2027-01-01T00:00:00.000Z'),
-        },
-        {
-          creatorWawuId: CREATOR_PAID_KYC_PENDING,
-          tier: 'basic',
-          status: 'active',
-          currentPeriodEnd: new Date('2027-02-01T00:00:00.000Z'),
-        },
-        {
-          creatorWawuId: CREATOR_PRO_DOWNGRADING,
-          tier: 'pro',
-          status: 'active',
-          currentPeriodEnd: new Date('2027-03-01T00:00:00.000Z'),
-          // The fact no other endpoint in this backend can show anybody.
-          pendingTier: 'basic',
-          tierChangesAt: new Date('2027-03-01T00:00:00.000Z'),
-          cardLast4: '4242',
-          renewalAttempts: 0,
         },
       ],
     });
@@ -475,19 +434,20 @@ describe('Admin creator lookup contract', () => {
       expect(res.body.data[0]).toMatchObject({
         wawuUserId: PLAIN_USER,
         accountType: 'user',
-        tier: null,
       });
     });
 
-    it('reports the two gates separately on every row, and never as one boolean', async () => {
+    it('reports the earning gate as its own field, and never as a merged boolean', async () => {
       const res = await search(supportToken, { q: HANDLE_STEM }).expect(200);
       const row = res.body.data.find(
         (r: { wawuUserId: string }) => r.wawuUserId === CREATOR_PAID_KYC_PENDING,
       );
 
-      // Paid + uploading + KYC pending. CLAUDE.md calls this normal, not an
-      // edge case, and this row is the proof it renders as two facts.
-      expect(row.gates).toMatchObject({ subscriptionPaid: true, kycStatus: 'pending' });
+      expect(row.gates).toMatchObject({ kycStatus: 'pending' });
+      // The upload gate went with subscriptions. It must not come back as a
+      // column that always says the same thing.
+      expect(row.gates).not.toHaveProperty('subscriptionPaid');
+      expect(row).not.toHaveProperty('tier');
       expect(JSON.stringify(res.body)).not.toContain('"verified"');
     });
 
@@ -502,28 +462,7 @@ describe('Admin creator lookup contract', () => {
       expect(byId(CREATOR_PAID_KYC_PENDING).gates.kycStatus).toBe('pending');
     });
 
-    it('surfaces a booked downgrade on the list row', async () => {
-      const res = await search(supportToken, { q: HANDLE_STEM }).expect(200);
-      const row = res.body.data.find(
-        (r: { wawuUserId: string }) => r.wawuUserId === CREATOR_PRO_DOWNGRADING,
-      );
-      expect(row).toMatchObject({ tier: 'pro', subscriptionStatus: 'active', pendingTier: 'basic' });
-    });
-
-    it('filters by tier, by the upload gate, and by the earning gate', async () => {
-      const pro = await search(supportToken, { q: HANDLE_STEM, tier: 'pro' }).expect(200);
-      expect(pro.body.data.map((r: { wawuUserId: string }) => r.wawuUserId)).toEqual([
-        CREATOR_PRO_DOWNGRADING,
-      ]);
-
-      const unpaid = await search(supportToken, {
-        q: HANDLE_STEM,
-        subscriptionPaid: 'false',
-      }).expect(200);
-      expect(unpaid.body.data.map((r: { wawuUserId: string }) => r.wawuUserId)).toEqual([
-        CREATOR_UNPAID,
-      ]);
-
+    it('filters by the earning gate', async () => {
       const rejected = await search(supportToken, {
         q: HANDLE_STEM,
         kycStatus: 'rejected',
@@ -619,21 +558,16 @@ describe('Admin creator lookup contract', () => {
         accountType: 'creator',
       });
 
-      // The subscription.
-      expect(data.subscription).toMatchObject({
-        tier: 'basic',
-        status: 'active',
-        currentPeriodEnd: '2027-01-01T00:00:00.000Z',
-        pendingTier: null,
-        tierChangesAt: null,
-      });
+      // No subscription block at all: there is no subscription to report and
+      // a block of nulls would read as one that failed to load.
+      expect(data).not.toHaveProperty('subscription');
 
-      // The two gates, side by side, never merged.
+      // The earning gate, on its own.
       expect(data.gates).toMatchObject({
-        subscriptionPaid: true,
         kycStatus: 'not_started',
         kycSubmittedAt: null,
       });
+      expect(data.gates).not.toHaveProperty('subscriptionPaid');
 
       // The badge, as its own field, and honest about who owns it.
       expect(data.verification).toEqual({
@@ -643,12 +577,11 @@ describe('Admin creator lookup contract', () => {
         authority: 'wawu-id',
       });
 
-      // Slots. `slotsTotal` is derived from tier, never stored — basic is 6.
+      // Slots. `slotsTotal` is derived, never stored, and flat per account.
+      // There is no free/paid sub-split any more, so neither field is here.
       expect(data.uploads).toEqual({
         slotsUsed: 2,
-        slotsTotal: 6,
-        freeSlots: 1,
-        paidSlots: 5,
+        slotsTotal: 5,
         pendingReviewCount: 1,
         liveCount: 1,
       });
@@ -660,18 +593,11 @@ describe('Admin creator lookup contract', () => {
       expect(data.directMessages).toEqual({ enabled: true, price: 1500 });
     });
 
-    it('shows the scheduled downgrade no other endpoint in this backend can show', async () => {
+    it('derives the same flat slot total for every creator, whoever they are', async () => {
       const res = await detail(financeToken, CREATOR_PRO_DOWNGRADING).expect(200);
-      expect(res.body.data.subscription).toMatchObject({
-        tier: 'pro',
-        status: 'active',
-        pendingTier: 'basic',
-        tierChangesAt: '2027-03-01T00:00:00.000Z',
-        currentPeriodEnd: '2027-03-01T00:00:00.000Z',
-        cardLast4: '4242',
-      });
-      // Pro is 12 slots, so the derivation is not hardcoded to basic.
-      expect(res.body.data.uploads).toMatchObject({ slotsTotal: 12, freeSlots: 2, paidSlots: 10 });
+      // This creator used to be on a plan that bought more slots. There is
+      // one number now, and it is the same one the previous test asserted.
+      expect(res.body.data.uploads).toMatchObject({ slotsUsed: 4, slotsTotal: 5 });
     });
 
     it('reports the verification badge as the HIGHEST approved rung, kept apart from kycStatus', async () => {
@@ -693,7 +619,6 @@ describe('Admin creator lookup contract', () => {
       const res = await detail(supportToken, CREATOR_UNPAID).expect(200);
 
       expect(res.body.data.gates).toMatchObject({
-        subscriptionPaid: false,
         kycStatus: 'rejected',
         kycSubmittedAt: '2026-06-02T00:00:00.000Z',
         kycReviewedAt: '2026-06-03T00:00:00.000Z',
@@ -728,8 +653,9 @@ describe('Admin creator lookup contract', () => {
     });
 
     it('opens an account that has CreatorState but no UserProfile, rather than 404ing', async () => {
-      // This is the broken shape a partial subscription grant used to leave
-      // behind, and it is exactly the ticket this screen exists for.
+      // Every CreatorAccountGuard reads accountType off the profile, so this
+      // shape 403s the account everywhere. It is exactly the ticket this
+      // screen exists for.
       const res = await detail(superToken, ORPHANED_STATE).expect(200);
       expect(res.body.data).toMatchObject({
         wawuUserId: ORPHANED_STATE,
@@ -737,17 +663,13 @@ describe('Admin creator lookup contract', () => {
         accountType: null,
         createdAt: null,
       });
-      expect(res.body.data.gates.subscriptionPaid).toBe(true);
+      expect(res.body.data.gates.kycStatus).toBe('not_started');
     });
 
     it('reports a plain user honestly rather than inventing creator state', async () => {
       const res = await detail(supportToken, PLAIN_USER).expect(200);
-      expect(res.body.data).toMatchObject({
-        accountType: 'user',
-        subscription: null,
-      });
+      expect(res.body.data).toMatchObject({ accountType: 'user' });
       expect(res.body.data.gates).toEqual({
-        subscriptionPaid: null,
         kycStatus: null,
         kycSubmittedAt: null,
         kycReviewedAt: null,

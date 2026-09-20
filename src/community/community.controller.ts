@@ -36,10 +36,10 @@ import type {
  *
  * POST /communities and PATCH /communities/:id are the hosting endpoints —
  * creator-only (CreatorAccountGuard, layered on the controller-wide
- * WawuAuthGuard). Community hosting is a sold subscription feature that had
- * no write path at all: nothing in this backend could create a Community
- * row. The entitlement gates (paid subscription; Pro tier for a private
- * community; host-only editing) live in CommunityService, not here.
+ * WawuAuthGuard). Community hosting once had no write path at all: nothing
+ * in this backend could create a Community row. Host-only editing is proved
+ * in CommunityService, not here; the paid-subscription and Pro-tier gates
+ * that also used to live there went with subscriptions.
  */
 @UseGuards(WawuAuthGuard)
 @Controller('communities')
@@ -120,8 +120,8 @@ export class CommunityController {
    *   DELETE /communities/:id/members/:userWawuId             host-only
    *
    * `POST /:id/join` wrote `status: 'pending'` for a private community and
-   * nothing could ever flip it, so a private community — the Pro tier's
-   * headline feature — could be requested but never entered.
+   * nothing could ever flip it, so a private community could be requested
+   * but never entered.
    *
    * CreatorAccountGuard here matches PATCH /:id above: managing a community
    * is a creator-account capability, and hosting one already requires a

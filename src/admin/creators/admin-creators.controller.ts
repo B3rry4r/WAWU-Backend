@@ -42,10 +42,8 @@ import { AdminCreatorSearchQueryDto } from './dto/admin-creator-search-query.dto
  *
  * No path segment collides with an existing controller: nothing outside
  * `src/admin/` declares an `admin` prefix, and the app's own creator-facing
- * routes are `@Controller('creator')` (creator state),
- * `@Controller('creator-subscription')` and
- * `@Controller('content/mine/earnings')` — every one a different first
- * segment.
+ * routes are `@Controller('creator')` (creator state) and
+ * `@Controller('content/mine/earnings')` — each a different first segment.
  */
 @UseGuards(AdminAuthGuard, AdminRolesGuard)
 @Controller('admin/creators')

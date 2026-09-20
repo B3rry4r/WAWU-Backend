@@ -553,11 +553,11 @@ describe('Admin verification review contract', () => {
         .expect(200);
 
       const after = await prisma.creatorState.findUnique({ where: { wawuUserId: APPLICANT_KNOWN } });
-      // CLAUDE.md: two independent gates. Approving a public trust badge must
-      // leave kycStatus, subscriptionPaid and tier exactly where they were.
+      // CLAUDE.md: the badge and the earning gate are independent systems.
+      // Approving a public trust badge must leave the KYC gate, and the
+      // creator's published-slot counter, exactly where they were.
       expect(after?.kycStatus).toBe(before?.kycStatus);
-      expect(after?.subscriptionPaid).toBe(before?.subscriptionPaid);
-      expect(after?.tier).toBe(before?.tier);
+      expect(after?.slotsUsed).toBe(before?.slotsUsed);
     });
 
     it('400s a submission that is not pending, without calling WAWU ID or writing an audit row', async () => {

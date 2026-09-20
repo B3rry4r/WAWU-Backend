@@ -26,11 +26,10 @@ import type { UpdateCommunityDto } from './dto/update-community.dto';
  * nothing in this backend could do until now:
  *   POST  /communities       creator-only — open a community you host
  *   PATCH /communities/:id   host-only    — edit name/description/image
- * Hosting is a SOLD subscription feature (docs/01_SPEC.md — Basic: "cannot
- * open/host private communities"; Pro: "Can open/host private communities",
- * i.e. Basic is sold OPEN-community hosting and Pro adds private), but no
- * endpoint wrote a Community row at all: every Community in the database
- * came from prisma/seed.ts. See create() for the gates.
+ * Hosting USED to be a sold subscription feature (Basic bought open-community
+ * hosting, Pro added private). Subscriptions are gone (build brief B1), so
+ * hosting is now open to any creator account and both kinds are available to
+ * all of them. See create() for the single gate that remains.
  *
  * `memberCount` / `messagesToday` are DERIVED (registry note) — never
  * stored columns. Computed via count() over CommunityMembership /
@@ -304,10 +303,9 @@ export class CommunityService {
    * community and nothing ever flipped it. `CommunityMessage.assertMember`
    * requires `status === 'joined'`, so a pending member could neither read
    * nor post: a private community was a room with a doorbell and no door.
-   * Private hosting is the Pro tier's headline differentiator (WAWU-Web
-   * docs/01_SPEC.md § tiers) and is advertised on the pricing card, so
-   * creators were being charged extra for a room nobody could be admitted
-   * to. These four methods are the other half of the hosting endpoints.
+   * Private hosting is open to every creator account, so that was a room
+   * nobody could be admitted to for everybody who opened one. These four
+   * methods are the other half of the hosting endpoints.
    *
    * HOST-ONLY, enforced HERE, not only in the guard. CreatorAccountGuard on
    * the controller proves "creator account"; it says nothing about WHICH

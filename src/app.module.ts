@@ -178,8 +178,8 @@ import { APP_GUARD } from '@nestjs/core';
     // `@Controller('admin/creators')`. Nothing outside src/admin/ declares an
     // `admin` prefix; the app's own payment surface is
     // `@Controller('webhooks/flutterwave')` and its creator surfaces are
-    // `@Controller('creator')`, `@Controller('creator-subscription')` and
-    // `@Controller('content/mine/earnings')` -- every one a different FIRST segment,
+    // `@Controller('creator')` and `@Controller('content/mine/earnings')`
+    // -- each a different FIRST segment,
     // so neither of these can shadow an existing route no matter how early it
     // registers. The only root-level controller (AppController) declares one
     // literal path (`health`) with no parameter segment.

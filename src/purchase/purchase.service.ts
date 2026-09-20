@@ -15,10 +15,12 @@ import { BlockedAccountService } from '../blocked-account/blocked-account.servic
 import type { CreateTipDto } from './dto/create-tip.dto';
 import type { VerifyTipDto } from './dto/verify-tip.dto';
 
-/** Standard commission rate (conventions.md § Identity & format canon). */
+/**
+ * The commission rate, for every creator (conventions.md § Identity & format
+ * canon). There used to be a second, 10% Pro rate; it went with the
+ * subscription that sold it.
+ */
 const STANDARD_COMMISSION_RATE = 0.15;
-/** Pro-tier commission rate, applied only while the Pro creator's subscription is active. */
-const PRO_COMMISSION_RATE = 0.1;
 
 export interface FlutterwaveConfigResponse {
   flutterwaveConfig: {

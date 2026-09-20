@@ -191,9 +191,9 @@ export class AdminKycReviewService {
    * POST /admin/kyc/:id/approve — the creator can be paid.
    *
    * Flips CreatorState.kycStatus to `approved` through the existing service,
-   * which is what `GET /creator/state` reads. It touches GATE 2 only:
-   * subscriptionPaid, accountType, tier and the WAWU ID verification tier are
-   * all untouched, here and everywhere else in this module.
+   * which is what `GET /creator/state` reads. It touches the earning gate
+   * only: accountType and the WAWU ID verification tier are untouched, here
+   * and everywhere else in this module.
    */
   async approve(id: string, admin: AdminUserView): Promise<AdminKycDecisionView> {
     return this.decide(id, admin, 'approved', null);

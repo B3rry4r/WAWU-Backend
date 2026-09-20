@@ -13,8 +13,8 @@ import { LearnEntitlementModule } from '../learn-entitlement.module';
 // Seeded WAWU IDs — mirror mock-wawu-id/server.js and prisma/seed.ts exactly
 // (see WAWU-Hub-API build task brief).
 const USER_PLAIN = '00000000-0000-4000-8000-000000000001'; // plain user, enrolled in the export course via seed
-const USER_CREATOR_BASIC = '00000000-0000-4000-8000-000000000002'; // Basic tier, no enrollments seeded
-const USER_CREATOR_PRO = '00000000-0000-4000-8000-000000000003'; // Pro tier, no enrollments seeded
+const USER_CREATOR_BASIC = '00000000-0000-4000-8000-000000000002'; // creator, no enrollments seeded
+const USER_CREATOR_PRO = '00000000-0000-4000-8000-000000000003'; // creator, no enrollments seeded
 
 const LEARN_COURSE_EXPORT = '50000000-0000-4000-8000-000000000001';
 
@@ -112,7 +112,7 @@ describe('LearnEntitlement (contract)', () => {
   });
 
   describe('GET /learn/entitlement', () => {
-    it('returns 0 free-course slots and the plain default tier for a plain user, but still reports seeded enrollments (200)', async () => {
+    it('returns 0 free-course slots for a plain user, but still reports seeded enrollments (200)', async () => {
       const res = await request(app.getHttpServer())
         .get('/learn/entitlement')
         .set('Authorization', `Bearer ${plainUserToken}`)
@@ -120,36 +120,35 @@ describe('LearnEntitlement (contract)', () => {
 
       expect(res.body.statusCode).toBe(200);
       expect(res.body.data).toEqual({
-        tier: 'basic',
         freeCoursesTotal: 0,
         freeCoursesUsed: 0,
         enrolledCourseIds: [LEARN_COURSE_EXPORT],
       });
     });
 
-    it('returns 1 free-course slot for a Basic-tier creator (200)', async () => {
+    it('returns 1 free-course slot for a creator account (200)', async () => {
       const res = await request(app.getHttpServer())
         .get('/learn/entitlement')
         .set('Authorization', `Bearer ${basicCreatorToken}`)
         .expect(200);
 
       expect(res.body.data).toEqual({
-        tier: 'basic',
         freeCoursesTotal: 1,
         freeCoursesUsed: 0,
         enrolledCourseIds: [],
       });
     });
 
-    it('returns 2 free-course slots for a Pro-tier creator (200)', async () => {
+    it('returns the SAME 1 slot for every other creator, because the tier ladder is gone (200)', async () => {
+      // This creator was on a plan that bought 2. The plan no longer exists,
+      // and the ladder collapsed to the floor every creator already had.
       const res = await request(app.getHttpServer())
         .get('/learn/entitlement')
         .set('Authorization', `Bearer ${proCreatorToken}`)
         .expect(200);
 
       expect(res.body.data).toEqual({
-        tier: 'pro',
-        freeCoursesTotal: 2,
+        freeCoursesTotal: 1,
         freeCoursesUsed: 0,
         enrolledCourseIds: [],
       });

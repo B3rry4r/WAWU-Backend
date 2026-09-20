@@ -253,7 +253,7 @@ describe('Protected registry regression baseline', () => {
         .get('/api/hub/creator/state')
         .set('Authorization', `Bearer ${creatorProToken}`)
         .expect(200);
-      expect(res.body.data).toMatchObject({ tier: expect.any(String), subscriptionPaid: expect.any(Boolean) });
+      expect(res.body.data).toMatchObject({ kycStatus: expect.any(String), slotsTotal: expect.any(Number) });
     });
   });
 
