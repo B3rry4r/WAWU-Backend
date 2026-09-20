@@ -32,10 +32,9 @@ export class AccountService {
     ).toISOString();
 
     // This is the ONLY place a deleted account's content ever gets marked
-    // `removed`. AccountPurgeService (hard-delete, wired to
-    // UnpaidAccountReaperService) only ever runs for a creator who signed up
-    // and never paid — it has nothing to do with an ordinary "delete my
-    // account", paid or not. Without this, ContentPieceService.findOne()
+    // `removed`. AccountPurgeService (hard-delete) is a separate facility with
+    // no caller since the unpaid-account reaper was removed; it has nothing to
+    // do with an ordinary "delete my account". Without this, ContentPieceService.findOne()
     // keeps serving every piece an account ever posted, live, forever, to
     // everyone, because it only checks `content.status` and has no idea the
     // creator behind it no longer exists. There is no cancel-deletion

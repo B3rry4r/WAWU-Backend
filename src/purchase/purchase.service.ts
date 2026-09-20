@@ -46,19 +46,14 @@ export class PurchaseService {
     private readonly blockedAccounts: BlockedAccountService,
   ) {}
 
-  /** Snapshotted at transaction time, never recomputed later (conventions.md). */
-  private async resolveCommissionRate(creatorWawuId: string): Promise<number> {
-    const creatorState = await this.prisma.creatorState.findUnique({
-      where: { wawuUserId: creatorWawuId },
-      select: { tier: true, subscriptionPaid: true },
-    });
-    if (
-      creatorState &&
-      creatorState.tier === 'pro' &&
-      creatorState.subscriptionPaid
-    ) {
-      return PRO_COMMISSION_RATE;
-    }
+  /**
+   * Snapshotted at transaction time, never recomputed later (conventions.md).
+   *
+   * Still resolved per transaction so the snapshot keeps its meaning; it
+   * simply has nothing to look up since the Pro tier that sold the 10% rate
+   * was removed.
+   */
+  private resolveCommissionRate(): number {
     return STANDARD_COMMISSION_RATE;
   }
 
@@ -86,7 +81,7 @@ export class PurchaseService {
       throw new NotFoundException('Recipient not found');
     }
 
-    const commissionRate = await this.resolveCommissionRate(dto.creatorWawuId);
+    const commissionRate = this.resolveCommissionRate();
 
     const charge = this.flutterwave.initCharge({
       amount: dto.amount,

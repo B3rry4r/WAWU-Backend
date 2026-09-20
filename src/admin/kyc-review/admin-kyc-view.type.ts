@@ -1,5 +1,5 @@
 import type { AdminKycAuditModel } from '../../../generated/prisma/models';
-import type { AccountType, CreatorTier, ReviewStatus, SubscriptionStatus } from '../../../generated/prisma/enums';
+import type { AccountType, ReviewStatus } from '../../../generated/prisma/enums';
 
 /**
  * The wire shapes for the admin KYC-review surface — the EARNING gate.
@@ -47,26 +47,23 @@ export interface AdminKycMaskedIdentifiersView {
  * `kycStatus` reproduces CreatorStateService's `not_started` synthesis
  * (protected-surface hazard H-5) so a reviewer and the creator are looking at
  * the same word for the same state, and `slotsTotal` is derived with the
- * shared `uploadAllowanceFor(tier)` helper rather than recomputed — law 13,
- * one definition of one number. Nothing here is written back.
+ * shared `uploadAllowanceFor()` helper rather than recomputed — law 13, one
+ * definition of one number. Nothing here is written back.
  *
- * `subscriptionPaid` is the OTHER gate and is shown for context only:
- * approving KYC must never touch it. "Paid + uploading + KYC pending" is a
- * normal state in this product, not an inconsistency to resolve.
+ * The upload gate used to sit beside it as `subscriptionPaid`, `tier`,
+ * `subscriptionStatus` and `subscriptionCurrentPeriodEnd`. Uploading is no
+ * longer bought, so those four are gone rather than defaulted: a dashboard
+ * column that always reads the same value tells a reviewer nothing and
+ * invites them to act on it. KYC remains the EARNING gate and is untouched.
  */
 export interface AdminKycCreatorView {
   wawuUserId: string;
   handle: string | null;
   accountType: AccountType | null;
-  tier: CreatorTier | null;
-  /** GATE 1 — uploading. Displayed, never written by this surface. */
-  subscriptionPaid: boolean | null;
-  /** GATE 2 — earning. ReviewStatus plus the synthesized 'not_started' (hazard H-5). */
+  /** The EARNING gate. ReviewStatus plus the synthesized 'not_started' (hazard H-5). */
   kycStatus: string | null;
   slotsUsed: number | null;
   slotsTotal: number | null;
-  subscriptionStatus: SubscriptionStatus | null;
-  subscriptionCurrentPeriodEnd: Date | null;
 }
 
 /** One row of the review queue. */

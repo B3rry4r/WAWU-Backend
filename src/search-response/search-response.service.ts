@@ -387,7 +387,6 @@ export class SearchResponseService {
         linkedinUrl: profile.linkedinUrl,
         whatsappHandle: profile.whatsappHandle,
         websiteUrl: profile.websiteUrl,
-        tier: state.tier,
         // Same buyer-facing DM settings as the public-profile aggregate, so a
         // creator found through search is not described differently from the
         // same creator opened directly.

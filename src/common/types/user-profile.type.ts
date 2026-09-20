@@ -38,7 +38,6 @@ export interface CreatorProfile {
   youtubeUrl: string | null;
   facebookUrl: string | null;
   linkedinUrl: string | null;
-  tier: 'basic' | 'pro' | 'pro_max';
   /**
    * The creator's paid-message settings, as a BUYER needs to see them.
    *

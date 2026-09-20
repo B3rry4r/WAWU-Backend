@@ -52,16 +52,6 @@ enum AccountType {
   creator
 }
 
-enum CreatorTier {
-  basic
-  pro
-  /// Everything in Pro, plus music distribution through Ditto. Priced and
-  /// sold as a third tier rather than an add-on, so it is a tier value and
-  /// not a flag — a creator is on one plan at a time and the whole billing,
-  /// proration and downgrade machinery already reasons about tiers.
-  pro_max
-}
-
 /// Shared by CreatorState.kycStatus, KycSubmission.status and
 /// VerificationSubmission.status — all three are the same pending/approved/
 /// rejected review lifecycle.
@@ -172,12 +162,8 @@ enum CreditPack {
   pro
 }
 
-enum SubscriptionStatus {
-  active
-  past_due
-  cancelled
-  expired
-}
+// REMOVED WITH SUBSCRIPTIONS: SubscriptionStatus. Its only column was
+// CreatorSubscription.status, and there is no subscription to be in a state.
 
 enum PartnerServiceStatus {
   live
@@ -248,25 +234,29 @@ model UserProfile {
   @@index([accountType])
 }
 
-/// Creator-only entitlement/gate state. Two independent gates per CLAUDE.md:
-/// subscriptionPaid gates uploading, kycStatus=approved gates earning.
-/// `slotsTotal` is deliberately NOT a column — it derives from `tier`
-/// (registry's own example of a derived field) and is computed in the wire
-/// response / service layer, never stored.
+/// Creator-only entitlement/gate state.
+///
+/// ONE gate now, not two. `subscriptionPaid` and `tier` are gone: the product
+/// owner removed subscriptions entirely (build brief B1 — "There is no
+/// subscription tier ... Do not gate uploads behind payment"), so uploading is
+/// free to every creator account and there is no plan to be on. `kycStatus =
+/// approved` still gates EARNING, and is untouched: KYC and payment were
+/// always independent gates and only the payment one was removed.
+///
+/// `slotsTotal` remains deliberately NOT a column, but it no longer derives
+/// from a tier — it is the flat per-account cap in creator-tier-allowance.ts
+/// (brief B2: "Maximum 5 items per account. Hard cap, enforced server-side").
 model CreatorState {
-  wawuUserId       String       @id
-  tier             CreatorTier
-  subscriptionPaid Boolean      @default(false)
-  kycStatus        ReviewStatus @default(pending)
-  slotsUsed        Int          @default(0)
-  dmPrice          Int?
-  dmEnabled        Boolean      @default(false)
+  wawuUserId      String       @id
+  kycStatus       ReviewStatus @default(pending)
+  slotsUsed       Int          @default(0)
+  dmPrice         Int?
+  dmEnabled       Boolean      @default(false)
   /// Hours the creator has to reply before the payer is refunded. 24 was
   /// hardcoded, which is right for a fan message and wrong for a
   /// professional quoting on a case. Bounded in the DTO, not here.
-  dmResponseHours  Int          @default(24)
+  dmResponseHours Int          @default(24)
 
-  @@index([tier])
   @@index([kycStatus])
 }
 
@@ -802,32 +792,6 @@ model PendingCharge {
 
   @@index([wawuUserId])
   @@index([createdAt])
-}
-
-model CreatorSubscription {
-  creatorWawuId          String             @id
-  tier                   CreatorTier
-  status                 SubscriptionStatus @default(active)
-  commissionRateOverride Decimal?           @db.Decimal(5, 4)
-  flutterwaveCustomerRef String?
-  flutterwavePlanId      String?
-  currentPeriodEnd       DateTime
-  renewalAttempts        Int                @default(0)
-  cancelsAt              DateTime?
-  cardLast4              String?
-  /// Scheduled tier change. A downgrade (Pro -> Basic) does NOT take effect
-  /// on the day it is requested: the annual term has already been paid in
-  /// full and DELETE/downgrade give no refund, so revoking Pro immediately
-  /// would confiscate something the creator bought. `pendingTier` records
-  /// the tier the subscription moves to, and `tierChangesAt` records when
-  /// (always the end of the paid term). Both are cleared the moment the
-  /// change is applied. Null/null means "no change scheduled".
-  pendingTier            CreatorTier?
-  tierChangesAt          DateTime?
-
-  @@index([status])
-  @@index([currentPeriodEnd])
-  @@index([tierChangesAt])
 }
 
 /// `score` is a periodically-recomputed cache (views + purchases*weight +
@@ -2497,60 +2461,19 @@ model DittoOptIn {
   emailedAt  DateTime?
 }
 
-/// A referral code: a discount on ONE plan, and a way in while public signup
-/// is closed.
-///
-/// It does two jobs deliberately, because they are the same act. A blog is
-/// given a code so its readers can join at a price, and a hand-picked creator
-/// is given one so they can join at all — the code is the invitation and the
-/// price in one object, rather than two systems that have to agree.
-///
-/// `discountPercent` is allowed to be 0. A code that takes nothing off is not
-/// a broken code: it is how a creator is let through the closed door at the
-/// normal price, which is a thing the product owner asked for explicitly.
-model ReferralCode {
-  /// Stored and matched UPPERCASE. Codes are read off a blog post and typed
-  /// by hand, so case is a typo waiting to happen, not a distinction.
-  code            String      @id
-  /// Who it is for — "Blog X", "Cohort 1". For whoever is reading the list
-  /// later trying to remember what it was.
-  label           String
-  /// 0-100. Bounded in the DTO, and again here by the service.
-  discountPercent Int
-  /// The plan it applies to. A code is issued against a price, and the prices
-  /// differ per tier, so a code that applied to all of them would mean three
-  /// different discounts.
-  tier            CreatorTier
-  active          Boolean     @default(true)
-  /// Null means unlimited. A blog code is unlimited; a code for one named
-  /// creator is not.
-  maxUses         Int?
-  usedCount       Int         @default(0)
-  expiresAt       DateTime?
-  createdAt       DateTime    @default(now())
-  createdByAdmin  String?
-
-  redemptions ReferralRedemption[]
-
-  @@index([active])
-}
-
-/// One account's use of one code.
-///
-/// Its own table rather than a counter alone, so "who came in through this
-/// code" is answerable — that is the entire point of giving a blog a code —
-/// and so the same account cannot spend one code twice.
-model ReferralRedemption {
-  id         String   @id @default(uuid())
-  code       String
-  wawuUserId String
-  redeemedAt DateTime @default(now())
-
-  referralCode ReferralCode @relation(fields: [code], references: [code], onDelete: Cascade)
-
-  @@unique([code, wawuUserId])
-  @@index([wawuUserId])
-}
+// REMOVED WITH SUBSCRIPTIONS: ReferralCode / ReferralRedemption.
+//
+// A referral code was a percentage discount on ONE subscription plan, keyed
+// to a CreatorTier and priced off the plan table. With subscriptions removed
+// (brief B1) there is no plan and no price for a code to take a percentage
+// of, so the feature has no target left rather than merely no callers.
+//
+// This is a CONSEQUENCE of the authorized removal, not a separate product
+// decision, and it leaves a real open question: verification (N4,999 creator
+// / N9,999 professional) is now the primary paid action, and a discount code
+// pointed at THAT would be the natural successor. Re-pointing it means
+// choosing what a code applies to and what it costs, which is the product
+// owner's call, so nothing here guesses at it. See DECISIONS.md.
 
 /// Platform-wide switches an admin can flip without a deploy.
 ///
@@ -2575,21 +2498,12 @@ model PlatformSettings {
 
 /// The code somebody arrived with, remembered against their account.
 ///
-/// A referral code is applied at SIGN-UP and spent at CHECKOUT, and between
-/// those two moments people leave for their email client to fetch a
-/// verification code. Holding it only in the browser meant a new tab, a
-/// different device or a cleared cache lost it, and the tier screen quietly
-/// showed full price — which is exactly what happened with a 100%-off code.
-///
-/// One row per account: arriving with a second code replaces the first, so
-/// the most recent invitation is the one that applies.
-model ReferralClaim {
-  wawuUserId String   @id
-  code       String
-  claimedAt  DateTime @default(now())
-
-  @@index([code])
-}
+// REMOVED WITH SUBSCRIPTIONS: ReferralClaim.
+//
+// This held a code between sign-up and subscription checkout, so the tier
+// screen still knew about it after a detour through an email client. There is
+// no tier screen and no checkout to carry it to. See the ReferralCode note
+// above for the open question this leaves.
 
 /// ─────────────────────────────────────────────────────────────────────────
 /// WALLETS

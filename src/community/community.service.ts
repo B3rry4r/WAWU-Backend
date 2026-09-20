@@ -106,38 +106,33 @@ export class CommunityService {
   /**
    * POST /communities — a creator opens a community they host.
    *
-   * THREE gates, in this order, and no others:
+   * ONE gate now, where there used to be three:
    *
    *  1. Creator ACCOUNT TYPE — enforced one layer up by
    *     CommunityController's CreatorAccountGuard (UserProfile.accountType),
    *     same guard-proves-creator / service-proves-entitlement split as
-   *     ContentPiece.create.
+   *     ContentPiece.create. This is the whole gate: a creator account may
+   *     host, and may host either kind.
    *
-   *  2. CreatorState.subscriptionPaid === true. Hosting is a paid-plan
-   *     feature on both tiers, so an unpaid (or lapsed — the hourly
-   *     scheduler clears this flag) creator cannot open one. Message mirrors
-   *     ContentPieceService.create's upload gate verbatim in shape.
+   * The two that are gone were both subscription entitlements, removed with
+   * subscriptions (build brief B1): hosting at all required
+   * `CreatorState.subscriptionPaid`, and hosting a PRIVATE community required
+   * Pro or Pro Max. Keeping either would now be a door with no key, because
+   * there is no longer anything a creator could buy to get through it.
    *
-   *  3. kind === 'private' requires a paid tier — Pro or Pro Max. A Basic creator asking
-   *     for a private community is refused with the tier named, never
-   *     silently downgraded to an open one — quietly handing someone an
-   *     open community when they asked for a private one publishes what they
-   *     meant to keep behind a door.
+   * KYC IS STILL DELIBERATELY NOT A GATE HERE, and that has not changed: KYC
+   * gates EARNING, never hosting or uploading. A creator whose KYC is
+   * `pending` can host, and the contract spec pins exactly that case, because
+   * this independence has been got wrong in this codebase before. It was the
+   * payment gate that was removed, not this one.
    *
-   * KYC IS DELIBERATELY NOT A GATE HERE. CLAUDE.md: the two creator gates are
-   * independent — subscriptionPaid gates uploading/hosting, kycStatus gates
-   * EARNING — and "paid + uploading + KYC pending" is a normal state, not an
-   * edge case. A paid creator whose KYC is still `pending` can host, and the
-   * contract spec pins exactly that case, because this independence has been
-   * got wrong in this codebase before.
-   *
-   * NO CAP on communities hosted per creator. The spec (WAWU-Web
-   * docs/01_SPEC.md, the monetization tiebreaker doc) states none —
-   * it bounds upload slots by tier (src/common/creator-tier-allowance.ts) and
-   * says nothing about a community count — so inventing "3 per creator" here
-   * would be a product rule this backend made up and then charged people
-   * against. If product wants one, it belongs next to uploadAllowanceFor()
-   * as a tier allowance, not hardcoded in this service.
+   * NO CAP on communities hosted per creator, and this is unaffected by the
+   * teardown. Brief B2 caps LISTINGS at 5 per account (products, content and
+   * services); it says nothing about communities, and a community is not a
+   * listing. Inventing "3 per creator" here would be a product rule this
+   * backend made up and then enforced against people. If product wants one it
+   * belongs beside MAX_ITEMS_PER_ACCOUNT in src/common/creator-allowance.ts,
+   * not hardcoded in this service.
    *
    * The host does NOT get a CommunityMembership row. Host-implies-member is
    * already this codebase's convention: CommunityMessageService.assertMember
@@ -151,25 +146,11 @@ export class CommunityService {
     hostWawuId: string,
     dto: CreateCommunityDto,
   ): Promise<CommunityResponse> {
-    const creatorState = await this.prisma.creatorState.findUnique({
-      where: { wawuUserId: hostWawuId },
-      select: { subscriptionPaid: true, tier: true },
-    });
-
-    if (!creatorState || !creatorState.subscriptionPaid) {
-      throw new ForbiddenException(
-        'A paid subscription is required to host a community (CreatorState.subscriptionPaid=false).',
-      );
-    }
-
-    // Any PAID tier, not Pro specifically. Pro Max includes everything in
-    // Pro, so testing `!== 'pro'` would have refused the most expensive plan
-    // on the platform a feature its own copy sells.
-    if (dto.kind === 'private' && creatorState.tier === 'basic') {
-      throw new ForbiddenException(
-        'Private communities are a Pro-tier feature. Your Basic plan can host open communities — upgrade to Pro to host a private one.',
-      );
-    }
+    // Hosting used to need a live subscription, and a PRIVATE community used
+    // to need a paid tier above Basic. Both were subscription entitlements and
+    // both are gone with it. CreatorAccountGuard on POST /communities still
+    // proves the caller is a creator account, which is the gate that decides
+    // who may host at all.
 
     const community = await this.prisma.community.create({
       data: {

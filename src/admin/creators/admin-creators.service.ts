@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { CreatorEarningsService } from '../../creator-earnings/creator-earnings.service';
-import { uploadAllowanceFor } from '../../common/creator-tier-allowance';
+import { uploadAllowanceFor } from '../../common/creator-allowance';
 import type { Paginated } from '../../common/interceptors/response.interceptor';
 import type { CreatorStateModel, UserProfileModel } from '../../../generated/prisma/models';
 import type { ReviewStatus } from '../../../generated/prisma/enums';
@@ -132,19 +132,17 @@ export class AdminCreatorsService {
    * GET /admin/creators/:wawuId — everything the support screen needs, in one
    * response, as clearly distinct fields.
    *
-   * Opens for an account with no `UserProfile` row rather than 404ing. That is
-   * the point: a subscription grant writes the subscription, the CreatorState
-   * and the profile's `accountType` in one transaction precisely because a
-   * partial write used to leave payers 403'd everywhere, and an account left in
-   * that shape is exactly the ticket. It 404s only when this backend has never
-   * heard of the id at all.
+   * Opens for an account with no `UserProfile` row rather than 404ing. An
+   * account with a CreatorState row and no profile is exactly the ticket this
+   * screen exists for, because every CreatorAccountGuard reads `accountType`
+   * off the profile and a missing one 403s them everywhere. It 404s only when
+   * this backend has never heard of the id at all.
    */
   async creatorDetail(wawuUserId: string): Promise<AdminCreatorDetailView> {
-    const [profile, state, subscription, latestKyc, verifications, pendingCount, liveCount] =
+    const [profile, state, latestKyc, verifications, pendingCount, liveCount] =
       await Promise.all([
         this.prisma.userProfile.findUnique({ where: { wawuUserId } }),
         this.prisma.creatorState.findUnique({ where: { wawuUserId } }),
-        this.prisma.creatorSubscription.findUnique({ where: { creatorWawuId: wawuUserId } }),
         this.prisma.kycSubmission.findFirst({
           where: { wawuUserId },
           orderBy: { submittedAt: 'desc' },
@@ -159,41 +157,25 @@ export class AdminCreatorsService {
         this.prisma.contentPiece.count({ where: { creatorWawuId: wawuUserId, status: 'live' } }),
       ]);
 
-    if (!profile && !state && !subscription) {
+    if (!profile && !state) {
       throw new NotFoundException('No account with that WAWU ID is known to this backend.');
     }
 
     // The same aggregate the creator's own /creator-earnings returns, from the
     // same service. Never recomputed here — see the class comment.
     const earnings = await this.earnings.getForCreator(wawuUserId);
-    const allowance = state ? uploadAllowanceFor(state.tier) : null;
+    const allowance = state ? uploadAllowanceFor() : null;
 
     return {
       wawuUserId,
       handle: profile?.handle ?? null,
       accountType: profile?.accountType ?? null,
       createdAt: profile?.createdAt ?? null,
-      subscription: subscription
-        ? {
-            tier: subscription.tier,
-            status: subscription.status,
-            currentPeriodEnd: subscription.currentPeriodEnd,
-            // The scheduled downgrade. Invisible to every other endpoint in
-            // this backend, and frequently the whole answer to the ticket.
-            pendingTier: subscription.pendingTier,
-            tierChangesAt: subscription.tierChangesAt,
-            cancelsAt: subscription.cancelsAt,
-            renewalAttempts: subscription.renewalAttempts,
-            cardLast4: subscription.cardLast4,
-          }
-        : null,
       gates: toGatesView(state, latestKyc),
       verification: toVerificationView(verifications),
       uploads: {
         slotsUsed: state?.slotsUsed ?? null,
         slotsTotal: allowance?.total ?? null,
-        freeSlots: allowance?.free ?? null,
-        paidSlots: allowance?.paid ?? null,
         pendingReviewCount: pendingCount,
         liveCount,
       },
@@ -218,10 +200,7 @@ export class AdminCreatorsService {
   private async idsMatchingStateFilters(
     query: AdminCreatorSearchQueryDto,
   ): Promise<string[] | null> {
-    const hasStateFilter =
-      query.tier !== undefined ||
-      query.subscriptionPaid !== undefined ||
-      query.kycStatus !== undefined;
+    const hasStateFilter = query.kycStatus !== undefined;
     if (!hasStateFilter) return null;
 
     const notStarted = query.kycStatus === 'not_started';
@@ -243,13 +222,7 @@ export class AdminCreatorsService {
         : {};
 
     const rows = await this.prisma.creatorState.findMany({
-      where: {
-        ...(query.tier ? { tier: query.tier } : {}),
-        ...(query.subscriptionPaid !== undefined
-          ? { subscriptionPaid: query.subscriptionPaid }
-          : {}),
-        ...kycWhere,
-      },
+      where: kycWhere,
       select: { wawuUserId: true },
     });
 
@@ -257,7 +230,7 @@ export class AdminCreatorsService {
   }
 
   /**
-   * Turns a page of profiles into list rows in three batched reads rather than
+   * Turns a page of profiles into list rows in batched reads rather than
    * per-row lookups — the same shape `AdminContentReviewService.resolveCreators`
    * uses for the same reason.
    */
@@ -265,9 +238,8 @@ export class AdminCreatorsService {
     const ids = profiles.map((p) => p.wawuUserId);
     if (ids.length === 0) return [];
 
-    const [states, subscriptions, kycRows] = await Promise.all([
+    const [states, kycRows] = await Promise.all([
       this.prisma.creatorState.findMany({ where: { wawuUserId: { in: ids } } }),
-      this.prisma.creatorSubscription.findMany({ where: { creatorWawuId: { in: ids } } }),
       this.prisma.kycSubmission.findMany({
         where: { wawuUserId: { in: ids } },
         orderBy: { submittedAt: 'desc' },
@@ -276,7 +248,6 @@ export class AdminCreatorsService {
     ]);
 
     const stateById = new Map(states.map((s) => [s.wawuUserId, s]));
-    const subscriptionById = new Map(subscriptions.map((s) => [s.creatorWawuId, s]));
     // findMany is ordered newest-first, so the first row seen per user IS the
     // latest submission.
     const latestKycById = new Map<string, KycSafeRow>();
@@ -286,15 +257,11 @@ export class AdminCreatorsService {
 
     return profiles.map((profile) => {
       const state = stateById.get(profile.wawuUserId) ?? null;
-      const subscription = subscriptionById.get(profile.wawuUserId) ?? null;
       return {
         wawuUserId: profile.wawuUserId,
         handle: profile.handle,
         accountType: profile.accountType,
-        tier: state?.tier ?? null,
         gates: toGatesView(state, latestKycById.get(profile.wawuUserId) ?? null),
-        subscriptionStatus: subscription?.status ?? null,
-        pendingTier: subscription?.pendingTier ?? null,
         createdAt: profile.createdAt,
       };
     });
@@ -302,7 +269,11 @@ export class AdminCreatorsService {
 }
 
 /**
- * The two gates, side by side and never merged.
+ * The EARNING gate.
+ *
+ * There used to be two gates here. The upload gate was a paid subscription and
+ * went with it; KYC is untouched and still decides whether a creator can be
+ * paid.
  *
  * `kycStatus` reproduces `CreatorStateService`'s `not_started` synthesis
  * (hazard H-5): the column defaults to `pending`, so without this a creator who
@@ -315,7 +286,6 @@ export function toGatesView(
   latestKyc: KycSafeRow | null,
 ): AdminCreatorGatesView {
   return {
-    subscriptionPaid: state?.subscriptionPaid ?? null,
     kycStatus: state
       ? state.kycStatus === 'pending' && latestKyc === null
         ? 'not_started'

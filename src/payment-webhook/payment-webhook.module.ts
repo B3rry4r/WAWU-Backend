@@ -3,7 +3,6 @@ import { PrismaModule } from '../common/prisma/prisma.module';
 import { PurchaseModule } from '../purchase/purchase.module';
 import { ContentPieceModule } from '../content-piece/content-piece.module';
 import { CreditPurchaseModule } from '../credit-purchase/credit-purchase.module';
-import { CreatorSubscriptionModule } from '../creator-subscription/creator-subscription.module';
 import { DirectMessageModule } from '../direct-message/direct-message.module';
 import { ServiceApplicationModule } from '../service-application/service-application.module';
 import { BillPaymentModule } from '../bill-payment/bill-payment.module';
@@ -37,7 +36,6 @@ import { WalletModule } from '../wallet/wallet.module';
     PurchaseModule,
     ContentPieceModule,
     CreditPurchaseModule,
-    CreatorSubscriptionModule,
     DirectMessageModule,
     ServiceApplicationModule,
     BillPaymentModule,

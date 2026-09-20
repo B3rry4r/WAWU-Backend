@@ -1,11 +1,13 @@
 /**
  * LearnEntitlement has NO Prisma model (see prisma/schema.prisma header
- * comment) — every field is fully derivable from CreatorState.tier +
- * CourseEnrollment rows. Wire-response interface only.
+ * comment) — every field is derived from whether a CreatorState row exists
+ * plus CourseEnrollment rows. Wire-response interface only.
+ *
+ * `tier` is gone with subscriptions: a field that always reported the same
+ * value would be a label pretending to be a distinction.
  */
 export interface LearnEntitlement {
-  tier: 'basic' | 'pro' | 'pro_max';
-  /** derived from CreatorState.tier: basic=1, pro=3 per registry note. */
+  /** Flat per creator account; see learn-entitlement.service.ts. */
   freeCoursesTotal: number;
   freeCoursesUsed: number;
   enrolledCourseIds: string[];

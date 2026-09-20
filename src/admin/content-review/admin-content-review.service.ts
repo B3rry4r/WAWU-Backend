@@ -7,7 +7,7 @@ import {
 import { NotificationService } from '../../notification/notification.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { objectKeyFrom, StorageService } from '../../storage/storage.service';
-import { uploadAllowanceFor } from '../../common/creator-tier-allowance';
+import { uploadAllowanceFor } from '../../common/creator-allowance';
 import type { Paginated } from '../../common/interceptors/response.interceptor';
 import type { ContentPieceModel } from '../../../generated/prisma/models';
 import type { AdminUserView } from '../auth/admin-user-view.type';
@@ -416,7 +416,7 @@ export class AdminContentReviewService {
    * per-row lookups.
    *
    * Every value is read from the row the app itself reads. `slotsTotal` is
-   * derived with the shared `uploadAllowanceFor(tier)` helper, exactly as
+   * derived with the shared `uploadAllowanceFor()` helper, exactly as
    * CreatorStateService does, and `kycStatus` reproduces that service's
    * `not_started` synthesis (protected-surface hazard H-5) — the reviewer must
    * see the same word the creator sees on their own screen, not a second
@@ -452,15 +452,13 @@ export class AdminContentReviewService {
             wawuUserId,
             handle: profile?.handle ?? null,
             accountType: profile?.accountType ?? null,
-            tier: state?.tier ?? null,
-            subscriptionPaid: state?.subscriptionPaid ?? null,
             kycStatus: state
               ? state.kycStatus === 'pending' && !hasSubmitted.has(wawuUserId)
                 ? 'not_started'
                 : state.kycStatus
               : null,
             slotsUsed: state?.slotsUsed ?? null,
-            slotsTotal: state ? uploadAllowanceFor(state.tier).total : null,
+            slotsTotal: state ? uploadAllowanceFor().total : null,
           },
         ];
       }),
@@ -509,15 +507,13 @@ export class AdminContentReviewService {
  *
  * Not an error and not hidden: the piece exists and still has to be reviewed.
  * Every field is null rather than a plausible default, so the dashboard shows
- * "unknown" instead of inventing a tier.
+ * "unknown" instead of inventing a value.
  */
 function emptyCreatorView(wawuUserId: string): AdminContentCreatorView {
   return {
     wawuUserId,
     handle: null,
     accountType: null,
-    tier: null,
-    subscriptionPaid: null,
     kycStatus: null,
     slotsUsed: null,
     slotsTotal: null,

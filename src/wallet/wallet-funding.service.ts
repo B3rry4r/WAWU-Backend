@@ -5,11 +5,12 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { WalletService } from './wallet.service';
 
 /**
- * The two real rates. Imported as constants rather than written inline: a rate
+ * The commission rate. A named constant rather than written inline: a rate
  * typed into a payout calculation is how somebody eventually gets paid 80%.
+ * There used to be a second, 10% Pro rate; it went with the subscription that
+ * sold it, so every creator is on 85/15.
  */
 const STANDARD_COMMISSION_RATE = 0.15;
-const PRO_COMMISSION_RATE = 0.1;
 
 /**
  * MOVES WHAT CREATORS HAVE EARNED INTO THEIR WALLETS.
@@ -100,8 +101,8 @@ export class WalletFundingService {
       rows.map((r) => ({
         reference: `purchase:${r.id}`,
         wawuUserId: r.creatorWawuId,
-        // The rate SNAPSHOTTED on the row, never the creator's current one:
-        // a tier change after the sale must not alter what that sale paid.
+        // The rate SNAPSHOTTED on the row, never the current one: a rate
+        // change after the sale must not alter what that sale paid.
         amount: Math.floor(r.amount * (1 - Number(r.commissionRate))),
         sourceType: 'purchase',
         sourceId: r.id,
@@ -129,39 +130,17 @@ export class WalletFundingService {
     if (rows.length === 0) return;
 
     // DirectMessage carries no snapshotted rate, unlike Purchase, so the
-    // creator's CURRENT rate applies - which is what CreatorEarningsService
-    // already does when it shows the same figure. Resolved per creator here
-    // rather than assumed: 85/15 and 90/10 are the two real rates and picking
-    // one by hand would eventually pay somebody the wrong share.
-    const rates = await this.ratesFor([...new Set(rows.map((r) => r.creatorWawuId))]);
-
+    // current rate applies - which is what CreatorEarningsService already does
+    // when it shows the same figure. There is only one rate now, so there is
+    // nothing to resolve per creator.
     await this.credit(
       rows.map((r) => ({
         reference: `direct_message:${r.id}`,
         wawuUserId: r.creatorWawuId,
-        amount: Math.floor(r.amount * (1 - (rates.get(r.creatorWawuId) ?? STANDARD_COMMISSION_RATE))),
+        amount: Math.floor(r.amount * (1 - STANDARD_COMMISSION_RATE)),
         sourceType: 'direct_message',
         sourceId: r.id,
       })),
-    );
-  }
-
-  /**
-   * The commission rate for each creator, by the same rule the earnings screen
-   * uses: Pro tier AND paid gets 90/10, everyone else 85/15.
-   */
-  private async ratesFor(creatorIds: string[]): Promise<Map<string, number>> {
-    const states = await this.prisma.creatorState.findMany({
-      where: { wawuUserId: { in: creatorIds } },
-      select: { wawuUserId: true, tier: true, subscriptionPaid: true },
-    });
-    return new Map(
-      states.map((s) => [
-        s.wawuUserId,
-        s.tier === 'pro' && s.subscriptionPaid
-          ? PRO_COMMISSION_RATE
-          : STANDARD_COMMISSION_RATE,
-      ]),
     );
   }
 

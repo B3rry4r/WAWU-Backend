@@ -25,7 +25,6 @@ export * from './community-message.type';
 export * from './credits-state.type';
 export * from './credit-purchase.type';
 export * from './credit-spend.type';
-export * from './creator-subscription.type';
 export * from './evg-score.type';
 export * from './creator-earnings.type';
 export * from './notification.type';

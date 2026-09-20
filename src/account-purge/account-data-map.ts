@@ -91,14 +91,7 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'ProfessionalProfile', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'StorageObject', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'DittoOptIn', column: 'wawuUserId', disposition: 'OWNED' },
-  { model: 'ReferralRedemption', column: 'wawuUserId', disposition: 'OWNED' },
-  { model: 'ReferralClaim', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'EventReferral', column: 'ownerWawuId', disposition: 'OWNED' },
-  {
-    model: 'CreatorSubscription',
-    column: 'creatorWawuId',
-    disposition: 'OWNED',
-  },
   {
     model: 'CreatorNoResponseTracker',
     column: 'creatorWawuId',
