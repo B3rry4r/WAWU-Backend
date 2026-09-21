@@ -147,3 +147,138 @@ jobs:
           done
           echo "Service did not answer after the deploy." >&2
           exit 1
+
+  # ---------------------------------------------------------------------------
+  # THE THING THAT WAS MISSING.
+  #
+  # Seven deploys failed in a row between 14 and 21 September and nobody
+  # noticed. The droplet served week-old code the whole time: the two ticks,
+  # Credits at 85/15, the admin finance API and the profile experience list
+  # were all merged, all green on their own PRs, and none of them were in
+  # production. It surfaced as "property company should not exist" on a save,
+  # which reads like a frontend bug and is not one.
+  #
+  # A red badge on a page nobody opens is the same as no CI at all. So a
+  # failure now opens an ISSUE and assigns it, which is the one GitHub event
+  # that reliably reaches an inbox and a phone.
+  #
+  # ONE ISSUE, NOT ONE PER FAILURE. It is found by a fixed marker in the body
+  # and updated with a comment when it is already open, because seven separate
+  # issues are as easy to scroll past as seven red badges. It closes itself on
+  # the next green deploy, so an open issue always means "production is behind
+  # main right now" rather than "something went wrong once".
+  #
+  # NO NEW SECRETS. GITHUB_TOKEN is issued to the run automatically; the only
+  # cost is the `issues: write` permission below.
+  # ---------------------------------------------------------------------------
+  notify:
+    name: Report deploy status
+    needs: [test, deploy]
+    # `always()`, not `failure()`: this job has to run on a GREEN deploy too,
+    # otherwise the issue it opened would never be closed. The branching is in
+    # the step conditions, which read the results of the two jobs above.
+    if: always() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+
+    steps:
+      - name: Open or update the deploy-failure issue
+        # `deploy` is SKIPPED when `test` fails, so a skipped deploy is not
+        # itself a failure and must not be treated as one. Checking both
+        # results explicitly is what makes "test went red" and "the droplet
+        # went red" both land here, and a cancelled run land nowhere.
+        if: needs.test.result == 'failure' || needs.deploy.result == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const MARKER = '<!-- deploy-failure-tracker -->';
+            const failed = [
+              ['Test', '${{ needs.test.result }}'],
+              ['Deploy to droplet', '${{ needs.deploy.result }}'],
+            ].filter(([, r]) => r === 'failure').map(([n]) => n).join(' and ');
+
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const sha = context.sha.slice(0, 8);
+            const line = `**${failed}** failed for \`${sha}\`. [Run log](${run})`;
+
+            // Search this repo's OPEN issues for the marker. `listForRepo` is
+            // used rather than the search API because search is eventually
+            // consistent: two failures minutes apart could both miss an issue
+            // that already exists and open a second one.
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const existing = open.find((i) => (i.body || '').includes(MARKER));
+
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body: `Still failing. ${line}`,
+              });
+              core.setFailed(`Deploy still failing — see issue #${existing.number}`);
+              return;
+            }
+
+            const body = [
+              MARKER,
+              '',
+              '## Production is behind `main`',
+              '',
+              line,
+              '',
+              'Until this is fixed the droplet keeps serving the last commit that',
+              'deployed successfully, so anything merged after it is NOT live, however',
+              'green its own pull request was.',
+              '',
+              'This issue updates itself while the failure persists and closes itself',
+              'on the next green deploy. An open copy means production is behind right',
+              'now.',
+            ].join('\n');
+
+            const created = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '🚨 Deploy to production is failing',
+              body,
+              // Assigned, because assignment is what actually generates a
+              // notification. An unassigned issue in a repo you own is just
+              // another row nobody reads.
+              assignees: [context.repo.owner],
+            });
+            core.setFailed(`Deploy failing — opened issue #${created.data.number}`);
+
+      - name: Close the failure issue on a green deploy
+        if: needs.test.result == 'success' && needs.deploy.result == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const MARKER = '<!-- deploy-failure-tracker -->';
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const existing = open.find((i) => (i.body || '').includes(MARKER));
+            if (!existing) return;
+
+            const sha = context.sha.slice(0, 8);
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: existing.number,
+              body: `Deploy is green again on \`${sha}\`. Production is up to date with \`main\`.`,
+            });
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: existing.number,
+              state: 'closed',
+              state_reason: 'completed',
+            });
