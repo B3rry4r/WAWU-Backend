@@ -30,9 +30,23 @@ export class WalletService {
   /**
    * Opens the creator's wallet, once.
    *
-   * Called when KYC is approved rather than at signup: the wallet is an
-   * account at a bank, and opening one for somebody whose identity has not
-   * been checked is the thing KYC exists to prevent.
+   * Opened AT REGISTRATION now, not at KYC approval (build brief C7:
+   * "auto-provision a wallet on registration for creators and
+   * professionals"). Two things made that safe to move:
+   *
+   *  - A payout subaccount is opened in the person's own name at Flutterwave
+   *    MFB, under Flutterwave's licence, with name/email/country/phone. It is
+   *    not a WAWU-held balance, so an account existing early holds nothing
+   *    of ours and nothing of anybody else's.
+   *  - The gate KYC actually exists for is money LEAVING to an outside bank
+   *    account. That gate moved to withdraw(), where it bites, instead of
+   *    being enforced by the wallet simply not existing.
+   *
+   * The second reason is the stronger one: while the wallet did not exist,
+   * a creator's share of a completed sale stayed in WAWU's own Flutterwave
+   * balance (the funding sweep skips a creator with no wallet). That is WAWU
+   * sitting on creator money. Opening the account at registration moves each
+   * share out to its owner as it is earned.
    *
    * Idempotent on wawuUserId. A second call returns the existing wallet
    * rather than opening a second account nobody can reconcile.
@@ -86,13 +100,17 @@ export class WalletService {
   }
 
   /**
-   * The wallet, with the balance Flutterwave reports, opening it on first ask.
+   * Everything a creator needs from their own account, in one read.
    *
-   * Opened from the CREATOR'S OWN request rather than from the admin's KYC
-   * approval, for one practical reason: a wallet is a bank account and needs a
-   * real name to open in, and the caller's token carries their verified name
-   * while the KYC row does not. The gate is the same either way - KYC must be
-   * approved - it is just enforced where the name is.
+   * `availableNgn` is FLUTTERWAVE'S figure, asked for on every load. Nothing
+   * in this method adds anything up and calls the result a balance: a total
+   * this hub worked out for itself can disagree with what the bank will
+   * actually pay, and the creator would believe ours.
+   *
+   * `paidInNgn`, `pendingInNgn` and `withdrawnNgn` are a different kind of
+   * number and are labelled as one on the screen. They are what WAWU has
+   * INSTRUCTED over the life of the wallet, summed from our own ledger, which
+   * is a record we do own. They are shown beside the balance, never as it.
    */
   async getWallet(claims: {
     sub: string;
@@ -108,39 +126,136 @@ export class WalletService {
     });
 
     if (!wallet) {
-      const state = await this.prisma.creatorState.findUnique({
+      // Registration opens the wallet (openForAccount, called from profile
+      // onboarding). This is the backstop for an account that registered
+      // before that existed, or whose provisioning call did not get through.
+      const profile = await this.prisma.userProfile.findUnique({
         where: { wawuUserId },
-        select: { kycStatus: true },
+        select: { accountType: true },
       });
-      if (state?.kycStatus !== 'approved') {
-        // Not an error state on the client: it is the ordinary "verify first"
-        // screen, and it must say which of the two gates is the one blocking.
+      if (profile?.accountType !== 'creator') {
+        // Not an error state on the client: it is an ordinary buyer account
+        // looking at a creator's screen, and it must say what would make them
+        // eligible rather than just refusing.
         throw new BadRequestException(
-          'Your identity check has to be approved before a wallet can be opened.',
+          'A wallet comes with a creator or professional account. Switch your account type to start selling and one is opened for you.',
         );
       }
-      wallet = await this.ensureWallet({
-        wawuUserId,
-        accountName: `${claims.firstName} ${claims.lastName}`.trim(),
-        // Flutterwave keys a payout subaccount by email and rejects a
-        // duplicate, so this is namespaced per account rather than the
-        // creator's own address, which they may share with another product.
-        email: claims.email ?? `${wawuUserId}@wallet.wawuafrica.com`,
-        // Flutterwave wants ISO alpha-2; the claim is a full name.
-        country: toAlpha2(claims.country),
-        phone: claims.phone,
-      });
+      wallet = await this.openForAccount(claims);
     }
 
-    const { availableNgn } = await this.flw.balance(wallet.accountReference);
+    const [{ availableNgn }, totals, state] = await Promise.all([
+      this.flw.balance(wallet.accountReference),
+      this.ledgerTotals(wawuUserId),
+      this.prisma.creatorState.findUnique({
+        where: { wawuUserId },
+        select: { kycStatus: true },
+      }),
+    ]);
+
+    const kycApproved = state?.kycStatus === 'approved';
     return {
       accountReference: wallet.accountReference,
       // The creator's own account number. Anyone can pay into it directly.
       accountNumber: wallet.nuban,
       bankName: wallet.bankName,
       availableNgn,
+      ...totals,
+      /**
+       * Whether money may leave for an outside bank account, decided here
+       * rather than by the app. The screen reads this instead of re-checking
+       * KYC for itself, so there is one answer and the server owns it.
+       */
+      withdrawalsEnabled: kycApproved,
+      withdrawalsBlockedReason: kycApproved
+        ? null
+        : 'Your identity check has to be approved before money can be sent to your bank account.',
       status: wallet.status,
       createdAt: wallet.createdAt,
+    };
+  }
+
+  /**
+   * Opens a wallet for an account that has just become a creator.
+   *
+   * Called from onboarding, where the account type is chosen. It NEVER throws:
+   * a creator whose Flutterwave call happened to fail must still finish
+   * registering, and getWallet() opens one on the next read.
+   */
+  async provisionOnRegistration(claims: {
+    sub: string;
+    firstName: string;
+    lastName: string;
+    email: string | null;
+    phone: string;
+    country: string;
+  }): Promise<{ provisioned: boolean }> {
+    try {
+      await this.openForAccount(claims);
+      return { provisioned: true };
+    } catch (e) {
+      this.logger.error(
+        `Could not open a wallet for ${claims.sub} at registration: ${(e as Error).message}`,
+      );
+      return { provisioned: false };
+    }
+  }
+
+  /**
+   * The claims-to-Flutterwave translation, in one place.
+   *
+   * A wallet is a bank account and needs a real name to open in; the caller's
+   * token carries the name WAWU ID holds, which is the one KYC will later be
+   * checked against.
+   */
+  private openForAccount(claims: {
+    sub: string;
+    firstName: string;
+    lastName: string;
+    email: string | null;
+    phone: string;
+    country: string;
+  }) {
+    return this.ensureWallet({
+      wawuUserId: claims.sub,
+      accountName: `${claims.firstName} ${claims.lastName}`.trim(),
+      // Flutterwave keys a payout subaccount by email and rejects a
+      // duplicate, so this is namespaced per account rather than the
+      // creator's own address, which they may share with another product.
+      email: claims.email ?? `${claims.sub}@wallet.wawuafrica.com`,
+      // Flutterwave wants ISO alpha-2; the claim is a full name.
+      country: toAlpha2(claims.country),
+      phone: claims.phone,
+    });
+  }
+
+  /**
+   * What WAWU has instructed over this wallet's life, from our own ledger.
+   *
+   * Only COMPLETED movements count toward the settled figures, because a
+   * pending one has not happened yet and a failed one never will. Pending
+   * earnings are reported separately: a creator who has sold something that
+   * is still in flight should see it named rather than silently missing.
+   *
+   * A reversal is an earning taken back, so it comes off what was paid in.
+   */
+  private async ledgerTotals(wawuUserId: string): Promise<{
+    paidInNgn: number;
+    pendingInNgn: number;
+    withdrawnNgn: number;
+  }> {
+    const groups = await this.prisma.walletLedgerEntry.groupBy({
+      by: ['kind', 'status'],
+      where: { wawuUserId },
+      _sum: { amount: true },
+    });
+    const sum = (kind: string, status: string) =>
+      groups.find((g) => g.kind === kind && g.status === status)?._sum.amount ?? 0;
+
+    return {
+      paidInNgn: sum('earning', 'completed') - sum('reversal', 'completed'),
+      pendingInNgn: sum('earning', 'pending'),
+      withdrawnNgn: sum('withdrawal', 'completed'),
     };
   }
 
@@ -229,6 +344,13 @@ export class WalletService {
    * stored with the withdrawal. A creator typing a digit wrong otherwise pays
    * a stranger, irreversibly, and there is no way to tell afterwards that it
    * was not what they meant.
+   *
+   * THIS is where the identity check bites, now that the wallet itself is
+   * opened at registration. It used to be enforced by the wallet not existing
+   * at all, which stopped an unverified creator from cashing out and also
+   * stopped their earnings from ever reaching them. Paying money OUT to an
+   * outside bank account is the act KYC is actually for, so the gate sits on
+   * it directly.
    */
   async withdraw(input: {
     wawuUserId: string;
@@ -242,10 +364,21 @@ export class WalletService {
       );
     }
 
-    const wallet = await this.prisma.creatorWallet.findUnique({
-      where: { wawuUserId: input.wawuUserId },
-    });
+    const [wallet, state] = await Promise.all([
+      this.prisma.creatorWallet.findUnique({
+        where: { wawuUserId: input.wawuUserId },
+      }),
+      this.prisma.creatorState.findUnique({
+        where: { wawuUserId: input.wawuUserId },
+        select: { kycStatus: true },
+      }),
+    ]);
     if (!wallet) throw new NotFoundException('No wallet for this account yet.');
+    if (state?.kycStatus !== 'approved') {
+      throw new BadRequestException(
+        'Your identity check has to be approved before money can be sent to your bank account.',
+      );
+    }
 
     // Flutterwave's balance is the authority, not anything we have summed.
     const { availableNgn } = await this.flw.balance(wallet.accountReference);

@@ -16,6 +16,7 @@ import type {
 import type { UpdateUserProfileDto } from './dto/update-user-profile.dto';
 import { normaliseHandle, toProfileUrl } from './social-handles';
 import { objectKeyFrom, StorageService } from '../storage/storage.service';
+import { WalletService } from '../wallet/wallet.service';
 
 /**
  * registry.json "UserProfile". Owns GET/PATCH /users/me and the public
@@ -28,6 +29,7 @@ export class UserProfileService {
     private readonly prisma: PrismaService,
     private readonly wawuId: WawuIdClient,
     private readonly storage: StorageService,
+    private readonly wallet: WalletService,
   ) {}
 
   /**
@@ -112,10 +114,19 @@ export class UserProfileService {
     } as UserProfileWithClaims;
   }
 
+  /**
+   * Onboarding, and the one place an account becomes a creator.
+   *
+   * Takes the whole claims object rather than the id because of that: a
+   * creator account gets a wallet opened for it here (build brief C7), and a
+   * wallet is a bank account that needs the name, email, phone and country
+   * WAWU ID holds. Those live on the token, not on this row.
+   */
   async upsertMe(
-    wawuUserId: string,
+    claims: WawuJwtClaims,
     dto: UpdateUserProfileDto,
   ): Promise<UserProfile> {
+    const wawuUserId = claims.sub;
     // The name goes to WAWU ID FIRST, and a failure there stops the whole
     // update. Names are checked against a government ID at KYC, so a rename
     // that silently did not take is worse than one that visibly failed: the
@@ -137,8 +148,9 @@ export class UserProfileService {
       });
     }
 
+    let saved: UserProfile;
     try {
-      return await this.prisma.userProfile.upsert({
+      saved = await this.prisma.userProfile.upsert({
         where: { wawuUserId },
         update: {
           // `accountType` is deliberately self-selectable (CLAUDE.md: creator
@@ -205,6 +217,25 @@ export class UserProfileService {
       }
       throw error;
     }
+
+    /**
+     * A creator account comes with a wallet, opened here.
+     *
+     * Registration is the moment for it: a creator who lists something and
+     * sells it that afternoon has somewhere for the money to go, instead of
+     * their share sitting in WAWU's own Flutterwave balance until they happen
+     * to open a screen. Professionals come through this same path - applying
+     * to be listed requires a creator account type.
+     *
+     * Idempotent, and it CANNOT fail the profile save. Flutterwave being
+     * slow or down is not a reason to reject somebody's onboarding, and
+     * GET /wallet opens one on the next read if this did not get through.
+     */
+    if (saved.accountType === AccountType.creator) {
+      await this.wallet.provisionOnRegistration(claims);
+    }
+
+    return saved;
   }
 
   /**

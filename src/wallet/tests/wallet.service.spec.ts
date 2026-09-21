@@ -26,6 +26,8 @@ describe('wallet', () => {
     entries?: Record<string, unknown>;
     fundThrows?: Error;
     kyc?: string;
+    accountType?: string;
+    totals?: Array<{ kind: string; status: string; _sum: { amount: number } }>;
     transferLookup?: { status: string; message?: string } | null;
     stale?: Array<{ id: string; reference: string }>;
     withdrawThrows?: (Error & { status?: number }) | undefined;
@@ -44,6 +46,9 @@ describe('wallet', () => {
         create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => data),
       },
       walletLedgerEntry: {
+        // Ledger TOTALS, which the wallet reports beside the balance and
+        // never as it. Empty here unless a case says otherwise.
+        groupBy: jest.fn().mockResolvedValue(opts.totals ?? []),
         findUnique: jest.fn(async ({ where }: { where: { reference: string } }) =>
           byReference.get(where.reference) ?? null,
         ),
@@ -64,6 +69,11 @@ describe('wallet', () => {
         findUnique: jest.fn().mockResolvedValue(
           opts.kyc === undefined ? { kycStatus: 'approved' } : { kycStatus: opts.kyc },
         ),
+      },
+      userProfile: {
+        findUnique: jest.fn().mockResolvedValue({
+          accountType: opts.accountType ?? 'creator',
+        }),
       },
       walletWithdrawal: {
         create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => data),
@@ -186,6 +196,17 @@ describe('wallet', () => {
       );
     });
 
+    it('refuses to send anything out until the identity check is approved', async () => {
+      const { service, flw } = build({ kyc: 'pending' });
+      await expect(
+        service.withdraw({ wawuUserId: 'u1', amount: 5000, bankCode: '044', accountNumber: '0123456789' }),
+      ).rejects.toThrow(/identity check/i);
+      // Refused before anything was resolved or sent: nothing to reconcile,
+      // nothing half-done.
+      expect(flw.resolveAccount).not.toHaveBeenCalled();
+      expect(flw.withdraw).not.toHaveBeenCalled();
+    });
+
     it('refuses an amount below the floor', async () => {
       const { service } = build();
       await expect(
@@ -274,33 +295,65 @@ describe('wallet', () => {
     });
   });
 
-  // ── the KYC gate on opening one ─────────────────────────────────────────
+  // ── who gets one, and what it reports ───────────────────────────────────
   describe('opening on first ask', () => {
     const CLAIMS = {
       sub: 'u1', firstName: 'Ada', lastName: 'Okeke',
       email: 'ada@example.com', phone: '+2348000000000', country: 'NG',
     };
 
-    it('refuses until the identity check is approved, and says which gate', async () => {
+    it('opens one for a creator who does not have one yet, verified or not', async () => {
+      // Registration is what normally opens it; this is the backstop for an
+      // account that registered before that existed. The identity check is
+      // no longer what decides whether the account EXISTS - see withdraw().
       const { service, flw } = build({ wallet: null, kyc: 'pending' });
-      await expect(service.getWallet(CLAIMS)).rejects.toThrow(/identity check/i);
-      // A wallet is a bank account; opening one for an unverified person is
-      // the thing KYC exists to prevent.
-      expect(flw.createWallet).not.toHaveBeenCalled();
-    });
-
-    it('opens it in the creator\'s verified name once KYC is approved', async () => {
-      const { service, flw } = build({ wallet: null, kyc: 'approved' });
       await service.getWallet(CLAIMS);
       expect(flw.createWallet).toHaveBeenCalledWith(
         expect.objectContaining({ accountName: 'Ada Okeke', country: 'NG' }),
       );
     });
 
+    it('opens none for a buyer account, and says what would change that', async () => {
+      const { service, flw } = build({ wallet: null, accountType: 'user' });
+      await expect(service.getWallet(CLAIMS)).rejects.toThrow(
+        /creator or professional account/i,
+      );
+      expect(flw.createWallet).not.toHaveBeenCalled();
+    });
+
     it('does not re-open a wallet that already exists', async () => {
       const { service, flw } = build();
       await service.getWallet(CLAIMS);
       expect(flw.createWallet).not.toHaveBeenCalled();
+    });
+
+    it('reports the gateway balance, never a total it summed itself', async () => {
+      const { service } = build({
+        balance: 12_345,
+        totals: [
+          { kind: 'earning', status: 'completed', _sum: { amount: 90_000 } },
+          { kind: 'earning', status: 'pending', _sum: { amount: 5_000 } },
+          { kind: 'reversal', status: 'completed', _sum: { amount: 10_000 } },
+          { kind: 'withdrawal', status: 'completed', _sum: { amount: 70_000 } },
+        ],
+      });
+      const res = await service.getWallet(CLAIMS);
+      // The balance is the gateway's 12,345 and nothing else. The ledger
+      // figures sit BESIDE it, and a reversal comes off what was paid in.
+      expect(res.availableNgn).toBe(12_345);
+      expect(res.paidInNgn).toBe(80_000);
+      expect(res.pendingInNgn).toBe(5_000);
+      expect(res.withdrawnNgn).toBe(70_000);
+    });
+
+    it('says whether money may leave, and why not, rather than leaving it to the app', async () => {
+      const blocked = await build({ kyc: 'pending' }).service.getWallet(CLAIMS);
+      expect(blocked.withdrawalsEnabled).toBe(false);
+      expect(blocked.withdrawalsBlockedReason).toMatch(/identity check/i);
+
+      const open = await build({ kyc: 'approved' }).service.getWallet(CLAIMS);
+      expect(open.withdrawalsEnabled).toBe(true);
+      expect(open.withdrawalsBlockedReason).toBeNull();
     });
   });
 
@@ -375,7 +428,11 @@ describe('opening a wallet through the real mock adapter', () => {
         create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => data),
       },
       creatorState: { findUnique: jest.fn().mockResolvedValue({ kycStatus: 'approved' }) },
-      walletLedgerEntry: { findMany: jest.fn().mockResolvedValue([]) },
+      userProfile: { findUnique: jest.fn().mockResolvedValue({ accountType: 'creator' }) },
+      walletLedgerEntry: {
+        findMany: jest.fn().mockResolvedValue([]),
+        groupBy: jest.fn().mockResolvedValue([]),
+      },
     };
     return new WalletService(prisma as never, new FlutterwaveWalletMock() as never);
   }
