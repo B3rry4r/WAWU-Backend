@@ -249,8 +249,8 @@ describe('Verification (two ticks) contract', () => {
         .set(auth(buyer.token))
         .expect(200);
       expect(res.body.data).toEqual({
-        creator: 4999,
-        professional: 9999,
+        creator: 2000,
+        professional: 2000,
         currency: 'NGN',
         termMonths: 12,
       });
@@ -280,7 +280,7 @@ describe('Verification (two ticks) contract', () => {
       } finally {
         await prisma.platformSettings.update({
           where: { id: 1 },
-          data: { creatorVerificationPriceNgn: 4999 },
+          data: { creatorVerificationPriceNgn: 2000 },
         });
         await prisma.verificationPurchase.deleteMany({
           where: { wawuUserId: creator.sub },
@@ -330,7 +330,7 @@ describe('Verification (two ticks) contract', () => {
         (e: { kind: string }) => e.kind === 'professional',
       );
       expect(professionalEntry.allowed).toBe(true);
-      expect(professionalEntry.priceNgn).toBe(9999);
+      expect(professionalEntry.priceNgn).toBe(2000);
     });
   });
 
@@ -398,7 +398,7 @@ describe('Verification (two ticks) contract', () => {
         where: { flutterwaveTxRef: txRef },
       });
       expect(row?.status).toBe('completed');
-      expect(row?.priceNgn).toBe(4999);
+      expect(row?.priceNgn).toBe(2000);
       expect(row?.grantedUntil?.toISOString()).toBe(expiresAt.toISOString());
     });
 

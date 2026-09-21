@@ -349,7 +349,7 @@ describe('Events contract (app-facing)', () => {
       expect(res.body.reason.steps.length).toBeGreaterThan(0);
       // And the price of the thing it is telling them to buy, in naira.
       expect(res.body.reason.purchasable).toEqual([
-        { kind: 'creator', priceNgn: 4999, currency: 'NGN', termMonths: 12 },
+        { kind: 'creator', priceNgn: 2000, currency: 'NGN', termMonths: 12 },
       ]);
       // No em-dash anywhere a person reads (CLAUDE.md, product-owner rule).
       const readable = [

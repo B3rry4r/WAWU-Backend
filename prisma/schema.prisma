@@ -2946,8 +2946,8 @@ model PlatformSettings {
   /// thing that reads these.
   ///
   /// Naira only. There is no second currency in this product.
-  creatorVerificationPriceNgn      Int @default(4999)
-  professionalVerificationPriceNgn Int @default(9999)
+  creatorVerificationPriceNgn      Int @default(2000)
+  professionalVerificationPriceNgn Int @default(2000)
 
   updatedAt DateTime @updatedAt
 }
