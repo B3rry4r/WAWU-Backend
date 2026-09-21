@@ -13,9 +13,6 @@ import {
 import type { CreateCreditPurchaseDto } from './dto/create-credit-purchase.dto';
 import type { VerifyCreditPurchaseDto } from './dto/verify-credit-purchase.dto';
 
-/** 7 days, mirrors CreditsStateService's own trial window constant (wave 0). */
-const TRIAL_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
-
 /**
  * `CreditPurchase.amount` is whole naira (every pack price is). Cost basis is
  * carried in kobo so the per-credit maths on a ₦1,000/120 pack stays exact
@@ -188,7 +185,11 @@ export class CreditPurchaseService {
         create: {
           userWawuId,
           creditBalance: purchase.creditsGranted,
-          trialEndsAt: new Date(Date.now() + TRIAL_DURATION_MS),
+          // No trial is opened here any more. It was removed on the product
+          // owner's instruction, 21 Sep 2026 ("no 7 day silly trials"), and
+          // it made least sense on this path regardless: this row is created
+          // because somebody just PAID for credits, so handing them free ones
+          // in the same breath was never the intent.
         },
         update: {
           creditBalance: { increment: purchase.creditsGranted },

@@ -33,14 +33,12 @@ import {
   CommunityKind,
   ContentStatus,
   ContentType,
-  CreatorTier,
   DmStatus,
   GuideKind,
   MembershipStatus,
   PartnerServiceStatus,
   PurchaseType,
   ReviewStatus,
-  SubscriptionStatus,
   TransactionStatus,
 } from '../generated/prisma/enums';
 
@@ -51,8 +49,8 @@ const prisma = new PrismaClient({ adapter });
 // Mirrors mock-wawu-id/server.js's USERS map exactly — same `sub` values.
 // -----------------------------------------------------------------------------
 const USER_PLAIN = '00000000-0000-4000-8000-000000000001'; // Adaeze Okonkwo — plain user
-const USER_CREATOR_BASIC = '00000000-0000-4000-8000-000000000002'; // Chidi Umeh — Basic tier, KYC pending
-const USER_CREATOR_PRO = '00000000-0000-4000-8000-000000000003'; // Zainab Bello — Pro tier, KYC approved
+const USER_CREATOR_BASIC = '00000000-0000-4000-8000-000000000002'; // Chidi Umeh — creator, KYC pending
+const USER_CREATOR_PRO = '00000000-0000-4000-8000-000000000003'; // Zainab Bello — creator, KYC approved
 
 // Fixed seed UUIDs for tables without a natural unique key relevant here —
 // keeps this script idempotent across re-runs via upsert-by-id.
@@ -102,7 +100,6 @@ function refuseIfProduction(): void {
 async function main() {
   if (process.env.ALLOW_REMOTE_SEED !== '1') refuseIfProduction();
   const now = new Date();
-  const oneYearFromNow = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
   const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
   const twentyFourHoursFromNow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
 
@@ -182,15 +179,13 @@ async function main() {
   });
 
   // ---------------------------------------------------------------------
-  // Creator gates: CreatorState (subscriptionPaid gates upload, kycStatus
-  // gates earning — the two independent gates per CLAUDE.md)
+  // Creator gates: CreatorState. One gate left, kycStatus, which gates
+  // EARNING. The upload gate was a paid subscription and went with it.
   // ---------------------------------------------------------------------
   await prisma.creatorState.upsert({
     where: { wawuUserId: USER_CREATOR_BASIC },
     update: {
       wawuUserId: USER_CREATOR_BASIC,
-      tier: CreatorTier.basic,
-      subscriptionPaid: true,
       kycStatus: ReviewStatus.pending,
       slotsUsed: 1,
       dmPrice: 100,
@@ -198,8 +193,6 @@ async function main() {
     },
     create: {
       wawuUserId: USER_CREATOR_BASIC,
-      tier: CreatorTier.basic,
-      subscriptionPaid: true,
       kycStatus: ReviewStatus.pending,
       slotsUsed: 1,
       dmPrice: 100,
@@ -211,8 +204,6 @@ async function main() {
     where: { wawuUserId: USER_CREATOR_PRO },
     update: {
       wawuUserId: USER_CREATOR_PRO,
-      tier: CreatorTier.pro,
-      subscriptionPaid: true,
       kycStatus: ReviewStatus.approved,
       slotsUsed: 2,
       dmPrice: 300,
@@ -220,71 +211,10 @@ async function main() {
     },
     create: {
       wawuUserId: USER_CREATOR_PRO,
-      tier: CreatorTier.pro,
-      subscriptionPaid: true,
       kycStatus: ReviewStatus.approved,
       slotsUsed: 2,
       dmPrice: 300,
       dmEnabled: true,
-    },
-  });
-
-  // ---------------------------------------------------------------------
-  // CreatorSubscription — single evolving row per creator
-  // ---------------------------------------------------------------------
-  await prisma.creatorSubscription.upsert({
-    where: { creatorWawuId: USER_CREATOR_BASIC },
-    update: {
-      creatorWawuId: USER_CREATOR_BASIC,
-      tier: CreatorTier.basic,
-      status: SubscriptionStatus.active,
-      commissionRateOverride: null,
-      flutterwaveCustomerRef: 'seed-flw-customer-002',
-      flutterwavePlanId: 'seed-flw-plan-basic',
-      currentPeriodEnd: oneYearFromNow,
-      renewalAttempts: 0,
-      cancelsAt: null,
-      cardLast4: '4242',
-    },
-    create: {
-      creatorWawuId: USER_CREATOR_BASIC,
-      tier: CreatorTier.basic,
-      status: SubscriptionStatus.active,
-      commissionRateOverride: null,
-      flutterwaveCustomerRef: 'seed-flw-customer-002',
-      flutterwavePlanId: 'seed-flw-plan-basic',
-      currentPeriodEnd: oneYearFromNow,
-      renewalAttempts: 0,
-      cancelsAt: null,
-      cardLast4: '4242',
-    },
-  });
-
-  await prisma.creatorSubscription.upsert({
-    where: { creatorWawuId: USER_CREATOR_PRO },
-    update: {
-      creatorWawuId: USER_CREATOR_PRO,
-      tier: CreatorTier.pro,
-      status: SubscriptionStatus.active,
-      commissionRateOverride: 0.1,
-      flutterwaveCustomerRef: 'seed-flw-customer-003',
-      flutterwavePlanId: 'seed-flw-plan-pro',
-      currentPeriodEnd: oneYearFromNow,
-      renewalAttempts: 0,
-      cancelsAt: null,
-      cardLast4: '1881',
-    },
-    create: {
-      creatorWawuId: USER_CREATOR_PRO,
-      tier: CreatorTier.pro,
-      status: SubscriptionStatus.active,
-      commissionRateOverride: 0.1,
-      flutterwaveCustomerRef: 'seed-flw-customer-003',
-      flutterwavePlanId: 'seed-flw-plan-pro',
-      currentPeriodEnd: oneYearFromNow,
-      renewalAttempts: 0,
-      cancelsAt: null,
-      cardLast4: '1881',
     },
   });
 
@@ -1279,7 +1209,6 @@ async function main() {
   console.log({
     userProfiles: await prisma.userProfile.count(),
     creatorStates: await prisma.creatorState.count(),
-    creatorSubscriptions: await prisma.creatorSubscription.count(),
     kycSubmissions: await prisma.kycSubmission.count(),
     contentPieces: await prisma.contentPiece.count(),
     courseLessons: await prisma.courseLesson.count(),

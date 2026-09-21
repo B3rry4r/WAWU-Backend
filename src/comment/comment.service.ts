@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { deriveVerificationState } from '../common/verification/verification-state';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
 import type { Paginated } from '../common/interceptors/response.interceptor';
@@ -43,7 +44,15 @@ export class CommentService {
       this.wawuId.lookupPublicIdentities(unique),
       this.prisma.userProfile.findMany({
         where: { wawuUserId: { in: unique } },
-        select: { wawuUserId: true, handle: true, avatarUrl: true },
+        select: {
+          wawuUserId: true,
+          handle: true,
+          avatarUrl: true,
+          creatorVerifiedAt: true,
+          creatorVerifiedUntil: true,
+          professionalVerifiedAt: true,
+          professionalVerifiedUntil: true,
+        },
       }),
     ]);
     const profileBy = new Map(profiles.map((p) => [p.wawuUserId, p]));
@@ -60,6 +69,9 @@ export class CommentService {
         name: fullName || profile?.handle || '',
         handle: profile?.handle ?? null,
         avatarUrl: profile?.avatarUrl ?? null,
+        // An author with no profile row on this service has no ticks. Derived
+        // through the one function, never compared inline.
+        verification: deriveVerificationState(profile ?? null),
       });
     }
     return out;

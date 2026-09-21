@@ -48,6 +48,29 @@ export class CreateContentDto {
   })
   category: CategoryId;
 
+  /**
+   * Specialization ids from the C1 taxonomy, e.g.
+   * `photography.portrait-photographer`. What a buyer actually searches and
+   * filters on; `category` above is the deprecated flat list it replaces.
+   *
+   * Optional and capped at three rather than required, deliberately:
+   *  - optional, because every piece published before this column exists has
+   *    none, and a required field would make those rows unrepublishable.
+   *  - capped, because this drives search placement. A piece tagged with
+   *    twenty specializations is tagged with none, and the cap belongs here
+   *    as well as in the client: a client-side maximum is a suggestion.
+   *
+   * The ids are NOT validated against the taxonomy here. That list lives in
+   * the web client and changes by deploy, so pinning a copy in this DTO would
+   * create two lists that drift and reject valid input the day they diverge.
+   * Shape is enforced; membership is the client's to get right.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(3)
+  @IsString({ each: true })
+  specializations?: string[];
+
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(20)

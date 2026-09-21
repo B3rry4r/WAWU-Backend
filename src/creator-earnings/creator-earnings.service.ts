@@ -20,7 +20,6 @@ import type {
  * constants module that doesn't exist yet.
  */
 const STANDARD_COMMISSION_RATE = 0.15;
-const PRO_COMMISSION_RATE = 0.1;
 
 /**
  * WAWU Credits are 90/10 for EVERY creator on every tier (docs/01_SPEC.md
@@ -99,19 +98,8 @@ interface SaleRow {
 export class CreatorEarningsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Snapshotted-at-read-time rate — mirrors Purchase/ContentPiece's own resolveCommissionRate() exactly (same CreatorState fields, same fallback). */
-  private async resolveCommissionRate(creatorWawuId: string): Promise<number> {
-    const creatorState = await this.prisma.creatorState.findUnique({
-      where: { wawuUserId: creatorWawuId },
-      select: { tier: true, subscriptionPaid: true },
-    });
-    if (
-      creatorState &&
-      creatorState.tier === 'pro' &&
-      creatorState.subscriptionPaid
-    ) {
-      return PRO_COMMISSION_RATE;
-    }
+  /** Mirrors Purchase/ContentPiece's own resolveCommissionRate() exactly: one flat rate for every creator. */
+  private resolveCommissionRate(): number {
     return STANDARD_COMMISSION_RATE;
   }
 
@@ -136,7 +124,7 @@ export class CreatorEarningsService {
       creditEarningTotals,
       recentCreditSpends,
     ] = await Promise.all([
-      this.resolveCommissionRate(creatorWawuId),
+      this.resolveCommissionRate(),
       // Totals are summed IN POSTGRES, grouped by the two dimensions the
       // net-of-commission maths needs (type, and the per-row snapshotted
       // rate). This used to be a findMany() of every Purchase/DirectMessage/
@@ -279,7 +267,7 @@ export class CreatorEarningsService {
       id: c.id,
       source: 'community_credits' as const,
       amount: c.creditsSpent,
-      // No earning row = a trial-covered or otherwise unfunded credit; the
+      // No earning row = an unfunded credit (seeded, admin-granted or legacy); the
       // host earned ₦0 on it because WAWU banked ₦0 for it.
       earningsNaira: koboToNaira(c.earning?.hostShareKobo ?? 0),
       occurredAt: c.spentAt,

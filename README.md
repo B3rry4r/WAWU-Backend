@@ -201,6 +201,121 @@ stops purchases getting stranded in `pending`.
    (mandatory in production), `WAWU_ID_JWKS_URL`, `WAWU_ID_BASE_URL`,
    `WAWU_ID_INTERNAL_SERVICE_KEY`, `FLUTTERWAVE_PUBLIC_KEY`.
 
+## Verification: two ticks, not a ladder
+
+There is no five-rung ladder any more. There are exactly **two** verifications,
+they are **independent** of each other, and neither outranks the other, because
+one person may hold more than one role.
+
+| Verification | Price | Tick | What it unlocks |
+| --- | --- | --- | --- |
+| Creator | NGN 4,999 / year | purple | the tick everywhere; hosting events |
+| Professional | NGN 9,999 / year | green | the tick everywhere; hosting events |
+
+Both are annual, both are paid, and both are server-authoritative.
+
+### The wire shape
+
+Every place a user appears on the wire carries the same object: the public
+profile, creator discovery, professional listings, search hits, comment
+authors, DM counterparties, community message senders and an event's host.
+
+```ts
+interface TickState { verified: boolean; expiresAt: string | null }
+interface VerificationState { creator: TickState; professional: TickState }
+```
+
+`verified` is computed **server-side** from the expiry. A client never compares
+dates to decide whether to draw a tick. `expiresAt === null` with
+`verified === true` is a perpetual, admin-granted tick (the accounts
+grandfathered off the old ladder); `expiresAt === null` with
+`verified === false` simply means never verified. Both ticks render when both
+are held, and nothing anywhere picks a winner.
+
+### Where it is decided
+
+One function: `deriveVerificationState()` in
+`src/common/verification/verification-state.ts`. Every read path calls it,
+through `VerificationStateService` for the batched reads. Nothing compares the
+stored dates anywhere else.
+
+### Storage, and who owns the truth
+
+**WAWU ID owns it.** Every grant and every revoke PATCHes
+`/internal/users/:userId/verification` there FIRST, then mirrors onto four
+nullable columns on this backend's `UserProfile`
+(`creator_verified_at`, `creator_verified_until`, `professional_verified_at`,
+`professional_verified_until`). If identity rejects the call nothing has been
+granted here and the payment is simply re-verifiable.
+
+The mirror exists so a page of creator cards renders its ticks from one query.
+`WawuIdClient.lookupPublicIdentities` deliberately degrades to an empty map
+when identity is unreachable, which would otherwise strip every tick on the
+page without an error.
+
+`VerificationTier`, `VerificationSubmission.tier` and
+`AdminVerificationAudit.tier` are all still there and still work. The ladder's
+review queue has rows in it that predate this change, and a half-reviewed queue
+that cannot be finished is worse than one write path too many. Nothing grants a
+tick through them. Dropping them is a separate migration once nothing reads
+them at all.
+
+### Endpoints
+
+| Endpoint | Auth | Notes |
+| --- | --- | --- |
+| `GET /api/hub/verification/pricing` | user | Both prices, in naira, by the year. |
+| `GET /api/hub/verification/me` | user | The caller's ticks, the prices, and which they may buy. |
+| `POST /api/hub/verification/purchase` | user | `{ kind }` -> a Flutterwave inline config. |
+| `POST /api/hub/verification/purchase/verify` | user | `{ transaction_id, tx_ref }` -> the granted tick. |
+| `POST /api/hub/admin/verification/ticks/:wawuUserId/grant` | admin (superadmin, reviewer) | `{ kind, until? }`. Omitting `until` grants a perpetual tick. |
+| `POST /api/hub/admin/verification/ticks/:wawuUserId/revoke` | admin (superadmin, reviewer) | `{ kind }`. Clears both dates. |
+
+Payment runs through the SAME `FLUTTERWAVE_CLIENT` the content unlock uses,
+exported from `ContentPieceModule`, rather than a sixth hand-copied adapter
+pair. Init writes a `VerificationPurchase` row keyed by its `tx_ref`; nothing
+is granted until a server-side verify has confirmed the amount and the
+reference with Flutterwave.
+
+### Prices are configured, not compiled in
+
+`PlatformSettings.creatorVerificationPriceNgn` and
+`.professionalVerificationPriceNgn`, read only by
+`src/common/verification/verification-pricing.ts`, which also holds the
+defaults for the case where that row does not exist yet. This is the first
+reader `PlatformSettings` has ever had.
+
+### Hosting an event is verified-only
+
+Enforced on the write in `EventService`, on both create and edit, not by hiding
+a button. A buyer can never host, because a buyer account can buy neither tick.
+An unverified creator and an unverified professional cannot host either: having
+the right account type is not having the tick.
+
+The refusal is never a bare 403. `AllExceptionsFilter` carries a `reason`
+object through to the caller when a thrower attaches one:
+
+```json
+{
+  "statusCode": 403,
+  "message": "Only verified accounts can host an event. ...",
+  "data": null,
+  "reason": {
+    "code": "verification_required",
+    "message": "...",
+    "steps": ["...", "...", "..."],
+    "purchasable": [
+      { "kind": "creator", "priceNgn": 4999, "currency": "NGN", "termMonths": 12 }
+    ]
+  }
+}
+```
+
+`code` is what the client branches on; `message` and `steps` are read by a
+person, so the app can render "here is what you need to do" instead of a wall.
+An exception without a `reason` produces exactly the envelope this filter has
+always produced.
+
 ## `WAWU_ADMIN_KEY` is retired
 
 It used to gate six operator surfaces — `legal/ops`, `services/ops/applications`,

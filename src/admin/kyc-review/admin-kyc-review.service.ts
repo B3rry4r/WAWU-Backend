@@ -2,7 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StorageService } from '../../storage/storage.service';
 import { KycSubmissionService } from '../../kyc-submission/kyc-submission.service';
-import { uploadAllowanceFor } from '../../common/creator-tier-allowance';
+import { uploadAllowanceFor } from '../../common/creator-allowance';
 import type { Paginated } from '../../common/interceptors/response.interceptor';
 import type { AdminKycAuditModel, KycSubmissionModel } from '../../../generated/prisma/models';
 import type { AdminUserView } from '../auth/admin-user-view.type';
@@ -191,9 +191,9 @@ export class AdminKycReviewService {
    * POST /admin/kyc/:id/approve — the creator can be paid.
    *
    * Flips CreatorState.kycStatus to `approved` through the existing service,
-   * which is what `GET /creator/state` reads. It touches GATE 2 only:
-   * subscriptionPaid, accountType, tier and the WAWU ID verification tier are
-   * all untouched, here and everywhere else in this module.
+   * which is what `GET /creator/state` reads. It touches the earning gate
+   * only: accountType and the WAWU ID verification tier are untouched, here
+   * and everywhere else in this module.
    */
   async approve(id: string, admin: AdminUserView): Promise<AdminKycDecisionView> {
     return this.decide(id, admin, 'approved', null);
@@ -379,10 +379,9 @@ export class AdminKycReviewService {
    * null rather than as a plausible default.
    */
   private async resolveCreator(wawuUserId: string): Promise<AdminKycCreatorView> {
-    const [profile, state, subscription, submissionCount] = await Promise.all([
+    const [profile, state, submissionCount] = await Promise.all([
       this.prisma.userProfile.findUnique({ where: { wawuUserId } }),
       this.prisma.creatorState.findUnique({ where: { wawuUserId } }),
-      this.prisma.creatorSubscription.findUnique({ where: { creatorWawuId: wawuUserId } }),
       this.prisma.kycSubmission.count({ where: { wawuUserId } }),
     ]);
 
@@ -390,17 +389,13 @@ export class AdminKycReviewService {
       wawuUserId,
       handle: profile?.handle ?? null,
       accountType: profile?.accountType ?? null,
-      tier: state?.tier ?? null,
-      subscriptionPaid: state?.subscriptionPaid ?? null,
       kycStatus: state
         ? state.kycStatus === 'pending' && submissionCount === 0
           ? 'not_started'
           : state.kycStatus
         : null,
       slotsUsed: state?.slotsUsed ?? null,
-      slotsTotal: state ? uploadAllowanceFor(state.tier).total : null,
-      subscriptionStatus: subscription?.status ?? null,
-      subscriptionCurrentPeriodEnd: subscription?.currentPeriodEnd ?? null,
+      slotsTotal: state ? uploadAllowanceFor().total : null,
     };
   }
 

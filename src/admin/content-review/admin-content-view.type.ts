@@ -4,7 +4,6 @@ import type {
   AccountType,
   ContentStatus,
   ContentType,
-  CreatorTier,
 } from '../../../generated/prisma/enums';
 
 /**
@@ -32,7 +31,7 @@ import type {
  *
  * Everything here is read from the same rows the app reads — no second
  * definition of any number is computed (law 13). `slotsTotal` is derived with
- * `uploadAllowanceFor(tier)`, exactly as CreatorStateService does, because it
+ * `uploadAllowanceFor()`, exactly as CreatorStateService does, because it
  * is not a stored column. `kycStatus` reproduces CreatorStateService's
  * `not_started` synthesis (protected-surface hazard H-5) so a reviewer and the
  * creator are looking at the same word for the same state.
@@ -41,8 +40,6 @@ export interface AdminContentCreatorView {
   wawuUserId: string;
   handle: string | null;
   accountType: AccountType | null;
-  tier: CreatorTier | null;
-  subscriptionPaid: boolean | null;
   /** ReviewStatus, plus the synthesized 'not_started' — see hazard H-5. Never written back. */
   kycStatus: string | null;
   slotsUsed: number | null;

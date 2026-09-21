@@ -175,11 +175,9 @@ describe('Admin KYC review contract', () => {
     for (const wawuUserId of CREATOR_IDS) {
       await prisma.creatorState.upsert({
         where: { wawuUserId },
-        update: { kycStatus: 'pending', subscriptionPaid: true, tier: 'basic', slotsUsed: STARTING_SLOTS },
+        update: { kycStatus: 'pending', slotsUsed: STARTING_SLOTS },
         create: {
           wawuUserId,
-          tier: 'basic',
-          subscriptionPaid: true,
           kycStatus: 'pending',
           slotsUsed: STARTING_SLOTS,
         },
@@ -445,15 +443,12 @@ describe('Admin KYC review contract', () => {
         wawuUserId: CREATOR_RESUBMITTING,
         handle: 'contract-kyc-c1',
         accountType: 'creator',
-        tier: 'basic',
-        // GATE 1 is shown for context and never written by this surface.
-        subscriptionPaid: true,
-        // GATE 2, as the creator's own screen words it.
+        // The EARNING gate, as the creator's own screen words it.
         kycStatus: 'pending',
         slotsUsed: STARTING_SLOTS,
         // Derived with the same uploadAllowanceFor() the app uses — never a
-        // second definition (law 13). basic = 6.
-        slotsTotal: 6,
+        // second definition (law 13). Flat per account, no tier ladder.
+        slotsTotal: 5,
       });
 
       // Both filings, newest first, so the reviewer can read the earlier
@@ -641,7 +636,7 @@ describe('Admin KYC review contract', () => {
       expect(await creatorStateKycStatus(resubmittingCreatorToken)).toBe('approved');
     });
 
-    it('touches the EARNING gate only — never the subscription, tier or slots', async () => {
+    it('touches the EARNING gate only — never the slots or the DM settings', async () => {
       const before = await prisma.creatorState.findUniqueOrThrow({
         where: { wawuUserId: CREATOR_RESUBMITTING },
       });
@@ -655,10 +650,8 @@ describe('Admin KYC review contract', () => {
         where: { wawuUserId: CREATOR_RESUBMITTING },
       });
       expect(after.kycStatus).toBe('approved');
-      // "Paid + uploading + KYC pending" is a normal state in this product;
-      // clearing one gate must not silently move the other.
-      expect(after.subscriptionPaid).toBe(before.subscriptionPaid);
-      expect(after.tier).toBe(before.tier);
+      // Clearing the earning gate must not move anything else on the row:
+      // publishing and being paid are separate facts.
       expect(after.slotsUsed).toBe(before.slotsUsed);
       expect(after.dmEnabled).toBe(before.dmEnabled);
     });

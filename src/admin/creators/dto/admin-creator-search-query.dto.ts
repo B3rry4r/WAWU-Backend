@@ -1,6 +1,4 @@
-import { Transform } from 'class-transformer';
 import {
-  IsBoolean,
   IsIn,
   IsOptional,
   IsString,
@@ -11,7 +9,7 @@ import {
   ValidatorConstraint,
   ValidatorConstraintInterface,
 } from 'class-validator';
-import { AccountType, CreatorTier, ReviewStatus } from '../../../../generated/prisma/enums';
+import { AccountType, ReviewStatus } from '../../../../generated/prisma/enums';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
 
 /**
@@ -22,7 +20,7 @@ import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
  * It cannot: email or phone. Not "not yet" — there is no column. Every
  * identity-bearing table in `prisma/schema.prisma` was checked: `UserProfile`
  * holds a handle, a bio, interests and social handles; `CreatorState`,
- * `CreatorSubscription`, `KycSubmission` and `VerificationSubmission` key on
+ * `KycSubmission` and `VerificationSubmission` key on
  * `wawuUserId` and hold no contact field. The only `email` and `phoneNumber`
  * columns in the whole schema belong to `HealthSubscription` (a WellaHealth
  * enrollee's own details, required because WellaHealth keys on phone),
@@ -126,16 +124,6 @@ export class AdminCreatorSearchQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsIn(Object.values(AccountType))
   accountType?: AccountType;
-
-  @IsOptional()
-  @IsIn(Object.values(CreatorTier))
-  tier?: CreatorTier;
-
-  /** The upload gate, as a filter: "who paid?" / "who has not?" */
-  @IsOptional()
-  @Transform(({ value }) => (value === 'true' ? true : value === 'false' ? false : value))
-  @IsBoolean()
-  subscriptionPaid?: boolean;
 
   /**
    * The earning gate, as a filter. `not_started` is accepted alongside the

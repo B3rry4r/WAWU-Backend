@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { deriveVerificationState } from '../common/verification/verification-state';
 import {
   AccountType,
   ContentStatus,
@@ -372,6 +373,10 @@ export class SearchResponseService {
       if (!profile || !state) continue;
       result.push({
         wawuUserId: profile.wawuUserId,
+        // Derived from the same four columns, through the same function, as
+        // the public profile. A creator found through search must not be
+        // described differently from the same creator opened directly.
+        verification: deriveVerificationState(profile),
         handle: profile.handle,
         bio: profile.bio,
         // Same omission as the public profile had: search returned every
@@ -387,7 +392,6 @@ export class SearchResponseService {
         linkedinUrl: profile.linkedinUrl,
         whatsappHandle: profile.whatsappHandle,
         websiteUrl: profile.websiteUrl,
-        tier: state.tier,
         // Same buyer-facing DM settings as the public-profile aggregate, so a
         // creator found through search is not described differently from the
         // same creator opened directly.

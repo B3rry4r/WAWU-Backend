@@ -13,8 +13,14 @@ import type {
   UserProfile,
   UserProfileWithClaims,
 } from '../common/types';
+import {
+  deriveVerificationState,
+  unverified,
+} from '../common/verification/verification-state';
 import type { UpdateUserProfileDto } from './dto/update-user-profile.dto';
 import { normaliseHandle, toProfileUrl } from './social-handles';
+import { objectKeyFrom, StorageService } from '../storage/storage.service';
+import { WalletService } from '../wallet/wallet.service';
 
 /**
  * registry.json "UserProfile". Owns GET/PATCH /users/me and the public
@@ -26,7 +32,46 @@ export class UserProfileService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly wawuId: WawuIdClient,
+    private readonly storage: StorageService,
+    private readonly wallet: WalletService,
   ) {}
+
+  /**
+   * Re-signs a stored image URL on the way out.
+   *
+   * THE BUG THIS FIXES. Avatar and cover are uploaded through
+   * StorageService.presignUpload, whose `fileUrl` is a SEVEN-DAY presigned
+   * read URL, and that string is what the profile row stores. The bucket is
+   * private, so seven days later the stored URL is a 403 and every surface
+   * that renders it draws a broken-image placeholder -- including the Edit
+   * Profile screen, where both pictures broke at once and made the upload
+   * itself look faulty. The object was never gone; only the signature was.
+   *
+   * `objectKeyFrom` recovers the key from the stored string (the grammar is
+   * closed and server-generated, so this is a match against a known shape,
+   * not a guess) and the URL is signed again for this response. Nothing
+   * stored is rewritten: an external URL, or anything that does not match
+   * the shape, is passed through untouched.
+   *
+   * Failing to sign falls back to the STORED string, never to null. On an
+   * environment with no bucket configured that is the only value there is,
+   * and it is exactly what shipped before this method existed -- so the worst
+   * case here is the old behaviour, never a picture that disappears because
+   * signing was unavailable. A profile read must not 500 over an image
+   * either.
+   */
+  private async resignImage(stored: string | null): Promise<string | null> {
+    if (!stored) return null;
+    const key = objectKeyFrom(stored);
+    // Not one of ours: an absolute URL that matches no upload folder is
+    // somebody's own link and is passed through untouched.
+    if (key === stored && /^https?:\/\//i.test(stored)) return stored;
+    try {
+      return await this.storage.readUrlFor(key);
+    } catch {
+      return stored;
+    }
+  }
 
   async getMe(user: WawuJwtClaims): Promise<UserProfileWithClaims> {
     const profile = await this.prisma.userProfile.findUnique({
@@ -59,13 +104,55 @@ export class UserProfileService {
       createdAt: null,
     };
 
-    return { ...user, ...base, wawuUserId: user.sub } as UserProfileWithClaims;
+    const [avatarUrl, coverUrl] = await Promise.all([
+      this.resignImage(base.avatarUrl),
+      this.resignImage(base.coverUrl),
+    ]);
+
+    // The four stored dates are pulled OFF the spread and republished as one
+    // derived object. `base` is the whole Prisma row, so leaving them in
+    // would put the raw expiry on the wire and invite a client to decide for
+    // itself whether the tick is live. That decision is the server's.
+    const {
+      creatorVerifiedAt: _cAt,
+      creatorVerifiedUntil: _cUntil,
+      professionalVerifiedAt: _pAt,
+      professionalVerifiedUntil: _pUntil,
+      ...withoutTickDates
+    } = base as typeof base & {
+      creatorVerifiedAt?: Date | null;
+      creatorVerifiedUntil?: Date | null;
+      professionalVerifiedAt?: Date | null;
+      professionalVerifiedUntil?: Date | null;
+    };
+    void _cAt;
+    void _cUntil;
+    void _pAt;
+    void _pUntil;
+
+    return {
+      ...user,
+      ...withoutTickDates,
+      avatarUrl,
+      coverUrl,
+      wawuUserId: user.sub,
+      verification: profile ? deriveVerificationState(profile) : unverified(),
+    } as UserProfileWithClaims;
   }
 
+  /**
+   * Onboarding, and the one place an account becomes a creator.
+   *
+   * Takes the whole claims object rather than the id because of that: a
+   * creator account gets a wallet opened for it here (build brief C7), and a
+   * wallet is a bank account that needs the name, email, phone and country
+   * WAWU ID holds. Those live on the token, not on this row.
+   */
   async upsertMe(
-    wawuUserId: string,
+    claims: WawuJwtClaims,
     dto: UpdateUserProfileDto,
   ): Promise<UserProfile> {
+    const wawuUserId = claims.sub;
     // The name goes to WAWU ID FIRST, and a failure there stops the whole
     // update. Names are checked against a government ID at KYC, so a rename
     // that silently did not take is worse than one that visibly failed: the
@@ -87,8 +174,9 @@ export class UserProfileService {
       });
     }
 
+    let saved: UserProfile;
     try {
-      return await this.prisma.userProfile.upsert({
+      saved = await this.prisma.userProfile.upsert({
         where: { wawuUserId },
         update: {
           // `accountType` is deliberately self-selectable (CLAUDE.md: creator
@@ -155,6 +243,25 @@ export class UserProfileService {
       }
       throw error;
     }
+
+    /**
+     * A creator account comes with a wallet, opened here.
+     *
+     * Registration is the moment for it: a creator who lists something and
+     * sells it that afternoon has somewhere for the money to go, instead of
+     * their share sitting in WAWU's own Flutterwave balance until they happen
+     * to open a screen. Professionals come through this same path - applying
+     * to be listed requires a creator account type.
+     *
+     * Idempotent, and it CANNOT fail the profile save. Flutterwave being
+     * slow or down is not a reason to reject somebody's onboarding, and
+     * GET /wallet opens one on the next read if this did not get through.
+     */
+    if (saved.accountType === AccountType.creator) {
+      await this.wallet.provisionOnRegistration(claims);
+    }
+
+    return saved;
   }
 
   /**
@@ -202,12 +309,18 @@ export class UserProfileService {
         this.prisma.community.count({ where: { hostWawuId: wawuUserId } }),
       ]);
 
+    const [avatarUrl, coverUrl] = await Promise.all([
+      this.resignImage(profile.avatarUrl),
+      this.resignImage(profile.coverUrl),
+    ]);
+
     return {
       wawuUserId: profile.wawuUserId,
+      verification: deriveVerificationState(profile),
       handle: profile.handle,
       bio: profile.bio,
-      avatarUrl: profile.avatarUrl,
-      coverUrl: profile.coverUrl,
+      avatarUrl,
+      coverUrl,
       interests: profile.interests,
       instagramHandle: profile.instagramHandle,
       xHandle: profile.xHandle,
@@ -217,7 +330,6 @@ export class UserProfileService {
       linkedinUrl: profile.linkedinUrl,
       whatsappHandle: profile.whatsappHandle,
       websiteUrl: profile.websiteUrl,
-      tier: creatorState.tier,
       // Buyer-facing DM settings — see CreatorProfile's doc comment for why
       // their absence made paid messaging unusable.
       dmEnabled: creatorState.dmEnabled,

@@ -4,8 +4,8 @@
  * Naira only — this product has no other currency (CLAUDE.md). Every amount
  * in this codebase is a whole-naira integer; `commissionRate` is the
  * Decimal(5,4) snapshotted onto the Purchase row at transaction time
- * (85/15 standard, 90/10 for Pro-tier creators — never recomputed, never
- * invented).
+ * (85/15 on every stream but WAWU Credits, which is 90/10 for everyone and
+ * always was — never recomputed, never invented).
  */
 
 /** Prisma hands Decimal columns back as a Decimal instance, not a number. */

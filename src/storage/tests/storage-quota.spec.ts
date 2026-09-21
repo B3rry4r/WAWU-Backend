@@ -3,9 +3,9 @@ import { PayloadTooLargeException } from '@nestjs/common';
 import { StorageService, formatBytes } from '../storage.service';
 import type { PrismaService } from '../../common/prisma/prisma.service';
 import {
-  STORAGE_ALLOWANCE_BY_TIER,
+  STORAGE_BYTES_PER_ACCOUNT,
   DEFAULT_STORAGE_BYTES,
-} from '../../common/creator-tier-allowance';
+} from '../../common/creator-allowance';
 
 /**
  * The per-account storage ceiling.
@@ -28,7 +28,7 @@ interface Row {
   createdAt: Date;
 }
 
-function buildService(opts: { tier?: 'basic' | 'pro' | 'pro_max' | null; rows?: Row[] } = {}) {
+function buildService(opts: { creator?: boolean; rows?: Row[] } = {}) {
   const rows: Row[] = opts.rows ?? [];
   const values: Record<string, string> = {
     STORAGE_ENDPOINT: 'https://example-bucket.t3.storageapi.dev',
@@ -58,7 +58,11 @@ function buildService(opts: { tier?: 'basic' | 'pro' | 'pro_max' | null; rows?: 
       update: async () => ({}),
     },
     creatorState: {
-      findUnique: async () => (opts.tier ? { tier: opts.tier } : null),
+      // Flat allowance now: the only thing asked of this row is whether it
+      // exists, which separates a creator's quota from the one a plain
+      // account gets for an avatar or a KYC document.
+      findUnique: async () =>
+        opts.creator === false ? null : { wawuUserId: 'creator-1' },
     },
   } as unknown as PrismaService;
 
@@ -70,23 +74,21 @@ const presign = (s: StorageService, bytes: number) =>
 
 describe('storage quota', () => {
   it('gives an account with no creator state the 2GB floor', async () => {
-    const { service } = buildService({ tier: null });
+    const { service } = buildService({ creator: false });
     const usage = await service.usageFor('creator-1');
     expect(usage.limitBytes).toBe(DEFAULT_STORAGE_BYTES);
     expect(usage.limitBytes).toBe(2 * GB);
   });
 
-  it('matches the storage each plan is sold with', () => {
-    // 2GB for everyone, 5GB on Pro Max (product owner, 31 Aug 2026). If the
-    // pricing copy changes, this fails before a creator hits the wall.
-    expect(STORAGE_ALLOWANCE_BY_TIER.basic).toBe(2 * GB);
-    expect(STORAGE_ALLOWANCE_BY_TIER.pro).toBe(2 * GB);
-    expect(STORAGE_ALLOWANCE_BY_TIER.pro_max).toBe(5 * GB);
+  it('is the same 2GB for every creator account', () => {
+    // One ceiling, no ladder: the tiers that sold a larger one are gone. If
+    // this number changes, this fails before a creator hits the wall.
+    expect(STORAGE_BYTES_PER_ACCOUNT).toBe(2 * GB);
+    expect(STORAGE_BYTES_PER_ACCOUNT).toBe(DEFAULT_STORAGE_BYTES);
   });
 
   it('REFUSES an upload that would cross the ceiling', async () => {
     const { service } = buildService({
-      tier: 'basic',
       rows: [{ id: 'a', wawuUserId: 'creator-1', key: 'k', bytes: 1.9 * GB, status: 'confirmed', createdAt: new Date() }],
     });
     await expect(presign(service, 0.5 * GB)).rejects.toBeInstanceOf(PayloadTooLargeException);
@@ -94,7 +96,6 @@ describe('storage quota', () => {
 
   it('allows an upload that exactly fills the remaining space', async () => {
     const { service } = buildService({
-      tier: 'basic',
       rows: [{ id: 'a', wawuUserId: 'creator-1', key: 'k', bytes: 2 * GB - 1000, status: 'confirmed', createdAt: new Date() }],
     });
     await expect(presign(service, 1000)).resolves.toHaveProperty('uploadUrl');
@@ -104,41 +105,42 @@ describe('storage quota', () => {
     // The exact hole a naive implementation leaves: the browser PUTs straight
     // to storage and never calls back, so if only confirmed rows counted, an
     // account could presign its whole allowance repeatedly in one second.
-    const { service } = buildService({ tier: 'basic' });
+    const { service } = buildService();
     await presign(service, 1.5 * GB);
     await expect(presign(service, 1 * GB)).rejects.toBeInstanceOf(PayloadTooLargeException);
   });
 
   it('does NOT count abandoned reservations against the account', async () => {
     const { service } = buildService({
-      tier: 'basic',
       rows: [{ id: 'a', wawuUserId: 'creator-1', key: 'k', bytes: 2 * GB, status: 'abandoned', createdAt: new Date() }],
     });
     await expect(presign(service, 1 * GB)).resolves.toHaveProperty('uploadUrl');
   });
 
-  it('gives Pro Max the larger ceiling, so the same file is refused on Basic and allowed on Pro Max', async () => {
+  it('refuses the same file for every creator, with no tier that buys past it', async () => {
     const rows = (): Row[] => [
       { id: 'a', wawuUserId: 'creator-1', key: 'k', bytes: 1.8 * GB, status: 'confirmed', createdAt: new Date() },
     ];
-    const basic = buildService({ tier: 'basic', rows: rows() });
-    const proMax = buildService({ tier: 'pro_max', rows: rows() });
-    await expect(presign(basic.service, 1 * GB)).rejects.toBeInstanceOf(PayloadTooLargeException);
-    await expect(presign(proMax.service, 1 * GB)).resolves.toHaveProperty('uploadUrl');
+    // This file used to fit on Pro Max and not on Basic. There is one ceiling
+    // now, so it is refused whoever asks.
+    for (const rowset of [rows(), rows()]) {
+      const { service } = buildService({ rows: rowset });
+      await expect(presign(service, 1 * GB)).rejects.toBeInstanceOf(PayloadTooLargeException);
+    }
   });
 
   it('reports usage a person can act on', async () => {
     const { service } = buildService({
-      tier: 'pro_max',
       rows: [{ id: 'a', wawuUserId: 'creator-1', key: 'k', bytes: 1 * GB, status: 'confirmed', createdAt: new Date() }],
     });
     const usage = await service.usageFor('creator-1');
-    expect(usage).toEqual({ usedBytes: 1 * GB, limitBytes: 5 * GB, remainingBytes: 4 * GB, tier: 'pro_max' });
+    // No `tier` on this shape any more: a field that always reported the same
+    // word is a label pretending to be a distinction.
+    expect(usage).toEqual({ usedBytes: 1 * GB, limitBytes: 2 * GB, remainingBytes: 1 * GB });
   });
 
   it('says how much room is left in words, not bytes', async () => {
     const { service } = buildService({
-      tier: 'basic',
       rows: [{ id: 'a', wawuUserId: 'creator-1', key: 'k', bytes: 1.9 * GB, status: 'confirmed', createdAt: new Date() }],
     });
     // Small remainders drop to MB rather than "0.1GB" — a person deciding
@@ -150,7 +152,6 @@ describe('storage quota', () => {
 
   it('formats sizes the way a person reads them', () => {
     expect(formatBytes(2 * GB)).toBe('2GB');
-    expect(formatBytes(5 * GB)).toBe('5GB');
     expect(formatBytes(1.5 * GB)).toBe('1.5GB');
     expect(formatBytes(400 * 1024 ** 2)).toBe('400MB');
     expect(formatBytes(12 * 1024)).toBe('12KB');

@@ -7,6 +7,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { deriveVerificationState } from '../common/verification/verification-state';
 import {
   CreditSpendService,
   DEFAULT_CREDITS_SPENT,
@@ -18,9 +19,6 @@ import type { CommunityMessage, CommunityMessageSender } from '../common/types';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
 import { NotificationService } from '../notification/notification.service';
 import type { CreateCommunityMessageDto } from './dto/create-community-message.dto';
-
-/** 7 days, mirrors CreditsStateService's own trial window constant (wave 0). */
-const TRIAL_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * Price of one community message, mirroring `CommunityMessage.costInCredits`'s
@@ -61,13 +59,15 @@ const LOW_CREDITS_THRESHOLD = 5;
 /**
  * Why a given message is free, or `'credits'` if it isn't.
  *
- *  - `'host'`         — the sender hosts this community.
- *  - `'subscription'` — the sender holds a paid creator subscription and this
- *                       is an OPEN community.
- *  - `'credits'`      — ordinary metered messaging: 1 credit, or the 7-day
- *                       trial, or 402.
+ *  - `'host'`    — the sender hosts this community.
+ *  - `'credits'` — ordinary metered messaging: 1 credit, or the 7-day trial,
+ *                  or 402.
+ *
+ * There used to be a third, `'subscription'`: a paid creator posted free in
+ * OPEN communities. That was a subscription perk and went with subscriptions.
+ * Nobody loses a free send they paid for, because nobody ever paid.
  */
-type MessageEntitlement = 'host' | 'subscription' | 'credits';
+type MessageEntitlement = 'host' | 'credits';
 
 /**
  * CommunityMessage resource — frozen endpoints `GET /communities/:id/messages`
@@ -84,8 +84,8 @@ type MessageEntitlement = 'host' | 'subscription' | 'credits';
  * wave), so this service reads/writes the `CreditsState` table directly via
  * the shared, globally-registered PrismaService — mirroring exactly how
  * CreditPurchaseService (also outside credits-state/) already does this
- * (see credit-purchase.service.ts's own `TRIAL_DURATION_MS` comment, which
- * calls itself out as mirroring this same constant).
+ * (see credit-purchase.service.ts, which writes the same table on the
+ * purchase path).
  *
  * That credits gate applies only to senders who are NOT entitled to send
  * for free. `resolveEntitlement()` runs first and decides that; everything
@@ -94,23 +94,26 @@ type MessageEntitlement = 'host' | 'subscription' | 'credits';
  * Gate + decrement semantics (judgment call, since the task brief leaves
  * the exact interaction underspecified):
  *   - A sender whose balance covers `costInCredits` (schema default 1)
- *     spends from that real balance, regardless of whether their trial is
- *     also still active. The debit is a conditional UPDATE guarded on
- *     sufficient balance, so it can never go negative and never double-spend
- *     under concurrency (see create()).
- *   - A sender with `creditBalance === 0` is only let through if their
- *     trial is still active (`trialEndsAt > now`). That message is
- *     "trial-covered" — there is no real balance to decrement, so none is
- *     decremented (0 stays 0). This is the literal reading of the task
- *     brief's own phrasing: "not spending a trial-covered message that has
- *     no balance to decrement" — trial-covered specifically means the
- *     no-balance case, not "trial active" in general.
- *   - Neither condition holds (`creditBalance === 0` AND trial expired) ->
- *     402 rejection.
+ *     spends from that real balance. The debit is a conditional UPDATE
+ *     guarded on sufficient balance, so it can never go negative and never
+ *     double-spend under concurrency (see create()).
+ *   - A sender whose balance does not cover it -> 402 rejection.
+ *
+ * THE FREE TRIAL IS GONE (product owner, 21 Sep 2026: "no 7 day silly
+ * trials"). There used to be a third case: a sender with `creditBalance ===
+ * 0` was let through anyway if `trialEndsAt > now`, and that message was
+ * "trial-covered" — no balance to decrement, so none was decremented, and
+ * the host earned ₦0 on it because WAWU had banked nothing. That path is
+ * removed, which makes the rule simple enough to state in one line: EVERY
+ * metered message costs a credit, and a sender with no credits is asked to
+ * buy some.
+ *
+ * Nobody loses credits they hold. Balances are untouched by this change;
+ * only the free allowance on top of them is withdrawn.
  *
  * A CreditsState row is lazily created for a first-time sender exactly like
  * CreditsStateService.getOrCreate does for GET /credits (same default: 0
- * balance, a fresh 7-day trial from *now*) — CommunityMessage is one of the
+ * balance, no trial) — CommunityMessage is one of the
  * two documented write-paths onto this table (the other being
  * CreditPurchase.verify), per credits-state.service.ts's own doc comment.
  * That lazy creation happens on the METERED path only: an entitled sender
@@ -164,7 +167,15 @@ export class CommunityMessageService {
       this.wawuId.lookupPublicIdentities(unique),
       this.prisma.userProfile.findMany({
         where: { wawuUserId: { in: unique } },
-        select: { wawuUserId: true, handle: true, avatarUrl: true },
+        select: {
+          wawuUserId: true,
+          handle: true,
+          avatarUrl: true,
+          creatorVerifiedAt: true,
+          creatorVerifiedUntil: true,
+          professionalVerifiedAt: true,
+          professionalVerifiedUntil: true,
+        },
       }),
     ]);
     const profileBy = new Map(profiles.map((p) => [p.wawuUserId, p]));
@@ -181,6 +192,9 @@ export class CommunityMessageService {
         name: fullName || profile?.handle || '',
         handle: profile?.handle ?? null,
         avatarUrl: profile?.avatarUrl ?? null,
+        // Both ticks, derived through the one function. An id with no profile
+        // row on this service carries neither.
+        verification: deriveVerificationState(profile ?? null),
       });
     }
     return out;
@@ -191,9 +205,6 @@ export class CommunityMessageService {
   ): Promise<{ id: string; hostWawuId: string; kind: CommunityKind }> {
     const community = await this.prisma.community.findUnique({
       where: { id: communityId },
-      // `kind` is read here (not only `hostWawuId`) because the paid
-      // subscription's "unlimited messages" entitlement is scoped to OPEN
-      // communities — see resolveEntitlement().
       select: { id: true, hostWawuId: true, kind: true },
     });
     if (!community) {
@@ -207,96 +218,37 @@ export class CommunityMessageService {
    * WHO PAYS FOR A MESSAGE.
    * ---------------------------------------------------------------------
    *
-   * This used to be "everybody, always, 1 credit", which contradicted the
-   * locked spec in two places and charged the wrong person in the second:
+   * This used to be "everybody, always, 1 credit", which charged the HOST for
+   * posting in their own room and could 402 them out of a community they own,
+   * while they are the party who earns 90% of every credit spent in it. A host
+   * with an empty balance and an expired trial was locked out of moderating,
+   * welcoming or answering in their own community.
    *
-   *  1. docs/01_SPEC.md §4 sells "Unlimited messages in open communities" as
-   *     a Basic-tier subscription perk (Pro is a strict superset of Basic, so
-   *     it carries the same line). Nothing in this service had ever heard of
-   *     a subscription, so a creator paid ₦5,999/year for an entitlement that
-   *     did not exist in the backend.
-   *  2. The HOST was debited for posting in their own room, and could be
-   *     402'd out of a community they own — while being, per §1 stream 4,
-   *     the party who earns 90% of every credit spent in it. A host with an
-   *     empty balance and an expired trial was locked out of moderating,
-   *     welcoming or answering in their own community.
+   * The rules, in evaluation order:
    *
-   * The rules now, in evaluation order:
+   *  1. **Host - always free, in OPEN and PRIVATE alike.** Unconditional and
+   *     first, so it cannot be undercut by balance or trial. A host is the
+   *     payee of this stream; charging them is charging someone to be paid.
+   *     This matches the convention already established elsewhere in this
+   *     resource - `assertMember` short-circuits on the host for READS - and
+   *     the seeded host message already carries `costInCredits: 0`.
    *
-   *  1. **Host — always free, in OPEN and PRIVATE alike.** Unconditional and
-   *     first, so it cannot be undercut by balance, trial or tier. A host is
-   *     the payee of this stream; charging them is charging someone to be
-   *     paid. This also matches the convention already established elsewhere
-   *     in this resource — `assertMember` short-circuits on the host for
-   *     READS — and the seeded host message already carries
-   *     `costInCredits: 0`.
-   *
-   *  2. **Paid subscription + OPEN community — free.** `CreatorState
-   *     .subscriptionPaid` is this backend's canonical "the subscription is
-   *     live" read: it is what ContentPieceService.create, CommunityService
-   *     .create and CreatorEarningsService.resolveCommissionRate all consult,
-   *     and the hourly scheduler clears it the moment a subscription lapses
-   *     (scheduler.service.ts), so a lapsed creator falls straight back to
-   *     paying. Deliberately tier-BLIND: §4 lists the line under Basic, and
-   *     Pro is Basic plus extras, so gating it on `tier === 'pro'` would take
-   *     away from Basic exactly the thing Basic was sold.
-   *
-   *     KYC is deliberately NOT consulted (CLAUDE.md: the two creator gates
-   *     are independent — `subscriptionPaid` gates what you may do,
-   *     `kycStatus` gates being paid; "paid + KYC pending" is a normal
-   *     state). Neither is `UserProfile.accountType`: `subscriptionPaid` is
-   *     already the stronger claim — you cannot have paid without being a
-   *     creator account — and re-deriving account type here would invent a
-   *     second, divergent read of creator status.
-   *
-   *  3. **Everyone else — 1 credit**, or the 7-day trial, or 402. Unchanged;
-   *     this is the documented model for ordinary users (§3: "After trial:
+   *  2. **Everyone else - 1 credit**, or the 7-day trial, or 402. This is the
+   *     documented model for ordinary users (docs/01_SPEC.md §3: "After trial:
    *     must hold credits to send messages in general/open communities").
    *
-   * PRIVATE COMMUNITIES — the reading, stated rather than assumed.
-   * ------------------------------------------------------------
-   * A non-host member of a PRIVATE community pays 1 credit per message
-   * exactly as before, INCLUDING a subscribed creator. Two reasons:
+   * A paid subscription used to buy a creator free messages in OPEN
+   * communities. Subscriptions are gone, so a creator is now an ordinary
+   * sender here. CreditSpend is what a host's 90% is computed from, so
+   * removing the perk widens what a host earns rather than narrowing it.
    *
-   *  - The entitlement's own words are "Unlimited messages in **open**
-   *     communities", and it sits immediately beside "cannot open/host
-   *     private communities" in the Basic list. The spec is drawing the
-   *     open/private line in that very sentence; extending the free tier
-   *     across it would be this backend inventing a perk.
-   *  - Removing the charge in private rooms would also delete the private
-   *     host's earnings. Private hosting is Pro's headline differentiator
-   *     (§4) and CreditSpend is what a host's 90% is computed from, so
-   *     making private messaging free would mean Pro creators pay ₦18,999 for
-   *     a room that can never earn.
-   *
-   * The counter-argument, for the record, because it is not frivolous: §1
-   * names stream 4 "general/open community messaging" and §3 rule 3 says
-   * credits "spend only on general-community messages", which can be read as
-   * private rooms being outside the credits model altogether. That reading is
-   * not taken here: §3's three rules exist to stop credits becoming a
-   * cashable wallet (their targets are "PPV, downloads, DMs, tips"), not to
-   * carve private rooms out of community messaging — and a message in a
-   * private community is still a community message. If product wants private
-   * rooms unmetered, that is a one-line change here plus a decision about how
-   * a private host earns instead; it is not something this fix should decide
-   * silently.
+   * KYC is deliberately NOT consulted: it gates being PAID, not sending.
    */
   private async resolveEntitlement(
     community: { hostWawuId: string; kind: CommunityKind },
     senderWawuId: string,
   ): Promise<MessageEntitlement> {
-    if (senderWawuId === community.hostWawuId) {
-      return 'host';
-    }
-    if (community.kind !== 'open') {
-      return 'credits';
-    }
-
-    const creatorState = await this.prisma.creatorState.findUnique({
-      where: { wawuUserId: senderWawuId },
-      select: { subscriptionPaid: true },
-    });
-    return creatorState?.subscriptionPaid ? 'subscription' : 'credits';
+    return senderWawuId === community.hostWawuId ? 'host' : 'credits';
   }
 
   /**
@@ -399,8 +351,8 @@ export class CommunityMessageService {
 
     const entitlement = await this.resolveEntitlement(community, senderWawuId);
 
-    // ENTITLED SEND — the host in their own room, or a paid subscriber in an
-    // open one. Nothing about credits happens on this path AT ALL:
+    // ENTITLED SEND — the host in their own room. Nothing about credits
+    // happens on this path AT ALL:
     //   - no CreditsState row is read, created or debited (so an entitled
     //     sender's 7-day trial is neither consumed nor started by sending,
     //     and no balance they bought is silently drained);
@@ -441,14 +393,13 @@ export class CommunityMessageService {
       });
       spentRealBalance = count > 0;
 
-      // Trial-covered send: no balance to debit, so nothing was debited.
-      // (Unchanged semantics — see the class doc comment.)
-      const trialActive = creditsState.trialEndsAt.getTime() > Date.now();
-      if (!spentRealBalance && !trialActive) {
+      // Every metered message costs a credit now that the trial is gone, so
+      // a failed debit is the whole test: there is no second way through.
+      if (!spentRealBalance) {
         throw new HttpException(
           {
             message:
-              'Out of WAWU Credits and your trial has ended. Buy more credits to keep messaging in this community.',
+              'You are out of WAWU Credits. Buy more to keep messaging in this community.',
             reason: 'insufficient_credits',
           },
           HttpStatus.PAYMENT_REQUIRED,
@@ -523,22 +474,22 @@ export class CommunityMessageService {
   }
 
   /**
-   * Mirrors CreditsStateService.getOrCreate (row, else a fresh 7-day trial),
-   * as an upsert rather than find-then-create so two first-ever sends from
-   * the same user can't race into a duplicate-key 500.
+   * Mirrors CreditsStateService.getOrCreate (row at zero, no trial), as an
+   * upsert rather than find-then-create so two first-ever sends from the
+   * same user can't race into a duplicate-key 500.
    */
   private async getOrCreateCreditsState(
     userWawuId: string,
     client: CreditSpendPrismaClient = this.prisma,
-  ): Promise<{ creditBalance: number; trialEndsAt: Date }> {
+  ): Promise<{ creditBalance: number }> {
     return client.creditsState.upsert({
       where: { userWawuId },
       update: {},
       create: {
         userWawuId,
         creditBalance: 0,
-        trialEndsAt: new Date(Date.now() + TRIAL_DURATION_MS),
       },
+      select: { creditBalance: true },
     });
   }
 }

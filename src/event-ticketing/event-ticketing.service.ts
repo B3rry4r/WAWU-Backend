@@ -14,7 +14,7 @@ import {
   type FlutterwaveClient,
 } from '../direct-message/flutterwave-client.interface';
 import {
-  commissionRateForTier,
+  commissionRate as standardCommissionRate,
   MAX_TICKETS_PER_ORDER,
 } from './event-ticketing.constants';
 import type { BuyTicketsDto, VerifyOrderDto } from './dto/event-ticketing.dto';
@@ -231,11 +231,7 @@ export class EventTicketingService {
       );
     }
 
-    const organiser = await this.prisma.creatorState.findUnique({
-      where: { wawuUserId: event.hostWawuId },
-      select: { tier: true },
-    });
-    const commissionRate = commissionRateForTier(organiser?.tier);
+    const commissionRate = standardCommissionRate();
     const amount = ticketType.priceNaira * dto.quantity;
 
     /**

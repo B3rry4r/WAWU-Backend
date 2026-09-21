@@ -21,7 +21,7 @@ import {
   HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { storageAllowanceFor } from '../common/creator-tier-allowance';
+import { storageAllowanceFor } from '../common/creator-allowance';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 /**
@@ -48,7 +48,6 @@ export interface StorageUsage {
   usedBytes: number;
   limitBytes: number;
   remainingBytes: number;
-  tier: string | null;
 }
 
 /**
@@ -336,17 +335,19 @@ export class StorageService {
       }),
       this.prisma.creatorState.findUnique({
         where: { wawuUserId: wawuId },
-        select: { tier: true },
+        select: { wawuUserId: true },
       }),
     ]);
 
     const usedBytes = agg._sum.bytes ?? 0;
-    const limitBytes = storageAllowanceFor(state?.tier);
+    // Flat now. The only thing still asked of CreatorState is whether a row
+    // exists at all, which separates a creator's quota from the one a plain
+    // account gets for an avatar or a KYC document.
+    const limitBytes = storageAllowanceFor(state !== null);
     return {
       usedBytes,
       limitBytes,
       remainingBytes: Math.max(0, limitBytes - usedBytes),
-      tier: state?.tier ?? null,
     };
   }
 

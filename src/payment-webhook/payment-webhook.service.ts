@@ -3,7 +3,6 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { PurchaseService } from '../purchase/purchase.service';
 import { ContentPieceService } from '../content-piece/content-piece.service';
 import { CreditPurchaseService } from '../credit-purchase/credit-purchase.service';
-import { CreatorSubscriptionService } from '../creator-subscription/creator-subscription.service';
 import { DirectMessageService } from '../direct-message/direct-message.service';
 import { DmRefundService } from '../direct-message/dm-refund.service';
 import {
@@ -19,7 +18,7 @@ import { LegalRequestsService } from '../legal/legal.service';
 
 /**
  * The event Flutterwave fires when a checkout completes. Everything else
- * (transfer.completed, subscription cancellations, …) is recorded and ignored
+ * (transfer.completed, refund notifications, …) is recorded and ignored
  * — this backend settles exactly one kind of thing.
  */
 const SETTLING_EVENT = 'charge.completed';
@@ -124,7 +123,7 @@ function messageOf(e: unknown): string {
  *    transaction id against Flutterwave and compares the amount Flutterwave
  *    reports to the amount this server stored (`PendingCharge.expectedAmount`,
  *    `Purchase.amount`, `CreditPurchase.amount`, `BillPayment.amount`, …).
- *    A ₦1 payment cannot buy an ₦18,999 tier through this door either.
+ *    A ₦1 payment cannot buy a ₦18,999 listing through this door either.
  *
  * 2. **Settlement happens at most once.** Two independent guards, because
  *    there are two different races:
@@ -145,7 +144,6 @@ export class PaymentWebhookService {
     private readonly purchases: PurchaseService,
     private readonly contentPieces: ContentPieceService,
     private readonly creditPurchases: CreditPurchaseService,
-    private readonly subscriptions: CreatorSubscriptionService,
     private readonly directMessages: DirectMessageService,
     private readonly dmRefunds: DmRefundService,
     private readonly serviceApplications: ServiceApplicationService,
@@ -484,19 +482,6 @@ export class PaymentWebhookService {
             ),
         };
       }
-    }
-
-    // Creator subscriptions (first subscribe and prorated upgrade) — keyed by
-    // the tx_ref directly on PendingCharge.
-    const pending = await this.prisma.pendingCharge.findUnique({
-      where: { txRef },
-      select: { kind: true, wawuUserId: true },
-    });
-    if (pending && (pending.kind === 'subscribe' || pending.kind === 'upgrade')) {
-      return {
-        flow: `subscription-${pending.kind}`,
-        settle: () => this.subscriptions.verify(pending.wawuUserId, dto),
-      };
     }
 
     // Paid DMs. Their PendingCharge row is keyed by the DM id (the verify

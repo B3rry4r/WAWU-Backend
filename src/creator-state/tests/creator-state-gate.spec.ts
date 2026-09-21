@@ -1,5 +1,6 @@
 import { ForbiddenException } from '@nestjs/common';
 import { CreatorStateService } from '../creator-state.service';
+import { MAX_ITEMS_PER_ACCOUNT } from '../../common/creator-allowance';
 
 /**
  * WHO IS ALLOWED TO BE A CREATOR, when there is no CreatorState row yet.
@@ -8,87 +9,66 @@ import { CreatorStateService } from '../creator-state.service';
  * as a reader. Getting it wrong does not throw anything a user can see: the
  * client clears their creator state and quietly renders plain user mode, with
  * no error on any screen. So the cases below are the whole point.
+ *
+ * `UserProfile.accountType` is now the only test. It used to have a second
+ * arm: an existing CreatorSubscription counted as proof of a creator account
+ * when the flag had been lost at signup. Subscriptions are gone and nothing
+ * replaced that evidence, so the gate recognises FEWER accounts than before,
+ * never more. The refusal cases below are what hold that line.
  */
 describe('creator state gate, with no row yet', () => {
-  function build(opts: {
-    accountType?: string | null;
-    subscriptions?: number;
-    tier?: string;
-    status?: string;
-  }) {
+  function build(opts: { accountType?: string | null; submissions?: number }) {
     const prisma = {
       creatorState: { findUnique: jest.fn().mockResolvedValue(null) },
-      kycSubmission: { count: jest.fn().mockResolvedValue(0) },
-      userProfile: {
-        findUnique: jest.fn().mockResolvedValue(
-          opts.accountType === undefined ? null : { accountType: opts.accountType },
-        ),
+      kycSubmission: {
+        count: jest.fn().mockResolvedValue(opts.submissions ?? 0),
       },
-      creatorSubscription: {
-        findUnique: jest.fn().mockResolvedValue(
-          opts.subscriptions
-            ? { tier: opts.tier ?? 'basic', status: opts.status ?? 'active' }
-            : null,
-        ),
+      userProfile: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue(
+            opts.accountType === undefined
+              ? null
+              : { accountType: opts.accountType },
+          ),
       },
     };
     return new CreatorStateService(prisma as never);
   }
 
-  it('answers a creator who has not subscribed yet', async () => {
+  it('answers a creator who has not published anything yet', async () => {
     const state = await build({ accountType: 'creator' }).getState('u1');
-    expect(state.subscriptionPaid).toBe(false);
-    expect(state.tier).toBe('basic');
+    expect(state.slotsUsed).toBe(0);
+    expect(state.slotsTotal).toBe(MAX_ITEMS_PER_ACCOUNT);
   });
 
-  it('answers somebody who PAID, even if the profile flag says user', async () => {
-    // The reported bug: one lost write at signup leaves accountType saying
-    // "user" for a real creator, and they are shown the app as a reader.
-    // A subscription is proof; nobody buys a creator plan by accident.
-    const state = await build({ accountType: 'user', subscriptions: 1 }).getState('u1');
-    expect(state.tier).toBe('basic');
+  it('reports the KYC gate as not_started before anything is submitted', async () => {
+    // KYC is untouched by the subscription teardown and still gates EARNING.
+    // `not_started` and `pending` are different states and the creator is
+    // shown the difference.
+    const state = await build({ accountType: 'creator' }).getState('u1');
+    expect(state.kycStatus).toBe('not_started');
   });
 
-  it('does not ask somebody who has already paid to pay again', async () => {
-    // An active subscription with no CreatorState row is a creator whose
-    // entitlement row was lost. Reporting them unpaid sends someone who has
-    // been charged back to the paywall to buy the plan they already hold.
+  it('reports the KYC gate as pending once a submission exists', async () => {
     const state = await build({
       accountType: 'creator',
-      subscriptions: 1,
-      tier: 'pro',
-      status: 'active',
+      submissions: 1,
     }).getState('u1');
-    expect(state.subscriptionPaid).toBe(true);
-    expect(state.tier).toBe('pro');
-  });
-
-  it('treats a cancelled subscription as unpaid, but still a creator', async () => {
-    const state = await build({
-      accountType: 'user',
-      subscriptions: 1,
-      status: 'cancelled',
-    }).getState('u1');
-    expect(state.subscriptionPaid).toBe(false);
-    expect(state.tier).toBe('basic');
-  });
-
-  it('answers somebody who paid whose profile row is missing entirely', async () => {
-    const state = await build({ accountType: undefined, subscriptions: 1 }).getState('u1');
-    expect(state.tier).toBe('basic');
+    expect(state.kycStatus).toBe('pending');
   });
 
   it('still refuses a plain reader', async () => {
-    // The gate must keep meaning something: a user with no claim and no
-    // payment has no business on a creator surface.
-    await expect(build({ accountType: 'user' }).getState('u1')).rejects.toBeInstanceOf(
-      ForbiddenException,
-    );
+    // The gate must keep meaning something: a user with no creator account
+    // type has no business on a creator surface.
+    await expect(
+      build({ accountType: 'user' }).getState('u1'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
-  it('still refuses an account with no profile and no payment', async () => {
-    await expect(build({ accountType: undefined }).getState('u1')).rejects.toBeInstanceOf(
-      ForbiddenException,
-    );
+  it('still refuses an account with no profile at all', async () => {
+    await expect(
+      build({ accountType: undefined }).getState('u1'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
   });
 });

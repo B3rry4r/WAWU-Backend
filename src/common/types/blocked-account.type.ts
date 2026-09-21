@@ -1,4 +1,5 @@
 import type { BlockedAccountModel } from '../../../generated/prisma/models';
+import type { VerificationState } from '../verification/verification-state';
 
 /** The blocked user's public identity, batch-looked-up alongside a page of rows. */
 export interface BlockedAccountUser {
@@ -7,6 +8,8 @@ export interface BlockedAccountUser {
   name: string;
   handle: string | null;
   avatarUrl: string | null;
+  /** Both ticks, derived server-side. Never a rung, never a rank. */
+  verification: VerificationState;
 }
 
 /**

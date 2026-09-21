@@ -1,4 +1,5 @@
 import type { DirectMessageModel } from '../../../generated/prisma/models';
+import type { VerificationState } from '../verification/verification-state';
 
 /**
  * The wire shape for a paid DM.
@@ -59,6 +60,8 @@ export interface DmOtherParty {
   name: string;
   handle: string | null;
   avatarUrl: string | null;
+  /** Both ticks, derived server-side. Never a rung, never a rank. */
+  verification: VerificationState;
 }
 
 /**

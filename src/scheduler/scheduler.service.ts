@@ -6,18 +6,19 @@ import { DmRefundService } from '../direct-message/dm-refund.service';
 import type { NotificationEvent } from '../notification/notification-event';
 
 /**
- * The two time-based promises the product makes and previously could not keep.
+ * Time-based work for the whole API.
  *
  * Nothing in this API ran on a schedule at all — no cron, no queue, no
- * webhook — so:
- *   1. A paid DM the creator never answered was never refunded, despite the
- *      reply-window guarantee shown to the sender at checkout. The money sat
- *      as `held` earnings forever and the creator effectively kept it.
- *   2. A subscription never charged again at `currentPeriodEnd`, so year two
- *      was free and a Pro creator's 10% commission rate persisted indefinitely.
+ * webhook — so a paid DM the creator never answered was never refunded,
+ * despite the reply-window guarantee shown to the sender at checkout. The
+ * money sat as `held` earnings forever and the creator effectively kept it.
  *
- * Both sweeps are idempotent and safe to run repeatedly: each one selects only
- * rows still in the state it acts on, and writes conditionally.
+ * A second sweep used to flip lapsed subscriptions to `past_due` and clear
+ * the upload gate with them. Subscriptions are gone and uploading is not
+ * bought, so it was deleted rather than left to run against nothing.
+ *
+ * Every sweep here is idempotent and safe to run repeatedly: each one selects
+ * only rows still in the state it acts on, and writes conditionally.
  */
 @Injectable()
 export class SchedulerService {
@@ -78,102 +79,6 @@ export class SchedulerService {
   }
 
   /**
-   * Mark subscriptions past their period end as `past_due`.
-   *
-   * Actually taking the renewal payment needs a stored Flutterwave customer
-   * or card token to charge off-session; `flutterwaveCustomerRef` exists on
-   * the model but nothing populates it yet, so attempting a charge here would
-   * be inventing a capability. Flipping to `past_due` is the honest, useful
-   * half: it revokes the paid tier's benefits at the right moment and drives
-   * the existing in-app "your subscription needs attention" recovery flow
-   * (POST /creator-subscription/retry-payment), instead of granting a free
-   * second year in silence.
-   */
-  @Cron(CronExpression.EVERY_HOUR, { name: 'expire-subscriptions' })
-  async expireLapsedSubscriptions(): Promise<void> {
-    const now = new Date();
-
-    // Selected before the write so the affected creators can be notified.
-    // The status guard stays in the UPDATE's own WHERE, so a subscription
-    // renewed in the same instant is not flipped out from under the creator
-    // — and the notification list is re-derived from what actually changed.
-    const lapsing = await this.prisma.creatorSubscription.findMany({
-      where: { status: 'active', currentPeriodEnd: { lt: now } },
-      select: { creatorWawuId: true, tier: true },
-      take: 1000,
-    });
-
-    const lapsed = await this.prisma.creatorSubscription.updateMany({
-      where: {
-        creatorWawuId: { in: lapsing.map((s) => s.creatorWawuId) },
-        status: 'active',
-        currentPeriodEnd: { lt: now },
-      },
-      data: { status: 'past_due' },
-    });
-
-    if (lapsed.count > 0) {
-      this.logger.log(`Marked ${lapsed.count} subscription(s) past_due at period end.`);
-
-      // "Your subscription did not renew" — the one piece of billing news a
-      // creator cannot afford to miss, because `subscriptionPaid` is cleared
-      // a few lines below and their upload gate closes with it. Re-read so a
-      // subscription that renewed in the race is not falsely warned.
-      const confirmed = await this.prisma.creatorSubscription.findMany({
-        where: {
-          creatorWawuId: { in: lapsing.map((s) => s.creatorWawuId) },
-          status: 'past_due',
-        },
-        select: { creatorWawuId: true, tier: true },
-      });
-      await this.notifications.emitMany(
-        confirmed.map((sub) => ({
-          kind: 'subscription_renewal' as const,
-          userWawuId: sub.creatorWawuId,
-          state: 'past_due' as const,
-          tier: sub.tier,
-        })),
-      );
-    }
-
-    // A subscription the creator cancelled, once its paid term actually ends.
-    const ended = await this.prisma.creatorSubscription.updateMany({
-      where: {
-        status: { in: ['active', 'past_due'] },
-        cancelsAt: { not: null, lte: now },
-      },
-      data: { status: 'expired' },
-    });
-
-    if (ended.count > 0) {
-      this.logger.log(`Expired ${ended.count} cancelled subscription(s).`);
-    }
-
-    // A lapsed subscription must not keep handing out the paid upload gate or
-    // the Pro commission rate.
-    //
-    // Only `CreatorState.subscriptionPaid` is cleared. `UserProfile
-    // .accountType` is deliberately left as 'creator' — per CLAUDE.md creator
-    // is an ACCOUNT TYPE, not an earned tier, so a lapse closes the upload
-    // gate without deleting the person's creator identity (handle, profile,
-    // Create navigation). Nothing in this backend demotes an account.
-    const stale = await this.prisma.creatorSubscription.findMany({
-      where: { status: { in: ['past_due', 'expired'] } },
-      select: { creatorWawuId: true },
-      take: 1000,
-    });
-    if (stale.length > 0) {
-      await this.prisma.creatorState.updateMany({
-        where: {
-          wawuUserId: { in: stale.map((s) => s.creatorWawuId) },
-          subscriptionPaid: true,
-        },
-        data: { subscriptionPaid: false },
-      });
-    }
-  }
-
-  /**
    * Remind a creator that a paid DM's 24-hour window is closing.
    *
    * Runs hourly over a ONE-HOUR band — DMs whose deadline falls between 3
@@ -217,42 +122,6 @@ export class SchedulerService {
       ),
     );
     this.logger.log(`Reminded ${written} creator(s) of a closing paid-DM deadline.`);
-  }
-
-  /**
-   * Warn a fan that their 7-day WAWU Credits trial ends tomorrow.
-   *
-   * Daily at a fixed hour over a 24-hour band, so every trial falls in
-   * exactly one run's window — same no-extra-column reasoning as the DM
-   * reminder above, but with an exact band rather than an approximate one.
-   *
-   * The credits figure is a COUNT and is written to `creditsCount`, never to
-   * `amount`: WAWU Credits are not money, are not a balance, and are not
-   * cashable (CLAUDE.md).
-   */
-  @Cron(CronExpression.EVERY_DAY_AT_8AM, { name: 'warn-credits-trial-ending' })
-  async warnCreditsTrialEnding(): Promise<void> {
-    const now = Date.now();
-    const from = new Date(now + 24 * 60 * 60 * 1000);
-    const to = new Date(now + 48 * 60 * 60 * 1000);
-
-    const ending = await this.prisma.creditsState.findMany({
-      where: { trialEndsAt: { gte: from, lt: to } },
-      select: { userWawuId: true, creditBalance: true },
-      take: 1000,
-    });
-    if (ending.length === 0) return;
-
-    const written = await this.notifications.emitMany(
-      ending.map(
-        (state): NotificationEvent => ({
-          kind: 'trial_ending',
-          userWawuId: state.userWawuId,
-          creditsCount: state.creditBalance,
-        }),
-      ),
-    );
-    this.logger.log(`Warned ${written} user(s) that their credits trial ends tomorrow.`);
   }
 
   /**

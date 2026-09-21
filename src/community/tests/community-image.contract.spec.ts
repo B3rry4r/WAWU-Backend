@@ -29,7 +29,7 @@ import { CommunityMessageModule } from '../../community-message/community-messag
  *
  * Every identity, community and credits row below is registered/created by
  * this spec and deleted in afterAll. Nothing here touches the three shared
- * seeded accounts, whose tier, balance and account type other specs mutate
+ * seeded accounts, whose balance and account type other specs mutate
  * (README § Why not parallel).
  */
 
@@ -115,21 +115,20 @@ describe('Community images (contract)', () => {
   const ownedSubs: string[] = [];
   const createdCommunityIds: string[] = [];
 
-  /** Sets one of this spec's own identities' balances. Never a seeded row. */
+  /**
+   * Sets one of this spec's own identities' balances. Never a seeded row.
+   *
+   * `trialEndsAt` is not written at all any more. It used to be pinned in the
+   * past so no send here could be trial-covered (a trial-covered send did not
+   * debit a balance, and this spec is about what a message actually costs).
+   * The 7-day free trial was removed on 21 Sep 2026, so the column is left
+   * null and every send here is metered by construction.
+   */
   const setCredits = async (userWawuId: string, creditBalance: number) => {
     await prisma.creditsState.upsert({
       where: { userWawuId },
-      update: {
-        creditBalance,
-        // Trial deliberately EXPIRED: a trial-covered send does not debit a
-        // balance, and this spec is about what a message actually costs.
-        trialEndsAt: new Date(Date.now() - 60_000),
-      },
-      create: {
-        userWawuId,
-        creditBalance,
-        trialEndsAt: new Date(Date.now() - 60_000),
-      },
+      update: { creditBalance },
+      create: { userWawuId, creditBalance },
     });
   };
 
@@ -204,11 +203,9 @@ describe('Community images (contract)', () => {
       });
       await prisma.creatorState.upsert({
         where: { wawuUserId: sub },
-        update: { tier: 'basic', subscriptionPaid: true },
+        update: { kycStatus: 'pending' },
         create: {
           wawuUserId: sub,
-          tier: 'basic',
-          subscriptionPaid: true,
           kycStatus: 'pending',
           slotsUsed: 0,
           dmPrice: null,
@@ -532,7 +529,7 @@ describe('Community images (contract)', () => {
     it('charges the HOST nothing for the same photo, in the room they host', async () => {
       // The other half of "1 credit = 1 message, whatever is in it": the
       // rule prices the message, it does not decide who pays. The host is
-      // the party who EARNS 90% of the credits spent in this room
+      // the party who EARNS 85% of the credits spent in this room
       // (docs/01_SPEC.md §1, stream 4), so posting a photo of their own
       // stock must not bill them for it — and must not write a ledger row
       // that pays them for it either.

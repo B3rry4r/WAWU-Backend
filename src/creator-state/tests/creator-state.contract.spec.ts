@@ -44,7 +44,7 @@ import { CreatorStateModule } from '../creator-state.module';
  * These assertions used to run against the three SHARED seeded accounts, and
  * that made them order-dependent: content-piece's upload tests claim an
  * upload slot on the seeded Basic creator (`slotsUsed += 1`) and
- * creator-subscription's subscribe flow promotes the seeded plain user to a
+ * another spec's flow can promote the seeded plain user to a
  * creator account. Whether `slotsUsed: 1` held therefore depended on which
  * suite jest happened to run first — the exact failure mode that makes a red
  * suite unreadable.
@@ -155,7 +155,7 @@ describe('CreatorState (contract)', () => {
       create: {
         wawuUserId: OWN_CREATOR_NO_STATE,
         accountType: 'creator',
-        bio: 'Creator who has not subscribed yet.',
+        bio: 'Creator with no CreatorState row yet.',
         interests: [],
       },
     });
@@ -163,8 +163,6 @@ describe('CreatorState (contract)', () => {
       [
         OWN_CREATOR_BASIC,
         {
-          tier: 'basic',
-          subscriptionPaid: true,
           kycStatus: 'pending',
           slotsUsed: 1,
           dmPrice: 100,
@@ -174,8 +172,6 @@ describe('CreatorState (contract)', () => {
       [
         OWN_CREATOR_PRO,
         {
-          tier: 'pro',
-          subscriptionPaid: true,
           kycStatus: 'approved',
           slotsUsed: 2,
           dmPrice: 300,
@@ -185,8 +181,6 @@ describe('CreatorState (contract)', () => {
       [
         OWN_CREATOR_NO_KYC,
         {
-          tier: 'basic',
-          subscriptionPaid: true,
           kycStatus: 'pending',
           slotsUsed: 0,
           dmPrice: 100,
@@ -248,7 +242,7 @@ describe('CreatorState (contract)', () => {
   });
 
   describe('GET /creator/state', () => {
-    it('200s with the shape + tier-derived slotsTotal for a basic creator', async () => {
+    it('200s with the shape + the derived flat slotsTotal for a creator', async () => {
       const res = await request(app.getHttpServer())
         .get('/creator/state')
         .set('Authorization', `Bearer ${signToken(OWN_CREATOR_BASIC)}`)
@@ -259,18 +253,16 @@ describe('CreatorState (contract)', () => {
         message: 'OK',
         data: {
           wawuUserId: OWN_CREATOR_BASIC,
-          tier: 'basic',
-          subscriptionPaid: true,
           kycStatus: 'pending',
           slotsUsed: 1,
-          slotsTotal: 6,
+          slotsTotal: 5,
           dmPrice: 100,
           dmEnabled: true,
         },
       });
     });
 
-    it('200s with the Pro allowance (12 slots) for a pro creator', async () => {
+    it('200s with the SAME allowance for every other creator — there is no ladder left', async () => {
       const res = await request(app.getHttpServer())
         .get('/creator/state')
         .set('Authorization', `Bearer ${signToken(OWN_CREATOR_PRO)}`)
@@ -278,8 +270,7 @@ describe('CreatorState (contract)', () => {
 
       expect(res.body.data).toMatchObject({
         wawuUserId: OWN_CREATOR_PRO,
-        tier: 'pro',
-        slotsTotal: 12,
+        slotsTotal: 5,
       });
     });
 
@@ -298,7 +289,6 @@ describe('CreatorState (contract)', () => {
 
       expect(res.body.data).toMatchObject({
         wawuUserId: OWN_CREATOR_NO_KYC,
-        subscriptionPaid: true,
         kycStatus: 'not_started',
       });
     });
@@ -308,16 +298,20 @@ describe('CreatorState (contract)', () => {
       expect(res.body.data).toBeNull();
     });
 
-    it('answers a CREATOR with no subscription yet, rather than refusing them', async () => {
-      // Every creator is in this state between signing up and paying, and
-      // production had eight creator accounts against one CreatorState row.
-      // It used to 403, and the app rendered the raw sentence with a Try
-      // again button that could never work.
+    it('answers a CREATOR with no CreatorState row yet, rather than refusing them', async () => {
+      // Every creator is in this state between signing up and publishing or
+      // configuring anything, and production had eight creator accounts
+      // against one CreatorState row. It used to 403, and the app rendered the
+      // raw sentence with a Try again button that could never work.
       const res = await request(app.getHttpServer())
         .get('/creator/state')
         .set('Authorization', `Bearer ${signToken(OWN_CREATOR_NO_STATE)}`)
         .expect(200);
-      expect(res.body.data).toMatchObject({ subscriptionPaid: false, slotsUsed: 0 });
+      expect(res.body.data).toMatchObject({
+        slotsUsed: 0,
+        slotsTotal: 5,
+        kycStatus: 'not_started',
+      });
     });
 
     it('403s for a plain-user account (no CreatorState row — not the creator role)', async () => {
@@ -348,7 +342,12 @@ describe('CreatorState (contract)', () => {
       expect(res.body).toMatchObject({
         statusCode: 200,
         message: 'OK',
-        data: { wawuUserId: OWN_CREATOR_BASIC, dmEnabled: false, dmPrice: 250, slotsTotal: 6 },
+        // slotsTotal is MAX_ITEMS_PER_ACCOUNT for every creator account now.
+        // The 6 this used to expect was the tier-derived allowance, and tiers
+        // went with subscriptions -- uploadAllowanceFor() takes no argument
+        // and can only return 5, which is what GET /creator/state asserts
+        // higher up in this same suite.
+        data: { wawuUserId: OWN_CREATOR_BASIC, dmEnabled: false, dmPrice: 250, slotsTotal: 5 },
       });
 
       const persisted = await prisma.creatorState.findUnique({ where: { wawuUserId: OWN_CREATOR_BASIC } });

@@ -268,14 +268,14 @@ describe('Admin ops-reads registration (full AppModule)', () => {
     });
 
     it('the app-side creator and webhook surfaces still answer on their own first segments', async () => {
-      // `/creator-subscription` is the app's own route for the same subject as
+      // `/creator` is the app's own route for the same subject as
       // `/admin/creators`. Different first segment, so neither can shadow the
       // other — asserted rather than assumed. Whatever it answers a plain user,
       // it answers in its OWN words; a routing miss would say "Cannot GET …".
-      const creatorSubscription = await http()
-        .get('/api/hub/creator-subscription')
+      const creatorState = await http()
+        .get('/api/hub/creator/state')
         .set(auth(userToken));
-      expect(creatorSubscription.body.message).not.toMatch(/^Cannot GET/);
+      expect(creatorState.body.message).not.toMatch(/^Cannot GET/);
       // The webhook, unauthenticated and signature-gated: still 401, i.e. still
       // its own controller rather than anything under /admin.
       await http().post('/api/hub/webhooks/flutterwave').send({ event: 'ping' }).expect(401);

@@ -327,7 +327,6 @@ describe('UserProfile (contract)', () => {
         expect.objectContaining({
           wawuUserId: USER_CREATOR_PRO,
           handle: 'zainab-pro',
-          tier: 'pro',
           evgScore: expectedEvg?.score ?? 0,
           contentCount: expectedContentCount,
           followerCount: expectedFollowerCount,

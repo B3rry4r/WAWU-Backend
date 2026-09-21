@@ -2,7 +2,7 @@
  * CreatorEarnings has NO Prisma model (see prisma/schema.prisma header
  * comment) — the registry's own endpoint note says explicitly "not a
  * running ledger balance", i.e. it's a flat aggregate computed at request
- * time across Purchase + DirectMessage + CreditSpend + CreatorSubscription
+ * time across Purchase + DirectMessage + CreditSpend
  * (docs/02_TECHNICAL_CONTEXT.md §3.7). This is the wire-response interface
  * only.
  */

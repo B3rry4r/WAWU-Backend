@@ -21,24 +21,26 @@ import { CommunityMessageModule } from '../community-message.module';
 /**
  * WHO PAYS TO POST IN A COMMUNITY.
  *
- * `CommunityMessageService` debited 1 credit from every sender, with no
- * knowledge of subscriptions and no knowledge of who hosts the room. Two
- * things were wrong with that, and this spec pins both:
+ * `CommunityMessageService` debited 1 credit from every sender, including the
+ * HOST — who was charged for posting in their own community and could be 402'd
+ * out of it, while being the party who earns 85% of the credits spent in that
+ * same room (docs/01_SPEC.md §1, stream 4). That is the one exemption, and
+ * this spec pins it.
  *
- *  1. docs/01_SPEC.md §4 sells "Unlimited messages in open communities" as a
- *     paid-subscription benefit. Nothing implemented it.
- *  2. The HOST was charged for posting in their own community and could be
- *     402'd out of it — while being the party who earns 90% of the credits
- *     spent in that same room (§1, stream 4).
+ * A second exemption used to sit beside it: a paid subscription bought a
+ * creator unlimited messages in OPEN communities. Subscriptions are gone, so
+ * a creator is now an ordinary sender and pays like one. The tests below pin
+ * that too, because silently keeping a free send alive for a plan nobody
+ * holds would take money out of every host's ledger.
  *
- * It also pins the two things that must NOT change: an ordinary user still
- * pays 1 credit and still hits the 402 wall at zero, and the ledger
- * (`CreditSpend`, which a host's earnings are computed from) gains a row if
- * and only if a credit was actually charged.
+ * It also pins what must NOT change: an ordinary sender pays 1 credit and
+ * still hits the 402 wall at zero, and the ledger (`CreditSpend`, which a
+ * host's earnings are computed from) gains a row if and only if a credit was
+ * actually charged.
  *
  * Every identity, community, membership and credits row below is created by
  * this spec and deleted in afterAll. Nothing here touches the three shared
- * seeded accounts, whose tier and balance other specs mutate (README § Why
+ * seeded accounts, whose balance other specs mutate (README § Why
  * not parallel).
  */
 
@@ -47,8 +49,12 @@ const MOCK_WAWU_ID_PORT = process.env.WAWU_ID_JWKS_URL
   : '4001';
 const MOCK_WAWU_ID_BASE = `http://localhost:${MOCK_WAWU_ID_PORT}`;
 
-const EXPIRED_TRIAL = () => new Date(Date.now() - 60_000);
-const ACTIVE_TRIAL = () => new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+// LEGACY COLUMN. The 7-day free credits trial was removed on 21 Sep 2026, so
+// `CreditsState.trialEndsAt` is never written and never read. Rows seeded here
+// leave it null, which is what a real row looks like now. The one exception is
+// the regression test at the bottom of this file, which plants a FUTURE date on
+// purpose to prove the gate ignores it.
+const FUTURE_TRIAL_END = () => new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
 async function waitForHealth(url: string, timeoutMs = 15000): Promise<boolean> {
   const start = Date.now();
@@ -96,13 +102,13 @@ describe('CommunityMessage entitlements (contract)', () => {
   let mockWawuId: ChildProcess | undefined;
   let ownedMockWawuId = false;
 
-  /** Hosts both rooms below. Paid creator. */
+  /** Hosts both rooms below. Creator account. */
   let hostSub: string;
   let hostToken: string;
-  /** Paid creator, member of both rooms, hosts nothing. */
+  /** Creator account, member of both rooms, hosts nothing. */
   let subscriberSub: string;
   let subscriberToken: string;
-  /** Creator whose subscription has lapsed (subscriptionPaid = false). */
+  /** A second creator account, member of both rooms, hosts nothing. */
   let lapsedSub: string;
   let lapsedToken: string;
   /** Plain user, no CreatorState at all. Member of both rooms. */
@@ -118,7 +124,7 @@ describe('CommunityMessage entitlements (contract)', () => {
   const setCredits = async (
     userWawuId: string,
     creditBalance: number,
-    trialEndsAt: Date,
+    trialEndsAt: Date | null = null,
   ) => {
     await prisma.creditsState.upsert({
       where: { userWawuId },
@@ -192,36 +198,20 @@ describe('CommunityMessage entitlements (contract)', () => {
 
     prisma = moduleRef.get(PrismaService);
 
-    // Host and subscriber: paid creators, KYC still pending — the
-    // entitlement rides on `subscriptionPaid` alone, never on KYC
-    // (CLAUDE.md: the two gates are independent).
-    for (const sub of [hostSub, subscriberSub]) {
+    // Creator accounts, KYC still pending: KYC gates EARNING, never sending
+    // (CLAUDE.md). Having a CreatorState row must buy nothing here — that is
+    // the point of the tests below.
+    for (const sub of [hostSub, subscriberSub, lapsedSub]) {
       await prisma.creatorState.upsert({
         where: { wawuUserId: sub },
-        update: { tier: 'basic', subscriptionPaid: true },
+        update: { kycStatus: 'pending' },
         create: {
           wawuUserId: sub,
-          tier: 'basic',
-          subscriptionPaid: true,
           kycStatus: 'pending',
           slotsUsed: 0,
         },
       });
     }
-    // Lapsed: a creator row exists, but the subscription is not paid — this
-    // is exactly the row the hourly scheduler leaves behind when a
-    // subscription expires (scheduler.service.ts).
-    await prisma.creatorState.upsert({
-      where: { wawuUserId: lapsedSub },
-      update: { tier: 'basic', subscriptionPaid: false },
-      create: {
-        wawuUserId: lapsedSub,
-        tier: 'basic',
-        subscriptionPaid: false,
-        kycStatus: 'pending',
-        slotsUsed: 0,
-      },
-    });
     // `plainSub` deliberately gets no CreatorState row at all.
 
     const openRoom = await prisma.community.create({
@@ -293,9 +283,9 @@ describe('CommunityMessage entitlements (contract)', () => {
   // The host never pays in a room they host.
   // -------------------------------------------------------------------
   describe('the host of a community', () => {
-    it('posts in their own OPEN community free — no debit, no ledger row, and no 402 even at zero balance with an expired trial', async () => {
+    it('posts in their own OPEN community free — no debit, no ledger row, and no 402 even at zero balance', async () => {
       // The exact state that used to lock a host out of their own room.
-      await setCredits(hostSub, 0, EXPIRED_TRIAL());
+      await setCredits(hostSub, 0);
       const spendsBefore = await spendCount(hostSub, openRoomId);
 
       for (const text of [
@@ -318,12 +308,12 @@ describe('CommunityMessage entitlements (contract)', () => {
 
       expect(await balanceOf(hostSub)).toBe(0);
       // No phantom spend rows: the host must never appear in the ledger
-      // their own 90% is computed from for messages they sent free.
+      // their own 85% is computed from for messages they sent free.
       expect(await spendCount(hostSub, openRoomId)).toBe(spendsBefore);
     });
 
     it('posts in their own PRIVATE community free too — hosting is hosting', async () => {
-      await setCredits(hostSub, 0, EXPIRED_TRIAL());
+      await setCredits(hostSub, 0);
       const spendsBefore = await spendCount(hostSub, privateRoomId);
 
       const res = await post(
@@ -348,9 +338,9 @@ describe('CommunityMessage entitlements (contract)', () => {
       );
       expect([200, 201]).toContain(res.status);
 
-      // The metered path lazily creates a CreditsState row (and with it a
-      // fresh 7-day trial). The entitled path must not: sending free must
-      // not silently start or burn a trial the sender never needed.
+      // The metered path lazily creates a CreditsState row. The entitled
+      // path must not: sending free must not silently open a credits row for
+      // a sender who never needed one.
       expect(
         await prisma.creditsState.findUnique({
           where: { userWawuId: hostSub },
@@ -360,73 +350,54 @@ describe('CommunityMessage entitlements (contract)', () => {
   });
 
   // -------------------------------------------------------------------
-  // The subscription benefit: unlimited messages in OPEN communities.
+  // A creator who is not the host: charged, like everybody else.
   // -------------------------------------------------------------------
-  describe('a creator with an active paid subscription', () => {
-    it('sends unlimited messages in an OPEN community with zero balance and an expired trial', async () => {
-      await setCredits(subscriberSub, 0, EXPIRED_TRIAL());
+  describe('a creator account that does not host the room', () => {
+    it('pays 1 credit per message in an OPEN community', async () => {
+      // This used to be free: "unlimited messages in open communities" was a
+      // paid-subscription benefit. The subscription is gone, so the exemption
+      // went with it rather than being handed to every creator for nothing.
+      await setCredits(subscriberSub, 3);
       const spendsBefore = await spendCount(subscriberSub, openRoomId);
 
-      // Ten in a row. Under the old behaviour the first one 402'd.
-      for (let i = 0; i < 10; i += 1) {
-        const res = await post(openRoomId, subscriberToken, `Unlimited ${i}`);
-        expect([200, 201]).toContain(res.status);
-        expect(res.body.data.costInCredits).toBe(0);
-      }
-
-      expect(await balanceOf(subscriberSub)).toBe(0);
-      expect(await spendCount(subscriberSub, openRoomId)).toBe(spendsBefore);
-    });
-
-    it('does not have a purchased balance drained by messages the subscription already covers', async () => {
-      await setCredits(subscriberSub, 10, EXPIRED_TRIAL());
-
-      const res = await post(openRoomId, subscriberToken, 'Balance untouched.');
-      expect([200, 201]).toContain(res.status);
-      expect(res.body.data.costInCredits).toBe(0);
-      expect(await balanceOf(subscriberSub)).toBe(10);
-    });
-
-    it('does not consume or start a trial when sending — no CreditsState row is created', async () => {
-      await prisma.creditsState.deleteMany({
-        where: { userWawuId: subscriberSub },
-      });
-
-      for (let i = 0; i < 3; i += 1) {
-        const res = await post(
-          openRoomId,
-          subscriberToken,
-          `No trial burn ${i}`,
-        );
-        expect([200, 201]).toContain(res.status);
-      }
-
-      expect(
-        await prisma.creditsState.findUnique({
-          where: { userWawuId: subscriberSub },
-        }),
-      ).toBeNull();
-    });
-
-    it('pays like everyone else once the subscription lapses (subscriptionPaid = false)', async () => {
-      await setCredits(lapsedSub, 3, EXPIRED_TRIAL());
-      const spendsBefore = await spendCount(lapsedSub, openRoomId);
-
-      const res = await post(openRoomId, lapsedToken, 'Lapsed, so charged.');
+      const res = await post(openRoomId, subscriberToken, 'Charged like anyone.');
       expect([200, 201]).toContain(res.status);
       expect(res.body.data.costInCredits).toBe(1);
 
-      expect(await balanceOf(lapsedSub)).toBe(2);
-      expect(await spendCount(lapsedSub, openRoomId)).toBe(spendsBefore + 1);
+      expect(await balanceOf(subscriberSub)).toBe(2);
+      expect(await spendCount(subscriberSub, openRoomId)).toBe(spendsBefore + 1);
+    });
+
+    it('hits the same 402 wall at zero balance', async () => {
+      await setCredits(lapsedSub, 0);
+      const spendsBefore = await spendCount(lapsedSub, openRoomId);
+
+      await post(openRoomId, lapsedToken, 'No balance, no send.').expect(402);
+
+      expect(await spendCount(lapsedSub, openRoomId)).toBe(spendsBefore);
+    });
+
+    it('credits the HOST for the spend, so the room still earns', async () => {
+      await setCredits(lapsedSub, 2);
+
+      const res = await post(openRoomId, lapsedToken, 'The host earns this.');
+      expect([200, 201]).toContain(res.status);
+
+      const spend = await prisma.creditSpend.findFirst({
+        where: { userWawuId: lapsedSub, communityId: openRoomId },
+        orderBy: { spentAt: 'desc' },
+      });
+      expect(spend?.creditsSpent).toBe(1);
+      expect(spend?.creatorWawuId).toBe(hostSub);
     });
   });
 
   // -------------------------------------------------------------------
   // Everyone else: the documented model, unchanged.
   // -------------------------------------------------------------------
-  describe('an ordinary user with no subscription', () => {
+  describe('an ordinary user with no creator account', () => {
     it('still pays exactly 1 credit per message, and the ledger records it against the host', async () => {
-      await setCredits(plainSub, 5, EXPIRED_TRIAL());
+      await setCredits(plainSub, 5);
 
       const res = await post(openRoomId, plainToken, 'One credit, please.');
       expect([200, 201]).toContain(res.status);
@@ -441,8 +412,8 @@ describe('CommunityMessage entitlements (contract)', () => {
       expect(spend?.creatorWawuId).toBe(hostSub);
     });
 
-    it('is still 402d at zero balance with an expired trial, and nothing is written', async () => {
-      await setCredits(plainSub, 0, EXPIRED_TRIAL());
+    it('is still 402d at zero balance, and nothing is written', async () => {
+      await setCredits(plainSub, 0);
       const spendsBefore = await spendCount(plainSub, openRoomId);
       const messagesBefore = await prisma.communityMessage.count({
         where: { communityId: openRoomId },
@@ -467,28 +438,48 @@ describe('CommunityMessage entitlements (contract)', () => {
       ).toBe(messagesBefore);
     });
 
-    it('is still covered by the 7-day trial at zero balance, and that message still lands in the ledger', async () => {
-      await setCredits(plainSub, 0, ACTIVE_TRIAL());
+    /**
+     * INVERTED ON 21 SEP 2026. This used to read "is still covered by the
+     * 7-day trial at zero balance, and that message still lands in the
+     * ledger". The trial is gone, so the same fixture must now be refused.
+     *
+     * Kept rather than deleted, and it still plants a FUTURE trial end on
+     * purpose. `CreditsState.trialEndsAt` was made nullable, not dropped, so
+     * a revert could quietly restore the `trialEndsAt > now` bypass in
+     * CommunityMessageService; every other test in this file leaves the
+     * column null and would stay green through that. This one would not.
+     */
+    it('is NOT rescued by a future trialEndsAt at zero balance: 402, and nothing is written', async () => {
+      await setCredits(plainSub, 0, FUTURE_TRIAL_END());
       const spendsBefore = await spendCount(plainSub, openRoomId);
+      const messagesBefore = await prisma.communityMessage.count({
+        where: { communityId: openRoomId },
+      });
 
-      const res = await post(openRoomId, plainToken, 'Trial-covered.');
-      expect([200, 201]).toContain(res.status);
-      // Pre-existing, deliberately unchanged: a trial message is free to the
-      // SENDER but is a metered message — it costs 1 and is written to the
-      // ledger as 1. (See the service doc comment's note to whoever converts
-      // this ledger into naira.)
-      expect(res.body.data.costInCredits).toBe(1);
+      const res = await post(openRoomId, plainToken, 'Trial-covered.').expect(
+        402,
+      );
+      expect(res.body.data).toBeNull();
+      expect(res.body.reason).toBe('insufficient_credits');
+
       expect(await balanceOf(plainSub)).toBe(0);
-      expect(await spendCount(plainSub, openRoomId)).toBe(spendsBefore + 1);
+      // Nothing written: no ledger row...
+      expect(await spendCount(plainSub, openRoomId)).toBe(spendsBefore);
+      // ...and no message row.
+      expect(
+        await prisma.communityMessage.count({
+          where: { communityId: openRoomId },
+        }),
+      ).toBe(messagesBefore);
     });
   });
 
   // -------------------------------------------------------------------
-  // Private communities: the entitlement is scoped to OPEN, per the spec.
+  // Private communities: same rule, and it always was.
   // -------------------------------------------------------------------
   describe('a PRIVATE community', () => {
-    it('charges a subscribed member 1 credit — "unlimited messages in OPEN communities" does not reach in here', async () => {
-      await setCredits(subscriberSub, 4, EXPIRED_TRIAL());
+    it('charges a non-host member 1 credit, exactly as an open room now does', async () => {
+      await setCredits(subscriberSub, 4);
       const spendsBefore = await spendCount(subscriberSub, privateRoomId);
 
       const res = await post(
@@ -500,7 +491,7 @@ describe('CommunityMessage entitlements (contract)', () => {
       expect(res.body.data.costInCredits).toBe(1);
       expect(await balanceOf(subscriberSub)).toBe(3);
 
-      // The private host's 90% still has something to be computed from.
+      // The private host's 85% still has something to be computed from.
       const spend = await prisma.creditSpend.findFirst({
         where: { userWawuId: subscriberSub, communityId: privateRoomId },
         orderBy: { spentAt: 'desc' },
@@ -512,8 +503,8 @@ describe('CommunityMessage entitlements (contract)', () => {
       );
     });
 
-    it('402s a subscribed member at zero balance with an expired trial', async () => {
-      await setCredits(subscriberSub, 0, EXPIRED_TRIAL());
+    it('402s a non-host member at zero balance', async () => {
+      await setCredits(subscriberSub, 0);
 
       await post(
         privateRoomId,

@@ -31,16 +31,14 @@ import { ContentPieceModule } from '../../content-piece/content-piece.module';
 import { DirectMessageModule } from '../../direct-message/direct-message.module';
 import { FollowRelationshipModule } from '../../follow-relationship/follow-relationship.module';
 import { CommunityMessageModule } from '../../community-message/community-message.module';
-import { CreatorSubscriptionModule } from '../../creator-subscription/creator-subscription.module';
 import { DmRefundService } from '../../direct-message/dm-refund.service';
 import { SchedulerService } from '../../scheduler/scheduler.service';
 import { MOCK_FAILURE_TRANSACTION_ID } from '../../purchase/mock-flutterwave.adapter';
-import { MOCK_CARD_TOKEN } from '../../creator-subscription/mock-flutterwave.adapter';
 
 // Seeded WAWU IDs — mirror mock-wawu-id/server.js and prisma/seed.ts.
 const USER_PLAIN = '00000000-0000-4000-8000-000000000001';
-const USER_CREATOR_BASIC = '00000000-0000-4000-8000-000000000002'; // basic tier -> 0.15 commission
-const USER_CREATOR_PRO = '00000000-0000-4000-8000-000000000003'; // pro tier -> 0.10 commission, dmPrice 300
+const USER_CREATOR_BASIC = '00000000-0000-4000-8000-000000000002'; // creator, 0.15 commission
+const USER_CREATOR_PRO = '00000000-0000-4000-8000-000000000003'; // creator, 0.15 commission, dmPrice 300
 const SEEDED_USERS = [USER_PLAIN, USER_CREATOR_BASIC, USER_CREATOR_PRO];
 
 // prisma/seed.ts fixtures this spec must leave exactly as it found them.
@@ -57,7 +55,6 @@ const SYNTHETIC_DM_EXPIRED = 'e2000000-0000-4000-8000-000000000001';
 const SYNTHETIC_DM_DUE_SOON = 'e2000000-0000-4000-8000-000000000002';
 const SYNTHETIC_FAN = 'e2000000-0000-4000-8000-0000000000f1';
 const SYNTHETIC_TRIAL_USER = 'e2000000-0000-4000-8000-0000000000f2';
-const SYNTHETIC_LAPSED_CREATOR = 'e2000000-0000-4000-8000-0000000000f3';
 /**
  * The sweep fixtures own their creator rather than borrowing the seeded one.
  *
@@ -73,7 +70,6 @@ const SYNTHETIC_DM_CREATOR = 'e2000000-0000-4000-8000-0000000000f4';
 const SYNTHETIC_USERS = [
   SYNTHETIC_FAN,
   SYNTHETIC_TRIAL_USER,
-  SYNTHETIC_LAPSED_CREATOR,
   SYNTHETIC_DM_CREATOR,
 ];
 
@@ -123,7 +119,6 @@ describe('Notification wiring (contract)', () => {
   let ownedMockWawuId = false;
 
   let plainToken: string;
-  let creatorBasicToken: string;
 
   /** Everything except the two seeded fixture rows. */
   const clearEmitted = () =>
@@ -155,7 +150,6 @@ describe('Notification wiring (contract)', () => {
     }
 
     plainToken = await login('user@test.wawu.dev');
-    creatorBasicToken = await login('creator-basic@test.wawu.dev');
 
     moduleRef = await Test.createTestingModule({
       imports: [
@@ -168,7 +162,6 @@ describe('Notification wiring (contract)', () => {
         DirectMessageModule,
         FollowRelationshipModule,
         CommunityMessageModule,
-        CreatorSubscriptionModule,
       ],
     }).compile();
 
@@ -204,7 +197,6 @@ describe('Notification wiring (contract)', () => {
       where: { followerWawuId: USER_PLAIN, followingWawuId: USER_CREATOR_BASIC },
     });
     await prisma.creditsState.deleteMany({ where: { userWawuId: SYNTHETIC_TRIAL_USER } });
-    await prisma.creatorSubscription.deleteMany({ where: { creatorWawuId: SYNTHETIC_LAPSED_CREATOR } });
     await prisma.notificationSettings.deleteMany({ where: { userWawuId: { in: SYNTHETIC_USERS } } });
     await app?.close();
     await moduleRef?.close();
@@ -287,10 +279,10 @@ describe('Notification wiring (contract)', () => {
 
       const [row] = await emittedFor(USER_CREATOR_PRO, 'sale');
       expect(row).toBeDefined();
-      // Pro tier -> 0.10 commission on a ₦1500 unlock.
-      expect(row.amount).toBe(1350);
+      // 0.15 commission on a ₦1,500 unlock, for every creator.
+      expect(row.amount).toBe(1275);
       expect(row.body).toContain('Invoice Template Pack');
-      expect(row.body).toContain('₦1,350');
+      expect(row.body).toContain('₦1,275');
       expect(await emittedFor(USER_PLAIN, 'sale')).toHaveLength(0);
     });
 
@@ -437,53 +429,6 @@ describe('Notification wiring (contract)', () => {
   });
 
   // -------------------------------------------------------------------------
-  describe('a successful subscription renewal notifies the creator', () => {
-    it('POST /creator-subscription/retry-payment writes subscription_renewal on success', async () => {
-      const before = await prisma.creatorSubscription.findUnique({ where: { creatorWawuId: USER_CREATOR_BASIC } });
-      if (!before) throw new Error('seed is missing the Basic creator subscription');
-
-      await prisma.creatorSubscription.update({
-        where: { creatorWawuId: USER_CREATOR_BASIC },
-        data: {
-          status: 'past_due',
-          currentPeriodEnd: new Date(Date.now() - HOUR),
-          renewalAttempts: 1,
-          flutterwaveCustomerRef: MOCK_CARD_TOKEN,
-        },
-      });
-
-      try {
-        await request(app.getHttpServer())
-          .post('/creator-subscription/retry-payment')
-          .set('Authorization', `Bearer ${creatorBasicToken}`)
-          .send()
-          .expect(201);
-
-        const [row] = await emittedFor(USER_CREATOR_BASIC, 'subscription_renewal');
-        expect(row).toBeDefined();
-        expect(row.tone).toBe('success');
-        expect(row.amount).toBeGreaterThan(0);
-        expect(row.body).toContain('₦');
-        expect(row.body).toContain('Basic');
-      } finally {
-        await prisma.creatorSubscription.update({
-          where: { creatorWawuId: USER_CREATOR_BASIC },
-          data: {
-            status: before.status,
-            currentPeriodEnd: before.currentPeriodEnd,
-            renewalAttempts: before.renewalAttempts,
-            flutterwaveCustomerRef: before.flutterwaveCustomerRef,
-          },
-        });
-        await prisma.creatorState.updateMany({
-          where: { wawuUserId: USER_CREATOR_BASIC },
-          data: { subscriptionPaid: true, tier: 'basic' },
-        });
-      }
-    });
-  });
-
-  // -------------------------------------------------------------------------
   describe('the scheduled sweeps', () => {
     /**
      * `flutterwaveTxId` matters here. The sweep no longer announces a refund
@@ -589,46 +534,40 @@ describe('Notification wiring (contract)', () => {
       expect(await emittedFor(SYNTHETIC_DM_CREATOR, 'dm_deadline')).toHaveLength(0);
     });
 
-    it('warnCreditsTrialEnding warns a trial ending tomorrow, as a COUNT', async () => {
+    /**
+     * REPLACES 'warnCreditsTrialEnding warns a trial ending tomorrow, as a
+     * COUNT'. The 7-day free credits trial was removed on 21 Sep 2026, and
+     * the daily sweep and the `trial_ending` notification kind went with it.
+     *
+     * The old fixture is kept verbatim — a row whose `trialEndsAt` lands 30
+     * hours out, dead centre of the band the sweep used to fire on — because
+     * the column still exists and so does the data. What is asserted is the
+     * other way round now: no sweep runs over it and nothing is emitted for
+     * it.
+     */
+    it('no longer sweeps credits trials: the sweep is gone and nothing emits trial_ending', async () => {
       await prisma.creditsState.upsert({
         where: { userWawuId: SYNTHETIC_TRIAL_USER },
         update: { creditBalance: 12, trialEndsAt: new Date(Date.now() + 30 * HOUR) },
         create: { userWawuId: SYNTHETIC_TRIAL_USER, creditBalance: 12, trialEndsAt: new Date(Date.now() + 30 * HOUR) },
       });
 
-      await scheduler.warnCreditsTrialEnding();
+      // The method is gone from the service, not merely unscheduled.
+      expect(
+        (scheduler as unknown as Record<string, unknown>).warnCreditsTrialEnding,
+      ).toBeUndefined();
 
-      const [row] = await emittedFor(SYNTHETIC_TRIAL_USER, 'trial_ending');
-      expect(row).toBeDefined();
-      expect(row.creditsCount).toBe(12);
-      expect(row.amount).toBeNull();
-      expect(row.body).toContain('12 credits');
-      // The seeded users' trials end in 7 days — well outside the band.
+      // Run the notification-emitting sweeps that DO still exist, over that
+      // fixture. (sweepStalePendingCharges is left out on purpose: it emits
+      // nothing and it deletes rows older than 24h, which would reach across
+      // into other suites' seeded fixtures.)
+      await scheduler.refundExpiredDms();
+      await scheduler.remindDmDeadlines();
+
+      expect(await emittedFor(SYNTHETIC_TRIAL_USER, 'trial_ending')).toHaveLength(0);
+      expect(await emittedFor(SYNTHETIC_TRIAL_USER)).toHaveLength(0);
       expect(await emittedFor(USER_PLAIN, 'trial_ending')).toHaveLength(0);
     });
 
-    it('expireLapsedSubscriptions tells the creator their subscription did not renew', async () => {
-      await prisma.creatorSubscription.deleteMany({ where: { creatorWawuId: SYNTHETIC_LAPSED_CREATOR } });
-      await prisma.creatorSubscription.create({
-        data: {
-          creatorWawuId: SYNTHETIC_LAPSED_CREATOR,
-          tier: 'basic',
-          status: 'active',
-          currentPeriodEnd: new Date(Date.now() - HOUR),
-        },
-      });
-
-      await scheduler.expireLapsedSubscriptions();
-
-      const [row] = await emittedFor(SYNTHETIC_LAPSED_CREATOR, 'subscription_renewal');
-      expect(row).toBeDefined();
-      expect(row.tone).toBe('warning');
-      expect(row.actionLabel).toBe('Retry payment');
-      expect(row.body).toContain('Basic');
-
-      // The seeded creators' subscriptions run to 2027 and must be untouched.
-      const seeded = await prisma.creatorSubscription.findUnique({ where: { creatorWawuId: USER_CREATOR_PRO } });
-      expect(seeded?.status).toBe('active');
-    });
   });
 });

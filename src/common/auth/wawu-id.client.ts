@@ -121,6 +121,77 @@ export class WawuIdClient {
     return out;
   }
 
+  /**
+   * Writes one of the two ticks at WAWU ID.
+   *
+   * Identity is the source of truth for whether somebody is verified, so this
+   * goes out BEFORE the Hub writes its own mirror columns. The ordering is
+   * the same one the old tier elevation used and for the same reason: if the
+   * call fails, the Hub has granted nothing and the payment is simply
+   * re-verifiable, whereas writing locally first would leave a tick that
+   * identity has never heard of and no API path back.
+   *
+   * A REVOKE is this same call with both dates null. There is no separate
+   * DELETE, because "verified until" is the whole state and clearing it is
+   * the whole revocation.
+   *
+   * Errors are RAISED. Somebody has just paid for this; silently keeping the
+   * two services out of step would be worse than a retryable failure.
+   */
+  async setVerification(
+    userId: string,
+    kind: 'creator' | 'professional',
+    dates: { verifiedAt: Date | null; verifiedUntil: Date | null },
+  ): Promise<void> {
+    const res = await fetch(
+      `${this.baseUrl}/internal/users/${userId}/verification`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Service-Key': this.serviceKey,
+        },
+        /*
+          WAWU ID's own shape, confirmed against its UpdateVerificationDto,
+          not this backend's internal one.
+
+          Its body is { tick, granted, expiresAt }: `tick` not `kind`, and an
+          EXPLICIT `granted` boolean rather than "both dates null means
+          revoke". It derives verifiedAt itself on a grant and refuses a
+          `verified` field outright, because whether a tick draws is derived
+          from the expiry on every read and a caller must not assert it.
+
+          This backend keeps thinking in (verifiedAt, verifiedUntil) because
+          that is what its own mirror columns are; the translation happens
+          here, at the boundary, and nowhere else. A revoke is verifiedAt ===
+          null, which is exactly how writeTick calls it.
+        */
+        body: JSON.stringify({
+          tick: kind,
+          granted: dates.verifiedAt !== null,
+          expiresAt: dates.verifiedUntil?.toISOString() ?? null,
+        }),
+      },
+    );
+    if (!res.ok) {
+      this.logger.error(
+        `Failed to set ${kind} verification for ${userId}: ${res.status} ${await res.text()}`,
+      );
+      throw new BadGatewayException(
+        'Your verification could not be saved. Your payment is safe, try again in a moment.',
+      );
+    }
+  }
+
+  /**
+   * The five-rung ladder's write path.
+   *
+   * Superseded by setVerification and no longer called by anything that
+   * grants a tick. Kept callable because the admin verification-review and
+   * professional-review queues still carry ladder submissions that were made
+   * before the change, and a half-reviewed queue that cannot be finished is
+   * worse than one write path too many.
+   */
   async elevateVerificationTier(userId: string, tier: string): Promise<void> {
     const res = await fetch(
       `${this.baseUrl}/internal/users/${userId}/verification-tier`,

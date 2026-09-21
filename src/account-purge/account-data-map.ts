@@ -65,6 +65,15 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'BlockedAccount', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CreditsState', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CreditPurchase', column: 'userWawuId', disposition: 'OWNED' },
+  // What somebody paid for their own tick. OWNED rather than AUDIT: the
+  // row exists only because this account bought something, there is no
+  // counterparty whose record it also is, and nothing else in the product
+  // needs it once the account is gone.
+  {
+    model: 'VerificationPurchase',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
   { model: 'CreditLot', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CreditSpend', column: 'userWawuId', disposition: 'OWNED' },
   {
@@ -91,14 +100,7 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'ProfessionalProfile', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'StorageObject', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'DittoOptIn', column: 'wawuUserId', disposition: 'OWNED' },
-  { model: 'ReferralRedemption', column: 'wawuUserId', disposition: 'OWNED' },
-  { model: 'ReferralClaim', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'EventReferral', column: 'ownerWawuId', disposition: 'OWNED' },
-  {
-    model: 'CreatorSubscription',
-    column: 'creatorWawuId',
-    disposition: 'OWNED',
-  },
   {
     model: 'CreatorNoResponseTracker',
     column: 'creatorWawuId',

@@ -20,3 +20,6 @@ mock-wawu-id/public.pem
 # so a stray `git add -A` cannot pick either up.
 wawu_do_deploy
 wawu_do_deploy.pub
+
+# Python bytecode from running the gates harness locally.
+scripts/gates/**/__pycache__/

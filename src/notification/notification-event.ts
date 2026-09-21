@@ -12,9 +12,16 @@
  * balance / cash-out language anywhere). Keeping every string in one file
  * is what makes that reviewable.
  *
- * The kinds are exactly the twelve the web client renders — see
+ * The kinds are exactly the ones the web client renders — see
  * WAWU-Web/src/types/notification.ts. Anything not in this union cannot be
  * written.
+ *
+ * Build brief C8 adds the only two kinds that are not a report of a
+ * transaction: `campaign` (an admin-composed announcement, the one kind whose
+ * copy a human supplies) and `verify_reminder` (B1's recurring verification
+ * prompt). Both carry the rich fields - a picture and an in-app destination -
+ * that make the notification list an experiential surface rather than a list
+ * of sentences.
  */
 
 /** Exactly the union in WAWU-Web/src/types/notification.ts. */
@@ -27,10 +34,13 @@ export type NotificationKind =
   | 'dm_refunded'
   | 'credits_low'
   | 'content_rejected'
-  | 'subscription_renewal'
   | 'new_follower'
   | 'tip_received'
-  | 'trial_ending';
+  // Build brief C8 adds two kinds that are not a reaction to a transaction.
+  /** An admin-composed announcement or promotion, fanned out from a NotificationCampaign. */
+  | 'campaign'
+  /** The recurring "you are not verified yet" prompt from brief B1. */
+  | 'verify_reminder';
 
 /** Exactly the union in WAWU-Web/src/types/notification.ts. */
 export type NotificationTone =
@@ -59,19 +69,6 @@ export type NotificationEvent =
   | { kind: 'dm_refunded'; userWawuId: string; amount: number }
   /** Credits ran low or ran out. Recipient: the spender. Always a COUNT. */
   | { kind: 'credits_low'; userWawuId: string; creditsCount: number }
-  /** The 7-day WAWU Credits trial is about to end. Recipient: the fan. Always a COUNT. */
-  | { kind: 'trial_ending'; userWawuId: string; creditsCount: number }
-  /** Subscription billing news. Recipient: the creator. */
-  | {
-      kind: 'subscription_renewal';
-      userWawuId: string;
-      state: 'renewed' | 'past_due' | 'expired';
-      tier: string;
-      /** Only meaningful for `renewed`. */
-      amount?: number;
-      /** Only meaningful for `renewed`. */
-      nextRenewalAt?: Date;
-    }
   /** Somebody followed this creator. Recipient: the creator. */
   | { kind: 'new_follower'; userWawuId: string }
   /** Admin review approved an upload. Recipient: the creator. (Emitted from feat/admin-surface.) */
@@ -92,7 +89,42 @@ export type NotificationEvent =
    * the kind was declared and rendered with no writer for the life of the
    * module (legacy-app-repair, 2026-08-31).
    */
-  | { kind: 'kyc_verified'; userWawuId: string; approved: boolean };
+  | { kind: 'kyc_verified'; userWawuId: string; approved: boolean }
+  /**
+   * An admin-composed announcement or promotion (build brief C8). This is the
+   * ONE event whose copy the caller supplies, because the caller is a human
+   * writing a campaign in the dashboard rather than a module reporting a fact.
+   * Everything about it is still validated before it gets here:
+   * ComposeCampaignDto bounds the lengths and the tone, and
+   * assertSafeDestination() bounds where it can send someone.
+   */
+  | {
+      kind: 'campaign';
+      userWawuId: string;
+      campaignId: string;
+      title: string;
+      body: string;
+      tone: NotificationTone;
+      imageUrl: string | null;
+      actionLabel: string | null;
+      actionHref: string | null;
+    }
+  /**
+   * The recurring "you have not verified yet" prompt (build brief B1:
+   * "Unverified creators and professionals receive persistent, recurring
+   * prompts to verify, and each prompt states the concrete benefits").
+   *
+   * `audience` picks which of the two ticks the copy talks about. It carries
+   * NO price: the two figures (N4,999 and N9,999 a year) live on the
+   * verification screen this prompt opens, which is where they are written
+   * down once. Repeating a price in a notification is how a stale figure ends
+   * up in somebody's history.
+   */
+  | {
+      kind: 'verify_reminder';
+      userWawuId: string;
+      audience: 'creator' | 'professional';
+    };
 
 /** The row `emit()` will write, before it reaches Prisma. */
 export interface NotificationDraft {
@@ -104,7 +136,34 @@ export interface NotificationDraft {
   amount: number | null;
   creditsCount: number | null;
   actionLabel: string | null;
+  /**
+   * Build brief C8: notifications carry a picture. Null on every kind that
+   * has nothing to show, which is every transactional kind - the client draws
+   * the compact row in that case rather than an empty frame.
+   */
+  imageUrl: string | null;
+  /**
+   * An in-app path this notification opens. Only the two C8 kinds set it.
+   * Every transactional kind is routed by `kind` on the client, because where
+   * "your DM is about to expire" goes is a property of the event, not
+   * something a composer should be able to retarget.
+   */
+  actionHref: string | null;
+  /** Set only on `campaign`, so a dispatch can be counted and audited. */
+  campaignId: string | null;
 }
+
+/**
+ * Everything a transactional kind leaves unset. Spread into each draft so the
+ * three C8 columns cannot be silently forgotten when a kind is added: the
+ * compiler requires them, and this names the "no picture, routed by kind"
+ * default once instead of eleven times.
+ */
+const NO_RICH_MEDIA = {
+  imageUrl: null,
+  actionHref: null,
+  campaignId: null,
+} as const;
 
 /**
  * ₦ with thousands separators, no decimals. Hand-rolled rather than
@@ -150,11 +209,6 @@ function formatDate(date: Date): string {
   return `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
 }
 
-/** "Basic"/"Pro" for copy — the DB stores the lowercase enum value. */
-function tierLabel(tier: string): string {
-  return tier.charAt(0).toUpperCase() + tier.slice(1);
-}
-
 /**
  * The single place notification copy is written.
  *
@@ -183,6 +237,7 @@ export function composeNotification(
         amount: Math.round(event.netAmount),
         creditsCount: null,
         actionLabel: 'View earnings',
+        ...NO_RICH_MEDIA,
       };
 
     case 'tip_received':
@@ -194,6 +249,7 @@ export function composeNotification(
         amount: Math.round(event.netAmount),
         creditsCount: null,
         actionLabel: 'View earnings',
+        ...NO_RICH_MEDIA,
       };
 
     case 'dm_received':
@@ -205,6 +261,7 @@ export function composeNotification(
         amount: Math.round(event.amount),
         creditsCount: null,
         actionLabel: 'Reply now',
+        ...NO_RICH_MEDIA,
       };
 
     case 'dm_deadline': {
@@ -217,6 +274,7 @@ export function composeNotification(
         amount: null,
         creditsCount: null,
         actionLabel: 'Reply now',
+        ...NO_RICH_MEDIA,
       };
     }
 
@@ -224,11 +282,12 @@ export function composeNotification(
       return {
         ...base,
         title: 'Paid DM refunded',
-        body: `Your ${formatNaira(event.amount)} has been refunded — the creator did not reply within 24 hours.`,
+        body: `Your ${formatNaira(event.amount)} has been refunded. The creator did not reply within 24 hours.`,
         tone: 'info',
         amount: Math.round(event.amount),
         creditsCount: null,
         actionLabel: null,
+        ...NO_RICH_MEDIA,
       };
 
     case 'credits_low': {
@@ -243,55 +302,9 @@ export function composeNotification(
         amount: null,
         creditsCount: event.creditsCount,
         actionLabel: 'Buy credits',
+        ...NO_RICH_MEDIA,
       };
     }
-
-    case 'trial_ending':
-      return {
-        ...base,
-        title: 'Credits trial ending',
-        body: `Your WAWU Credits trial ends tomorrow. You have ${formatCredits(event.creditsCount)} left.`,
-        tone: 'warning',
-        amount: null,
-        creditsCount: event.creditsCount,
-        actionLabel: 'Buy credits',
-      };
-
-    case 'subscription_renewal':
-      if (event.state === 'renewed') {
-        const until = event.nextRenewalAt
-          ? ` Next renewal ${formatDate(event.nextRenewalAt)}.`
-          : '';
-        return {
-          ...base,
-          title: 'Subscription renewed',
-          body: `Your ${tierLabel(event.tier)} creator subscription renewed for ${formatNaira(event.amount ?? 0)}.${until}`,
-          tone: 'success',
-          amount: event.amount != null ? Math.round(event.amount) : null,
-          creditsCount: null,
-          actionLabel: null,
-        };
-      }
-      if (event.state === 'past_due') {
-        return {
-          ...base,
-          title: 'Subscription needs attention',
-          body: `Your ${tierLabel(event.tier)} creator subscription did not renew. Update your card to keep uploading.`,
-          tone: 'warning',
-          amount: null,
-          creditsCount: null,
-          actionLabel: 'Retry payment',
-        };
-      }
-      return {
-        ...base,
-        title: 'Subscription ended',
-        body: `Your ${tierLabel(event.tier)} creator subscription has ended. Resubscribe to start uploading again.`,
-        tone: 'neutral',
-        amount: null,
-        creditsCount: null,
-        actionLabel: 'Resubscribe',
-      };
 
     case 'new_follower':
       return {
@@ -302,6 +315,7 @@ export function composeNotification(
         amount: null,
         creditsCount: null,
         actionLabel: null,
+        ...NO_RICH_MEDIA,
       };
 
     case 'content_published':
@@ -313,6 +327,7 @@ export function composeNotification(
         amount: null,
         creditsCount: null,
         actionLabel: 'View content',
+        ...NO_RICH_MEDIA,
       };
 
     case 'content_rejected':
@@ -324,6 +339,7 @@ export function composeNotification(
         amount: null,
         creditsCount: null,
         actionLabel: 'Edit and resubmit',
+        ...NO_RICH_MEDIA,
       };
 
     case 'kyc_verified':
@@ -336,6 +352,7 @@ export function composeNotification(
             amount: null,
             creditsCount: null,
             actionLabel: null,
+            ...NO_RICH_MEDIA,
           }
         : {
             ...base,
@@ -345,6 +362,63 @@ export function composeNotification(
             amount: null,
             creditsCount: null,
             actionLabel: 'Resubmit',
+            ...NO_RICH_MEDIA,
           };
+
+    /**
+     * The one kind whose words come from a person. Kept inside this switch
+     * anyway so `composeNotification` stays the single place a Notification
+     * row's shape is decided, and so the campaign's fields are normalised
+     * (empty string -> null) exactly once.
+     */
+    case 'campaign':
+      return {
+        ...base,
+        title: event.title,
+        body: event.body,
+        tone: event.tone,
+        amount: null,
+        creditsCount: null,
+        actionLabel: event.actionLabel ?? null,
+        imageUrl: event.imageUrl ?? null,
+        actionHref: event.actionHref ?? null,
+        campaignId: event.campaignId,
+      };
+
+    /**
+     * Present tense only. Every clause below is something that is true the
+     * moment the submission is approved, and is implemented today:
+     *
+     *  - the tick: VerificationSubmissionService.review() (creators) and
+     *    AdminProfessionalReviewService (professionals) both call
+     *    WawuIdClient.elevateVerificationTier on approval, and the web client
+     *    renders <VerificationBadge> from that claim;
+     *  - the destination: /profile/verification is a built screen. It no
+     *    longer lists tiers or takes a submission (the five-rung ladder was
+     *    replaced by the two paid ticks); it is now where those ticks are
+     *    bought.
+     *
+     * What it deliberately does NOT say is anything in the future tense. "We
+     * will let you know when your badge is approved" would need a notification
+     * emitted on that approval, and nothing emits one today - so it is not
+     * promised here. See DECISIONS.md D17b.
+     */
+    case 'verify_reminder': {
+      const professional = event.audience === 'professional';
+      return {
+        ...base,
+        title: 'Your account is not verified yet',
+        body: professional
+          ? 'Verified professionals carry the green tick on their profile and on every card they appear on. Send your credentials to start.'
+          : 'Verified creators carry the purple tick on their profile and on every card they appear on. Send your ID to start.',
+        tone: 'info',
+        amount: null,
+        creditsCount: null,
+        actionLabel: 'Get verified',
+        imageUrl: null,
+        actionHref: '/profile/verification',
+        campaignId: null,
+      };
+    }
   }
 }

@@ -7,8 +7,8 @@ import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface'
  * "creator" role gate for this resource's single endpoint. The account type
  * (`user` | `creator`) lives in THIS backend's own UserProfile table, never
  * on the WAWU ID JWT (conventions.md § Roles & permissions) — this is
- * distinct from the CreatorState entitlement gates (subscriptionPaid/kyc),
- * which govern upload/earn capability, not the account-type role itself.
+ * distinct from the CreatorState earning gate (kycStatus), which governs
+ * whether a creator can be paid, not the account-type role itself.
  * Deliberately local to this resource's directory per the task brief's
  * scope rule (creator-gate logic lives in src/common/ only when a
  * schema/pre-step agent owns it; this build agent owns only its own

@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer';
-import { IsBoolean, IsEnum, IsIn, IsOptional } from 'class-validator';
+import { IsBoolean, IsEnum, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 import { EventCategory, EventFormat, EventType } from '../../../generated/prisma/enums';
 import { PaginationQueryDto } from '../../common/dto/pagination.dto';
 
@@ -53,4 +53,23 @@ export class ListEventsQueryDto extends PaginationQueryDto {
   )
   @IsBoolean()
   featured?: boolean;
+
+  /**
+   * One host's PUBLISHED events, for the Events tab on their profile.
+   *
+   * Without this there was no way to ask for somebody else's events at all.
+   * The profile called GET /events/mine, which is the CALLER's events, so a
+   * visitor opening a creator's profile saw their OWN events listed under
+   * that creator's name. /events/mine cannot serve this: it deliberately
+   * returns every status, including pending and rejected submissions, which
+   * belong to the host alone.
+   *
+   * This filters the PUBLIC list, so it inherits `status: published` and the
+   * time window with everything else. A visitor sees exactly what the
+   * calendar shows.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  host?: string;
 }

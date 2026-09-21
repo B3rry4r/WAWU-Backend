@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { uploadAllowanceFor } from '../common/creator-tier-allowance';
+import { uploadAllowanceFor } from '../common/creator-allowance';
 import { RANKING, type ContentSort } from './ranking';
 import { Prisma } from '../../generated/prisma/client';
 import type { ContentPieceModel as ContentPieceRow } from '../../generated/prisma/models';
@@ -26,10 +26,12 @@ import { NotificationService } from '../notification/notification.service';
 import { StorageService } from '../storage/storage.service';
 import type { VerifyUnlockDto } from './dto/verify-unlock.dto';
 
-/** Standard commission rate (conventions.md § Identity & format canon). */
+/**
+ * The commission rate, for every creator (conventions.md § Identity & format
+ * canon). The 10% Pro rate went with the subscription that sold it; there is
+ * no tier left to vary on.
+ */
 const STANDARD_COMMISSION_RATE = 0.15;
-/** Pro-tier commission rate, applied only while the Pro creator's subscription is active. */
-const PRO_COMMISSION_RATE = 0.1;
 
 export interface FlutterwaveConfigResponse {
   flutterwaveConfig: {
@@ -91,19 +93,14 @@ export class ContentPieceService {
     private readonly storage: StorageService,
   ) {}
 
-  /** Snapshotted at transaction time, never recomputed later (conventions.md). */
-  private async resolveCommissionRate(creatorWawuId: string): Promise<number> {
-    const creatorState = await this.prisma.creatorState.findUnique({
-      where: { wawuUserId: creatorWawuId },
-      select: { tier: true, subscriptionPaid: true },
-    });
-    if (
-      creatorState &&
-      creatorState.tier === 'pro' &&
-      creatorState.subscriptionPaid
-    ) {
-      return PRO_COMMISSION_RATE;
-    }
+  /**
+   * Snapshotted at transaction time, never recomputed later (conventions.md).
+   *
+   * Still a method, and still called per transaction, because the snapshot is
+   * the point: a rate change later must not move money already split. It
+   * simply has nothing to look up any more.
+   */
+  private resolveCommissionRate(): number {
     return STANDARD_COMMISSION_RATE;
   }
 
@@ -436,17 +433,10 @@ export class ContentPieceService {
     creatorWawuId: string,
     dto: CreateContentDto,
   ): Promise<ContentPieceResponse> {
-    const creatorState = await this.prisma.creatorState.findUnique({
-      where: { wawuUserId: creatorWawuId },
-      select: { subscriptionPaid: true, tier: true },
-    });
-    if (!creatorState || !creatorState.subscriptionPaid) {
-      throw new ForbiddenException(
-        'A paid subscription is required to upload content (CreatorState.subscriptionPaid=false).',
-      );
-    }
-
-    const allowance = uploadAllowanceFor(creatorState.tier);
+    // No payment gate on uploading (build brief B1). CreatorAccountGuard on
+    // POST /content has already proved this caller is a creator account, which
+    // is the only thing that was ever checked here besides the subscription.
+    const allowance = uploadAllowanceFor();
 
     // `previewAsset` is public by design — it is returned to every caller,
     // including anonymous ones on /content/public/featured. If it points at
@@ -469,23 +459,18 @@ export class ContentPieceService {
 
     const slug = `${this.slugify(dto.title)}-${randomUUID().slice(0, 8)}`;
 
-    // The tier allowance is a paid entitlement, so it is counted and claimed
-    // inside one transaction. Counting outside it would let two uploads sent
-    // at the same moment both read "2 used" and both be written.
+    // The allowance is claimed inside one transaction. Counting outside it
+    // would let two uploads sent at the same moment both read "2 used" and
+    // both be written.
     const created = await this.prisma.$transaction(async (tx) => {
-      // A REJECTED or REMOVED piece occupies no slot, of either kind.
+      // A REJECTED or REMOVED piece occupies no slot.
       //
       // POST /admin/content/:id/reject and DELETE /content/:id both give the
-      // slot back by decrementing CreatorState.slotsUsed, which restores the
-      // TOTAL cap. The per-kind caps below are counted from ContentPiece rows
-      // instead, so without this filter they would go on counting the
-      // rejected/removed row and the return would be only half a return: a
-      // Basic creator (1 free) whose only upload is rejected, or whose only
-      // paid upload they delete, would get the total slot back and still be
-      // refused another upload of the same kind. Worse, `isFirstUpload`
-      // derives from these same counts, so they would also stop being a
-      // first-time uploader — forcing their first visible piece to be PAID,
-      // in direct contradiction of the spec's first-upload-must-be-free rule.
+      // slot back by decrementing CreatorState.slotsUsed. `isFirstUpload`
+      // derives from the count below, so without this filter a creator whose
+      // only upload was rejected would get the slot back and still not count
+      // as a first-time uploader, forcing their first visible piece to be
+      // PAID in direct contradiction of the first-upload-must-be-free rule.
       //
       // Two definitions of "used" that disagree are worse than either alone.
       const occupiesASlot = {
@@ -493,38 +478,31 @@ export class ContentPieceService {
           notIn: ['rejected', 'removed'] as ('rejected' | 'removed')[],
         },
       };
-      const [freeUsed, paidUsed] = await Promise.all([
-        tx.contentPiece.count({
-          where: { creatorWawuId, accessType: 'free', ...occupiesASlot },
-        }),
-        tx.contentPiece.count({
-          where: { creatorWawuId, accessType: 'paid', ...occupiesASlot },
-        }),
-      ]);
-      const isFirstUpload = freeUsed + paidUsed === 0;
+      const used = await tx.contentPiece.count({
+        where: { creatorWawuId, ...occupiesASlot },
+      });
+      const isFirstUpload = used === 0;
 
       if (isFirstUpload && dto.accessType === 'paid') {
         throw new BadRequestException(
-          "A creator's first upload must be free (creatorFirstUploadFree) — resubmit with accessType 'free'.",
+          "A creator's first upload must be free (creatorFirstUploadFree). Resubmit with accessType 'free'.",
         );
       }
 
-      // Free and paid slots are not interchangeable: a Basic creator with 1
-      // free and 0 paid uploads has 2 slots left, but neither of them can be
-      // spent on another free piece.
-      if (dto.accessType === 'free' && freeUsed >= allowance.free) {
-        throw new ForbiddenException(
-          `Your ${creatorState.tier} plan includes ${allowance.free} free upload${allowance.free === 1 ? '' : 's'}, and you have used ${freeUsed}. Upload this as paid content, or upgrade your plan for more slots.`,
-        );
-      }
-      if (dto.accessType === 'paid' && paidUsed >= allowance.paid) {
-        throw new ForbiddenException(
-          `Your ${creatorState.tier} plan includes ${allowance.paid} paid upload${allowance.paid === 1 ? '' : 's'}, and you have used ${paidUsed}. Upgrade your plan for more slots.`,
-        );
-      }
+      // The cap counts products, content AND services together, so it is held
+      // on CreatorState.slotsUsed rather than on a count of ContentPiece rows.
+      //
+      // The row is created on demand: it used to exist only once a creator had
+      // paid for a subscription, so requiring one here would be the payment
+      // gate under another name.
+      await tx.creatorState.upsert({
+        where: { wawuUserId: creatorWawuId },
+        create: { wawuUserId: creatorWawuId },
+        update: {},
+      });
 
-      // Claims the slot conditionally, so the total cap holds even if the
-      // per-kind counts above were read concurrently by another request.
+      // Claimed conditionally, so the cap holds even against a concurrent
+      // upload that read the same count.
       const claimed = await tx.creatorState.updateMany({
         where: {
           wawuUserId: creatorWawuId,
@@ -534,7 +512,7 @@ export class ContentPieceService {
       });
       if (claimed.count === 0) {
         throw new ForbiddenException(
-          `You have used all ${allowance.total} upload slots on your ${creatorState.tier} plan. Upgrade your plan for more slots.`,
+          `You have used all ${allowance.total} of your upload slots. Remove an item to free one up.`,
         );
       }
 
@@ -546,6 +524,7 @@ export class ContentPieceService {
           title: dto.title,
           description: dto.description,
           category: dto.category,
+          specializations: dto.specializations ?? [],
           tags: dto.tags ?? [],
           accessType: dto.accessType as never,
           price: dto.price,
@@ -614,9 +593,7 @@ export class ContentPieceService {
       throw new BadRequestException('You have already unlocked this content.');
     }
 
-    const commissionRate = await this.resolveCommissionRate(
-      content.creatorWawuId,
-    );
+    const commissionRate = this.resolveCommissionRate();
     const charge = this.flutterwave.initCharge({
       amount: content.price,
       purpose: 'content-unlock',

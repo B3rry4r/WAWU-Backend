@@ -19,9 +19,9 @@ export interface EnrolResponse extends LearnEntitlement {
  * CourseEnrollment resource — registry.json "CourseEnrollment". Frozen
  * contract is exactly one endpoint: POST /learn/courses/:id/enrol
  * (`roles: ["any"]`). Business rule (registry note): "Spends a free-course
- * slot (freeCoursesTotal derived from CreatorState.tier: basic=1, pro=3)".
+ * slot (freeCoursesTotal is flat per creator account)".
  *
- * JUDGMENT: rather than re-deriving the tier/slot math here, this service
+ * JUDGMENT: rather than re-deriving the slot math here, this service
  * reuses LearnEntitlementService.getForUser — the exact same computation
  * GET /learn/entitlement already returns — both to decide whether a slot
  * remains and to build the fresh entitlement snapshot returned after

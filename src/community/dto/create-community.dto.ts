@@ -11,10 +11,9 @@ import {
 
 /**
  * `CommunityKind` (prisma/schema.prisma) — the enum's real members, not an
- * invented set. `open` is available on Basic; `private` is a Pro-tier
- * feature, enforced server-side in CommunityService.create (docs/01_SPEC.md:
- * Basic "cannot open/host private communities", Pro "Can open/host private
- * communities").
+ * invented set. Both kinds are open to every creator account. `private` used
+ * to be a Pro-tier feature enforced in CommunityService.create; the tier that
+ * sold it is gone, and so is the check.
  */
 const COMMUNITY_KINDS = ['open', 'private'] as const;
 

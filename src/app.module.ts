@@ -10,6 +10,7 @@ import { AdminProfessionalReviewModule } from './admin/professional-review/admin
 import { AdminPaymentsModule } from './admin/payments/admin-payments.module';
 import { AdminCreatorsModule } from './admin/creators/admin-creators.module';
 import { AdminEventsModule } from './admin/events/admin-events.module';
+import { AdminNotificationsModule } from './admin/notifications/admin-notifications.module';
 import { PrismaModule } from './common/prisma/prisma.module';
 import { AccountModule } from './account/account.module';
 import { CommentModule } from './comment/comment.module';
@@ -31,6 +32,8 @@ import { SavedItemModule } from './saved-item/saved-item.module';
 import { PurchaseModule } from './purchase/purchase.module';
 import { MentorModule } from './mentor/mentor.module';
 import { ServiceApplicationModule } from './service-application/service-application.module';
+import { VerificationStateModule } from './common/verification/verification-state.module';
+import { VerificationModule } from './verification/verification.module';
 import { VerificationSubmissionModule } from './verification-submission/verification-submission.module';
 import { FollowRelationshipModule } from './follow-relationship/follow-relationship.module';
 import { CreatorDiscoveryModule } from './creator-discovery/creator-discovery.module';
@@ -45,13 +48,11 @@ import { NotificationSettingsModule } from './notification-settings/notification
 import { PrivacySettingsModule } from './privacy-settings/privacy-settings.module';
 import { UserProfileModule } from './user-profile/user-profile.module';
 import { CourseEnrollmentModule } from './course-enrollment/course-enrollment.module';
-import { CreatorSubscriptionModule } from './creator-subscription/creator-subscription.module';
 import { SearchResponseModule } from './search-response/search-response.module';
 import { CommunityModule } from './community/community.module';
 import { CommunityMessageModule } from './community-message/community-message.module';
 import { CreatorEarningsModule } from './creator-earnings/creator-earnings.module';
 import { DirectMessageModule } from './direct-message/direct-message.module';
-import { ReferralModule } from './referral/referral.module';
 import { PaymentLinkModule } from './payment-link/payment-link.module';
 import { EventModule } from './event/event.module';
 import { EventTicketingModule } from './event-ticketing/event-ticketing.module';
@@ -180,8 +181,8 @@ import { APP_GUARD } from '@nestjs/core';
     // `@Controller('admin/creators')`. Nothing outside src/admin/ declares an
     // `admin` prefix; the app's own payment surface is
     // `@Controller('webhooks/flutterwave')` and its creator surfaces are
-    // `@Controller('creator')`, `@Controller('creator-subscription')` and
-    // `@Controller('content/mine/earnings')` -- every one a different FIRST segment,
+    // `@Controller('creator')` and `@Controller('content/mine/earnings')`
+    // -- each a different FIRST segment,
     // so neither of these can shadow an existing route no matter how early it
     // registers. The only root-level controller (AppController) declares one
     // literal path (`health`) with no parameter segment.
@@ -214,6 +215,13 @@ import { APP_GUARD } from '@nestjs/core';
     // by booting and reading the printed route table, not by reasoning about
     // it.
     AdminEventsModule,
+    // Admin notification campaigns (build brief C8). Registered alongside the
+    // other `/admin/*` modules and for the same shadow-safety reason:
+    // AdminNotificationsController is `@Controller('admin/notifications')`;
+    // the app's own surface is `@Controller('notifications')`, a different
+    // FIRST segment, so neither can swallow the other in either registration
+    // order.
+    AdminNotificationsModule,
     AccountModule,
     CommentModule,
     CourseLessonModule,
@@ -242,12 +250,17 @@ import { APP_GUARD } from '@nestjs/core';
     PlaybookModule,
     SavedItemModule,
     PurchaseModule,
+    VerificationStateModule,
     VerificationSubmissionModule,
     CreatorDiscoveryModule,
     ProfessionalModule,
     FollowRelationshipModule,
     BlockedAccountModule,
     ContentPieceModule,
+    // After ContentPieceModule: VerificationModule imports it for the shared
+    // Flutterwave client, and listing it earlier would move ContentPiece's own
+    // controllers up the route registration order as a side effect.
+    VerificationModule,
     CreditPurchaseModule,
     KycSubmissionModule,
     LearnEntitlementModule,
@@ -256,13 +269,11 @@ import { APP_GUARD } from '@nestjs/core';
     PrivacySettingsModule,
     UserProfileModule,
     CourseEnrollmentModule,
-    CreatorSubscriptionModule,
     SearchResponseModule,
     CommunityModule,
     CommunityMessageModule,
     CreatorEarningsModule,
     DirectMessageModule,
-    ReferralModule,
     PaymentLinkModule,
     // Events, app-facing half -- reinstated 22 Aug 2026 by product-owner
     // decision, reversing the "no Events section" line in WAWU-Web/CLAUDE.md

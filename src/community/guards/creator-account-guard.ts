@@ -21,11 +21,11 @@ import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface'
  * (one copy per resource dir) rather than importing another resource's copy
  * or hoisting a shared one into src/common.
  *
- * This guard checks ACCOUNT TYPE only. The entitlement gates
+ * This guard checks ACCOUNT TYPE, and that is now the whole gate on hosting.
+ * CommunityService.create used to add two entitlement checks on top of it
  * (CreatorState.subscriptionPaid for hosting at all, CreatorState.tier for
- * private communities) are enforced in CommunityService.create — same split
- * as ContentPiece, where the guard proves "creator" and the service proves
- * "paid".
+ * private communities); both were subscription entitlements and went with
+ * subscriptions.
  */
 @Injectable()
 export class CreatorAccountGuard implements CanActivate {

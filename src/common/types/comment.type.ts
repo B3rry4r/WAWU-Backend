@@ -1,4 +1,5 @@
 import type { CommentModel } from '../../../generated/prisma/models';
+import type { VerificationState } from '../verification/verification-state';
 
 /**
  * A comment's author, resolved from `authorWawuId` — same batch-lookup shape
@@ -7,6 +8,11 @@ import type { CommentModel } from '../../../generated/prisma/models';
  */
 export interface CommentAuthor {
   wawuId: string;
+  /**
+   * Both ticks. A comment thread is a place people decide who to trust, so
+   * it is one of the places the tick most has to appear.
+   */
+  verification: VerificationState;
   /** Real display name from WAWU ID, falling back to the handle, then ''. */
   name: string;
   handle: string | null;

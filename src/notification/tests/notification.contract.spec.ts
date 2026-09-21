@@ -200,4 +200,78 @@ describe('Notification contract', () => {
       await request(app.getHttpServer()).post('/notifications/mark-all-read').expect(401);
     });
   });
+
+  /**
+   * Added with build brief C8. The unread dot is a claim about what the
+   * reader has seen, and until this route existed nothing made that claim
+   * true one notification at a time: opening one navigated away and left its
+   * dot lit, so the only way to clear it was to declare EVERYTHING read.
+   */
+  describe('POST /notifications/:id/read', () => {
+    it('marks one notification read, and leaves the caller’s others alone', async () => {
+      await prisma.notification.update({
+        where: { id: SEEDED_FOLLOW_FOR_BASIC },
+        data: { read: false },
+      });
+
+      await request(app.getHttpServer())
+        .post(`/notifications/${SEEDED_FOLLOW_FOR_BASIC}/read`)
+        .set('Authorization', `Bearer ${creatorBasicToken}`)
+        .expect(200);
+
+      const row = await prisma.notification.findUniqueOrThrow({
+        where: { id: SEEDED_FOLLOW_FOR_BASIC },
+      });
+      expect(row.read).toBe(true);
+
+      const others = await prisma.notification.findMany({
+        where: { userWawuId: CREATOR_PRO.sub },
+      });
+      expect(others.every((n) => !n.read)).toBe(true);
+
+      // restore fixture state for repeatability across local runs
+      await prisma.notification.update({
+        where: { id: SEEDED_FOLLOW_FOR_BASIC },
+        data: { read: false },
+      });
+    });
+
+    it('cannot mark ANOTHER account’s notification read', async () => {
+      await request(app.getHttpServer())
+        .post(`/notifications/${SEEDED_SALE_FOR_PRO}/read`)
+        .set('Authorization', `Bearer ${creatorBasicToken}`)
+        .expect(200);
+
+      const row = await prisma.notification.findUniqueOrThrow({
+        where: { id: SEEDED_SALE_FOR_PRO },
+      });
+      expect(row.read).toBe(false);
+    });
+
+    it('is idempotent — the client fires it on open, and a retry must not fail', async () => {
+      await request(app.getHttpServer())
+        .post(`/notifications/${SEEDED_FOLLOW_FOR_BASIC}/read`)
+        .set('Authorization', `Bearer ${creatorBasicToken}`)
+        .expect(200);
+      await request(app.getHttpServer())
+        .post(`/notifications/${SEEDED_FOLLOW_FOR_BASIC}/read`)
+        .set('Authorization', `Bearer ${creatorBasicToken}`)
+        .expect(200);
+
+      await prisma.notification.update({
+        where: { id: SEEDED_FOLLOW_FOR_BASIC },
+        data: { read: false },
+      });
+    });
+
+    it('400s a non-uuid id, and 401s with no auth', async () => {
+      await request(app.getHttpServer())
+        .post('/notifications/not-a-uuid/read')
+        .set('Authorization', `Bearer ${creatorBasicToken}`)
+        .expect(400);
+      await request(app.getHttpServer())
+        .post(`/notifications/${SEEDED_FOLLOW_FOR_BASIC}/read`)
+        .expect(401);
+    });
+  });
 });

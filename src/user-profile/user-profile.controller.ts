@@ -49,7 +49,7 @@ export class UserProfileController {
     @CurrentUser() user: WawuJwtClaims,
     @Body() dto: UpdateUserProfileDto,
   ) {
-    return this.userProfileService.upsertMe(user.sub, dto);
+    return this.userProfileService.upsertMe(user, dto);
   }
 
   @Get(':wawuId/public-profile')

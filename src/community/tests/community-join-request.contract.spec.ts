@@ -27,9 +27,8 @@ import { CommunityMessageModule } from '../../community-message/community-messag
  * branch. `CommunityMessageService.assertMember` requires
  * `status === 'joined'`, so a pending member could neither read nor post: a
  * private community was a room nobody could ever be admitted to. Private
- * hosting is the Pro tier's headline differentiator (WAWU-Web
- * docs/01_SPEC.md:81) and is advertised on the pricing card, so creators
- * were paying extra for a dead end.
+ * hosting is open to every creator account (WAWU-Web docs/01_SPEC.md:81),
+ * so it was a dead end for everybody who used it.
  *
  * The tests below therefore do not stop at "the row says joined". The
  * central one requests -> is refused a post -> is approved -> POSTS
@@ -230,23 +229,19 @@ describe('Community join requests (contract)', () => {
       ],
     });
 
-    // Both creators are paid with kycStatus 'pending' on purpose: KYC gates
-    // EARNING, never hosting or moderating (CLAUDE.md — the two creator
-    // gates are independent).
+    // Both creators have kycStatus 'pending' on purpose: KYC gates EARNING,
+    // never hosting or moderating (CLAUDE.md — the creator gates are
+    // independent).
     await prisma.creatorState.createMany({
       data: [
         {
           wawuUserId: hostSub,
-          tier: 'pro',
-          subscriptionPaid: true,
           kycStatus: 'pending',
           slotsUsed: 0,
           dmEnabled: false,
         },
         {
           wawuUserId: otherHostSub,
-          tier: 'basic',
-          subscriptionPaid: true,
           kycStatus: 'pending',
           slotsUsed: 0,
           dmEnabled: false,
@@ -473,6 +468,18 @@ describe('Community join requests (contract)', () => {
      * can now actually be in the room".
      */
     it('approves a pending request — and the member, refused a post a moment earlier, can now post', async () => {
+      // The requester needs credits to post. Until 21 Sep 2026 a first-ever
+      // sender was carried by the 7-day free trial that the metered path
+      // opened for them, so this test never had to say so; the trial was
+      // removed, so the credit is seeded explicitly. What is under test here
+      // is the MEMBERSHIP dead end, not the credits gate, and this keeps the
+      // two from being confused for each other.
+      await prisma.creditsState.upsert({
+        where: { userWawuId: requesterSub },
+        update: { creditBalance: 1 },
+        create: { userWawuId: requesterSub, creditBalance: 1 },
+      });
+
       await requestToJoin(requesterToken);
 
       // Before approval: pending is NOT membership. This is the dead end.

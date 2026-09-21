@@ -1,8 +1,7 @@
+import type { VerificationState } from '../../common/verification/verification-state';
 import type {
   AccountType,
-  CreatorTier,
   ReviewStatus,
-  SubscriptionStatus,
   VerificationTier,
 } from '../../../generated/prisma/enums';
 
@@ -12,7 +11,7 @@ import type {
  *
  * ── WHY THIS FILE EXISTS ─────────────────────────────────────────────────
  * There was no creator lookup of any kind. Every existing read is self-scoped
- * (`/creator`, `/creator-subscription`, `/content/mine/earnings` all key on
+ * (`/creator`, `/content/mine/earnings` all key on
  * the caller's own token), so an operator holding a support ticket had nothing
  * to open — not by handle, not by id, not at all. The answer to that ticket is
  * spread across four tables and one derived figure, and nobody could see them
@@ -22,9 +21,9 @@ import type {
  * Protected-surface hazard H-1: nearly every wire type in this codebase is a
  * bare re-export of its Prisma model returned by spread, so a new column on an
  * existing table silently widens a live app response. Nothing here reuses or
- * widens `src/common/types/creator-state.type.ts` or
- * `creator-subscription.type.ts`; these interfaces are declared field by field
- * so a future column reaches this surface only when somebody decides it should.
+ * widens `src/common/types/creator-state.type.ts`; these interfaces are
+ * declared field by field so a future column reaches this surface only when
+ * somebody decides it should.
  *
  * ── WHAT IS DELIBERATELY ABSENT ──────────────────────────────────────────
  * BVN, NIN, national-ID equivalent, ID document URL, payout bank name and
@@ -37,24 +36,16 @@ import type {
  */
 
 /**
- * The two INDEPENDENT gates, never merged.
+ * The EARNING gate.
  *
- * CLAUDE.md is explicit: a paid subscription unlocks UPLOADING, manual KYC
- * approval unlocks EARNING, and "paid + uploading + KYC pending" is a normal
- * state rather than an edge case. So there is no `verified` boolean on this
- * shape and there never will be one — collapsing these two into a single
- * word is how an operator tells a creator who is legitimately uploading that
- * their account is "not verified", and how a creator who cannot be paid gets
+ * There were two gates. A paid subscription unlocked UPLOADING and manual KYC
+ * unlocks EARNING; the first went with subscriptions, and uploading is now
+ * bounded only by the flat per-account cap. KYC is untouched. There is still
+ * no `verified` boolean on this shape and there never will be one — collapsing
+ * a KYC status into a single word is how a creator who cannot be paid gets
  * told everything is fine.
  */
 export interface AdminCreatorGatesView {
-  /**
-   * The UPLOAD gate. `CreatorState.subscriptionPaid`, read verbatim — the same
-   * column `ContentPieceService.create` checks before allowing an upload, so
-   * this field and the creator's actual ability to upload cannot disagree.
-   * Null when the account has no CreatorState row at all.
-   */
-  subscriptionPaid: boolean | null;
   /**
    * The EARNING gate. `CreatorState.kycStatus`, plus the `not_started`
    * synthesis `CreatorStateService` performs (protected-surface hazard H-5):
@@ -93,6 +84,16 @@ export interface AdminCreatorGatesView {
  * `authority`.
  */
 export interface AdminCreatorVerificationView {
+  /**
+   * The two ticks, as everybody else on the platform sees them.
+   *
+   * THIS is the live badge now, and the three tier fields below it are the
+   * history of the ladder it replaced. They are kept because a submission
+   * made before the change is still a real thing a reviewer may have to
+   * explain, and removing them would leave an admin looking at a decision
+   * with no record of what was decided. Read this field, not those.
+   */
+  ticks: VerificationState;
   /** The highest rung this backend has approved and elevated. Null if none. */
   approvedTier: VerificationTier | null;
   /** When that approval happened. */
@@ -107,41 +108,15 @@ export interface AdminCreatorVerificationView {
   authority: 'wawu-id';
 }
 
-/**
- * The paid subscription — the thing that unlocks uploading.
- *
- * `pendingTier` / `tierChangesAt` are the reason this block exists in this
- * shape. A scheduled downgrade is invisible to every current endpoint, and it
- * is exactly the fact that resolves a support call: a creator on Pro today
- * whose row says `pendingTier: basic, tierChangesAt: <the day their term ends>`
- * has a downgrade booked, and neither they nor the operator can see it
- * anywhere else.
- */
-export interface AdminCreatorSubscriptionView {
-  tier: CreatorTier;
-  status: SubscriptionStatus;
-  /** End of the paid term. A downgrade never takes effect before this. */
-  currentPeriodEnd: Date;
-  /** The tier this subscription moves to at `tierChangesAt`. Null = no change booked. */
-  pendingTier: CreatorTier | null;
-  /** When the scheduled change applies — always the end of the paid term. */
-  tierChangesAt: Date | null;
-  /** Set when the creator has cancelled; the term still runs to `currentPeriodEnd`. */
-  cancelsAt: Date | null;
-  /** How many renewal charges have failed. Non-zero on a `past_due` row is the story. */
-  renewalAttempts: number;
-  /** Last four digits of the card on file. Never a full PAN — Flutterwave never sends one. */
-  cardLast4: string | null;
-}
-
 /** Upload slots. `slotsTotal` is derived, never stored — see `uploadAllowanceFor`. */
 export interface AdminCreatorUploadsView {
   slotsUsed: number | null;
-  /** Derived from tier with the shared `uploadAllowanceFor(tier)` helper, exactly as CreatorStateService does. */
+  /**
+   * The flat per-account cap, from the shared `uploadAllowanceFor()` helper,
+   * exactly as CreatorStateService derives it. There is no longer a free/paid
+   * sub-split, so the two sub-cap fields that used to sit here are gone.
+   */
   slotsTotal: number | null;
-  /** The free/paid split of that total, because the sub-caps are enforced separately. */
-  freeSlots: number | null;
-  paidSlots: number | null;
   /** Pieces currently waiting on a moderator — the other reason "I cannot see my upload". */
   pendingReviewCount: number;
   liveCount: number;
@@ -156,8 +131,7 @@ export interface AdminCreatorUploadsView {
  * the commission maths involved (per-row snapshotted rates, credit cost-basis
  * in kobo, DM escrow) is precisely the kind that drifts when copied.
  *
- * Naira, always. Never a wallet balance — there is no wallet in this product,
- * and these are read-time aggregates, not a spendable ledger.
+ * Naira, always. These are read-time aggregates, not a spendable ledger.
  */
 export interface AdminCreatorEarningsView {
   total: number;
@@ -170,13 +144,7 @@ export interface AdminCreatorListItemView {
   wawuUserId: string;
   handle: string | null;
   accountType: AccountType;
-  /** Null when the account has no CreatorState row (i.e. has never been a creator). */
-  tier: CreatorTier | null;
   gates: AdminCreatorGatesView;
-  /** Null when there is no CreatorSubscription row. */
-  subscriptionStatus: SubscriptionStatus | null;
-  /** Non-null here is the at-a-glance "a downgrade is booked" signal. */
-  pendingTier: CreatorTier | null;
   createdAt: Date;
 }
 
@@ -186,19 +154,16 @@ export interface AdminCreatorListItemView {
  * `accountType` and `createdAt` are nullable here and not on the list shape,
  * because they are the only two fields that come from `UserProfile` and the
  * detail endpoint can be opened for an account that has none. That is not
- * hypothetical: a subscription grant writes the subscription row, the
- * CreatorState row and the profile's `accountType` in one transaction
- * precisely because a partial write used to leave payers 403'd by every
- * CreatorAccountGuard in the codebase. An account in that broken shape is
- * exactly the ticket this screen exists for, so it must open rather than 404.
+ * hypothetical: every CreatorAccountGuard in the codebase reads `accountType`
+ * off the profile, so an account with a CreatorState row and no profile is
+ * 403'd everywhere. That broken shape is exactly the ticket this screen exists
+ * for, so it must open rather than 404.
  */
 export interface AdminCreatorDetailView {
   wawuUserId: string;
   handle: string | null;
   accountType: AccountType | null;
   createdAt: Date | null;
-  /** Null when the account has never had a paid subscription. */
-  subscription: AdminCreatorSubscriptionView | null;
   gates: AdminCreatorGatesView;
   verification: AdminCreatorVerificationView;
   uploads: AdminCreatorUploadsView;

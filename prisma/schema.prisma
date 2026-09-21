@@ -52,16 +52,6 @@ enum AccountType {
   creator
 }
 
-enum CreatorTier {
-  basic
-  pro
-  /// Everything in Pro, plus music distribution through Ditto. Priced and
-  /// sold as a third tier rather than an add-on, so it is a tier value and
-  /// not a flag — a creator is on one plan at a time and the whole billing,
-  /// proration and downgrade machinery already reasons about tiers.
-  pro_max
-}
-
 /// Shared by CreatorState.kycStatus, KycSubmission.status and
 /// VerificationSubmission.status — all three are the same pending/approved/
 /// rejected review lifecycle.
@@ -172,12 +162,8 @@ enum CreditPack {
   pro
 }
 
-enum SubscriptionStatus {
-  active
-  past_due
-  cancelled
-  expired
-}
+// REMOVED WITH SUBSCRIPTIONS: SubscriptionStatus. Its only column was
+// CreatorSubscription.status, and there is no subscription to be in a state.
 
 enum PartnerServiceStatus {
   live
@@ -245,28 +231,58 @@ model UserProfile {
   linkedinUrl     String?
   createdAt       DateTime    @default(now())
 
+  /// ── THE TWO TICKS ────────────────────────────────────────────────────────
+  /// Two INDEPENDENT paid verifications, not a ladder. A person may hold one,
+  /// both or neither, because a person may hold more than one role. Creator
+  /// is the purple tick, professional the green one, and neither outranks the
+  /// other, so nothing here ever picks a winner.
+  ///
+  /// Both are annual purchases. `...VerifiedAt` is when it was granted;
+  /// `...VerifiedUntil` is when it lapses. A NULL `until` alongside a
+  /// non-null `at` is a perpetual, admin-granted tick, which is what the
+  /// grandfathered accounts from the old ladder carry.
+  ///
+  /// WAWU ID remains the source of truth and is written first on every grant
+  /// and revoke (WawuIdClient.setVerification). These columns are the Hub's
+  /// mirror, so a page of 24 creator cards renders ticks from one query
+  /// instead of depending on identity being reachable - lookupPublicIdentities
+  /// deliberately degrades to an empty map when it is not, which would
+  /// otherwise silently strip every tick on the page.
+  ///
+  /// Never compare these dates at a call site. deriveVerificationState() in
+  /// src/common/verification/verification-state.ts is the one place that
+  /// turns them into `verified`.
+  creatorVerifiedAt         DateTime? @map("creator_verified_at")
+  creatorVerifiedUntil      DateTime? @map("creator_verified_until")
+  professionalVerifiedAt    DateTime? @map("professional_verified_at")
+  professionalVerifiedUntil DateTime? @map("professional_verified_until")
+
   @@index([accountType])
 }
 
-/// Creator-only entitlement/gate state. Two independent gates per CLAUDE.md:
-/// subscriptionPaid gates uploading, kycStatus=approved gates earning.
-/// `slotsTotal` is deliberately NOT a column — it derives from `tier`
-/// (registry's own example of a derived field) and is computed in the wire
-/// response / service layer, never stored.
+/// Creator-only entitlement/gate state.
+///
+/// ONE gate now, not two. `subscriptionPaid` and `tier` are gone: the product
+/// owner removed subscriptions entirely (build brief B1 — "There is no
+/// subscription tier ... Do not gate uploads behind payment"), so uploading is
+/// free to every creator account and there is no plan to be on. `kycStatus =
+/// approved` still gates EARNING, and is untouched: KYC and payment were
+/// always independent gates and only the payment one was removed.
+///
+/// `slotsTotal` remains deliberately NOT a column, but it no longer derives
+/// from a tier — it is the flat per-account cap in creator-tier-allowance.ts
+/// (brief B2: "Maximum 5 items per account. Hard cap, enforced server-side").
 model CreatorState {
-  wawuUserId       String       @id
-  tier             CreatorTier
-  subscriptionPaid Boolean      @default(false)
-  kycStatus        ReviewStatus @default(pending)
-  slotsUsed        Int          @default(0)
-  dmPrice          Int?
-  dmEnabled        Boolean      @default(false)
+  wawuUserId      String       @id
+  kycStatus       ReviewStatus @default(pending)
+  slotsUsed       Int          @default(0)
+  dmPrice         Int?
+  dmEnabled       Boolean      @default(false)
   /// Hours the creator has to reply before the payer is refunded. 24 was
   /// hardcoded, which is right for a fan message and wrong for a
   /// professional quoting on a case. Bounded in the DTO, not here.
-  dmResponseHours  Int          @default(24)
+  dmResponseHours Int          @default(24)
 
-  @@index([tier])
   @@index([kycStatus])
 }
 
@@ -289,6 +305,52 @@ model VerificationSubmission {
 
   @@index([wawuUserId])
   @@index([status])
+}
+
+/// Which of the two ticks a purchase or a grant is for.
+///
+/// NOT a ladder and not ordered: `professional` does not outrank `creator`,
+/// costs more only because it certifies more, and a person may hold both.
+/// Anything that sorts these two values is reintroducing the ladder that was
+/// removed.
+enum VerificationKind {
+  creator
+  professional
+}
+
+/// A paid, annual verification purchase.
+///
+/// Its own table rather than a `Purchase` row: a Purchase names a
+/// `creatorWawuId` who receives 85% of it, and this money is paid to the
+/// platform for a tick, with no creator on the other side. Forcing it into
+/// that shape would have put a fake counterparty on a real revenue row.
+///
+/// Durable rather than a PendingCharge that is deleted on claim: this is
+/// revenue, and "who paid for which tick, when, and what it cost that day"
+/// has to stay answerable after the tick itself has lapsed. `priceNgn` is
+/// snapshotted for exactly that reason - the configured price moves, what
+/// this person paid does not.
+model VerificationPurchase {
+  id               String            @id @default(uuid())
+  wawuUserId       String
+  kind             VerificationKind
+  /// Whole naira, snapshotted at init. Verification enforces
+  /// `paid >= priceNgn`, which is what stops a 1 naira payment buying a tick.
+  priceNgn         Int
+  /// Payment lookup key. Unique because a duplicate here is a double-granted
+  /// tick, and because verify finds the row by it.
+  flutterwaveTxRef String            @unique
+  flutterwaveTxId  String?
+  status           TransactionStatus @default(pending)
+  /// When the tick this purchase bought runs out. Written on settlement, so
+  /// a lapsed tick can still be traced back to the payment that granted it.
+  grantedUntil     DateTime?
+  createdAt        DateTime          @default(now())
+  settledAt        DateTime?
+
+  @@index([wawuUserId])
+  @@index([status])
+  @@index([kind])
 }
 
 /// Creator KYC (BVN/NIN or national-ID equivalent + payout bank details).
@@ -338,7 +400,17 @@ model ContentPiece {
   contentType            ContentType
   title                  String
   description            String
+  /// DEPRECATED: the flat 25-category list. Kept, and still required, until
+  /// every published row carries `specializations` and a backfill has run.
+  /// Dropping it now would orphan every piece published before this column.
   category               String
+  /// Specialization ids from the C1 taxonomy (`<categoryId>.<slug>`, e.g.
+  /// `photography.portrait-photographer`). What a buyer actually searches and
+  /// filters on. A plain String[] rather than a relation: these are stable
+  /// ids from a code-owned taxonomy (src/lib/taxonomy in the web client), not
+  /// user-editable rows, so a join table would add a write path and a
+  /// referential-integrity story for data that only ever changes by deploy.
+  specializations        String[]      @default([])
   tags                   String[]      @default([])
   accessType             AccessType
   price                  Int
@@ -630,7 +702,13 @@ model CommunityMessage {
 model CreditsState {
   userWawuId    String   @id
   creditBalance Int      @default(0)
-  trialEndsAt   DateTime
+  /// LEGACY. The 7-day free trial was removed on 21 Sep 2026 (product owner:
+  /// "no 7 day silly trials"), so nothing writes this any more and nothing
+  /// reads it. Made NULLABLE rather than dropped: dropping a column an older
+  /// instance still selects takes production down mid-deploy, and rows that
+  /// already carry a date keep it harmlessly. Drop it in a follow-up once no
+  /// deployed build references it.
+  trialEndsAt   DateTime?
 }
 
 model CreditPurchase {
@@ -804,32 +882,6 @@ model PendingCharge {
   @@index([createdAt])
 }
 
-model CreatorSubscription {
-  creatorWawuId          String             @id
-  tier                   CreatorTier
-  status                 SubscriptionStatus @default(active)
-  commissionRateOverride Decimal?           @db.Decimal(5, 4)
-  flutterwaveCustomerRef String?
-  flutterwavePlanId      String?
-  currentPeriodEnd       DateTime
-  renewalAttempts        Int                @default(0)
-  cancelsAt              DateTime?
-  cardLast4              String?
-  /// Scheduled tier change. A downgrade (Pro -> Basic) does NOT take effect
-  /// on the day it is requested: the annual term has already been paid in
-  /// full and DELETE/downgrade give no refund, so revoking Pro immediately
-  /// would confiscate something the creator bought. `pendingTier` records
-  /// the tier the subscription moves to, and `tierChangesAt` records when
-  /// (always the end of the paid term). Both are cleared the moment the
-  /// change is applied. Null/null means "no change scheduled".
-  pendingTier            CreatorTier?
-  tierChangesAt          DateTime?
-
-  @@index([status])
-  @@index([currentPeriodEnd])
-  @@index([tierChangesAt])
-}
-
 /// `score` is a periodically-recomputed cache (views + purchases*weight +
 /// comments, per registry note) — the row itself IS stored (hence
 /// `updatedAt`), even though the computation reads across multiple tables.
@@ -856,9 +908,36 @@ model Notification {
   read         Boolean  @default(false)
   createdAt    DateTime @default(now())
 
+  /// Build brief C8: a notification is an EXPERIENTIAL surface, not a text
+  /// row. A 16:9 image, stored as an absolute URL. Null on every
+  /// transactional kind that has no picture to show, which is most of them -
+  /// the list renders the compact row in that case rather than an empty frame.
+  imageUrl String?
+
+  /// Where this notification goes when it is opened, as an in-app path
+  /// ("/explore", "/profile/verification"). Only the campaign and reminder
+  /// kinds set it: every transactional kind is routed by `kind` on the client
+  /// (actionHrefFor), because its destination is a property of the event and
+  /// must not be something an admin can retarget.
+  ///
+  /// Validated against a fixed allowlist before it is written - see
+  /// src/admin/notifications/campaign-destination.ts. An open redirect in a
+  /// notification that lands on every account at once is not a small bug.
+  actionHref String?
+
+  /// Set when this row was fanned out from a NotificationCampaign, so a
+  /// dispatch can be counted, audited and reasoned about after the fact.
+  /// Null for every organically emitted notification.
+  campaignId String?
+
   @@index([userWawuId])
   @@index([userWawuId, read])
   @@index([createdAt])
+  @@index([campaignId])
+  /// The verification reminder sweep asks "when did this user last get one of
+  /// these", per user, per kind. Without this it is a sequential scan of the
+  /// whole table on every run.
+  @@index([userWawuId, kind, createdAt])
 }
 
 model NotificationSettings {
@@ -867,8 +946,147 @@ model NotificationSettings {
   newFollowers    Boolean @default(true)
   dmReminders     Boolean @default(true)
   refunds         Boolean @default(true)
-  promotions      Boolean @default(false)
+  /// "Offers and news" in Settings. Now the opt-out for admin-composed
+  /// campaigns (kind `campaign`), which is the first thing that has ever read
+  /// this column.
+  ///
+  /// Default flipped false -> true with build brief C8, which asks for a
+  /// promotion channel "to the whole user base". A channel whose default is
+  /// off reaches nobody, so leaving it at false would have shipped the
+  /// feature dead. EXISTING ROWS ARE NOT BACKFILLED: a stored `false` is left
+  /// alone, because it cannot be told apart from a deliberate opt-out. See
+  /// DECISIONS.md D17c - whether to backfill is the product owner's call, not
+  /// one to make quietly in a migration.
+  promotions      Boolean @default(true)
   communityDigest Boolean @default(true)
+}
+
+// -----------------------------------------------------------------------------
+// Notification campaigns (build brief C8 - the push / promotion channel)
+// -----------------------------------------------------------------------------
+
+/// Who a campaign goes to.
+///
+/// Every value here is a question this database can actually answer with a
+/// query, which is the whole constraint on the list. "Everyone who opened the
+/// app this week" is a perfectly sensible marketing segment and is not here,
+/// because nothing in this backend records a session.
+enum NotificationAudience {
+  /// Every account with a profile on this backend.
+  everyone
+  /// UserProfile.accountType = creator.
+  creators
+  /// UserProfile.accountType = user, i.e. buyers.
+  buyers
+  /// Creators with no APPROVED VerificationSubmission row. This is the
+  /// segment B1's recurring verification prompt is aimed at.
+  unverified_creators
+  /// Anyone with an approved ProfessionalProfile.
+  professionals
+  /// Approved professionals with no approved VerificationSubmission row.
+  unverified_professionals
+}
+
+enum NotificationCampaignStatus {
+  draft
+  /// Claimed by a dispatch that is fanning out right now. A campaign cannot
+  /// leave this state except by finishing, which is what makes a double-click
+  /// on "Send" harmless.
+  sending
+  sent
+  failed
+}
+
+enum AdminNotificationAction {
+  campaign_created
+  campaign_updated
+  campaign_dispatched
+  campaign_failed
+}
+
+/// One admin-composed rich notification, and the record of sending it.
+///
+/// Kept as its own row rather than as "the first Notification of a batch"
+/// because the campaign exists before any recipient does: it is drafted,
+/// reviewed, and only then fanned out. It also holds the two numbers nobody
+/// can reconstruct afterwards - how many accounts the audience resolved to,
+/// and how many rows were actually written once notification preferences were
+/// honoured.
+model NotificationCampaign {
+  id String @id @default(uuid())
+
+  title       String
+  body        String
+  /// The picture. Absolute URL; null means the campaign renders as a compact
+  /// row rather than a picture card.
+  imageUrl    String?
+  /// Both or neither: a button with no destination is a dead control.
+  actionLabel String?
+  actionHref  String?
+  /// Mirrors Notification.tone. Campaigns are limited to the quiet tones in
+  /// the DTO (`accent`, `info`, `neutral`, `success`); a promotion has no
+  /// business rendering in the danger red reserved for money and deadlines.
+  tone        String  @default("accent")
+
+  audience NotificationAudience
+  status   NotificationCampaignStatus @default(draft)
+
+  /// How many accounts the audience query matched at dispatch time.
+  recipientCount Int     @default(0)
+  /// How many notification rows were actually written. Lower than
+  /// recipientCount by exactly the number of recipients whose
+  /// NotificationSettings.promotions is off.
+  deliveredCount Int     @default(0)
+  /// Set when a dispatch fails, so the failure is readable in the dashboard
+  /// rather than only in a server log.
+  failureReason  String?
+
+  /// Admin identity snapshotted at each step, same as AdminContentReview and
+  /// AdminKycAudit: the trail has to survive an admin being renamed or removed.
+  createdByAdminId    String
+  createdByAdminEmail String
+  createdByAdminRole  AdminRole
+
+  dispatchedByAdminId    String?
+  dispatchedByAdminEmail String?
+  dispatchedAt           DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([createdAt])
+  @@index([createdByAdminId])
+}
+
+/// Audit trail for the campaign surface, in the shape this codebase already
+/// uses for moderation decisions (AdminContentReview, AdminKycAudit,
+/// AdminEventReview): one row per action, with who and when snapshotted onto
+/// it.
+///
+/// A campaign is the only admin action in this backend that touches every
+/// account at once, so "who sent that, and to whom" has to be answerable from
+/// the trail alone, after the campaign row itself has been edited or deleted.
+model AdminNotificationAudit {
+  id         String @id @default(uuid())
+  campaignId String
+
+  action         AdminNotificationAction
+  audience       NotificationAudience
+  /// Null on create/update: nothing was resolved or written yet.
+  recipientCount Int?
+  deliveredCount Int?
+  /// Set on campaign_failed.
+  reason         String?
+
+  actedByAdminId    String
+  actedByAdminEmail String
+  actedByAdminRole  AdminRole
+  actedAt           DateTime  @default(now())
+
+  @@index([campaignId])
+  @@index([actedByAdminId])
+  @@index([actedAt])
 }
 
 // -----------------------------------------------------------------------------
@@ -1812,15 +2030,15 @@ model Event {
 /// order like anything else here. Initials are derived on the wire from
 /// `name`; storing them would be a second definition of the same fact.
 model EventSpeaker {
-  id      String  @id @default(uuid())
-  eventId String
-  event   Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  name    String
-  title   String?
+  id       String  @id @default(uuid())
+  eventId  String
+  event    Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  name     String
+  title    String?
   /// Object-storage URL from POST /uploads/presign (folder "event/speaker").
   /// Optional — a speaker with no photo still renders, as initials.
   photoUrl String?
-  order   Int
+  order    Int
 
   @@index([eventId])
 }
@@ -2497,60 +2715,19 @@ model DittoOptIn {
   emailedAt  DateTime?
 }
 
-/// A referral code: a discount on ONE plan, and a way in while public signup
-/// is closed.
-///
-/// It does two jobs deliberately, because they are the same act. A blog is
-/// given a code so its readers can join at a price, and a hand-picked creator
-/// is given one so they can join at all — the code is the invitation and the
-/// price in one object, rather than two systems that have to agree.
-///
-/// `discountPercent` is allowed to be 0. A code that takes nothing off is not
-/// a broken code: it is how a creator is let through the closed door at the
-/// normal price, which is a thing the product owner asked for explicitly.
-model ReferralCode {
-  /// Stored and matched UPPERCASE. Codes are read off a blog post and typed
-  /// by hand, so case is a typo waiting to happen, not a distinction.
-  code            String      @id
-  /// Who it is for — "Blog X", "Cohort 1". For whoever is reading the list
-  /// later trying to remember what it was.
-  label           String
-  /// 0-100. Bounded in the DTO, and again here by the service.
-  discountPercent Int
-  /// The plan it applies to. A code is issued against a price, and the prices
-  /// differ per tier, so a code that applied to all of them would mean three
-  /// different discounts.
-  tier            CreatorTier
-  active          Boolean     @default(true)
-  /// Null means unlimited. A blog code is unlimited; a code for one named
-  /// creator is not.
-  maxUses         Int?
-  usedCount       Int         @default(0)
-  expiresAt       DateTime?
-  createdAt       DateTime    @default(now())
-  createdByAdmin  String?
-
-  redemptions ReferralRedemption[]
-
-  @@index([active])
-}
-
-/// One account's use of one code.
-///
-/// Its own table rather than a counter alone, so "who came in through this
-/// code" is answerable — that is the entire point of giving a blog a code —
-/// and so the same account cannot spend one code twice.
-model ReferralRedemption {
-  id         String   @id @default(uuid())
-  code       String
-  wawuUserId String
-  redeemedAt DateTime @default(now())
-
-  referralCode ReferralCode @relation(fields: [code], references: [code], onDelete: Cascade)
-
-  @@unique([code, wawuUserId])
-  @@index([wawuUserId])
-}
+// REMOVED WITH SUBSCRIPTIONS: ReferralCode / ReferralRedemption.
+//
+// A referral code was a percentage discount on ONE subscription plan, keyed
+// to a CreatorTier and priced off the plan table. With subscriptions removed
+// (brief B1) there is no plan and no price for a code to take a percentage
+// of, so the feature has no target left rather than merely no callers.
+//
+// This is a CONSEQUENCE of the authorized removal, not a separate product
+// decision, and it leaves a real open question: verification (N4,999 creator
+// / N9,999 professional) is now the primary paid action, and a discount code
+// pointed at THAT would be the natural successor. Re-pointing it means
+// choosing what a code applies to and what it costs, which is the product
+// owner's call, so nothing here guesses at it. See DECISIONS.md.
 
 /// Platform-wide switches an admin can flip without a deploy.
 ///
@@ -2570,26 +2747,30 @@ model PlatformSettings {
   /// Flipped from the dashboard, not from a deploy.
   userSignupEnabled Boolean @default(true)
 
+  /// What the two ticks cost, in whole naira, per year.
+  ///
+  /// Columns rather than constants because a price is a commercial decision
+  /// that changes without a deploy, and this table already exists to be
+  /// flipped from the dashboard. The defaults are the launch prices; the
+  /// single place they are written down in code is
+  /// src/common/verification/verification-pricing.ts, which is also the only
+  /// thing that reads these.
+  ///
+  /// Naira only. There is no second currency in this product.
+  creatorVerificationPriceNgn      Int @default(4999)
+  professionalVerificationPriceNgn Int @default(9999)
+
   updatedAt DateTime @updatedAt
 }
 
 /// The code somebody arrived with, remembered against their account.
 ///
-/// A referral code is applied at SIGN-UP and spent at CHECKOUT, and between
-/// those two moments people leave for their email client to fetch a
-/// verification code. Holding it only in the browser meant a new tab, a
-/// different device or a cleared cache lost it, and the tier screen quietly
-/// showed full price — which is exactly what happened with a 100%-off code.
-///
-/// One row per account: arriving with a second code replaces the first, so
-/// the most recent invitation is the one that applies.
-model ReferralClaim {
-  wawuUserId String   @id
-  code       String
-  claimedAt  DateTime @default(now())
-
-  @@index([code])
-}
+// REMOVED WITH SUBSCRIPTIONS: ReferralClaim.
+//
+// This held a code between sign-up and subscription checkout, so the tier
+// screen still knew about it after a detour through an email client. There is
+// no tier screen and no checkout to carry it to. See the ReferralCode note
+// above for the open question this leaves.
 
 /// ─────────────────────────────────────────────────────────────────────────
 /// WALLETS

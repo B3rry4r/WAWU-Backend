@@ -1,6 +1,7 @@
 import { Global, Module } from '@nestjs/common';
 import { NotificationController } from './notification.controller';
 import { NotificationService } from './notification.service';
+import { VerificationReminderService } from './verification-reminder.service';
 
 /**
  * registry.json § Notification. PrismaModule is @Global() (see
@@ -23,7 +24,7 @@ import { NotificationService } from './notification.service';
 @Global()
 @Module({
   controllers: [NotificationController],
-  providers: [NotificationService],
-  exports: [NotificationService],
+  providers: [NotificationService, VerificationReminderService],
+  exports: [NotificationService, VerificationReminderService],
 })
 export class NotificationModule {}

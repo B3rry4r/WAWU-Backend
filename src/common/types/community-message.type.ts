@@ -1,4 +1,5 @@
 import type { CommunityMessageModel } from '../../../generated/prisma/models';
+import type { VerificationState } from '../verification/verification-state';
 
 /** The sender's public identity, batch-looked-up alongside a page of messages. */
 export interface CommunityMessageSender {
@@ -7,6 +8,8 @@ export interface CommunityMessageSender {
   name: string;
   handle: string | null;
   avatarUrl: string | null;
+  /** Both ticks, derived server-side. Never a rung, never a rank. */
+  verification: VerificationState;
 }
 
 /**

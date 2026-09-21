@@ -10,7 +10,15 @@ import {
   composeNotification,
   type NotificationEvent,
   type NotificationKind,
+  type NotificationTone,
 } from './notification-event';
+
+/**
+ * Rows per INSERT when a campaign fans out. Large enough that a platform-wide
+ * send is a handful of statements, small enough that one statement stays well
+ * inside Postgres\' parameter limit and does not hold a write lock for long.
+ */
+const CAMPAIGN_CHUNK = 500;
 
 /**
  * Either the shared client or an interactive-transaction client — same idiom
@@ -35,18 +43,21 @@ export type NotificationPrismaClient = PrismaService | Prisma.TransactionClient;
  * them and inventing a mapping would be worse than an honest gap:
  *   newReplies      — would gate "the creator replied to your paid DM", which
  *                     is not one of the twelve kinds and has no emit site.
- *   promotions      — the nearest candidates (credits_low, trial_ending) are
- *                     operational warnings about a service the user is
- *                     actively using, not marketing. `promotions` also
- *                     defaults to FALSE, so mapping it would silently switch
- *                     the credits warning off for every account on the
- *                     platform.
+ *   promotions      — NOW WIRED, to the `campaign` kind that build brief C8
+ *                     introduced. It is still not mapped to credits_low:
+ *                     that is an operational warning about a service the
+ *                     user is actively using, not marketing, and
+ *                     switching them off would cost somebody a conversation
+ *                     they paid for. The column's default was flipped to TRUE
+ *                     with the same change, because a promotion channel whose
+ *                     default is off reaches nobody; existing rows were not
+ *                     backfilled (see the migration, and DECISIONS.md D17c).
  *   communityDigest — a periodic digest job that does not exist.
  *
- * Money-settlement kinds (sale, tip_received, dm_received,
- * subscription_renewal) are intentionally NOT suppressible by any flag: they
- * are the record of a completed transaction, and no notification preference
- * should be able to hide the fact that money changed hands.
+ * Money-settlement kinds (sale, tip_received, dm_received) are intentionally
+ * NOT suppressible by any flag: they are the record of a completed
+ * transaction, and no notification preference should be able to hide the fact
+ * that money changed hands.
  */
 const SETTINGS_GATE: Partial<
   Record<NotificationKind, keyof NotificationSettings>
@@ -54,7 +65,18 @@ const SETTINGS_GATE: Partial<
   new_follower: 'newFollowers',
   dm_deadline: 'dmReminders',
   dm_refunded: 'refunds',
+  campaign: 'promotions',
 };
+
+/**
+ * `verify_reminder` is deliberately absent from SETTINGS_GATE. It is not
+ * marketing: it is the state of the reader's own account, and brief B1 asks
+ * for it to be persistent and recurring. What stops it being spam is
+ * frequency, not a switch - VerificationReminderService sends at most one per
+ * account per REMINDER_INTERVAL_DAYS and stops the day the account is
+ * verified. That an unverified account cannot silence it is a product
+ * decision, recorded in DECISIONS.md D17b rather than left implicit here.
+ */
 
 /**
  * Prisma model defaults, mirrored for the case where a user has no
@@ -70,7 +92,10 @@ const SETTINGS_DEFAULTS: Record<keyof NotificationSettings, boolean | string> =
     newFollowers: true,
     dmReminders: true,
     refunds: true,
-    promotions: false,
+    // Mirrors the Prisma default, which C8 flipped to true. An account with no
+    // settings row has never been asked, and this is the answer given for it:
+    // announcements are on, and the Settings toggle turns them off.
+    promotions: true,
     communityDigest: true,
   };
 
@@ -147,6 +172,79 @@ export class NotificationService {
     return written;
   }
 
+  /**
+   * Fan one admin-composed campaign out to many recipients (build brief C8).
+   *
+   * Still the single write path: nothing outside this service calls
+   * `prisma.notification.create*`, and the row is still composed by
+   * `composeNotification`, so a campaign gets the same shape and the same
+   * copy rules as every organic notification.
+   *
+   * NOT `emitMany`. That one is sequential and does a settings lookup per
+   * event, which is right for a cron sweep resolving a handful of recipients
+   * and wrong here: a campaign to the whole user base would be one query and
+   * one INSERT per account. This resolves the opt-outs in ONE query and
+   * writes in batches.
+   *
+   * Returns the number of rows actually written, which is the recipient count
+   * MINUS everyone who has "Offers and news" switched off. Both numbers are
+   * recorded on the campaign, because "we sent it to 12,000 people" and "we
+   * wrote 9,412 notifications" are different facts and the dashboard shows
+   * both rather than picking the flattering one.
+   *
+   * Errors are NOT swallowed here, unlike `emit()`. A campaign dispatch is
+   * the caller's whole job rather than a side effect of somebody else's, so
+   * a failure has to reach the admin who pressed Send and the audit trail.
+   */
+  async emitCampaign(
+    campaign: {
+      id: string;
+      title: string;
+      body: string;
+      tone: NotificationTone;
+      imageUrl: string | null;
+      actionLabel: string | null;
+      actionHref: string | null;
+    },
+    recipientWawuIds: readonly string[],
+  ): Promise<number> {
+    if (recipientWawuIds.length === 0) return 0;
+
+    const optedOut = new Set(
+      (
+        await this.prisma.notificationSettings.findMany({
+          where: { userWawuId: { in: [...recipientWawuIds] }, promotions: false },
+          select: { userWawuId: true },
+        })
+      ).map((r) => r.userWawuId),
+    );
+
+    const recipients = recipientWawuIds.filter((id) => !optedOut.has(id));
+    if (recipients.length === 0) return 0;
+
+    let written = 0;
+    for (let i = 0; i < recipients.length; i += CAMPAIGN_CHUNK) {
+      const chunk = recipients.slice(i, i + CAMPAIGN_CHUNK);
+      const result = await this.prisma.notification.createMany({
+        data: chunk.map((userWawuId) =>
+          composeNotification({
+            kind: 'campaign',
+            userWawuId,
+            campaignId: campaign.id,
+            title: campaign.title,
+            body: campaign.body,
+            tone: campaign.tone,
+            imageUrl: campaign.imageUrl,
+            actionLabel: campaign.actionLabel,
+            actionHref: campaign.actionHref,
+          }),
+        ),
+      });
+      written += result.count;
+    }
+    return written;
+  }
+
   private async isSuppressed(
     userWawuId: string,
     kind: NotificationKind,
@@ -201,6 +299,27 @@ export class NotificationService {
         pagination: { currentPage: page, nextPage, perPage, total },
       },
     };
+  }
+
+  /**
+   * POST /notifications/:id/read — mark ONE notification read.
+   *
+   * The only way to clear an unread dot used to be "Mark all read". Opening a
+   * notification navigated away and left its dot lit, so the header badge
+   * counted things the reader had already dealt with, and the only way to fix
+   * that was to declare everything read including the things they had not.
+   *
+   * Scoped by `userWawuId` as well as `id`, so one account cannot mark
+   * another's notification read. A row that is already read, or belongs to
+   * somebody else, or does not exist, all produce the same silent success:
+   * this is idempotent by design (the client fires it on open, and a retry
+   * must not 404), and a 404 here would leak whether an id exists.
+   */
+  async markRead(userWawuId: string, id: string): Promise<void> {
+    await this.prisma.notification.updateMany({
+      where: { id, userWawuId, read: false },
+      data: { read: true },
+    });
   }
 
   /** POST /notifications/mark-all-read — response.shape: "void". */

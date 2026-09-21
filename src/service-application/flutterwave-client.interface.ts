@@ -2,7 +2,7 @@
  * FlutterwaveClient — scoped to ServiceApplication (conventions.md §
  * Third-party integrations / Flutterwave). ServiceApplication is the only
  * wave-0 resource with a real payment leg (the CAC ₦25,000 registration
- * fee); DirectMessage/CreatorSubscription/CreditPurchase/Purchase come in
+ * fee); DirectMessage/CreditPurchase/Purchase come in
  * later waves and will build their own client behind this same
  * client-charge + server-verify pattern (or a future shared refactor) — not
  * this agent's call to make.

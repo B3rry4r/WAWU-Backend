@@ -25,6 +25,16 @@ import type {
 @Injectable()
 export class FlutterwaveWalletMock implements FlutterwaveWalletGateway {
   private readonly balances = new Map<string, number>();
+  /**
+   * barterId -> accountReference.
+   *
+   * Funding addresses the barter id and every other call addresses the
+   * account reference, exactly as Flutterwave's own API does. This map used
+   * not to exist: fundWallet() credited whichever wallet happened to be first
+   * in the map, which is indistinguishable from correct while one wallet
+   * exists and pays the wrong creator the moment two do.
+   */
+  private readonly byBarterId = new Map<string, string>();
 
   createWallet(input: {
     accountName: string;
@@ -42,10 +52,12 @@ export class FlutterwaveWalletMock implements FlutterwaveWalletGateway {
       );
     }
     const ref = `PSA${randomUUID().replace(/-/g, '').slice(0, 16).toUpperCase()}`;
+    const barterId = `234${Math.floor(Math.random() * 1e12)}`;
     this.balances.set(ref, 0);
+    this.byBarterId.set(barterId, ref);
     return Promise.resolve({
       accountReference: ref,
-      barterId: `234${Math.floor(Math.random() * 1e12)}`,
+      barterId,
       nuban: String(9000000000 + Math.floor(Math.random() * 999999999)).slice(0, 10),
       bankName: 'Flutterwave MFB',
       bankCode: '090567',
@@ -58,9 +70,7 @@ export class FlutterwaveWalletMock implements FlutterwaveWalletGateway {
   }
 
   fundWallet(input: { barterId: string; amount: number }): Promise<TransferResult> {
-    // The mock keys balances by account reference, and funding addresses the
-    // barter id, so credit whichever wallet exists. One wallet per test.
-    const [ref] = [...this.balances.keys()];
+    const ref = this.byBarterId.get(input.barterId);
     if (ref) this.balances.set(ref, (this.balances.get(ref) ?? 0) + input.amount);
     return Promise.resolve({ transferId: randomUUID(), status: 'NEW' });
   }

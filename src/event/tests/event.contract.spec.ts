@@ -172,6 +172,31 @@ describe('Events contract (app-facing)', () => {
     });
   }
 
+  /**
+   * The tick columns as this suite found them, restored in afterAll.
+   *
+   * Hosting is verified-only (build brief B3), so every submission in this
+   * suite needs its host to hold a tick. These are SEEDED profile rows shared
+   * with other suites, so they are snapshotted and written back rather than
+   * left changed - README § Test hygiene, option 2.
+   */
+  const tickSnapshot = new Map<
+    string,
+    {
+      creatorVerifiedAt: Date | null;
+      creatorVerifiedUntil: Date | null;
+      professionalVerifiedAt: Date | null;
+      professionalVerifiedUntil: Date | null;
+    }
+  >();
+
+  const TICK_COLUMNS = {
+    creatorVerifiedAt: true,
+    creatorVerifiedUntil: true,
+    professionalVerifiedAt: true,
+    professionalVerifiedUntil: true,
+  } as const;
+
   beforeAll(async () => {
     [hostToken, strangerToken, thirdToken] = await Promise.all([
       loginToWawuId(HOST_EMAIL),
@@ -202,6 +227,32 @@ describe('Events contract (app-facing)', () => {
     await app.init();
 
     prisma = moduleRef.get(PrismaService);
+
+    for (const sub of ALL_SUBS) {
+      const row = await prisma.userProfile.findUnique({
+        where: { wawuUserId: sub },
+        select: TICK_COLUMNS,
+      });
+      if (row) tickSnapshot.set(sub, row);
+    }
+    // The two accounts that submit here hold a live creator tick. STRANGER_SUB
+    // is deliberately left with none: it is the fixture for the refusal.
+    await prisma.userProfile.updateMany({
+      where: { wawuUserId: { in: [HOST_SUB, THIRD_SUB] } },
+      data: {
+        creatorVerifiedAt: new Date('2026-01-01T00:00:00.000Z'),
+        creatorVerifiedUntil: new Date('2099-01-01T00:00:00.000Z'),
+      },
+    });
+    await prisma.userProfile.updateMany({
+      where: { wawuUserId: STRANGER_SUB },
+      data: {
+        creatorVerifiedAt: null,
+        creatorVerifiedUntil: null,
+        professionalVerifiedAt: null,
+        professionalVerifiedUntil: null,
+      },
+    });
   });
 
   beforeEach(async () => {
@@ -210,6 +261,12 @@ describe('Events contract (app-facing)', () => {
 
   afterAll(async () => {
     await sweep();
+    for (const [sub, snapshot] of tickSnapshot) {
+      await prisma.userProfile.update({
+        where: { wawuUserId: sub },
+        data: snapshot,
+      });
+    }
     await app.close();
   });
 
@@ -262,16 +319,88 @@ describe('Events contract (app-facing)', () => {
         .expect(200);
     });
 
-    it('is open to a plain user account — an event costs no upload slot and earns nobody anything', async () => {
-      // creator-pro has never been given a UserProfile by this suite; creation
-      // must still work. There is no creator gate on this endpoint by design.
+    it('is open to any VERIFIED account, whatever kind of account it is', async () => {
+      // Holding a tick is the whole of the requirement. There is no upload
+      // slot spent here and nobody earns anything, so nothing else gates it.
       const res = await http()
         .post('/api/hub/events')
         .set(auth(thirdToken))
-        .send(validEventBody({ name: 'Submitted by a non-creator' }))
+        .send(validEventBody({ name: 'Submitted by a verified account' }))
         .expect(201);
       expect(res.body.data.hostWawuId).toBe(THIRD_SUB);
       expect(res.body.data.status).toBe('pending');
+    });
+
+    it('REFUSES an unverified account, and says what would make it eligible', async () => {
+      const res = await http()
+        .post('/api/hub/events')
+        .set(auth(strangerToken))
+        .send(validEventBody({ name: 'Submitted by an unverified account' }))
+        .expect(403);
+
+      // Never a bare 403. The body has to be enough for the app to render a
+      // conversion prompt instead of a wall.
+      expect(res.body.reason).toBeDefined();
+      expect(res.body.reason.code).toBe('verification_required');
+      expect(typeof res.body.reason.message).toBe('string');
+      expect(res.body.reason.message.length).toBeGreaterThan(0);
+      expect(Array.isArray(res.body.reason.steps)).toBe(true);
+      expect(res.body.reason.steps.length).toBeGreaterThan(0);
+      // And the price of the thing it is telling them to buy, in naira.
+      expect(res.body.reason.purchasable).toEqual([
+        { kind: 'creator', priceNgn: 4999, currency: 'NGN', termMonths: 12 },
+      ]);
+      // No em-dash anywhere a person reads (CLAUDE.md, product-owner rule).
+      const readable = [
+        res.body.message,
+        res.body.reason.message,
+        ...res.body.reason.steps,
+      ].join(' ');
+      expect(readable).not.toContain('\u2014');
+
+      // And nothing was written.
+      const mine = await prisma.event.findMany({
+        where: { hostWawuId: STRANGER_SUB, name: 'Submitted by an unverified account' },
+      });
+      expect(mine).toHaveLength(0);
+    });
+
+    it('REFUSES an account whose tick has lapsed, the same as one that never had it', async () => {
+      await prisma.userProfile.update({
+        where: { wawuUserId: THIRD_SUB },
+        data: {
+          creatorVerifiedAt: new Date('2024-01-01T00:00:00.000Z'),
+          creatorVerifiedUntil: new Date('2025-01-01T00:00:00.000Z'),
+        },
+      });
+      try {
+        const res = await http()
+          .post('/api/hub/events')
+          .set(auth(thirdToken))
+          .send(validEventBody({ name: 'Submitted on a lapsed tick' }))
+          .expect(403);
+        expect(res.body.reason.code).toBe('verification_required');
+      } finally {
+        await prisma.userProfile.update({
+          where: { wawuUserId: THIRD_SUB },
+          data: {
+            creatorVerifiedAt: new Date('2026-01-01T00:00:00.000Z'),
+            creatorVerifiedUntil: new Date('2099-01-01T00:00:00.000Z'),
+          },
+        });
+      }
+    });
+
+    it('carries the host ticks on the event it returns', async () => {
+      const res = await http()
+        .post('/api/hub/events')
+        .set(auth(hostToken))
+        .send(validEventBody({ name: 'Event with a verified host' }))
+        .expect(201);
+      expect(res.body.data.hostVerification).toEqual({
+        creator: { verified: true, expiresAt: '2099-01-01T00:00:00.000Z' },
+        professional: { verified: false, expiresAt: null },
+      });
     });
 
     it('stores speakers in order and derives their initials rather than storing them', async () => {
@@ -467,6 +596,41 @@ describe('Events contract (app-facing)', () => {
           (e: { category: string }) => e.category === 'music',
         ),
       ).toBe(true);
+    });
+
+    it('accepts ?host and returns only that host\'s PUBLISHED events', async () => {
+      /*
+        THE BUG THIS PINS. There was no way to ask for one host's events at
+        all, so a creator's profile called GET /events/mine instead - the
+        CALLER's events. A visitor opening somebody's profile saw their OWN
+        events listed under that person's name.
+
+        /events/mine cannot serve this even filtered: it returns every
+        status, including pending and rejected submissions, which belong to
+        the host alone. This filters the PUBLIC list, so `status: published`
+        still applies. Both halves are asserted below.
+      */
+      const res = await http()
+        .get('/api/hub/events')
+        .query({ perPage: 100, host: HOST_SUB })
+        .set(auth(strangerToken))
+        .expect(200);
+
+      expect(res.body.data.length).toBeGreaterThan(0);
+      expect(
+        res.body.data.every(
+          (e: { hostWawuId?: string; host?: { wawuId?: string } }) =>
+            (e.hostWawuId ?? e.host?.wawuId) === HOST_SUB,
+        ),
+      ).toBe(true);
+
+      // A host with nothing published comes back empty, not "everybody's".
+      const none = await http()
+        .get('/api/hub/events')
+        .query({ perPage: 100, host: 'nobody-with-this-id' })
+        .set(auth(strangerToken))
+        .expect(200);
+      expect(none.body.data).toEqual([]);
     });
 
     it('rejects a category that is not one of the enum values', async () => {

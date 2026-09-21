@@ -27,11 +27,14 @@ import {
 /**
  * CONTRACT: A COMMUNITY HOST GETS PAID FOR THE CREDITS SPENT IN THEIR ROOM.
  *
- * docs/01_SPEC.md §1 row 4 sells WAWU Credits at "Creator 90% / WAWU 10%",
- * §3 calls that "deliberately a better split than every other stream", and
- * six live app surfaces repeat "you keep 90% of every credit spent in it".
- * Before this suite existed, no code in this backend multiplied anything by
- * 0.9: CreditSpend stored a credit count and no money, and the earnings
+ * WAWU Credits pay the community host 85% of what was actually spent in
+ * their room, and WAWU keeps 15%. That is the same split as every other
+ * stream: the product owner collapsed the credits rate from 90/10 to 85/15
+ * on 21 Sep 2026 ("Credits follow 85 15"), so there is now exactly one split
+ * in the product and no tier or stream overrides it.
+ *
+ * Before this suite existed, no code in this backend multiplied anything at
+ * all: CreditSpend stored a credit count and no money, and the earnings
  * endpoint excluded credits from `total`, `payable` and `held` outright. A
  * host could run a busy community for a year and earn nothing.
  *
@@ -283,8 +286,8 @@ describe('Credit host earnings (contract)', () => {
   // The split: money out
   // -------------------------------------------------------------------
 
-  describe('a spent credit pays the host 90% of what that credit actually cost', () => {
-    it('₦500/50 pack -> ₦10.00 a credit -> ₦9.00 to the host, ₦1.00 to WAWU', async () => {
+  describe('a spent credit pays the host 85% of what that credit actually cost', () => {
+    it('₦500/50 pack -> ₦10.00 a credit -> ₦8.50 to the host, ₦1.50 to WAWU', async () => {
       const buyer = newBuyer();
       await buyPack(buyer, 'starter');
 
@@ -298,9 +301,10 @@ describe('Credit host earnings (contract)', () => {
       expect(earning.creditsSpent).toBe(1);
       expect(earning.creditsFunded).toBe(1);
       expect(earning.grossKobo).toBe(1000); // ₦10.00
-      expect(earning.hostShareKobo).toBe(900); // ₦9.00
-      expect(earning.platformShareKobo).toBe(100); // ₦1.00
-      expect(earning.hostShareKobo / earning.grossKobo).toBeCloseTo(0.9, 10);
+      // 1000 x 17 / 20 = 850 exactly, nothing to floor.
+      expect(earning.hostShareKobo).toBe(850); // ₦8.50
+      expect(earning.platformShareKobo).toBe(150); // ₦1.50
+      expect(earning.hostShareKobo / earning.grossKobo).toBeCloseTo(0.85, 10);
       expect(earning.lotIds).toHaveLength(1);
     });
 
@@ -329,11 +333,14 @@ describe('Credit host earnings (contract)', () => {
       // The whole point: the same "1 credit" is worth different money, and
       // the host's share tracks the money, not the count.
       expect(popular.grossKobo).not.toBe(proPack.grossKobo);
-      expect(popular.hostShareKobo).toBe(Math.floor(833 * 0.9)); // 749
-      expect(proPack.hostShareKobo).toBe(Math.floor(666 * 0.9)); // 599
+      // Integer maths, not `* 0.85`, for the same reason the service uses a
+      // numerator/denominator: 833 x 17 / 20 = 708.05 -> 708 kobo, and
+      // 666 x 17 / 20 = 566.1 -> 566 kobo.
+      expect(popular.hostShareKobo).toBe(Math.floor((833 * 17) / 20)); // 708
+      expect(proPack.hostShareKobo).toBe(Math.floor((666 * 17) / 20)); // 566
     });
 
-    it('never pays out more than was banked — the residual kobo of the 90% stays with WAWU', async () => {
+    it('never pays out more than was banked — the residual kobo of the 85% stays with WAWU', async () => {
       const buyer = newBuyer();
       await buyPack(buyer, 'popular');
       const spend = await creditSpends.record({
@@ -351,7 +358,7 @@ describe('Credit host earnings (contract)', () => {
           CREDITS_HOST_SHARE_DENOMINATOR,
       );
       expect(earning.platformShareKobo).toBeGreaterThanOrEqual(
-        earning.grossKobo * 0.1,
+        earning.grossKobo * 0.15,
       );
     });
 
@@ -400,10 +407,18 @@ describe('Credit host earnings (contract)', () => {
       expect(lot.allocatedKobo).toBe(PACKS.popular.naira * 100);
       expect(grossTotal).toBe(PACKS.popular.naira * 100); // exactly ₦1,000
 
-      // 90% of ₦1,000 is ₦900. Flooring per spend can only cost the host
-      // sub-kobo dust, never a naira, and never the other way.
-      expect(hostTotal).toBeLessThanOrEqual(90000);
-      expect(hostTotal).toBeGreaterThan(90000 - PACKS.popular.credits);
+      // 85% of ₦1,000 is ₦850 (85,000 kobo). Flooring per spend can only
+      // cost the host sub-kobo dust, never a naira, and never the other way.
+      //
+      // The exact figure, recomputed by hand for the 85/15 split: the lot
+      // allocates 100,000 kobo across 120 credits by largest remainder, so
+      // each spend draws either 833 or 834 kobo. floor(833 x 17 / 20) =
+      // floor(708.05) = 708 and floor(834 x 17 / 20) = floor(708.9) = 708,
+      // so every one of the 120 spends pays the host exactly 708 kobo:
+      // 708 x 120 = 84,960 kobo, 40 kobo of dust short of the round 85,000.
+      expect(hostTotal).toBe(84960);
+      expect(hostTotal).toBeLessThanOrEqual(85000);
+      expect(hostTotal).toBeGreaterThan(85000 - PACKS.popular.credits);
     });
 
     it('stops paying once the lot is empty — an unfunded credit is worth ₦0 because it cost ₦0', async () => {
@@ -431,12 +446,13 @@ describe('Credit host earnings (contract)', () => {
     });
   });
 
-  describe('the credits split is 90/10 for EVERY tier — it is not the Pro override', () => {
+  describe('the credits split is 85/15 for EVERY host, whatever their tier', () => {
     it('a Basic-tier host and a Pro-tier host earn the identical share on an identical credit', async () => {
-      // docs/01_SPEC.md §1 row 8 scopes the Pro upgrade to "streams 1, 2, 3,
-      // 5, 6" — credits are stream 4 and are deliberately absent from it;
-      // §3 says the 90% is "deliberately a better split than every other
-      // stream". So tier must make no difference here.
+      // This used to guard a 90/10 credits rate against being collapsed into
+      // the 85/15 everything-else rate. The product owner collapsed it
+      // deliberately on 21 Sep 2026, so what is left to guard is the part
+      // that never depended on the rate: tier must make no difference here,
+      // and CreditSpendService must not consult CreatorState.tier.
       const basicCommunity = await prisma.community.create({
         data: {
           name: 'TEST: basic-hosted room',
@@ -466,14 +482,14 @@ describe('Credit host earnings (contract)', () => {
       const basicEarning = await earningFor(toBasic.id);
       const proEarning = await earningFor(toPro.id);
 
-      expect(basicEarning.hostShareKobo).toBe(900);
-      expect(proEarning.hostShareKobo).toBe(900);
+      expect(basicEarning.hostShareKobo).toBe(850);
+      expect(proEarning.hostShareKobo).toBe(850);
       expect(basicEarning.hostShareKobo).toBe(proEarning.hostShareKobo);
     });
   });
 
   // -------------------------------------------------------------------
-  // The real send path, including the trial
+  // The real send path
   // -------------------------------------------------------------------
 
   describe('sending a real message in a community', () => {
@@ -494,7 +510,7 @@ describe('Credit host earnings (contract)', () => {
       return buyer;
     }
 
-    it('pays the host their 90% end to end, from POST-shaped send through to the earnings ledger', async () => {
+    it('pays the host their 85% end to end, from POST-shaped send through to the earnings ledger', async () => {
       const buyer = await joinedBuyer(SEEDED_COMMUNITY_ID, 'starter');
 
       await communityMessages.create(SEEDED_COMMUNITY_ID, buyer, {
@@ -507,7 +523,7 @@ describe('Credit host earnings (contract)', () => {
       const earning = await earningFor(spend.id);
       expect(earning.creatorWawuId).toBe(USER_CREATOR_PRO);
       expect(earning.creditsFunded).toBe(1);
-      expect(earning.hostShareKobo).toBe(900);
+      expect(earning.hostShareKobo).toBe(850); // 1000 kobo x 17 / 20
 
       // The member's balance still moved by exactly one credit.
       const state = await prisma.creditsState.findUniqueOrThrow({
@@ -516,23 +532,41 @@ describe('Credit host earnings (contract)', () => {
       expect(state.creditBalance).toBe(PACKS.starter.credits - 1);
     });
 
-    it('a TRIAL-covered message earns the host ₦0 — WAWU banked nothing, so there is no 90% of anything — but it still counts as a credit spent', async () => {
-      // docs/01_SPEC.md §3: a 7-day free trial precedes any purchase. The
-      // sender pays nothing, so the platform receives nothing, so the host's
-      // share of it is nothing. Paying a notional value would have WAWU
-      // handing out real naira against revenue it never received. The
-      // activity is still visible to the host as a credit COUNT.
+    /**
+     * REWRITTEN ON 21 SEP 2026. This used to be "a TRIAL-covered message
+     * earns the host ₦0". The 7-day free trial is gone, so a sender with no
+     * credits at all no longer reaches this path: they are 402'd (covered in
+     * community-message.contract.spec.ts).
+     *
+     * The rule the test actually pinned survives the trial, because the
+     * trial was only one way to hold a credit nobody paid for. A balance
+     * with no CreditLot behind it — seeded, admin-granted or legacy — is
+     * still spendable and still cost WAWU nothing, so 85% of nothing is
+     * nothing. That is the fixture now, and it keeps the ₦0-earning case
+     * covered through the REAL send path rather than only through
+     * CreditSpendService.record directly.
+     */
+    it('an UNFUNDED credit earns the host ₦0 — WAWU banked nothing, so there is no 85% of anything — but it still counts as a credit spent', async () => {
       const buyer = await joinedBuyer(SEEDED_COMMUNITY_ID);
+      // A balance with no purchase behind it: no CreditLot is created.
+      await prisma.creditsState.create({
+        data: { userWawuId: buyer, creditBalance: 1 },
+      });
 
       await communityMessages.create(SEEDED_COMMUNITY_ID, buyer, {
-        text: 'Sent inside my free trial.',
+        text: 'Sent with a credit nobody ever paid for.',
       });
 
       const state = await prisma.creditsState.findUniqueOrThrow({
         where: { userWawuId: buyer },
       });
+      // The balance is still debited: the credit was real to the sender.
       expect(state.creditBalance).toBe(0);
-      expect(state.trialEndsAt.getTime()).toBeGreaterThan(Date.now());
+      // No trial is opened on this path any more.
+      expect(state.trialEndsAt).toBeNull();
+      expect(
+        await prisma.creditLot.count({ where: { userWawuId: buyer } }),
+      ).toBe(0);
 
       const spend = await prisma.creditSpend.findFirstOrThrow({
         where: { userWawuId: buyer },
@@ -587,9 +621,11 @@ describe('Credit host earnings (contract)', () => {
       const b = before.body.data;
       const a = after.body.data;
 
-      // 3 credits x ₦10.00 x 90% = ₦27.00 — the thing that used to be ₦0.
-      expect(a.payable - b.payable).toBeCloseTo(27, 5);
-      expect(a.total - b.total).toBeCloseTo(27, 5);
+      // 3 credits x ₦10.00 x 85% = ₦25.50 — the thing that used to be ₦0.
+      // Per credit: 1000 kobo x 17 / 20 = 850 kobo exactly (nothing to
+      // floor), so 3 x 850 = 2,550 kobo = ₦25.50.
+      expect(a.payable - b.payable).toBeCloseTo(25.5, 5);
+      expect(a.total - b.total).toBeCloseTo(25.5, 5);
       // Never held: the member's money cleared at purchase and the message
       // was delivered instantly. There is no DM-style response escrow.
       expect(a.held - b.held).toBeCloseTo(0, 5);
@@ -609,9 +645,9 @@ describe('Credit host earnings (contract)', () => {
 
       // `amount` is still the COUNT the shipped app prints as "N credits".
       expect(entry(a).amount - entry(b).amount).toBe(3);
-      // `earningsNaira` is the money, and it is the 90%.
+      // `earningsNaira` is the money, and it is the 85%.
       expect(entry(a).earningsNaira - entry(b).earningsNaira).toBeCloseTo(
-        27,
+        25.5,
         5,
       );
 
@@ -631,7 +667,7 @@ describe('Credit host earnings (contract)', () => {
       // The sale row keeps its count in `amount` (the app renders
       // `${amount} credits`) and puts the naira in `earningsNaira`.
       expect(creditSale.amount).toBe(1);
-      expect(creditSale.earningsNaira).toBeCloseTo(9, 5);
+      expect(creditSale.earningsNaira).toBeCloseTo(8.5, 5); // 850 kobo
     });
   });
 
@@ -645,6 +681,9 @@ describe('Credit host earnings (contract)', () => {
       const body = res.body.data;
       expect(body.userWawuId).toBe(USER_PLAIN);
       expect(Number.isInteger(body.creditBalance)).toBe(true);
+      // `trialEndsAt` is a LEGACY column: the 21 Sep 2026 migration made it
+      // nullable rather than dropping it (an older instance still selects it
+      // mid-deploy), so it is still on the wire and still carries no money.
       expect(Object.keys(body).sort()).toEqual([
         'creditBalance',
         'trialEndsAt',
