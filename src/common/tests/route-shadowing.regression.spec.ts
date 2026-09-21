@@ -72,6 +72,38 @@ describe('route shadowing (full AppModule)', () => {
     expect(res.body.data).toHaveProperty('penaltyState');
   });
 
+  /**
+   * The admin money surface mounts in the COMPOSED app, not just in its own
+   * contract suite.
+   *
+   * `/admin/finance/wallets/:wawuId` is a parameter route on a prefix several
+   * other controllers also serve under (`admin/...`), and its own contract
+   * test boots four modules where nothing could shadow it by construction --
+   * which is exactly the blind spot that let GET /dm/response-stats 400 in
+   * production for weeks. A 401 here is the proof: the request reached
+   * AdminAuthGuard, so the route exists and belongs to AdminFinanceController.
+   * A 404 would mean something swallowed it.
+   */
+  it.each([
+    '/api/hub/admin/finance/summary',
+    '/api/hub/admin/finance/transactions',
+    '/api/hub/admin/finance/payouts',
+    '/api/hub/admin/finance/wallets',
+    '/api/hub/admin/finance/wallets/00000000-0000-4000-8000-000000000001',
+  ])('%s reaches the admin guard rather than a catch-all', async (route) => {
+    const res = await request(app.getHttpServer()).get(route);
+    expect(res.status).toBe(401);
+  });
+
+  it('a WAWU ID user token does not reach the admin money surface', async () => {
+    // The gate is cryptographic, not a claim check: AdminTokenService pins
+    // HS256 against a local secret and a WAWU ID token is RS256.
+    const res = await request(app.getHttpServer())
+      .get('/api/hub/admin/finance/wallets/00000000-0000-4000-8000-000000000001')
+      .set('Authorization', `Bearer ${proCreatorToken}`);
+    expect(res.status).toBe(401);
+  });
+
   it('the parameter route it shares a prefix with still works', async () => {
     // Guards against "fixing" the shadowing by breaking dm/:messageId.
     const res = await request(app.getHttpServer())

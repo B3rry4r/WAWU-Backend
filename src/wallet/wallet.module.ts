@@ -27,6 +27,14 @@ import { shouldUseMockFlutterwave } from '../common/flutterwave/require-payment-
       useClass: shouldUseMockFlutterwave() ? FlutterwaveWalletMock : FlutterwaveWalletClient,
     },
   ],
-  exports: [WalletService],
+  /**
+   * The gateway is exported alongside the service because the admin money
+   * surface (src/admin/finance) reports Flutterwave's balance and must read
+   * it through THIS provider rather than constructing a second client. One
+   * provider means one answer to "what is in this wallet", and it means the
+   * admin surface inherits the same production guard: shouldUseMockFlutterwave()
+   * throws rather than degrading when FLUTTERWAVE_SECRET_KEY is absent.
+   */
+  exports: [WalletService, FLUTTERWAVE_WALLET_GATEWAY],
 })
 export class WalletModule {}

@@ -9,6 +9,7 @@ import { AdminVerificationReviewModule } from './admin/verification-review/admin
 import { AdminProfessionalReviewModule } from './admin/professional-review/admin-professional-review.module';
 import { AdminPaymentsModule } from './admin/payments/admin-payments.module';
 import { AdminCreatorsModule } from './admin/creators/admin-creators.module';
+import { AdminFinanceModule } from './admin/finance/admin-finance.module';
 import { AdminEventsModule } from './admin/events/admin-events.module';
 import { AdminNotificationsModule } from './admin/notifications/admin-notifications.module';
 import { PrismaModule } from './common/prisma/prisma.module';
@@ -196,6 +197,36 @@ import { APP_GUARD } from '@nestjs/core';
     // registered below and deduped.
     AdminPaymentsModule,
     AdminCreatorsModule,
+    // The admin MONEY surface, read-only. `/admin/payments` answered only
+    // "did this webhook land" and "did this DM refund fail"; nothing anywhere
+    // answered what the platform has taken, what WAWU's share of it is, what
+    // creators are owed, or what transactions have passed through. `/wallet`
+    // and `/content/mine/earnings` answer those for the CALLER's own account,
+    // which is no use to an operator holding the whole platform's books.
+    //
+    // Registered with the other admin modules, and for the same reason they
+    // all sit here: Express matches in registration order, so every `/admin/*`
+    // route is matched ahead of any module owning a parameterised route --
+    // PartnerServiceController's `@Controller('services')` + `@Get(':id')`
+    // being the catch-all that has already bitten twice (see the comment
+    // further down).
+    //
+    // Shadow-safe in the other direction too, which is the direction that
+    // matters when registering EARLY. AdminFinanceController is
+    // `@Controller('admin/finance')`: a SECOND segment no other admin
+    // controller declares, and `admin` is a first segment nothing outside
+    // src/admin/ declares at all. The app's own money surfaces are
+    // `@Controller('wallet')`, `@Controller('content/mine/earnings')` and
+    // `@Controller('webhooks/flutterwave')` -- each a different FIRST
+    // segment, so this can neither shadow nor be shadowed by one wherever it
+    // sits. The only root-level controller (AppController) declares one
+    // literal path (`health`) with no parameter segment.
+    //
+    // AdminFinanceModule imports WalletModule for FLUTTERWAVE_WALLET_GATEWAY.
+    // WalletModule is already registered at the top of this list and Nest
+    // dedupes, so the load-bearing controller order below is untouched --
+    // exactly as it already is for AdminPaymentsModule's own imports.
+    AdminFinanceModule,
     // Admin event moderation, for the Events feature reinstated 22 Aug 2026 by
     // product-owner decision (see src/event/ for the app-facing half and
     // prisma/schema.prisma for the three new tables). Registered alongside the

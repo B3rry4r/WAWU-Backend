@@ -11489,6 +11489,412 @@
         ]
       }
     },
+    "/api/hub/admin/finance/summary": {
+      "get": {
+        "operationId": "AdminFinanceController_summary",
+        "parameters": [
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "description": "Inclusive lower bound. Omitted with `to` means the current calendar month.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "description": "Exclusive upper bound. Omitted with `from` means the current calendar month.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminFinanceSummaryView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Gross taken, WAWU's share, the creators' share and a transaction count,\nper revenue stream, for `?from=&to=` (default: this calendar month).\n\nOnly settled charges are counted, and each stream reports which of its\nown statuses that means on `countedStatuses`.",
+        "tags": [
+          "AdminFinance"
+        ]
+      }
+    },
+    "/api/hub/admin/finance/transactions": {
+      "get": {
+        "operationId": "AdminFinanceController_transactions",
+        "parameters": [
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "stream",
+            "required": false,
+            "in": "query",
+            "description": "Omitted means every stream.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "content",
+                  "tips",
+                  "dm",
+                  "credits",
+                  "verification",
+                  "events",
+                  "shop"
+                ]
+              }
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "Omitted means every status, INCLUDING the ones that are not revenue.\nThat is deliberate: a ledger that silently hid failed charges would make\n\"where did this charge go\" unanswerable on the one screen built to\nanswer it. The summary endpoint is the one that counts only settled\nmoney, and it says so on its own response.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "settled",
+                  "pending",
+                  "failed",
+                  "refunded",
+                  "cancelled"
+                ]
+              }
+            }
+          },
+          {
+            "name": "creatorWawuId",
+            "required": false,
+            "in": "query",
+            "description": "Narrows to one creator's incoming money, across every stream.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "default": "newest",
+              "type": "string",
+              "enum": [
+                "newest",
+                "oldest"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminFinanceTransactionView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "The ledger: one row per money movement across all six payment tables,\nnewest first, filterable by stream, status, date range and creator.\n\nUnlike the summary this does NOT hide unsettled charges by default.\n\"Where did this charge go\" is the question the screen exists for, and it\nis unanswerable if the failed ones are invisible.",
+        "tags": [
+          "AdminFinance"
+        ]
+      }
+    },
+    "/api/hub/admin/finance/payouts": {
+      "get": {
+        "operationId": "AdminFinanceController_payouts",
+        "parameters": [
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "`WalletLedgerEntry.status`. Omitted means every status.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "completed",
+                "failed"
+              ]
+            }
+          },
+          {
+            "name": "sort",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "default": "newest",
+              "type": "string",
+              "enum": [
+                "newest",
+                "oldest"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminFinancePayoutsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "What has left for creators' bank accounts, and what is earned and has not.",
+        "tags": [
+          "AdminFinance"
+        ]
+      }
+    },
+    "/api/hub/admin/finance/wallets": {
+      "get": {
+        "operationId": "AdminFinanceController_listWallets",
+        "parameters": [
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "q",
+            "required": false,
+            "in": "query",
+            "description": "Matched against `handle` (partial, case-insensitive) and `wawuUserId`\n(prefix). This backend stores no email or phone for a WAWU account -\nboth live in WAWU ID and are never persisted here - so neither can be\nsearched, the same limitation `/admin/creators` documents at length.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "kycStatus",
+            "required": false,
+            "in": "query",
+            "description": "`CreatorState.kycStatus`, the gate that decides whether money may leave a\nwallet.\n\n`not_started` is accepted alongside the three stored values because it is\nwhat this surface REPORTS: the column defaults to `pending`, so a creator\nwho has never submitted and one waiting on a reviewer read identically\nwithout the synthesis `CreatorStateService` and `/admin/creators` both\napply (hazard H-5). A filter that could not express the word the row\nshows would be a filter that disagrees with its own list.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "approved",
+                "rejected",
+                "not_started"
+              ]
+            }
+          },
+          {
+            "name": "hasSubaccount",
+            "required": false,
+            "in": "query",
+            "description": "True lists only creators Flutterwave has opened a payout subaccount for; false only those it has not.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "withBalances",
+            "required": true,
+            "in": "query",
+            "description": "Ask Flutterwave for each row's balance. See BALANCE_PAGE_CAP above.",
+            "schema": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "sort",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "default": "newest",
+              "type": "string",
+              "enum": [
+                "newest",
+                "oldest",
+                "handle"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminFinanceWalletView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "One row per creator account: KYC state, whether Flutterwave has opened a\npayout subaccount, the lifetime ledger figures, and - on request -\nFlutterwave's own balance.\n\nDeclared before `wallets/:wawuId`; Nest matches in declaration order.",
+        "tags": [
+          "AdminFinance"
+        ]
+      }
+    },
+    "/api/hub/admin/finance/wallets/{wawuId}": {
+      "get": {
+        "operationId": "AdminFinanceController_walletDetail",
+        "parameters": [
+          {
+            "name": "wawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "historyLimit",
+            "required": true,
+            "in": "query",
+            "description": "How many ledger movements to return, newest first.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminFinanceWalletDetailView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "One creator's wallet with its transaction history. The balance is always Flutterwave's.",
+        "tags": [
+          "AdminFinance"
+        ]
+      }
+    },
     "/api/hub/admin/events": {
       "get": {
         "operationId": "AdminEventsController_list",
@@ -13729,6 +14135,9 @@
                           "category": {
                             "type": "string"
                           },
+                          "verification": {
+                            "type": "string"
+                          },
                           "tagline": {
                             "type": "string"
                           },
@@ -13746,9 +14155,6 @@
                             "items": {
                               "type": "string"
                             }
-                          },
-                          "verification": {
-                            "type": "string"
                           },
                           "openForRequests": {
                             "type": "boolean"
@@ -13774,12 +14180,12 @@
                           "name",
                           "id",
                           "category",
+                          "verification",
                           "tagline",
                           "handle",
                           "field",
                           "bio",
                           "topics",
-                          "verification",
                           "openForRequests",
                           "fullUntil",
                           "yearsExperience",
@@ -13805,6 +14211,9 @@
                               "category": {
                                 "type": "string"
                               },
+                              "verification": {
+                                "type": "string"
+                              },
                               "tagline": {
                                 "type": "string"
                               },
@@ -13822,9 +14231,6 @@
                                 "items": {
                                   "type": "string"
                                 }
-                              },
-                              "verification": {
-                                "type": "string"
                               },
                               "openForRequests": {
                                 "type": "boolean"
@@ -13850,12 +14256,12 @@
                               "name",
                               "id",
                               "category",
+                              "verification",
                               "tagline",
                               "handle",
                               "field",
                               "bio",
                               "topics",
-                              "verification",
                               "openForRequests",
                               "fullUntil",
                               "yearsExperience",
@@ -13923,6 +14329,9 @@
                     "category": {
                       "type": "string"
                     },
+                    "verification": {
+                      "type": "string"
+                    },
                     "tagline": {
                       "type": "string"
                     },
@@ -13940,9 +14349,6 @@
                       "items": {
                         "type": "string"
                       }
-                    },
-                    "verification": {
-                      "type": "string"
                     },
                     "openForRequests": {
                       "type": "boolean"
@@ -13968,12 +14374,12 @@
                     "name",
                     "id",
                     "category",
+                    "verification",
                     "tagline",
                     "handle",
                     "field",
                     "bio",
                     "topics",
-                    "verification",
                     "openForRequests",
                     "fullUntil",
                     "yearsExperience",
@@ -25141,6 +25547,704 @@
           "uploads",
           "earnings",
           "directMessages"
+        ]
+      },
+      "AdminFinancePeriodView": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "isDefaultPeriod": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "isDefaultPeriod"
+        ]
+      },
+      "AdminFinanceMoneyView": {
+        "type": "object",
+        "properties": {
+          "grossKobo": {
+            "type": "number"
+          },
+          "wawuShareKobo": {
+            "type": "number"
+          },
+          "creatorShareKobo": {
+            "type": "number"
+          },
+          "transactionCount": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "grossKobo",
+          "wawuShareKobo",
+          "creatorShareKobo",
+          "transactionCount"
+        ]
+      },
+      "AdminFinanceStreamTotalsView": {
+        "type": "object",
+        "properties": {
+          "stream": {
+            "type": "string",
+            "enum": [
+              "content",
+              "dm",
+              "tips",
+              "credits",
+              "verification",
+              "events",
+              "shop"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "creatorSharePct": {
+            "type": "number"
+          },
+          "source": {
+            "type": "string"
+          },
+          "countedStatuses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "grossKobo": {
+            "type": "number"
+          },
+          "wawuShareKobo": {
+            "type": "number"
+          },
+          "creatorShareKobo": {
+            "type": "number"
+          },
+          "transactionCount": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "stream",
+          "label",
+          "creatorSharePct",
+          "source",
+          "countedStatuses",
+          "grossKobo",
+          "wawuShareKobo",
+          "creatorShareKobo",
+          "transactionCount"
+        ]
+      },
+      "AdminFinanceCreditsAttributionView": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "string"
+          },
+          "creditsSpent": {
+            "type": "number"
+          },
+          "creditsFunded": {
+            "type": "number"
+          },
+          "fundedGrossKobo": {
+            "type": "number"
+          },
+          "hostShareKobo": {
+            "type": "number"
+          },
+          "platformShareKobo": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "note",
+          "creditsSpent",
+          "creditsFunded",
+          "fundedGrossKobo",
+          "hostShareKobo",
+          "platformShareKobo"
+        ]
+      },
+      "AdminFinanceSummaryView": {
+        "type": "object",
+        "properties": {
+          "period": {
+            "$ref": "#/components/schemas/AdminFinancePeriodView"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN"
+            ]
+          },
+          "amountsIn": {
+            "type": "string",
+            "enum": [
+              "kobo"
+            ]
+          },
+          "totals": {
+            "$ref": "#/components/schemas/AdminFinanceMoneyView"
+          },
+          "streams": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminFinanceStreamTotalsView"
+            }
+          },
+          "creditsAttribution": {
+            "$ref": "#/components/schemas/AdminFinanceCreditsAttributionView"
+          },
+          "basis": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "period",
+          "currency",
+          "amountsIn",
+          "totals",
+          "streams",
+          "creditsAttribution",
+          "basis"
+        ]
+      },
+      "AdminFinancePartyView": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "wawuId",
+          "handle"
+        ]
+      },
+      "AdminFinanceTransactionView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "stream": {
+            "type": "string",
+            "enum": [
+              "content",
+              "dm",
+              "tips",
+              "credits",
+              "verification",
+              "events",
+              "shop"
+            ]
+          },
+          "occurredAt": {
+            "type": "string"
+          },
+          "creator": {
+            "$ref": "#/components/schemas/AdminFinancePartyView",
+            "nullable": true
+          },
+          "buyer": {
+            "$ref": "#/components/schemas/AdminFinancePartyView",
+            "nullable": true
+          },
+          "grossKobo": {
+            "type": "number"
+          },
+          "wawuShareKobo": {
+            "type": "number"
+          },
+          "creatorShareKobo": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "refunded",
+              "settled",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "sourceStatus": {
+            "type": "string"
+          },
+          "flutterwaveTxRef": {
+            "type": "string",
+            "nullable": true
+          },
+          "flutterwaveTxId": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "stream",
+          "occurredAt",
+          "creator",
+          "buyer",
+          "grossKobo",
+          "wawuShareKobo",
+          "creatorShareKobo",
+          "status",
+          "sourceStatus",
+          "flutterwaveTxRef",
+          "flutterwaveTxId"
+        ]
+      },
+      "AdminFinancePayoutView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "creator": {
+            "$ref": "#/components/schemas/AdminFinancePartyView"
+          },
+          "amountNaira": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "transferId": {
+            "type": "string",
+            "nullable": true
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "bankCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "accountName": {
+            "type": "string",
+            "nullable": true
+          },
+          "accountNumberLast4": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "settledAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "creator",
+          "amountNaira",
+          "status",
+          "reference",
+          "transferId",
+          "failureReason",
+          "bankCode",
+          "accountName",
+          "accountNumberLast4",
+          "createdAt",
+          "settledAt"
+        ]
+      },
+      "AdminFinanceOwedStreamView": {
+        "type": "object",
+        "properties": {
+          "stream": {
+            "type": "string",
+            "enum": [
+              "content",
+              "dm",
+              "tips",
+              "credits",
+              "verification",
+              "events",
+              "shop"
+            ]
+          },
+          "sourceRows": {
+            "type": "number"
+          },
+          "creatorShareNaira": {
+            "type": "number"
+          },
+          "sweptAutomatically": {
+            "type": "boolean"
+          },
+          "why": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stream",
+          "sourceRows",
+          "creatorShareNaira",
+          "sweptAutomatically",
+          "why"
+        ]
+      },
+      "AdminFinancePayoutsView": {
+        "type": "object",
+        "properties": {
+          "period": {
+            "$ref": "#/components/schemas/AdminFinancePeriodView"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN"
+            ]
+          },
+          "amountsIn": {
+            "type": "string",
+            "enum": [
+              "naira"
+            ]
+          },
+          "withdrawals": {
+            "type": "object",
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AdminFinancePayoutView"
+                }
+              },
+              "page": {
+                "type": "number"
+              },
+              "perPage": {
+                "type": "number"
+              },
+              "total": {
+                "type": "number"
+              },
+              "completedNaira": {
+                "type": "number"
+              },
+              "pendingNaira": {
+                "type": "number"
+              },
+              "failedNaira": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "items",
+              "page",
+              "perPage",
+              "total",
+              "completedNaira",
+              "pendingNaira",
+              "failedNaira"
+            ]
+          },
+          "owed": {
+            "type": "object",
+            "properties": {
+              "note": {
+                "type": "string"
+              },
+              "instructedAwaitingConfirmation": {
+                "type": "object",
+                "properties": {
+                  "count": {
+                    "type": "number"
+                  },
+                  "amountNaira": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "count",
+                  "amountNaira"
+                ]
+              },
+              "instructionsFailed": {
+                "type": "object",
+                "properties": {
+                  "count": {
+                    "type": "number"
+                  },
+                  "amountNaira": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "count",
+                  "amountNaira"
+                ]
+              },
+              "earnedNotInstructed": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AdminFinanceOwedStreamView"
+                }
+              },
+              "earnedNotInstructedTotalNaira": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "note",
+              "instructedAwaitingConfirmation",
+              "instructionsFailed",
+              "earnedNotInstructed",
+              "earnedNotInstructedTotalNaira"
+            ]
+          }
+        },
+        "required": [
+          "period",
+          "currency",
+          "amountsIn",
+          "withdrawals",
+          "owed"
+        ]
+      },
+      "AdminFinanceSubaccountView": {
+        "type": "object",
+        "properties": {
+          "accountReference": {
+            "type": "string"
+          },
+          "bankName": {
+            "type": "string",
+            "nullable": true
+          },
+          "accountNumberLast4": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "openedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "accountReference",
+          "bankName",
+          "accountNumberLast4",
+          "status",
+          "openedAt"
+        ]
+      },
+      "AdminFinanceWalletBalanceView": {
+        "type": "object",
+        "properties": {
+          "ngn": {
+            "type": "number",
+            "nullable": true
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "flutterwave"
+            ]
+          },
+          "unavailableReason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "ngn",
+          "source",
+          "unavailableReason"
+        ]
+      },
+      "AdminFinanceWalletLifetimeView": {
+        "type": "object",
+        "properties": {
+          "earnedInstructedNaira": {
+            "type": "number"
+          },
+          "earningsPendingNaira": {
+            "type": "number"
+          },
+          "withdrawnNaira": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "earnedInstructedNaira",
+          "earningsPendingNaira",
+          "withdrawnNaira"
+        ]
+      },
+      "AdminFinanceWalletView": {
+        "type": "object",
+        "properties": {
+          "creator": {
+            "$ref": "#/components/schemas/AdminFinancePartyView"
+          },
+          "kycStatus": {
+            "type": "string",
+            "nullable": true
+          },
+          "withdrawalsEnabled": {
+            "type": "boolean"
+          },
+          "payoutSubaccount": {
+            "$ref": "#/components/schemas/AdminFinanceSubaccountView",
+            "nullable": true
+          },
+          "balance": {
+            "$ref": "#/components/schemas/AdminFinanceWalletBalanceView"
+          },
+          "lifetime": {
+            "$ref": "#/components/schemas/AdminFinanceWalletLifetimeView"
+          }
+        },
+        "required": [
+          "creator",
+          "kycStatus",
+          "withdrawalsEnabled",
+          "payoutSubaccount",
+          "balance",
+          "lifetime"
+        ]
+      },
+      "AdminFinanceWalletEntryView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "amountNaira": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "transferId": {
+            "type": "string",
+            "nullable": true
+          },
+          "sourceType": {
+            "type": "string",
+            "nullable": true
+          },
+          "sourceId": {
+            "type": "string",
+            "nullable": true
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "settledAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "amountNaira",
+          "status",
+          "reference",
+          "transferId",
+          "sourceType",
+          "sourceId",
+          "failureReason",
+          "createdAt",
+          "settledAt"
+        ]
+      },
+      "AdminFinanceWalletDetailView": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN"
+            ]
+          },
+          "amountsIn": {
+            "type": "string",
+            "enum": [
+              "naira"
+            ]
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminFinanceWalletEntryView"
+            }
+          },
+          "historyTotal": {
+            "type": "number"
+          },
+          "creator": {
+            "$ref": "#/components/schemas/AdminFinancePartyView"
+          },
+          "kycStatus": {
+            "type": "string",
+            "nullable": true
+          },
+          "withdrawalsEnabled": {
+            "type": "boolean"
+          },
+          "payoutSubaccount": {
+            "$ref": "#/components/schemas/AdminFinanceSubaccountView",
+            "nullable": true
+          },
+          "balance": {
+            "$ref": "#/components/schemas/AdminFinanceWalletBalanceView"
+          },
+          "lifetime": {
+            "$ref": "#/components/schemas/AdminFinanceWalletLifetimeView"
+          }
+        },
+        "required": [
+          "currency",
+          "amountsIn",
+          "history",
+          "historyTotal",
+          "creator",
+          "kycStatus",
+          "withdrawalsEnabled",
+          "payoutSubaccount",
+          "balance",
+          "lifetime"
         ]
       },
       "EventSpeakerView": {
