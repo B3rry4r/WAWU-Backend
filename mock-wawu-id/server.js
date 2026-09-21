@@ -302,18 +302,28 @@ app.patch("/internal/users/:userId/verification-tier", requireServiceKey, (req, 
 // PATCH /internal/users/:userId/verification, which is how the Hub keeps
 // identity as the source of truth for whether somebody is verified.
 //
-// One kind per call. Both dates null is a REVOKE; a null "verifiedUntil"
+// One tick per call. `granted: false` is a REVOKE; a null "expiresAt"
 // beside a real "verifiedAt" is a perpetual, admin-granted tick. Nothing here
 // derives `verified` - that is the reading service's job, from the expiry.
 app.patch("/internal/users/:userId/verification", requireServiceKey, (req, res) => {
   const user = Object.values(USERS).find((u) => u.sub === req.params.userId);
   if (!user) return res.status(404).json({ message: "user not found" });
-  const kind = req.body?.kind;
+  // Mirrors WAWU ID's UpdateVerificationDto exactly: { tick, granted,
+  // expiresAt }. A mock that accepted a shape the real service rejects would
+  // make the contract suite pass against an integration that 400s in
+  // production, which is worse than no mock.
+  const kind = req.body?.tick;
   if (kind !== "creator" && kind !== "professional") {
-    return res.status(400).json({ message: "kind must be creator or professional" });
+    return res.status(400).json({ message: "tick must be creator or professional" });
   }
-  const verifiedAt = req.body?.verifiedAt ?? null;
-  const verifiedUntil = req.body?.verifiedUntil ?? null;
+  if (typeof req.body?.granted !== "boolean") {
+    return res.status(400).json({ message: "granted must be a boolean" });
+  }
+  // Granting stamps verifiedAt here, the way the real service does. Revoking
+  // clears BOTH columns, so the row reads as never-verified rather than as
+  // lapsed.
+  const verifiedAt = req.body.granted ? new Date().toISOString() : null;
+  const verifiedUntil = req.body.granted ? (req.body?.expiresAt ?? null) : null;
   user.verification = user.verification ?? {
     creator: { verifiedAt: null, verifiedUntil: null },
     professional: { verifiedAt: null, verifiedUntil: null },

@@ -151,10 +151,25 @@ export class WawuIdClient {
           'Content-Type': 'application/json',
           'X-Service-Key': this.serviceKey,
         },
+        /*
+          WAWU ID's own shape, confirmed against its UpdateVerificationDto,
+          not this backend's internal one.
+
+          Its body is { tick, granted, expiresAt }: `tick` not `kind`, and an
+          EXPLICIT `granted` boolean rather than "both dates null means
+          revoke". It derives verifiedAt itself on a grant and refuses a
+          `verified` field outright, because whether a tick draws is derived
+          from the expiry on every read and a caller must not assert it.
+
+          This backend keeps thinking in (verifiedAt, verifiedUntil) because
+          that is what its own mirror columns are; the translation happens
+          here, at the boundary, and nowhere else. A revoke is verifiedAt ===
+          null, which is exactly how writeTick calls it.
+        */
         body: JSON.stringify({
-          kind,
-          verifiedAt: dates.verifiedAt?.toISOString() ?? null,
-          verifiedUntil: dates.verifiedUntil?.toISOString() ?? null,
+          tick: kind,
+          granted: dates.verifiedAt !== null,
+          expiresAt: dates.verifiedUntil?.toISOString() ?? null,
         }),
       },
     );
