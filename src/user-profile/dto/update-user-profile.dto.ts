@@ -78,6 +78,16 @@ export class UpdateUserProfileDto {
   handle?: string | null;
 
   /**
+   * The one line under the name. A person's own sentence about what they do,
+   * not a category: see the schema note on why the first interest was the
+   * wrong thing to render there.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  headline?: string | null;
+
+  /**
    * The organisation this person is part of, beside the location and the
    * website on the profile header.
    *

@@ -111,6 +111,7 @@ export class UserProfileService {
       whatsappHandle: null,
       websiteUrl: null,
       company: null,
+      headline: null,
       createdAt: null,
     };
 
@@ -210,7 +211,7 @@ export class UserProfileService {
           ...(dto.bio !== undefined && { bio: dto.bio }),
           ...(dto.handle !== undefined && { handle: dto.handle }),
           ...Object.fromEntries(
-            (['websiteUrl', 'avatarUrl', 'coverUrl', 'company'] as const)
+            (['websiteUrl', 'avatarUrl', 'coverUrl', 'company', 'headline'] as const)
               .filter((k) => dto[k] !== undefined)
               .map((k) => [k, dto[k]]),
           ),
@@ -249,6 +250,7 @@ export class UserProfileService {
           linkedinUrl: toProfileUrl(dto.linkedinUrl, 'linkedin'),
           websiteUrl: dto.websiteUrl ?? null,
           company: dto.company ?? null,
+          headline: dto.headline ?? null,
           whatsappHandle: dto.whatsappHandle ?? null,
           avatarUrl: dto.avatarUrl ?? null,
           coverUrl: dto.coverUrl ?? null,
@@ -365,6 +367,7 @@ export class UserProfileService {
       whatsappHandle: profile.whatsappHandle,
       websiteUrl: profile.websiteUrl,
       company: profile.company,
+      headline: profile.headline,
       experience,
       // Buyer-facing DM settings — see CreatorProfile's doc comment for why
       // their absence made paid messaging unusable.

@@ -405,6 +405,7 @@ export class SearchResponseService {
         whatsappHandle: profile.whatsappHandle,
         websiteUrl: profile.websiteUrl,
         company: profile.company,
+        headline: profile.headline,
         /*
           EMPTY ON PURPOSE, AND THE ONE PLACE THAT IS TRUE.
 
