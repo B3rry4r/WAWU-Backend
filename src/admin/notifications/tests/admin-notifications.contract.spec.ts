@@ -556,12 +556,26 @@ describe('Admin notification campaigns contract', () => {
      * there. Both directions are asserted in one test on purpose: "they got
      * it" and "they did not get it" are only meaningful together.
      *
-     * The seeded row starts at promotions=false, because prisma/seed.ts
-     * created it back when that was the model default and C8 deliberately did
-     * NOT backfill existing rows (see the migration). That is why this test
-     * flips it rather than assuming.
+     * BOTH STATES ARE SET EXPLICITLY, neither is assumed.
+     *
+     * This used to rely on the seeded row starting at promotions=false,
+     * which was the model default when the test was written. C8 flipped that
+     * default to true, so on a freshly seeded database the creator now
+     * receives the first campaign and the "did not get it" half failed. It
+     * kept passing on developer machines whose row predated the flip, and
+     * failed on every CI run from 14 September onward, blocking every deploy.
+     *
+     * A test about what a SWITCH does must set the switch. It has no business
+     * knowing what the column defaults to.
      */
     it('an ordinary signed-in creator sees it, or does not, according to their own switch', async () => {
+      // Off, stated rather than inherited.
+      await prisma.notificationSettings.upsert({
+        where: { userWawuId: CREATOR_BASIC_SUB },
+        create: { userWawuId: CREATOR_BASIC_SUB, promotions: false },
+        update: { promotions: false },
+      });
+
       const off = await compose();
       await http()
         .post(`/api/hub/admin/notifications/campaigns/${off}/dispatch`)
