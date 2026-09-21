@@ -55,10 +55,14 @@ async function login(identifier: string): Promise<string> {
   return body.accessToken;
 }
 
+// `trialEndsAt` is LEGACY and nullable: the 7-day free trial was removed on
+// 21 Sep 2026 and nothing writes the column any more. It is still modelled
+// here because this suite restores the shared seeded row byte-for-byte in
+// afterAll, and rows created before the removal still carry a date.
 type CreditsStateRow = {
   userWawuId: string;
   creditBalance: number;
-  trialEndsAt: Date;
+  trialEndsAt: Date | null;
 } | null;
 
 describe('CommunityMessage (contract)', () => {
@@ -77,9 +81,15 @@ describe('CommunityMessage (contract)', () => {
   // it (or null if it didn't exist yet) — restored exactly in afterAll.
   let originalCreditsState: CreditsStateRow = null;
 
+  /**
+   * Seeds USER_PLAIN's balance. `trialEndsAt` defaults to null, which is what
+   * every row written since 21 Sep 2026 looks like; it is still settable so
+   * the "a future trial rescues nobody" regression test below can plant one
+   * and prove the gate ignores it.
+   */
   async function setCreditsState(
     creditBalance: number,
-    trialEndsAt: Date,
+    trialEndsAt: Date | null = null,
   ): Promise<void> {
     await prisma.creditsState.upsert({
       where: { userWawuId: USER_PLAIN },
@@ -213,7 +223,7 @@ describe('CommunityMessage (contract)', () => {
     it('returns a paginated, newest-first list of messages for a valid community (200)', async () => {
       // Ensure at least a real balance so both sends succeed and land as
       // real, ordered rows (not gated).
-      await setCreditsState(50, new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
+      await setCreditsState(50);
 
       const first = await sendMessage('ordering-probe-first');
       expect([200, 201]).toContain(first.status);
@@ -270,7 +280,7 @@ describe('CommunityMessage (contract)', () => {
     });
 
     it('creates a message and decrements a real balance by costInCredits (1)', async () => {
-      await setCreditsState(10, new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
+      await setCreditsState(10);
 
       const res = await sendMessage('Hello, community!');
 
@@ -305,27 +315,58 @@ describe('CommunityMessage (contract)', () => {
       expect(spend?.creditsSpent).toBe(1);
     });
 
-    it('allows a trial-covered send with 0 balance and does NOT decrement below 0', async () => {
-      await setCreditsState(0, new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)); // trial active, no balance
+    /**
+     * INVERTED ON 21 SEP 2026. This used to assert the opposite: "allows a
+     * trial-covered send with 0 balance and does NOT decrement below 0".
+     * The 7-day free trial is gone, so that send must now be refused.
+     *
+     * It is deliberately kept rather than deleted, and it deliberately
+     * plants a FUTURE `trialEndsAt`. The column still exists on the table,
+     * so a careless revert could reintroduce the `trialEndsAt > now` bypass
+     * and every other test here would stay green, because every other test
+     * leaves the column null. This is the one test that can tell "the trial
+     * was removed" apart from "the trial quietly came back".
+     */
+    it('does NOT let a future trialEndsAt rescue a 0 balance: 402, and nothing is written', async () => {
+      await setCreditsState(0, new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)); // trial in the FUTURE, no balance
 
-      const res = await sendMessage('Trial-covered message');
+      const spendsBefore = await prisma.creditSpend.count({
+        where: { userWawuId: USER_PLAIN, communityId: SEEDED_COMMUNITY_ID },
+      });
 
-      expect([200, 201]).toContain(res.status);
+      const res = await request(app.getHttpServer())
+        .post(`/communities/${SEEDED_COMMUNITY_ID}/messages`)
+        .set('Authorization', `Bearer ${userToken}`)
+        .send({ text: 'Trial-covered message' })
+        .expect(402);
+
+      expect(res.body.data).toBeNull();
+      expect(res.body.reason).toBe('insufficient_credits');
+
+      // Nothing written: no message row...
+      const messages = await prisma.communityMessage.findMany({
+        where: {
+          communityId: SEEDED_COMMUNITY_ID,
+          senderWawuId: USER_PLAIN,
+          text: 'Trial-covered message',
+        },
+      });
+      expect(messages.length).toBe(0);
+
+      // ...and no ledger row.
+      const spendsAfter = await prisma.creditSpend.count({
+        where: { userWawuId: USER_PLAIN, communityId: SEEDED_COMMUNITY_ID },
+      });
+      expect(spendsAfter).toBe(spendsBefore);
 
       const state = await prisma.creditsState.findUnique({
         where: { userWawuId: USER_PLAIN },
       });
-      expect(state?.creditBalance).toBe(0); // stays at 0, never goes negative
-
-      const spend = await prisma.creditSpend.findFirst({
-        where: { userWawuId: USER_PLAIN, communityId: SEEDED_COMMUNITY_ID },
-        orderBy: { spentAt: 'desc' },
-      });
-      expect(spend).not.toBeNull();
+      expect(state?.creditBalance).toBe(0); // unchanged, and never negative
     });
 
-    it('402s with a buy-more-credits rejection when balance is 0 and the trial has ended', async () => {
-      await setCreditsState(0, new Date(Date.now() - 1000)); // trial expired, no balance
+    it('402s with a buy-more-credits rejection when balance is 0', async () => {
+      await setCreditsState(0); // no balance
 
       const res = await request(app.getHttpServer())
         .post(`/communities/${SEEDED_COMMUNITY_ID}/messages`)
@@ -354,7 +395,7 @@ describe('CommunityMessage (contract)', () => {
     });
 
     it('404s for a community that does not exist (checked before the credits gate)', async () => {
-      await setCreditsState(0, new Date(Date.now() - 1000)); // would also fail the gate — 404 must win
+      await setCreditsState(0); // would also fail the credits gate - 404 must win
 
       const res = await request(app.getHttpServer())
         .post(`/communities/${NONEXISTENT_COMMUNITY_ID}/messages`)
@@ -366,7 +407,7 @@ describe('CommunityMessage (contract)', () => {
     });
 
     it('400s on an invalid payload (empty text)', async () => {
-      await setCreditsState(10, new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
+      await setCreditsState(10);
 
       const res = await request(app.getHttpServer())
         .post(`/communities/${SEEDED_COMMUNITY_ID}/messages`)
@@ -378,7 +419,7 @@ describe('CommunityMessage (contract)', () => {
     });
 
     it('400s on a payload with a non-whitelisted field', async () => {
-      await setCreditsState(10, new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
+      await setCreditsState(10);
 
       await request(app.getHttpServer())
         .post(`/communities/${SEEDED_COMMUNITY_ID}/messages`)

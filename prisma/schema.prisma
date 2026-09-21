@@ -702,7 +702,13 @@ model CommunityMessage {
 model CreditsState {
   userWawuId    String   @id
   creditBalance Int      @default(0)
-  trialEndsAt   DateTime
+  /// LEGACY. The 7-day free trial was removed on 21 Sep 2026 (product owner:
+  /// "no 7 day silly trials"), so nothing writes this any more and nothing
+  /// reads it. Made NULLABLE rather than dropped: dropping a column an older
+  /// instance still selects takes production down mid-deploy, and rows that
+  /// already carry a date keep it harmlessly. Drop it in a follow-up once no
+  /// deployed build references it.
+  trialEndsAt   DateTime?
 }
 
 model CreditPurchase {

@@ -44,9 +44,9 @@ export type NotificationPrismaClient = PrismaService | Prisma.TransactionClient;
  *   newReplies      — would gate "the creator replied to your paid DM", which
  *                     is not one of the twelve kinds and has no emit site.
  *   promotions      — NOW WIRED, to the `campaign` kind that build brief C8
- *                     introduced. It is still not mapped to credits_low or
- *                     trial_ending: those are operational warnings about a
- *                     service the user is actively using, not marketing, and
+ *                     introduced. It is still not mapped to credits_low:
+ *                     that is an operational warning about a service the
+ *                     user is actively using, not marketing, and
  *                     switching them off would cost somebody a conversation
  *                     they paid for. The column's default was flipped to TRUE
  *                     with the same change, because a promotion channel whose

@@ -38,7 +38,9 @@ const ONE_OF_EVERY_KIND = (userWawuId: string): NotificationEvent[] => [
   { kind: 'dm_deadline', userWawuId, hoursLeft: 3.4 },
   { kind: 'dm_refunded', userWawuId, amount: 300 },
   { kind: 'credits_low', userWawuId, creditsCount: 4 },
-  { kind: 'trial_ending', userWawuId, creditsCount: 12 },
+  // 'trial_ending' used to sit here. The 7-day free credits trial was removed
+  // on 21 Sep 2026 and the kind was deleted from the vocabulary with it, so
+  // 'credits_low' is now the only credits-shaped kind.
   { kind: 'new_follower', userWawuId },
   { kind: 'content_published', userWawuId, contentTitle: 'Owambe Makeup' },
   { kind: 'content_rejected', userWawuId, contentTitle: 'Owambe Makeup', reason: 'Audio is inaudible.' },
@@ -266,9 +268,9 @@ describe('NotificationService.emit (contract)', () => {
     });
 
     it('credits are a COUNT and never a naira value', () => {
-      const creditKinds = drafts.filter((d) => d.kind === 'credits_low' || d.kind === 'trial_ending');
+      const creditKinds = drafts.filter((d) => d.kind === 'credits_low');
 
-      expect(creditKinds).toHaveLength(2);
+      expect(creditKinds).toHaveLength(1);
       for (const draft of creditKinds) {
         expect(draft.creditsCount).toEqual(expect.any(Number));
         expect(draft.amount).toBeNull();

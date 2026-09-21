@@ -23,26 +23,25 @@ export type CreditSpendPrismaClient = PrismaService | Prisma.TransactionClient;
 export const DEFAULT_CREDITS_SPENT = 1;
 
 /**
- * The community-credits split, docs/01_SPEC.md §1 row 4: "Creator 90% /
- * WAWU 10%".
+ * The community-credits split: creator 85 / WAWU 15.
  *
- * IT IS 90/10 FOR EVERY CREATOR, ON EVERY TIER — this is NOT the Pro
- * override. Two independent lines of the locked spec say so:
- *   - §1 row 8 lists the Pro upgrade as applying to "streams 1, 2, 3, 5, 6".
- *     Credits are stream 4, and are conspicuously absent from that list.
- *   - §3: "Creator share (90%) rewards creators for building and moderating
- *     active communities — this is deliberately a better split than every
- *     other stream, not an error."
- * So a Basic-tier host and a Pro-tier host earn the same 90 on credits, and
- * this service must NOT consult CreatorState.tier. (creator-earnings.service
- * .ts resolves a per-creator commission rate for the other streams; credits
- * deliberately bypass it.)
+ * IT WAS 90/10 UNTIL 21 SEP 2026, and the change is the product owner's:
+ * "Credits follow 85 15". Credits were the last rate in the product that was
+ * not 85/15, so there is now exactly ONE split, on every stream, for every
+ * account. The old doc here argued at length that 90/10 was deliberate and
+ * must not be collapsed into the flat rate, citing docs/01_SPEC.md §1 row 4
+ * and §3. That argument was correct about the spec and is now simply out of
+ * date: the owner overruled it, so the spec and CLAUDE.md were updated to
+ * match rather than left disagreeing with this constant.
  *
- * Expressed as integer numerator/denominator, not 0.9, so the arithmetic
- * below never leaves integer kobo.
+ * Tier is still not consulted, and that part never depended on the rate:
+ * Basic/Pro/Pro Max no longer exist at all.
+ *
+ * Expressed as an integer numerator/denominator, not 0.85, so the arithmetic
+ * below never leaves fractional kobo. 17/20 is 85/100 in lowest terms.
  */
-export const CREDITS_HOST_SHARE_NUMERATOR = 9;
-export const CREDITS_HOST_SHARE_DENOMINATOR = 10;
+export const CREDITS_HOST_SHARE_NUMERATOR = 17;
+export const CREDITS_HOST_SHARE_DENOMINATOR = 20;
 
 /** Options for {@link CreditSpendService.record}. */
 export interface RecordCreditSpendOptions {
@@ -64,13 +63,13 @@ const DEFAULT_MAX_LOTS = 8;
  * `/credit-spends` route. The row is written internally by the
  * CommunityMessage module's `POST /communities/:id/messages` handler (a
  * separate wave-0 resource, wired centrally after this wave) as the
- * audit/revenue-share trail for the community host's 90% share; this
+ * audit/revenue-share trail for the community host's 85% share; this
  * service is that module's only entry point into this table.
  *
  * It is ALSO the entry point into the community host's earnings: every
  * ledger row written here is paired, in the same transaction, with a
  * CreditSpendEarning row carrying the naira the host earned at the spec's
- * 90/10 credits split. Read {@link CreditSpendService.recordEarning}'s doc
+ * 85/15 credits split. Read {@link CreditSpendService.recordEarning}'s doc
  * comment ("THE COST-BASIS MODEL") before touching any of it — the choice
  * of model is load-bearing and was made deliberately.
  *
@@ -97,7 +96,7 @@ export class CreditSpendService {
    * debit, the message and this row commit or roll back together.
    *
    * ALSO writes the CreditSpendEarning row that pays the community host
-   * their 90% (see {@link recordEarning}). The caller passes no "was this
+   * their 85% (see {@link recordEarning}). The caller passes no "was this
    * funded?" flag and does not need to: funding is DERIVED here by trying to
    * draw the credits out of the sender's open purchase lots. If lots have
    * credits left, the sender had a real balance and it was really debited;
@@ -160,12 +159,13 @@ export class CreditSpendService {
   /**
    * THE COST-BASIS MODEL — read this before changing anything below.
    *
-   * WHAT THE SPEC SELLS. docs/01_SPEC.md §1 row 4: WAWU Credits, "Creator
-   * 90% / WAWU 10%". §3: that share "rewards creators for building and
-   * moderating active communities — this is deliberately a better split than
-   * every other stream, not an error." Six app surfaces say "you keep 90% of
-   * every credit spent in it". Until this method existed, nothing multiplied
-   * anything by 0.9 and a host earned exactly nothing.
+   * WHAT THE PRODUCT SELLS. WAWU Credits pay the community host 85% of what
+   * was actually spent in their room, the same split as every other stream
+   * (product owner, 21 Sep 2026). Until this method existed, nothing
+   * multiplied anything at all and a host earned exactly nothing, which is
+   * the defect this cost-basis model was written to fix; the rate moving
+   * from 90 to 85 changes the multiplier, not one line of the reasoning
+   * below.
    *
    * WHY IT IS HARD. A credit is bought in a PACK and spent one at a time,
    * possibly months later, possibly out of several packs. The packs are not
@@ -178,9 +178,11 @@ export class CreditSpendService {
    *   1. A single platform-wide rate (say ₦10, or a blended ₦8.33).
    *      REJECTED. It decouples what WAWU owes from what WAWU collected. A
    *      member who only ever buys the ₦2,000/300 pack pays ₦6.67 a credit;
-   *      paying the host 90% of ₦10 for it is a ₦9 payout on ₦6.67 of
-   *      revenue — a 135% payout, on a stream the spec defines as 90/10.
-   *      A model that can contradict the split it implements is not a model.
+   *      paying the host 85% of ₦10 for it is an ₦8.50 payout on ₦6.67 of
+   *      revenue — a 127% payout, on a stream defined as 85/15. A model that
+   *      can contradict the split it implements is not a model. Note the
+   *      lower rate does NOT rescue this option: it only moves the overpay
+   *      from 135% to 127%.
    *
    *   2. Weighted-average cost per member, kept on their credits row.
    *      REJECTED. It drifts as purchases and spends interleave, it needs a
@@ -193,8 +195,8 @@ export class CreditSpendService {
    *      Every completed purchase opens a CreditLot holding the exact kobo
    *      banked and the credits it bought. A spend draws from the oldest
    *      open lot first and carries THAT lot's real cost basis. The host
-   *      gets 90% of money that actually exists, per credit, always — so the
-   *      spec's split is literally true rather than approximately true, and
+   *      gets 85% of money that actually exists, per credit, always — so the
+   *      split is literally true rather than approximately true, and
    *      every naira in the earnings ledger traces to one Flutterwave
    *      charge.
    *
@@ -211,20 +213,24 @@ export class CreditSpendService {
    * invented, none lost — which a fixed `round(gross/granted)` per credit
    * cannot promise on a 120-pack (₦1,000 / 120 = 833.33 kobo).
    *
-   * THE HOST'S 90% IS FLOORED. The residual kobo (at most 1 per spend) stays
+   * THE HOST'S 85% IS FLOORED. The residual kobo (at most 1 per spend) stays
    * with WAWU. Rounding the other way would let total payouts exceed total
    * receipts, which is the one thing this model exists to make impossible.
    *
-   * TRIAL-COVERED MESSAGES EARN THE HOST ₦0, AND THAT IS DELIBERATE. During
-   * the 7-day trial (docs/01_SPEC.md §3) a member sends without holding
-   * credits: nothing is debited and WAWU banks nothing. 90% of nothing is
-   * nothing, and inventing a notional value would have WAWU paying real
-   * naira out of revenue it never received — the same defect as option 1.
-   * The message still writes its CreditSpend row, so the host's credit COUNT
-   * and their community's activity are unaffected; only the naira is zero.
-   * The same reasoning covers any credit sitting in a balance with no
-   * completed purchase behind it (seeded, granted, or legacy): unfunded
-   * credits are worth ₦0 because they cost ₦0. `creditsFunded` on the
+   * UNFUNDED CREDITS EARN THE HOST ₦0, AND THAT IS DELIBERATE. A credit
+   * sitting in a balance with no completed purchase behind it (seeded,
+   * admin-granted, or legacy) cost WAWU nothing, so it is worth ₦0: 85% of
+   * nothing is nothing, and inventing a notional value would have WAWU
+   * paying real naira out of revenue it never received, which is option 1's
+   * defect again. The message still writes its CreditSpend row, so the
+   * host's credit COUNT and their community's activity are unaffected; only
+   * the naira is zero.
+   *
+   * This paragraph used to lead on the 7-day free trial, which let a member
+   * send without holding credits at all. That trial was removed on the
+   * product owner's instruction (21 Sep 2026), so the trial case is gone;
+   * the unfunded-credit case it was an instance of is not, and is what the
+   * rule actually turns on. `creditsFunded` on the
    * earning row records exactly how many of the spend's credits were real,
    * so this is auditable rather than merely absorbed.
    *

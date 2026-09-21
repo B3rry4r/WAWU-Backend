@@ -468,6 +468,18 @@ describe('Community join requests (contract)', () => {
      * can now actually be in the room".
      */
     it('approves a pending request — and the member, refused a post a moment earlier, can now post', async () => {
+      // The requester needs credits to post. Until 21 Sep 2026 a first-ever
+      // sender was carried by the 7-day free trial that the metered path
+      // opened for them, so this test never had to say so; the trial was
+      // removed, so the credit is seeded explicitly. What is under test here
+      // is the MEMBERSHIP dead end, not the credits gate, and this keeps the
+      // two from being confused for each other.
+      await prisma.creditsState.upsert({
+        where: { userWawuId: requesterSub },
+        update: { creditBalance: 1 },
+        create: { userWawuId: requesterSub, creditBalance: 1 },
+      });
+
       await requestToJoin(requesterToken);
 
       // Before approval: pending is NOT membership. This is the dead end.

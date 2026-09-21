@@ -20,9 +20,6 @@ import { WawuIdClient } from '../common/auth/wawu-id.client';
 import { NotificationService } from '../notification/notification.service';
 import type { CreateCommunityMessageDto } from './dto/create-community-message.dto';
 
-/** 7 days, mirrors CreditsStateService's own trial window constant (wave 0). */
-const TRIAL_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
-
 /**
  * Price of one community message, mirroring `CommunityMessage.costInCredits`'s
  * schema default. Written explicitly onto the row (rather than left to the
@@ -87,8 +84,8 @@ type MessageEntitlement = 'host' | 'credits';
  * wave), so this service reads/writes the `CreditsState` table directly via
  * the shared, globally-registered PrismaService — mirroring exactly how
  * CreditPurchaseService (also outside credits-state/) already does this
- * (see credit-purchase.service.ts's own `TRIAL_DURATION_MS` comment, which
- * calls itself out as mirroring this same constant).
+ * (see credit-purchase.service.ts, which writes the same table on the
+ * purchase path).
  *
  * That credits gate applies only to senders who are NOT entitled to send
  * for free. `resolveEntitlement()` runs first and decides that; everything
@@ -97,23 +94,26 @@ type MessageEntitlement = 'host' | 'credits';
  * Gate + decrement semantics (judgment call, since the task brief leaves
  * the exact interaction underspecified):
  *   - A sender whose balance covers `costInCredits` (schema default 1)
- *     spends from that real balance, regardless of whether their trial is
- *     also still active. The debit is a conditional UPDATE guarded on
- *     sufficient balance, so it can never go negative and never double-spend
- *     under concurrency (see create()).
- *   - A sender with `creditBalance === 0` is only let through if their
- *     trial is still active (`trialEndsAt > now`). That message is
- *     "trial-covered" — there is no real balance to decrement, so none is
- *     decremented (0 stays 0). This is the literal reading of the task
- *     brief's own phrasing: "not spending a trial-covered message that has
- *     no balance to decrement" — trial-covered specifically means the
- *     no-balance case, not "trial active" in general.
- *   - Neither condition holds (`creditBalance === 0` AND trial expired) ->
- *     402 rejection.
+ *     spends from that real balance. The debit is a conditional UPDATE
+ *     guarded on sufficient balance, so it can never go negative and never
+ *     double-spend under concurrency (see create()).
+ *   - A sender whose balance does not cover it -> 402 rejection.
+ *
+ * THE FREE TRIAL IS GONE (product owner, 21 Sep 2026: "no 7 day silly
+ * trials"). There used to be a third case: a sender with `creditBalance ===
+ * 0` was let through anyway if `trialEndsAt > now`, and that message was
+ * "trial-covered" — no balance to decrement, so none was decremented, and
+ * the host earned ₦0 on it because WAWU had banked nothing. That path is
+ * removed, which makes the rule simple enough to state in one line: EVERY
+ * metered message costs a credit, and a sender with no credits is asked to
+ * buy some.
+ *
+ * Nobody loses credits they hold. Balances are untouched by this change;
+ * only the free allowance on top of them is withdrawn.
  *
  * A CreditsState row is lazily created for a first-time sender exactly like
  * CreditsStateService.getOrCreate does for GET /credits (same default: 0
- * balance, a fresh 7-day trial from *now*) — CommunityMessage is one of the
+ * balance, no trial) — CommunityMessage is one of the
  * two documented write-paths onto this table (the other being
  * CreditPurchase.verify), per credits-state.service.ts's own doc comment.
  * That lazy creation happens on the METERED path only: an entitled sender
@@ -393,14 +393,13 @@ export class CommunityMessageService {
       });
       spentRealBalance = count > 0;
 
-      // Trial-covered send: no balance to debit, so nothing was debited.
-      // (Unchanged semantics — see the class doc comment.)
-      const trialActive = creditsState.trialEndsAt.getTime() > Date.now();
-      if (!spentRealBalance && !trialActive) {
+      // Every metered message costs a credit now that the trial is gone, so
+      // a failed debit is the whole test: there is no second way through.
+      if (!spentRealBalance) {
         throw new HttpException(
           {
             message:
-              'Out of WAWU Credits and your trial has ended. Buy more credits to keep messaging in this community.',
+              'You are out of WAWU Credits. Buy more to keep messaging in this community.',
             reason: 'insufficient_credits',
           },
           HttpStatus.PAYMENT_REQUIRED,
@@ -475,22 +474,22 @@ export class CommunityMessageService {
   }
 
   /**
-   * Mirrors CreditsStateService.getOrCreate (row, else a fresh 7-day trial),
-   * as an upsert rather than find-then-create so two first-ever sends from
-   * the same user can't race into a duplicate-key 500.
+   * Mirrors CreditsStateService.getOrCreate (row at zero, no trial), as an
+   * upsert rather than find-then-create so two first-ever sends from the
+   * same user can't race into a duplicate-key 500.
    */
   private async getOrCreateCreditsState(
     userWawuId: string,
     client: CreditSpendPrismaClient = this.prisma,
-  ): Promise<{ creditBalance: number; trialEndsAt: Date }> {
+  ): Promise<{ creditBalance: number }> {
     return client.creditsState.upsert({
       where: { userWawuId },
       update: {},
       create: {
         userWawuId,
         creditBalance: 0,
-        trialEndsAt: new Date(Date.now() + TRIAL_DURATION_MS),
       },
+      select: { creditBalance: true },
     });
   }
 }

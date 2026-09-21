@@ -125,42 +125,6 @@ export class SchedulerService {
   }
 
   /**
-   * Warn a fan that their 7-day WAWU Credits trial ends tomorrow.
-   *
-   * Daily at a fixed hour over a 24-hour band, so every trial falls in
-   * exactly one run's window — same no-extra-column reasoning as the DM
-   * reminder above, but with an exact band rather than an approximate one.
-   *
-   * The credits figure is a COUNT and is written to `creditsCount`, never to
-   * `amount`: WAWU Credits are not money, are not a balance, and are not
-   * cashable (CLAUDE.md).
-   */
-  @Cron(CronExpression.EVERY_DAY_AT_8AM, { name: 'warn-credits-trial-ending' })
-  async warnCreditsTrialEnding(): Promise<void> {
-    const now = Date.now();
-    const from = new Date(now + 24 * 60 * 60 * 1000);
-    const to = new Date(now + 48 * 60 * 60 * 1000);
-
-    const ending = await this.prisma.creditsState.findMany({
-      where: { trialEndsAt: { gte: from, lt: to } },
-      select: { userWawuId: true, creditBalance: true },
-      take: 1000,
-    });
-    if (ending.length === 0) return;
-
-    const written = await this.notifications.emitMany(
-      ending.map(
-        (state): NotificationEvent => ({
-          kind: 'trial_ending',
-          userWawuId: state.userWawuId,
-          creditsCount: state.creditBalance,
-        }),
-      ),
-    );
-    this.logger.log(`Warned ${written} user(s) that their credits trial ends tomorrow.`);
-  }
-
-  /**
    * Sweep charge attempts that were initiated but never verified. These are
    * abandoned checkouts; keeping them forever would let a stale tx_ref be
    * verified long after the fact.

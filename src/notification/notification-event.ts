@@ -36,7 +36,6 @@ export type NotificationKind =
   | 'content_rejected'
   | 'new_follower'
   | 'tip_received'
-  | 'trial_ending'
   // Build brief C8 adds two kinds that are not a reaction to a transaction.
   /** An admin-composed announcement or promotion, fanned out from a NotificationCampaign. */
   | 'campaign'
@@ -70,8 +69,6 @@ export type NotificationEvent =
   | { kind: 'dm_refunded'; userWawuId: string; amount: number }
   /** Credits ran low or ran out. Recipient: the spender. Always a COUNT. */
   | { kind: 'credits_low'; userWawuId: string; creditsCount: number }
-  /** The 7-day WAWU Credits trial is about to end. Recipient: the fan. Always a COUNT. */
-  | { kind: 'trial_ending'; userWawuId: string; creditsCount: number }
   /** Somebody followed this creator. Recipient: the creator. */
   | { kind: 'new_follower'; userWawuId: string }
   /** Admin review approved an upload. Recipient: the creator. (Emitted from feat/admin-surface.) */
@@ -309,18 +306,6 @@ export function composeNotification(
       };
     }
 
-    case 'trial_ending':
-      return {
-        ...base,
-        title: 'Credits trial ending',
-        body: `Your WAWU Credits trial ends tomorrow. You have ${formatCredits(event.creditsCount)} left.`,
-        tone: 'warning',
-        amount: null,
-        creditsCount: event.creditsCount,
-        actionLabel: 'Buy credits',
-        ...NO_RICH_MEDIA,
-      };
-
     case 'new_follower':
       return {
         ...base,
@@ -408,8 +393,10 @@ export function composeNotification(
      *    AdminProfessionalReviewService (professionals) both call
      *    WawuIdClient.elevateVerificationTier on approval, and the web client
      *    renders <VerificationBadge> from that claim;
-     *  - the destination: /profile/verification is a built screen that lists
-     *    the tiers and takes a submission.
+     *  - the destination: /profile/verification is a built screen. It no
+     *    longer lists tiers or takes a submission (the five-rung ladder was
+     *    replaced by the two paid ticks); it is now where those ticks are
+     *    bought.
      *
      * What it deliberately does NOT say is anything in the future tense. "We
      * will let you know when your badge is approved" would need a notification

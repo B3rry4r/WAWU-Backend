@@ -534,21 +534,38 @@ describe('Notification wiring (contract)', () => {
       expect(await emittedFor(SYNTHETIC_DM_CREATOR, 'dm_deadline')).toHaveLength(0);
     });
 
-    it('warnCreditsTrialEnding warns a trial ending tomorrow, as a COUNT', async () => {
+    /**
+     * REPLACES 'warnCreditsTrialEnding warns a trial ending tomorrow, as a
+     * COUNT'. The 7-day free credits trial was removed on 21 Sep 2026, and
+     * the daily sweep and the `trial_ending` notification kind went with it.
+     *
+     * The old fixture is kept verbatim — a row whose `trialEndsAt` lands 30
+     * hours out, dead centre of the band the sweep used to fire on — because
+     * the column still exists and so does the data. What is asserted is the
+     * other way round now: no sweep runs over it and nothing is emitted for
+     * it.
+     */
+    it('no longer sweeps credits trials: the sweep is gone and nothing emits trial_ending', async () => {
       await prisma.creditsState.upsert({
         where: { userWawuId: SYNTHETIC_TRIAL_USER },
         update: { creditBalance: 12, trialEndsAt: new Date(Date.now() + 30 * HOUR) },
         create: { userWawuId: SYNTHETIC_TRIAL_USER, creditBalance: 12, trialEndsAt: new Date(Date.now() + 30 * HOUR) },
       });
 
-      await scheduler.warnCreditsTrialEnding();
+      // The method is gone from the service, not merely unscheduled.
+      expect(
+        (scheduler as unknown as Record<string, unknown>).warnCreditsTrialEnding,
+      ).toBeUndefined();
 
-      const [row] = await emittedFor(SYNTHETIC_TRIAL_USER, 'trial_ending');
-      expect(row).toBeDefined();
-      expect(row.creditsCount).toBe(12);
-      expect(row.amount).toBeNull();
-      expect(row.body).toContain('12 credits');
-      // The seeded users' trials end in 7 days — well outside the band.
+      // Run the notification-emitting sweeps that DO still exist, over that
+      // fixture. (sweepStalePendingCharges is left out on purpose: it emits
+      // nothing and it deletes rows older than 24h, which would reach across
+      // into other suites' seeded fixtures.)
+      await scheduler.refundExpiredDms();
+      await scheduler.remindDmDeadlines();
+
+      expect(await emittedFor(SYNTHETIC_TRIAL_USER, 'trial_ending')).toHaveLength(0);
+      expect(await emittedFor(SYNTHETIC_TRIAL_USER)).toHaveLength(0);
       expect(await emittedFor(USER_PLAIN, 'trial_ending')).toHaveLength(0);
     });
 

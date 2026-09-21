@@ -88,6 +88,11 @@ describe('CreditsState contract', () => {
       // value — the wire shape must never carry anything price-shaped.
       expect(res.body.data).not.toHaveProperty('amount');
       expect(res.body.data).not.toHaveProperty('balanceNaira');
+      // LEGACY COLUMN. prisma/seed.ts still writes a date onto the seeded
+      // rows, and the 21 Sep 2026 migration made `trialEndsAt` nullable
+      // rather than dropping it, so a pre-existing row still serialises one.
+      // It means nothing: no code reads it and nothing new writes it. The
+      // fresh-row test below is the one that pins the new behaviour.
       expect(typeof res.body.data.trialEndsAt).toBe('string');
       // Seeded by prisma/seed.ts for all three seeded users.
       expect(res.body.data.creditBalance).toBe(48);
@@ -110,11 +115,15 @@ describe('CreditsState contract', () => {
         userWawuId: freshWawuId,
         creditBalance: 0,
       });
-      expect(new Date(res.body.data.trialEndsAt).getTime()).toBeGreaterThan(Date.now());
+      // No trial is opened. This used to assert `trialEndsAt` was in the
+      // future; the 7-day free credits trial was removed on 21 Sep 2026
+      // ("no 7 day silly trials"), so a row created today carries null.
+      expect(res.body.data.trialEndsAt).toBeNull();
 
       const persisted = await prisma.creditsState.findUnique({ where: { userWawuId: freshWawuId } });
       expect(persisted).not.toBeNull();
       expect(persisted?.creditBalance).toBe(0);
+      expect(persisted?.trialEndsAt).toBeNull();
 
       await prisma.creditsState.deleteMany({ where: { userWawuId: freshWawuId } });
     });

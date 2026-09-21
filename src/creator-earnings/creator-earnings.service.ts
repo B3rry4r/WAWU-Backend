@@ -267,7 +267,7 @@ export class CreatorEarningsService {
       id: c.id,
       source: 'community_credits' as const,
       amount: c.creditsSpent,
-      // No earning row = a trial-covered or otherwise unfunded credit; the
+      // No earning row = an unfunded credit (seeded, admin-granted or legacy); the
       // host earned ₦0 on it because WAWU banked ₦0 for it.
       earningsNaira: koboToNaira(c.earning?.hostShareKobo ?? 0),
       occurredAt: c.spentAt,

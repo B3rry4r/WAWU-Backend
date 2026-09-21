@@ -1,0 +1,16 @@
+-- Remove the 7-day WAWU Credits free trial (product owner, 21 Sep 2026).
+--
+-- EXPAND ONLY. The column is made nullable so new rows can stop carrying a
+-- trial end date; it is NOT dropped, because an older instance still running
+-- during a rolling deploy selects it, and dropping it out from under that
+-- instance takes production down. Existing values are left exactly as they
+-- are: they are now meaningless rather than wrong, and rewriting historical
+-- rows buys nothing.
+--
+-- Nobody's credit BALANCE is touched. Credits already granted are credits a
+-- person holds; this withdraws the free allowance on top of them, not the
+-- credits themselves.
+--
+-- The drop of "trialEndsAt" is a follow-up migration, once no deployed build
+-- references the column.
+ALTER TABLE "CreditsState" ALTER COLUMN "trialEndsAt" DROP NOT NULL;
