@@ -110,7 +110,28 @@ describe('NotificationSettings (contract)', () => {
   });
 
   describe('GET /settings/notifications', () => {
-    it('200s with the seeded default shape for a plain user', async () => {
+    it('200s with the model defaults for an account that has never read them', async () => {
+      /*
+        THE ROW IS REMOVED FIRST, so this asserts what a NEW account gets
+        rather than whatever this database happens to be carrying.
+
+        It used to read the seeded row and assert `promotions: false`, which
+        was the model default when the test was written. Build brief C8
+        flipped that default to true and did not update this expectation, and
+        the test kept passing locally because a developer database already
+        held a row created under the old default. CI seeds from the CURRENT
+        schema every run, so CI got `true` and went red -- and stayed red,
+        blocking every deploy from 14 September onward.
+
+        GET upserts with `create: { userWawuId }`, so deleting the row makes
+        the next read create it at the model's own defaults. That is the
+        thing this test is actually about, and it cannot drift out of step
+        with the schema again.
+      */
+      await prisma.notificationSettings.deleteMany({
+        where: { userWawuId: USER_PLAIN },
+      });
+
       const res = await request(app.getHttpServer())
         .get('/settings/notifications')
         .set('Authorization', `Bearer ${signToken(USER_PLAIN)}`)
@@ -125,7 +146,10 @@ describe('NotificationSettings (contract)', () => {
           newFollowers: true,
           dmReminders: true,
           refunds: true,
-          promotions: false,
+          // C8: a promotion channel defaulting to off reaches nobody, so the
+          // model default is true. See the schema's note on why existing rows
+          // were deliberately not backfilled.
+          promotions: true,
           communityDigest: true,
         },
       });
@@ -178,7 +202,10 @@ describe('NotificationSettings (contract)', () => {
           newFollowers: true,
           dmReminders: true,
           refunds: true,
-          promotions: false,
+          // C8: a promotion channel defaulting to off reaches nobody, so the
+          // model default is true. See the schema's note on why existing rows
+          // were deliberately not backfilled.
+          promotions: true,
           communityDigest: true,
         },
       });
