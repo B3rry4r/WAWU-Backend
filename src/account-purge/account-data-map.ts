@@ -69,6 +69,11 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // The views OF this profile. A statistic about the account, so it goes with
   // the account. The other column on this table is somebody else's, below.
   { model: 'ProfileView', column: 'profileWawuId', disposition: 'OWNED' },
+  // This person's own job history. It is part of their profile and nothing
+  // else references it, so it goes when the account goes. The employers named
+  // on those rows are free text, not other accounts, so there is no
+  // counterparty here to preserve.
+  { model: 'ProfileExperience', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'CourseEnrollment', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CommunityMembership', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'Notification', column: 'userWawuId', disposition: 'OWNED' },

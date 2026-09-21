@@ -404,6 +404,20 @@ export class SearchResponseService {
         linkedinUrl: profile.linkedinUrl,
         whatsappHandle: profile.whatsappHandle,
         websiteUrl: profile.websiteUrl,
+        company: profile.company,
+        /*
+          EMPTY ON PURPOSE, AND THE ONE PLACE THAT IS TRUE.
+
+          A search result is a card: a face, a name, a handle and a line of
+          bio. Nothing on it draws an experience list, and filling this would
+          mean one extra query per result page to populate something nobody
+          renders. The full list is on the profile the card opens.
+
+          It is `[]` rather than the field being optional because a shape that
+          is sometimes absent is a shape every reader has to test for. This
+          says "no roles to show here", which is exactly what a card means.
+        */
+        experience: [],
         // Same buyer-facing DM settings as the public-profile aggregate, so a
         // creator found through search is not described differently from the
         // same creator opened directly.

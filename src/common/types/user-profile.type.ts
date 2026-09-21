@@ -1,6 +1,7 @@
 import type { UserProfileModel } from '../../../generated/prisma/models';
 import type { WawuJwtClaims } from '../auth/wawu-jwt-claims.interface';
 import type { VerificationState } from '../verification/verification-state';
+import type { ProfileExperienceView } from '../../user-profile/profile-experience.type';
 
 export type UserProfile = UserProfileModel;
 
@@ -24,6 +25,14 @@ export type UserProfileWithClaims = Omit<UserProfile, StoredVerificationDates> &
   WawuJwtClaims & {
     /** Both ticks, derived server-side. See deriveVerificationState. */
     verification: VerificationState;
+    /**
+     * The owner's own roles, newest first.
+     *
+     * It rides on the profile rather than sitting behind its own GET: the
+     * header renders it on first paint, and a caller with no profile row yet
+     * gets an empty array rather than a query.
+     */
+    experience: ProfileExperienceView[];
   };
 
 /**
@@ -60,6 +69,19 @@ export interface CreatorProfile {
   instagramHandle: string | null;
   whatsappHandle: string | null;
   websiteUrl: string | null;
+  /**
+   * The organisation this person is part of, as the approved profile header
+   * draws it beside the location and the website. Free text: see the schema's
+   * note on why it is not a relation.
+   */
+  company: string | null;
+  /**
+   * The experience list, newest first, with the role they hold now at the
+   * top. Public, because it is the part of a profile that says who somebody
+   * is; the private figures on that screen stay on the owner-only stats
+   * endpoint.
+   */
+  experience: ProfileExperienceView[];
   xHandle: string | null;
   tiktokHandle: string | null;
   youtubeUrl: string | null;
