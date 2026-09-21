@@ -7190,685 +7190,6 @@
         ]
       }
     },
-    "/api/hub/creator-subscription/ditto": {
-      "get": {
-        "operationId": "CreatorSubscriptionController_dittoState",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DittoState"
-                }
-              }
-            }
-          }
-        },
-        "summary": "GET /creator-subscription/ditto — whether this creator has opted in to\nDitto Music distribution, and the link once they have.\n\nNot folded into GET /creator-subscription: the opt-in is a consent record,\nnot a property of the plan, and the signup link must not be handed to\nevery Pro Max subscriber who merely loads their billing page.",
-        "tags": [
-          "CreatorSubscription"
-        ]
-      }
-    },
-    "/api/hub/creator-subscription/ditto/opt-in": {
-      "post": {
-        "operationId": "CreatorSubscriptionController_dittoOptIn",
-        "parameters": [],
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DittoState"
-                }
-              }
-            }
-          }
-        },
-        "summary": "POST /creator-subscription/ditto/opt-in — the explicit act. Nothing else\nin the codebase writes this row, so paying for Pro Max can never enrol\nsomebody by itself.",
-        "tags": [
-          "CreatorSubscription"
-        ]
-      }
-    },
-    "/api/hub/creator-subscription": {
-      "get": {
-        "operationId": "CreatorSubscriptionController_getSubscription",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CreatorSubscriptionResponse"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "CreatorSubscription"
-        ]
-      },
-      "post": {
-        "operationId": "CreatorSubscriptionController_subscribe",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SubscribeDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "oneOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "free": {
-                          "type": "boolean",
-                          "nullable": true
-                        },
-                        "flutterwaveConfig": {
-                          "type": "object",
-                          "properties": {
-                            "txRef": {
-                              "type": "string"
-                            },
-                            "amount": {
-                              "type": "number"
-                            },
-                            "currency": {
-                              "type": "string",
-                              "enum": [
-                                "NGN"
-                              ]
-                            },
-                            "publicKey": {
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "txRef",
-                            "amount",
-                            "currency",
-                            "publicKey"
-                          ]
-                        }
-                      },
-                      "required": [
-                        "flutterwaveConfig"
-                      ]
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "free": {
-                          "type": "boolean"
-                        },
-                        "subscription": {
-                          "$ref": "#/components/schemas/CreatorSubscriptionResponse"
-                        }
-                      },
-                      "required": [
-                        "free",
-                        "subscription"
-                      ]
-                    }
-                  ]
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "CreatorSubscription"
-        ]
-      },
-      "delete": {
-        "operationId": "CreatorSubscriptionController_cancel",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CreatorSubscriptionResponse"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "CreatorSubscription"
-        ]
-      }
-    },
-    "/api/hub/creator-subscription/verify": {
-      "post": {
-        "operationId": "CreatorSubscriptionController_verify",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/VerifySubscriptionDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CreatorSubscriptionResponse"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "CreatorSubscription"
-        ]
-      }
-    },
-    "/api/hub/creator-subscription/upgrade": {
-      "post": {
-        "operationId": "CreatorSubscriptionController_upgrade",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpgradeSubscriptionDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FlutterwaveConfigResponse"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "CreatorSubscription"
-        ]
-      }
-    },
-    "/api/hub/creator-subscription/downgrade": {
-      "post": {
-        "operationId": "CreatorSubscriptionController_downgrade",
-        "parameters": [],
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CreatorSubscriptionResponse"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "CreatorSubscription"
-        ]
-      }
-    },
-    "/api/hub/creator-subscription/retry-payment": {
-      "post": {
-        "operationId": "CreatorSubscriptionController_retryPayment",
-        "parameters": [],
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FlutterwaveConfigResponse"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "CreatorSubscription"
-        ]
-      }
-    },
-    "/api/hub/creator-subscription/card": {
-      "patch": {
-        "operationId": "CreatorSubscriptionController_updateCard",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateCardDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "last4": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "last4"
-                  ]
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "CreatorSubscription"
-        ]
-      }
-    },
-    "/api/hub/creator-subscription/billing-history": {
-      "get": {
-        "operationId": "CreatorSubscriptionController_billingHistory",
-        "parameters": [
-          {
-            "name": "page",
-            "required": true,
-            "in": "query",
-            "schema": {
-              "minimum": 1,
-              "maximum": 1000,
-              "default": 1,
-              "type": "number"
-            }
-          },
-          {
-            "name": "perPage",
-            "required": true,
-            "in": "query",
-            "schema": {
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20,
-              "type": "number"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {}
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "CreatorSubscription"
-        ]
-      }
-    },
-    "/api/hub/referral/signup-state": {
-      "get": {
-        "operationId": "ReferralController_signupState",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "userSignupEnabled": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "userSignupEnabled"
-                  ]
-                }
-              }
-            }
-          }
-        },
-        "summary": "Whether an account can be created without a code.",
-        "tags": [
-          "Referral"
-        ]
-      }
-    },
-    "/api/hub/referral/validate": {
-      "get": {
-        "operationId": "ReferralController_validate",
-        "parameters": [
-          {
-            "name": "code",
-            "required": true,
-            "in": "query",
-            "schema": {
-              "minLength": 3,
-              "maxLength": 40,
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ReferralCodeView"
-                }
-              }
-            }
-          }
-        },
-        "summary": "GET /referral/validate?code=... — checks a code and prices it.\n\nHas no side effects on purpose: this is called while somebody is still\ntyping, and incrementing a use here would burn a single-use code on a\nkeystroke.",
-        "tags": [
-          "Referral"
-        ]
-      }
-    },
-    "/api/hub/referral/claim": {
-      "post": {
-        "operationId": "ReferralController_claim",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ValidateReferralQueryDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "claimed": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "claimed"
-                  ]
-                }
-              }
-            }
-          }
-        },
-        "summary": "POST /referral/claim — remember the code this account arrived with.\n\nCalled once, right after the account exists. The code was applied before\nthere was anybody to attach it to, so it lived only in the browser until\nnow — and a browser copy does not survive the trip to an email client and\nback in a new tab.",
-        "tags": [
-          "Referral"
-        ]
-      }
-    },
-    "/api/hub/referral/mine": {
-      "get": {
-        "operationId": "ReferralController_mine",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "nullable": true
-                    }
-                  },
-                  "required": [
-                    "code"
-                  ]
-                }
-              }
-            }
-          }
-        },
-        "summary": "GET /referral/mine — the code this account arrived with, if still usable.",
-        "tags": [
-          "Referral"
-        ]
-      }
-    },
-    "/api/hub/admin/referral/codes": {
-      "get": {
-        "operationId": "AdminReferralController_list",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/AdminReferralCodeView"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "AdminReferral"
-        ]
-      },
-      "post": {
-        "operationId": "AdminReferralController_create",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateReferralCodeDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AdminReferralCodeView"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "AdminReferral"
-        ]
-      }
-    },
-    "/api/hub/admin/referral/codes/{code}": {
-      "patch": {
-        "operationId": "AdminReferralController_update",
-        "parameters": [
-          {
-            "name": "code",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateReferralCodeDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AdminReferralCodeView"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "AdminReferral"
-        ]
-      }
-    },
-    "/api/hub/admin/referral/codes/{code}/deactivate": {
-      "post": {
-        "operationId": "AdminReferralController_deactivate",
-        "parameters": [
-          {
-            "name": "code",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AdminReferralCodeView"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "AdminReferral"
-        ]
-      }
-    },
-    "/api/hub/admin/referral/signup-state": {
-      "get": {
-        "operationId": "AdminReferralController_signupState",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "userSignupEnabled": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "userSignupEnabled"
-                  ]
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "AdminReferral"
-        ]
-      },
-      "patch": {
-        "operationId": "AdminReferralController_setSignupState",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UserSignupDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "userSignupEnabled": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "userSignupEnabled"
-                  ]
-                }
-              }
-            }
-          }
-        },
-        "summary": "The toggle. Flipped from here, never from a deploy.",
-        "tags": [
-          "AdminReferral"
-        ]
-      }
-    },
     "/api/hub/services/applications": {
       "get": {
         "operationId": "ServiceApplicationController_list",
@@ -10961,9 +10282,9 @@
                             "enum": [
                               "paid",
                               "pending",
-                              "cancelled",
                               "refunded",
-                              "failed"
+                              "failed",
+                              "cancelled"
                             ]
                           },
                           "createdAt": {
@@ -11128,9 +10449,9 @@
                       "enum": [
                         "paid",
                         "pending",
-                        "cancelled",
                         "refunded",
-                        "failed"
+                        "failed",
+                        "cancelled"
                       ]
                     },
                     "createdAt": {
@@ -11922,28 +11243,6 @@
                 "user",
                 "creator"
               ]
-            }
-          },
-          {
-            "name": "tier",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "enum": [
-                "basic",
-                "pro",
-                "pro_max"
-              ]
-            }
-          },
-          {
-            "name": "subscriptionPaid",
-            "required": false,
-            "in": "query",
-            "description": "The upload gate, as a filter: \"who paid?\" / \"who has not?\"",
-            "schema": {
-              "type": "boolean"
             }
           },
           {
@@ -17874,7 +17173,7 @@
             }
           }
         },
-        "summary": "---------------------------------------------------------------------\nHost-side membership review — the other half of a private community.\n---------------------------------------------------------------------\n\n  GET    /communities/:id/requests                        host-only\n  POST   /communities/:id/requests/:userWawuId/approve    host-only\n  DELETE /communities/:id/requests/:userWawuId            host-only\n  DELETE /communities/:id/members/:userWawuId             host-only\n\n`POST /:id/join` wrote `status: 'pending'` for a private community and\nnothing could ever flip it, so a private community — the Pro tier's\nheadline feature — could be requested but never entered.\n\nCreatorAccountGuard here matches PATCH /:id above: managing a community\nis a creator-account capability, and hosting one already requires a\ncreator account (POST /communities). It proves the ROLE only; that the\ncaller is THIS community's host is proved in CommunityService, exactly\nas update()'s host check is.\n\n`:userWawuId` is the member/requester, validated as a v4 UUID the same\nway FollowRelationship and EvgScore validate their own `:wawuId` params.\nIt is a path param rather than a body field because these are actions on\none identified request, not edits to a collection.",
+        "summary": "---------------------------------------------------------------------\nHost-side membership review — the other half of a private community.\n---------------------------------------------------------------------\n\n  GET    /communities/:id/requests                        host-only\n  POST   /communities/:id/requests/:userWawuId/approve    host-only\n  DELETE /communities/:id/requests/:userWawuId            host-only\n  DELETE /communities/:id/members/:userWawuId             host-only\n\n`POST /:id/join` wrote `status: 'pending'` for a private community and\nnothing could ever flip it, so a private community could be requested\nbut never entered.\n\nCreatorAccountGuard here matches PATCH /:id above: managing a community\nis a creator-account capability, and hosting one already requires a\ncreator account (POST /communities). It proves the ROLE only; that the\ncaller is THIS community's host is proved in CommunityService, exactly\nas update()'s host check is.\n\n`:userWawuId` is the member/requester, validated as a v4 UUID the same\nway FollowRelationship and EvgScore validate their own `:wawuId` params.\nIt is a path param rather than a body field because these are actions on\none identified request, not edits to a collection.",
         "tags": [
           "Community"
         ]
@@ -19204,6 +18503,14 @@
               "social_impact"
             ]
           },
+          "specializations": {
+            "description": "Specialization ids from the C1 taxonomy, e.g.\n`photography.portrait-photographer`. What a buyer actually searches and\nfilters on; `category` above is the deprecated flat list it replaces.\n\nOptional and capped at three rather than required, deliberately:\n - optional, because every piece published before this column exists has\n   none, and a required field would make those rows unrepublishable.\n - capped, because this drives search placement. A piece tagged with\n   twenty specializations is tagged with none, and the cap belongs here\n   as well as in the client: a client-side maximum is a suggestion.\n\nThe ids are NOT validated against the taxonomy here. That list lives in\nthe web client and changes by deploy, so pinning a copy in this DTO would\ncreate two lists that drift and reject valid input the day they diverge.\nShape is enforced; membership is the client's to get right.",
+            "maxItems": 3,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "tags": {
             "maxItems": 20,
             "type": "array",
@@ -19277,9 +18584,9 @@
           "pack": {
             "type": "string",
             "enum": [
-              "pro",
               "starter",
-              "popular"
+              "popular",
+              "pro"
             ]
           }
         },
@@ -19300,162 +18607,6 @@
         "required": [
           "transaction_id",
           "tx_ref"
-        ]
-      },
-      "SubscribeDto": {
-        "type": "object",
-        "properties": {
-          "tier": {
-            "type": "string",
-            "enum": [
-              "basic",
-              "pro",
-              "pro_max"
-            ]
-          },
-          "referralCode": {
-            "type": "string",
-            "description": "A referral code, if they were given one.\n\nThe DISCOUNT is not accepted from the client either — only the code is.\nThe percentage is looked up server-side and the naira amount recomputed\nhere, for the same reason `tier` is the only other field: a client that\ncan name its own price will.",
-            "minLength": 3,
-            "maxLength": 40
-          }
-        },
-        "required": [
-          "tier"
-        ]
-      },
-      "VerifySubscriptionDto": {
-        "type": "object",
-        "properties": {
-          "transaction_id": {
-            "type": "string"
-          },
-          "tx_ref": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "transaction_id",
-          "tx_ref"
-        ]
-      },
-      "UpgradeSubscriptionDto": {
-        "type": "object",
-        "properties": {
-          "to": {
-            "type": "string",
-            "enum": [
-              "basic",
-              "pro",
-              "pro_max"
-            ]
-          }
-        }
-      },
-      "UpdateCardDto": {
-        "type": "object",
-        "properties": {
-          "flutterwaveCardToken": {
-            "type": "string",
-            "minLength": 4
-          }
-        },
-        "required": [
-          "flutterwaveCardToken"
-        ]
-      },
-      "ValidateReferralQueryDto": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string",
-            "minLength": 3,
-            "maxLength": 40
-          }
-        },
-        "required": [
-          "code"
-        ]
-      },
-      "CreateReferralCodeDto": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string",
-            "description": "Letters, digits, dash and underscore only.\n\nThese are printed in blog posts and typed by hand, so anything that needs\nescaping in a URL or reads ambiguously in print is not worth allowing.",
-            "minLength": 3,
-            "maxLength": 40,
-            "pattern": "^[A-Za-z0-9_-]+$"
-          },
-          "label": {
-            "type": "string",
-            "minLength": 2,
-            "maxLength": 120
-          },
-          "discountPercent": {
-            "type": "number",
-            "description": "0 is deliberately allowed. A code that takes nothing off is how a creator\nis let through while public signup is closed, at the normal price.",
-            "minimum": 0,
-            "maximum": 100
-          },
-          "tier": {
-            "type": "string",
-            "enum": [
-              "basic",
-              "pro",
-              "pro_max"
-            ]
-          },
-          "maxUses": {
-            "type": "number",
-            "description": "Null / omitted means unlimited.",
-            "minimum": 1
-          },
-          "expiresAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "code",
-          "label",
-          "discountPercent",
-          "tier"
-        ]
-      },
-      "UpdateReferralCodeDto": {
-        "type": "object",
-        "properties": {
-          "label": {
-            "type": "string",
-            "minLength": 2,
-            "maxLength": 120
-          },
-          "discountPercent": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 100
-          },
-          "active": {
-            "type": "boolean"
-          },
-          "maxUses": {
-            "type": "number",
-            "minimum": 1
-          },
-          "expiresAt": {
-            "type": "string"
-          }
-        }
-      },
-      "UserSignupDto": {
-        "type": "object",
-        "properties": {
-          "userSignupEnabled": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "userSignupEnabled"
         ]
       },
       "ApplyCacDto": {
@@ -21083,17 +20234,12 @@
           },
           "remainingBytes": {
             "type": "number"
-          },
-          "tier": {
-            "type": "string",
-            "nullable": true
           }
         },
         "required": [
           "usedBytes",
           "limitBytes",
-          "remainingBytes",
-          "tier"
+          "remainingBytes"
         ]
       },
       "AdminContentCreatorView": {
@@ -21114,19 +20260,6 @@
             ],
             "nullable": true
           },
-          "tier": {
-            "type": "string",
-            "enum": [
-              "basic",
-              "pro",
-              "pro_max"
-            ],
-            "nullable": true
-          },
-          "subscriptionPaid": {
-            "type": "boolean",
-            "nullable": true
-          },
           "kycStatus": {
             "type": "string",
             "nullable": true
@@ -21144,8 +20277,6 @@
           "wawuUserId",
           "handle",
           "accountType",
-          "tier",
-          "subscriptionPaid",
           "kycStatus",
           "slotsUsed",
           "slotsTotal"
@@ -21643,19 +20774,6 @@
             ],
             "nullable": true
           },
-          "tier": {
-            "type": "string",
-            "enum": [
-              "basic",
-              "pro",
-              "pro_max"
-            ],
-            "nullable": true
-          },
-          "subscriptionPaid": {
-            "type": "boolean",
-            "nullable": true
-          },
           "kycStatus": {
             "type": "string",
             "nullable": true
@@ -21667,34 +20785,15 @@
           "slotsTotal": {
             "type": "number",
             "nullable": true
-          },
-          "subscriptionStatus": {
-            "type": "string",
-            "enum": [
-              "active",
-              "past_due",
-              "cancelled",
-              "expired"
-            ],
-            "nullable": true
-          },
-          "subscriptionCurrentPeriodEnd": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
           }
         },
         "required": [
           "wawuUserId",
           "handle",
           "accountType",
-          "tier",
-          "subscriptionPaid",
           "kycStatus",
           "slotsUsed",
-          "slotsTotal",
-          "subscriptionStatus",
-          "subscriptionCurrentPeriodEnd"
+          "slotsTotal"
         ]
       },
       "AdminKycHistoryEntryView": {
@@ -22731,6 +21830,12 @@
           "category": {
             "type": "string"
           },
+          "specializations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "tags": {
             "type": "array",
             "items": {
@@ -22792,6 +21897,7 @@
           "contentType",
           "description",
           "category",
+          "specializations",
           "tags",
           "accessType",
           "price",
@@ -22821,210 +21927,6 @@
         "required": [
           "purchased",
           "fullAssetUrl"
-        ]
-      },
-      "DittoState": {
-        "type": "object",
-        "properties": {
-          "eligible": {
-            "type": "boolean"
-          },
-          "optedIn": {
-            "type": "boolean"
-          },
-          "optedInAt": {
-            "type": "string",
-            "nullable": true
-          },
-          "signupUrl": {
-            "type": "string",
-            "nullable": true
-          },
-          "discountPercent": {
-            "type": "number"
-          },
-          "emailed": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "eligible",
-          "optedIn",
-          "optedInAt",
-          "signupUrl",
-          "discountPercent",
-          "emailed"
-        ]
-      },
-      "CreatorSubscriptionResponse": {
-        "type": "object",
-        "properties": {
-          "status": {
-            "type": "string",
-            "enum": [
-              "active",
-              "past_due",
-              "cancelled",
-              "expired"
-            ]
-          },
-          "creatorWawuId": {
-            "type": "string"
-          },
-          "tier": {
-            "type": "string",
-            "enum": [
-              "basic",
-              "pro",
-              "pro_max"
-            ]
-          },
-          "flutterwaveCustomerRef": {
-            "type": "string",
-            "nullable": true
-          },
-          "flutterwavePlanId": {
-            "type": "string",
-            "nullable": true
-          },
-          "currentPeriodEnd": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "renewalAttempts": {
-            "type": "number"
-          },
-          "cancelsAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
-          },
-          "cardLast4": {
-            "type": "string",
-            "nullable": true
-          },
-          "pendingTier": {
-            "type": "string",
-            "enum": [
-              "basic",
-              "pro",
-              "pro_max"
-            ],
-            "nullable": true
-          },
-          "tierChangesAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
-          },
-          "commissionRateOverride": {
-            "type": "number",
-            "nullable": true
-          }
-        },
-        "required": [
-          "status",
-          "creatorWawuId",
-          "tier",
-          "flutterwaveCustomerRef",
-          "flutterwavePlanId",
-          "currentPeriodEnd",
-          "renewalAttempts",
-          "cancelsAt",
-          "cardLast4",
-          "pendingTier",
-          "tierChangesAt",
-          "commissionRateOverride"
-        ]
-      },
-      "ReferralCodeView": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "discountPercent": {
-            "type": "number"
-          },
-          "tier": {
-            "type": "string",
-            "enum": [
-              "basic",
-              "pro",
-              "pro_max"
-            ]
-          },
-          "priceNaira": {
-            "type": "number"
-          },
-          "originalPriceNaira": {
-            "type": "number"
-          }
-        },
-        "required": [
-          "code",
-          "discountPercent",
-          "tier",
-          "priceNaira",
-          "originalPriceNaira"
-        ]
-      },
-      "AdminReferralCodeView": {
-        "type": "object",
-        "properties": {
-          "label": {
-            "type": "string"
-          },
-          "active": {
-            "type": "boolean"
-          },
-          "maxUses": {
-            "type": "number",
-            "nullable": true
-          },
-          "usedCount": {
-            "type": "number"
-          },
-          "expiresAt": {
-            "type": "string",
-            "nullable": true
-          },
-          "createdAt": {
-            "type": "string"
-          },
-          "code": {
-            "type": "string"
-          },
-          "discountPercent": {
-            "type": "number"
-          },
-          "tier": {
-            "type": "string",
-            "enum": [
-              "basic",
-              "pro",
-              "pro_max"
-            ]
-          },
-          "priceNaira": {
-            "type": "number"
-          },
-          "originalPriceNaira": {
-            "type": "number"
-          }
-        },
-        "required": [
-          "label",
-          "active",
-          "maxUses",
-          "usedCount",
-          "expiresAt",
-          "createdAt",
-          "code",
-          "discountPercent",
-          "tier",
-          "priceNaira",
-          "originalPriceNaira"
         ]
       },
       "DmSendInitResponse": {
@@ -23856,9 +22758,9 @@
             "enum": [
               "paid",
               "pending",
-              "cancelled",
               "refunded",
-              "failed"
+              "failed",
+              "cancelled"
             ]
           },
           "subtotalNaira": {
@@ -24766,10 +23668,6 @@
       "AdminCreatorGatesView": {
         "type": "object",
         "properties": {
-          "subscriptionPaid": {
-            "type": "boolean",
-            "nullable": true
-          },
           "kycStatus": {
             "type": "string",
             "enum": [
@@ -24796,7 +23694,6 @@
           }
         },
         "required": [
-          "subscriptionPaid",
           "kycStatus",
           "kycSubmittedAt",
           "kycReviewedAt",
@@ -24820,36 +23717,8 @@
               "creator"
             ]
           },
-          "tier": {
-            "type": "string",
-            "enum": [
-              "basic",
-              "pro",
-              "pro_max"
-            ],
-            "nullable": true
-          },
           "gates": {
             "$ref": "#/components/schemas/AdminCreatorGatesView"
-          },
-          "subscriptionStatus": {
-            "type": "string",
-            "enum": [
-              "active",
-              "past_due",
-              "cancelled",
-              "expired"
-            ],
-            "nullable": true
-          },
-          "pendingTier": {
-            "type": "string",
-            "enum": [
-              "basic",
-              "pro",
-              "pro_max"
-            ],
-            "nullable": true
           },
           "createdAt": {
             "type": "string",
@@ -24860,73 +23729,8 @@
           "wawuUserId",
           "handle",
           "accountType",
-          "tier",
           "gates",
-          "subscriptionStatus",
-          "pendingTier",
           "createdAt"
-        ]
-      },
-      "AdminCreatorSubscriptionView": {
-        "type": "object",
-        "properties": {
-          "tier": {
-            "type": "string",
-            "enum": [
-              "basic",
-              "pro",
-              "pro_max"
-            ]
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "active",
-              "past_due",
-              "cancelled",
-              "expired"
-            ]
-          },
-          "currentPeriodEnd": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "pendingTier": {
-            "type": "string",
-            "enum": [
-              "basic",
-              "pro",
-              "pro_max"
-            ],
-            "nullable": true
-          },
-          "tierChangesAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
-          },
-          "cancelsAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
-          },
-          "renewalAttempts": {
-            "type": "number"
-          },
-          "cardLast4": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "tier",
-          "status",
-          "currentPeriodEnd",
-          "pendingTier",
-          "tierChangesAt",
-          "cancelsAt",
-          "renewalAttempts",
-          "cardLast4"
         ]
       },
       "AdminCreatorVerificationView": {
@@ -24984,14 +23788,6 @@
             "type": "number",
             "nullable": true
           },
-          "freeSlots": {
-            "type": "number",
-            "nullable": true
-          },
-          "paidSlots": {
-            "type": "number",
-            "nullable": true
-          },
           "pendingReviewCount": {
             "type": "number"
           },
@@ -25002,8 +23798,6 @@
         "required": [
           "slotsUsed",
           "slotsTotal",
-          "freeSlots",
-          "paidSlots",
           "pendingReviewCount",
           "liveCount"
         ]
@@ -25050,10 +23844,6 @@
             "format": "date-time",
             "nullable": true
           },
-          "subscription": {
-            "$ref": "#/components/schemas/AdminCreatorSubscriptionView",
-            "nullable": true
-          },
           "gates": {
             "$ref": "#/components/schemas/AdminCreatorGatesView"
           },
@@ -25089,7 +23879,6 @@
           "handle",
           "accountType",
           "createdAt",
-          "subscription",
           "gates",
           "verification",
           "uploads",
@@ -25659,19 +24448,8 @@
       "CreatorStateResponse": {
         "type": "object",
         "properties": {
-          "tier": {
-            "type": "string",
-            "enum": [
-              "basic",
-              "pro",
-              "pro_max"
-            ]
-          },
           "wawuUserId": {
             "type": "string"
-          },
-          "subscriptionPaid": {
-            "type": "boolean"
           },
           "kycStatus": {
             "type": "string",
@@ -25699,9 +24477,7 @@
           }
         },
         "required": [
-          "tier",
           "wawuUserId",
-          "subscriptionPaid",
           "kycStatus",
           "slotsUsed",
           "dmPrice",
@@ -26084,14 +24860,6 @@
       "LearnEntitlement": {
         "type": "object",
         "properties": {
-          "tier": {
-            "type": "string",
-            "enum": [
-              "basic",
-              "pro",
-              "pro_max"
-            ]
-          },
           "freeCoursesTotal": {
             "type": "number"
           },
@@ -26106,7 +24874,6 @@
           }
         },
         "required": [
-          "tier",
           "freeCoursesTotal",
           "freeCoursesUsed",
           "enrolledCourseIds"
@@ -26341,14 +25108,6 @@
             "type": "string",
             "nullable": true
           },
-          "tier": {
-            "type": "string",
-            "enum": [
-              "basic",
-              "pro",
-              "pro_max"
-            ]
-          },
           "dmEnabled": {
             "type": "boolean"
           },
@@ -26387,7 +25146,6 @@
           "youtubeUrl",
           "facebookUrl",
           "linkedinUrl",
-          "tier",
           "dmEnabled",
           "dmPrice",
           "dmResponseHours",
@@ -26402,14 +25160,6 @@
         "properties": {
           "externalHostUrl": {
             "type": "string"
-          },
-          "tier": {
-            "type": "string",
-            "enum": [
-              "basic",
-              "pro",
-              "pro_max"
-            ]
           },
           "freeCoursesTotal": {
             "type": "number"
@@ -26426,7 +25176,6 @@
         },
         "required": [
           "externalHostUrl",
-          "tier",
           "freeCoursesTotal",
           "freeCoursesUsed",
           "enrolledCourseIds"

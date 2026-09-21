@@ -328,7 +328,17 @@ model ContentPiece {
   contentType            ContentType
   title                  String
   description            String
+  /// DEPRECATED: the flat 25-category list. Kept, and still required, until
+  /// every published row carries `specializations` and a backfill has run.
+  /// Dropping it now would orphan every piece published before this column.
   category               String
+  /// Specialization ids from the C1 taxonomy (`<categoryId>.<slug>`, e.g.
+  /// `photography.portrait-photographer`). What a buyer actually searches and
+  /// filters on. A plain String[] rather than a relation: these are stable
+  /// ids from a code-owned taxonomy (src/lib/taxonomy in the web client), not
+  /// user-editable rows, so a join table would add a write path and a
+  /// referential-integrity story for data that only ever changes by deploy.
+  specializations        String[]      @default([])
   tags                   String[]      @default([])
   accessType             AccessType
   price                  Int

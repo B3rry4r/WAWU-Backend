@@ -524,6 +524,7 @@ export class ContentPieceService {
           title: dto.title,
           description: dto.description,
           category: dto.category,
+          specializations: dto.specializations ?? [],
           tags: dto.tags ?? [],
           accessType: dto.accessType as never,
           price: dto.price,
