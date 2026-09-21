@@ -22,8 +22,12 @@ export const DEFAULT_VERIFICATION_PRICE_NGN: Record<
   VerificationKindValue,
   number
 > = {
-  creator: 4999,
-  professional: 9999,
+  // Both ticks are NGN 2,000/year. Product owner, 21 Sep 2026: "reduce both
+  // prices of the verifications to 2000 naira for each". They were 4,999 and
+  // 9,999; they are now the same figure, so nothing in this product should
+  // derive one from the other or assume the professional tick costs more.
+  creator: 2000,
+  professional: 2000,
 };
 
 /** The single settings row. `PlatformSettings.id` defaults to 1 by design. */
