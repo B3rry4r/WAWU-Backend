@@ -62,6 +62,7 @@ describe('Profile experience (contract)', () => {
   const auth = (t: string) => ({ Authorization: `Bearer ${t}` });
 
   const companySnapshot = new Map<string, string | null>();
+  const headlineSnapshot = new Map<string, string | null>();
 
   async function sweep(): Promise<void> {
     await prisma.profileExperience.deleteMany({
@@ -114,9 +115,12 @@ describe('Profile experience (contract)', () => {
     for (const sub of ALL_SUBS) {
       const row = await prisma.userProfile.findUnique({
         where: { wawuUserId: sub },
-        select: { company: true },
+        select: { company: true, headline: true },
       });
-      if (row) companySnapshot.set(sub, row.company);
+      if (row) {
+        companySnapshot.set(sub, row.company);
+        headlineSnapshot.set(sub, row.headline);
+      }
     }
   }, 30000);
 
@@ -129,7 +133,7 @@ describe('Profile experience (contract)', () => {
     for (const [sub, company] of companySnapshot) {
       await prisma.userProfile.update({
         where: { wawuUserId: sub },
-        data: { company },
+        data: { company, headline: headlineSnapshot.get(sub) ?? null },
       });
     }
     await app.close();
@@ -379,6 +383,23 @@ describe('Profile experience (contract)', () => {
 
     expect((res.body as { data: { company: string } }).data.company).toBe(
       'WAWU Africa',
+    );
+  });
+
+  it('saves the headline and serves it to a visitor', async () => {
+    await http()
+      .patch('/users/me')
+      .set(auth(ownerToken))
+      .send({ headline: 'Chief Steward, WAWU' })
+      .expect(200);
+
+    const res = await http()
+      .get(`/users/${OWNER_SUB}/public-profile`)
+      .set(auth(otherToken))
+      .expect(200);
+
+    expect((res.body as { data: { headline: string } }).data.headline).toBe(
+      'Chief Steward, WAWU',
     );
   });
 

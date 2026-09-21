@@ -229,6 +229,15 @@ model UserProfile {
   youtubeUrl      String?
   facebookUrl     String?
   linkedinUrl     String?
+  /// The one line under the name: "Chief Steward, WAWU".
+  ///
+  /// A person's own sentence about what they do. It is NOT their first
+  /// interest category, which is what the profile screen was substituting:
+  /// a category is a filter that decides where somebody appears in Explore,
+  /// and reading "Agriculture" where a headline belongs describes nobody.
+  /// Professionals already had one of these on their listing; everybody
+  /// needs one, because everybody has a name with a line under it.
+  headline        String?
   /// The organisation this person is part of, written the way they write it.
   ///
   /// FREE TEXT, NOT A RELATION. The approved profile design puts a company

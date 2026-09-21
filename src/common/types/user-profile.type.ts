@@ -70,6 +70,11 @@ export interface CreatorProfile {
   whatsappHandle: string | null;
   websiteUrl: string | null;
   /**
+   * The one line under the name, as the approved header draws it. A person's
+   * own sentence about what they do, never their first interest category.
+   */
+  headline: string | null;
+  /**
    * The organisation this person is part of, as the approved profile header
    * draws it beside the location and the website. Free text: see the schema's
    * note on why it is not a relation.

@@ -1,0 +1,12 @@
+-- The one line under the name on a profile: "Chief Steward, WAWU".
+--
+-- It is a person's own sentence about what they do, and it did not exist. The
+-- profile screen was rendering the account's FIRST INTEREST CATEGORY in that
+-- position, so a farmer's profile read "Agriculture" where the approved
+-- design draws a headline. A category is a filter that decides where somebody
+-- turns up in Explore; it describes nobody.
+--
+-- Additive and nullable, so a deployed instance on the previous release is
+-- unaffected: every existing row gets NULL, and the screen falls back to what
+-- it did before when there is nothing here.
+ALTER TABLE "UserProfile" ADD COLUMN "headline" TEXT;
