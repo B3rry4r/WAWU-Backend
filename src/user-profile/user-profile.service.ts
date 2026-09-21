@@ -25,6 +25,7 @@ import {
 import type { UpdateUserProfileDto } from './dto/update-user-profile.dto';
 import { normaliseHandle, toProfileUrl } from './social-handles';
 import { profileCompleteness } from './profile-completeness';
+import { ProfileExperienceService } from './profile-experience.service';
 import type { ProfileStatsView } from './profile-stats.type';
 import { objectKeyFrom, StorageService } from '../storage/storage.service';
 import { WalletService } from '../wallet/wallet.service';
@@ -41,6 +42,7 @@ export class UserProfileService {
     private readonly wawuId: WawuIdClient,
     private readonly storage: StorageService,
     private readonly wallet: WalletService,
+    private readonly profileExperience: ProfileExperienceService,
   ) {}
 
   /**
@@ -108,12 +110,21 @@ export class UserProfileService {
       linkedinUrl: null,
       whatsappHandle: null,
       websiteUrl: null,
+      company: null,
       createdAt: null,
     };
 
-    const [avatarUrl, coverUrl] = await Promise.all([
+    // The experience list travels with the profile rather than behind its own
+    // GET: the header renders it on first paint, and a second round trip for
+    // a list that is almost always under ten rows buys nothing. A caller with
+    // no profile row yet has no roles either, so this is an empty array and
+    // not a query.
+    const [avatarUrl, coverUrl, experience] = await Promise.all([
       this.resignImage(base.avatarUrl),
       this.resignImage(base.coverUrl),
+      profile
+        ? this.profileExperience.list(user.sub)
+        : Promise.resolve([]),
     ]);
 
     // The four stored dates are pulled OFF the spread and republished as one
@@ -143,6 +154,7 @@ export class UserProfileService {
       avatarUrl,
       coverUrl,
       wawuUserId: user.sub,
+      experience,
       verification: profile ? deriveVerificationState(profile) : unverified(),
     } as UserProfileWithClaims;
   }
@@ -198,7 +210,7 @@ export class UserProfileService {
           ...(dto.bio !== undefined && { bio: dto.bio }),
           ...(dto.handle !== undefined && { handle: dto.handle }),
           ...Object.fromEntries(
-            (['websiteUrl', 'avatarUrl', 'coverUrl'] as const)
+            (['websiteUrl', 'avatarUrl', 'coverUrl', 'company'] as const)
               .filter((k) => dto[k] !== undefined)
               .map((k) => [k, dto[k]]),
           ),
@@ -236,6 +248,7 @@ export class UserProfileService {
           facebookUrl: toProfileUrl(dto.facebookUrl, 'facebook'),
           linkedinUrl: toProfileUrl(dto.linkedinUrl, 'linkedin'),
           websiteUrl: dto.websiteUrl ?? null,
+          company: dto.company ?? null,
           whatsappHandle: dto.whatsappHandle ?? null,
           avatarUrl: dto.avatarUrl ?? null,
           coverUrl: dto.coverUrl ?? null,
@@ -329,9 +342,10 @@ export class UserProfileService {
 
     await this.recordProfileView(wawuUserId, viewerWawuId);
 
-    const [avatarUrl, coverUrl] = await Promise.all([
+    const [avatarUrl, coverUrl, experience] = await Promise.all([
       this.resignImage(profile.avatarUrl),
       this.resignImage(profile.coverUrl),
+      this.profileExperience.list(profile.wawuUserId),
     ]);
 
     return {
@@ -350,6 +364,8 @@ export class UserProfileService {
       linkedinUrl: profile.linkedinUrl,
       whatsappHandle: profile.whatsappHandle,
       websiteUrl: profile.websiteUrl,
+      company: profile.company,
+      experience,
       // Buyer-facing DM settings — see CreatorProfile's doc comment for why
       // their absence made paid messaging unusable.
       dmEnabled: creatorState.dmEnabled,

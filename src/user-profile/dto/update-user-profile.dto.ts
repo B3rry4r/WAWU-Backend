@@ -77,6 +77,18 @@ export class UpdateUserProfileDto {
   })
   handle?: string | null;
 
+  /**
+   * The organisation this person is part of, beside the location and the
+   * website on the profile header.
+   *
+   * Free text and no @IsUrl: it is a name, not a link. See the schema's note
+   * on why it is not a relation to an Organisation row.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  company?: string | null;
+
   @IsOptional()
   @IsString()
   @MaxLength(50)

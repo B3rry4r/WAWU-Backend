@@ -6,6 +6,7 @@ import { WalletModule } from '../wallet/wallet.module';
 import { UserProfileController } from './user-profile.controller';
 import { PublicUserProfileController } from './public-user-profile.controller';
 import { UserProfileService } from './user-profile.service';
+import { ProfileExperienceService } from './profile-experience.service';
 
 /**
  * registry.json "UserProfile" resource module. PrismaService comes from the
@@ -32,6 +33,6 @@ import { UserProfileService } from './user-profile.service';
     WalletModule,
   ],
   controllers: [UserProfileController, PublicUserProfileController],
-  providers: [UserProfileService],
+  providers: [UserProfileService, ProfileExperienceService],
 })
 export class UserProfileModule {}

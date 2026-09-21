@@ -17877,6 +17877,10 @@
                       "type": "string",
                       "nullable": true
                     },
+                    "company": {
+                      "type": "string",
+                      "nullable": true
+                    },
                     "creatorVerifiedAt": {
                       "type": "string",
                       "format": "date-time",
@@ -17916,6 +17920,7 @@
                     "youtubeUrl",
                     "facebookUrl",
                     "linkedinUrl",
+                    "company",
                     "creatorVerifiedAt",
                     "creatorVerifiedUntil",
                     "professionalVerifiedAt",
@@ -17948,6 +17953,113 @@
           }
         },
         "summary": "Your own profile's numbers: the three-up row, both stat cards and the\ncompleteness ring.\n\nDeclared BEFORE `:wawuId/public-profile` because Nest matches in\ndeclaration order and `me` would otherwise be read as a wawuId. Owner-only\nby construction — it takes the caller's id from the token and has no\nparameter that could point it at anybody else, which is what keeps\nprofile views and sales off a stranger's screen.",
+        "tags": [
+          "UserProfile"
+        ]
+      }
+    },
+    "/api/hub/users/me/experience": {
+      "post": {
+        "operationId": "UserProfileController_addExperience",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProfileExperienceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileExperienceView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "UserProfile"
+        ]
+      }
+    },
+    "/api/hub/users/me/experience/{id}": {
+      "patch": {
+        "operationId": "UserProfileController_editExperience",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProfileExperienceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileExperienceView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "UserProfile"
+        ]
+      },
+      "delete": {
+        "operationId": "UserProfileController_removeExperience",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "deleted"
+                  ]
+                }
+              }
+            }
+          }
+        },
         "tags": [
           "UserProfile"
         ]
@@ -21193,6 +21305,12 @@
             "maxLength": 30,
             "pattern": "^[a-zA-Z0-9_.]+$"
           },
+          "company": {
+            "type": "string",
+            "nullable": true,
+            "description": "The organisation this person is part of, beside the location and the\nwebsite on the profile header.\n\nFree text and no @IsUrl: it is a name, not a link. See the schema's note\non why it is not a relation to an Organisation row.",
+            "maxLength": 120
+          },
           "instagramHandle": {
             "type": "string",
             "nullable": true,
@@ -21247,6 +21365,76 @@
             "nullable": true,
             "maxLength": 2048,
             "format": "uri"
+          }
+        }
+      },
+      "CreateProfileExperienceDto": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "company": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "location": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 120
+          },
+          "startedOn": {
+            "type": "string"
+          },
+          "endedOn": {
+            "type": "string",
+            "nullable": true,
+            "description": "Omitted or null means this is the role they hold now.\n\nThere is no `current` flag to send alongside it, for the reason the\nschema gives: two fields that can contradict each other eventually do."
+          },
+          "description": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "title",
+          "company",
+          "startedOn"
+        ]
+      },
+      "UpdateProfileExperienceDto": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "company": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "location": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 120
+          },
+          "startedOn": {
+            "type": "string"
+          },
+          "endedOn": {
+            "type": "string",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 1000
           }
         }
       },
@@ -27639,6 +27827,48 @@
           "enrolledCourseIds"
         ]
       },
+      "ProfileExperienceView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "company": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string",
+            "nullable": true
+          },
+          "startedOn": {
+            "type": "string"
+          },
+          "endedOn": {
+            "type": "string",
+            "nullable": true
+          },
+          "current": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "company",
+          "location",
+          "startedOn",
+          "endedOn",
+          "current",
+          "description"
+        ]
+      },
       "UserProfileWithClaims": {
         "type": "object",
         "properties": {
@@ -27715,6 +27945,10 @@
             "type": "string",
             "nullable": true
           },
+          "company": {
+            "type": "string",
+            "nullable": true
+          },
           "sub": {
             "type": "string"
           },
@@ -27778,6 +28012,12 @@
           },
           "verification": {
             "$ref": "#/components/schemas/VerificationState"
+          },
+          "experience": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProfileExperienceView"
+            }
           }
         },
         "required": [
@@ -27798,6 +28038,7 @@
           "youtubeUrl",
           "facebookUrl",
           "linkedinUrl",
+          "company",
           "sub",
           "email",
           "phone",
@@ -27809,7 +28050,8 @@
           "status",
           "iat",
           "exp",
-          "verification"
+          "verification",
+          "experience"
         ]
       },
       "ProfileStatsView": {
@@ -27909,6 +28151,16 @@
             "type": "string",
             "nullable": true
           },
+          "company": {
+            "type": "string",
+            "nullable": true
+          },
+          "experience": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProfileExperienceView"
+            }
+          },
           "xHandle": {
             "type": "string",
             "nullable": true
@@ -27966,6 +28218,8 @@
           "instagramHandle",
           "whatsappHandle",
           "websiteUrl",
+          "company",
+          "experience",
           "xHandle",
           "tiktokHandle",
           "youtubeUrl",

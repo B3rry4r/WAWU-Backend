@@ -229,6 +229,15 @@ model UserProfile {
   youtubeUrl      String?
   facebookUrl     String?
   linkedinUrl     String?
+  /// The organisation this person is part of, written the way they write it.
+  ///
+  /// FREE TEXT, NOT A RELATION. The approved profile design puts a company
+  /// beside the location and the website, and that is all it is: a line on a
+  /// profile. Modelling it as an Organisation row would imply this product
+  /// knows which employers are real and can merge two spellings of one, and
+  /// it does neither. The same string appears on ProfileExperience for the
+  /// same reason.
+  company         String?
   createdAt       DateTime    @default(now())
 
   /// ── THE TWO TICKS ────────────────────────────────────────────────────────
@@ -257,7 +266,51 @@ model UserProfile {
   professionalVerifiedAt    DateTime? @map("professional_verified_at")
   professionalVerifiedUntil DateTime? @map("professional_verified_until")
 
+  experience ProfileExperience[]
+
   @@index([accountType])
+}
+
+/// One role on somebody's profile: what they did, where, and when.
+///
+/// WHY A TABLE AND NOT A JSON COLUMN. Each row is independently editable and
+/// independently deletable from the profile editor, and the list is ordered
+/// by a real date rather than by array position. A JSON blob would make
+/// "delete the third one" a read-modify-write that two open tabs can lose,
+/// and would put date ordering in application code on every read.
+///
+/// MONTH PRECISION, EXPRESSED AS A DATE. `startedOn` and `endedOn` are always
+/// the first of their month: nobody remembers the day they started a job, and
+/// a form that asks for one is asking for a number people invent. Storing a
+/// real date rather than a pair of ints means ordering and comparison are the
+/// database's job, and there is no way to represent March of no year.
+///
+/// A NULL `endedOn` IS "STILL THERE". There is deliberately no `current`
+/// boolean beside it: two columns that can disagree will eventually disagree,
+/// and a row reading `current: true, endedOn: 2019` is a bug with no correct
+/// answer. One column, one meaning.
+model ProfileExperience {
+  id          String    @id @default(uuid())
+  wawuUserId  String
+  /// The job title, as written. "Chief Steward", not an enum.
+  title       String
+  /// Where they held it. Free text for the reason `UserProfile.company` is.
+  company     String
+  /// City, country, or "Remote". Optional: plenty of roles have no one place.
+  location    String?
+  /// Always the first of the month. See the note above.
+  startedOn   DateTime  @db.Date
+  /// NULL means this is the role they hold now.
+  endedOn     DateTime? @db.Date
+  description String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  profile UserProfile @relation(fields: [wawuUserId], references: [wawuUserId], onDelete: Cascade)
+
+  /// Reads are always "this person's roles, newest first", which is exactly
+  /// what this index serves.
+  @@index([wawuUserId, startedOn])
 }
 
 /// Creator-only entitlement/gate state.
