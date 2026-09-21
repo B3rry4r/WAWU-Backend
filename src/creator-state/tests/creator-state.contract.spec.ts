@@ -342,7 +342,12 @@ describe('CreatorState (contract)', () => {
       expect(res.body).toMatchObject({
         statusCode: 200,
         message: 'OK',
-        data: { wawuUserId: OWN_CREATOR_BASIC, dmEnabled: false, dmPrice: 250, slotsTotal: 6 },
+        // slotsTotal is MAX_ITEMS_PER_ACCOUNT for every creator account now.
+        // The 6 this used to expect was the tier-derived allowance, and tiers
+        // went with subscriptions -- uploadAllowanceFor() takes no argument
+        // and can only return 5, which is what GET /creator/state asserts
+        // higher up in this same suite.
+        data: { wawuUserId: OWN_CREATOR_BASIC, dmEnabled: false, dmPrice: 250, slotsTotal: 5 },
       });
 
       const persisted = await prisma.creatorState.findUnique({ where: { wawuUserId: OWN_CREATOR_BASIC } });

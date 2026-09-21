@@ -173,7 +173,13 @@ describe('SearchResponse (contract)', () => {
       const zainab = res.body.data.creators.find(
         (c: { wawuUserId: string }) => c.wawuUserId === USER_CREATOR_PRO,
       );
-      expect(zainab.tier).toBe('pro');
+      // `tier` went with subscriptions (build brief B1: "There is no
+      // subscription tier"), so the aggregate must not carry one at all --
+      // a surviving tier here would be a fabricated plan. What the handle
+      // search actually has to prove is that it matched on the handle, so
+      // assert that instead of the plan that no longer exists.
+      expect(zainab.tier).toBeUndefined();
+      expect(zainab.handle).toBe('zainab-pro');
       // evgScore/followerCount are live aggregates over tables other
       // concurrently-running resource test suites legitimately mutate in
       // this shared wawu_hub_test database (follow/unfollow, EvgScore
