@@ -1,5 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import {
+  deriveVerificationState,
+  type VerificationState,
+} from '../common/verification/verification-state';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
 import { AccountType, ContentStatus } from '../../generated/prisma/enums';
 import type { ListCreatorsQueryDto } from './dto/list-creators-query.dto';
@@ -15,8 +19,16 @@ export interface CreatorDiscoveryItem {
   field: string | null;
   /** Live pieces only. A draft or rejected upload is not something to browse. */
   pieceCount: number;
-  /** Public badge tier from WAWU ID. Never their KYC state, which is private. */
-  verification: string;
+  /**
+   * Both ticks. NOT a tier and not a rank.
+   *
+   * This used to be the WAWU ID ladder value as a bare string, which every
+   * card had to interpret for itself. It is now the two independent ticks,
+   * each already decided server-side, and a creator who is also a verified
+   * professional shows both. Still never their KYC state, which is private
+   * and a different gate entirely.
+   */
+  verification: VerificationState;
   /** Whether the CALLER follows them. False for an anonymous reader. */
   following: boolean;
 }
@@ -106,7 +118,16 @@ export class CreatorDiscoveryService {
     const [profiles, total] = await Promise.all([
       this.prisma.userProfile.findMany({
         where,
-        select: { wawuUserId: true, handle: true, interests: true, avatarUrl: true },
+        select: {
+          wawuUserId: true,
+          handle: true,
+          interests: true,
+          avatarUrl: true,
+          creatorVerifiedAt: true,
+          creatorVerifiedUntil: true,
+          professionalVerifiedAt: true,
+          professionalVerifiedUntil: true,
+        },
         // A stable order, so page 2 is not page 1 again. `handle` is unique
         // where set; wawuUserId breaks the tie for profiles without one.
         orderBy: [{ handle: 'asc' }, { wawuUserId: 'asc' }],
@@ -157,7 +178,11 @@ export class CreatorDiscoveryService {
         avatarUrl: p.avatarUrl,
         field: p.interests[0] ?? null,
         pieceCount: pieceCountBy.get(p.wawuUserId) ?? 0,
-        verification: identity?.verificationTier ?? 'basic',
+        // Read off the row already loaded for this page. No extra query, and
+        // no dependence on WAWU ID being reachable: lookupPublicIdentities
+        // degrades to an empty map when it is not, which would have silently
+        // stripped every tick on the page.
+        verification: deriveVerificationState(p),
         following: followingSet.has(p.wawuUserId),
       };
     });

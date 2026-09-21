@@ -4,6 +4,7 @@ import type {
   EventStatus,
   EventType,
 } from '../../generated/prisma/enums';
+import type { VerificationState } from '../common/verification/verification-state';
 
 /**
  * The wire shapes for the app-facing Events surface.
@@ -52,6 +53,15 @@ export interface EventSpeakerView {
 export interface EventView {
   id: string;
   hostWawuId: string;
+  /**
+   * The host's two ticks, as everywhere else a user appears on the wire.
+   *
+   * An event is a listing with an owner, and the owner's tick is the whole
+   * reason the listing is allowed to exist: hosting is verified-only. Sending
+   * the event without it would make the card the one place a verified host
+   * renders unverified.
+   */
+  hostVerification: VerificationState;
   name: string;
   description: string;
   hostOrg: string;

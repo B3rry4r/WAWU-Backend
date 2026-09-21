@@ -70,6 +70,20 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     let statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
     let message = 'Something went wrong. Please try again.';
+    /**
+     * A refusal that explains itself.
+     *
+     * A bare 403 with a sentence in it tells a screen that something is not
+     * allowed and nothing about what would make it allowed, so the screen
+     * guesses, and a guessed remedy is usually a dead end. When a thrower
+     * puts a `reason` object on the exception body it is carried through to
+     * the caller untouched, so the app can render "here is what you need to
+     * do" instead of a wall.
+     *
+     * Additive: an exception without one produces exactly the envelope this
+     * filter has always produced, with no extra key.
+     */
+    let reason: unknown;
 
     if (exception instanceof HttpException) {
       statusCode = exception.getStatus();
@@ -81,6 +95,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
         message = Array.isArray(maybeMessage)
           ? maybeMessage[0]
           : (maybeMessage ?? exception.message);
+        reason = (body as { reason?: unknown }).reason;
       } else {
         message = exception.message;
       }
@@ -106,6 +121,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       statusCode,
       message,
       data: null,
+      ...(reason === undefined ? {} : { reason }),
     });
   }
 }

@@ -13,6 +13,10 @@ import type {
   UserProfile,
   UserProfileWithClaims,
 } from '../common/types';
+import {
+  deriveVerificationState,
+  unverified,
+} from '../common/verification/verification-state';
 import type { UpdateUserProfileDto } from './dto/update-user-profile.dto';
 import { normaliseHandle, toProfileUrl } from './social-handles';
 import { objectKeyFrom, StorageService } from '../storage/storage.service';
@@ -105,12 +109,34 @@ export class UserProfileService {
       this.resignImage(base.coverUrl),
     ]);
 
+    // The four stored dates are pulled OFF the spread and republished as one
+    // derived object. `base` is the whole Prisma row, so leaving them in
+    // would put the raw expiry on the wire and invite a client to decide for
+    // itself whether the tick is live. That decision is the server's.
+    const {
+      creatorVerifiedAt: _cAt,
+      creatorVerifiedUntil: _cUntil,
+      professionalVerifiedAt: _pAt,
+      professionalVerifiedUntil: _pUntil,
+      ...withoutTickDates
+    } = base as typeof base & {
+      creatorVerifiedAt?: Date | null;
+      creatorVerifiedUntil?: Date | null;
+      professionalVerifiedAt?: Date | null;
+      professionalVerifiedUntil?: Date | null;
+    };
+    void _cAt;
+    void _cUntil;
+    void _pAt;
+    void _pUntil;
+
     return {
       ...user,
-      ...base,
+      ...withoutTickDates,
       avatarUrl,
       coverUrl,
       wawuUserId: user.sub,
+      verification: profile ? deriveVerificationState(profile) : unverified(),
     } as UserProfileWithClaims;
   }
 
@@ -290,6 +316,7 @@ export class UserProfileService {
 
     return {
       wawuUserId: profile.wawuUserId,
+      verification: deriveVerificationState(profile),
       handle: profile.handle,
       bio: profile.bio,
       avatarUrl,

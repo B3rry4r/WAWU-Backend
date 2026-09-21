@@ -123,6 +123,40 @@
         ]
       }
     },
+    "/api/hub/notifications/{id}/read": {
+      "post": {
+        "operationId": "NotificationController_markRead",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarkAllReadDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Mark ONE notification read — what opening it does.\n\nDeclared AFTER `mark-all-read` because Nest matches in declaration order\nand `:id` would otherwise swallow the literal segment. `ParseUUIDPipe`\nwould reject 'mark-all-read' anyway, but relying on a 400 to protect a\nroute is not the same as the route being reachable.\n\nVersion-UNPINNED, matching every other id route in this codebase: the\nids in the data are facts, and `@default(uuid())` is not the only thing\nthat has ever written one.",
+        "tags": [
+          "Notification"
+        ]
+      }
+    },
     "/api/hub/dm/{creatorWawuId}/send": {
       "post": {
         "operationId": "DirectMessageController_sendInit",
@@ -7141,6 +7175,92 @@
         ]
       }
     },
+    "/api/hub/content/public/{id}": {
+      "get": {
+        "operationId": "PublicContentController_findOne",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentPieceResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "One creator's live content, to ANYBODY.\n\nWHY IT HAD TO EXIST. A shared store link (build brief C3) opens a\ncreator's shop with no session. The only per-creator content read was\nGET /users/:wawuId/content, which sits on a guarded controller and 401s\nan anonymous caller, so the store rendered identity and cross-sell over\nan empty shelf: the page whose entire job is to sell somebody's work\ncould not show any of it. The alternative considered and rejected was\nfilling the shelf from /content/public/featured, which is\nplatform-wide - that would present an arbitrary subset of the platform\nas one person's shop.\n\nWHY IT IS SAFE. `listByCreator` already takes an OPTIONAL requester and\n`resolveUnlockedSet(undefined, ...)` returns an empty set, so every\npiece comes back locked and `fullAssetUrl` is withheld from all of them.\nAn anonymous caller therefore sees exactly what a signed-in stranger\nsees: titles, covers, prices, and nothing behind the paywall. It also\nfilters `status: 'live'`, so a pending or rejected piece is never\nexposed.\n\nIt lives on this ungated controller rather than as a bypass on the\nguarded one, which is the same call this file's header comment makes\nabout `featured`: weakening a class-level guard for one route is how a\nguard stops meaning anything.",
+        "tags": [
+          "PublicContent"
+        ]
+      }
+    },
+    "/api/hub/content/public/creator/{wawuId}/content": {
+      "get": {
+        "operationId": "PublicContentController_creatorContent",
+        "parameters": [
+          {
+            "name": "wawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ContentPieceResponse"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "PublicContent"
+        ]
+      }
+    },
     "/api/hub/credits/purchase": {
       "post": {
         "operationId": "CreditPurchaseController_createPurchase",
@@ -9616,6 +9736,7 @@
             "schema": {
               "type": "string",
               "enum": [
+                "professional",
                 "audio_music",
                 "video_film",
                 "lighting_studio",
@@ -9625,7 +9746,6 @@
                 "gaming_streaming",
                 "content_creation",
                 "live_events",
-                "professional",
                 "power_accessories"
               ]
             }
@@ -9737,6 +9857,7 @@
             "in": "path",
             "schema": {
               "enum": [
+                "professional",
                 "audio_music",
                 "video_film",
                 "lighting_studio",
@@ -9746,7 +9867,6 @@
                 "gaming_streaming",
                 "content_creation",
                 "live_events",
-                "professional",
                 "power_accessories"
               ],
               "type": "string"
@@ -10072,6 +10192,7 @@
             "schema": {
               "type": "string",
               "enum": [
+                "professional",
                 "audio_music",
                 "video_film",
                 "lighting_studio",
@@ -10081,7 +10202,6 @@
                 "gaming_streaming",
                 "content_creation",
                 "live_events",
-                "professional",
                 "power_accessories"
               ]
             }
@@ -11743,6 +11863,481 @@
         "summary": "removed → published. The exit that keeps a takedown from being a one-way door.",
         "tags": [
           "AdminEvents"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/audiences": {
+      "get": {
+        "operationId": "AdminNotificationsController_audiences",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminAudienceView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "Every segment with its LIVE size and how many of them have announcements\nswitched on. The composer shows both beside each option, so the number an\nadmin sends against is measured rather than assumed.",
+        "tags": [
+          "AdminNotifications"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/destinations": {
+      "get": {
+        "operationId": "AdminNotificationsController_destinations",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "href": {
+                            "type": "string",
+                            "enum": [
+                              "/home"
+                            ]
+                          },
+                          "label": {
+                            "type": "string",
+                            "enum": [
+                              "Home feed"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "href",
+                          "label"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "href": {
+                            "type": "string",
+                            "enum": [
+                              "/explore"
+                            ]
+                          },
+                          "label": {
+                            "type": "string",
+                            "enum": [
+                              "Explore"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "href",
+                          "label"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "href": {
+                            "type": "string",
+                            "enum": [
+                              "/events"
+                            ]
+                          },
+                          "label": {
+                            "type": "string",
+                            "enum": [
+                              "Events"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "href",
+                          "label"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "href": {
+                            "type": "string",
+                            "enum": [
+                              "/shop"
+                            ]
+                          },
+                          "label": {
+                            "type": "string",
+                            "enum": [
+                              "Shop"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "href",
+                          "label"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "href": {
+                            "type": "string",
+                            "enum": [
+                              "/learn"
+                            ]
+                          },
+                          "label": {
+                            "type": "string",
+                            "enum": [
+                              "Learn"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "href",
+                          "label"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "href": {
+                            "type": "string",
+                            "enum": [
+                              "/services"
+                            ]
+                          },
+                          "label": {
+                            "type": "string",
+                            "enum": [
+                              "Services"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "href",
+                          "label"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "href": {
+                            "type": "string",
+                            "enum": [
+                              "/communities"
+                            ]
+                          },
+                          "label": {
+                            "type": "string",
+                            "enum": [
+                              "Communities"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "href",
+                          "label"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "href": {
+                            "type": "string",
+                            "enum": [
+                              "/professionals"
+                            ]
+                          },
+                          "label": {
+                            "type": "string",
+                            "enum": [
+                              "Professionals"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "href",
+                          "label"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "href": {
+                            "type": "string",
+                            "enum": [
+                              "/profile/verification"
+                            ]
+                          },
+                          "label": {
+                            "type": "string",
+                            "enum": [
+                              "Get verified"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "href",
+                          "label"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "href": {
+                            "type": "string",
+                            "enum": [
+                              "/create"
+                            ]
+                          },
+                          "label": {
+                            "type": "string",
+                            "enum": [
+                              "Create a listing"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "href",
+                          "label"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "href": {
+                            "type": "string",
+                            "enum": [
+                              "/notifications"
+                            ]
+                          },
+                          "label": {
+                            "type": "string",
+                            "enum": [
+                              "Stay here"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "href",
+                          "label"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "The allowlist of in-app destinations a campaign button may point at.\nServed rather than hard-coded in the dashboard so the two cannot drift:\na destination this backend will refuse must never be offerable.",
+        "tags": [
+          "AdminNotifications"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/campaigns": {
+      "get": {
+        "operationId": "AdminNotificationsController_list",
+        "parameters": [
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "Omitted means every status, drafts included.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "failed",
+                "draft",
+                "sending",
+                "sent"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminCampaignView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "The send history, newest first. Drafts included.",
+        "tags": [
+          "AdminNotifications"
+        ]
+      },
+      "post": {
+        "operationId": "AdminNotificationsController_compose",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ComposeCampaignDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCampaignView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Compose a draft. Sends nothing: composing and dispatching are two calls,\nso a campaign is always read back before it reaches anybody.\n\n`@HttpCode(200)`: the ResponseInterceptor stamps `statusCode: 200` into\nthe body regardless (hazard H-3), and a 201 would ship that mismatch into\na new surface for no reason. Same choice as every other admin write here.",
+        "tags": [
+          "AdminNotifications"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/campaigns/{id}": {
+      "get": {
+        "operationId": "AdminNotificationsController_detail",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCampaignView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminNotifications"
+        ]
+      },
+      "patch": {
+        "operationId": "AdminNotificationsController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ComposeCampaignDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCampaignView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Edit a draft. A sent campaign is refused: it is the record of what people saw.",
+        "tags": [
+          "AdminNotifications"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/campaigns/{id}/dispatch": {
+      "post": {
+        "operationId": "AdminNotificationsController_dispatch",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCampaignDispatchView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Send it. Superadmin only, and there is no unsend.\n\nReturns the two counts and the difference between them, so the admin who\npressed the button sees the opt-out rate immediately rather than reading\n\"Sent\" and assuming it reached everybody.",
+        "tags": [
+          "AdminNotifications"
         ]
       }
     },
@@ -15656,7 +16251,7 @@
                       }
                     },
                     "verification": {
-                      "type": "string"
+                      "$ref": "#/components/schemas/VerificationState"
                     },
                     "avatarUrl": {
                       "type": "string",
@@ -15823,6 +16418,196 @@
         },
         "tags": [
           "FollowRelationship"
+        ]
+      }
+    },
+    "/api/hub/verification/pricing": {
+      "get": {
+        "operationId": "VerificationController_pricing",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationPrices"
+                }
+              }
+            }
+          }
+        },
+        "summary": "What each tick costs today. Configured, not compiled in.",
+        "tags": [
+          "Verification"
+        ]
+      }
+    },
+    "/api/hub/verification/me": {
+      "get": {
+        "operationId": "VerificationController_me",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyVerificationView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The caller's own ticks, the prices, and which they may buy.",
+        "tags": [
+          "Verification"
+        ]
+      }
+    },
+    "/api/hub/verification/purchase": {
+      "post": {
+        "operationId": "VerificationController_purchase",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartVerificationPurchaseDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationCheckoutView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Open a checkout for one tick.\n\n`@HttpCode(200)`: the ResponseInterceptor stamps `statusCode: 200` into\nevery success body, so a 201 here would ship a response whose envelope\ncontradicts its own status line. Same reasoning as the events routes.",
+        "tags": [
+          "Verification"
+        ]
+      }
+    },
+    "/api/hub/verification/purchase/verify": {
+      "post": {
+        "operationId": "VerificationController_verifyPurchase",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyVerificationPurchaseDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationGrantView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Confirm the payment with Flutterwave and grant the tick.\n\nNothing is granted anywhere else. The transaction id the client sends is\nonly a claim until this has checked it server-side.",
+        "tags": [
+          "Verification"
+        ]
+      }
+    },
+    "/api/hub/admin/verification/ticks/{wawuUserId}/grant": {
+      "post": {
+        "operationId": "AdminVerificationTicksController_grant",
+        "parameters": [
+          {
+            "name": "wawuUserId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminTickDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationState"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Grant a tick with no payment behind it.\n\nOmitting `until` grants a PERPETUAL tick, which is deliberate: it is what\nthe accounts grandfathered off the old ladder carry. Pass a date for a\ncomped annual term instead.",
+        "tags": [
+          "AdminVerificationTicks"
+        ]
+      }
+    },
+    "/api/hub/admin/verification/ticks/{wawuUserId}/revoke": {
+      "post": {
+        "operationId": "AdminVerificationTicksController_revoke",
+        "parameters": [
+          {
+            "name": "wawuUserId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminTickDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationState"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Take a tick away.\n\nWAWU ID is written first, as on a grant. The VerificationPurchase rows\nare left alone: they record a payment that really happened, and revoking\nthe tick does not un-happen it.",
+        "tags": [
+          "AdminVerificationTicks"
         ]
       }
     },
@@ -16559,6 +17344,26 @@
                     "linkedinUrl": {
                       "type": "string",
                       "nullable": true
+                    },
+                    "creatorVerifiedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "nullable": true
+                    },
+                    "creatorVerifiedUntil": {
+                      "type": "string",
+                      "format": "date-time",
+                      "nullable": true
+                    },
+                    "professionalVerifiedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "nullable": true
+                    },
+                    "professionalVerifiedUntil": {
+                      "type": "string",
+                      "format": "date-time",
+                      "nullable": true
                     }
                   },
                   "required": [
@@ -16578,7 +17383,11 @@
                     "tiktokHandle",
                     "youtubeUrl",
                     "facebookUrl",
-                    "linkedinUrl"
+                    "linkedinUrl",
+                    "creatorVerifiedAt",
+                    "creatorVerifiedUntil",
+                    "professionalVerifiedAt",
+                    "professionalVerifiedUntil"
                   ]
                 }
               }
@@ -17595,6 +18404,16 @@
             "description": "The featured rail is `?featured=true&perPage=1`, not a second endpoint and\nnot an extra key hung off the list envelope — the ResponseInterceptor\nrenders exactly one canonical envelope and a bespoke `featured` sibling\nwould be a second one.",
             "schema": {
               "type": "boolean"
+            }
+          },
+          {
+            "name": "host",
+            "required": false,
+            "in": "query",
+            "description": "One host's PUBLISHED events, for the Events tab on their profile.\n\nWithout this there was no way to ask for somebody else's events at all.\nThe profile called GET /events/mine, which is the CALLER's events, so a\nvisitor opening a creator's profile saw their OWN events listed under\nthat creator's name. /events/mine cannot serve this: it deliberately\nreturns every status, including pending and rejected submissions, which\nbelong to the host alone.\n\nThis filters the PUBLIC list, so it inherits `status: published` and the\ntime window with everything else. A visitor sees exactly what the\ncalendar shows.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
             }
           }
         ],
@@ -18923,6 +19742,7 @@
           },
           "category": {
             "enum": [
+              "professional",
               "audio_music",
               "video_film",
               "lighting_studio",
@@ -18932,7 +19752,6 @@
               "gaming_streaming",
               "content_creation",
               "live_events",
-              "professional",
               "power_accessories"
             ],
             "type": "string"
@@ -19161,6 +19980,65 @@
         },
         "required": [
           "reason"
+        ]
+      },
+      "ComposeCampaignDto": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 70
+          },
+          "body": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 220
+          },
+          "imageUrl": {
+            "type": "string",
+            "description": "The picture. Optional: an announcement with nothing to show renders as\nthe compact row, which is better than a stock photograph chosen to fill a\nframe.",
+            "maxLength": 500,
+            "format": "uri"
+          },
+          "actionLabel": {
+            "type": "string",
+            "description": "Button label and destination. BOTH or NEITHER, enforced in the service:\na label with no destination is a dead control, and a destination with no\nlabel is unreachable.",
+            "minLength": 2,
+            "maxLength": 24
+          },
+          "actionHref": {
+            "type": "string",
+            "description": "Checked against CAMPAIGN_DESTINATIONS in the service, which is the allowlist.",
+            "maxLength": 120
+          },
+          "tone": {
+            "default": "accent",
+            "enum": [
+              "accent",
+              "info",
+              "neutral",
+              "success"
+            ],
+            "type": "string"
+          },
+          "audience": {
+            "enum": [
+              "everyone",
+              "creators",
+              "buyers",
+              "unverified_creators",
+              "professionals",
+              "unverified_professionals"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "body",
+          "tone",
+          "audience"
         ]
       },
       "DeleteAccountDto": {
@@ -19448,6 +20326,55 @@
         },
         "required": [
           "listed"
+        ]
+      },
+      "StartVerificationPurchaseDto": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "creator",
+              "professional"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "VerifyVerificationPurchaseDto": {
+        "type": "object",
+        "properties": {
+          "transaction_id": {
+            "type": "string"
+          },
+          "tx_ref": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_id",
+          "tx_ref"
+        ]
+      },
+      "AdminTickDto": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "creator",
+              "professional"
+            ],
+            "type": "string"
+          },
+          "until": {
+            "type": "string",
+            "description": "ISO 8601. Omit for a tick that does not expire."
+          }
+        },
+        "required": [
+          "kind"
         ]
       },
       "CreateKycSubmissionDto": {
@@ -21768,6 +22695,37 @@
           "flutterwaveConfig"
         ]
       },
+      "TickState": {
+        "type": "object",
+        "properties": {
+          "verified": {
+            "type": "boolean"
+          },
+          "expiresAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "verified",
+          "expiresAt"
+        ]
+      },
+      "VerificationState": {
+        "type": "object",
+        "properties": {
+          "creator": {
+            "$ref": "#/components/schemas/TickState"
+          },
+          "professional": {
+            "$ref": "#/components/schemas/TickState"
+          }
+        },
+        "required": [
+          "creator",
+          "professional"
+        ]
+      },
       "BlockedAccountUser": {
         "type": "object",
         "properties": {
@@ -21784,13 +22742,17 @@
           "avatarUrl": {
             "type": "string",
             "nullable": true
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
           }
         },
         "required": [
           "wawuId",
           "name",
           "handle",
-          "avatarUrl"
+          "avatarUrl",
+          "verification"
         ]
       },
       "BlockedAccount": {
@@ -22019,13 +22981,17 @@
           "avatarUrl": {
             "type": "string",
             "nullable": true
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
           }
         },
         "required": [
           "wawuId",
           "name",
           "handle",
-          "avatarUrl"
+          "avatarUrl",
+          "verification"
         ]
       },
       "DirectMessage": {
@@ -23772,6 +24738,9 @@
       "AdminCreatorVerificationView": {
         "type": "object",
         "properties": {
+          "ticks": {
+            "$ref": "#/components/schemas/VerificationState"
+          },
           "approvedTier": {
             "type": "string",
             "enum": [
@@ -23807,6 +24776,7 @@
           }
         },
         "required": [
+          "ticks",
           "approvedTier",
           "approvedAt",
           "pendingTier",
@@ -24369,6 +25339,172 @@
           "review"
         ]
       },
+      "AdminAudienceView": {
+        "type": "object",
+        "properties": {
+          "audience": {
+            "type": "string",
+            "enum": [
+              "everyone",
+              "creators",
+              "buyers",
+              "unverified_creators",
+              "professionals",
+              "unverified_professionals"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "size": {
+            "type": "number"
+          },
+          "optedIn": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "audience",
+          "label",
+          "description",
+          "size",
+          "optedIn"
+        ]
+      },
+      "AdminCampaignView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "imageUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "actionLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "actionHref": {
+            "type": "string",
+            "nullable": true
+          },
+          "tone": {
+            "type": "string"
+          },
+          "audience": {
+            "type": "string",
+            "enum": [
+              "everyone",
+              "creators",
+              "buyers",
+              "unverified_creators",
+              "professionals",
+              "unverified_professionals"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "failed",
+              "draft",
+              "sending",
+              "sent"
+            ]
+          },
+          "recipientCount": {
+            "type": "number"
+          },
+          "deliveredCount": {
+            "type": "number"
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdByAdminEmail": {
+            "type": "string"
+          },
+          "createdByAdminRole": {
+            "type": "string",
+            "enum": [
+              "superadmin",
+              "reviewer",
+              "support",
+              "finance"
+            ]
+          },
+          "dispatchedByAdminEmail": {
+            "type": "string",
+            "nullable": true
+          },
+          "dispatchedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "body",
+          "imageUrl",
+          "actionLabel",
+          "actionHref",
+          "tone",
+          "audience",
+          "status",
+          "recipientCount",
+          "deliveredCount",
+          "failureReason",
+          "createdByAdminEmail",
+          "createdByAdminRole",
+          "dispatchedByAdminEmail",
+          "dispatchedAt",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "AdminCampaignDispatchView": {
+        "type": "object",
+        "properties": {
+          "campaign": {
+            "$ref": "#/components/schemas/AdminCampaignView"
+          },
+          "recipientCount": {
+            "type": "number"
+          },
+          "deliveredCount": {
+            "type": "number"
+          },
+          "suppressedByPreference": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "campaign",
+          "recipientCount",
+          "deliveredCount",
+          "suppressedByPreference"
+        ]
+      },
       "AccountDeletionResponse": {
         "type": "object",
         "properties": {
@@ -24386,6 +25522,9 @@
           "wawuId": {
             "type": "string"
           },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          },
           "name": {
             "type": "string"
           },
@@ -24400,6 +25539,7 @@
         },
         "required": [
           "wawuId",
+          "verification",
           "name",
           "handle",
           "avatarUrl"
@@ -24700,6 +25840,179 @@
           "readingSections"
         ]
       },
+      "VerificationPrices": {
+        "type": "object",
+        "properties": {
+          "creator": {
+            "type": "number"
+          },
+          "professional": {
+            "type": "number"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN"
+            ]
+          },
+          "termMonths": {
+            "type": "number",
+            "enum": [
+              12
+            ]
+          }
+        },
+        "required": [
+          "creator",
+          "professional",
+          "currency",
+          "termMonths"
+        ]
+      },
+      "VerificationPricingView": {
+        "type": "object",
+        "properties": {
+          "creator": {
+            "type": "number"
+          },
+          "professional": {
+            "type": "number"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN"
+            ]
+          },
+          "termMonths": {
+            "type": "number",
+            "enum": [
+              12
+            ]
+          }
+        },
+        "required": [
+          "creator",
+          "professional",
+          "currency",
+          "termMonths"
+        ]
+      },
+      "TickPurchaseEligibility": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "creator",
+              "professional"
+            ]
+          },
+          "allowed": {
+            "type": "boolean"
+          },
+          "priceNgn": {
+            "type": "number"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "kind",
+          "allowed",
+          "priceNgn",
+          "reason"
+        ]
+      },
+      "MyVerificationView": {
+        "type": "object",
+        "properties": {
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          },
+          "pricing": {
+            "$ref": "#/components/schemas/VerificationPricingView"
+          },
+          "eligibility": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TickPurchaseEligibility"
+            }
+          }
+        },
+        "required": [
+          "verification",
+          "pricing",
+          "eligibility"
+        ]
+      },
+      "VerificationCheckoutView": {
+        "type": "object",
+        "properties": {
+          "flutterwaveConfig": {
+            "type": "object",
+            "properties": {
+              "txRef": {
+                "type": "string"
+              },
+              "amount": {
+                "type": "number"
+              },
+              "currency": {
+                "type": "string",
+                "enum": [
+                  "NGN"
+                ]
+              },
+              "publicKey": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "txRef",
+              "amount",
+              "currency",
+              "publicKey"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "creator",
+              "professional"
+            ]
+          },
+          "priceNgn": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "flutterwaveConfig",
+          "kind",
+          "priceNgn"
+        ]
+      },
+      "VerificationGrantView": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "creator",
+              "professional"
+            ]
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          }
+        },
+        "required": [
+          "kind",
+          "verification"
+        ]
+      },
       "VerificationLevelEntry": {
         "type": "object",
         "properties": {
@@ -24811,7 +26124,7 @@
             "type": "number"
           },
           "verification": {
-            "type": "string"
+            "$ref": "#/components/schemas/VerificationState"
           },
           "following": {
             "type": "boolean"
@@ -24857,7 +26170,7 @@
             }
           },
           "verification": {
-            "type": "string"
+            "$ref": "#/components/schemas/VerificationState"
           },
           "avatarUrl": {
             "type": "string",
@@ -25051,6 +26364,9 @@
           },
           "exp": {
             "type": "number"
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
           }
         },
         "required": [
@@ -25081,7 +26397,8 @@
           "trustScore",
           "status",
           "iat",
-          "exp"
+          "exp",
+          "verification"
         ]
       },
       "CreatorProfile": {
@@ -25089,6 +26406,9 @@
         "properties": {
           "wawuUserId": {
             "type": "string"
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
           },
           "handle": {
             "type": "string",
@@ -25169,6 +26489,7 @@
         },
         "required": [
           "wawuUserId",
+          "verification",
           "handle",
           "bio",
           "avatarUrl",
@@ -25395,13 +26716,17 @@
           "avatarUrl": {
             "type": "string",
             "nullable": true
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
           }
         },
         "required": [
           "wawuId",
           "name",
           "handle",
-          "avatarUrl"
+          "avatarUrl",
+          "verification"
         ]
       },
       "CommunityMessage": {
@@ -25454,6 +26779,9 @@
           },
           "hostWawuId": {
             "type": "string"
+          },
+          "hostVerification": {
+            "$ref": "#/components/schemas/VerificationState"
           },
           "name": {
             "type": "string"
@@ -25597,6 +26925,7 @@
         "required": [
           "id",
           "hostWawuId",
+          "hostVerification",
           "name",
           "description",
           "hostOrg",

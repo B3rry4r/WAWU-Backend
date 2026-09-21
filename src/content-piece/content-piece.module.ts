@@ -36,7 +36,13 @@ import { StorageModule } from '../storage/storage.module';
       inject: [MockFlutterwaveAdapter, RealFlutterwaveAdapter],
     },
   ],
-  // Exported for PaymentWebhookModule (provider-driven unlock settlement).
-  exports: [ContentPieceService],
+  // ContentPieceService is exported for PaymentWebhookModule (provider-driven
+  // unlock settlement).
+  //
+  // FLUTTERWAVE_CLIENT is exported so VerificationModule can take a paid
+  // action through the SAME client the content unlock verifies against,
+  // rather than adding a sixth hand-copied FlutterwaveClient, adapter pair
+  // and DI token to the five the forks gate already reports.
+  exports: [ContentPieceService, FLUTTERWAVE_CLIENT],
 })
 export class ContentPieceModule {}

@@ -1,3 +1,4 @@
+import type { VerificationState } from '../../common/verification/verification-state';
 import type {
   AccountType,
   ReviewStatus,
@@ -83,6 +84,16 @@ export interface AdminCreatorGatesView {
  * `authority`.
  */
 export interface AdminCreatorVerificationView {
+  /**
+   * The two ticks, as everybody else on the platform sees them.
+   *
+   * THIS is the live badge now, and the three tier fields below it are the
+   * history of the ladder it replaced. They are kept because a submission
+   * made before the change is still a real thing a reviewer may have to
+   * explain, and removing them would leave an admin looking at a decision
+   * with no record of what was decided. Read this field, not those.
+   */
+  ticks: VerificationState;
   /** The highest rung this backend has approved and elevated. Null if none. */
   approvedTier: VerificationTier | null;
   /** When that approval happened. */

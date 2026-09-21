@@ -5,6 +5,14 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { VerificationStateService } from '../common/verification/verification-state.service';
+import { VerificationPricingService } from '../common/verification/verification-pricing';
+import {
+  holdsAnyTick,
+  unverified as unverifiedState,
+  type VerificationState,
+} from '../common/verification/verification-state';
+import type { IneligibilityReason } from '../verification/verification-view.type';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type {
   EventModel,
@@ -51,7 +59,99 @@ type EventWithSpeakers = EventModel & { speakers: EventSpeakerModel[] };
  */
 @Injectable()
 export class EventService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly verification: VerificationStateService,
+    private readonly pricing: VerificationPricingService,
+  ) {}
+
+  /**
+   * HOSTING AN EVENT IS VERIFIED-ONLY (build brief B3).
+   *
+   * Enforced here, on the write, and not by hiding a button. A hidden button
+   * is a suggestion; this is the rule. A buyer can never host, because a
+   * buyer account can hold neither tick. An unverified creator and an
+   * unverified professional cannot host either, which is the half that is
+   * easy to get wrong: having the right ACCOUNT TYPE is not having the tick.
+   *
+   * Either tick is enough, and they are not ranked. A verified creator hosts
+   * on the strength of the purple tick; a verified professional on the green
+   * one; somebody with both does not host twice as hard.
+   *
+   * The refusal carries a `reason` object, not a bare sentence, so the app
+   * can render what this person specifically has to do to become eligible.
+   * Being refused for want of a NGN 4,999 purchase and being refused because
+   * you are on the wrong kind of account are different problems with
+   * different remedies, and a single 403 string cannot tell them apart.
+   */
+  private async assertMayHost(userWawuId: string): Promise<void> {
+    const state: VerificationState = await this.verification.forOne(userWawuId);
+    if (holdsAnyTick(state)) return;
+
+    const [profile, professional, prices] = await Promise.all([
+      this.prisma.userProfile.findUnique({
+        where: { wawuUserId: userWawuId },
+        select: { accountType: true },
+      }),
+      this.prisma.professionalProfile.findFirst({
+        where: { wawuUserId: userWawuId, status: 'approved' },
+        select: { id: true },
+      }),
+      this.pricing.prices(),
+    ]);
+
+    const isCreator = profile?.accountType === 'creator';
+    const isProfessional = Boolean(professional);
+
+    const purchasable: IneligibilityReason['purchasable'] = [];
+    if (isCreator) {
+      purchasable.push({
+        kind: 'creator',
+        priceNgn: prices.creator,
+        currency: 'NGN',
+        termMonths: 12,
+      });
+    }
+    if (isProfessional) {
+      purchasable.push({
+        kind: 'professional',
+        priceNgn: prices.professional,
+        currency: 'NGN',
+        termMonths: 12,
+      });
+    }
+
+    const reason: IneligibilityReason =
+      purchasable.length > 0
+        ? {
+            code: 'verification_required',
+            message:
+              'Only verified accounts can host an event. Get verified and you can submit this one straight away.',
+            steps: [
+              'Open Settings, then Verification.',
+              'Pay for the tick that fits your account. It lasts a year.',
+              'Come back and submit your event.',
+            ],
+            purchasable,
+          }
+        : {
+            code: 'account_type_required',
+            message:
+              'Hosting an event is for verified creators and verified professionals. This account is neither yet.',
+            steps: [
+              'Switch to a creator account in Settings, or submit your professional credentials for review.',
+              'Once that is done, pay for the tick that fits your account.',
+              'Come back and submit your event.',
+            ],
+            purchasable: [],
+          };
+
+    throw new ForbiddenException({
+      statusCode: 403,
+      message: reason.message,
+      reason,
+    });
+  }
 
   /**
    * GET /events — the public list. `published` only, ever.
@@ -147,6 +247,7 @@ export class EventService {
 
   /** POST /events — created `pending`, always. There is no path here that publishes. */
   async create(userWawuId: string, dto: CreateEventDto): Promise<EventView> {
+    await this.assertMayHost(userWawuId);
     const startsAt = new Date(dto.startsAt);
     const endsAt = dto.endsAt ? new Date(dto.endsAt) : null;
     assertWindowOrdered(startsAt, endsAt);
@@ -200,6 +301,11 @@ export class EventService {
     userWawuId: string,
     dto: UpdateEventDto,
   ): Promise<EventView> {
+    // Checked on the edit as well as the create. A tick that lapses after an
+    // event was approved must not leave its host with a write path that the
+    // create path refuses, and every edit re-enters the moderation queue
+    // anyway, so an edit IS a submission.
+    await this.assertMayHost(userWawuId);
     const existing = await this.prisma.event.findUnique({ where: { id } });
     if (!existing || existing.hostWawuId !== userWawuId) {
       // Same 404-not-403 reasoning as findOne: an event that is not yours is
@@ -371,7 +477,7 @@ export class EventService {
     if (rows.length === 0) return [];
     const ids = rows.map((r) => r.id);
 
-    const [counts, mine] = await Promise.all([
+    const [counts, mine, hostTicks] = await Promise.all([
       this.prisma.eventGoing.groupBy({
         by: ['eventId'],
         where: { eventId: { in: ids } },
@@ -381,6 +487,8 @@ export class EventService {
         where: { eventId: { in: ids }, userWawuId },
         select: { eventId: true },
       }),
+      // One batched read for the whole page, not one per row.
+      this.verification.forMany(rows.map((r) => r.hostWawuId)),
     ]);
 
     const countByEvent = new Map(counts.map((c) => [c.eventId, c._count._all]));
@@ -389,6 +497,7 @@ export class EventService {
     return rows.map((row) => ({
       id: row.id,
       hostWawuId: row.hostWawuId,
+      hostVerification: hostTicks.get(row.hostWawuId) ?? unverifiedState(),
       name: row.name,
       description: row.description,
       hostOrg: row.hostOrg,

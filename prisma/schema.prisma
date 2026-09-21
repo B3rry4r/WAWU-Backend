@@ -231,6 +231,32 @@ model UserProfile {
   linkedinUrl     String?
   createdAt       DateTime    @default(now())
 
+  /// ── THE TWO TICKS ────────────────────────────────────────────────────────
+  /// Two INDEPENDENT paid verifications, not a ladder. A person may hold one,
+  /// both or neither, because a person may hold more than one role. Creator
+  /// is the purple tick, professional the green one, and neither outranks the
+  /// other, so nothing here ever picks a winner.
+  ///
+  /// Both are annual purchases. `...VerifiedAt` is when it was granted;
+  /// `...VerifiedUntil` is when it lapses. A NULL `until` alongside a
+  /// non-null `at` is a perpetual, admin-granted tick, which is what the
+  /// grandfathered accounts from the old ladder carry.
+  ///
+  /// WAWU ID remains the source of truth and is written first on every grant
+  /// and revoke (WawuIdClient.setVerification). These columns are the Hub's
+  /// mirror, so a page of 24 creator cards renders ticks from one query
+  /// instead of depending on identity being reachable - lookupPublicIdentities
+  /// deliberately degrades to an empty map when it is not, which would
+  /// otherwise silently strip every tick on the page.
+  ///
+  /// Never compare these dates at a call site. deriveVerificationState() in
+  /// src/common/verification/verification-state.ts is the one place that
+  /// turns them into `verified`.
+  creatorVerifiedAt         DateTime? @map("creator_verified_at")
+  creatorVerifiedUntil      DateTime? @map("creator_verified_until")
+  professionalVerifiedAt    DateTime? @map("professional_verified_at")
+  professionalVerifiedUntil DateTime? @map("professional_verified_until")
+
   @@index([accountType])
 }
 
@@ -279,6 +305,52 @@ model VerificationSubmission {
 
   @@index([wawuUserId])
   @@index([status])
+}
+
+/// Which of the two ticks a purchase or a grant is for.
+///
+/// NOT a ladder and not ordered: `professional` does not outrank `creator`,
+/// costs more only because it certifies more, and a person may hold both.
+/// Anything that sorts these two values is reintroducing the ladder that was
+/// removed.
+enum VerificationKind {
+  creator
+  professional
+}
+
+/// A paid, annual verification purchase.
+///
+/// Its own table rather than a `Purchase` row: a Purchase names a
+/// `creatorWawuId` who receives 85% of it, and this money is paid to the
+/// platform for a tick, with no creator on the other side. Forcing it into
+/// that shape would have put a fake counterparty on a real revenue row.
+///
+/// Durable rather than a PendingCharge that is deleted on claim: this is
+/// revenue, and "who paid for which tick, when, and what it cost that day"
+/// has to stay answerable after the tick itself has lapsed. `priceNgn` is
+/// snapshotted for exactly that reason - the configured price moves, what
+/// this person paid does not.
+model VerificationPurchase {
+  id               String            @id @default(uuid())
+  wawuUserId       String
+  kind             VerificationKind
+  /// Whole naira, snapshotted at init. Verification enforces
+  /// `paid >= priceNgn`, which is what stops a 1 naira payment buying a tick.
+  priceNgn         Int
+  /// Payment lookup key. Unique because a duplicate here is a double-granted
+  /// tick, and because verify finds the row by it.
+  flutterwaveTxRef String            @unique
+  flutterwaveTxId  String?
+  status           TransactionStatus @default(pending)
+  /// When the tick this purchase bought runs out. Written on settlement, so
+  /// a lapsed tick can still be traced back to the payment that granted it.
+  grantedUntil     DateTime?
+  createdAt        DateTime          @default(now())
+  settledAt        DateTime?
+
+  @@index([wawuUserId])
+  @@index([status])
+  @@index([kind])
 }
 
 /// Creator KYC (BVN/NIN or national-ID equivalent + payout bank details).
@@ -954,11 +1026,11 @@ model NotificationCampaign {
   status   NotificationCampaignStatus @default(draft)
 
   /// How many accounts the audience query matched at dispatch time.
-  recipientCount Int @default(0)
+  recipientCount Int     @default(0)
   /// How many notification rows were actually written. Lower than
   /// recipientCount by exactly the number of recipients whose
   /// NotificationSettings.promotions is off.
-  deliveredCount Int @default(0)
+  deliveredCount Int     @default(0)
   /// Set when a dispatch fails, so the failure is readable in the dashboard
   /// rather than only in a server log.
   failureReason  String?
@@ -993,8 +1065,8 @@ model AdminNotificationAudit {
   id         String @id @default(uuid())
   campaignId String
 
-  action   AdminNotificationAction
-  audience NotificationAudience
+  action         AdminNotificationAction
+  audience       NotificationAudience
   /// Null on create/update: nothing was resolved or written yet.
   recipientCount Int?
   deliveredCount Int?
@@ -1004,7 +1076,7 @@ model AdminNotificationAudit {
   actedByAdminId    String
   actedByAdminEmail String
   actedByAdminRole  AdminRole
-  actedAt           DateTime @default(now())
+  actedAt           DateTime  @default(now())
 
   @@index([campaignId])
   @@index([actedByAdminId])
@@ -1952,15 +2024,15 @@ model Event {
 /// order like anything else here. Initials are derived on the wire from
 /// `name`; storing them would be a second definition of the same fact.
 model EventSpeaker {
-  id      String  @id @default(uuid())
-  eventId String
-  event   Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  name    String
-  title   String?
+  id       String  @id @default(uuid())
+  eventId  String
+  event    Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  name     String
+  title    String?
   /// Object-storage URL from POST /uploads/presign (folder "event/speaker").
   /// Optional — a speaker with no photo still renders, as initials.
   photoUrl String?
-  order   Int
+  order    Int
 
   @@index([eventId])
 }
@@ -2668,6 +2740,19 @@ model PlatformSettings {
   ///
   /// Flipped from the dashboard, not from a deploy.
   userSignupEnabled Boolean @default(true)
+
+  /// What the two ticks cost, in whole naira, per year.
+  ///
+  /// Columns rather than constants because a price is a commercial decision
+  /// that changes without a deploy, and this table already exists to be
+  /// flipped from the dashboard. The defaults are the launch prices; the
+  /// single place they are written down in code is
+  /// src/common/verification/verification-pricing.ts, which is also the only
+  /// thing that reads these.
+  ///
+  /// Naira only. There is no second currency in this product.
+  creatorVerificationPriceNgn      Int @default(4999)
+  professionalVerificationPriceNgn Int @default(9999)
 
   updatedAt DateTime @updatedAt
 }

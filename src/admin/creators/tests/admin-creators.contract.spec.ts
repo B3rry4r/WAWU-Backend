@@ -571,6 +571,13 @@ describe('Admin creator lookup contract', () => {
 
       // The badge, as its own field, and honest about who owns it.
       expect(data.verification).toEqual({
+        // The live badge: two independent ticks, neither held here.
+        ticks: {
+          creator: { verified: false, expiresAt: null },
+          professional: { verified: false, expiresAt: null },
+        },
+        // And the ladder history it replaced, kept so a reviewer can still
+        // explain a decision made before the change.
         approvedTier: null,
         approvedAt: null,
         pendingTier: null,
@@ -600,12 +607,18 @@ describe('Admin creator lookup contract', () => {
       expect(res.body.data.uploads).toMatchObject({ slotsUsed: 4, slotsTotal: 5 });
     });
 
-    it('reports the verification badge as the HIGHEST approved rung, kept apart from kycStatus', async () => {
+    it('reports the two ticks alongside the old ladder history, kept apart from kycStatus', async () => {
       const res = await detail(supportToken, CREATOR_PRO_DOWNGRADING).expect(200);
 
       // verified_business was approved after verified_user, and a
       // certified_professional application is still in front of a reviewer.
       expect(res.body.data.verification).toEqual({
+        // This fixture holds neither tick: the rungs below are HISTORY, and
+        // an old approval does not silently become a paid tick.
+        ticks: {
+          creator: { verified: false, expiresAt: null },
+          professional: { verified: false, expiresAt: null },
+        },
         approvedTier: 'verified_business',
         approvedAt: '2026-02-11T00:00:00.000Z',
         pendingTier: 'certified_professional',

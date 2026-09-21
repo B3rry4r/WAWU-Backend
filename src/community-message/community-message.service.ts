@@ -7,6 +7,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { deriveVerificationState } from '../common/verification/verification-state';
 import {
   CreditSpendService,
   DEFAULT_CREDITS_SPENT,
@@ -166,7 +167,15 @@ export class CommunityMessageService {
       this.wawuId.lookupPublicIdentities(unique),
       this.prisma.userProfile.findMany({
         where: { wawuUserId: { in: unique } },
-        select: { wawuUserId: true, handle: true, avatarUrl: true },
+        select: {
+          wawuUserId: true,
+          handle: true,
+          avatarUrl: true,
+          creatorVerifiedAt: true,
+          creatorVerifiedUntil: true,
+          professionalVerifiedAt: true,
+          professionalVerifiedUntil: true,
+        },
       }),
     ]);
     const profileBy = new Map(profiles.map((p) => [p.wawuUserId, p]));
@@ -183,6 +192,9 @@ export class CommunityMessageService {
         name: fullName || profile?.handle || '',
         handle: profile?.handle ?? null,
         avatarUrl: profile?.avatarUrl ?? null,
+        // Both ticks, derived through the one function. An id with no profile
+        // row on this service carries neither.
+        verification: deriveVerificationState(profile ?? null),
       });
     }
     return out;

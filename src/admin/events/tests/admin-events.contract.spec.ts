@@ -104,6 +104,13 @@ describe('Admin events moderation contract', () => {
   let supportToken: string;
   let financeToken: string;
   let hostToken: string;
+  /** The host's tick columns as this suite found them. See beforeAll. */
+  let hostTickSnapshot: {
+    creatorVerifiedAt: Date | null;
+    creatorVerifiedUntil: Date | null;
+    professionalVerifiedAt: Date | null;
+    professionalVerifiedUntil: Date | null;
+  } | null = null;
   let otherUserToken: string;
 
   const envSnapshot: Record<string, string | undefined> = {};
@@ -271,6 +278,27 @@ describe('Admin events moderation contract', () => {
     reviewerToken = await adminLogin(REVIEWER_EMAIL);
     supportToken = await adminLogin(SUPPORT_EMAIL);
     financeToken = await adminLogin(FINANCE_EMAIL);
+
+    // Hosting is verified-only (build brief B3), and this suite submits
+    // through the REAL app endpoint on purpose, so its host needs a live
+    // tick. The seeded row is snapshotted and written back in afterAll
+    // rather than left changed (README § Test hygiene, option 2).
+    hostTickSnapshot = await prisma.userProfile.findUnique({
+      where: { wawuUserId: HOST_SUB },
+      select: {
+        creatorVerifiedAt: true,
+        creatorVerifiedUntil: true,
+        professionalVerifiedAt: true,
+        professionalVerifiedUntil: true,
+      },
+    });
+    await prisma.userProfile.updateMany({
+      where: { wawuUserId: HOST_SUB },
+      data: {
+        creatorVerifiedAt: new Date('2026-01-01T00:00:00.000Z'),
+        creatorVerifiedUntil: new Date('2099-01-01T00:00:00.000Z'),
+      },
+    });
   });
 
   beforeEach(async () => {
@@ -279,6 +307,12 @@ describe('Admin events moderation contract', () => {
 
   afterAll(async () => {
     await sweepEvents();
+    if (hostTickSnapshot) {
+      await prisma.userProfile.update({
+        where: { wawuUserId: HOST_SUB },
+        data: hostTickSnapshot,
+      });
+    }
     await prisma.adminUser.deleteMany({ where: { id: { in: ADMIN_IDS } } });
     await app.close();
     for (const [key, value] of Object.entries(envSnapshot)) {

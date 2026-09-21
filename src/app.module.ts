@@ -32,6 +32,8 @@ import { SavedItemModule } from './saved-item/saved-item.module';
 import { PurchaseModule } from './purchase/purchase.module';
 import { MentorModule } from './mentor/mentor.module';
 import { ServiceApplicationModule } from './service-application/service-application.module';
+import { VerificationStateModule } from './common/verification/verification-state.module';
+import { VerificationModule } from './verification/verification.module';
 import { VerificationSubmissionModule } from './verification-submission/verification-submission.module';
 import { FollowRelationshipModule } from './follow-relationship/follow-relationship.module';
 import { CreatorDiscoveryModule } from './creator-discovery/creator-discovery.module';
@@ -248,12 +250,17 @@ import { APP_GUARD } from '@nestjs/core';
     PlaybookModule,
     SavedItemModule,
     PurchaseModule,
+    VerificationStateModule,
     VerificationSubmissionModule,
     CreatorDiscoveryModule,
     ProfessionalModule,
     FollowRelationshipModule,
     BlockedAccountModule,
     ContentPieceModule,
+    // After ContentPieceModule: VerificationModule imports it for the shared
+    // Flutterwave client, and listing it earlier would move ContentPiece's own
+    // controllers up the route registration order as a side effect.
+    VerificationModule,
     CreditPurchaseModule,
     KycSubmissionModule,
     LearnEntitlementModule,

@@ -298,6 +298,33 @@ app.patch("/internal/users/:userId/verification-tier", requireServiceKey, (req, 
   res.json({ ok: true, userId: user.sub, verificationTier: user.verificationTier });
 });
 
+// The two-tick surface. Mirrors WAWU ID's new
+// PATCH /internal/users/:userId/verification, which is how the Hub keeps
+// identity as the source of truth for whether somebody is verified.
+//
+// One kind per call. Both dates null is a REVOKE; a null "verifiedUntil"
+// beside a real "verifiedAt" is a perpetual, admin-granted tick. Nothing here
+// derives `verified` - that is the reading service's job, from the expiry.
+app.patch("/internal/users/:userId/verification", requireServiceKey, (req, res) => {
+  const user = Object.values(USERS).find((u) => u.sub === req.params.userId);
+  if (!user) return res.status(404).json({ message: "user not found" });
+  const kind = req.body?.kind;
+  if (kind !== "creator" && kind !== "professional") {
+    return res.status(400).json({ message: "kind must be creator or professional" });
+  }
+  const verifiedAt = req.body?.verifiedAt ?? null;
+  const verifiedUntil = req.body?.verifiedUntil ?? null;
+  user.verification = user.verification ?? {
+    creator: { verifiedAt: null, verifiedUntil: null },
+    professional: { verifiedAt: null, verifiedUntil: null },
+  };
+  user.verification[kind] = { verifiedAt, verifiedUntil };
+  console.log(
+    `[mock-wawu-id] ${verifiedAt === null ? "revoking" : "granting"} ${kind} verification for ${user.email}`,
+  );
+  res.json({ ok: true, userId: user.sub, verification: user.verification });
+});
+
 // Mirrors WAWU-ID's POST /internal/users/lookup — display name and badge
 // tier for a set of ids, so a sibling service can render real people in a
 // list. Unknown ids are omitted, never returned as nulls.
@@ -317,6 +344,10 @@ app.post("/internal/users/lookup", requireServiceKey, (req, res) => {
       firstName: u.firstName ?? null,
       lastName: u.lastName ?? null,
       verificationTier: u.verificationTier,
+      verification: u.verification ?? {
+        creator: { verifiedAt: null, verifiedUntil: null },
+        professional: { verifiedAt: null, verifiedUntil: null },
+      },
     }));
   res.json({ data });
 });

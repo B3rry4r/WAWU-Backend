@@ -1,10 +1,30 @@
 import type { UserProfileModel } from '../../../generated/prisma/models';
 import type { WawuJwtClaims } from '../auth/wawu-jwt-claims.interface';
+import type { VerificationState } from '../verification/verification-state';
 
 export type UserProfile = UserProfileModel;
 
+/**
+ * The four stored verification dates, which never go on the wire.
+ *
+ * `UserProfileWithClaims` is a spread of the whole Prisma row, so anything
+ * added to the model lands on GET /users/me by default (protected-surface
+ * hazard H-1). The ticks are published as a derived `verification` object and
+ * the raw dates are omitted here, so no client can start comparing the dates
+ * itself and drawing its own tick.
+ */
+type StoredVerificationDates =
+  | 'creatorVerifiedAt'
+  | 'creatorVerifiedUntil'
+  | 'professionalVerifiedAt'
+  | 'professionalVerifiedUntil';
+
 /** GET /users/me response.shape: "UserProfile & WawuJwtClaims (merged)". */
-export type UserProfileWithClaims = UserProfile & WawuJwtClaims;
+export type UserProfileWithClaims = Omit<UserProfile, StoredVerificationDates> &
+  WawuJwtClaims & {
+    /** Both ticks, derived server-side. See deriveVerificationState. */
+    verification: VerificationState;
+  };
 
 /**
  * GET /users/:wawuId/public-profile response.shape: "CreatorProfile" — a
@@ -13,6 +33,13 @@ export type UserProfileWithClaims = UserProfile & WawuJwtClaims;
  */
 export interface CreatorProfile {
   wawuUserId: string;
+  /**
+   * Both ticks, as every user-shaped response on this backend carries them.
+   *
+   * Derived server-side from the expiry. A client never compares dates to
+   * decide whether to draw a tick, and both ticks render when both are held.
+   */
+  verification: VerificationState;
   handle: string | null;
   bio: string | null;
   /**

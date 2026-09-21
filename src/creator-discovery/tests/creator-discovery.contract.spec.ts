@@ -157,7 +157,7 @@ describe('CreatorDiscovery (contract)', () => {
     expect(ids).not.toContain(USER_CREATOR_EMPTY);
   });
 
-  it('resolves the real display name and badge tier from WAWU ID', async () => {
+  it('resolves the real display name from WAWU ID and carries both ticks', async () => {
     const res = await request(app.getHttpServer()).get('/creators').expect(200);
 
     const pro = res.body.data.find(
@@ -166,8 +166,20 @@ describe('CreatorDiscovery (contract)', () => {
     expect(pro).toBeDefined();
     // Name comes from WAWU ID, not from the handle it used to fall back to.
     expect(pro.name).toBe('Zainab Bello');
-    // And the badge is that account's real tier, not a hardcoded "basic".
-    expect(pro.verification).toBe('certified_professional');
+    // The badge used to be the ladder rung as a bare string. It is now the
+    // two independent ticks, each already decided server-side, so a card
+    // never compares a date to work out whether to draw one. Asserted
+    // structurally rather than against a fixed value: whether this seeded
+    // account currently holds a tick depends on what the rest of the suite
+    // has granted it, and the SHAPE is what every card depends on.
+    expect(Object.keys(pro.verification).sort()).toEqual([
+      'creator',
+      'professional',
+    ]);
+    for (const tick of ['creator', 'professional'] as const) {
+      expect(typeof pro.verification[tick].verified).toBe('boolean');
+      expect(pro.verification[tick]).toHaveProperty('expiresAt');
+    }
   });
 
   it('counts only LIVE pieces', async () => {

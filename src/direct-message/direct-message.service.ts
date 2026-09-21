@@ -8,6 +8,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { deriveVerificationState } from '../common/verification/verification-state';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import { toWireDm, type DirectMessage, type DmOtherParty } from '../common/types';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
@@ -156,7 +157,15 @@ export class DirectMessageService {
       this.wawuId.lookupPublicIdentities(unique),
       this.prisma.userProfile.findMany({
         where: { wawuUserId: { in: unique } },
-        select: { wawuUserId: true, handle: true, avatarUrl: true },
+        select: {
+          wawuUserId: true,
+          handle: true,
+          avatarUrl: true,
+          creatorVerifiedAt: true,
+          creatorVerifiedUntil: true,
+          professionalVerifiedAt: true,
+          professionalVerifiedUntil: true,
+        },
       }),
     ]);
     const profileBy = new Map(profiles.map((p) => [p.wawuUserId, p]));
@@ -173,6 +182,9 @@ export class DirectMessageService {
         name: fullName || profile?.handle || '',
         handle: profile?.handle ?? null,
         avatarUrl: profile?.avatarUrl ?? null,
+        // Both ticks, derived through the one function. An id with no profile
+        // row on this service carries neither.
+        verification: deriveVerificationState(profile ?? null),
       });
     }
     return out;

@@ -1,5 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import {
+  deriveVerificationState,
+  type VerificationColumns,
+} from '../../common/verification/verification-state';
 import { CreatorEarningsService } from '../../creator-earnings/creator-earnings.service';
 import { uploadAllowanceFor } from '../../common/creator-allowance';
 import type { Paginated } from '../../common/interceptors/response.interceptor';
@@ -172,7 +176,7 @@ export class AdminCreatorsService {
       accountType: profile?.accountType ?? null,
       createdAt: profile?.createdAt ?? null,
       gates: toGatesView(state, latestKyc),
-      verification: toVerificationView(verifications),
+      verification: toVerificationView(verifications, profile),
       uploads: {
         slotsUsed: state?.slotsUsed ?? null,
         slotsTotal: allowance?.total ?? null,
@@ -325,6 +329,7 @@ export function toVerificationView(
     submittedAt: Date;
     reviewedAt: Date | null;
   }[],
+  profile: VerificationColumns | null,
 ): AdminCreatorVerificationView {
   let approved: (typeof submissions)[number] | null = null;
   for (const s of submissions) {
@@ -342,6 +347,7 @@ export function toVerificationView(
   const pending = submissions.find((s) => s.status === 'pending') ?? null;
 
   return {
+    ticks: deriveVerificationState(profile),
     approvedTier: approved?.tier ?? null,
     approvedAt: approved?.reviewedAt ?? null,
     pendingTier: pending?.tier ?? null,

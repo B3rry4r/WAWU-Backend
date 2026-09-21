@@ -6,6 +6,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import {
+  deriveVerificationState,
+  unverified,
+  type VerificationState,
+} from '../common/verification/verification-state';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
 import { AccountType, ContentStatus } from '../../generated/prisma/enums';
 import type { ApplyProfessionalDto } from './dto/apply-professional.dto';
@@ -21,7 +26,11 @@ export interface ProfessionalListItem {
   category: string;
   headline: string;
   services: string[];
-  verification: string;
+  /**
+   * Both ticks, not a rung. A professional who is also a verified creator
+   * carries both, and this surface never picks one to show.
+   */
+  verification: VerificationState;
   /** Profile picture. Null is normal: not every creator has uploaded one. */
   avatarUrl: string | null;
   /** Live pieces, so a browser can see they are actually active on WAWU. */
@@ -237,7 +246,15 @@ export class ProfessionalService {
       this.wawuId.lookupPublicIdentities(ids),
       this.prisma.userProfile.findMany({
         where: { wawuUserId: { in: ids } },
-        select: { wawuUserId: true, handle: true, avatarUrl: true },
+        select: {
+          wawuUserId: true,
+          handle: true,
+          avatarUrl: true,
+          creatorVerifiedAt: true,
+          creatorVerifiedUntil: true,
+          professionalVerifiedAt: true,
+          professionalVerifiedUntil: true,
+        },
       }),
       this.prisma.creatorState.findMany({
         where: { wawuUserId: { in: ids } },
@@ -257,6 +274,9 @@ export class ProfessionalService {
 
     const handleBy = new Map(profiles.map((p) => [p.wawuUserId, p.handle]));
     const avatarBy = new Map(profiles.map((p) => [p.wawuUserId, p.avatarUrl]));
+    const ticksBy = new Map(
+      profiles.map((p) => [p.wawuUserId, deriveVerificationState(p)]),
+    );
     const stateBy = new Map(states.map((s) => [s.wawuUserId, s]));
     const pieceBy = new Map(
       pieceCounts.map((c) => [c.creatorWawuId, c._count._all]),
@@ -279,7 +299,10 @@ export class ProfessionalService {
         category: r.category,
         headline: r.headline,
         services: r.services,
-        verification: identity?.verificationTier ?? 'basic',
+        // An approved professional listing without a UserProfile row on this
+        // service has no ticks to show; unverified() is the honest answer,
+        // not an assumed green one.
+        verification: ticksBy.get(r.wawuUserId) ?? unverified(),
         avatarUrl: avatarBy.get(r.wawuUserId) ?? null,
         pieceCount: pieceBy.get(r.wawuUserId) ?? 0,
         // A professional who never switched paid messages on, or never set a
@@ -305,7 +328,15 @@ export class ProfessionalService {
       this.wawuId.lookupPublicIdentities([row.wawuUserId]),
       this.prisma.userProfile.findUnique({
         where: { wawuUserId: row.wawuUserId },
-        select: { handle: true, bio: true, avatarUrl: true },
+        select: {
+          handle: true,
+          bio: true,
+          avatarUrl: true,
+          creatorVerifiedAt: true,
+          creatorVerifiedUntil: true,
+          professionalVerifiedAt: true,
+          professionalVerifiedUntil: true,
+        },
       }),
       this.prisma.creatorState.findUnique({
         where: { wawuUserId: row.wawuUserId },
@@ -331,7 +362,7 @@ export class ProfessionalService {
       headline: row.headline,
       about: row.about,
       services: row.services,
-      verification: identity?.verificationTier ?? 'basic',
+      verification: deriveVerificationState(profile),
       avatarUrl: profile?.avatarUrl ?? null,
       /**
        * The issuing body is public; the licence NUMBER is not. A buyer is
