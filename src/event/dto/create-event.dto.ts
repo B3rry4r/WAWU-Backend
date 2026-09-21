@@ -129,6 +129,18 @@ export class CreateEventDto {
   address?: string;
 
   /**
+   * The venue by NAME, e.g. "Eko Convention Centre".
+   *
+   * Separate from `location`, which the card renders as the city. An online
+   * event simply omits it, and so may an in-person one whose organiser has
+   * only given a city, which is why nothing here is required.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(160)
+  venueName?: string;
+
+  /**
    * The organiser's own page. `require_protocol` and an http(s)-only protocol
    * list, so a submitted `javascript:` or `data:` URL cannot reach a client
    * that renders this as a link.

@@ -12,8 +12,13 @@ import {
   type VerificationState,
 } from '../common/verification/verification-state';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
-import { AccountType, ContentStatus } from '../../generated/prisma/enums';
+import {
+  AccountType,
+  ContentStatus,
+  DmStatus,
+} from '../../generated/prisma/enums';
 import type { ApplyProfessionalDto } from './dto/apply-professional.dto';
+import type { CreateProfessionalReviewDto } from './dto/create-professional-review.dto';
 import type { ListProfessionalsQueryDto } from './dto/list-professionals-query.dto';
 import { isRegulatedCategory } from './professional-categories';
 
@@ -39,6 +44,32 @@ export interface ProfessionalListItem {
   dmEnabled: boolean;
   dmPrice: number | null;
   dmResponseHours: number;
+  /**
+   * The stars above the Book button, and the "(120 reviews)" beside them.
+   *
+   * AGGREGATED from ProfessionalReview rows on read, to one decimal. NULL
+   * when nobody has reviewed this listing, and the card then draws no stars
+   * at all — which is the whole reason there is no `rating` column on
+   * ProfessionalProfile. A fabricated 4.8 under every name in a directory of
+   * lawyers and doctors is worse than no stars, because somebody chooses a
+   * professional on it.
+   */
+  ratingAvg: number | null;
+  reviewCount: number;
+}
+
+/** One review as it goes back to the person who just wrote it. */
+export interface ProfessionalReviewView {
+  id: string;
+  professionalId: string;
+  authorWawuId: string;
+  stars: number;
+  body: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  /** The listing's rating AFTER this review, so a client never has to refetch. */
+  ratingAvg: number | null;
+  reviewCount: number;
 }
 
 const DEFAULT_PER_PAGE = 20;
@@ -242,7 +273,9 @@ export class ProfessionalService {
     }
 
     const ids = rows.map((r) => r.wawuUserId);
-    const [identities, profiles, states, pieceCounts] = await Promise.all([
+    const listingIds = rows.map((r) => r.id);
+    const [identities, profiles, states, pieceCounts, ratings] =
+      await Promise.all([
       this.wawuId.lookupPublicIdentities(ids),
       this.prisma.userProfile.findMany({
         where: { wawuUserId: { in: ids } },
@@ -270,6 +303,15 @@ export class ProfessionalService {
         where: { creatorWawuId: { in: ids }, status: ContentStatus.live },
         _count: { _all: true },
       }),
+      // One grouped read for the whole page. Per LISTING, not per person: a
+      // review of someone's legal advice does not transfer to their
+      // photography listing.
+      this.prisma.professionalReview.groupBy({
+        by: ['professionalId'],
+        where: { professionalId: { in: listingIds } },
+        _avg: { stars: true },
+        _count: { _all: true },
+      }),
     ]);
 
     const handleBy = new Map(profiles.map((p) => [p.wawuUserId, p.handle]));
@@ -280,6 +322,12 @@ export class ProfessionalService {
     const stateBy = new Map(states.map((s) => [s.wawuUserId, s]));
     const pieceBy = new Map(
       pieceCounts.map((c) => [c.creatorWawuId, c._count._all]),
+    );
+    const ratingBy = new Map(
+      ratings.map((r) => [
+        r.professionalId,
+        { avg: r._avg.stars, count: r._count._all },
+      ]),
     );
 
     const items: ProfessionalListItem[] = rows.map((r) => {
@@ -311,6 +359,8 @@ export class ProfessionalService {
         dmEnabled: (state?.dmEnabled ?? false) && (state?.dmPrice ?? 0) > 0,
         dmPrice: state?.dmPrice ?? null,
         dmResponseHours: state?.dmResponseHours ?? 24,
+        ratingAvg: roundToOneDecimal(ratingBy.get(r.id)?.avg ?? null),
+        reviewCount: ratingBy.get(r.id)?.count ?? 0,
       };
     });
 
@@ -324,7 +374,7 @@ export class ProfessionalService {
     });
     if (!row) throw new NotFoundException('Professional profile not found');
 
-    const [identities, profile, state, pieceCount] = await Promise.all([
+    const [identities, profile, state, pieceCount, rating] = await Promise.all([
       this.wawuId.lookupPublicIdentities([row.wawuUserId]),
       this.prisma.userProfile.findUnique({
         where: { wawuUserId: row.wawuUserId },
@@ -345,6 +395,7 @@ export class ProfessionalService {
       this.prisma.contentPiece.count({
         where: { creatorWawuId: row.wawuUserId, status: ContentStatus.live },
       }),
+      this.ratingFor(row.id),
     ]);
 
     const identity = identities.get(row.wawuUserId);
@@ -376,6 +427,114 @@ export class ProfessionalService {
       dmEnabled: (state?.dmEnabled ?? false) && (state?.dmPrice ?? 0) > 0,
       dmPrice: state?.dmPrice ?? null,
       dmResponseHours: state?.dmResponseHours ?? 24,
+      ratingAvg: rating.ratingAvg,
+      reviewCount: rating.reviewCount,
     };
   }
+
+  // -------------------------------------------------------------------
+  // Reviews
+  // -------------------------------------------------------------------
+
+  /**
+   * POST /professionals/:id/reviews — rate somebody you actually dealt with.
+   *
+   * ── WHO MAY WRITE ONE, AND WHY IT IS THIS ──────────────────────────────
+   * The engagement itself happens off WAWU: this backend takes no money for
+   * professional work, holds no booking and knows nothing about whether a
+   * contract was delivered. What it does hold is the PAID INTRODUCTION.
+   * DirectMessage records that this author paid to message this professional
+   * and, in `status`, whether the professional replied.
+   *
+   * So the gate is a DM from the author to that professional which the
+   * professional RESPONDED to. That relationship costs real money to
+   * manufacture, it cannot be faked by pressing a button, and it excludes
+   * both the person who never made contact and the one whose message was
+   * ignored and refunded — rating somebody for a conversation that never
+   * happened is not a review of their work.
+   *
+   * An UPSERT on (professionalId, authorWawuId): changing your mind replaces
+   * your own rating rather than casting a second vote.
+   */
+  async review(
+    professionalId: string,
+    authorWawuId: string,
+    dto: CreateProfessionalReviewDto,
+  ): Promise<ProfessionalReviewView> {
+    const listing = await this.prisma.professionalProfile.findFirst({
+      where: { id: professionalId, status: 'approved' },
+      select: { id: true, wawuUserId: true },
+    });
+    // Unlisted is deliberately still reviewable: a professional who has gone
+    // temporarily unavailable should not be able to switch off the rating of
+    // work they have already done.
+    if (!listing) throw new NotFoundException('Professional profile not found');
+
+    if (listing.wawuUserId === authorWawuId) {
+      throw new ForbiddenException('You cannot review your own listing.');
+    }
+
+    const dealt = await this.prisma.directMessage.findFirst({
+      where: {
+        creatorWawuId: listing.wawuUserId,
+        senderWawuId: authorWawuId,
+        status: DmStatus.responded,
+      },
+      select: { id: true },
+    });
+    if (!dealt) {
+      throw new ForbiddenException(
+        'Only someone this professional has replied to can rate them. Send a message first, and rate them once they answer.',
+      );
+    }
+
+    const body = dto.body?.trim() || null;
+    const saved = await this.prisma.professionalReview.upsert({
+      where: {
+        professionalId_authorWawuId: { professionalId, authorWawuId },
+      },
+      create: { professionalId, authorWawuId, stars: dto.stars, body },
+      update: { stars: dto.stars, body },
+    });
+
+    const rating = await this.ratingFor(professionalId);
+    return {
+      id: saved.id,
+      professionalId: saved.professionalId,
+      authorWawuId: saved.authorWawuId,
+      stars: saved.stars,
+      body: saved.body,
+      createdAt: saved.createdAt,
+      updatedAt: saved.updatedAt,
+      ratingAvg: rating.ratingAvg,
+      reviewCount: rating.reviewCount,
+    };
+  }
+
+  /** The aggregate for one listing. Null average when nobody has reviewed it. */
+  private async ratingFor(
+    professionalId: string,
+  ): Promise<{ ratingAvg: number | null; reviewCount: number }> {
+    const agg = await this.prisma.professionalReview.aggregate({
+      where: { professionalId },
+      _avg: { stars: true },
+      _count: { _all: true },
+    });
+    return {
+      ratingAvg: roundToOneDecimal(agg._avg.stars),
+      reviewCount: agg._count._all,
+    };
+  }
+}
+
+/**
+ * One decimal, the precision the card prints ("4.9").
+ *
+ * Null in, null out. Rounding "no reviews" into 0.0 would put a zero-star
+ * rating on every professional nobody has got to yet, which reads as a
+ * verdict rather than an absence.
+ */
+function roundToOneDecimal(value: number | null): number | null {
+  if (value === null) return null;
+  return Math.round(value * 10) / 10;
 }

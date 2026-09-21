@@ -241,6 +241,35 @@ describe('Shop — browsing', () => {
     expect(res.body.data.ratingCount).toBe(0);
   });
 
+  it('serves the Featured Products rail: image, category label and price', async () => {
+    // The approved Marketplace screen draws three cards, each an image over a
+    // name, a category label and a naira price, under "Featured Products".
+    // Every one of those already exists on this table (`images`,
+    // `subcategory`/`category`, `priceNaira`) and the rail is the WAWU PICKS
+    // shelf, so nothing was added for it. This test is what says so.
+    const res = await request(app.getHttpServer())
+      .get('/api/hub/shop/products')
+      .query({ wawuPick: true })
+      .expect(200);
+
+    const card = (res.body.data as Record<string, unknown>[]).find(
+      (p) => p.id === liveProductId,
+    );
+    expect(card).toEqual(
+      expect.objectContaining({
+        images: ['https://cdn.example.com/nt-usb.jpg'],
+        category: 'audio_music',
+        subcategory: 'Microphones',
+        priceNaira: 185_000,
+        wawuPick: true,
+      }),
+    );
+
+    // The rail is a filter, not everything: the scarce fixture is not a pick.
+    const ids = (res.body.data as { id: string }[]).map((p) => p.id);
+    expect(ids).not.toContain(scarceProductId);
+  });
+
   it('404s a draft product rather than admitting it exists', async () => {
     await request(app.getHttpServer())
       .get(`/api/hub/shop/${draftProductSlug}`)

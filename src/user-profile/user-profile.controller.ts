@@ -52,9 +52,34 @@ export class UserProfileController {
     return this.userProfileService.upsertMe(user, dto);
   }
 
+  /**
+   * Your own profile's numbers: the three-up row, both stat cards and the
+   * completeness ring.
+   *
+   * Declared BEFORE `:wawuId/public-profile` because Nest matches in
+   * declaration order and `me` would otherwise be read as a wawuId. Owner-only
+   * by construction — it takes the caller's id from the token and has no
+   * parameter that could point it at anybody else, which is what keeps
+   * profile views and sales off a stranger's screen.
+   */
+  @Get('me/profile-stats')
+  getProfileStats(@CurrentUser() user: WawuJwtClaims) {
+    return this.userProfileService.getProfileStats(user.sub);
+  }
+
+  /**
+   * Somebody else's public profile.
+   *
+   * The caller is passed through so the visit can be counted once per viewer
+   * per day. Your own profile is never counted as a view of itself — see
+   * UserProfileService.recordProfileView.
+   */
   @Get(':wawuId/public-profile')
-  getPublicProfile(@Param('wawuId') wawuId: string) {
-    return this.userProfileService.getPublicProfile(wawuId);
+  getPublicProfile(
+    @Param('wawuId') wawuId: string,
+    @CurrentUser() user: WawuJwtClaims,
+  ) {
+    return this.userProfileService.getPublicProfile(wawuId, user.sub);
   }
 
   @Get(':wawuId/content')

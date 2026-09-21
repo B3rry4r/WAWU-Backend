@@ -542,6 +542,36 @@ model SavedItem {
   @@index([contentId])
 }
 
+/// One person looked at one profile, on one day.
+///
+/// The profile screen's "Profile Views / This month" needs a number, and the
+/// only honest source for it is a record of views. No counter column: a
+/// counter cannot answer "this month" at all, and it drifts the moment a row
+/// is removed.
+///
+/// TWO THINGS ARE DELIBERATELY NOT COUNTED. An anonymous read (the signed-out
+/// public-profile route) writes nothing, because there is no viewer to
+/// attribute it to and no way to stop a script from being thousands of them.
+/// And the owner's own visit writes nothing either, since reloading your own
+/// page is not somebody looking at you.
+///
+/// One row per viewer per DAY, which the unique constraint enforces. A number
+/// that goes up every time a person refreshes is not a measure of interest,
+/// and it is the easiest number on the screen to inflate on purpose.
+model ProfileView {
+  id            String   @id @default(uuid())
+  /// Whose profile was looked at.
+  profileWawuId String
+  /// Who looked. Never null: an unattributable view is not recorded at all.
+  viewerWawuId  String
+  /// The UTC calendar day, which is what the once-per-day key is on.
+  viewedOn      DateTime @db.Date
+  viewedAt      DateTime @default(now())
+
+  @@unique([profileWawuId, viewerWawuId, viewedOn])
+  @@index([profileWawuId, viewedOn])
+}
+
 model FollowRelationship {
   id              String   @id @default(uuid())
   followerWawuId  String
@@ -700,8 +730,8 @@ model CommunityMessage {
 }
 
 model CreditsState {
-  userWawuId    String   @id
-  creditBalance Int      @default(0)
+  userWawuId    String    @id
+  creditBalance Int       @default(0)
   /// LEGACY. The 7-day free trial was removed on 21 Sep 2026 (product owner:
   /// "no 7 day silly trials"), so nothing writes this any more and nothing
   /// reads it. Made NULLABLE rather than dropped: dropping a column an older
@@ -1117,6 +1147,28 @@ model PartnerService {
   steps       Json?
   ctaLabel    String?
   ctaHref     String?
+
+  /// ── THE MARKETPLACE CARD ──────────────────────────────────────────────
+  /// The "Featured Services" rail draws an image, a category label and a
+  /// floor price. `icon` is a glyph name and cannot be a card image;
+  /// `priceFrom` is free text ("₦25,000") a client cannot compare, sort or
+  /// format, so it stays as the display string it always was and the numeric
+  /// one below is what the rail reads. All four are nullable or defaulted,
+  /// so every existing row keeps rendering exactly as it did.
+  imageUrl       String?
+  /// "Design", "Business" — the label under the name. Free text for the same
+  /// reason `ProfessionalProfile.category` is: the taxonomy is app-defined
+  /// and moves without a migration.
+  category       String?
+  /// Naira, and a FLOOR: what "From ₦10,000" means. Null when the service has
+  /// no published starting price, and the card then shows no price rather
+  /// than a zero.
+  priceFromNaira Int?
+  /// The editorial pick for the Featured Services rail. Admin-set, the same
+  /// kind of flag as `Product.wawuPick` and `Event.featured`.
+  featured       Boolean @default(false)
+
+  @@index([featured])
 }
 
 /// `status` (free-text machine state, e.g. "submitted"/"in_review"/"issued")
@@ -1967,6 +2019,14 @@ model Event {
   location String
   address  String?
 
+  /// The VENUE, by name — "Eko Convention Centre". Separate from `location`,
+  /// which conflated two facts: the card renders "Concert • Abuja" (category
+  /// and city) while the hero renders the venue under a pin, and one column
+  /// cannot be both. Nullable, because an online event has no venue and every
+  /// event created before this column has only ever had `location`. A client
+  /// with nothing here shows `location`, exactly as it did before.
+  venueName String?
+
   /// The organiser's own page. Registration — including any paid registration
   /// the organiser runs — lives THERE, never here. This backend takes no
   /// money for an event.
@@ -1993,6 +2053,7 @@ model Event {
 
   speakers EventSpeaker[]
   going    EventGoing[]
+  saves    EventSave[]
 
   /// Ticketing. An event with no ticket types is exactly the free,
   /// interest-only event this table held before ticketing existed — the
@@ -2053,6 +2114,31 @@ model EventGoing {
   event      Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
   userWawuId String
   markedAt   DateTime @default(now())
+
+  @@unique([eventId, userWawuId])
+  @@index([eventId])
+  @@index([userWawuId])
+}
+
+/// The bookmark on an event card, and NOT a second "Going".
+///
+/// The two answer different questions and a screen shows both at once: the
+/// ribbon in the corner of the hero is "keep this for me to look at", the
+/// heart under a card is the same bookmark on the same event, and "Going" is
+/// a public interest signal that appears in the organiser's count. Folding
+/// the bookmark into EventGoing would make saving an event for later
+/// indistinguishable from telling the organiser you are coming.
+///
+/// Shaped exactly like EventGoing on purpose — one row per (event, user),
+/// the unique constraint IS the idempotency, and a DELETE that matches
+/// nothing is still the correct end state. Private: nothing publishes who
+/// saved what, and the only count on the wire is the caller's own boolean.
+model EventSave {
+  id         String   @id @default(uuid())
+  eventId    String
+  event      Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  userWawuId String
+  savedAt    DateTime @default(now())
 
   @@unique([eventId, userWawuId])
   @@index([eventId])
@@ -2173,12 +2259,53 @@ model ProfessionalProfile {
   /// `status`: this is availability, that is whether they were ever approved.
   listed Boolean @default(true)
 
+  reviews ProfessionalReview[]
+
   /// One application per person per category. A rejected application is
   /// edited and resubmitted in place rather than piling up duplicates, which
   /// is also what stops someone spamming a queue a human has to work.
   @@unique([wawuUserId, category])
   @@index([category, status])
   @@index([status])
+}
+
+/// One client's rating of one professional listing.
+///
+/// The directory card draws stars and a review count next to a Book button,
+/// and those two numbers are the whole reason somebody picks one lawyer over
+/// another. So they come from rows, aggregated on read. There is no
+/// `ratingAvg` column on ProfessionalProfile, deliberately: a stored average
+/// is a second definition of the same fact, and a bare float that nothing
+/// writes is how "4.8" ends up under every name on the platform.
+///
+/// WHO MAY WRITE ONE. The engagement itself happens off WAWU — this backend
+/// takes no money for professional work and holds no booking. What it does
+/// hold is the paid introduction: DirectMessage records that a client paid to
+/// message this person and whether that person replied. So a review requires
+/// a DM from the author to the professional that the professional RESPONDED
+/// to. That is a real, checkable relationship, it costs money to manufacture,
+/// and it excludes both the person who never made contact and the one whose
+/// message was ignored and refunded.
+///
+/// Per LISTING, not per person. Someone listed in two categories is being
+/// judged on two different pieces of work, and a review of their legal advice
+/// does not transfer to their photography.
+model ProfessionalReview {
+  id             String              @id @default(uuid())
+  professionalId String
+  professional   ProfessionalProfile @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+  authorWawuId   String
+  /// 1 to 5. Bounded in the DTO, not by a CHECK constraint: an out-of-range
+  /// value has to come back as an explained 400, not as a database error the
+  /// API cannot translate for the person who typed it.
+  stars          Int
+  body           String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  @@unique([professionalId, authorWawuId])
+  @@index([professionalId])
+  @@index([authorWawuId])
 }
 
 // -----------------------------------------------------------------------------

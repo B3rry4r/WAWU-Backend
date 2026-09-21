@@ -120,4 +120,32 @@ export class EventController {
   ) {
     return this.eventService.withdrawGoing(id, user.sub);
   }
+
+  /**
+   * Bookmark it — the ribbon on the hero card and the heart on a trending
+   * one. Private to the caller, and NOT the same statement as "Going": see
+   * EventService.save.
+   *
+   * `@HttpCode(200)` for the same reason `going` uses it: the second call
+   * creates nothing, and the ResponseInterceptor stamps 200 into the body
+   * regardless (hazard H-3).
+   */
+  @Post(':id/save')
+  @HttpCode(HttpStatus.OK)
+  save(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: WawuJwtClaims,
+  ) {
+    return this.eventService.save(id, user.sub);
+  }
+
+  /** Un-bookmark it. Idempotent: removing one that was never there is a 200. */
+  @Delete(':id/save')
+  @HttpCode(HttpStatus.OK)
+  unsave(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: WawuJwtClaims,
+  ) {
+    return this.eventService.unsave(id, user.sub);
+  }
 }

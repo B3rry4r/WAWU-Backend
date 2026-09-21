@@ -17,6 +17,7 @@ import { ProfessionalService } from './professional.service';
 import { ApplyProfessionalDto } from './dto/apply-professional.dto';
 import { ListProfessionalsQueryDto } from './dto/list-professionals-query.dto';
 import { UpdateListingDto } from './dto/update-listing.dto';
+import { CreateProfessionalReviewDto } from './dto/create-professional-review.dto';
 
 /**
  * The professional directory — `/api/hub/professionals/*`.
@@ -73,5 +74,23 @@ export class ProfessionalController {
   @Get(':id')
   detail(@Param('id', ParseUUIDPipe) id: string) {
     return this.service.detail(id);
+  }
+
+  /**
+   * Rate a professional you have actually dealt with, 1 to 5 stars.
+   *
+   * A real token, never optional auth: a rating has to be attributable, and
+   * the service then checks this person paid to message that professional and
+   * got a reply. Posting twice updates your own rating rather than adding a
+   * second one.
+   */
+  @UseGuards(WawuAuthGuard)
+  @Post(':id/reviews')
+  review(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: WawuJwtClaims,
+    @Body() dto: CreateProfessionalReviewDto,
+  ) {
+    return this.service.review(id, user.sub, dto);
   }
 }

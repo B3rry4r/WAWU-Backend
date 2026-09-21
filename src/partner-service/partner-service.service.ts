@@ -6,9 +6,26 @@ import type { PartnerService } from '../common/types';
 export class PartnerServiceService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /** GET /services — registry.json § PartnerService. Reference/seed data, admin-managed later. */
-  async list(): Promise<PartnerService[]> {
-    return this.prisma.partnerService.findMany({ orderBy: { name: 'asc' } });
+  /**
+   * GET /services — registry.json § PartnerService. Reference/seed data,
+   * admin-managed later.
+   *
+   * `featured` and `category` narrow it; sending neither returns the whole
+   * catalogue, which is what this endpoint did before either existed.
+   * Featured rows sort first even on an unfiltered read, so the rail and the
+   * full list agree about which services WAWU is pushing.
+   */
+  async list(query?: {
+    featured?: boolean;
+    category?: string;
+  }): Promise<PartnerService[]> {
+    return this.prisma.partnerService.findMany({
+      where: {
+        ...(query?.featured === undefined ? {} : { featured: query.featured }),
+        ...(query?.category ? { category: query.category } : {}),
+      },
+      orderBy: [{ featured: 'desc' }, { name: 'asc' }],
+    });
   }
 
   /** GET /services/:id — registry.json § PartnerService. */

@@ -49,6 +49,15 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     disposition: 'AUTHORED',
   },
   { model: 'DmReport', column: 'reporterWawuId', disposition: 'AUTHORED' },
+  // A rating IS writing, even when it is only a number: it is this person's
+  // opinion, it is published under their account, and it moves an average
+  // other people read. Leaving it behind would keep their judgment of a
+  // professional on the platform after they had gone.
+  {
+    model: 'ProfessionalReview',
+    column: 'authorWawuId',
+    disposition: 'AUTHORED',
+  },
 
   // ── things that exist only because this account exists ──────────────────
   { model: 'SavedItem', column: 'userWawuId', disposition: 'OWNED' },
@@ -56,6 +65,10 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'MarketplaceSave', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CartItem', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'EventGoing', column: 'userWawuId', disposition: 'OWNED' },
+  { model: 'EventSave', column: 'userWawuId', disposition: 'OWNED' },
+  // The views OF this profile. A statistic about the account, so it goes with
+  // the account. The other column on this table is somebody else's, below.
+  { model: 'ProfileView', column: 'profileWawuId', disposition: 'OWNED' },
   { model: 'CourseEnrollment', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CommunityMembership', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'Notification', column: 'userWawuId', disposition: 'OWNED' },
@@ -156,6 +169,15 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   {
     model: 'BlockedAccount',
     column: 'blockedWawuId',
+    disposition: 'COUNTERPARTY',
+  },
+  // Views this account made of OTHER people's profiles. Deleting them would
+  // silently reduce somebody else's historical figures, which is editing a
+  // third party's records to erase this one; the reference is scrubbed by
+  // WAWU ID's anonymize like every other counterparty id here.
+  {
+    model: 'ProfileView',
+    column: 'viewerWawuId',
     disposition: 'COUNTERPARTY',
   },
 

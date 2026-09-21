@@ -95,6 +95,12 @@ export class UpdateEventDto {
   @MaxLength(300)
   address?: string;
 
+  /** The venue by name. Blanked by sending an empty string. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(160)
+  venueName?: string;
+
   @IsOptional()
   @IsUrl({ protocols: ['http', 'https'], require_protocol: true })
   @MaxLength(500)

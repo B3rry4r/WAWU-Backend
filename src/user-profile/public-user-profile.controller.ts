@@ -18,6 +18,12 @@ import { UserProfileService } from './user-profile.service';
 export class PublicUserProfileController {
   constructor(private readonly userProfileService: UserProfileService) {}
 
+  /**
+   * No viewer id is passed, and that is deliberate: this route has no caller
+   * to attribute anything to, so it records NO profile view. Counting an
+   * anonymous read would put a number on the owner's stat card that any loop
+   * without an account could drive to whatever it liked.
+   */
   @Get(':wawuId')
   get(@Param('wawuId') wawuId: string) {
     return this.userProfileService.getPublicProfile(wawuId);

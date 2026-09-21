@@ -328,6 +328,7 @@ export class SearchResponseService {
       scores,
       contentCounts,
       followerCounts,
+      followingCounts,
       communityCounts,
     ] = await Promise.all([
       this.prisma.userProfile.findMany({ where: { wawuUserId: { in: ids } } }),
@@ -341,6 +342,14 @@ export class SearchResponseService {
       this.prisma.followRelationship.groupBy({
         by: ['followingWawuId'],
         where: { followingWawuId: { in: ids } },
+        _count: { _all: true },
+      }),
+      // The other direction of the same relation. Counted here for the same
+      // reason the follower count is: a creator found through search must not
+      // be described differently from the same creator opened directly.
+      this.prisma.followRelationship.groupBy({
+        by: ['followerWawuId'],
+        where: { followerWawuId: { in: ids } },
         _count: { _all: true },
       }),
       this.prisma.community.groupBy({
@@ -360,6 +369,9 @@ export class SearchResponseService {
     );
     const followerCountMap = new Map(
       followerCounts.map((c) => [c.followingWawuId, c._count._all]),
+    );
+    const followingCountMap = new Map(
+      followingCounts.map((c) => [c.followerWawuId, c._count._all]),
     );
     const communityCountMap = new Map(
       communityCounts.map((c) => [c.hostWawuId, c._count._all]),
@@ -401,6 +413,7 @@ export class SearchResponseService {
         evgScore: scoreMap.get(id) ?? 0,
         contentCount: contentCountMap.get(id) ?? 0,
         followerCount: followerCountMap.get(id) ?? 0,
+        followingCount: followingCountMap.get(id) ?? 0,
         communityCount: communityCountMap.get(id) ?? 0,
       });
     }

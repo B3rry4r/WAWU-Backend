@@ -10,11 +10,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
-import {
-  OptionalPaginationQueryDto,
-  paginateArray,
-  wantsPagination,
-} from '../common/dto/pagination.dto';
+import { paginateArray, wantsPagination } from '../common/dto/pagination.dto';
+import { ListPartnerServicesQueryDto } from './dto/list-partner-services-query.dto';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import { PartnerServiceService } from './partner-service.service';
 import type { PartnerService } from '../common/types';
@@ -38,12 +35,10 @@ export class PartnerServiceController {
    */
   @Get()
   async list(
-    @Query() pagination: OptionalPaginationQueryDto,
+    @Query() query: ListPartnerServicesQueryDto,
   ): Promise<PartnerService[] | Paginated<PartnerService>> {
-    const services = await this.partnerServiceService.list();
-    return wantsPagination(pagination)
-      ? paginateArray(services, pagination)
-      : services;
+    const services = await this.partnerServiceService.list(query);
+    return wantsPagination(query) ? paginateArray(services, query) : services;
   }
 
   @Get(':id')

@@ -14013,6 +14013,24 @@
               "maximum": 100,
               "type": "number"
             }
+          },
+          {
+            "name": "featured",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "category",
+            "required": false,
+            "in": "query",
+            "description": "The category chip row. Free text, matching the column.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -14040,8 +14058,19 @@
                               "coming"
                             ]
                           },
+                          "imageUrl": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "slug": {
                             "type": "string"
+                          },
+                          "category": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "featured": {
+                            "type": "boolean"
                           },
                           "tagline": {
                             "type": "string"
@@ -14203,13 +14232,20 @@
                           "ctaHref": {
                             "type": "string",
                             "nullable": true
+                          },
+                          "priceFromNaira": {
+                            "type": "number",
+                            "nullable": true
                           }
                         },
                         "required": [
                           "name",
                           "id",
                           "status",
+                          "imageUrl",
                           "slug",
+                          "category",
+                          "featured",
                           "tagline",
                           "blurb",
                           "icon",
@@ -14221,7 +14257,8 @@
                           "benefits",
                           "steps",
                           "ctaLabel",
-                          "ctaHref"
+                          "ctaHref",
+                          "priceFromNaira"
                         ]
                       }
                     },
@@ -14246,8 +14283,19 @@
                                   "coming"
                                 ]
                               },
+                              "imageUrl": {
+                                "type": "string",
+                                "nullable": true
+                              },
                               "slug": {
                                 "type": "string"
+                              },
+                              "category": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "featured": {
+                                "type": "boolean"
                               },
                               "tagline": {
                                 "type": "string"
@@ -14396,13 +14444,20 @@
                               "ctaHref": {
                                 "type": "string",
                                 "nullable": true
+                              },
+                              "priceFromNaira": {
+                                "type": "number",
+                                "nullable": true
                               }
                             },
                             "required": [
                               "name",
                               "id",
                               "status",
+                              "imageUrl",
                               "slug",
+                              "category",
+                              "featured",
                               "tagline",
                               "blurb",
                               "icon",
@@ -14414,7 +14469,8 @@
                               "benefits",
                               "steps",
                               "ctaLabel",
-                              "ctaHref"
+                              "ctaHref",
+                              "priceFromNaira"
                             ]
                           }
                         },
@@ -14481,8 +14537,19 @@
                         "coming"
                       ]
                     },
+                    "imageUrl": {
+                      "type": "string",
+                      "nullable": true
+                    },
                     "slug": {
                       "type": "string"
+                    },
+                    "category": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "featured": {
+                      "type": "boolean"
                     },
                     "tagline": {
                       "type": "string"
@@ -14667,13 +14734,20 @@
                     "ctaHref": {
                       "type": "string",
                       "nullable": true
+                    },
+                    "priceFromNaira": {
+                      "type": "number",
+                      "nullable": true
                     }
                   },
                   "required": [
                     "name",
                     "id",
                     "status",
+                    "imageUrl",
                     "slug",
+                    "category",
+                    "featured",
                     "tagline",
                     "blurb",
                     "icon",
@@ -14685,7 +14759,8 @@
                     "benefits",
                     "steps",
                     "ctaLabel",
-                    "ctaHref"
+                    "ctaHref",
+                    "priceFromNaira"
                   ]
                 }
               }
@@ -16282,6 +16357,13 @@
                     },
                     "dmResponseHours": {
                       "type": "number"
+                    },
+                    "ratingAvg": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "reviewCount": {
+                      "type": "number"
                     }
                   },
                   "required": [
@@ -16300,13 +16382,56 @@
                     "pieceCount",
                     "dmEnabled",
                     "dmPrice",
-                    "dmResponseHours"
+                    "dmResponseHours",
+                    "ratingAvg",
+                    "reviewCount"
                   ]
                 }
               }
             }
           }
         },
+        "tags": [
+          "Professional"
+        ]
+      }
+    },
+    "/api/hub/professionals/{id}/reviews": {
+      "post": {
+        "operationId": "ProfessionalController_review",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProfessionalReviewDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfessionalReviewView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Rate a professional you have actually dealt with, 1 to 5 stars.\n\nA real token, never optional auth: a rating has to be attributable, and\nthe service then checks this person paid to message that professional and\ngot a reply. Posting twice updates your own rating rather than adding a\nsecond one.",
         "tags": [
           "Professional"
         ]
@@ -17400,6 +17525,28 @@
         ]
       }
     },
+    "/api/hub/users/me/profile-stats": {
+      "get": {
+        "operationId": "UserProfileController_getProfileStats",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileStatsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Your own profile's numbers: the three-up row, both stat cards and the\ncompleteness ring.\n\nDeclared BEFORE `:wawuId/public-profile` because Nest matches in\ndeclaration order and `me` would otherwise be read as a wawuId. Owner-only\nby construction — it takes the caller's id from the token and has no\nparameter that could point it at anybody else, which is what keeps\nprofile views and sales off a stranger's screen.",
+        "tags": [
+          "UserProfile"
+        ]
+      }
+    },
     "/api/hub/users/{wawuId}/public-profile": {
       "get": {
         "operationId": "UserProfileController_getPublicProfile",
@@ -17425,6 +17572,7 @@
             }
           }
         },
+        "summary": "Somebody else's public profile.\n\nThe caller is passed through so the visit can be counted once per viewer\nper day. Your own profile is never counted as a view of itself — see\nUserProfileService.recordProfileView.",
         "tags": [
           "UserProfile"
         ]
@@ -17510,6 +17658,7 @@
             }
           }
         },
+        "summary": "No viewer id is passed, and that is deliberate: this route has no caller\nto attribute anything to, so it records NO profile view. Counting an\nanonymous read would put a number on the owner's stat card that any loop\nwithout an account could drive to whatever it liked.",
         "tags": [
           "PublicUserProfile"
         ]
@@ -18408,6 +18557,20 @@
             }
           },
           {
+            "name": "sort",
+            "required": true,
+            "in": "query",
+            "description": "How the calendar is ordered.\n\n`starting_soon` is the default and is exactly the behaviour this endpoint\nhas always had: the row nearest to today first, forwards for `upcoming`\nand backwards for `past`.\n\n`trending` is the Events screen's second rail, and it is DERIVED rather\nthan stored — most interest first, counted from the \"Going\" rows that\nalready exist. There is deliberately no `trending` flag on Event: that\nwould be a third editorial pin alongside `featured`, set by hand, going\nstale on its own. `featured` stays what it is, an admin's decision about\nthe one hero card, and the two rails are asked for with two different\nqueries rather than two columns.",
+            "schema": {
+              "default": "starting_soon",
+              "type": "string",
+              "enum": [
+                "starting_soon",
+                "trending"
+              ]
+            }
+          },
+          {
             "name": "host",
             "required": false,
             "in": "query",
@@ -18641,6 +18804,66 @@
           }
         },
         "summary": "Withdraw it. Also idempotent: withdrawing twice is a 200, not a 404.",
+        "tags": [
+          "Event"
+        ]
+      }
+    },
+    "/api/hub/events/{id}/save": {
+      "post": {
+        "operationId": "EventController_save",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventSaveView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Bookmark it — the ribbon on the hero card and the heart on a trending\none. Private to the caller, and NOT the same statement as \"Going\": see\nEventService.save.\n\n`@HttpCode(200)` for the same reason `going` uses it: the second call\ncreates nothing, and the ResponseInterceptor stamps 200 into the body\nregardless (hazard H-3).",
+        "tags": [
+          "Event"
+        ]
+      },
+      "delete": {
+        "operationId": "EventController_unsave",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventSaveView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Un-bookmark it. Idempotent: removing one that was never there is a 200.",
         "tags": [
           "Event"
         ]
@@ -20329,6 +20552,23 @@
           "listed"
         ]
       },
+      "CreateProfessionalReviewDto": {
+        "type": "object",
+        "properties": {
+          "stars": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 5
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "stars"
+        ]
+      },
       "StartVerificationPurchaseDto": {
         "type": "object",
         "properties": {
@@ -20816,6 +21056,11 @@
             "type": "string",
             "maxLength": 300
           },
+          "venueName": {
+            "type": "string",
+            "description": "The venue by NAME, e.g. \"Eko Convention Centre\".\n\nSeparate from `location`, which the card renders as the city. An online\nevent simply omits it, and so may an in-person one whose organiser has\nonly given a city, which is why nothing here is required.",
+            "maxLength": 160
+          },
           "externalUrl": {
             "type": "string",
             "description": "The organiser's own page. `require_protocol` and an http(s)-only protocol\nlist, so a submitted `javascript:` or `data:` URL cannot reach a client\nthat renders this as a link.",
@@ -20930,6 +21175,11 @@
           "address": {
             "type": "string",
             "maxLength": 300
+          },
+          "venueName": {
+            "type": "string",
+            "description": "The venue by name. Blanked by sending an empty string.",
+            "maxLength": 160
           },
           "externalUrl": {
             "type": "string",
@@ -26189,6 +26439,13 @@
           },
           "dmResponseHours": {
             "type": "number"
+          },
+          "ratingAvg": {
+            "type": "number",
+            "nullable": true
+          },
+          "reviewCount": {
+            "type": "number"
           }
         },
         "required": [
@@ -26204,7 +26461,56 @@
           "pieceCount",
           "dmEnabled",
           "dmPrice",
-          "dmResponseHours"
+          "dmResponseHours",
+          "ratingAvg",
+          "reviewCount"
+        ]
+      },
+      "ProfessionalReviewView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "professionalId": {
+            "type": "string"
+          },
+          "authorWawuId": {
+            "type": "string"
+          },
+          "stars": {
+            "type": "number"
+          },
+          "body": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ratingAvg": {
+            "type": "number",
+            "nullable": true
+          },
+          "reviewCount": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "professionalId",
+          "authorWawuId",
+          "stars",
+          "body",
+          "createdAt",
+          "updatedAt",
+          "ratingAvg",
+          "reviewCount"
         ]
       },
       "LearnEntitlement": {
@@ -26402,6 +26708,60 @@
           "verification"
         ]
       },
+      "ProfileStatsView": {
+        "type": "object",
+        "properties": {
+          "wawuUserId": {
+            "type": "string"
+          },
+          "followerCount": {
+            "type": "number"
+          },
+          "followingCount": {
+            "type": "number"
+          },
+          "postCount": {
+            "type": "number"
+          },
+          "profileViewsThisMonth": {
+            "type": "number"
+          },
+          "productsSoldThisMonth": {
+            "type": "number"
+          },
+          "monthStart": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "profileCompletenessPct": {
+            "type": "number"
+          },
+          "profileCompletenessMissing": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "handle",
+                "bio",
+                "avatar",
+                "cover",
+                "links"
+              ]
+            }
+          }
+        },
+        "required": [
+          "wawuUserId",
+          "followerCount",
+          "followingCount",
+          "postCount",
+          "profileViewsThisMonth",
+          "productsSoldThisMonth",
+          "monthStart",
+          "profileCompletenessPct",
+          "profileCompletenessMissing"
+        ]
+      },
       "CreatorProfile": {
         "type": "object",
         "properties": {
@@ -26484,6 +26844,9 @@
           "followerCount": {
             "type": "number"
           },
+          "followingCount": {
+            "type": "number"
+          },
           "communityCount": {
             "type": "number"
           }
@@ -26510,6 +26873,7 @@
           "evgScore",
           "contentCount",
           "followerCount",
+          "followingCount",
           "communityCount"
         ]
       },
@@ -26838,6 +27202,10 @@
             "type": "string",
             "nullable": true
           },
+          "venueName": {
+            "type": "string",
+            "nullable": true
+          },
           "externalUrl": {
             "type": "string",
             "nullable": true
@@ -26908,6 +27276,16 @@
           "userGoing": {
             "type": "boolean"
           },
+          "userSaved": {
+            "type": "boolean"
+          },
+          "ticketed": {
+            "type": "boolean"
+          },
+          "priceFromNaira": {
+            "type": "number",
+            "nullable": true
+          },
           "speakers": {
             "type": "array",
             "items": {
@@ -26939,6 +27317,7 @@
           "timezone",
           "location",
           "address",
+          "venueName",
           "externalUrl",
           "bannerUrl",
           "category",
@@ -26953,6 +27332,9 @@
           "status",
           "goingCount",
           "userGoing",
+          "userSaved",
+          "ticketed",
+          "priceFromNaira",
           "speakers",
           "createdAt",
           "lastDecisionReason"
@@ -26975,6 +27357,21 @@
           "eventId",
           "userGoing",
           "goingCount"
+        ]
+      },
+      "EventSaveView": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string"
+          },
+          "userSaved": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "eventId",
+          "userSaved"
         ]
       },
       "QuestionOption": {
