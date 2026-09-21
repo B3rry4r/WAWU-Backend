@@ -15,6 +15,7 @@ import type {
 } from '../common/types';
 import type { UpdateUserProfileDto } from './dto/update-user-profile.dto';
 import { normaliseHandle, toProfileUrl } from './social-handles';
+import { objectKeyFrom, StorageService } from '../storage/storage.service';
 
 /**
  * registry.json "UserProfile". Owns GET/PATCH /users/me and the public
@@ -26,7 +27,45 @@ export class UserProfileService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly wawuId: WawuIdClient,
+    private readonly storage: StorageService,
   ) {}
+
+  /**
+   * Re-signs a stored image URL on the way out.
+   *
+   * THE BUG THIS FIXES. Avatar and cover are uploaded through
+   * StorageService.presignUpload, whose `fileUrl` is a SEVEN-DAY presigned
+   * read URL, and that string is what the profile row stores. The bucket is
+   * private, so seven days later the stored URL is a 403 and every surface
+   * that renders it draws a broken-image placeholder -- including the Edit
+   * Profile screen, where both pictures broke at once and made the upload
+   * itself look faulty. The object was never gone; only the signature was.
+   *
+   * `objectKeyFrom` recovers the key from the stored string (the grammar is
+   * closed and server-generated, so this is a match against a known shape,
+   * not a guess) and the URL is signed again for this response. Nothing
+   * stored is rewritten: an external URL, or anything that does not match
+   * the shape, is passed through untouched.
+   *
+   * Failing to sign falls back to the STORED string, never to null. On an
+   * environment with no bucket configured that is the only value there is,
+   * and it is exactly what shipped before this method existed -- so the worst
+   * case here is the old behaviour, never a picture that disappears because
+   * signing was unavailable. A profile read must not 500 over an image
+   * either.
+   */
+  private async resignImage(stored: string | null): Promise<string | null> {
+    if (!stored) return null;
+    const key = objectKeyFrom(stored);
+    // Not one of ours: an absolute URL that matches no upload folder is
+    // somebody's own link and is passed through untouched.
+    if (key === stored && /^https?:\/\//i.test(stored)) return stored;
+    try {
+      return await this.storage.readUrlFor(key);
+    } catch {
+      return stored;
+    }
+  }
 
   async getMe(user: WawuJwtClaims): Promise<UserProfileWithClaims> {
     const profile = await this.prisma.userProfile.findUnique({
@@ -59,7 +98,18 @@ export class UserProfileService {
       createdAt: null,
     };
 
-    return { ...user, ...base, wawuUserId: user.sub } as UserProfileWithClaims;
+    const [avatarUrl, coverUrl] = await Promise.all([
+      this.resignImage(base.avatarUrl),
+      this.resignImage(base.coverUrl),
+    ]);
+
+    return {
+      ...user,
+      ...base,
+      avatarUrl,
+      coverUrl,
+      wawuUserId: user.sub,
+    } as UserProfileWithClaims;
   }
 
   async upsertMe(
@@ -202,12 +252,17 @@ export class UserProfileService {
         this.prisma.community.count({ where: { hostWawuId: wawuUserId } }),
       ]);
 
+    const [avatarUrl, coverUrl] = await Promise.all([
+      this.resignImage(profile.avatarUrl),
+      this.resignImage(profile.coverUrl),
+    ]);
+
     return {
       wawuUserId: profile.wawuUserId,
       handle: profile.handle,
       bio: profile.bio,
-      avatarUrl: profile.avatarUrl,
-      coverUrl: profile.coverUrl,
+      avatarUrl,
+      coverUrl,
       interests: profile.interests,
       instagramHandle: profile.instagramHandle,
       xHandle: profile.xHandle,
