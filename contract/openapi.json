@@ -479,6 +479,29 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "withdrawalsEnabled": {
+                      "type": "boolean"
+                    },
+                    "withdrawalsBlockedReason": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "paidInNgn": {
+                      "type": "number"
+                    },
+                    "pendingInNgn": {
+                      "type": "number"
+                    },
+                    "withdrawnNgn": {
+                      "type": "number"
+                    },
                     "accountReference": {
                       "type": "string"
                     },
@@ -492,22 +515,20 @@
                     },
                     "availableNgn": {
                       "type": "number"
-                    },
-                    "status": {
-                      "type": "string"
-                    },
-                    "createdAt": {
-                      "type": "string",
-                      "format": "date-time"
                     }
                   },
                   "required": [
+                    "withdrawalsEnabled",
+                    "withdrawalsBlockedReason",
+                    "status",
+                    "createdAt",
+                    "paidInNgn",
+                    "pendingInNgn",
+                    "withdrawnNgn",
                     "accountReference",
                     "accountNumber",
                     "bankName",
-                    "availableNgn",
-                    "status",
-                    "createdAt"
+                    "availableNgn"
                   ]
                 }
               }
@@ -20189,6 +20210,18 @@
                     },
                     "read": {
                       "type": "boolean"
+                    },
+                    "imageUrl": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "actionHref": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "campaignId": {
+                      "type": "string",
+                      "nullable": true
                     }
                   },
                   "required": [
@@ -20202,7 +20235,10 @@
                     "amount",
                     "creditsCount",
                     "actionLabel",
-                    "read"
+                    "read",
+                    "imageUrl",
+                    "actionHref",
+                    "campaignId"
                   ]
                 }
               },
@@ -25197,15 +25233,15 @@
               "private"
             ]
           },
+          "imageUrl": {
+            "type": "string",
+            "nullable": true
+          },
           "description": {
             "type": "string"
           },
           "hostWawuId": {
             "type": "string"
-          },
-          "imageUrl": {
-            "type": "string",
-            "nullable": true
           },
           "memberCount": {
             "type": "number"
@@ -25218,9 +25254,9 @@
           "name",
           "id",
           "kind",
+          "imageUrl",
           "description",
           "hostWawuId",
-          "imageUrl",
           "memberCount",
           "messagesToday"
         ]
@@ -25374,6 +25410,10 @@
           "id": {
             "type": "string"
           },
+          "imageUrl": {
+            "type": "string",
+            "nullable": true
+          },
           "senderWawuId": {
             "type": "string"
           },
@@ -25384,10 +25424,6 @@
           "sentAt": {
             "type": "string",
             "format": "date-time"
-          },
-          "imageUrl": {
-            "type": "string",
-            "nullable": true
           },
           "communityId": {
             "type": "string"
@@ -25402,10 +25438,10 @@
         },
         "required": [
           "id",
+          "imageUrl",
           "senderWawuId",
           "text",
           "sentAt",
-          "imageUrl",
           "communityId",
           "costInCredits"
         ]

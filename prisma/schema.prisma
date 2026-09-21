@@ -830,9 +830,36 @@ model Notification {
   read         Boolean  @default(false)
   createdAt    DateTime @default(now())
 
+  /// Build brief C8: a notification is an EXPERIENTIAL surface, not a text
+  /// row. A 16:9 image, stored as an absolute URL. Null on every
+  /// transactional kind that has no picture to show, which is most of them -
+  /// the list renders the compact row in that case rather than an empty frame.
+  imageUrl String?
+
+  /// Where this notification goes when it is opened, as an in-app path
+  /// ("/explore", "/profile/verification"). Only the campaign and reminder
+  /// kinds set it: every transactional kind is routed by `kind` on the client
+  /// (actionHrefFor), because its destination is a property of the event and
+  /// must not be something an admin can retarget.
+  ///
+  /// Validated against a fixed allowlist before it is written - see
+  /// src/admin/notifications/campaign-destination.ts. An open redirect in a
+  /// notification that lands on every account at once is not a small bug.
+  actionHref String?
+
+  /// Set when this row was fanned out from a NotificationCampaign, so a
+  /// dispatch can be counted, audited and reasoned about after the fact.
+  /// Null for every organically emitted notification.
+  campaignId String?
+
   @@index([userWawuId])
   @@index([userWawuId, read])
   @@index([createdAt])
+  @@index([campaignId])
+  /// The verification reminder sweep asks "when did this user last get one of
+  /// these", per user, per kind. Without this it is a sequential scan of the
+  /// whole table on every run.
+  @@index([userWawuId, kind, createdAt])
 }
 
 model NotificationSettings {
@@ -841,8 +868,147 @@ model NotificationSettings {
   newFollowers    Boolean @default(true)
   dmReminders     Boolean @default(true)
   refunds         Boolean @default(true)
-  promotions      Boolean @default(false)
+  /// "Offers and news" in Settings. Now the opt-out for admin-composed
+  /// campaigns (kind `campaign`), which is the first thing that has ever read
+  /// this column.
+  ///
+  /// Default flipped false -> true with build brief C8, which asks for a
+  /// promotion channel "to the whole user base". A channel whose default is
+  /// off reaches nobody, so leaving it at false would have shipped the
+  /// feature dead. EXISTING ROWS ARE NOT BACKFILLED: a stored `false` is left
+  /// alone, because it cannot be told apart from a deliberate opt-out. See
+  /// DECISIONS.md D17c - whether to backfill is the product owner's call, not
+  /// one to make quietly in a migration.
+  promotions      Boolean @default(true)
   communityDigest Boolean @default(true)
+}
+
+// -----------------------------------------------------------------------------
+// Notification campaigns (build brief C8 - the push / promotion channel)
+// -----------------------------------------------------------------------------
+
+/// Who a campaign goes to.
+///
+/// Every value here is a question this database can actually answer with a
+/// query, which is the whole constraint on the list. "Everyone who opened the
+/// app this week" is a perfectly sensible marketing segment and is not here,
+/// because nothing in this backend records a session.
+enum NotificationAudience {
+  /// Every account with a profile on this backend.
+  everyone
+  /// UserProfile.accountType = creator.
+  creators
+  /// UserProfile.accountType = user, i.e. buyers.
+  buyers
+  /// Creators with no APPROVED VerificationSubmission row. This is the
+  /// segment B1's recurring verification prompt is aimed at.
+  unverified_creators
+  /// Anyone with an approved ProfessionalProfile.
+  professionals
+  /// Approved professionals with no approved VerificationSubmission row.
+  unverified_professionals
+}
+
+enum NotificationCampaignStatus {
+  draft
+  /// Claimed by a dispatch that is fanning out right now. A campaign cannot
+  /// leave this state except by finishing, which is what makes a double-click
+  /// on "Send" harmless.
+  sending
+  sent
+  failed
+}
+
+enum AdminNotificationAction {
+  campaign_created
+  campaign_updated
+  campaign_dispatched
+  campaign_failed
+}
+
+/// One admin-composed rich notification, and the record of sending it.
+///
+/// Kept as its own row rather than as "the first Notification of a batch"
+/// because the campaign exists before any recipient does: it is drafted,
+/// reviewed, and only then fanned out. It also holds the two numbers nobody
+/// can reconstruct afterwards - how many accounts the audience resolved to,
+/// and how many rows were actually written once notification preferences were
+/// honoured.
+model NotificationCampaign {
+  id String @id @default(uuid())
+
+  title       String
+  body        String
+  /// The picture. Absolute URL; null means the campaign renders as a compact
+  /// row rather than a picture card.
+  imageUrl    String?
+  /// Both or neither: a button with no destination is a dead control.
+  actionLabel String?
+  actionHref  String?
+  /// Mirrors Notification.tone. Campaigns are limited to the quiet tones in
+  /// the DTO (`accent`, `info`, `neutral`, `success`); a promotion has no
+  /// business rendering in the danger red reserved for money and deadlines.
+  tone        String  @default("accent")
+
+  audience NotificationAudience
+  status   NotificationCampaignStatus @default(draft)
+
+  /// How many accounts the audience query matched at dispatch time.
+  recipientCount Int @default(0)
+  /// How many notification rows were actually written. Lower than
+  /// recipientCount by exactly the number of recipients whose
+  /// NotificationSettings.promotions is off.
+  deliveredCount Int @default(0)
+  /// Set when a dispatch fails, so the failure is readable in the dashboard
+  /// rather than only in a server log.
+  failureReason  String?
+
+  /// Admin identity snapshotted at each step, same as AdminContentReview and
+  /// AdminKycAudit: the trail has to survive an admin being renamed or removed.
+  createdByAdminId    String
+  createdByAdminEmail String
+  createdByAdminRole  AdminRole
+
+  dispatchedByAdminId    String?
+  dispatchedByAdminEmail String?
+  dispatchedAt           DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([createdAt])
+  @@index([createdByAdminId])
+}
+
+/// Audit trail for the campaign surface, in the shape this codebase already
+/// uses for moderation decisions (AdminContentReview, AdminKycAudit,
+/// AdminEventReview): one row per action, with who and when snapshotted onto
+/// it.
+///
+/// A campaign is the only admin action in this backend that touches every
+/// account at once, so "who sent that, and to whom" has to be answerable from
+/// the trail alone, after the campaign row itself has been edited or deleted.
+model AdminNotificationAudit {
+  id         String @id @default(uuid())
+  campaignId String
+
+  action   AdminNotificationAction
+  audience NotificationAudience
+  /// Null on create/update: nothing was resolved or written yet.
+  recipientCount Int?
+  deliveredCount Int?
+  /// Set on campaign_failed.
+  reason         String?
+
+  actedByAdminId    String
+  actedByAdminEmail String
+  actedByAdminRole  AdminRole
+  actedAt           DateTime @default(now())
+
+  @@index([campaignId])
+  @@index([actedByAdminId])
+  @@index([actedAt])
 }
 
 // -----------------------------------------------------------------------------

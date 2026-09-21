@@ -146,10 +146,16 @@ describe('NotificationSettings (contract)', () => {
         .set('Authorization', `Bearer ${signToken(USER_WITH_NO_ROW)}`)
         .expect(200);
 
+      // `promotions` defaults to TRUE as of build brief C8, which made this
+      // column the opt-out for admin-composed campaigns. It had defaulted to
+      // false while nothing read it, and a promotion channel whose default is
+      // off reaches nobody. Existing rows were deliberately NOT backfilled
+      // (see prisma/migrations/20260921140000_notification_campaigns), so this
+      // assertion is specifically about a user with NO row.
       expect(res.body.data).toMatchObject({
         userWawuId: USER_WITH_NO_ROW,
         newReplies: true,
-        promotions: false,
+        promotions: true,
       });
 
       const persisted = await prisma.notificationSettings.findUnique({ where: { userWawuId: USER_WITH_NO_ROW } });

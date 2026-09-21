@@ -10,6 +10,7 @@ import { AdminProfessionalReviewModule } from './admin/professional-review/admin
 import { AdminPaymentsModule } from './admin/payments/admin-payments.module';
 import { AdminCreatorsModule } from './admin/creators/admin-creators.module';
 import { AdminEventsModule } from './admin/events/admin-events.module';
+import { AdminNotificationsModule } from './admin/notifications/admin-notifications.module';
 import { PrismaModule } from './common/prisma/prisma.module';
 import { AccountModule } from './account/account.module';
 import { CommentModule } from './comment/comment.module';
@@ -212,6 +213,13 @@ import { APP_GUARD } from '@nestjs/core';
     // by booting and reading the printed route table, not by reasoning about
     // it.
     AdminEventsModule,
+    // Admin notification campaigns (build brief C8). Registered alongside the
+    // other `/admin/*` modules and for the same shadow-safety reason:
+    // AdminNotificationsController is `@Controller('admin/notifications')`;
+    // the app's own surface is `@Controller('notifications')`, a different
+    // FIRST segment, so neither can swallow the other in either registration
+    // order.
+    AdminNotificationsModule,
     AccountModule,
     CommentModule,
     CourseLessonModule,
