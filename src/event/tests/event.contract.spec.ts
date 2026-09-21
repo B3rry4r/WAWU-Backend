@@ -469,6 +469,41 @@ describe('Events contract (app-facing)', () => {
       ).toBe(true);
     });
 
+    it('accepts ?host and returns only that host\'s PUBLISHED events', async () => {
+      /*
+        THE BUG THIS PINS. There was no way to ask for one host's events at
+        all, so a creator's profile called GET /events/mine instead - the
+        CALLER's events. A visitor opening somebody's profile saw their OWN
+        events listed under that person's name.
+
+        /events/mine cannot serve this even filtered: it returns every
+        status, including pending and rejected submissions, which belong to
+        the host alone. This filters the PUBLIC list, so `status: published`
+        still applies. Both halves are asserted below.
+      */
+      const res = await http()
+        .get('/api/hub/events')
+        .query({ perPage: 100, host: HOST_SUB })
+        .set(auth(strangerToken))
+        .expect(200);
+
+      expect(res.body.data.length).toBeGreaterThan(0);
+      expect(
+        res.body.data.every(
+          (e: { hostWawuId?: string; host?: { wawuId?: string } }) =>
+            (e.hostWawuId ?? e.host?.wawuId) === HOST_SUB,
+        ),
+      ).toBe(true);
+
+      // A host with nothing published comes back empty, not "everybody's".
+      const none = await http()
+        .get('/api/hub/events')
+        .query({ perPage: 100, host: 'nobody-with-this-id' })
+        .set(auth(strangerToken))
+        .expect(200);
+      expect(none.body.data).toEqual([]);
+    });
+
     it('rejects a category that is not one of the enum values', async () => {
       await http()
         .get('/api/hub/events')

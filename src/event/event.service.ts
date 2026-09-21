@@ -73,6 +73,10 @@ export class EventService {
       // forbidNonWhitelisted pipe before reaching this method.
       ...(query.category ? { category: query.category } : {}),
       ...(query.featured === undefined ? {} : { featured: query.featured }),
+      // One host's published events. `status: published` above still applies,
+      // so this can never leak a pending or rejected submission the way
+      // /events/mine (which returns every status to its owner) would.
+      ...(query.host ? { hostWawuId: query.host } : {}),
       ...timeWindow(query.view),
     };
 
