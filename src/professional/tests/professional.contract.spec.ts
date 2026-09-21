@@ -390,4 +390,160 @@ describe('Professional profiles (contract)', () => {
     expect(res.body.data.licenceNumber).toBeUndefined();
   });
 
+  // ---- the stars over the Book button ------------------------------------
+  //
+  // The approved Services screen draws "★ 4.9 (120 reviews)" next to every
+  // professional. These tests exist to prove that number is somebody's actual
+  // opinion: null until a real review row exists, averaged from rows
+  // afterwards, and writable only by a client this professional has replied
+  // to. A directory of lawyers and doctors with a seeded 4.8 under every name
+  // is worse than one with no stars at all.
+
+  /** Approves this suite's own application and returns the listing id. */
+  async function approvedListing(): Promise<string> {
+    await post(creatorToken, application()).expect(201);
+    const row = await prisma.professionalProfile.findFirstOrThrow({
+      where: { wawuUserId: USER_CREATOR_PRO, category: 'technology' },
+    });
+    await prisma.professionalProfile.update({
+      where: { id: row.id },
+      data: { status: 'approved', reviewedAt: new Date() },
+    });
+    return row.id;
+  }
+
+  /** A paid DM this professional answered — the thing that earns a review. */
+  async function respondedDm(senderWawuId: string): Promise<string> {
+    const dm = await prisma.directMessage.create({
+      data: {
+        creatorWawuId: USER_CREATOR_PRO,
+        senderWawuId,
+        text: 'Could you look at a contract for me?',
+        amount: 5000,
+        status: 'responded',
+        deadlineAt: new Date(Date.now() + 86_400_000),
+        respondedAt: new Date(),
+        responseText: 'Yes, send it over.',
+        flutterwaveTxRef: `pro-review-test-${Date.now()}-${Math.random()}`,
+      },
+    });
+    return dm.id;
+  }
+
+  const review = (token: string, id: string, body: object) =>
+    request(app.getHttpServer())
+      .post(`/professionals/${id}/reviews`)
+      .set('Authorization', `Bearer ${token}`)
+      .send(body);
+
+  it('reports no rating at all until somebody reviews the listing', async () => {
+    const id = await approvedListing();
+    const res = await request(app.getHttpServer())
+      .get(`/professionals/${id}`)
+      .expect(200);
+    expect(res.body.data).toHaveProperty('ratingAvg', null);
+    expect(res.body.data).toHaveProperty('reviewCount', 0);
+
+    const list = await request(app.getHttpServer())
+      .get('/professionals?category=technology')
+      .expect(200);
+    const card = (list.body.data as Record<string, unknown>[]).find(
+      (p) => p.id === id,
+    );
+    expect(card).toEqual(
+      expect.objectContaining({ ratingAvg: null, reviewCount: 0 }),
+    );
+  });
+
+  it('averages real review rows, to one decimal, on both the card and the detail', async () => {
+    const id = await approvedListing();
+    const dmIds = [await respondedDm(USER_PLAIN)];
+    await review(plainToken, id, { stars: 4, body: 'Quick and clear.' }).expect(
+      201,
+    );
+
+    const res = await request(app.getHttpServer())
+      .get(`/professionals/${id}`)
+      .expect(200);
+    expect(res.body.data.ratingAvg).toBe(4);
+    expect(res.body.data.reviewCount).toBe(1);
+
+    const list = await request(app.getHttpServer())
+      .get('/professionals?category=technology')
+      .expect(200);
+    const card = (list.body.data as Record<string, unknown>[]).find(
+      (p) => p.id === id,
+    );
+    expect(card).toEqual(
+      expect.objectContaining({ ratingAvg: 4, reviewCount: 1 }),
+    );
+
+    await prisma.professionalReview.deleteMany({ where: { professionalId: id } });
+    await prisma.directMessage.deleteMany({ where: { id: { in: dmIds } } });
+  });
+
+  it('refuses a review from somebody this professional never replied to', async () => {
+    const id = await approvedListing();
+
+    // No DM at all.
+    const none = await review(plainToken, id, { stars: 5 }).expect(403);
+    expect(none.body.message).toMatch(/replied/i);
+
+    // A DM that is still awaiting an answer is not a dealing either: the
+    // money is refundable and nothing has been delivered.
+    const pending = await prisma.directMessage.create({
+      data: {
+        creatorWawuId: USER_CREATOR_PRO,
+        senderWawuId: USER_PLAIN,
+        text: 'Are you free?',
+        amount: 5000,
+        status: 'awaiting_response',
+        deadlineAt: new Date(Date.now() + 86_400_000),
+        flutterwaveTxRef: `pro-review-test-pending-${Date.now()}`,
+      },
+    });
+    await review(plainToken, id, { stars: 5 }).expect(403);
+    expect(
+      await prisma.professionalReview.count({ where: { professionalId: id } }),
+    ).toBe(0);
+
+    await prisma.directMessage.deleteMany({ where: { id: pending.id } });
+  });
+
+  it('replaces the author\'s own rating rather than counting it twice', async () => {
+    const id = await approvedListing();
+    const dmId = await respondedDm(USER_PLAIN);
+
+    await review(plainToken, id, { stars: 1 }).expect(201);
+    const second = await review(plainToken, id, { stars: 5 }).expect(201);
+    expect(second.body.data.ratingAvg).toBe(5);
+    expect(second.body.data.reviewCount).toBe(1);
+    expect(
+      await prisma.professionalReview.count({ where: { professionalId: id } }),
+    ).toBe(1);
+
+    await prisma.professionalReview.deleteMany({ where: { professionalId: id } });
+    await prisma.directMessage.deleteMany({ where: { id: dmId } });
+  });
+
+  it('refuses a self-review, an out-of-range star and an unauthenticated one', async () => {
+    const id = await approvedListing();
+    await review(creatorToken, id, { stars: 5 }).expect(403);
+
+    const dmId = await respondedDm(USER_PLAIN);
+    await review(plainToken, id, { stars: 6 }).expect(400);
+    await review(plainToken, id, { stars: 0 }).expect(400);
+    // There is no way to post an average; it is aggregated, never accepted.
+    await review(plainToken, id, { stars: 5, ratingAvg: 4.8 }).expect(400);
+
+    await request(app.getHttpServer())
+      .post(`/professionals/${id}/reviews`)
+      .send({ stars: 5 })
+      .expect(401);
+
+    expect(
+      await prisma.professionalReview.count({ where: { professionalId: id } }),
+    ).toBe(0);
+    await prisma.directMessage.deleteMany({ where: { id: dmId } });
+  });
 });

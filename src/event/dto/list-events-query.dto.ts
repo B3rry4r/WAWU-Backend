@@ -55,6 +55,25 @@ export class ListEventsQueryDto extends PaginationQueryDto {
   featured?: boolean;
 
   /**
+   * How the calendar is ordered.
+   *
+   * `starting_soon` is the default and is exactly the behaviour this endpoint
+   * has always had: the row nearest to today first, forwards for `upcoming`
+   * and backwards for `past`.
+   *
+   * `trending` is the Events screen's second rail, and it is DERIVED rather
+   * than stored — most interest first, counted from the "Going" rows that
+   * already exist. There is deliberately no `trending` flag on Event: that
+   * would be a third editorial pin alongside `featured`, set by hand, going
+   * stale on its own. `featured` stays what it is, an admin's decision about
+   * the one hero card, and the two rails are asked for with two different
+   * queries rather than two columns.
+   */
+  @IsOptional()
+  @IsIn(['starting_soon', 'trending'])
+  sort: 'starting_soon' | 'trending' = 'starting_soon';
+
+  /**
    * One host's PUBLISHED events, for the Events tab on their profile.
    *
    * Without this there was no way to ask for somebody else's events at all.

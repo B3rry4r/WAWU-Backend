@@ -90,5 +90,19 @@ export interface CreatorProfile {
   evgScore: number;
   contentCount: number;
   followerCount: number;
+  /**
+   * How many accounts THIS person follows — the middle figure in the
+   * profile's three-up stat row, beside followers and posts.
+   *
+   * Counted from FollowRelationship, the same relation `followerCount` is
+   * counted from and in the other direction. No column: a follow and an
+   * unfollow would both have to remember to move it, and the day one forgets
+   * is the day the number is wrong for good.
+   *
+   * Public, like the follower count. The private figures on that screen
+   * (profile views, sales) are deliberately NOT here — they live on the
+   * owner-only GET /users/me/profile-stats.
+   */
+  followingCount: number;
   communityCount: number;
 }

@@ -11489,6 +11489,412 @@
         ]
       }
     },
+    "/api/hub/admin/finance/summary": {
+      "get": {
+        "operationId": "AdminFinanceController_summary",
+        "parameters": [
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "description": "Inclusive lower bound. Omitted with `to` means the current calendar month.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "description": "Exclusive upper bound. Omitted with `from` means the current calendar month.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminFinanceSummaryView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Gross taken, WAWU's share, the creators' share and a transaction count,\nper revenue stream, for `?from=&to=` (default: this calendar month).\n\nOnly settled charges are counted, and each stream reports which of its\nown statuses that means on `countedStatuses`.",
+        "tags": [
+          "AdminFinance"
+        ]
+      }
+    },
+    "/api/hub/admin/finance/transactions": {
+      "get": {
+        "operationId": "AdminFinanceController_transactions",
+        "parameters": [
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "stream",
+            "required": false,
+            "in": "query",
+            "description": "Omitted means every stream.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "content",
+                  "tips",
+                  "dm",
+                  "credits",
+                  "verification",
+                  "events",
+                  "shop"
+                ]
+              }
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "Omitted means every status, INCLUDING the ones that are not revenue.\nThat is deliberate: a ledger that silently hid failed charges would make\n\"where did this charge go\" unanswerable on the one screen built to\nanswer it. The summary endpoint is the one that counts only settled\nmoney, and it says so on its own response.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "settled",
+                  "pending",
+                  "failed",
+                  "refunded",
+                  "cancelled"
+                ]
+              }
+            }
+          },
+          {
+            "name": "creatorWawuId",
+            "required": false,
+            "in": "query",
+            "description": "Narrows to one creator's incoming money, across every stream.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "default": "newest",
+              "type": "string",
+              "enum": [
+                "newest",
+                "oldest"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminFinanceTransactionView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "The ledger: one row per money movement across all six payment tables,\nnewest first, filterable by stream, status, date range and creator.\n\nUnlike the summary this does NOT hide unsettled charges by default.\n\"Where did this charge go\" is the question the screen exists for, and it\nis unanswerable if the failed ones are invisible.",
+        "tags": [
+          "AdminFinance"
+        ]
+      }
+    },
+    "/api/hub/admin/finance/payouts": {
+      "get": {
+        "operationId": "AdminFinanceController_payouts",
+        "parameters": [
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "`WalletLedgerEntry.status`. Omitted means every status.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "completed",
+                "failed"
+              ]
+            }
+          },
+          {
+            "name": "sort",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "default": "newest",
+              "type": "string",
+              "enum": [
+                "newest",
+                "oldest"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminFinancePayoutsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "What has left for creators' bank accounts, and what is earned and has not.",
+        "tags": [
+          "AdminFinance"
+        ]
+      }
+    },
+    "/api/hub/admin/finance/wallets": {
+      "get": {
+        "operationId": "AdminFinanceController_listWallets",
+        "parameters": [
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "q",
+            "required": false,
+            "in": "query",
+            "description": "Matched against `handle` (partial, case-insensitive) and `wawuUserId`\n(prefix). This backend stores no email or phone for a WAWU account -\nboth live in WAWU ID and are never persisted here - so neither can be\nsearched, the same limitation `/admin/creators` documents at length.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "kycStatus",
+            "required": false,
+            "in": "query",
+            "description": "`CreatorState.kycStatus`, the gate that decides whether money may leave a\nwallet.\n\n`not_started` is accepted alongside the three stored values because it is\nwhat this surface REPORTS: the column defaults to `pending`, so a creator\nwho has never submitted and one waiting on a reviewer read identically\nwithout the synthesis `CreatorStateService` and `/admin/creators` both\napply (hazard H-5). A filter that could not express the word the row\nshows would be a filter that disagrees with its own list.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "approved",
+                "rejected",
+                "not_started"
+              ]
+            }
+          },
+          {
+            "name": "hasSubaccount",
+            "required": false,
+            "in": "query",
+            "description": "True lists only creators Flutterwave has opened a payout subaccount for; false only those it has not.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "withBalances",
+            "required": true,
+            "in": "query",
+            "description": "Ask Flutterwave for each row's balance. See BALANCE_PAGE_CAP above.",
+            "schema": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "sort",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "default": "newest",
+              "type": "string",
+              "enum": [
+                "newest",
+                "oldest",
+                "handle"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminFinanceWalletView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "One row per creator account: KYC state, whether Flutterwave has opened a\npayout subaccount, the lifetime ledger figures, and - on request -\nFlutterwave's own balance.\n\nDeclared before `wallets/:wawuId`; Nest matches in declaration order.",
+        "tags": [
+          "AdminFinance"
+        ]
+      }
+    },
+    "/api/hub/admin/finance/wallets/{wawuId}": {
+      "get": {
+        "operationId": "AdminFinanceController_walletDetail",
+        "parameters": [
+          {
+            "name": "wawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "historyLimit",
+            "required": true,
+            "in": "query",
+            "description": "How many ledger movements to return, newest first.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminFinanceWalletDetailView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "One creator's wallet with its transaction history. The balance is always Flutterwave's.",
+        "tags": [
+          "AdminFinance"
+        ]
+      }
+    },
     "/api/hub/admin/events": {
       "get": {
         "operationId": "AdminEventsController_list",
@@ -13729,6 +14135,9 @@
                           "category": {
                             "type": "string"
                           },
+                          "verification": {
+                            "type": "string"
+                          },
                           "tagline": {
                             "type": "string"
                           },
@@ -13746,9 +14155,6 @@
                             "items": {
                               "type": "string"
                             }
-                          },
-                          "verification": {
-                            "type": "string"
                           },
                           "openForRequests": {
                             "type": "boolean"
@@ -13774,12 +14180,12 @@
                           "name",
                           "id",
                           "category",
+                          "verification",
                           "tagline",
                           "handle",
                           "field",
                           "bio",
                           "topics",
-                          "verification",
                           "openForRequests",
                           "fullUntil",
                           "yearsExperience",
@@ -13805,6 +14211,9 @@
                               "category": {
                                 "type": "string"
                               },
+                              "verification": {
+                                "type": "string"
+                              },
                               "tagline": {
                                 "type": "string"
                               },
@@ -13822,9 +14231,6 @@
                                 "items": {
                                   "type": "string"
                                 }
-                              },
-                              "verification": {
-                                "type": "string"
                               },
                               "openForRequests": {
                                 "type": "boolean"
@@ -13850,12 +14256,12 @@
                               "name",
                               "id",
                               "category",
+                              "verification",
                               "tagline",
                               "handle",
                               "field",
                               "bio",
                               "topics",
-                              "verification",
                               "openForRequests",
                               "fullUntil",
                               "yearsExperience",
@@ -13923,6 +14329,9 @@
                     "category": {
                       "type": "string"
                     },
+                    "verification": {
+                      "type": "string"
+                    },
                     "tagline": {
                       "type": "string"
                     },
@@ -13940,9 +14349,6 @@
                       "items": {
                         "type": "string"
                       }
-                    },
-                    "verification": {
-                      "type": "string"
                     },
                     "openForRequests": {
                       "type": "boolean"
@@ -13968,12 +14374,12 @@
                     "name",
                     "id",
                     "category",
+                    "verification",
                     "tagline",
                     "handle",
                     "field",
                     "bio",
                     "topics",
-                    "verification",
                     "openForRequests",
                     "fullUntil",
                     "yearsExperience",
@@ -14013,6 +14419,24 @@
               "maximum": 100,
               "type": "number"
             }
+          },
+          {
+            "name": "featured",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "category",
+            "required": false,
+            "in": "query",
+            "description": "The category chip row. Free text, matching the column.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -14040,8 +14464,19 @@
                               "coming"
                             ]
                           },
+                          "imageUrl": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "slug": {
                             "type": "string"
+                          },
+                          "category": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "featured": {
+                            "type": "boolean"
                           },
                           "tagline": {
                             "type": "string"
@@ -14203,13 +14638,20 @@
                           "ctaHref": {
                             "type": "string",
                             "nullable": true
+                          },
+                          "priceFromNaira": {
+                            "type": "number",
+                            "nullable": true
                           }
                         },
                         "required": [
                           "name",
                           "id",
                           "status",
+                          "imageUrl",
                           "slug",
+                          "category",
+                          "featured",
                           "tagline",
                           "blurb",
                           "icon",
@@ -14221,7 +14663,8 @@
                           "benefits",
                           "steps",
                           "ctaLabel",
-                          "ctaHref"
+                          "ctaHref",
+                          "priceFromNaira"
                         ]
                       }
                     },
@@ -14246,8 +14689,19 @@
                                   "coming"
                                 ]
                               },
+                              "imageUrl": {
+                                "type": "string",
+                                "nullable": true
+                              },
                               "slug": {
                                 "type": "string"
+                              },
+                              "category": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "featured": {
+                                "type": "boolean"
                               },
                               "tagline": {
                                 "type": "string"
@@ -14396,13 +14850,20 @@
                               "ctaHref": {
                                 "type": "string",
                                 "nullable": true
+                              },
+                              "priceFromNaira": {
+                                "type": "number",
+                                "nullable": true
                               }
                             },
                             "required": [
                               "name",
                               "id",
                               "status",
+                              "imageUrl",
                               "slug",
+                              "category",
+                              "featured",
                               "tagline",
                               "blurb",
                               "icon",
@@ -14414,7 +14875,8 @@
                               "benefits",
                               "steps",
                               "ctaLabel",
-                              "ctaHref"
+                              "ctaHref",
+                              "priceFromNaira"
                             ]
                           }
                         },
@@ -14481,8 +14943,19 @@
                         "coming"
                       ]
                     },
+                    "imageUrl": {
+                      "type": "string",
+                      "nullable": true
+                    },
                     "slug": {
                       "type": "string"
+                    },
+                    "category": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "featured": {
+                      "type": "boolean"
                     },
                     "tagline": {
                       "type": "string"
@@ -14667,13 +15140,20 @@
                     "ctaHref": {
                       "type": "string",
                       "nullable": true
+                    },
+                    "priceFromNaira": {
+                      "type": "number",
+                      "nullable": true
                     }
                   },
                   "required": [
                     "name",
                     "id",
                     "status",
+                    "imageUrl",
                     "slug",
+                    "category",
+                    "featured",
                     "tagline",
                     "blurb",
                     "icon",
@@ -14685,7 +15165,8 @@
                     "benefits",
                     "steps",
                     "ctaLabel",
-                    "ctaHref"
+                    "ctaHref",
+                    "priceFromNaira"
                   ]
                 }
               }
@@ -16282,6 +16763,13 @@
                     },
                     "dmResponseHours": {
                       "type": "number"
+                    },
+                    "ratingAvg": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "reviewCount": {
+                      "type": "number"
                     }
                   },
                   "required": [
@@ -16300,13 +16788,56 @@
                     "pieceCount",
                     "dmEnabled",
                     "dmPrice",
-                    "dmResponseHours"
+                    "dmResponseHours",
+                    "ratingAvg",
+                    "reviewCount"
                   ]
                 }
               }
             }
           }
         },
+        "tags": [
+          "Professional"
+        ]
+      }
+    },
+    "/api/hub/professionals/{id}/reviews": {
+      "post": {
+        "operationId": "ProfessionalController_review",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProfessionalReviewDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfessionalReviewView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Rate a professional you have actually dealt with, 1 to 5 stars.\n\nA real token, never optional auth: a rating has to be attributable, and\nthe service then checks this person paid to message that professional and\ngot a reply. Posting twice updates your own rating rather than adding a\nsecond one.",
         "tags": [
           "Professional"
         ]
@@ -17400,6 +17931,28 @@
         ]
       }
     },
+    "/api/hub/users/me/profile-stats": {
+      "get": {
+        "operationId": "UserProfileController_getProfileStats",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileStatsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Your own profile's numbers: the three-up row, both stat cards and the\ncompleteness ring.\n\nDeclared BEFORE `:wawuId/public-profile` because Nest matches in\ndeclaration order and `me` would otherwise be read as a wawuId. Owner-only\nby construction — it takes the caller's id from the token and has no\nparameter that could point it at anybody else, which is what keeps\nprofile views and sales off a stranger's screen.",
+        "tags": [
+          "UserProfile"
+        ]
+      }
+    },
     "/api/hub/users/{wawuId}/public-profile": {
       "get": {
         "operationId": "UserProfileController_getPublicProfile",
@@ -17425,6 +17978,7 @@
             }
           }
         },
+        "summary": "Somebody else's public profile.\n\nThe caller is passed through so the visit can be counted once per viewer\nper day. Your own profile is never counted as a view of itself — see\nUserProfileService.recordProfileView.",
         "tags": [
           "UserProfile"
         ]
@@ -17510,6 +18064,7 @@
             }
           }
         },
+        "summary": "No viewer id is passed, and that is deliberate: this route has no caller\nto attribute anything to, so it records NO profile view. Counting an\nanonymous read would put a number on the owner's stat card that any loop\nwithout an account could drive to whatever it liked.",
         "tags": [
           "PublicUserProfile"
         ]
@@ -18408,6 +18963,20 @@
             }
           },
           {
+            "name": "sort",
+            "required": true,
+            "in": "query",
+            "description": "How the calendar is ordered.\n\n`starting_soon` is the default and is exactly the behaviour this endpoint\nhas always had: the row nearest to today first, forwards for `upcoming`\nand backwards for `past`.\n\n`trending` is the Events screen's second rail, and it is DERIVED rather\nthan stored — most interest first, counted from the \"Going\" rows that\nalready exist. There is deliberately no `trending` flag on Event: that\nwould be a third editorial pin alongside `featured`, set by hand, going\nstale on its own. `featured` stays what it is, an admin's decision about\nthe one hero card, and the two rails are asked for with two different\nqueries rather than two columns.",
+            "schema": {
+              "default": "starting_soon",
+              "type": "string",
+              "enum": [
+                "starting_soon",
+                "trending"
+              ]
+            }
+          },
+          {
             "name": "host",
             "required": false,
             "in": "query",
@@ -18641,6 +19210,66 @@
           }
         },
         "summary": "Withdraw it. Also idempotent: withdrawing twice is a 200, not a 404.",
+        "tags": [
+          "Event"
+        ]
+      }
+    },
+    "/api/hub/events/{id}/save": {
+      "post": {
+        "operationId": "EventController_save",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventSaveView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Bookmark it — the ribbon on the hero card and the heart on a trending\none. Private to the caller, and NOT the same statement as \"Going\": see\nEventService.save.\n\n`@HttpCode(200)` for the same reason `going` uses it: the second call\ncreates nothing, and the ResponseInterceptor stamps 200 into the body\nregardless (hazard H-3).",
+        "tags": [
+          "Event"
+        ]
+      },
+      "delete": {
+        "operationId": "EventController_unsave",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventSaveView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Un-bookmark it. Idempotent: removing one that was never there is a 200.",
         "tags": [
           "Event"
         ]
@@ -20329,6 +20958,23 @@
           "listed"
         ]
       },
+      "CreateProfessionalReviewDto": {
+        "type": "object",
+        "properties": {
+          "stars": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 5
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "stars"
+        ]
+      },
       "StartVerificationPurchaseDto": {
         "type": "object",
         "properties": {
@@ -20816,6 +21462,11 @@
             "type": "string",
             "maxLength": 300
           },
+          "venueName": {
+            "type": "string",
+            "description": "The venue by NAME, e.g. \"Eko Convention Centre\".\n\nSeparate from `location`, which the card renders as the city. An online\nevent simply omits it, and so may an in-person one whose organiser has\nonly given a city, which is why nothing here is required.",
+            "maxLength": 160
+          },
           "externalUrl": {
             "type": "string",
             "description": "The organiser's own page. `require_protocol` and an http(s)-only protocol\nlist, so a submitted `javascript:` or `data:` URL cannot reach a client\nthat renders this as a link.",
@@ -20930,6 +21581,11 @@
           "address": {
             "type": "string",
             "maxLength": 300
+          },
+          "venueName": {
+            "type": "string",
+            "description": "The venue by name. Blanked by sending an empty string.",
+            "maxLength": 160
           },
           "externalUrl": {
             "type": "string",
@@ -24893,6 +25549,704 @@
           "directMessages"
         ]
       },
+      "AdminFinancePeriodView": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "isDefaultPeriod": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "isDefaultPeriod"
+        ]
+      },
+      "AdminFinanceMoneyView": {
+        "type": "object",
+        "properties": {
+          "grossKobo": {
+            "type": "number"
+          },
+          "wawuShareKobo": {
+            "type": "number"
+          },
+          "creatorShareKobo": {
+            "type": "number"
+          },
+          "transactionCount": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "grossKobo",
+          "wawuShareKobo",
+          "creatorShareKobo",
+          "transactionCount"
+        ]
+      },
+      "AdminFinanceStreamTotalsView": {
+        "type": "object",
+        "properties": {
+          "stream": {
+            "type": "string",
+            "enum": [
+              "content",
+              "dm",
+              "tips",
+              "credits",
+              "verification",
+              "events",
+              "shop"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "creatorSharePct": {
+            "type": "number"
+          },
+          "source": {
+            "type": "string"
+          },
+          "countedStatuses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "grossKobo": {
+            "type": "number"
+          },
+          "wawuShareKobo": {
+            "type": "number"
+          },
+          "creatorShareKobo": {
+            "type": "number"
+          },
+          "transactionCount": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "stream",
+          "label",
+          "creatorSharePct",
+          "source",
+          "countedStatuses",
+          "grossKobo",
+          "wawuShareKobo",
+          "creatorShareKobo",
+          "transactionCount"
+        ]
+      },
+      "AdminFinanceCreditsAttributionView": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "string"
+          },
+          "creditsSpent": {
+            "type": "number"
+          },
+          "creditsFunded": {
+            "type": "number"
+          },
+          "fundedGrossKobo": {
+            "type": "number"
+          },
+          "hostShareKobo": {
+            "type": "number"
+          },
+          "platformShareKobo": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "note",
+          "creditsSpent",
+          "creditsFunded",
+          "fundedGrossKobo",
+          "hostShareKobo",
+          "platformShareKobo"
+        ]
+      },
+      "AdminFinanceSummaryView": {
+        "type": "object",
+        "properties": {
+          "period": {
+            "$ref": "#/components/schemas/AdminFinancePeriodView"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN"
+            ]
+          },
+          "amountsIn": {
+            "type": "string",
+            "enum": [
+              "kobo"
+            ]
+          },
+          "totals": {
+            "$ref": "#/components/schemas/AdminFinanceMoneyView"
+          },
+          "streams": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminFinanceStreamTotalsView"
+            }
+          },
+          "creditsAttribution": {
+            "$ref": "#/components/schemas/AdminFinanceCreditsAttributionView"
+          },
+          "basis": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "period",
+          "currency",
+          "amountsIn",
+          "totals",
+          "streams",
+          "creditsAttribution",
+          "basis"
+        ]
+      },
+      "AdminFinancePartyView": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "wawuId",
+          "handle"
+        ]
+      },
+      "AdminFinanceTransactionView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "stream": {
+            "type": "string",
+            "enum": [
+              "content",
+              "dm",
+              "tips",
+              "credits",
+              "verification",
+              "events",
+              "shop"
+            ]
+          },
+          "occurredAt": {
+            "type": "string"
+          },
+          "creator": {
+            "$ref": "#/components/schemas/AdminFinancePartyView",
+            "nullable": true
+          },
+          "buyer": {
+            "$ref": "#/components/schemas/AdminFinancePartyView",
+            "nullable": true
+          },
+          "grossKobo": {
+            "type": "number"
+          },
+          "wawuShareKobo": {
+            "type": "number"
+          },
+          "creatorShareKobo": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "refunded",
+              "settled",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "sourceStatus": {
+            "type": "string"
+          },
+          "flutterwaveTxRef": {
+            "type": "string",
+            "nullable": true
+          },
+          "flutterwaveTxId": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "stream",
+          "occurredAt",
+          "creator",
+          "buyer",
+          "grossKobo",
+          "wawuShareKobo",
+          "creatorShareKobo",
+          "status",
+          "sourceStatus",
+          "flutterwaveTxRef",
+          "flutterwaveTxId"
+        ]
+      },
+      "AdminFinancePayoutView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "creator": {
+            "$ref": "#/components/schemas/AdminFinancePartyView"
+          },
+          "amountNaira": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "transferId": {
+            "type": "string",
+            "nullable": true
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "bankCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "accountName": {
+            "type": "string",
+            "nullable": true
+          },
+          "accountNumberLast4": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "settledAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "creator",
+          "amountNaira",
+          "status",
+          "reference",
+          "transferId",
+          "failureReason",
+          "bankCode",
+          "accountName",
+          "accountNumberLast4",
+          "createdAt",
+          "settledAt"
+        ]
+      },
+      "AdminFinanceOwedStreamView": {
+        "type": "object",
+        "properties": {
+          "stream": {
+            "type": "string",
+            "enum": [
+              "content",
+              "dm",
+              "tips",
+              "credits",
+              "verification",
+              "events",
+              "shop"
+            ]
+          },
+          "sourceRows": {
+            "type": "number"
+          },
+          "creatorShareNaira": {
+            "type": "number"
+          },
+          "sweptAutomatically": {
+            "type": "boolean"
+          },
+          "why": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stream",
+          "sourceRows",
+          "creatorShareNaira",
+          "sweptAutomatically",
+          "why"
+        ]
+      },
+      "AdminFinancePayoutsView": {
+        "type": "object",
+        "properties": {
+          "period": {
+            "$ref": "#/components/schemas/AdminFinancePeriodView"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN"
+            ]
+          },
+          "amountsIn": {
+            "type": "string",
+            "enum": [
+              "naira"
+            ]
+          },
+          "withdrawals": {
+            "type": "object",
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AdminFinancePayoutView"
+                }
+              },
+              "page": {
+                "type": "number"
+              },
+              "perPage": {
+                "type": "number"
+              },
+              "total": {
+                "type": "number"
+              },
+              "completedNaira": {
+                "type": "number"
+              },
+              "pendingNaira": {
+                "type": "number"
+              },
+              "failedNaira": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "items",
+              "page",
+              "perPage",
+              "total",
+              "completedNaira",
+              "pendingNaira",
+              "failedNaira"
+            ]
+          },
+          "owed": {
+            "type": "object",
+            "properties": {
+              "note": {
+                "type": "string"
+              },
+              "instructedAwaitingConfirmation": {
+                "type": "object",
+                "properties": {
+                  "count": {
+                    "type": "number"
+                  },
+                  "amountNaira": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "count",
+                  "amountNaira"
+                ]
+              },
+              "instructionsFailed": {
+                "type": "object",
+                "properties": {
+                  "count": {
+                    "type": "number"
+                  },
+                  "amountNaira": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "count",
+                  "amountNaira"
+                ]
+              },
+              "earnedNotInstructed": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AdminFinanceOwedStreamView"
+                }
+              },
+              "earnedNotInstructedTotalNaira": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "note",
+              "instructedAwaitingConfirmation",
+              "instructionsFailed",
+              "earnedNotInstructed",
+              "earnedNotInstructedTotalNaira"
+            ]
+          }
+        },
+        "required": [
+          "period",
+          "currency",
+          "amountsIn",
+          "withdrawals",
+          "owed"
+        ]
+      },
+      "AdminFinanceSubaccountView": {
+        "type": "object",
+        "properties": {
+          "accountReference": {
+            "type": "string"
+          },
+          "bankName": {
+            "type": "string",
+            "nullable": true
+          },
+          "accountNumberLast4": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "openedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "accountReference",
+          "bankName",
+          "accountNumberLast4",
+          "status",
+          "openedAt"
+        ]
+      },
+      "AdminFinanceWalletBalanceView": {
+        "type": "object",
+        "properties": {
+          "ngn": {
+            "type": "number",
+            "nullable": true
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "flutterwave"
+            ]
+          },
+          "unavailableReason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "ngn",
+          "source",
+          "unavailableReason"
+        ]
+      },
+      "AdminFinanceWalletLifetimeView": {
+        "type": "object",
+        "properties": {
+          "earnedInstructedNaira": {
+            "type": "number"
+          },
+          "earningsPendingNaira": {
+            "type": "number"
+          },
+          "withdrawnNaira": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "earnedInstructedNaira",
+          "earningsPendingNaira",
+          "withdrawnNaira"
+        ]
+      },
+      "AdminFinanceWalletView": {
+        "type": "object",
+        "properties": {
+          "creator": {
+            "$ref": "#/components/schemas/AdminFinancePartyView"
+          },
+          "kycStatus": {
+            "type": "string",
+            "nullable": true
+          },
+          "withdrawalsEnabled": {
+            "type": "boolean"
+          },
+          "payoutSubaccount": {
+            "$ref": "#/components/schemas/AdminFinanceSubaccountView",
+            "nullable": true
+          },
+          "balance": {
+            "$ref": "#/components/schemas/AdminFinanceWalletBalanceView"
+          },
+          "lifetime": {
+            "$ref": "#/components/schemas/AdminFinanceWalletLifetimeView"
+          }
+        },
+        "required": [
+          "creator",
+          "kycStatus",
+          "withdrawalsEnabled",
+          "payoutSubaccount",
+          "balance",
+          "lifetime"
+        ]
+      },
+      "AdminFinanceWalletEntryView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "amountNaira": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "transferId": {
+            "type": "string",
+            "nullable": true
+          },
+          "sourceType": {
+            "type": "string",
+            "nullable": true
+          },
+          "sourceId": {
+            "type": "string",
+            "nullable": true
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "settledAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "amountNaira",
+          "status",
+          "reference",
+          "transferId",
+          "sourceType",
+          "sourceId",
+          "failureReason",
+          "createdAt",
+          "settledAt"
+        ]
+      },
+      "AdminFinanceWalletDetailView": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN"
+            ]
+          },
+          "amountsIn": {
+            "type": "string",
+            "enum": [
+              "naira"
+            ]
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminFinanceWalletEntryView"
+            }
+          },
+          "historyTotal": {
+            "type": "number"
+          },
+          "creator": {
+            "$ref": "#/components/schemas/AdminFinancePartyView"
+          },
+          "kycStatus": {
+            "type": "string",
+            "nullable": true
+          },
+          "withdrawalsEnabled": {
+            "type": "boolean"
+          },
+          "payoutSubaccount": {
+            "$ref": "#/components/schemas/AdminFinanceSubaccountView",
+            "nullable": true
+          },
+          "balance": {
+            "$ref": "#/components/schemas/AdminFinanceWalletBalanceView"
+          },
+          "lifetime": {
+            "$ref": "#/components/schemas/AdminFinanceWalletLifetimeView"
+          }
+        },
+        "required": [
+          "currency",
+          "amountsIn",
+          "history",
+          "historyTotal",
+          "creator",
+          "kycStatus",
+          "withdrawalsEnabled",
+          "payoutSubaccount",
+          "balance",
+          "lifetime"
+        ]
+      },
       "EventSpeakerView": {
         "type": "object",
         "properties": {
@@ -26189,6 +27543,13 @@
           },
           "dmResponseHours": {
             "type": "number"
+          },
+          "ratingAvg": {
+            "type": "number",
+            "nullable": true
+          },
+          "reviewCount": {
+            "type": "number"
           }
         },
         "required": [
@@ -26204,7 +27565,56 @@
           "pieceCount",
           "dmEnabled",
           "dmPrice",
-          "dmResponseHours"
+          "dmResponseHours",
+          "ratingAvg",
+          "reviewCount"
+        ]
+      },
+      "ProfessionalReviewView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "professionalId": {
+            "type": "string"
+          },
+          "authorWawuId": {
+            "type": "string"
+          },
+          "stars": {
+            "type": "number"
+          },
+          "body": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ratingAvg": {
+            "type": "number",
+            "nullable": true
+          },
+          "reviewCount": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "professionalId",
+          "authorWawuId",
+          "stars",
+          "body",
+          "createdAt",
+          "updatedAt",
+          "ratingAvg",
+          "reviewCount"
         ]
       },
       "LearnEntitlement": {
@@ -26402,6 +27812,60 @@
           "verification"
         ]
       },
+      "ProfileStatsView": {
+        "type": "object",
+        "properties": {
+          "wawuUserId": {
+            "type": "string"
+          },
+          "followerCount": {
+            "type": "number"
+          },
+          "followingCount": {
+            "type": "number"
+          },
+          "postCount": {
+            "type": "number"
+          },
+          "profileViewsThisMonth": {
+            "type": "number"
+          },
+          "productsSoldThisMonth": {
+            "type": "number"
+          },
+          "monthStart": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "profileCompletenessPct": {
+            "type": "number"
+          },
+          "profileCompletenessMissing": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "handle",
+                "bio",
+                "avatar",
+                "cover",
+                "links"
+              ]
+            }
+          }
+        },
+        "required": [
+          "wawuUserId",
+          "followerCount",
+          "followingCount",
+          "postCount",
+          "profileViewsThisMonth",
+          "productsSoldThisMonth",
+          "monthStart",
+          "profileCompletenessPct",
+          "profileCompletenessMissing"
+        ]
+      },
       "CreatorProfile": {
         "type": "object",
         "properties": {
@@ -26484,6 +27948,9 @@
           "followerCount": {
             "type": "number"
           },
+          "followingCount": {
+            "type": "number"
+          },
           "communityCount": {
             "type": "number"
           }
@@ -26510,6 +27977,7 @@
           "evgScore",
           "contentCount",
           "followerCount",
+          "followingCount",
           "communityCount"
         ]
       },
@@ -26838,6 +28306,10 @@
             "type": "string",
             "nullable": true
           },
+          "venueName": {
+            "type": "string",
+            "nullable": true
+          },
           "externalUrl": {
             "type": "string",
             "nullable": true
@@ -26908,6 +28380,16 @@
           "userGoing": {
             "type": "boolean"
           },
+          "userSaved": {
+            "type": "boolean"
+          },
+          "ticketed": {
+            "type": "boolean"
+          },
+          "priceFromNaira": {
+            "type": "number",
+            "nullable": true
+          },
           "speakers": {
             "type": "array",
             "items": {
@@ -26939,6 +28421,7 @@
           "timezone",
           "location",
           "address",
+          "venueName",
           "externalUrl",
           "bannerUrl",
           "category",
@@ -26953,6 +28436,9 @@
           "status",
           "goingCount",
           "userGoing",
+          "userSaved",
+          "ticketed",
+          "priceFromNaira",
           "speakers",
           "createdAt",
           "lastDecisionReason"
@@ -26975,6 +28461,21 @@
           "eventId",
           "userGoing",
           "goingCount"
+        ]
+      },
+      "EventSaveView": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string"
+          },
+          "userSaved": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "eventId",
+          "userSaved"
         ]
       },
       "QuestionOption": {

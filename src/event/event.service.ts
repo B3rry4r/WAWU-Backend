@@ -22,6 +22,7 @@ import type { PaginationQueryDto } from '../common/dto/pagination.dto';
 import {
   initialsFor,
   type EventGoingView,
+  type EventSaveView,
   type EventView,
 } from './event-view.type';
 import type { CreateEventDto, EventSpeakerDto } from './dto/create-event.dto';
@@ -187,7 +188,17 @@ export class EventService {
         // Upcoming reads forwards from now, past reads backwards from now —
         // in both directions the row nearest to today comes first, which is
         // the only ordering a calendar screen can use unpaginated.
-        orderBy: { startsAt: query.view === 'past' ? 'desc' : 'asc' },
+        //
+        // `trending` orders by how many people have signalled interest, with
+        // the calendar order as the tie-break so a page of events nobody has
+        // marked yet is still stable rather than arbitrary.
+        orderBy:
+          query.sort === 'trending'
+            ? [
+                { going: { _count: 'desc' as const } },
+                { startsAt: query.view === 'past' ? 'desc' : ('asc' as const) },
+              ]
+            : { startsAt: query.view === 'past' ? 'desc' : 'asc' },
         skip: (query.page - 1) * query.perPage,
         take: query.perPage,
       }),
@@ -267,6 +278,7 @@ export class EventService {
         timezone: dto.timezone?.trim() ?? null,
         location: dto.location.trim(),
         address: dto.address?.trim() ?? null,
+        venueName: dto.venueName?.trim() || null,
         externalUrl: dto.externalUrl ?? null,
         bannerUrl: dto.bannerUrl ?? null,
         category: dto.category ?? 'other',
@@ -355,6 +367,9 @@ export class EventService {
           ...(dto.address !== undefined
             ? { address: dto.address.trim() || null }
             : {}),
+          ...(dto.venueName !== undefined
+            ? { venueName: dto.venueName.trim() || null }
+            : {}),
           ...(dto.externalUrl !== undefined
             ? { externalUrl: dto.externalUrl }
             : {}),
@@ -438,6 +453,40 @@ export class EventService {
     };
   }
 
+  /**
+   * POST /events/:id/save — the bookmark in the corner of the card.
+   *
+   * NOT a second "Going". Keeping an event to look at later and telling the
+   * organiser you are coming are different statements, and the screen shows
+   * both at once, so folding one into the other would make a private note
+   * public. Nothing is charged and no seat is held here either.
+   *
+   * Idempotent by the same construction markGoing uses: the unique key on
+   * (eventId, userWawuId) is the idempotency, so this is an upsert rather
+   * than a toggle, and a retried request cannot silently unsave.
+   */
+  async save(id: string, userWawuId: string): Promise<EventSaveView> {
+    await this.loadVisible(id, userWawuId);
+    await this.prisma.eventSave.upsert({
+      where: { eventId_userWawuId: { eventId: id, userWawuId } },
+      update: {},
+      create: { eventId: id, userWawuId },
+    });
+    return { eventId: id, userSaved: true };
+  }
+
+  /**
+   * DELETE /events/:id/save — remove it. Removing a bookmark that was never
+   * there is a 200 describing the true state, not a 404.
+   */
+  async unsave(id: string, userWawuId: string): Promise<EventSaveView> {
+    await this.loadVisible(id, userWawuId);
+    await this.prisma.eventSave.deleteMany({
+      where: { eventId: id, userWawuId },
+    });
+    return { eventId: id, userSaved: false };
+  }
+
   // ── internals ─────────────────────────────────────────────────────────────
 
   /** Published to anyone; anything else to its host alone. 404 otherwise. */
@@ -477,7 +526,7 @@ export class EventService {
     if (rows.length === 0) return [];
     const ids = rows.map((r) => r.id);
 
-    const [counts, mine, hostTicks] = await Promise.all([
+    const [counts, mine, saved, floors, hostTicks] = await Promise.all([
       this.prisma.eventGoing.groupBy({
         by: ['eventId'],
         where: { eventId: { in: ids } },
@@ -487,12 +536,28 @@ export class EventService {
         where: { eventId: { in: ids }, userWawuId },
         select: { eventId: true },
       }),
+      this.prisma.eventSave.findMany({
+        where: { eventId: { in: ids }, userWawuId },
+        select: { eventId: true },
+      }),
+      // The "from" price, DERIVED: the cheapest tier this event offers. One
+      // grouped read for the whole page rather than a price column on Event
+      // that would go stale the moment a tier is added or repriced.
+      this.prisma.eventTicketType.groupBy({
+        by: ['eventId'],
+        where: { eventId: { in: ids } },
+        _min: { priceNaira: true },
+      }),
       // One batched read for the whole page, not one per row.
       this.verification.forMany(rows.map((r) => r.hostWawuId)),
     ]);
 
     const countByEvent = new Map(counts.map((c) => [c.eventId, c._count._all]));
     const goingIds = new Set(mine.map((m) => m.eventId));
+    const savedIds = new Set(saved.map((m) => m.eventId));
+    const floorByEvent = new Map(
+      floors.map((f) => [f.eventId, f._min.priceNaira]),
+    );
 
     return rows.map((row) => ({
       id: row.id,
@@ -510,6 +575,7 @@ export class EventService {
       timezone: row.timezone,
       location: row.location,
       address: row.address,
+      venueName: row.venueName,
       externalUrl: row.externalUrl,
       bannerUrl: row.bannerUrl,
       category: row.category,
@@ -524,6 +590,12 @@ export class EventService {
       status: row.status,
       goingCount: countByEvent.get(row.id) ?? 0,
       userGoing: goingIds.has(row.id),
+      userSaved: savedIds.has(row.id),
+      // An event with no ticket types sells nothing, which is still the
+      // ordinary case. `null` rather than 0: "free" and "not for sale" are
+      // different, and only one of them is an invitation to pay.
+      ticketed: floorByEvent.get(row.id) != null,
+      priceFromNaira: floorByEvent.get(row.id) ?? null,
       speakers: row.speakers.map((s) => ({
         name: s.name,
         title: s.title,

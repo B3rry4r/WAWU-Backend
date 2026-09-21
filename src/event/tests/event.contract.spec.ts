@@ -100,7 +100,8 @@ describe('Events contract (app-facing)', () => {
     await prisma.adminEventReview.deleteMany({
       where: { hostWawuId: { in: ALL_SUBS } },
     });
-    // EventSpeaker and EventGoing cascade from Event.
+    // EventSpeaker, EventGoing, EventSave and EventTicketType all cascade
+    // from Event.
     await prisma.event.deleteMany({ where: { hostWawuId: { in: ALL_SUBS } } });
   }
 
@@ -1131,6 +1132,231 @@ describe('Events contract (app-facing)', () => {
     });
   });
 
+  // ── what the approved Events screen draws ─────────────────────────────────
+
+  describe('the fields the Events screen renders', () => {
+    it('carries the venue by name, separately from the city', async () => {
+      const res = await http()
+        .post('/api/hub/events')
+        .set(auth(hostToken))
+        .send(
+          validEventBody({
+            location: 'Lagos',
+            venueName: 'Eko Convention Centre',
+          }),
+        )
+        .expect(201);
+
+      // Two facts, two fields. The card prints the city, the hero prints the
+      // venue under a pin, and before this column one string had to be both.
+      expect(res.body.data.location).toBe('Lagos');
+      expect(res.body.data.venueName).toBe('Eko Convention Centre');
+    });
+
+    it('reports a null venue rather than omitting it, on an event that has none', async () => {
+      const res = await http()
+        .get(`/api/hub/events/${EV_PUBLISHED}`)
+        .set(auth(hostToken))
+        .expect(200);
+
+      // Every fixture here predates the column. The field must still be
+      // present and null: a client that falls back to `location` has to be
+      // able to tell "no venue" from "field missing".
+      expect(res.body.data).toHaveProperty('venueName', null);
+    });
+
+    it('lets a host blank the venue with an empty string', async () => {
+      const created = await http()
+        .post('/api/hub/events')
+        .set(auth(hostToken))
+        .send(validEventBody({ venueName: 'Freedom Park' }))
+        .expect(201);
+
+      const res = await http()
+        .patch(`/api/hub/events/${created.body.data.id}`)
+        .set(auth(hostToken))
+        .send({ venueName: '   ' })
+        .expect(200);
+      expect(res.body.data.venueName).toBeNull();
+    });
+
+    it('derives the "from" price from the cheapest ticket tier, and never stores one', async () => {
+      await prisma.eventTicketType.createMany({
+        data: [
+          {
+            eventId: EV_PUBLISHED,
+            tier: 'vip',
+            name: 'VIP',
+            priceNaira: 25000,
+            quantity: 20,
+          },
+          {
+            eventId: EV_PUBLISHED,
+            tier: 'regular',
+            name: 'Regular',
+            priceNaira: 10000,
+            quantity: 200,
+          },
+        ],
+      });
+
+      const res = await http()
+        .get(`/api/hub/events/${EV_PUBLISHED}`)
+        .set(auth(strangerToken))
+        .expect(200);
+
+      expect(res.body.data.ticketed).toBe(true);
+      expect(res.body.data.priceFromNaira).toBe(10000);
+    });
+
+    it('reports an unticketed event as null, never as ₦0', async () => {
+      const res = await http()
+        .get(`/api/hub/events/${EV_PUBLISHED}`)
+        .set(auth(strangerToken))
+        .expect(200);
+
+      // Free and not-for-sale are different things, and only one of them is
+      // an invitation to pay. A 0 here would print "₦0" on the card.
+      expect(res.body.data.ticketed).toBe(false);
+      expect(res.body.data.priceFromNaira).toBeNull();
+    });
+
+    it('refuses a price on the event itself — tickets are their own resource', async () => {
+      await http()
+        .post('/api/hub/events')
+        .set(auth(hostToken))
+        .send(validEventBody({ priceNaira: 5000 }))
+        .expect(400);
+    });
+  });
+
+  // ── the bookmark ──────────────────────────────────────────────────────────
+
+  describe('POST/DELETE /api/hub/events/:id/save', () => {
+    it('saves, reports the state back, and is idempotent', async () => {
+      const first = await http()
+        .post(`/api/hub/events/${EV_PUBLISHED}/save`)
+        .set(auth(strangerToken))
+        .expect(200);
+      expect(first.body.data).toEqual({
+        eventId: EV_PUBLISHED,
+        userSaved: true,
+      });
+
+      await http()
+        .post(`/api/hub/events/${EV_PUBLISHED}/save`)
+        .set(auth(strangerToken))
+        .expect(200);
+
+      // One row, not two: the unique key is the idempotency.
+      expect(
+        await prisma.eventSave.count({ where: { eventId: EV_PUBLISHED } }),
+      ).toBe(1);
+    });
+
+    it('removes it, and removing one that was never there is still a 200', async () => {
+      await http()
+        .post(`/api/hub/events/${EV_PUBLISHED}/save`)
+        .set(auth(strangerToken))
+        .expect(200);
+
+      const res = await http()
+        .delete(`/api/hub/events/${EV_PUBLISHED}/save`)
+        .set(auth(strangerToken))
+        .expect(200);
+      expect(res.body.data).toEqual({
+        eventId: EV_PUBLISHED,
+        userSaved: false,
+      });
+
+      await http()
+        .delete(`/api/hub/events/${EV_PUBLISHED}/save`)
+        .set(auth(strangerToken))
+        .expect(200);
+      expect(
+        await prisma.eventSave.count({ where: { eventId: EV_PUBLISHED } }),
+      ).toBe(0);
+    });
+
+    it('is per viewer, and is not the same statement as "Going"', async () => {
+      await http()
+        .post(`/api/hub/events/${EV_PUBLISHED}/save`)
+        .set(auth(strangerToken))
+        .expect(200);
+
+      const mine = await http()
+        .get(`/api/hub/events/${EV_PUBLISHED}`)
+        .set(auth(strangerToken))
+        .expect(200);
+      expect(mine.body.data.userSaved).toBe(true);
+      // Saving it told the organiser nothing.
+      expect(mine.body.data.userGoing).toBe(false);
+      expect(mine.body.data.goingCount).toBe(0);
+
+      const theirs = await http()
+        .get(`/api/hub/events/${EV_PUBLISHED}`)
+        .set(auth(thirdToken))
+        .expect(200);
+      expect(theirs.body.data.userSaved).toBe(false);
+    });
+
+    it('404s an unknown event, and a stranger\'s unpublished one', async () => {
+      await http()
+        .post(`/api/hub/events/${UNKNOWN_EVENT}/save`)
+        .set(auth(hostToken))
+        .expect(404);
+      await http()
+        .post(`/api/hub/events/${EV_PENDING}/save`)
+        .set(auth(strangerToken))
+        .expect(404);
+    });
+  });
+
+  // ── the two rails ─────────────────────────────────────────────────────────
+
+  describe('GET /api/hub/events?sort=trending', () => {
+    it('orders by interest, and leaves the default order alone', async () => {
+      // EV_PUBLISHED starts in 2027; add a later one and give it the interest.
+      const later = await prisma.event.create({
+        data: {
+          id: 'ee000000-0000-4000-8000-0000000000aa',
+          hostWawuId: HOST_SUB,
+          name: 'Later, but everybody is going',
+          description: 'A fixture event for the events contract suite.',
+          hostOrg: 'Contract Fixtures Ltd',
+          format: 'in_person',
+          type: 'workshop',
+          location: 'Abuja',
+          startsAt: new Date('2027-09-04T09:00:00.000Z'),
+          status: 'published',
+        },
+      });
+      await prisma.eventGoing.createMany({
+        data: ALL_SUBS.map((sub) => ({ eventId: later.id, userWawuId: sub })),
+      });
+
+      const trending = await http()
+        .get('/api/hub/events?sort=trending')
+        .set(auth(hostToken))
+        .expect(200);
+      expect((trending.body.data as { id: string }[])[0].id).toBe(later.id);
+
+      // No sort parameter is still "the row nearest to today first".
+      const calendar = await http()
+        .get('/api/hub/events')
+        .set(auth(hostToken))
+        .expect(200);
+      expect((calendar.body.data as { id: string }[])[0].id).toBe(EV_PUBLISHED);
+    });
+
+    it('400s a sort nobody implements, rather than silently ignoring it', async () => {
+      await http()
+        .get('/api/hub/events?sort=whatever')
+        .set(auth(hostToken))
+        .expect(400);
+    });
+  });
+
   // ── auth ──────────────────────────────────────────────────────────────────
 
   describe('who may reach this surface', () => {
@@ -1145,6 +1371,8 @@ describe('Events contract (app-facing)', () => {
         .expect(401);
       await http().post(`/api/hub/events/${EV_PUBLISHED}/going`).expect(401);
       await http().delete(`/api/hub/events/${EV_PUBLISHED}/going`).expect(401);
+      await http().post(`/api/hub/events/${EV_PUBLISHED}/save`).expect(401);
+      await http().delete(`/api/hub/events/${EV_PUBLISHED}/save`).expect(401);
     });
   });
 });

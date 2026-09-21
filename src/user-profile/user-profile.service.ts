@@ -4,7 +4,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
-import { AccountType, ContentStatus } from '../../generated/prisma/enums';
+import {
+  AccountType,
+  ContentStatus,
+  PurchaseType,
+  TransactionStatus,
+} from '../../generated/prisma/enums';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
@@ -19,6 +24,8 @@ import {
 } from '../common/verification/verification-state';
 import type { UpdateUserProfileDto } from './dto/update-user-profile.dto';
 import { normaliseHandle, toProfileUrl } from './social-handles';
+import { profileCompleteness } from './profile-completeness';
+import type { ProfileStatsView } from './profile-stats.type';
 import { objectKeyFrom, StorageService } from '../storage/storage.service';
 import { WalletService } from '../wallet/wallet.service';
 
@@ -272,7 +279,10 @@ export class UserProfileService {
    * that is what the app's own internal links use; a handle lookup only runs
    * when that misses.
    */
-  async getPublicProfile(idOrHandle: string): Promise<CreatorProfile> {
+  async getPublicProfile(
+    idOrHandle: string,
+    viewerWawuId?: string,
+  ): Promise<CreatorProfile> {
     const profile =
       (await this.prisma.userProfile.findUnique({
         where: { wawuUserId: idOrHandle },
@@ -295,19 +305,29 @@ export class UserProfileService {
       throw new NotFoundException('This account has no public creator profile');
     }
 
-    const [evgScore, contentCount, followerCount, communityCount] =
-      await this.prisma.$transaction([
-        this.prisma.evgScore.findUnique({
-          where: { creatorWawuId: wawuUserId },
-        }),
-        this.prisma.contentPiece.count({
-          where: { creatorWawuId: wawuUserId, status: ContentStatus.live },
-        }),
-        this.prisma.followRelationship.count({
-          where: { followingWawuId: wawuUserId },
-        }),
-        this.prisma.community.count({ where: { hostWawuId: wawuUserId } }),
-      ]);
+    const [
+      evgScore,
+      contentCount,
+      followerCount,
+      followingCount,
+      communityCount,
+    ] = await this.prisma.$transaction([
+      this.prisma.evgScore.findUnique({
+        where: { creatorWawuId: wawuUserId },
+      }),
+      this.prisma.contentPiece.count({
+        where: { creatorWawuId: wawuUserId, status: ContentStatus.live },
+      }),
+      this.prisma.followRelationship.count({
+        where: { followingWawuId: wawuUserId },
+      }),
+      this.prisma.followRelationship.count({
+        where: { followerWawuId: wawuUserId },
+      }),
+      this.prisma.community.count({ where: { hostWawuId: wawuUserId } }),
+    ]);
+
+    await this.recordProfileView(wawuUserId, viewerWawuId);
 
     const [avatarUrl, coverUrl] = await Promise.all([
       this.resignImage(profile.avatarUrl),
@@ -338,7 +358,135 @@ export class UserProfileService {
       evgScore: evgScore?.score ?? 0,
       contentCount,
       followerCount,
+      followingCount,
       communityCount,
     };
   }
+
+  /**
+   * Writes one ProfileView, at most once per viewer per UTC day.
+   *
+   * ── WHAT IS NOT COUNTED, ON PURPOSE ─────────────────────────────────────
+   * An ANONYMOUS read writes nothing. `GET /users/public/:wawuId` has no
+   * caller to attribute a view to, and counting it would mean the number on
+   * the stat card could be driven to any value by a loop with no account.
+   * The OWNER'S OWN read writes nothing either: reloading your own page is
+   * not somebody looking at you, and it is the first thing that would inflate
+   * the figure.
+   *
+   * At most one row per viewer per day, which the unique key enforces — the
+   * upsert is how "already counted today" is expressed without a read first.
+   *
+   * Failing to record NEVER fails the read. A profile page must not 500
+   * because a statistic could not be written; the view is the product, the
+   * count is the instrumentation, and they do not rank equally.
+   */
+  private async recordProfileView(
+    profileWawuId: string,
+    viewerWawuId?: string,
+  ): Promise<void> {
+    if (!viewerWawuId || viewerWawuId === profileWawuId) return;
+    const viewedOn = startOfUtcDay(new Date());
+    try {
+      await this.prisma.profileView.upsert({
+        where: {
+          profileWawuId_viewerWawuId_viewedOn: {
+            profileWawuId,
+            viewerWawuId,
+            viewedOn,
+          },
+        },
+        create: { profileWawuId, viewerWawuId, viewedOn },
+        update: {},
+      });
+    } catch {
+      // Deliberately swallowed. See the doc comment: instrumentation must not
+      // take the page down with it.
+    }
+  }
+
+  /**
+   * GET /users/me/profile-stats — the numbers on your own profile screen.
+   *
+   * Owner-only by construction: it takes the caller's own id from the token
+   * and there is no parameter to point it at anybody else. Profile views and
+   * sales are facts about an account, not about a public profile, and putting
+   * them on the public aggregate would publish them to every visitor.
+   *
+   * Every figure is counted or computed here. There is no stats table and no
+   * counter column, so nothing on this response can disagree with the rows it
+   * came from.
+   */
+  async getProfileStats(wawuUserId: string): Promise<ProfileStatsView> {
+    const profile = await this.prisma.userProfile.findUnique({
+      where: { wawuUserId },
+    });
+    if (!profile) {
+      throw new NotFoundException('User not found');
+    }
+
+    const monthStart = startOfUtcMonth(new Date());
+
+    const [followerCount, followingCount, postCount, profileViews, sold] =
+      await this.prisma.$transaction([
+        this.prisma.followRelationship.count({
+          where: { followingWawuId: wawuUserId },
+        }),
+        this.prisma.followRelationship.count({
+          where: { followerWawuId: wawuUserId },
+        }),
+        this.prisma.contentPiece.count({
+          where: { creatorWawuId: wawuUserId, status: ContentStatus.live },
+        }),
+        this.prisma.profileView.count({
+          where: { profileWawuId: wawuUserId, viewedOn: { gte: monthStart } },
+        }),
+        // "Products sold" is completed SALES of this creator's own listings.
+        // Tips are excluded: a tip is money somebody chose to give, not a
+        // thing that was bought, and counting one as a sale overstates what
+        // the catalogue did. Pending and failed payments are excluded for the
+        // obvious reason that nothing was sold.
+        this.prisma.purchase.count({
+          where: {
+            creatorWawuId: wawuUserId,
+            type: PurchaseType.content,
+            status: TransactionStatus.completed,
+            purchasedAt: { gte: monthStart },
+          },
+        }),
+      ]);
+
+    const completeness = profileCompleteness(profile);
+
+    return {
+      wawuUserId,
+      followerCount,
+      followingCount,
+      postCount,
+      profileViewsThisMonth: profileViews,
+      productsSoldThisMonth: sold,
+      monthStart,
+      profileCompletenessPct: completeness.pct,
+      profileCompletenessMissing: completeness.missing,
+    };
+  }
+}
+
+/** Midnight UTC on the given day — the key the once-per-day view is stored under. */
+function startOfUtcDay(now: Date): Date {
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+  );
+}
+
+/**
+ * The first instant of the current calendar month, UTC.
+ *
+ * UTC rather than a local zone because the server has no business guessing
+ * which zone a creator reads "This month" in, and a boundary that moves with
+ * whoever is asking would make the same number differ between two requests
+ * seconds apart.
+ */
+function startOfUtcMonth(now: Date): Date {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 }

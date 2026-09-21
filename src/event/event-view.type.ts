@@ -79,6 +79,12 @@ export interface EventView {
 
   location: string;
   address: string | null;
+  /**
+   * The venue by name — "Eko Convention Centre", under the pin on the hero
+   * card. Null on an online event, and on every event created before the
+   * column existed; a client with nothing here falls back to `location`.
+   */
+  venueName: string | null;
   /** The organiser's own page. Any registration — paid or not — happens THERE. */
   externalUrl: string | null;
   /** Banner image, object-storage URL. */
@@ -104,10 +110,43 @@ export interface EventView {
   /** Whether the CALLING user is one of them. */
   userGoing: boolean;
 
+  /**
+   * Whether the CALLING user has bookmarked it. Private to them: no count of
+   * who else has, because a bookmark is not a public signal the way "Going"
+   * is.
+   */
+  userSaved: boolean;
+
+  /**
+   * ── WHAT THE CARD PRINTS UNDER THE NAME ────────────────────────────────
+   * Both are DERIVED from this event's ticket types on read, never stored. A
+   * price column on Event would be a second copy of a figure that already
+   * lives on EventTicketType, and it would go stale the moment a tier is
+   * added, repriced or sold out.
+   *
+   * `priceFromNaira` is the cheapest tier's price: what "from" means. Null
+   * when the event sells no tickets at all, which is still the common case —
+   * the card then prints nothing rather than "₦0", because free and
+   * not-for-sale are different things and only one of them is an invitation
+   * to pay.
+   */
+  ticketed: boolean;
+  priceFromNaira: number | null;
+
   speakers: EventSpeakerView[];
   createdAt: Date;
   /** Why the last rejection or takedown happened. Host-only; null for everyone else. */
   lastDecisionReason: string | null;
+}
+
+/**
+ * What POST/DELETE `/events/:id/save` return — the whole bookmark state, for
+ * the same reason EventGoingView carries the whole signal state: a client
+ * should never have to guess what it ended up with.
+ */
+export interface EventSaveView {
+  eventId: string;
+  userSaved: boolean;
 }
 
 /** What POST/DELETE `/events/:id/going` return — the whole signal state, so a client never has to guess. */
