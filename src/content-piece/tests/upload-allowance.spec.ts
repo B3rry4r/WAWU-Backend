@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { ForbiddenException } from '@nestjs/common';
 import { ContentPieceService } from '../content-piece.service';
 import { MAX_ITEMS_PER_ACCOUNT } from '../../common/creator-allowance';
 import type { CreateContentDto } from '../dto/create-content.dto';
@@ -134,12 +134,17 @@ describe('ContentPieceService upload allowances', () => {
     expect(state.slotsUsed).toBe(5);
   });
 
-  it('still requires the first upload to be free', async () => {
-    const { service, state } = buildService({ used: 0 });
-    await expect(service.create('creator-1', dto('paid'))).rejects.toThrow(
-      BadRequestException,
-    );
-    expect(state.slotsUsed).toBe(0);
+  it('lets a creator publish a PAID first upload', async () => {
+    // The web wizard only sends paid listings, so a free-first rule here
+    // meant no new creator could publish at all.
+    const { service, state, tx } = buildService({ used: 0 });
+    await service.create('creator-1', dto('paid'));
+    expect(state.slotsUsed).toBe(1);
+    const [arg] = (tx.contentPiece.create as jest.Mock).mock.calls[0] as [
+      { data: { accessType: string; creatorFirstUploadFree: boolean } },
+    ];
+    expect(arg.data.accessType).toBe('paid');
+    expect(arg.data.creatorFirstUploadFree).toBe(true);
   });
 
   it('does not claim a slot when the write is rejected', async () => {

@@ -481,13 +481,12 @@ export class ContentPieceService {
       const used = await tx.contentPiece.count({
         where: { creatorWawuId, ...occupiesASlot },
       });
+      // Recorded, no longer enforced. The first-upload-must-be-free rule
+      // outlived brief B2 ("every listing carries a price"): the web wizard
+      // refuses ₦0, so the rule 400'd every new creator's first publish. The
+      // flag stays because the creator dashboard labels "Your first upload"
+      // from it; the column keeps its old name to avoid a migration.
       const isFirstUpload = used === 0;
-
-      if (isFirstUpload && dto.accessType === 'paid') {
-        throw new BadRequestException(
-          "A creator's first upload must be free (creatorFirstUploadFree). Resubmit with accessType 'free'.",
-        );
-      }
 
       // The cap counts products, content AND services together, so it is held
       // on CreatorState.slotsUsed rather than on a count of ContentPiece rows.
