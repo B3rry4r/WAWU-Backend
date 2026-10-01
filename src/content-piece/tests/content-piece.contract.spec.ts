@@ -406,10 +406,8 @@ describe('ContentPiece (contract)', () => {
       // from ContentPiece rows here in create(). Those counts used to include
       // rejected rows, making the return only half a return: the creator got
       // the total slot back and was still refused another upload of the same
-      // kind. And because `isFirstUpload` derives from the same counts, they
-      // also stopped being a first-time uploader, which would force their
-      // first visible piece to be PAID — the opposite of the spec's
-      // first-upload-must-be-free rule.
+      // kind. `isFirstUpload` derives from the same counts, so it would also
+      // have stopped marking their first visible piece as a first upload.
       //
       // Asserted through the real creator-facing endpoint, because the
       // counter was never the thing that was broken.
@@ -774,9 +772,9 @@ describe('ContentPiece (contract)', () => {
    */
   describe('DELETE /content/:id', () => {
     async function createFixture(): Promise<string> {
-      // Paid, not free: the seeded USER_CREATOR_BASIC has already published
-      // (CONTENT_MAKEUP_VIDEO), so this is not a first upload and the
-      // first-upload-must-be-free rule does not apply to it.
+      // Paid, like every listing the web sends. The seeded USER_CREATOR_BASIC
+      // has already published (CONTENT_MAKEUP_VIDEO), so this is not a first
+      // upload.
       const res = await request(app.getHttpServer())
         .post('/content')
         .set('Authorization', `Bearer ${creatorToken}`)
