@@ -755,7 +755,7 @@ model Community {
 /// INBOX-01. A community's share link, written `wawu/c/<slug>`.
 ///
 /// A side table rather than a `slug` column on Community: every Community
-/// response is the model spread (protected-registry H-1), so a new column
+/// response is the model spread (locked response shape H-1), so a new column
 /// would appear in five responses the web calls. The slug is made from the
 /// name the first time a link is asked for (or when the app creates a room)
 /// and never changes after that, so a shared link keeps working through a
