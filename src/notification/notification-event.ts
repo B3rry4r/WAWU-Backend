@@ -12,9 +12,11 @@
  * balance / cash-out language anywhere). Keeping every string in one file
  * is what makes that reviewable.
  *
- * The kinds are exactly the ones the web client renders — see
- * WAWU-Web/src/types/notification.ts. Anything not in this union cannot be
- * written.
+ * Anything not in this union cannot be written. The union started as exactly
+ * the kinds the web client renders (WAWU-Web/src/types/notification.ts); it
+ * no longer is: INBOX-01 added `community_join_approved` and
+ * `community_join_declined` for the app, which the web's list does not name
+ * (mobile repo BACKEND_GAPS.md G-27).
  *
  * Build brief C8 adds the only two kinds that are not a report of a
  * transaction: `campaign` (an admin-composed announcement, the one kind whose
@@ -24,7 +26,10 @@
  * of sentences.
  */
 
-/** Exactly the union in WAWU-Web/src/types/notification.ts. */
+/**
+ * The web's union (WAWU-Web/src/types/notification.ts) plus the two INBOX-01
+ * kinds at the end.
+ */
 export type NotificationKind =
   | 'dm_deadline'
   | 'sale'

@@ -45,6 +45,15 @@ import type { UpdateCommunityDto } from './dto/update-community.dto';
  * /communities/:id/join` is explicitly this resource's endpoint per
  * registry.json).
  */
+/**
+ * Declining someone who is already a member. The wording is the live web
+ * answer (DELETE /communities/:id/requests/:userWawuId is a protected route),
+ * so it is kept as it is; INBOX-01 reuses it for a decline that loses a race
+ * to an approval.
+ */
+const ALREADY_APPROVED =
+  'That request was already approved — this person is a member. Remove them instead.';
+
 @Injectable()
 export class CommunityService {
   constructor(
@@ -446,13 +455,30 @@ export class CommunityService {
       return membership;
     }
 
-    const approved = await this.prisma.communityMembership.update({
-      where: { id: membership.id },
+    // INBOX-01: the change is conditional on the row still being pending, so
+    // when approvals (or an approval and a decline) race, exactly one request
+    // makes the change and only that one notifies.
+    const { count } = await this.prisma.communityMembership.updateMany({
+      where: { id: membership.id, status: 'pending' },
       data: { status: 'joined', joinedAt: new Date() },
     });
-    // INBOX-01: tell the person who asked. Only here, on the real
-    // pending -> joined change: the no-op approval above sends nothing, so a
-    // double tap never notifies twice. emit() never throws.
+    const approved = await this.prisma.communityMembership.findUnique({
+      where: { id: membership.id },
+    });
+    if (!approved) {
+      // A decline removed the request first: there is nothing to approve,
+      // the same answer as a request that never existed.
+      throw new NotFoundException(
+        'No join request from this user for this community.',
+      );
+    }
+    if (count !== 1) {
+      // Another approval got there first. Same answer as approving a member
+      // who is already in, and no second notification.
+      return approved;
+    }
+    // INBOX-01: tell the person who asked, once, on the real
+    // pending -> joined change. emit() never throws.
     await this.notifications.emit({
       kind: 'community_join_approved',
       userWawuId,
@@ -519,22 +545,36 @@ export class CommunityService {
       select: { id: true, status: true },
     });
     if (membership?.status === 'joined') {
-      throw new ConflictException(
-        'That request was already approved — this person is a member. Remove them instead.',
-      );
+      throw new ConflictException(ALREADY_APPROVED);
     }
     if (membership) {
-      await this.prisma.communityMembership.delete({
-        where: { id: membership.id },
+      // INBOX-01: delete only while still pending, so a decline racing an
+      // approval cannot remove someone the approval just let in, and of
+      // several declines in flight exactly one removes the row and notifies.
+      const { count } = await this.prisma.communityMembership.deleteMany({
+        where: { id: membership.id, status: 'pending' },
       });
-      // INBOX-01: the requester hears the answer (I31, "We'll let you know
-      // when she answers"). Only when a request was actually removed, so a
-      // repeat decline from a stale queue sends nothing.
-      await this.notifications.emit({
-        kind: 'community_join_declined',
-        userWawuId,
-        communityName: community.name,
-      });
+      if (count === 1) {
+        // The requester hears the answer (I31, "We'll let you know when
+        // she answers"), once.
+        await this.notifications.emit({
+          kind: 'community_join_declined',
+          userWawuId,
+          communityName: community.name,
+        });
+      } else {
+        const now = await this.prisma.communityMembership.findUnique({
+          where: { id: membership.id },
+          select: { status: true },
+        });
+        if (now?.status === 'joined') {
+          // An approval won the race: the same refusal as declining someone
+          // who is already a member.
+          throw new ConflictException(ALREADY_APPROVED);
+        }
+        // Another decline removed it first: nothing left to decline, the
+        // same success as declining when there is no request.
+      }
     }
     return { declined: true };
   }

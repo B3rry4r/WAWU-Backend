@@ -143,6 +143,8 @@ describe('Community rooms: mine, links, read, join decisions (contract)', () => 
   let declinedSub: string;
   let outsiderToken: string;
   let outsiderSub: string;
+  /** Requesters for the race tests: one per race, so no race sees another. */
+  const racers: Array<{ sub: string; accessToken: string }> = [];
 
   /** A per-run room name, so its slug never meets a leftover from a rerun. */
   const runTag = Date.now().toString(36);
@@ -181,6 +183,11 @@ describe('Community rooms: mine, links, read, join decisions (contract)', () => 
     outsiderToken = outsider.accessToken;
     outsiderSub = outsider.sub;
     ownedSubs.push(host.sub, member.sub, declined.sub, outsider.sub);
+    for (const label of ['racer1', 'racer2', 'racer3']) {
+      const racer = await registerThrowawayIdentity(label);
+      racers.push(racer);
+      ownedSubs.push(racer.sub);
+    }
 
     const moduleRef = await Test.createTestingModule({
       imports: [
@@ -233,6 +240,12 @@ describe('Community rooms: mine, links, read, join decisions (contract)', () => 
           interests: [],
           bio: fixture,
         },
+        ...racers.map((r) => ({
+          wawuUserId: r.sub,
+          accountType: 'user' as const,
+          interests: [],
+          bio: fixture,
+        })),
       ],
     });
     // KYC pending on purpose: it gates earning, never hosting.
@@ -723,6 +736,123 @@ describe('Community rooms: mine, links, read, join decisions (contract)', () => 
         .set(auth(memberToken))
         .expect(200);
       expect((await mine(memberToken)).data).toEqual([]);
+    });
+  });
+
+  /**
+   * Answers sent at the same time (two host devices, a double tap on a slow
+   * network). Each race runs several rounds; every round must end with one
+   * outcome and one notification. Before the fix, parallel approvals wrote
+   * two or three "Request approved" rows in some rounds.
+   */
+  describe('answers that race', () => {
+    const ROUNDS = 5;
+
+    const ask = (token: string) =>
+      request(server())
+        .post(`/communities/${privateRoomId}/join`)
+        .set(auth(token))
+        .expect(200);
+    const approve = (sub: string) =>
+      request(server())
+        .post(`/communities/${privateRoomId}/requests/${sub}/approve`)
+        .set(auth(hostToken));
+    const decline = (sub: string) =>
+      request(server())
+        .delete(`/communities/${privateRoomId}/requests/${sub}`)
+        .set(auth(hostToken));
+    const answersTo = (sub: string) =>
+      prisma.notification.findMany({
+        where: { userWawuId: sub, kind: { startsWith: 'community_join' } },
+        select: { kind: true },
+      });
+    /** Back to "not a member, never told", for the next round. */
+    const reset = async (sub: string) => {
+      await prisma.communityMembership.deleteMany({
+        where: { communityId: privateRoomId, userWawuId: sub },
+      });
+      await prisma.notification.deleteMany({ where: { userWawuId: sub } });
+    };
+
+    it('three approvals at once: one approval, one notification', async () => {
+      const racer = racers[0];
+      for (let round = 0; round < ROUNDS; round += 1) {
+        await reset(racer.sub);
+        await ask(racer.accessToken);
+        const answers = await Promise.all([
+          approve(racer.sub),
+          approve(racer.sub),
+          approve(racer.sub),
+        ]);
+        expect(answers.map((a) => a.status)).toEqual([200, 200, 200]);
+        for (const a of answers) {
+          expect(dataOf<{ status: string }>(a).status).toBe('joined');
+        }
+        expect(await answersTo(racer.sub)).toEqual([
+          { kind: 'community_join_approved' },
+        ]);
+      }
+    });
+
+    it('three declines at once: one decline, one notification', async () => {
+      const racer = racers[1];
+      for (let round = 0; round < ROUNDS; round += 1) {
+        await reset(racer.sub);
+        await ask(racer.accessToken);
+        const answers = await Promise.all([
+          decline(racer.sub),
+          decline(racer.sub),
+          decline(racer.sub),
+        ]);
+        expect(answers.map((a) => a.status)).toEqual([200, 200, 200]);
+        for (const a of answers) {
+          expect(dataOf<{ declined: boolean }>(a)).toEqual({ declined: true });
+        }
+        expect(await answersTo(racer.sub)).toEqual([
+          { kind: 'community_join_declined' },
+        ]);
+        expect(
+          await prisma.communityMembership.count({
+            where: { communityId: privateRoomId, userWawuId: racer.sub },
+          }),
+        ).toBe(0);
+      }
+    });
+
+    it('an approval and a decline at once: one of them wins, and only it is told', async () => {
+      const racer = racers[2];
+      for (let round = 0; round < ROUNDS; round += 1) {
+        await reset(racer.sub);
+        await ask(racer.accessToken);
+        const [approved, declined] = await Promise.all([
+          approve(racer.sub),
+          decline(racer.sub),
+        ]);
+        const row = await prisma.communityMembership.findUnique({
+          where: {
+            userWawuId_communityId: {
+              userWawuId: racer.sub,
+              communityId: privateRoomId,
+            },
+          },
+        });
+        const told = await answersTo(racer.sub);
+        if (row) {
+          // The approval won: they are in, the decline was refused.
+          expect(approved.status).toBe(200);
+          expect(declined.status).toBe(409);
+          expect(row.status).toBe('joined');
+          expect(told).toEqual([{ kind: 'community_join_approved' }]);
+        } else {
+          // The decline won: the request is gone, the approval found nothing.
+          expect(declined.status).toBe(200);
+          expect(approved.status).toBe(404);
+          expect(envelope<null>(approved).message).toBe(
+            'No join request from this user for this community.',
+          );
+          expect(told).toEqual([{ kind: 'community_join_declined' }]);
+        }
+      }
     });
   });
 
