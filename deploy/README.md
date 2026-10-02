@@ -95,6 +95,10 @@ FLUTTERWAVE_WEBHOOK_HASH=
 # live base URL here: the client never assumes live, and refuses any host
 # other than Fintava's. The timeouts may stay empty (defaults in
 # .env.example). Live values are put here by OPS-10.
+# Since MONEY-11 the app mounts the Fintava client (the balance route), so
+# with NODE_ENV=production the server does not start until FINTAVA_BASE_URL
+# is set: set it before deploying MONEY-11. Without FINTAVA_API_KEY it still
+# starts, sends nothing, and the money routes answer 503 provider_unreachable.
 FINTAVA_BASE_URL=
 FINTAVA_API_KEY=
 FINTAVA_WEBHOOK_SECRET=

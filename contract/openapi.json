@@ -19662,39 +19662,9 @@
         "x-wawu-built-by": "MONEY-09"
       }
     },
-    "/api/hub/money/wallet": {
-      "get": {
-        "operationId": "MoneyWalletController_wallet",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WalletView"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "The wallet as WAWU records it: state, account details, limits, PIN state.\nNever calls Fintava and never carries a balance. With no wallet it answers\n200 with state not_open (R-6), so the Wallet tab can lead to Open your wallet.",
-        "tags": [
-          "MoneyWallet"
-        ],
-        "x-wawu-built-by": "MONEY-12",
-        "description": "Declared by MONEY-04, not served yet: MONEY-12 serves it.",
-        "x-wawu-served": false
-      }
-    },
     "/api/hub/money/wallet/balance": {
       "get": {
-        "operationId": "MoneyWalletController_balance",
+        "operationId": "MoneyBalanceController_balance",
         "parameters": [],
         "responses": {
           "200": {
@@ -19745,10 +19715,38 @@
         ],
         "summary": "Fintava's available balance, asked for on every call (W1, W9, W13).\n503 provider_unreachable when the bank does not answer (W6): never a 0.",
         "tags": [
+          "MoneyBalance"
+        ],
+        "x-wawu-built-by": "MONEY-11"
+      }
+    },
+    "/api/hub/money/wallet": {
+      "get": {
+        "operationId": "MoneyWalletController_wallet",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The wallet as WAWU records it: state, account details, limits, PIN state.\nNever calls Fintava and never carries a balance. With no wallet it answers\n200 with state not_open (R-6), so the Wallet tab can lead to Open your wallet.",
+        "tags": [
           "MoneyWallet"
         ],
-        "x-wawu-built-by": "MONEY-11",
-        "description": "Declared by MONEY-04, not served yet: MONEY-11 serves it.",
+        "x-wawu-built-by": "MONEY-12",
+        "description": "Declared by MONEY-04, not served yet: MONEY-12 serves it.",
         "x-wawu-served": false
       }
     },
@@ -31692,6 +31690,21 @@
           "legalRequestId"
         ]
       },
+      "WalletBalanceView": {
+        "type": "object",
+        "properties": {
+          "availableKobo": {
+            "type": "integer"
+          },
+          "asOf": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "availableKobo",
+          "asOf"
+        ]
+      },
       "PinStateView": {
         "type": "object",
         "properties": {
@@ -32736,21 +32749,6 @@
           "pin",
           "bankTransfers",
           "beneficiaryCount"
-        ]
-      },
-      "WalletBalanceView": {
-        "type": "object",
-        "properties": {
-          "availableKobo": {
-            "type": "integer"
-          },
-          "asOf": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "availableKobo",
-          "asOf"
         ]
       },
       "PinResetView": {
