@@ -17561,39 +17561,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "userWawuId": {
-                      "type": "string"
-                    },
-                    "newReplies": {
-                      "type": "boolean"
-                    },
-                    "newFollowers": {
-                      "type": "boolean"
-                    },
-                    "dmReminders": {
-                      "type": "boolean"
-                    },
-                    "refunds": {
-                      "type": "boolean"
-                    },
-                    "promotions": {
-                      "type": "boolean"
-                    },
-                    "communityDigest": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "userWawuId",
-                    "newReplies",
-                    "newFollowers",
-                    "dmReminders",
-                    "refunds",
-                    "promotions",
-                    "communityDigest"
-                  ]
+                  "$ref": "#/components/schemas/NotificationSettingsWire"
                 }
               }
             }
@@ -17622,39 +17590,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "userWawuId": {
-                      "type": "string"
-                    },
-                    "newReplies": {
-                      "type": "boolean"
-                    },
-                    "newFollowers": {
-                      "type": "boolean"
-                    },
-                    "dmReminders": {
-                      "type": "boolean"
-                    },
-                    "refunds": {
-                      "type": "boolean"
-                    },
-                    "promotions": {
-                      "type": "boolean"
-                    },
-                    "communityDigest": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "userWawuId",
-                    "newReplies",
-                    "newFollowers",
-                    "dmReminders",
-                    "refunds",
-                    "promotions",
-                    "communityDigest"
-                  ]
+                  "$ref": "#/components/schemas/NotificationSettingsWire"
                 }
               }
             }
@@ -19888,6 +19824,282 @@
           "MoneyBalance"
         ],
         "x-wawu-built-by": "MONEY-11"
+      }
+    },
+    "/api/hub/chats": {
+      "post": {
+        "operationId": "ChatController_open",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenChatDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatSummary"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Open the chat with one person, or get the one that already exists.",
+        "tags": [
+          "Chat"
+        ]
+      },
+      "get": {
+        "operationId": "ChatController_list",
+        "parameters": [
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "Opaque: send back the `nextCursor` of the previous page as given.",
+            "schema": {
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "1 to 100, 20 when left out.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatSummaryPage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The caller's chats, newest activity first, cursor-paged.",
+        "tags": [
+          "Chat"
+        ]
+      }
+    },
+    "/api/hub/chats/{chatId}": {
+      "get": {
+        "operationId": "ChatController_get",
+        "parameters": [
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatSummary"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Chat"
+        ]
+      }
+    },
+    "/api/hub/chats/{chatId}/messages": {
+      "get": {
+        "operationId": "ChatController_messages",
+        "parameters": [
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "Opaque: send back the `nextCursor` of the previous page as given.",
+            "schema": {
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "1 to 100, 20 when left out.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatMessagePage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Messages, newest first, cursor-paged.",
+        "tags": [
+          "Chat"
+        ]
+      },
+      "post": {
+        "operationId": "ChatController_send",
+        "parameters": [
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatSendMessageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatMessage"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Chat"
+        ]
+      }
+    },
+    "/api/hub/chats/{chatId}/read": {
+      "post": {
+        "operationId": "ChatController_markRead",
+        "parameters": [
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarkChatReadDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatReadMark"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Move the caller's read mark forward.",
+        "tags": [
+          "Chat"
+        ]
+      }
+    },
+    "/api/hub/chats/{chatId}/attachments": {
+      "post": {
+        "operationId": "ChatController_presignAttachment",
+        "parameters": [
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatUploadDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatUpload"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Where to upload one photo, video or PDF for this chat.",
+        "tags": [
+          "Chat"
+        ]
       }
     },
     "/api/hub/webhooks/fintava": {
@@ -23606,6 +23818,18 @@
           },
           "communityDigest": {
             "type": "boolean"
+          },
+          "moneyIn": {
+            "type": "boolean",
+            "description": "Tips and sales (SETTINGS-07). Optional; absent leaves it as it is."
+          },
+          "contentReviews": {
+            "type": "boolean",
+            "description": "An upload approved or sent back (SETTINGS-07). Optional; absent leaves it as it is."
+          },
+          "communityMessages": {
+            "type": "boolean",
+            "description": "Community messages (SETTINGS-07). Optional; absent leaves it as it is. Stored only: nothing sends that kind yet."
           }
         }
       },
@@ -24366,6 +24590,91 @@
         "required": [
           "newPin",
           "newPinConfirmation"
+        ]
+      },
+      "OpenChatDto": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string",
+            "description": "The other person's WAWU ID (uuid).",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "wawuId"
+        ]
+      },
+      "ChatAttachmentDto": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The `key` POST /chats/:chatId/attachments returned, after the upload.",
+            "maxLength": 300
+          },
+          "name": {
+            "type": "string",
+            "description": "The file's own name, shown on a PDF bubble.",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "key"
+        ]
+      },
+      "ChatSendMessageDto": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 2000,
+            "pattern": "\\S"
+          },
+          "attachment": {
+            "$ref": "#/components/schemas/ChatAttachmentDto"
+          },
+          "clientMessageId": {
+            "type": "string",
+            "description": "The app's own id for this message. Sending the same one again returns\nthe message already stored instead of posting it twice.",
+            "pattern": "^[A-Za-z0-9_-]{8,64}$"
+          }
+        }
+      },
+      "MarkChatReadDto": {
+        "type": "object",
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "ChatUploadDto": {
+        "type": "object",
+        "properties": {
+          "contentType": {
+            "type": "string",
+            "description": "image/png, image/jpeg, image/webp, video/mp4, video/quicktime or application/pdf.",
+            "enum": [
+              "image/png",
+              "image/jpeg",
+              "image/webp",
+              "video/mp4",
+              "video/quicktime",
+              "application/pdf"
+            ]
+          },
+          "contentLength": {
+            "type": "number",
+            "description": "Exact size in bytes; the upload link is signed for this length. Up to\n512 MB, the limit every upload already has (MAX_UPLOAD_BYTES).",
+            "minimum": 1,
+            "maximum": 536870912
+          }
+        },
+        "required": [
+          "contentType",
+          "contentLength"
         ]
       },
       "ConfirmPinResetDto": {
@@ -30568,6 +30877,53 @@
           "enrolledCourseIds"
         ]
       },
+      "NotificationSettingsWire": {
+        "type": "object",
+        "properties": {
+          "userWawuId": {
+            "type": "string"
+          },
+          "newReplies": {
+            "type": "boolean"
+          },
+          "newFollowers": {
+            "type": "boolean"
+          },
+          "dmReminders": {
+            "type": "boolean"
+          },
+          "refunds": {
+            "type": "boolean"
+          },
+          "promotions": {
+            "type": "boolean"
+          },
+          "communityDigest": {
+            "type": "boolean"
+          },
+          "moneyIn": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "contentReviews": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "communityMessages": {
+            "type": "boolean",
+            "nullable": true
+          }
+        },
+        "required": [
+          "userWawuId",
+          "newReplies",
+          "newFollowers",
+          "dmReminders",
+          "refunds",
+          "promotions",
+          "communityDigest"
+        ]
+      },
       "ProfileExperienceView": {
         "type": "object",
         "properties": {
@@ -32123,6 +32479,253 @@
           "changedAt",
           "triesLeft",
           "lockedUntil"
+        ]
+      },
+      "ChatPerson": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          }
+        },
+        "required": [
+          "wawuId",
+          "name",
+          "handle",
+          "avatarUrl",
+          "verification"
+        ]
+      },
+      "ChatAttachment": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "nullable": true
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "url",
+          "contentType",
+          "bytes",
+          "name"
+        ]
+      },
+      "ChatMessage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "chatId": {
+            "type": "string"
+          },
+          "senderWawuId": {
+            "type": "string"
+          },
+          "mine": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "video",
+              "image",
+              "text",
+              "file"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "nullable": true
+          },
+          "attachment": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ChatAttachment"
+              }
+            ],
+            "nullable": true
+          },
+          "clientMessageId": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "readState": {
+            "type": "string",
+            "enum": [
+              "read",
+              "sent"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "chatId",
+          "senderWawuId",
+          "mine",
+          "kind",
+          "text",
+          "attachment",
+          "clientMessageId",
+          "createdAt",
+          "readState"
+        ]
+      },
+      "ChatSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "other": {
+            "$ref": "#/components/schemas/ChatPerson"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "lastActivityAt": {
+            "type": "string"
+          },
+          "lastMessage": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ChatMessage"
+              }
+            ],
+            "nullable": true
+          },
+          "unreadCount": {
+            "type": "number"
+          },
+          "myLastReadAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "otherLastReadAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "canMessage": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "other",
+          "createdAt",
+          "lastActivityAt",
+          "lastMessage",
+          "unreadCount",
+          "myLastReadAt",
+          "otherLastReadAt",
+          "canMessage"
+        ]
+      },
+      "ChatSummaryPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatSummary"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "ChatMessagePage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatMessage"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "ChatReadMark": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string"
+          },
+          "lastReadAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastReadMessageId": {
+            "type": "string",
+            "nullable": true
+          },
+          "unreadCount": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "chatId",
+          "lastReadAt",
+          "lastReadMessageId",
+          "unreadCount"
+        ]
+      },
+      "ChatUpload": {
+        "type": "object",
+        "properties": {
+          "uploadUrl": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "uploadUrl",
+          "key"
         ]
       },
       "FintavaWebhookAck": {
