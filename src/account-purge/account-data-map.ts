@@ -165,6 +165,11 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'wawuUserId',
     disposition: 'OWNED',
   },
+  // Open your wallet's identity step (KYC-01): keyed hashes and last 4 digits
+  // of this person's BVN and NIN, their verified phone and occupation, and
+  // the record of their BVN checks. All of it is theirs and goes with them.
+  { model: 'WalletIdentity', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'BvnCheckAttempt', column: 'wawuUserId', disposition: 'OWNED' },
 
   // Last: everything above may reference these.
   { model: 'CreatorState', column: 'wawuUserId', disposition: 'OWNED' },

@@ -4,6 +4,9 @@ import { FintavaModule } from '../fintava/fintava.module';
 import { MoneyBalanceController } from './balance/money-balance.controller';
 import { LedgerModule } from './ledger/ledger.module';
 import { WalletBalanceService } from './balance/wallet-balance.service';
+import { IdentityHasher } from './identity/identity-config';
+import { MoneyIdentityController } from './identity/money-identity.controller';
+import { WalletIdentityService } from './identity/wallet-identity.service';
 import { MoneyPinController } from './pin/money-pin.controller';
 import { TransactionPinGuard } from './pin/transaction-pin.guard';
 import { TransactionPinService } from './pin/transaction-pin.service';
@@ -25,11 +28,26 @@ import { TransactionPinService } from './pin/transaction-pin.service';
  *
  * MONEY-10: the ledger (LedgerModule), fed from the stored Fintava
  * deliveries by a sweep. It adds no route.
+ *
+ * KYC-01: Open your wallet's identity step (`/money/identity`), the BVN
+ * check through the same client. WalletIdentityService is exported for the
+ * steps after it (KYC-02, MONEY-12), which check the BVN and NIN they are
+ * sent against the ones that passed.
  */
 @Module({
   imports: [ConfigModule, FintavaModule, LedgerModule],
-  controllers: [MoneyPinController, MoneyBalanceController],
-  providers: [TransactionPinService, TransactionPinGuard, WalletBalanceService],
-  exports: [TransactionPinService, TransactionPinGuard],
+  controllers: [
+    MoneyPinController,
+    MoneyBalanceController,
+    MoneyIdentityController,
+  ],
+  providers: [
+    TransactionPinService,
+    TransactionPinGuard,
+    WalletBalanceService,
+    IdentityHasher,
+    WalletIdentityService,
+  ],
+  exports: [TransactionPinService, TransactionPinGuard, WalletIdentityService],
 })
 export class MoneyModule {}
