@@ -20,10 +20,11 @@ import type { UpdateNotificationSettingsDto } from './dto/update-notification-se
  */
 export type NotificationSettingsWire = Omit<
   NotificationSettings,
-  'moneyIn' | 'contentReviews'
+  'moneyIn' | 'contentReviews' | 'communityMessages'
 > & {
   moneyIn?: boolean;
   contentReviews?: boolean;
+  communityMessages?: boolean;
 };
 
 @Injectable()
@@ -63,10 +64,11 @@ export class NotificationSettingsService {
 function withoutUnsetSwitches(
   row: NotificationSettings,
 ): NotificationSettingsWire {
-  const { moneyIn, contentReviews, ...rest } = row;
+  const { moneyIn, contentReviews, communityMessages, ...rest } = row;
   return {
     ...rest,
     ...(moneyIn === null ? {} : { moneyIn }),
     ...(contentReviews === null ? {} : { contentReviews }),
+    ...(communityMessages === null ? {} : { communityMessages }),
   };
 }

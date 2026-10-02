@@ -34,6 +34,7 @@ const USER_PLAIN = '00000000-0000-4000-8000-000000000001';
 const USER_CREATOR_BASIC = '00000000-0000-4000-8000-000000000002';
 const USER_CREATOR_PRO = '00000000-0000-4000-8000-000000000003';
 const USER_NO_ROW = 'e3000000-0000-4000-8000-0000000000a1';
+const USERS = [USER_PLAIN, USER_CREATOR_BASIC, USER_CREATOR_PRO, USER_NO_ROW];
 const CONTENT_PDF_TEMPLATE = '10000000-0000-4000-8000-000000000003'; // paid, creator = PRO
 const SEEDED_NOTIFICATIONS = [
   'a0000000-0000-4000-8000-000000000001',
@@ -89,12 +90,16 @@ describe('Notification switches (contract, SETTINGS-07)', () => {
   const saved = new Map<string, unknown>();
   /** Purchases USER_PLAIN already had, so afterAll removes only what this spec made. */
   let purchasesBefore: string[] = [];
+  /** Notifications that existed before this spec ran (seeded or left by another spec): never read, never deleted. */
+  let keep: string[] = [...SEEDED_NOTIFICATIONS];
+  /** Whether the seeded follow edge (plain user to basic creator) existed, so afterAll restores it. */
+  let followedBefore = false;
 
   const emittedFor = (userWawuId: string, kind?: string) =>
     prisma.notification.findMany({
       where: {
         userWawuId,
-        id: { notIn: SEEDED_NOTIFICATIONS },
+        id: { notIn: keep },
         ...(kind ? { kind } : {}),
       },
     });
@@ -102,10 +107,8 @@ describe('Notification switches (contract, SETTINGS-07)', () => {
   const clearEmitted = () =>
     prisma.notification.deleteMany({
       where: {
-        userWawuId: {
-          in: [USER_PLAIN, USER_CREATOR_BASIC, USER_CREATOR_PRO, USER_NO_ROW],
-        },
-        id: { notIn: SEEDED_NOTIFICATIONS },
+        userWawuId: { in: USERS },
+        id: { notIn: keep },
       },
     });
 
@@ -223,6 +226,19 @@ describe('Notification switches (contract, SETTINGS-07)', () => {
         select: { id: true },
       })
     ).map((p) => p.id);
+    keep = (
+      await prisma.notification.findMany({
+        where: { userWawuId: { in: USERS } },
+        select: { id: true },
+      })
+    ).map((n) => n.id);
+    followedBefore =
+      (await prisma.followRelationship.count({
+        where: {
+          followerWawuId: USER_PLAIN,
+          followingWawuId: USER_CREATOR_BASIC,
+        },
+      })) > 0;
     await clearEmitted();
   }, 40000);
 
@@ -250,6 +266,17 @@ describe('Notification switches (contract, SETTINGS-07)', () => {
         followingWawuId: USER_CREATOR_BASIC,
       },
     });
+    if (followedBefore) {
+      await prisma.followRelationship.createMany({
+        data: [
+          {
+            followerWawuId: USER_PLAIN,
+            followingWawuId: USER_CREATOR_BASIC,
+          },
+        ],
+        skipDuplicates: true,
+      });
+    }
     await prisma.purchase.deleteMany({
       where: { buyerWawuId: USER_PLAIN, id: { notIn: purchasesBefore } },
     });
@@ -272,6 +299,7 @@ describe('Notification switches (contract, SETTINGS-07)', () => {
           communityDigest: true,
           moneyIn: null,
           contentReviews: null,
+          communityMessages: null,
         },
         create: { userWawuId: id },
       });
@@ -328,9 +356,59 @@ describe('Notification switches (contract, SETTINGS-07)', () => {
       });
     });
 
+    it('communityMessages is absent while unset, then saved and read back, and another key leaves it alone', async () => {
+      expect(dataOf(await read(basicToken).expect(200))).not.toHaveProperty(
+        'communityMessages',
+      );
+
+      const off = await patch(basicToken, { communityMessages: false }).expect(
+        200,
+      );
+      expect(dataOf(off)).toMatchObject({
+        communityMessages: false,
+        newFollowers: true,
+      });
+      expect(dataOf(off)).not.toHaveProperty('moneyIn');
+      expect(dataOf(await read(basicToken).expect(200))).toMatchObject({
+        communityMessages: false,
+      });
+
+      await patch(basicToken, { refunds: false, moneyIn: false }).expect(200);
+      expect(dataOf(await read(basicToken).expect(200))).toMatchObject({
+        communityMessages: false,
+        refunds: false,
+        moneyIn: false,
+      });
+
+      await patch(basicToken, { communityMessages: true }).expect(200);
+      expect(dataOf(await read(basicToken).expect(200))).toMatchObject({
+        communityMessages: true,
+      });
+    });
+
+    it('communityMessages=false mutes nothing today: no community message kind exists, and every kind that does exist is still delivered', async () => {
+      await patch(basicToken, { communityMessages: false }).expect(200);
+      expect(
+        await notifications.emit({
+          kind: 'new_follower',
+          userWawuId: USER_CREATOR_BASIC,
+        }),
+      ).not.toBeNull();
+      expect(
+        await notifications.emit({
+          kind: 'tip_received',
+          userWawuId: USER_CREATOR_BASIC,
+          netAmount: 10,
+        }),
+      ).not.toBeNull();
+    });
+
     it('refuses a non-boolean new switch', async () => {
       await patch(basicToken, { moneyIn: 'no' }).expect(400);
       await patch(basicToken, { contentReviews: 1 }).expect(400);
+      await patch(basicToken, { communityMessages: 'yes' }).expect(400);
+      await patch(basicToken, { communityMessages: 0 }).expect(400);
+      await patch(basicToken, { communityMessages: [true] }).expect(400);
     });
 
     it('a user with no row at all reads the old defaults with no new keys', async () => {
@@ -342,6 +420,7 @@ describe('Notification switches (contract, SETTINGS-07)', () => {
       });
       expect(created.moneyIn).toBeNull();
       expect(created.contentReviews).toBeNull();
+      expect(created.communityMessages).toBeNull();
     });
   });
 

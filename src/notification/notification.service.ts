@@ -78,6 +78,10 @@ const SETTINGS_GATE: Partial<
   sale: 'moneyIn',
   content_published: 'contentReviews',
   content_rejected: 'contentReviews',
+  // `communityMessages` is stored (Settings saves it) but gates NOTHING yet:
+  // no community message notification kind or sender exists. The task that
+  // adds that kind (and any other new kind) must add its entry here, or the
+  // switch can never mute it.
 };
 
 /**
@@ -114,6 +118,7 @@ const SETTINGS_DEFAULTS: Record<
   // NULL = never asked = ON (see the schema). Only an explicit false mutes.
   moneyIn: null,
   contentReviews: null,
+  communityMessages: null,
 };
 
 @Injectable()

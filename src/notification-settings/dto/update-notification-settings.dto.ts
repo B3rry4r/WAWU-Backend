@@ -39,4 +39,9 @@ export class UpdateNotificationSettingsDto {
   @IsOptional()
   @IsBoolean()
   contentReviews?: boolean;
+
+  /** Community messages (SETTINGS-07). Optional; absent leaves it as it is. Stored only: nothing sends that kind yet. */
+  @IsOptional()
+  @IsBoolean()
+  communityMessages?: boolean;
 }
