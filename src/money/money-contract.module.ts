@@ -3,7 +3,7 @@ import { MoneyHistoryController } from './money-history.controller';
 import { MoneyPaymentController } from './money-payment.controller';
 import { MoneyTransferController } from './money-transfer.controller';
 import {
-  MoneyPinController,
+  MoneyPinResetController,
   MoneyWalletController,
 } from './money-wallet.controller';
 
@@ -16,12 +16,13 @@ import {
  * served routes, marked `x-wawu-served: false`. A task that serves one of
  * these routes moves that handler into a controller a mounted module owns
  * and deletes it here in the same change; the emitter refuses a route that
- * is declared here and served as well.
+ * is declared here and served as well. Served so far: the transaction PIN
+ * (MONEY-09, MoneyModule).
  */
 @Module({
   controllers: [
     MoneyWalletController,
-    MoneyPinController,
+    MoneyPinResetController,
     MoneyTransferController,
     MoneyPaymentController,
     MoneyHistoryController,

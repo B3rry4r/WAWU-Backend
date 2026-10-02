@@ -4,21 +4,15 @@ import {
   Get,
   HttpCode,
   Post,
-  Put,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
-import {
-  ChangePinDto,
-  ConfirmPinResetDto,
-  SetPinDto,
-} from './dto/money-request.dto';
+import { ConfirmPinResetDto } from './dto/money-request.dto';
 import {
   BuiltBy,
   declaredOnly,
   MoneyErrors,
-  TransactionPinHeader,
   WALLET_GATE_ERRORS,
 } from './money-contract';
 import type {
@@ -63,63 +57,15 @@ export class MoneyWalletController {
   }
 }
 
-/** The transaction PIN (MONEY-09) and its reset by a code to the phone (MONEY-14). */
+/**
+ * Reset of the transaction PIN by a code to the phone (MONEY-14). The PIN
+ * itself (GET, POST and PUT /money/pin, POST /money/pin/verify) is served by
+ * MONEY-09 in src/money/pin/money-pin.controller.ts.
+ */
 @ApiBearerAuth('wawu-id')
 @UseGuards(WawuAuthGuard)
 @Controller('money')
-export class MoneyPinController {
-  /** Is a PIN set, when it last changed, tries left, and the lock if any. */
-  @Get('pin')
-  @BuiltBy('MONEY-09')
-  @MoneyErrors(...WALLET_GATE_ERRORS)
-  state(): Promise<PinStateView> {
-    return declaredOnly('MONEY-09');
-  }
-
-  /** Set the first PIN (A9, A10, W36). Both entries in one request; a difference is pin_mismatch. */
-  @Post('pin')
-  @BuiltBy('MONEY-09')
-  @MoneyErrors(...WALLET_GATE_ERRORS, 'pin_already_set', 'pin_mismatch')
-  set(@Body() dto: SetPinDto): Promise<PinStateView> {
-    return declaredOnly('MONEY-09', dto);
-  }
-
-  /** Change the PIN. The current PIN is X-Transaction-Pin. */
-  @Put('pin')
-  @BuiltBy('MONEY-09')
-  @TransactionPinHeader()
-  @MoneyErrors(
-    ...WALLET_GATE_ERRORS,
-    'pin_required',
-    'pin_not_set',
-    'pin_incorrect',
-    'pin_locked',
-    'pin_mismatch',
-  )
-  change(@Body() dto: ChangePinDto): Promise<PinStateView> {
-    return declaredOnly('MONEY-09', dto);
-  }
-
-  /**
-   * Check the PIN without moving money, for a screen that must confirm the
-   * person before it changes something. A wrong PIN counts toward the lock
-   * exactly as it does on a debit.
-   */
-  @Post('pin/verify')
-  @HttpCode(200)
-  @BuiltBy('MONEY-09')
-  @TransactionPinHeader()
-  @MoneyErrors(
-    ...WALLET_GATE_ERRORS,
-    'pin_required',
-    'pin_not_set',
-    'pin_incorrect',
-    'pin_locked',
-  )
-  verify(): Promise<PinStateView> {
-    return declaredOnly('MONEY-09');
-  }
-
+export class MoneyPinResetController {
   /** Forgot PIN (W37): send a code to the phone on file. Answers again with a new code once resendAvailableAt has passed. */
   @Post('pin/reset')
   @BuiltBy('MONEY-14')

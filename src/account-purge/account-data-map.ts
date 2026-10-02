@@ -143,6 +143,9 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'WalletWithdrawal', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'WalletLedgerEntry', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'CreatorWallet', column: 'wawuUserId', disposition: 'OWNED' },
+  // The transaction PIN (MONEY-09): a hash of this person's own secret and
+  // their wrong-try count. Nothing else references it, so it goes with them.
+  { model: 'TransactionPin', column: 'wawuUserId', disposition: 'OWNED' },
 
   // Last: everything above may reference these.
   { model: 'CreatorState', column: 'wawuUserId', disposition: 'OWNED' },

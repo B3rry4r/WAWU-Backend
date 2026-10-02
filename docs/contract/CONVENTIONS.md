@@ -71,6 +71,14 @@ module AppModule mounts (importing a new module into `app.module.ts` is a
 `x-wawu-served: false`. The mobile app must not treat a route marked
 `x-wawu-served: false` as live.
 
+**Served so far** (`MoneyModule`, `src/money/money.module.ts`, mounted by
+AppModule since MONEY-09): `GET`, `POST` and `PUT /money/pin` and
+`POST /money/pin/verify`. A served route and a declared one may share a
+schema (the error envelope, the PIN DTOs); the emitter keeps one copy when
+the two are identical and still fails when they differ. A task that serves
+more routes adds them to `SERVED_MONEY_ROUTES` in
+`src/money/tests/money-contract.spec.ts`.
+
 ---
 
 ## 1. Money is integer kobo
@@ -270,12 +278,23 @@ blindly: it stays `pending` until MONEY-08 has asked Fintava what happened.
   `pin`, `pinConfirmation`, `newPin`, `newPinConfirmation` and `code` fields.
   The PIN is stored only as a slow hash (`argon2`, already a dependency) by
   MONEY-09 and is never in a response.
-- **Checked** after the token and validation, before the quote, the balance
-  and the limit. Missing: `403 pin_required`. Not set: `409 pin_not_set`.
-  Wrong: `403 pin_incorrect` with `triesLeft`. After 5 wrong tries in a row
-  (MONEY-09): `423 pin_locked` with `lockedUntil`; the lock's length is
-  MONEY-09's config. A right PIN resets the count; a reset by code
+- **Checked** after the token, before the quote, the balance and the limit,
+  by `TransactionPinGuard` (`@RequireTransactionPin()`, `src/money/pin/`,
+  MONEY-09). Nest runs guards before pipes, so the PIN is checked before the
+  body is validated: a malformed body with a wrong PIN still uses a try.
+  Missing, sent twice, or not four digits: `403 pin_required`, and no try is
+  used. Not set: `409 pin_not_set`. Wrong: `403 pin_incorrect` with
+  `triesLeft` (4, 3, 2, 1). The fifth wrong try in a row answers
+  `423 pin_locked` with `lockedUntil` (not "0 tries left"), and so does every
+  try until then, the right PIN included. The lock lasts `PIN_LOCK_MINUTES`
+  (config, provisional 30). A try is counted before the hash is compared, so
+  tries sent at the same moment cannot get past five together. A right PIN
+  resets the count; so does the end of a lock; a reset by code
   (`/money/pin/reset/confirm`, MONEY-14) clears the lock.
+- **The guard removes the header** from the request once read (`headers` and
+  `rawHeaders`), so nothing that runs after it can log or report it. An
+  idempotent replay must not check the PIN again (section 4, rule 3), so
+  whatever answers replays runs before the guard.
 - **Fintava has no wallet PIN** (only card PINs), so this PIN guards WAWU's
   API, not the account at Fintava.
 - **Face ID** (W11, W35) is MONEY-14's: a biometric approval on a registered

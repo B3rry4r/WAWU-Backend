@@ -6,17 +6,30 @@ import { MoneyContractModule } from '../money-contract.module';
 import { MONEY_ERROR_CODES } from '../dto/money-enums';
 import { MONEY_ERROR_STATUS } from '../money-contract';
 import { WalletController } from '../../wallet/wallet.controller';
+import { MoneyPinController } from '../pin/money-pin.controller';
 
 /**
- * THE NAIRA WALLET CONTRACT IS DECLARED, NEVER SERVED (task MONEY-04).
+ * THE NAIRA WALLET CONTRACT IS DECLARED BEFORE IT IS SERVED (task MONEY-04).
  *
  * These routes exist so the mobile app can generate its types before the
- * Fintava client does. If one of them were reachable it would answer every
+ * Fintava client does. If a declared one were reachable it would answer every
  * request with a thrown declaration, and a debit route answering 500 is a
  * money incident. So: nothing AppModule mounts may include the contract
  * module or any of its controllers, and contract/openapi.json must mark
  * every declared operation as not served and name the task that serves it.
+ *
+ * A task that serves routes adds them to SERVED_MONEY_ROUTES below, and the
+ * tests then hold the other side too: each of those is mounted, carries no
+ * "not served" marker, and still names its task.
  */
+
+/** Money routes a mounted module serves, and the task that serves each. */
+const SERVED_MONEY_ROUTES: Record<string, string> = {
+  'GET /api/hub/money/pin': 'MONEY-09',
+  'POST /api/hub/money/pin': 'MONEY-09',
+  'PUT /api/hub/money/pin': 'MONEY-09',
+  'POST /api/hub/money/pin/verify': 'MONEY-09',
+};
 
 type ModuleRef =
   | { module?: unknown; forwardRef?: () => unknown }
@@ -67,6 +80,8 @@ describe('money contract (MONEY-04)', () => {
           []) as unknown[],
     );
     expect(allMounted).toContain(WalletController);
+    // The served PIN routes (MONEY-09) are mounted.
+    expect(allMounted).toContain(MoneyPinController);
 
     const declared = new Set(
       (Reflect.getMetadata(MODULE_METADATA.CONTROLLERS, MoneyContractModule) ??
@@ -115,6 +130,7 @@ describe('money contract (MONEY-04)', () => {
 
     it('marks every declared money route as not served, with the task that serves it', () => {
       for (const { route, op } of moneyOps) {
+        if (route in SERVED_MONEY_ROUTES) continue;
         expect({ route, served: op['x-wawu-served'] }).toEqual({
           route,
           served: false,
@@ -122,6 +138,32 @@ describe('money contract (MONEY-04)', () => {
         expect({ route, builtBy: typeof op['x-wawu-built-by'] }).toEqual({
           route,
           builtBy: 'string',
+        });
+      }
+    });
+
+    it('marks no served money route as declared, and names its task', () => {
+      const routes = new Set(moneyOps.map(({ route }) => route));
+      for (const route of Object.keys(SERVED_MONEY_ROUTES)) {
+        expect({ route, present: routes.has(route) }).toEqual({
+          route,
+          present: true,
+        });
+      }
+      for (const { route, op } of moneyOps) {
+        if (!(route in SERVED_MONEY_ROUTES)) continue;
+        expect({
+          route,
+          served: op['x-wawu-served'],
+          builtBy: op['x-wawu-built-by'],
+          declaredNote:
+            typeof op.description === 'string' &&
+            op.description.includes('not served'),
+        }).toEqual({
+          route,
+          served: undefined,
+          builtBy: SERVED_MONEY_ROUTES[route],
+          declaredNote: false,
         });
       }
     });
@@ -204,6 +246,28 @@ describe('money contract (MONEY-04)', () => {
         expect({ route, headers }).toEqual({
           route,
           headers: ['Idempotency-Key', 'X-Transaction-Pin'],
+        });
+      }
+    });
+
+    it('requires X-Transaction-Pin to change or check the PIN', () => {
+      for (const route of [
+        'PUT /api/hub/money/pin',
+        'POST /api/hub/money/pin/verify',
+      ]) {
+        const op = moneyOps.find((o) => o.route === route)?.op;
+        const headers = (
+          (op?.parameters ?? []) as Array<{
+            in: string;
+            name: string;
+            required?: boolean;
+          }>
+        )
+          .filter((p) => p.in === 'header' && p.required)
+          .map((p) => p.name);
+        expect({ route, headers }).toEqual({
+          route,
+          headers: ['X-Transaction-Pin'],
         });
       }
     });

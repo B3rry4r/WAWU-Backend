@@ -67,6 +67,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { SchedulerModule } from './scheduler/scheduler.module';
 import { AccountPurgeModule } from './account-purge/account-purge.module';
 import { WalletModule } from './wallet/wallet.module';
+import { MoneyModule } from './money/money.module';
 import { PaymentWebhookModule } from './payment-webhook/payment-webhook.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
@@ -323,6 +324,11 @@ import { APP_GUARD } from '@nestjs/core';
     EventModule,
     EventTicketingModule,
     ShopModule,
+    // The Naira wallet's served routes (task MONEY-09 first: the transaction
+    // PIN). `@Controller('money')` is a first segment nothing else declares,
+    // so it can neither shadow nor be shadowed wherever it sits. The declared,
+    // unserved half (MoneyContractModule) is never imported here.
+    MoneyModule,
     // LAST on purpose. PaymentWebhookModule imports every money module so it
     // can reuse their /verify settlement, and every one of them is already
     // registered above — Nest dedupes, so the load-bearing controller order
