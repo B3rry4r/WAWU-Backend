@@ -48,6 +48,12 @@ export const FINTAVA_CONFIG_KEYS = {
   moneyTimeoutMs: 'FINTAVA_MONEY_TIMEOUT_MS',
   checkTimeoutMs: 'FINTAVA_CHECK_TIMEOUT_MS',
   resendSafetyMs: 'FINTAVA_RESEND_SAFETY_MS',
+  /**
+   * The dashboard's webhook secret: the HMAC-SHA512 key of
+   * `x-fintava-signature` (MONEY-07, src/fintava/webhook/). Read on every
+   * delivery; unset means every delivery is refused.
+   */
+  webhookSecret: 'FINTAVA_WEBHOOK_SECRET',
 } as const;
 
 /** Everything the client needs except the key, which is kept apart. */

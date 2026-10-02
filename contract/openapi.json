@@ -19996,6 +19996,28 @@
         ]
       }
     },
+    "/api/hub/webhooks/fintava": {
+      "post": {
+        "operationId": "FintavaWebhookController_receive",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FintavaWebhookAck"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Records one Fintava delivery and acknowledges it. Fintava's webhook,\nnever called by an app. The body is untyped on purpose: the global\nValidationPipe forbids unknown fields, and Fintava's payloads differ by\nevent and are not all published, so a DTO would refuse real deliveries.\nThe signature is checked over the raw bytes before this runs.",
+        "tags": [
+          "PaymentWebhook"
+        ]
+      }
+    },
     "/api/hub/money/wallet": {
       "get": {
         "operationId": "MoneyWalletController_wallet",
@@ -32336,6 +32358,26 @@
         "required": [
           "uploadUrl",
           "key"
+        ]
+      },
+      "FintavaWebhookAck": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "duplicate",
+              "recorded"
+            ]
+          },
+          "event": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "outcome",
+          "event"
         ]
       },
       "FeeBreakdown": {
