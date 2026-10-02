@@ -136,7 +136,10 @@ host, or if `CARDEX_API_KEY` is not a `cdx_test_` key. It reads the `.env`
 files with dotenv, exactly as the services do, so `export KEY=...`, indented
 lines and a later duplicate line are all seen. It also ignores any of those
 variables exported in your terminal (`DATABASE_URL`, `PORT` and the rest),
-so one left over from another project cannot redirect it.
+and any `DOTENV_CONFIG_*` or `DOTENV_KEY` (which would make Prisma load a
+different file), and it hands every migrate, seed and service the
+`DATABASE_URL` it has just checked. A variable left over from another
+project cannot redirect it.
 
 ## 5. Check it works
 
@@ -315,10 +318,12 @@ scripts/local/up.sh
 ```
 
 **Regenerating a `.env`.** Delete one or both and run `up.sh`. A file written
-next to a surviving one copies what must match from it (the shared service
-key, both ports), so deleting only `wawu-id/.env` or only
-`wawu-backend/.env` is safe. What it cannot recover is a database name you
-had changed: pass `HUB_DB` / `ID_DB` again on that run. To go back to every
+next to a surviving one copies what must match from it: the shared service
+key, both ports, and the Postgres server with its user and password (unless
+you give `LOCAL_PG_URL` on that run, which wins). So deleting only
+`wawu-id/.env` or only `wawu-backend/.env` is safe. What it cannot recover is
+the deleted file's database name if you had changed it: pass `HUB_DB` /
+`ID_DB` again on that run. To go back to every
 default, delete both. The keypair in `wawu-id/keys/` is reused unless you
 delete it too.
 

@@ -27,6 +27,12 @@ STATE_DIR="$HUB_DIR/.local"
 LOG_DIR="$STATE_DIR/logs"
 DETACH=0
 
+# dotenv/config (which both repos' prisma.config.ts import) obeys
+# DOTENV_CONFIG_PATH, DOTENV_CONFIG_OVERRIDE and friends. One left in the
+# shell would make Prisma load some other file, possibly a remote
+# DATABASE_URL, after every check below had passed. Nothing here needs them.
+for v in $(compgen -e | grep -E '^DOTENV_' || true); do unset "$v"; done
+
 # What the caller set explicitly, before any default fills in.
 GIVEN_PG="${LOCAL_PG_URL:-}"
 GIVEN_HUB_DB="${HUB_DB:-}"
@@ -63,6 +69,8 @@ env_update() { # file label key value(as written) value(as read)
 
 url_host() { node -e 'try { console.log(new URL(process.argv[1]).hostname.toLowerCase()) } catch { console.log("") }' "$1"; }
 url_port() { node -e 'try { const u = new URL(process.argv[1]); console.log(u.port || "") } catch { console.log("") }' "$1"; }
+# The server part of a Postgres URL (credentials, host, port), without the database.
+url_server() { node -e 'try { const u = new URL(process.argv[1]); console.log(u.protocol + "//" + (u.username ? u.username + (u.password ? ":" + u.password : "") + "@" : "") + u.host) } catch { console.log("") }' "$1"; }
 url_db()   { node -e 'try { console.log(decodeURIComponent(new URL(process.argv[1]).pathname.replace(/^\//, ""))) } catch { console.log("") }' "$1"; }
 # pg lets ?host= / ?hostaddr= override the host in the URL; treat either as remote.
 url_has_host_param() { node -e 'try { const p = new URL(process.argv[1]).searchParams; process.exit(p.has("host") || p.has("hostaddr") ? 0 : 1) } catch { process.exit(1) }' "$1"; }
@@ -128,6 +136,10 @@ fi
 # agree with the survivor: same shared service key, same ports. Deleting
 # either file (or both) and rerunning is always safe.
 if [[ ! -f "$ID_ENV" ]]; then
+  # Same Postgres server (and credentials) as the surviving hub .env.
+  if [[ -z "$GIVEN_PG" && -f "$HUB_ENV" ]]; then
+    survivor="$(url_server "$(env_get "$HUB_ENV" DATABASE_URL)")"; if [[ -n "$survivor" ]]; then PG_URL="$survivor"; fi
+  fi
   say "Writing $ID_ENV (local values only)"
   SERVICE_KEY=""; W_ID_PORT="$GIVEN_ID_PORT"; W_HUB_PORT="$GIVEN_HUB_PORT"
   if [[ -f "$HUB_ENV" ]]; then
@@ -161,6 +173,10 @@ fi
 
 # ---------------------------------------------------------------- hub .env
 if [[ ! -f "$HUB_ENV" ]]; then
+  # Same Postgres server (and credentials) as the wawu-id .env.
+  if [[ -z "$GIVEN_PG" ]]; then
+    survivor="$(url_server "$(env_get "$ID_ENV" DATABASE_URL)")"; if [[ -n "$survivor" ]]; then PG_URL="$survivor"; fi
+  fi
   say "Writing $HUB_ENV from .env.example (local values only)"
   W_ID_PORT="${GIVEN_ID_PORT:-$(env_get "$ID_ENV" PORT)}"
   W_HUB_PORT="${GIVEN_HUB_PORT:-$(url_port "$(env_get "$ID_ENV" WAWUAFRICA_API_URL)")}"
@@ -240,13 +256,13 @@ port_in_use "$HUB_PORT" && die "Port $HUB_PORT (Hub API) is already in use. Stop
 
 # ---------------------------------------------------------------- migrate, seed, build
 say "wawu-id: migrating $(url_db "$ID_DB_URL") (created if missing)"
-run_logged id-migrate "$ID_DIR" sh -c 'npx prisma generate && npx prisma migrate deploy'
+run_logged id-migrate "$ID_DIR" env DATABASE_URL="$ID_DB_URL" sh -c 'npx prisma generate && npx prisma migrate deploy'
 say "Hub API: migrating $(url_db "$HUB_DB_URL") (created if missing)"
-run_logged hub-migrate "$HUB_DIR" sh -c 'npx prisma generate && npx prisma migrate deploy'
+run_logged hub-migrate "$HUB_DIR" env DATABASE_URL="$HUB_DB_URL" sh -c 'npx prisma generate && npx prisma migrate deploy'
 
 
 say "Seeding the Hub (prisma/seed.ts) and the same three accounts in wawu-id"
-run_logged hub-seed "$HUB_DIR" npx prisma db seed
+run_logged hub-seed "$HUB_DIR" env DATABASE_URL="$HUB_DB_URL" npx prisma db seed
 run_logged id-seed "$HUB_DIR" env WAWU_ID_DATABASE_URL="$ID_DB_URL" node scripts/local/seed-wawu-id.js
 
 say "Building wawu-id and the Hub API"
@@ -254,9 +270,9 @@ run_logged id-build "$ID_DIR" npm run build
 run_logged hub-build "$HUB_DIR" npm run build
 
 # ---------------------------------------------------------------- start
-start() { # name dir entry
-  local name="$1" dir="$2" entry="$3"
-  (cd "$dir" && exec node "$entry") > "$LOG_DIR/$name.log" 2>&1 &
+start() { # name dir entry database-url
+  local name="$1" dir="$2" entry="$3" db="$4"
+  (cd "$dir" && export DATABASE_URL="$db" && exec node "$entry") > "$LOG_DIR/$name.log" 2>&1 &
   echo $! > "$STATE_DIR/$name.pid"
 }
 
@@ -286,10 +302,10 @@ stop_all() {
 if (( DETACH == 0 )); then trap 'stop_all' EXIT; trap 'exit 130' INT TERM; fi
 
 say "Starting wawu-id on :$ID_PORT"
-start wawu-id "$ID_DIR" dist/main.js
+start wawu-id "$ID_DIR" dist/main.js "$ID_DB_URL"
 wait_healthy wawu-id "http://localhost:$ID_PORT/health" "$STATE_DIR/wawu-id.pid"
 say "Starting the Hub API on :$HUB_PORT"
-start hub-api "$HUB_DIR" dist/src/main.js
+start hub-api "$HUB_DIR" dist/src/main.js "$HUB_DB_URL"
 wait_healthy hub-api "http://localhost:$HUB_PORT/api/hub/health" "$STATE_DIR/hub-api.pid"
 
 LAN_IP="$( (ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}') | head -n 1 || true)"
