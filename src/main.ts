@@ -4,13 +4,16 @@ import helmet from 'helmet';
 import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
-import { HUB_APP_OPTIONS } from './hub-app-options';
+import { applyHubHttpSettings, HUB_APP_OPTIONS } from './hub-app-options';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 
 async function bootstrap() {
   // rawBody: true, for the Fintava webhook signature (src/hub-app-options.ts).
   const app = await NestFactory.create(AppModule, HUB_APP_OPTIONS);
+  // `trust proxy`: one nginx hop on loopback, so the rate limits count each
+  // caller, not nginx (src/hub-app-options.ts, task OPS-11).
+  applyHubHttpSettings(app);
 
   app.use(helmet());
   app.use(compression());

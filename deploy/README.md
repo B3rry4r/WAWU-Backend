@@ -18,6 +18,14 @@ for object storage. Auto-deploy on push to `main`.
 Ports 3001/3002 are **not** open to the internet. `ufw` allows SSH and nginx
 only, so both services are reachable through nginx or not at all.
 
+The Hub API's rate limits (20/s and 200/min per caller) count each caller by
+the address nginx puts last in `X-Forwarded-For`. The app trusts exactly one
+hop, and only from a loopback peer (`hubTrustProxy` in
+`src/hub-app-options.ts`, task OPS-11), so a request that reaches the port any
+other way is counted by its own address and its header is ignored. Putting a
+CDN or load balancer in front of nginx adds a hop: change that setting with it,
+or every caller shares the CDN's buckets.
+
 ---
 
 ## Order of operations
