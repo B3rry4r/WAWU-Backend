@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { NotificationService } from '../notification/notification.service';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type {
   Community,
@@ -46,7 +47,10 @@ import type { UpdateCommunityDto } from './dto/update-community.dto';
  */
 @Injectable()
 export class CommunityService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationService,
+  ) {}
 
   /** Start of "today" in UTC, per the task brief's derivation rule for `messagesToday`. */
   private startOfTodayUtc(): Date {
@@ -56,9 +60,8 @@ export class CommunityService {
     );
   }
 
-  private async withDerivedFields(
-    community: Community,
-  ): Promise<CommunityResponse> {
+  /** Public so the rooms routes (INBOX-01) answer with the same counts. */
+  async withDerivedFields(community: Community): Promise<CommunityResponse> {
     const startOfToday = this.startOfTodayUtc();
     const [memberCount, messagesToday] = await this.prisma.$transaction([
       this.prisma.communityMembership.count({
@@ -319,10 +322,10 @@ export class CommunityService {
     id: string,
     actorWawuId: string,
     action: string,
-  ): Promise<{ id: string; hostWawuId: string }> {
+  ): Promise<{ id: string; hostWawuId: string; name: string }> {
     const community = await this.prisma.community.findUnique({
       where: { id },
-      select: { id: true, hostWawuId: true },
+      select: { id: true, hostWawuId: true, name: true },
     });
     if (!community) {
       throw new NotFoundException('Community not found');
@@ -425,7 +428,11 @@ export class CommunityService {
     hostWawuId: string,
     userWawuId: string,
   ): Promise<CommunityMembership> {
-    await this.assertHost(id, hostWawuId, 'review join requests for');
+    const community = await this.assertHost(
+      id,
+      hostWawuId,
+      'review join requests for',
+    );
 
     const membership = await this.prisma.communityMembership.findUnique({
       where: { userWawuId_communityId: { userWawuId, communityId: id } },
@@ -439,10 +446,20 @@ export class CommunityService {
       return membership;
     }
 
-    return this.prisma.communityMembership.update({
+    const approved = await this.prisma.communityMembership.update({
       where: { id: membership.id },
       data: { status: 'joined', joinedAt: new Date() },
     });
+    // INBOX-01: tell the person who asked. Only here, on the real
+    // pending -> joined change: the no-op approval above sends nothing, so a
+    // double tap never notifies twice. emit() never throws.
+    await this.notifications.emit({
+      kind: 'community_join_approved',
+      userWawuId,
+      communityId: community.id,
+      communityName: community.name,
+    });
+    return approved;
   }
 
   /**
@@ -469,8 +486,8 @@ export class CommunityService {
    *  3. Re-requesting after a decline is the established real-world
    *     behaviour for exactly this interaction (a declined follow request
    *     on a private account can be sent again), and the cost is bounded:
-   *     the requester learns nothing (no notification exists either way)
-   *     and the host declines again.
+   *     the requester is told it was declined (INBOX-01) and the host
+   *     declines again.
    *
    * The trade this accepts, stated plainly: a declined user can immediately
    * request again, and the host cannot see that they were declined before.
@@ -491,7 +508,11 @@ export class CommunityService {
     hostWawuId: string,
     userWawuId: string,
   ): Promise<{ declined: true }> {
-    await this.assertHost(id, hostWawuId, 'review join requests for');
+    const community = await this.assertHost(
+      id,
+      hostWawuId,
+      'review join requests for',
+    );
 
     const membership = await this.prisma.communityMembership.findUnique({
       where: { userWawuId_communityId: { userWawuId, communityId: id } },
@@ -505,6 +526,14 @@ export class CommunityService {
     if (membership) {
       await this.prisma.communityMembership.delete({
         where: { id: membership.id },
+      });
+      // INBOX-01: the requester hears the answer (I31, "We'll let you know
+      // when she answers"). Only when a request was actually removed, so a
+      // repeat decline from a stale queue sends nothing.
+      await this.notifications.emit({
+        kind: 'community_join_declined',
+        userWawuId,
+        communityName: community.name,
       });
     }
     return { declined: true };

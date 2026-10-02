@@ -21,5 +21,7 @@ import { WawuAuthModule } from '../common/auth/wawu-auth.module';
   imports: [NotificationModule, CreditSpendModule, WawuAuthModule],
   controllers: [CommunityMessageController],
   providers: [CommunityMessageService],
+  // CommunityModule's "my communities" (INBOX-01) reuses lookupSenders.
+  exports: [CommunityMessageService],
 })
 export class CommunityMessageModule {}

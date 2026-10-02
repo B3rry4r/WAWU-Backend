@@ -744,9 +744,41 @@ model Community {
   memberships  CommunityMembership[]
   messages     CommunityMessage[]
   creditSpends CreditSpend[]
+  /// INBOX-01. Relation fields only: no column is added to Community.
+  link         CommunityLink?
+  readMarkers  CommunityReadMarker[]
 
   @@index([hostWawuId])
   @@index([kind])
+}
+
+/// INBOX-01. A community's share link, written `wawu/c/<slug>`.
+///
+/// A side table rather than a `slug` column on Community: every Community
+/// response is the model spread (protected-registry H-1), so a new column
+/// would appear in five responses the web calls. The slug is made from the
+/// name the first time a link is asked for (or when the app creates a room)
+/// and never changes after that, so a shared link keeps working through a
+/// rename.
+model CommunityLink {
+  communityId String    @id
+  community   Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  slug        String    @unique
+  createdAt   DateTime  @default(now())
+}
+
+/// INBOX-01. How far a person has read in a community, for the unread count
+/// on "my communities". Keyed by person and community, not a column on
+/// CommunityMembership, because a host has no membership row (host implies
+/// member) and still has unread messages in their own room.
+model CommunityReadMarker {
+  userWawuId  String
+  communityId String
+  community   Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  lastReadAt  DateTime
+
+  @@id([userWawuId, communityId])
+  @@index([communityId])
 }
 
 model CommunityMembership {
@@ -1010,9 +1042,11 @@ model Notification {
   /// ("/explore", "/profile/verification"). Only the campaign and reminder
   /// kinds set it: every transactional kind is routed by `kind` on the client
   /// (actionHrefFor), because its destination is a property of the event and
-  /// must not be something an admin can retarget.
+  /// must not be something an admin can retarget. INBOX-01 adds one more:
+  /// `community_join_approved` opens `/communities/<id>`, built by the server
+  /// from the room's id (src/notification/notification-event.ts).
   ///
-  /// Validated against a fixed allowlist before it is written - see
+  /// A campaign's is validated against a fixed allowlist before it is written - see
   /// src/admin/notifications/campaign-destination.ts. An open redirect in a
   /// notification that lands on every account at once is not a small bug.
   actionHref String?
