@@ -18291,6 +18291,7 @@
             }
           }
         },
+        "summary": "The caller's communities: rooms they host and rooms they were let into,\nnewest activity first, each with its share link, last message and unread\ncount. A request still waiting for the host is not listed.",
         "tags": [
           "CommunityRooms"
         ]
@@ -18322,7 +18323,7 @@
             }
           }
         },
-        "summary": "Creator accounts only, like POST /communities.",
+        "summary": "Create a room, the way the app does. Creator accounts only, like\nPOST /communities. A private room needs a cover image (`imageUrl`):\nwithout one the answer is 400 \"A private room needs a cover image.\".\nThe answer carries the room's share link.",
         "tags": [
           "CommunityRooms"
         ]
@@ -18353,6 +18354,7 @@
             }
           }
         },
+        "summary": "Open a `wawu/c/<slug>` link: the room it names, members or not. Capitals\nare accepted. 404 \"No community has this link.\" otherwise.",
         "tags": [
           "CommunityRooms"
         ]
@@ -18383,6 +18385,7 @@
             }
           }
         },
+        "summary": "The room's share link, made from its name the first time it is asked for.",
         "tags": [
           "CommunityRooms"
         ]
@@ -18413,7 +18416,7 @@
             }
           }
         },
-        "summary": "200, not 201: it moves a marker, it creates nothing the caller sees.",
+        "summary": "The caller has read the room up to now; its unread count on\nGET /communities/mine goes to 0. The host or an approved member only\n(403 otherwise). 200, not 201: it moves a marker.",
         "tags": [
           "CommunityRooms"
         ]
