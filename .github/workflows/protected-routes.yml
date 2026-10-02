@@ -1,0 +1,141 @@
+name: Protected routes (V3)
+
+# MONEY-01. Nothing the live web app or the admin dashboard uses may change
+# behaviour while this backend grows.
+#
+# The suite also runs inside deploy.yml's `npx jest` step, but there it is the
+# branch's own copy of the suite and the lock, which a branch can edit. This
+# job holds a pull request to the BASE branch's checker:
+#
+#   - The base branch is checked out into ./base and the pull request's head
+#     into ./pr, both without persisted credentials. The head is fetched into
+#     ./base as objects; of the pull request, only the code under test runs.
+#   - scripts/protected-routes/ci-check.sh, run.sh, lock-diff.py and the suite
+#     (src/ and test/protected-routes, the registry) all come from the base.
+#     run.sh also writes its own jest config and checks that every locked entry
+#     ran, so a jest setting in the pull request's package.json does not
+#     exclude the suite.
+#   - A pull request that changes the lock or any checker file is checked
+#     against the base's lock (and fails if its code no longer matches it)
+#     unless the owner applied the `relock-approved` label AFTER its latest
+#     push: only the run triggered by that `labeled` event counts it, and any
+#     later push is a `synchronize` run that does not. The lock diff is in the
+#     job summary either way.
+#   - The pull request that introduces the suite is checked against its own
+#     (the base has none yet).
+#   - What a pull request changed is measured from its merge base with the
+#     base branch. Code outside the checker that names it (the suite, the
+#     shape comparison, the registry) fails the check unless the owner approved.
+#
+# Scope: this catches accidental breakage and accidental or casual edits to
+# the lock and the checker. The pull request's own code still runs (seed
+# scripts, prisma.config.ts, the app), so deliberate tampering is not blocked
+# here; it is visible in the diff and caught by review.
+#
+# On `pull_request` GitHub runs the workflow FILE from the pull request, so
+# this file is protected by CODEOWNERS and by making the job a required check
+# (README, "Protected route suite": repository settings, not code).
+# deploy.yml is untouched: this runs on pull requests only.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: protected-routes-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  v3:
+    name: Protected route suite against the base branch's checker and lock
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports: ['5432:5432']
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/wawu_hub_protected_test?schema=public
+      WAWU_ID_BASE_URL: http://localhost:4001
+      WAWU_ID_JWKS_URL: http://localhost:4001/.well-known/jwks.json
+      ADMIN_JWT_SECRET: ci-only-admin-secret-not-a-real-one-000000
+      ADMIN_JWT_REFRESH_SECRET: ci-only-admin-refresh-secret-not-a-real-one-0
+      # 1 only on the run the owner's label itself triggered (see above).
+      RELOCK_APPROVED: ${{ (github.event.action == 'labeled' && github.event.label.name == 'relock-approved') && '1' || '0' }}
+
+    steps:
+      - name: Check out the BASE branch (the checker)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out the pull request's head commit (the code under test)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: pr
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bring the pull request's commits into the base checkout as objects
+        id: shas
+        working-directory: base
+        run: |
+          # A local fetch from ./pr: no credentials, nothing checked out.
+          git fetch --no-tags ../pr "+HEAD:refs/remotes/pr/head"
+          PR_SHA="$(git rev-parse refs/remotes/pr/head)"
+          test "$PR_SHA" = "${{ github.event.pull_request.head.sha }}"
+          echo "base=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "pr=$PR_SHA" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: base/package-lock.json
+
+      - name: Install the base's dependencies
+        working-directory: base
+        run: npm ci --no-audit --no-fund
+
+      - name: Start mock WAWU ID (the base's)
+        working-directory: base/mock-wawu-id
+        run: |
+          npm ci --no-audit --no-fund
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out private.pem -quiet
+          openssl rsa -in private.pem -pubout -out public.pem 2>/dev/null
+          nohup node server.js > /tmp/mock.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4001/health >/dev/null && echo "mock up" && exit 0
+            sleep 1
+          done
+          cat /tmp/mock.log >&2
+          exit 1
+
+      - name: Run the suite (base's checker, pull request's code)
+        working-directory: base
+        run: |
+          BASE_SHA='${{ steps.shas.outputs.base }}'
+          PR_SHA='${{ steps.shas.outputs.pr }}'
+          if git cat-file -e "$BASE_SHA:scripts/protected-routes/ci-check.sh" 2>/dev/null; then
+            git show "$BASE_SHA:scripts/protected-routes/ci-check.sh" > .protected-ci-check.sh
+          else
+            # Only the pull request that introduces the suite gets here.
+            git show "$PR_SHA:scripts/protected-routes/ci-check.sh" > .protected-ci-check.sh
+          fi
+          bash .protected-ci-check.sh "$BASE_SHA" "$PR_SHA" "$RELOCK_APPROVED"
