@@ -9739,7 +9739,7 @@
             }
           },
           "410": {
-            "description": "reason.code: shop_retired. WAWU Shop has closed and no longer takes orders. Orders you already placed are still in your purchases.",
+            "description": "reason.code: shop_retired. Shop has closed. Orders you already paid for are not affected.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9816,7 +9816,7 @@
             }
           },
           "410": {
-            "description": "reason.code: shop_retired. WAWU Shop has closed and no longer takes orders. Orders you already placed are still in your purchases.",
+            "description": "reason.code: shop_retired. Shop has closed. Orders you already paid for are not affected.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9884,7 +9884,7 @@
             }
           },
           "410": {
-            "description": "reason.code: shop_retired. WAWU Shop has closed and no longer takes orders. Orders you already placed are still in your purchases.",
+            "description": "reason.code: shop_retired. Shop has closed. Orders you already paid for are not affected.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9950,7 +9950,7 @@
             }
           },
           "410": {
-            "description": "reason.code: shop_retired. WAWU Shop has closed and no longer takes orders. Orders you already placed are still in your purchases.",
+            "description": "reason.code: shop_retired. Shop has closed. Orders you already paid for are not affected.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10027,7 +10027,7 @@
             }
           },
           "410": {
-            "description": "reason.code: shop_retired. WAWU Shop has closed and no longer takes orders. Orders you already placed are still in your purchases.",
+            "description": "reason.code: shop_retired. Shop has closed. Orders you already paid for are not affected.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10102,7 +10102,7 @@
             }
           },
           "410": {
-            "description": "reason.code: shop_retired. WAWU Shop has closed and no longer takes orders. Orders you already placed are still in your purchases.",
+            "description": "reason.code: shop_retired. Shop has closed. Orders you already paid for are not affected.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10170,7 +10170,7 @@
             }
           },
           "410": {
-            "description": "reason.code: shop_retired. WAWU Shop has closed and no longer takes orders. Orders you already placed are still in your purchases.",
+            "description": "reason.code: shop_retired. Shop has closed. Orders you already paid for are not affected.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10341,7 +10341,7 @@
             }
           },
           "410": {
-            "description": "reason.code: shop_retired. WAWU Shop has closed and no longer takes orders. Orders you already placed are still in your purchases.",
+            "description": "reason.code: shop_retired. Shop has closed. Orders you already paid for are not affected.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10515,7 +10515,7 @@
             }
           },
           "410": {
-            "description": "reason.code: shop_retired. WAWU Shop has closed, so products can no longer be added or changed. Orders already placed can still be read and dispatched.",
+            "description": "reason.code: shop_retired. Shop has closed, so products can no longer be added or changed. Orders already paid for can still be read and dispatched.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10621,7 +10621,7 @@
             }
           },
           "410": {
-            "description": "reason.code: shop_retired. WAWU Shop has closed, so products can no longer be added or changed. Orders already placed can still be read and dispatched.",
+            "description": "reason.code: shop_retired. Shop has closed, so products can no longer be added or changed. Orders already paid for can still be read and dispatched.",
             "content": {
               "application/json": {
                 "schema": {
@@ -19258,6 +19258,9 @@
                 }
               }
             }
+          },
+          "410": {
+            "description": "reason.code: shop_retired. The txRef is a Shop order: Shop is retired (R-2, OPS-08), so no new payment page is opened for it."
           }
         },
         "tags": [

@@ -302,7 +302,7 @@ describe('Shop retired: browsing answers 410', () => {
     );
   });
 
-  it('the message is plain: no em-dash, and it points at past orders', () => {
+  it('the message is plain: no em-dash, and it says past orders are not affected', () => {
     for (const message of [
       SHOP_RETIRED_MESSAGE,
       SHOP_CATALOGUE_RETIRED_MESSAGE,
@@ -310,7 +310,9 @@ describe('Shop retired: browsing answers 410', () => {
       expect(message).not.toMatch(/\u2014/);
       expect(message).toMatch(/[Oo]rders/);
     }
-    expect(SHOP_RETIRED_MESSAGE).toMatch(/purchases/);
+    // No screen shows a past Shop order today (web gated, mobile has none),
+    // so the sentence promises nothing about where one can be seen.
+    expect(SHOP_RETIRED_MESSAGE).not.toMatch(/purchases/);
   });
 });
 

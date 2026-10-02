@@ -8,6 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../common/prisma/prisma.service';
 import type { HostedLinkDto } from './dto/hosted-link.dto';
+import { shopRetired } from '../shop/shop-retired';
 
 /**
  * Flutterwave's HOSTED checkout, as an alternative to the inline modal.
@@ -88,7 +89,7 @@ export class PaymentLinkService {
    */
   private async resolveCharge(
     txRef: string,
-  ): Promise<{ amount: number; owner: string | null } | null> {
+  ): Promise<{ amount: number; owner: string | null; shop?: true } | null> {
     const pending = await this.prisma.pendingCharge.findUnique({ where: { txRef } });
     if (pending) return { amount: pending.expectedAmount, owner: pending.wawuUserId };
 
@@ -106,7 +107,8 @@ export class PaymentLinkService {
     if (credit) return { amount: credit.amount, owner: credit.userWawuId };
     if (bill) return { amount: bill.amount, owner: bill.buyerWawuId };
     if (order) return { amount: order.amountNaira, owner: order.buyerWawuId };
-    if (shop) return { amount: shop.totalNaira, owner: shop.buyerWawuId };
+    if (shop)
+      return { amount: shop.totalNaira, owner: shop.buyerWawuId, shop: true };
     return null;
   }
 
@@ -117,6 +119,12 @@ export class PaymentLinkService {
     if (!charge || (charge.owner !== null && charge.owner !== wawuUserId)) {
       throw new NotFoundException('No matching payment attempt was found.');
     }
+    // Shop is retired (R-2, OPS-08). A Shop order's txRef never gets a new
+    // payment page: a pending order from before the cutover cannot be charged
+    // now. A charge already opened before the cutover still settles through
+    // verify and the webhook. Checked after ownership, so somebody else's
+    // txRef stays a 404 and cannot be probed.
+    if (charge.shop) throw shopRetired();
 
     const amount = charge.amount;
 

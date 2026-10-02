@@ -27,10 +27,10 @@ import { ApiExtension, ApiGoneResponse } from '@nestjs/swagger';
 export const SHOP_RETIRED_CODE = 'shop_retired';
 
 export const SHOP_RETIRED_MESSAGE =
-  'WAWU Shop has closed and no longer takes orders. Orders you already placed are still in your purchases.';
+  'Shop has closed. Orders you already paid for are not affected.';
 
 export const SHOP_CATALOGUE_RETIRED_MESSAGE =
-  'WAWU Shop has closed, so products can no longer be added or changed. Orders already placed can still be read and dispatched.';
+  'Shop has closed, so products can no longer be added or changed. Orders already paid for can still be read and dispatched.';
 
 /** The 410 a retired buyer-facing Shop route answers. */
 export function shopRetired(): GoneException {
