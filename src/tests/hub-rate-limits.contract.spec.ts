@@ -7,6 +7,12 @@ import type { INestApplication } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import {
+  THROTTLER_BLOCK_DURATION,
+  THROTTLER_LIMIT,
+  THROTTLER_TTL,
+} from '@nestjs/throttler/dist/throttler.constants';
+import { AdminAuthController } from '../admin/auth/admin-auth.controller';
 import { AppController } from '../app.controller';
 import { AllExceptionsFilter } from '../common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../common/interceptors/response.interceptor';
@@ -17,6 +23,7 @@ import {
   isLoopbackAddress,
 } from '../hub-app-options';
 import { HUB_THROTTLERS } from '../hub-throttlers';
+import { MoneyIdentityController } from '../money/identity/money-identity.controller';
 
 /**
  * OPS-11: behind nginx, every caller gets its own rate-limit bucket, and no
@@ -238,7 +245,7 @@ describe('Rate limits behind nginx (OPS-11)', () => {
       );
     });
 
-    it('only the two payment webhooks skip the limits; the only other overrides are admin login and refresh, and the BVN check (KYC-01), which only tighten them', () => {
+    it('only the two payment webhooks skip the limits; the only other overrides are admin login and refresh, and the BVN check (KYC-01), once each', () => {
       const root = join(__dirname, '..');
       const files: string[] = [];
       const walk = (dir: string) => {
@@ -250,19 +257,92 @@ describe('Rate limits behind nginx (OPS-11)', () => {
         }
       };
       walk(root);
-      const using = (pattern: RegExp) =>
-        files
-          .filter((f) => pattern.test(readFileSync(f, 'utf8')))
-          .map((f) => relative(root, f))
-          .sort();
-      expect(using(/^\s*@SkipThrottle\(/m)).toEqual([
-        'fintava/webhook/fintava-webhook.controller.ts',
-        'payment-webhook/payment-webhook.controller.ts',
+      // How many times each file uses the decorator, so a second override
+      // added to a file already listed is caught too.
+      const uses = (pattern: RegExp): Record<string, number> => {
+        const counts: Record<string, number> = {};
+        for (const f of [...files].sort()) {
+          const n = readFileSync(f, 'utf8').match(pattern)?.length ?? 0;
+          if (n !== 0) counts[relative(root, f)] = n;
+        }
+        return counts;
+      };
+      expect(uses(/^\s*@SkipThrottle\(/gm)).toEqual({
+        'fintava/webhook/fintava-webhook.controller.ts': 1,
+        'payment-webhook/payment-webhook.controller.ts': 1,
+      });
+      expect(uses(/^\s*@Throttle\(/gm)).toEqual({
+        'admin/auth/admin-auth.controller.ts': 2,
+        'money/identity/money-identity.controller.ts': 1,
+      });
+    });
+
+    it('each of those overrides only tightens the limits: per throttler, no more requests in no shorter a window, and no shorter a block', () => {
+      // What the decorators actually set, read the way the guard reads it:
+      // the class and each handler's own metadata.
+      const overrides: {
+        on: string;
+        name: string;
+        limit?: number;
+        ttl?: number;
+        blockDuration?: number;
+      }[] = [];
+      for (const controller of [AdminAuthController, MoneyIdentityController]) {
+        const proto = controller.prototype as unknown as Record<
+          string,
+          unknown
+        >;
+        const targets: [string, object][] = [
+          [controller.name, controller],
+          ...Object.getOwnPropertyNames(proto)
+            .filter((k) => k !== 'constructor')
+            .map((k): [string, object] => [
+              `${controller.name}.${k}`,
+              proto[k] as object,
+            ]),
+        ];
+        for (const [on, target] of targets) {
+          for (const key of Reflect.getOwnMetadataKeys(target) as unknown[]) {
+            if (typeof key !== 'string' || !key.startsWith(THROTTLER_LIMIT))
+              continue;
+            const name = key.slice(THROTTLER_LIMIT.length);
+            const read = (prefix: string) =>
+              Reflect.getOwnMetadata(prefix + name, target) as
+                number | undefined;
+            overrides.push({
+              on,
+              name,
+              limit: read(THROTTLER_LIMIT),
+              ttl: read(THROTTLER_TTL),
+              blockDuration: read(THROTTLER_BLOCK_DURATION),
+            });
+          }
+        }
+      }
+      expect([...new Set(overrides.map((o) => o.on))].sort()).toEqual([
+        'AdminAuthController.login',
+        'AdminAuthController.refresh',
+        'MoneyIdentityController.checkBvn',
       ]);
-      expect(using(/^\s*@Throttle\(/m)).toEqual([
-        'admin/auth/admin-auth.controller.ts',
-        'money/identity/money-identity.controller.ts',
-      ]);
+      for (const o of overrides) {
+        const base = HUB_THROTTLERS.find((t) => t.name === o.name);
+        // A name the app does not register would be silently ignored.
+        expect({ on: o.on, name: o.name, registered: !!base }).toEqual({
+          on: o.on,
+          name: o.name,
+          registered: true,
+        });
+        const limit = o.limit ?? base!.limit;
+        const ttl = o.ttl ?? base!.ttl;
+        expect({
+          on: o.on,
+          name: o.name,
+          tightens:
+            limit <= base!.limit &&
+            ttl >= base!.ttl &&
+            (o.blockDuration === undefined || o.blockDuration >= ttl),
+        }).toEqual({ on: o.on, name: o.name, tightens: true });
+      }
     });
 
     it('through nginx, one client gets 20 a second (the 21st is 429, with the limit headers) and 200 a minute (the 201st is 429 from `medium`)', async () => {

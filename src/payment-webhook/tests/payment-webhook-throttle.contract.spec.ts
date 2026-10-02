@@ -12,7 +12,7 @@ import {
 } from '@nestjs/throttler';
 import { THROTTLER_SKIP } from '@nestjs/throttler/dist/throttler.constants';
 import type { NextFunction, Request, Response } from 'express';
-import request from 'supertest';
+import request, { type Response as Delivery } from 'supertest';
 import { AllExceptionsFilter } from '../../common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../../common/interceptors/response.interceptor';
 import { PrismaModule } from '../../common/prisma/prisma.module';
@@ -30,9 +30,9 @@ import { PaymentWebhookModule } from '../payment-webhook.module';
  * the same create options and Express settings (HUB_APP_OPTIONS,
  * applyHubHttpSettings), the same pipe, filter and interceptor, and the
  * app's named throttlers (HUB_THROTTLERS) behind the same global
- * ThrottlerGuard. Every delivery arrives as nginx forwards it, from one
- * Flutterwave address in X-Forwarded-For, so without the skip they all share
- * one bucket.
+ * ThrottlerGuard. Every delivery in a burst arrives as nginx forwards it,
+ * from one Flutterwave address in X-Forwarded-For, so without the skip the
+ * whole burst shares one bucket.
  *
  * Each delivery is a correctly signed `charge.completed` for a tx_ref no
  * flow owns: the service answers 200 `unmatched` after one receipt insert,
@@ -43,12 +43,25 @@ import { PaymentWebhookModule } from '../payment-webhook.module';
 const SECRET_HASH = 'test-webhook-secret-hash-o11';
 const RUN = `o11-${randomUUID().slice(0, 8)}`;
 const PATH = '/api/hub/webhooks/flutterwave';
-/** One Flutterwave sender, as nginx's X-Forwarded-For would name it. */
-const FLUTTERWAVE_ADDRESS = '203.0.113.40';
+/**
+ * The Flutterwave sender of burst attempt `n`, as nginx's X-Forwarded-For
+ * would name it. Each attempt has its own, so its bucket starts full.
+ */
+const flutterwaveAddress = (attempt: number) => `203.0.113.${40 + attempt}`;
 /** Another sender, only for warming the app up before a timed burst. */
-const WARM_UP_ADDRESS = '203.0.113.41';
+const WARM_UP_ADDRESS = '203.0.113.30';
 
 const SHORT = HUB_THROTTLERS.find((t) => t.name === 'short')!;
+
+/** How many bursts may be sent before one fits a single `short` window. */
+const MAX_ATTEMPTS = 5;
+/**
+ * Arrivals are noted when a delivery reaches the app; the guard counts it a
+ * little later, after its body is read and parsed. A burst counts only if
+ * its arrivals fit one window with this much to spare, so the guard's own
+ * span fits it too.
+ */
+const ARRIVAL_MARGIN_MS = 100;
 
 function chargeCompleted(txRef: string) {
   return {
@@ -115,12 +128,7 @@ type Built = Awaited<ReturnType<typeof buildApp>>;
  * those writes alone take more than a second (the flake the OPS-11 verifier
  * found).
  */
-async function burst(
-  app: Built,
-  label: string,
-  count: number,
-  sender = FLUTTERWAVE_ADDRESS,
-) {
+async function burst(app: Built, label: string, count: number, sender: string) {
   app.arrivals.length = 0;
   const results = await Promise.all(
     Array.from({ length: count }, (_, i) =>
@@ -138,13 +146,50 @@ async function burst(
 
 /**
  * A fresh app's first requests open the database pool and pay every
- * first-call cost. Before a timed burst, 10 deliveries at once from ANOTHER
- * sender (its own bucket, so the burst's sender starts with a full one in
+ * first-call cost. Before timed bursts, 10 deliveries at once from ANOTHER
+ * sender (its own bucket, so each burst's sender starts with a full one in
  * either variant) warm the app up.
  */
 async function warmUp(app: Built, label: string) {
   const { results } = await burst(app, `warm-${label}`, 10, WARM_UP_ADDRESS);
   expect(results.map((r) => r.status)).toEqual(Array(10).fill(200));
+}
+
+/**
+ * A burst of `count` deliveries whose arrivals all fall in one `short`
+ * window, which is the premise both burst tests assert on.
+ *
+ * On a busy machine a single late delivery can stretch a burst past the
+ * window (the OPS-11 verifier saw 1003 ms in 2 of 68 runs at load 7 or
+ * more). Such a burst proves nothing either way: without the skip, the
+ * late deliveries start a new window and are let through. So it is set
+ * aside and a fresh burst is sent (new tx_refs, a new sender with a full
+ * bucket), up to MAX_ATTEMPTS. `everyBurst` still sees every burst sent,
+ * set aside or not. If none fits, the test fails: it never passes on a
+ * burst that could not have been throttled.
+ */
+async function burstInOneWindow(
+  app: Built,
+  label: string,
+  count: number,
+  everyBurst: (results: Delivery[]) => void = () => undefined,
+) {
+  const spans: number[] = [];
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    const tag = `${label}-a${attempt}`;
+    const { results, span } = await burst(
+      app,
+      tag,
+      count,
+      flutterwaveAddress(attempt),
+    );
+    everyBurst(results);
+    spans.push(span);
+    if (span < SHORT.ttl - ARRIVAL_MARGIN_MS) return { results, span, tag };
+  }
+  throw new Error(
+    `None of ${MAX_ATTEMPTS} bursts of ${count} deliveries reached the app within one ${SHORT.ttl} ms window with ${ARRIVAL_MARGIN_MS} ms to spare (arrival spans ${spans.join(', ')} ms), so the throttle was never put to the test.`,
+  );
 }
 
 describe('Flutterwave webhook rate limits (OPS-11)', () => {
@@ -170,11 +215,18 @@ describe('Flutterwave webhook rate limits (OPS-11)', () => {
   it('30 different signed deliveries in the same second, through the real global ThrottlerGuard: 30 times 200, 30 receipts, no 429', async () => {
     // AppModule allows 20 a second (`short`) per caller: without the skip,
     // 10 of these are refused with 429 and wait for Flutterwave's resend.
+    // Every burst sent, including one set aside for arriving too spread
+    // out, must be answered 200 every time: nothing here is ever refused.
     const count = SHORT.limit + 10;
     await warmUp(built, 'burst');
-    const { results, span } = await burst(built, 'burst', count);
+    const { results, span, tag } = await burstInOneWindow(
+      built,
+      'burst',
+      count,
+      (sent) =>
+        expect(sent.map((r) => r.status)).toEqual(Array(count).fill(200)),
+    );
     expect(span).toBeLessThan(SHORT.ttl);
-    expect(results.map((r) => r.status)).toEqual(Array(count).fill(200));
     expect(
       results.every(
         (r) =>
@@ -184,10 +236,10 @@ describe('Flutterwave webhook rate limits (OPS-11)', () => {
     ).toBe(true);
     expect(
       await prisma.paymentWebhookReceipt.count({
-        where: { txRef: { startsWith: `${RUN}-burst-` } },
+        where: { txRef: { startsWith: `${RUN}-${tag}-` } },
       }),
     ).toBe(count);
-  }, 30000);
+  }, 60000);
 
   it('the old bare @SkipThrottle() on the same controller fails that burst: 20 times 200, then 429', async () => {
     // The controller as it was before OPS-11: the named skips taken off and
@@ -208,7 +260,7 @@ describe('Flutterwave webhook rate limits (OPS-11)', () => {
     try {
       const count = SHORT.limit + 10;
       await warmUp(bare, 'bare');
-      const { results, span } = await burst(bare, 'bare', count);
+      const { results, span } = await burstInOneWindow(bare, 'bare', count);
       expect(span).toBeLessThan(SHORT.ttl);
       const statuses = results.map((r) => r.status);
       expect(statuses.filter((s) => s === 200)).toHaveLength(SHORT.limit);
@@ -226,7 +278,7 @@ describe('Flutterwave webhook rate limits (OPS-11)', () => {
           PaymentWebhookController,
         );
     }
-  }, 30000);
+  }, 60000);
 
   it('the controller skips every throttler AppModule registers, by name', () => {
     expect(Object.keys(SKIP_EVERY_HUB_THROTTLER).sort()).toEqual(
