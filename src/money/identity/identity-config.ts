@@ -44,11 +44,44 @@ export const BVN_CHECK_WINDOW_MS = 24 * 60 * 60_000;
  * address. The per-person limit above is the one that bounds the cost; this
  * one stops one address from running checks for many fresh accounts at
  * once. Carrier NAT puts many people behind one address, hence 20, not 3.
+ * The address is the caller's, not nginx's: see bvnCheckTracker.
  */
 export const BVN_CHECK_THROTTLE = {
-  short: { limit: 3, ttl: 60_000 },
-  medium: { limit: 20, ttl: 60 * 60_000 },
-} as const;
+  short: { limit: 3, ttl: 60_000, getTracker: bvnCheckTracker },
+  medium: { limit: 20, ttl: 60 * 60_000, getTracker: bvnCheckTracker },
+};
+
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+
+/**
+ * Whose address a BVN check counts against. The app sets no `trust proxy`
+ * (BACKEND_GAPS G-20 in the mobile repo), so behind the droplet's nginx
+ * `req.ip` is nginx's own 127.0.0.1 for everyone, and a per-address limit of
+ * 3 a minute would be one bucket for the whole country. nginx proxies from
+ * the same machine and appends the caller's address as the LAST entry of
+ * X-Forwarded-For (`$proxy_add_x_forwarded_for`, deploy/install-services.sh),
+ * so: from a loopback peer, that last entry; from anyone else, their own
+ * address. Entries a caller writes themselves sit to the left of nginx's
+ * and are never read, and a caller who reaches the app directly cannot use
+ * the header at all.
+ */
+type TrackedRequest = {
+  ip?: unknown;
+  socket?: { remoteAddress?: unknown };
+  headers?: Record<string, unknown>;
+};
+
+export function bvnCheckTracker(request: Record<string, unknown>): string {
+  const req = request as TrackedRequest;
+  const ip = req.ip ?? req.socket?.remoteAddress;
+  const peer = typeof ip === 'string' ? ip : '';
+  if (!LOOPBACK.has(peer)) return peer;
+  const header = req.headers?.['x-forwarded-for'];
+  const raw = Array.isArray(header) ? header.join(',') : header;
+  if (typeof raw !== 'string') return peer;
+  const last = raw.split(',').pop()?.trim() ?? '';
+  return last === '' ? peer : last;
+}
 
 /** A set but unusable identity setting. Stops the app at boot. */
 export class IdentityConfigError extends Error {

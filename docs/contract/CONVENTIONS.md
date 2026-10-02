@@ -399,7 +399,11 @@ one retry at a time per payment.
   `retryAfterSeconds`, and Fintava is not asked. A check that never reached
   the provider (no key, a key refused, the merchant gate) is given back.
   Per address: the app's global throttler, `short` 3 a minute and `medium`
-  20 an hour on this route (PROVISIONAL); its 429 has no `reason`.
+  20 an hour on this route (PROVISIONAL); its 429 has no `reason`. The
+  address is the caller's, not nginx's: from a loopback peer the last
+  X-Forwarded-For entry (the one nginx appends), from anyone else the peer
+  itself (`bvnCheckTracker`; the app sets no `trust proxy`, mobile repo
+  BACKEND_GAPS G-20).
 - **Without settings.** No `FINTAVA_*` (production before OPS-10) or no
   `IDENTITY_HASH_KEY`: the server starts, and the BVN check answers
   `503 provider_unreachable` without calling out or counting a check.

@@ -162,6 +162,50 @@ describe('BVN check throttle through the global ThrottlerGuard (KYC-01)', () => 
     ).toBe(3);
   });
 
+  it('behind nginx each caller has their own bucket: the address nginx appends, never one the caller wrote', async () => {
+    // Every request here reaches the app from 127.0.0.1, as nginx's do on
+    // the droplet. Without reading X-Forwarded-For they would all share the
+    // bucket the first test used up.
+    const send = (xff: string) =>
+      request(app.getHttpServer())
+        .post('/api/hub/money/identity/bvn')
+        .set('Authorization', person())
+        .set('X-Forwarded-For', xff)
+        .send({ bvn: '22190000777', nin: '70190000777' });
+    const before = bvnCalls();
+    // Caller A, three times, each time writing a different address of its
+    // own in front of the one nginx appended: still one bucket, A's.
+    const a = [];
+    for (const forged of ['9.9.9.1', '9.9.9.2', '9.9.9.3', '9.9.9.4']) {
+      a.push((await send(`${forged}, 198.51.100.7`)).status);
+    }
+    expect(a).toEqual([422, 422, 422, 429]);
+    // Caller B, at the same moment, is not held up by A or by the first test.
+    expect((await send('198.51.100.8')).status).toBe(422);
+    expect(bvnCalls() - before).toBe(4);
+  });
+
+  it('a caller that reaches the app directly cannot choose its bucket with the header', () => {
+    /* eslint-disable @typescript-eslint/no-require-imports */
+    const { bvnCheckTracker } =
+      require('../identity-config') as typeof import('../identity-config');
+    /* eslint-enable @typescript-eslint/no-require-imports */
+    const xff = { 'x-forwarded-for': '198.51.100.9' };
+    expect(bvnCheckTracker({ ip: '203.0.113.5', headers: xff })).toBe(
+      '203.0.113.5',
+    );
+    expect(bvnCheckTracker({ ip: '127.0.0.1', headers: xff })).toBe(
+      '198.51.100.9',
+    );
+    expect(bvnCheckTracker({ ip: '::1', headers: {} })).toBe('::1');
+    expect(
+      bvnCheckTracker({
+        ip: '::ffff:127.0.0.1',
+        headers: { 'x-forwarded-for': ' 1.2.3.4 ,  198.51.100.10 ' },
+      }),
+    ).toBe('198.51.100.10');
+  });
+
   it('reading the identity step is not held to the BVN check’s limit', async () => {
     const auth = person();
     for (let i = 0; i < 6; i += 1) {
@@ -185,6 +229,16 @@ describe('BVN check throttle through the global ThrottlerGuard (KYC-01)', () => 
       (k): k is string => typeof k === 'string' && k.startsWith('THROTTLER:'),
     );
     expect(keys.some((k) => k.endsWith('default'))).toBe(false);
+    /* eslint-disable @typescript-eslint/no-require-imports */
+    const { HUB_THROTTLERS } =
+      require('../../../hub-throttlers') as typeof import('../../../hub-throttlers');
+    const { BVN_CHECK_THROTTLE } =
+      require('../identity-config') as typeof import('../identity-config');
+    /* eslint-enable @typescript-eslint/no-require-imports */
+    const registered = HUB_THROTTLERS.map((t) => t.name as string);
+    for (const name of Object.keys(BVN_CHECK_THROTTLE)) {
+      expect(registered).toContain(name);
+    }
     expect(Reflect.getMetadata('THROTTLER:LIMITshort', handler)).toBe(3);
     expect(Reflect.getMetadata('THROTTLER:TTLshort', handler)).toBe(60_000);
     expect(Reflect.getMetadata('THROTTLER:LIMITmedium', handler)).toBe(20);
