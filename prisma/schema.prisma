@@ -3202,3 +3202,73 @@ model FintavaWebhookEvent {
   @@index([dataReference])
   @@index([dataCustomerReference])
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+/// FREE CHAT BETWEEN TWO USERS (task INBOX-06, DECISIONS R-13)
+///
+/// Any two people can chat for free with text, photos, videos and PDFs. This
+/// is not the paid DirectMessage (a fan's paid question to a creator, with a
+/// reply deadline): nothing here costs anything or touches money. A block in
+/// either direction (BlockedAccount) stops new messages and new chats; the
+/// history stays readable by both people.
+///
+/// One row per pair of people: the two ids are stored sorted (userAWawuId is
+/// the smaller), so opening a chat with someone twice, from either side,
+/// finds the same row.
+// ─────────────────────────────────────────────────────────────────────────
+model ChatConversation {
+  id             String            @id @default(uuid())
+  userAWawuId    String
+  userBWawuId    String
+  createdAt      DateTime          @default(now())
+  /// When the newest message was sent, or when the chat was opened if it has
+  /// none yet. The chat list is ordered by it.
+  lastActivityAt DateTime          @default(now())
+  participants   ChatParticipant[]
+  messages       ChatMessage[]
+
+  @@unique([userAWawuId, userBWawuId])
+}
+
+/// One row for each of the two people in a chat, holding how far that person
+/// has read. The other person's read mark is what turns "sent" into "read"
+/// on a message the caller sent.
+model ChatParticipant {
+  conversationId    String
+  wawuUserId        String
+  /// The time of the newest message this person has read. Null: nothing read
+  /// yet. Only ever moves forward.
+  lastReadAt        DateTime?
+  /// The message that mark points at.
+  lastReadMessageId String?
+  conversation      ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@id([conversationId, wawuUserId])
+  @@index([wawuUserId])
+}
+
+/// One message. Text, an attachment, or both. An attachment is an object the
+/// sender uploaded through POST /chats/:id/attachments (StorageObject, folder
+/// chat/media or chat/file); the key is stored, never a link, and every read
+/// signs a fresh link.
+model ChatMessage {
+  id                    String           @id @default(uuid())
+  conversationId        String
+  senderWawuId          String
+  /// text | image | video | file
+  kind                  String
+  text                  String?
+  attachmentKey         String?
+  attachmentContentType String?
+  attachmentBytes       Int?
+  /// The file's own name, shown on a PDF bubble. Null for text and media.
+  attachmentName        String?
+  /// The sender app's own id for this message, so a resend after a lost
+  /// answer returns the first message instead of posting it twice.
+  clientMessageId       String?
+  createdAt             DateTime         @default(now())
+  conversation          ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, senderWawuId, clientMessageId])
+  @@index([conversationId, createdAt, id])
+}
