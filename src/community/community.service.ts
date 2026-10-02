@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { NotificationService } from '../notification/notification.service';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type {
   Community,
@@ -44,9 +45,21 @@ import type { UpdateCommunityDto } from './dto/update-community.dto';
  * /communities/:id/join` is explicitly this resource's endpoint per
  * registry.json).
  */
+/**
+ * Declining someone who is already a member. The wording is the live web
+ * answer (DELETE /communities/:id/requests/:userWawuId is a protected route),
+ * so it is kept as it is; INBOX-01 reuses it for a decline that loses a race
+ * to an approval.
+ */
+const ALREADY_APPROVED =
+  'That request was already approved — this person is a member. Remove them instead.';
+
 @Injectable()
 export class CommunityService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationService,
+  ) {}
 
   /** Start of "today" in UTC, per the task brief's derivation rule for `messagesToday`. */
   private startOfTodayUtc(): Date {
@@ -56,9 +69,8 @@ export class CommunityService {
     );
   }
 
-  private async withDerivedFields(
-    community: Community,
-  ): Promise<CommunityResponse> {
+  /** Public so the rooms routes (INBOX-01) answer with the same counts. */
+  async withDerivedFields(community: Community): Promise<CommunityResponse> {
     const startOfToday = this.startOfTodayUtc();
     const [memberCount, messagesToday] = await this.prisma.$transaction([
       this.prisma.communityMembership.count({
@@ -319,10 +331,10 @@ export class CommunityService {
     id: string,
     actorWawuId: string,
     action: string,
-  ): Promise<{ id: string; hostWawuId: string }> {
+  ): Promise<{ id: string; hostWawuId: string; name: string }> {
     const community = await this.prisma.community.findUnique({
       where: { id },
-      select: { id: true, hostWawuId: true },
+      select: { id: true, hostWawuId: true, name: true },
     });
     if (!community) {
       throw new NotFoundException('Community not found');
@@ -425,7 +437,11 @@ export class CommunityService {
     hostWawuId: string,
     userWawuId: string,
   ): Promise<CommunityMembership> {
-    await this.assertHost(id, hostWawuId, 'review join requests for');
+    const community = await this.assertHost(
+      id,
+      hostWawuId,
+      'review join requests for',
+    );
 
     const membership = await this.prisma.communityMembership.findUnique({
       where: { userWawuId_communityId: { userWawuId, communityId: id } },
@@ -439,10 +455,37 @@ export class CommunityService {
       return membership;
     }
 
-    return this.prisma.communityMembership.update({
-      where: { id: membership.id },
+    // INBOX-01: the change is conditional on the row still being pending, so
+    // when approvals (or an approval and a decline) race, exactly one request
+    // makes the change and only that one notifies.
+    const { count } = await this.prisma.communityMembership.updateMany({
+      where: { id: membership.id, status: 'pending' },
       data: { status: 'joined', joinedAt: new Date() },
     });
+    const approved = await this.prisma.communityMembership.findUnique({
+      where: { id: membership.id },
+    });
+    if (!approved) {
+      // A decline removed the request first: there is nothing to approve,
+      // the same answer as a request that never existed.
+      throw new NotFoundException(
+        'No join request from this user for this community.',
+      );
+    }
+    if (count !== 1) {
+      // Another approval got there first. Same answer as approving a member
+      // who is already in, and no second notification.
+      return approved;
+    }
+    // INBOX-01: tell the person who asked, once, on the real
+    // pending -> joined change. emit() never throws.
+    await this.notifications.emit({
+      kind: 'community_join_approved',
+      userWawuId,
+      communityId: community.id,
+      communityName: community.name,
+    });
+    return approved;
   }
 
   /**
@@ -469,8 +512,8 @@ export class CommunityService {
    *  3. Re-requesting after a decline is the established real-world
    *     behaviour for exactly this interaction (a declined follow request
    *     on a private account can be sent again), and the cost is bounded:
-   *     the requester learns nothing (no notification exists either way)
-   *     and the host declines again.
+   *     the requester is told it was declined (INBOX-01) and the host
+   *     declines again.
    *
    * The trade this accepts, stated plainly: a declined user can immediately
    * request again, and the host cannot see that they were declined before.
@@ -491,21 +534,47 @@ export class CommunityService {
     hostWawuId: string,
     userWawuId: string,
   ): Promise<{ declined: true }> {
-    await this.assertHost(id, hostWawuId, 'review join requests for');
+    const community = await this.assertHost(
+      id,
+      hostWawuId,
+      'review join requests for',
+    );
 
     const membership = await this.prisma.communityMembership.findUnique({
       where: { userWawuId_communityId: { userWawuId, communityId: id } },
       select: { id: true, status: true },
     });
     if (membership?.status === 'joined') {
-      throw new ConflictException(
-        'That request was already approved — this person is a member. Remove them instead.',
-      );
+      throw new ConflictException(ALREADY_APPROVED);
     }
     if (membership) {
-      await this.prisma.communityMembership.delete({
-        where: { id: membership.id },
+      // INBOX-01: delete only while still pending, so a decline racing an
+      // approval cannot remove someone the approval just let in, and of
+      // several declines in flight exactly one removes the row and notifies.
+      const { count } = await this.prisma.communityMembership.deleteMany({
+        where: { id: membership.id, status: 'pending' },
       });
+      if (count === 1) {
+        // The requester hears the answer (I31, "We'll let you know when
+        // she answers"), once.
+        await this.notifications.emit({
+          kind: 'community_join_declined',
+          userWawuId,
+          communityName: community.name,
+        });
+      } else {
+        const now = await this.prisma.communityMembership.findUnique({
+          where: { id: membership.id },
+          select: { status: true },
+        });
+        if (now?.status === 'joined') {
+          // An approval won the race: the same refusal as declining someone
+          // who is already a member.
+          throw new ConflictException(ALREADY_APPROVED);
+        }
+        // Another decline removed it first: nothing left to decline, the
+        // same success as declining when there is no request.
+      }
     }
     return { declined: true };
   }

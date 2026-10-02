@@ -82,6 +82,12 @@ const SETTINGS_GATE: Partial<
   // no community message notification kind or sender exists. The task that
   // adds that kind (and any other new kind) must add its entry here, or the
   // switch can never mute it.
+  //
+  // INBOX-01's `community_join_approved` and `community_join_declined` are
+  // deliberately NOT gated by `communityMessages`: they are not messages in a
+  // room but the answer to a request the person made themselves ("We'll let
+  // you know when she answers", I31), like `kyc_verified`, which no switch
+  // mutes either.
 };
 
 /**

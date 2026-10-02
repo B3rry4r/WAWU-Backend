@@ -154,9 +154,10 @@ export class CommunityMessageService {
    * CreatorDiscoveryService.list() and DirectMessageService's
    * lookupOtherParties: one WawuIdClient.lookupPublicIdentities call plus
    * one userProfile.findMany, merged by id. Called once per page in list(),
-   * not once per row.
+   * not once per row. Public so "my communities" (INBOX-01) names the
+   * sender of each room's last message the same way.
    */
-  private async lookupSenders(
+  async lookupSenders(
     senderIds: string[],
   ): Promise<Map<string, CommunityMessageSender>> {
     const unique = [...new Set(senderIds)];
