@@ -91,6 +91,18 @@ FLUTTERWAVE_SECRET_KEY=
 FLUTTERWAVE_PUBLIC_KEY=
 FLUTTERWAVE_WEBHOOK_HASH=
 
+# Fintava (naira wallets; src/fintava/, MONEY-06). Production must name the
+# live base URL here: the client never assumes live, and refuses any host
+# other than Fintava's. The timeouts may stay empty (defaults in
+# .env.example). Live values are put here by OPS-10.
+FINTAVA_BASE_URL=
+FINTAVA_API_KEY=
+FINTAVA_WEBHOOK_SECRET=
+FINTAVA_TIMEOUT_MS=
+FINTAVA_MONEY_TIMEOUT_MS=
+FINTAVA_CHECK_TIMEOUT_MS=
+FINTAVA_RESEND_SAFETY_MS=
+
 GEMINI_API_KEY=
 
 # Spaces — S3-compatible, so the AWS SDK talks to it unchanged.
