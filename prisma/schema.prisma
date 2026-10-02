@@ -1051,6 +1051,14 @@ model NotificationSettings {
   /// one to make quietly in a migration.
   promotions      Boolean @default(true)
   communityDigest Boolean @default(true)
+  /// "Money in" in Settings (SETTINGS-07): tips and sales. NULL means never
+  /// asked, which behaves as ON, exactly as before the column existed. Nullable
+  /// with no default on purpose: an existing row keeps reading and serialising
+  /// as it always did until its owner flips the switch.
+  moneyIn         Boolean?
+  /// "Reviews" in Settings (SETTINGS-07): an upload approved or sent back.
+  /// NULL means never asked, which behaves as ON.
+  contentReviews  Boolean?
 }
 
 // -----------------------------------------------------------------------------
