@@ -100,6 +100,10 @@ FLUTTERWAVE_WEBHOOK_HASH=
 # is not configured on this server"), sends nothing to Fintava, and the
 # wallet routes answer 503 provider_unreachable (MONEY-11). A value that IS
 # set is checked at boot: anything but Fintava's two hosts stops the server.
+# FINTAVA_WEBHOOK_SECRET is the live dashboard's webhook secret. OPS-10
+# registers this webhook URL in Fintava's live dashboard (MONEY-07):
+#   https://<the API's public host>/api/hub/webhooks/fintava
+# Without the secret every delivery is refused with 401 (fails closed).
 FINTAVA_BASE_URL=
 FINTAVA_API_KEY=
 FINTAVA_WEBHOOK_SECRET=
@@ -107,6 +111,12 @@ FINTAVA_TIMEOUT_MS=
 FINTAVA_MONEY_TIMEOUT_MS=
 FINTAVA_CHECK_TIMEOUT_MS=
 FINTAVA_RESEND_SAFETY_MS=
+# The BVN check (KYC-01). IDENTITY_HASH_KEY is the secret the BVN and NIN
+# are hashed under: `openssl rand -hex 32`, set once, never changed (every
+# stored hash would stop matching). Unset, the server starts and the BVN
+# check answers 503. BVN_CHECKS_PER_DAY may stay empty (3, provisional).
+IDENTITY_HASH_KEY=
+BVN_CHECKS_PER_DAY=
 
 GEMINI_API_KEY=
 

@@ -68,8 +68,11 @@ import { SchedulerModule } from './scheduler/scheduler.module';
 import { AccountPurgeModule } from './account-purge/account-purge.module';
 import { WalletModule } from './wallet/wallet.module';
 import { MoneyModule } from './money/money.module';
+import { ChatModule } from './chat/chat.module';
+import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
 import { PaymentWebhookModule } from './payment-webhook/payment-webhook.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { HUB_THROTTLERS } from './hub-throttlers';
 import { APP_GUARD } from '@nestjs/core';
 // Phase 5 build (waves 0-3, all 39 registry resources) is now complete.
 // The deferred Flutterwave webhook has now shipped as PaymentWebhookModule
@@ -82,10 +85,9 @@ import { APP_GUARD } from '@nestjs/core';
     // Rate limiting: @nestjs/throttler was a dependency but was never
     // registered, leaving presign, search and every payment-verify endpoint
     // unlimited — a storage-cost and scan-cost DoS from a single account.
-    ThrottlerModule.forRoot([
-      { name: 'short', ttl: 1_000, limit: 20 },
-      { name: 'medium', ttl: 60_000, limit: 200 },
-    ]),
+    // The limits themselves (short 20/s, medium 200/min) live in
+    // src/hub-throttlers.ts, so a webhook can skip every one by name.
+    ThrottlerModule.forRoot([...HUB_THROTTLERS]),
     ScheduleModule.forRoot(),
     // MUST stay ahead of SchedulerModule, and of everything else that pulls in
     // DirectMessageModule (SchedulerModule, PaymentWebhookModule, ShopModule,
@@ -329,6 +331,13 @@ import { APP_GUARD } from '@nestjs/core';
     // so it can neither shadow nor be shadowed wherever it sits. The declared,
     // unserved half (MoneyContractModule) is never imported here.
     MoneyModule,
+    // Free chat between two users (task INBOX-06). `@Controller('chats')` is a
+    // first segment nothing else declares, so it cannot shadow or be shadowed.
+    ChatModule,
+    // Fintava's webhooks (task MONEY-07): POST /webhooks/fintava, recorded
+    // once, no money moved. `webhooks/fintava` is a fixed path no other
+    // controller declares, beside the unchanged `webhooks/flutterwave`.
+    FintavaWebhookModule,
     // LAST on purpose. PaymentWebhookModule imports every money module so it
     // can reuse their /verify settlement, and every one of them is already
     // registered above — Nest dedupes, so the load-bearing controller order

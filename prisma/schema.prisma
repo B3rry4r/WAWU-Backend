@@ -1033,11 +1033,11 @@ model Notification {
 }
 
 model NotificationSettings {
-  userWawuId      String  @id
-  newReplies      Boolean @default(true)
-  newFollowers    Boolean @default(true)
-  dmReminders     Boolean @default(true)
-  refunds         Boolean @default(true)
+  userWawuId        String   @id
+  newReplies        Boolean  @default(true)
+  newFollowers      Boolean  @default(true)
+  dmReminders       Boolean  @default(true)
+  refunds           Boolean  @default(true)
   /// "Offers and news" in Settings. Now the opt-out for admin-composed
   /// campaigns (kind `campaign`), which is the first thing that has ever read
   /// this column.
@@ -1049,8 +1049,20 @@ model NotificationSettings {
   /// alone, because it cannot be told apart from a deliberate opt-out. See
   /// DECISIONS.md D17c - whether to backfill is the product owner's call, not
   /// one to make quietly in a migration.
-  promotions      Boolean @default(true)
-  communityDigest Boolean @default(true)
+  promotions        Boolean  @default(true)
+  communityDigest   Boolean  @default(true)
+  /// "Money in" in Settings (SETTINGS-07): tips and sales. NULL means never
+  /// asked, which behaves as ON, exactly as before the column existed. Nullable
+  /// with no default on purpose: an existing row keeps reading and serialising
+  /// as it always did until its owner flips the switch.
+  moneyIn           Boolean?
+  /// "Reviews" in Settings (SETTINGS-07): an upload approved or sent back.
+  /// NULL means never asked, which behaves as ON.
+  contentReviews    Boolean?
+  /// "Community messages" in Settings (SETTINGS-07). NULL means never asked,
+  /// which behaves as ON. It gates nothing today: no community message kind
+  /// or sender exists yet, so this only stores the choice.
+  communityMessages Boolean?
 }
 
 // -----------------------------------------------------------------------------
@@ -3107,4 +3119,213 @@ model FintavaWallet {
   accountNumber String   @unique
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// FINTAVA WEBHOOK EVENTS (task MONEY-07)
+///
+/// Every signed delivery Fintava sends to `POST /api/hub/webhooks/fintava`,
+/// recorded once and acknowledged. Nothing here moves money or touches a
+/// balance: the ledger (MONEY-10) and the pending sweep (MONEY-08) read the
+/// `pending` rows and mark them `processed` or `failed`. Fintava's balance
+/// stays the only balance.
+///
+/// Fintava sends no event id and no timestamp (mobile repo
+/// `docs/fintava/naira-api.md`, "Webhooks"), so a delivery is identified by
+/// its event, the transaction reference it carries and the status it
+/// reports. The unique constraint over those three IS the replay protection:
+/// the insert is `ON CONFLICT DO NOTHING`, so a retry, a replayed capture or
+/// two copies arriving at the same moment leave one row.
+/// ─────────────────────────────────────────────────────────────────────────
+enum FintavaWebhookProcessing {
+  /// Recorded; waiting for the task that consumes this event.
+  pending
+  /// The consuming task handled it.
+  processed
+  /// The consuming task tried and could not; `note` says why.
+  failed
+  /// The delivery named no event we know (or none). Kept for review.
+  unrecognised
+}
+
+model FintavaWebhookEvent {
+  id String @id @default(uuid())
+
+  /// The event name, trimmed and lower case (`VIRTUAL_WALLET_PAYMENT` is
+  /// `virtual_wallet_payment`), read from the body's `event` field or, when
+  /// that is missing, its `type` field. Empty when the delivery named none.
+  event    String
+  /// The event name exactly as sent, when there was one.
+  eventRaw String?
+
+  /// The transaction reference this delivery is keyed on, read from `data`
+  /// in the order the event's entry in FINTAVA_WEBHOOK_EVENTS
+  /// (src/fintava/webhook/fintava-webhook-event.ts) lists. When the
+  /// delivery carries none, the SHA-256 of its raw body (`sha256:<hex>`),
+  /// so a byte-identical retry still lands on the same row.
+  reference      String
+  /// Where `reference` came from: `data.reference`, `data.customerReference`,
+  /// `data.reversalRef`, ..., or `body.sha256`. Every text column here has
+  /// any NUL replaced by U+FFFD (Postgres text cannot hold one), the same way
+  /// every time, so a replay still lands on the same key.
+  referenceField String
+  /// Fintava's own status for the transaction (`data.status`, else
+  /// `data.paymentStatus`), upper case; empty when it sent none. Part of the
+  /// key so a later delivery reporting a new status is recorded too.
+  fintavaStatus  String
+
+  /// `data.reference` and `data.customerReference` (or `CustomerReference`)
+  /// as sent, so a consumer can match either to what it stored. A transfer
+  /// RESPONSE swaps these two names (`sandbox/11-`); whether a delivery does
+  /// too is unconfirmed until a real one is recorded (OPS-10), so neither
+  /// is assumed to be ours.
+  dataReference         String?
+  dataCustomerReference String?
+
+  /// The body exactly as delivered: the bytes the signature covers, kept
+  /// byte for byte (`bytea`, so a NUL or any other byte fits). Personal data
+  /// lives here and in `payload`, never in a log.
+  rawBody Bytes
+  /// The same body parsed, with every NUL (`\u0000`) in a key or a string
+  /// replaced by U+FFFD: Postgres json cannot hold a NUL, and a delivery it
+  /// refused would be retried and lost. `rawBody` keeps the original.
+  payload Json
+
+  processingStatus FintavaWebhookProcessing @default(pending)
+  /// Set by the consuming task: what it did, or why it could not.
+  note             String?
+  receivedAt       DateTime                 @default(now())
+  processedAt      DateTime?
+
+  @@unique([event, reference, fintavaStatus])
+  @@index([processingStatus, receivedAt])
+  @@index([dataReference])
+  @@index([dataCustomerReference])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// WHO OPENS A WALLET (tables added by task KYC-01)
+///
+/// The BVN check that starts Open your wallet (R-6: identity is checked when
+/// someone opens a wallet, never at sign-up). Fintava's
+/// `GET /compliance/verify/bvn` answers name, date of birth, phone, gender
+/// and a photo; the name, date of birth and gender go back to the app once,
+/// in the check's answer, for A5. None of it is kept here.
+///
+/// What is kept, and nothing more:
+/// - when the BVN passed, a KEYED hash of it (HMAC-SHA256 under
+///   IDENTITY_HASH_KEY, never a plain or salted hash: a BVN has only 10^11
+///   values, so anything without a server secret can be walked in minutes)
+///   and its last 4 digits;
+/// - the same for the NIN taken on the same screen (A26), which Fintava
+///   needs to open the account (MONEY-12);
+/// - the account phone that matched the BVN's phone, E.164 (BACKEND_GAPS
+///   G-11: the one phone number identity checks have proved);
+/// - the occupation typed on A5.
+/// The full BVN and NIN are never stored and never logged: the app sends
+/// them again to the steps that need them (KYC-02's selfie, MONEY-12's
+/// account opening), which check them against these hashes. The address is
+/// not held at all: it goes straight to account opening.
+/// ─────────────────────────────────────────────────────────────────────────
+model WalletIdentity {
+  wawuUserId    String    @id
+  /// HMAC-SHA256 of the BVN under IDENTITY_HASH_KEY, hex. Null until a check passes.
+  bvnHash       String?
+  bvnLast4      String?
+  /// When the BVN check last passed (the phone matched).
+  bvnVerifiedAt DateTime?
+  /// HMAC-SHA256 of the NIN under IDENTITY_HASH_KEY, hex.
+  ninHash       String?
+  ninLast4      String?
+  /// The account's phone, E.164, when it matched the BVN's phone.
+  verifiedPhone String?
+  /// Typed on A5.
+  occupation    String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+/// One row per BVN check sent (or about to be sent) to Fintava, which charges
+/// for each one even when it says no (mobile repo
+/// `docs/fintava/sandbox/04-bvn-check.md`). It is how the per-person daily
+/// limit is counted; it holds no part of the BVN.
+model BvnCheckAttempt {
+  id         String   @id @default(uuid())
+  wawuUserId String
+  /// `pending` while Fintava is being asked; then `verified`,
+  /// `phone_mismatch`, `refused` or `unavailable`.
+  outcome    String   @default("pending")
+  createdAt  DateTime @default(now())
+
+  @@index([wawuUserId, createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+/// FREE CHAT BETWEEN TWO USERS (task INBOX-06, DECISIONS R-13)
+///
+/// Any two people can chat for free with text, photos, videos and PDFs. This
+/// is not the paid DirectMessage (a fan's paid question to a creator, with a
+/// reply deadline): nothing here costs anything or touches money. A block in
+/// either direction (BlockedAccount) stops new messages and new chats; the
+/// history stays readable by both people.
+///
+/// One row per pair of people: the two ids are stored sorted (userAWawuId is
+/// the smaller), so opening a chat with someone twice, from either side,
+/// finds the same row.
+// ─────────────────────────────────────────────────────────────────────────
+model ChatConversation {
+  id             String            @id @default(uuid())
+  userAWawuId    String
+  userBWawuId    String
+  createdAt      DateTime          @default(now())
+  /// When the newest message was sent, or when the chat was opened if it has
+  /// none yet. The chat list is ordered by it.
+  lastActivityAt DateTime          @default(now())
+  participants   ChatParticipant[]
+  messages       ChatMessage[]
+
+  @@unique([userAWawuId, userBWawuId])
+}
+
+/// One row for each of the two people in a chat, holding how far that person
+/// has read. The other person's read mark is what turns "sent" into "read"
+/// on a message the caller sent.
+model ChatParticipant {
+  conversationId    String
+  wawuUserId        String
+  /// The time of the newest message this person has read. Null: nothing read
+  /// yet. Only ever moves forward.
+  lastReadAt        DateTime?
+  /// The message that mark points at.
+  lastReadMessageId String?
+  conversation      ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@id([conversationId, wawuUserId])
+  @@index([wawuUserId])
+}
+
+/// One message. Text, an attachment, or both. An attachment is an object the
+/// sender uploaded through POST /chats/:id/attachments (StorageObject, folder
+/// chat/media or chat/file); the key is stored, never a link, and every read
+/// signs a fresh link.
+model ChatMessage {
+  id                    String           @id @default(uuid())
+  conversationId        String
+  senderWawuId          String
+  /// text | image | video | file
+  kind                  String
+  text                  String?
+  attachmentKey         String?
+  attachmentContentType String?
+  attachmentBytes       Int?
+  /// The file's own name, shown on a PDF bubble. Null for text and media.
+  attachmentName        String?
+  /// The sender app's own id for this message, so a resend after a lost
+  /// answer returns the first message instead of posting it twice.
+  clientMessageId       String?
+  createdAt             DateTime         @default(now())
+  conversation          ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, senderWawuId, clientMessageId])
+  @@index([conversationId, createdAt, id])
 }

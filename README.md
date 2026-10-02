@@ -353,6 +353,34 @@ stops purchases getting stranded in `pending`.
    (mandatory in production), `WAWU_ID_JWKS_URL`, `WAWU_ID_BASE_URL`,
    `WAWU_ID_INTERNAL_SERVICE_KEY`, `FLUTTERWAVE_PUBLIC_KEY`.
 
+### Fintava webhook (MONEY-07)
+
+```
+POST /api/hub/webhooks/fintava
+```
+
+Fintava (the naira wallets, beside Flutterwave, which is unchanged) posts
+here when money arrives or a transfer settles or is reversed. OPS-10
+registers `https://<host>/api/hub/webhooks/fintava` in Fintava's live
+dashboard and puts the dashboard's webhook secret in
+`FINTAVA_WEBHOOK_SECRET`.
+
+- **Auth**: no JWT. `FintavaSignatureGuard` checks `x-fintava-signature`,
+  the HMAC-SHA512 of the raw body under `FINTAVA_WEBHOOK_SECRET`, in
+  constant time, and fails closed (401) when the secret is unset. The raw
+  bytes exist because the app is created with `rawBody: true`
+  (`src/hub-app-options.ts`).
+- **Exactly once**: Fintava sends no event id, so each delivery is stored in
+  `FintavaWebhookEvent` under the unique key (event, transaction reference,
+  Fintava's status), with an `ON CONFLICT DO NOTHING` insert. A retry, a
+  replay or two copies at once leave one row and answer `duplicate`.
+- **Records only**: no money moves and no balance changes here. Rows are
+  `pending` for the ledger (MONEY-10) and the pending sweep (MONEY-08);
+  an event nobody documents is `unrecognised`.
+- **Status codes**: `200` recorded or duplicate; `400` no JSON body; `401`
+  signature missing or wrong, or no secret; `503` not stored, resend.
+- Run `npx prisma migrate deploy` so `FintavaWebhookEvent` exists.
+
 ## Verification: two ticks, not a ladder
 
 There is no five-rung ladder any more. There are exactly **two** verifications,

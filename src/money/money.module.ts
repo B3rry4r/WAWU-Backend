@@ -3,6 +3,9 @@ import { ConfigModule } from '@nestjs/config';
 import { FintavaModule } from '../fintava/fintava.module';
 import { MoneyBalanceController } from './balance/money-balance.controller';
 import { WalletBalanceService } from './balance/wallet-balance.service';
+import { IdentityHasher } from './identity/identity-config';
+import { MoneyIdentityController } from './identity/money-identity.controller';
+import { WalletIdentityService } from './identity/wallet-identity.service';
 import { MoneyPinController } from './pin/money-pin.controller';
 import { TransactionPinGuard } from './pin/transaction-pin.guard';
 import { TransactionPinService } from './pin/transaction-pin.service';
@@ -21,11 +24,26 @@ import { TransactionPinService } from './pin/transaction-pin.service';
  * The server starts without any FINTAVA_* setting (the client is then
  * unconfigured and the balance answers 503); the settings are needed for the
  * wallet to work (deploy/README.md step 4).
+ *
+ * KYC-01: Open your wallet's identity step (`/money/identity`), the BVN
+ * check through the same client. WalletIdentityService is exported for the
+ * steps after it (KYC-02, MONEY-12), which check the BVN and NIN they are
+ * sent against the ones that passed.
  */
 @Module({
   imports: [ConfigModule, FintavaModule],
-  controllers: [MoneyPinController, MoneyBalanceController],
-  providers: [TransactionPinService, TransactionPinGuard, WalletBalanceService],
-  exports: [TransactionPinService, TransactionPinGuard],
+  controllers: [
+    MoneyPinController,
+    MoneyBalanceController,
+    MoneyIdentityController,
+  ],
+  providers: [
+    TransactionPinService,
+    TransactionPinGuard,
+    WalletBalanceService,
+    IdentityHasher,
+    WalletIdentityService,
+  ],
+  exports: [TransactionPinService, TransactionPinGuard, WalletIdentityService],
 })
 export class MoneyModule {}
