@@ -252,10 +252,22 @@ after a send that failed (W14).
 **Fintava has no Idempotency-Key** (`naira-api.md`). Ours is enforced here.
 The reference we send Fintava as `CustomerReference` is derived from our own
 transaction id, not from the app's key (which is only unique per person).
-`/transaction/wallet-to-wallet` and `/bank/credit/merchant` take it;
-whether `/bank/credit` (a customer's bank send) does is unknown (Fintava
-question 1), so a customer bank send that timed out is never sent again
-blindly: it stays `pending` until MONEY-08 has asked Fintava what happened.
+`/transaction/wallet-to-wallet`, `/bank/credit/merchant` and `/bank/credit`
+all take it and refuse a repeat (OPS-02, `sandbox/13-`, `14-`; question 1
+answered). A send whose answer was lost is never sent again blindly: the
+Fintava client (MONEY-06, `src/fintava/`) asks Fintava first, by our
+reference and then from history, because a lookup can answer `200 {}`,
+which is neither found nor not found. Only Fintava's own JSON
+`404 "Transaction not found!"` with no row in the sender's history counts
+as "Fintava does not have it", and only once the money timeout plus a
+safety window (`FINTAVA_RESEND_SAFETY_MS`, ten minutes) has passed since
+the first send: Fintava keeps working after the client gives up. Then a
+wallet-to-wallet send goes again under the same reference, and a bank send
+only under a new one (a refused bank send can leave a `PENDING` record and
+use its reference up). A repeated reference means the earlier send exists:
+it is reconciled, never refunded or charged again. Anything still pending
+or unknown stays `pending` until MONEY-08 has asked Fintava again, holding
+one retry at a time per payment.
 
 ## 5. The transaction PIN
 
