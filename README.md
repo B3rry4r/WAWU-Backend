@@ -2,6 +2,10 @@
 
 NestJS + Prisma backend for the WAWU creator content marketplace.
 
+**Run it on your own machine** (with `wawu-id`, seeded accounts, and the phone
+pointed at it): [`docs/LOCAL.md`](docs/LOCAL.md). One command:
+`scripts/local/up.sh`.
+
 ## Running the tests
 
 **The contract suite is not parallel-safe. Always run it with `--runInBand`.**

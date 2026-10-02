@@ -23,3 +23,6 @@ wawu_do_deploy.pub
 
 # Python bytecode from running the gates harness locally.
 scripts/gates/**/__pycache__/
+
+# Local run state from scripts/local/up.sh (pids and logs).
+.local/
