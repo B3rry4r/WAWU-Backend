@@ -92,8 +92,39 @@ function timeout(
 }
 
 /**
+ * True in production when FINTAVA_BASE_URL is not set (or blank): Fintava is
+ * simply not set up on this server yet (OPS-10 adds it). The client is then
+ * built unconfigured instead of stopping the app (MONEY-11): the rest of the
+ * backend must keep starting on every deploy, and the wallet routes answer
+ * 503 until the setting arrives. A value that IS set is still read, and
+ * refused when wrong, by readFintavaSettings below.
+ */
+export function fintavaIsUnconfigured(
+  get: (key: string) => string | undefined,
+  nodeEnv: string | undefined = process.env.NODE_ENV,
+): boolean {
+  return (
+    (get(FINTAVA_CONFIG_KEYS.baseUrl)?.trim() ?? '') === '' &&
+    nodeEnv === 'production'
+  );
+}
+
+/** The settings of a client that sends nothing: no base URL, no host. */
+export function unconfiguredFintavaSettings(): FintavaSettings {
+  return {
+    baseUrl: '',
+    environment: 'unconfigured',
+    readTimeoutMs: FINTAVA_DEFAULTS.readTimeoutMs,
+    moneyTimeoutMs: FINTAVA_DEFAULTS.moneyTimeoutMs,
+    checkTimeoutMs: FINTAVA_DEFAULTS.checkTimeoutMs,
+    resendSafetyMs: FINTAVA_RESEND_SAFETY_MS,
+  };
+}
+
+/**
  * Reads the Fintava settings. FINTAVA_BASE_URL unset means the sandbox,
- * except in production, where it must be set (live is never assumed).
+ * except in production, where it must be set (live is never assumed; the
+ * client checks fintavaIsUnconfigured first and does not call this then).
  */
 export function readFintavaSettings(
   get: (key: string) => string | undefined,

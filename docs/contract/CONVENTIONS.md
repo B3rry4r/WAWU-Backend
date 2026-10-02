@@ -73,7 +73,9 @@ module AppModule mounts (importing a new module into `app.module.ts` is a
 
 **Served so far** (`MoneyModule`, `src/money/money.module.ts`, mounted by
 AppModule since MONEY-09): `GET`, `POST` and `PUT /money/pin` and
-`POST /money/pin/verify`. A served route and a declared one may share a
+`POST /money/pin/verify` (MONEY-09); `GET /money/wallet/balance`
+(MONEY-11), which reads the caller's wallet from `FintavaWallet` (no row:
+`409 wallet_not_open`) and asks Fintava on every request. A served route and a declared one may share a
 schema (the error envelope, the PIN DTOs); the emitter keeps one copy when
 the two are identical and still fails when they differ. A task that serves
 more routes adds them to `SERVED_MONEY_ROUTES` in

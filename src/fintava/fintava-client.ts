@@ -9,7 +9,9 @@ import {
 } from './fintava-amount';
 import {
   FINTAVA_CONFIG_KEYS,
+  fintavaIsUnconfigured,
   readFintavaSettings,
+  unconfiguredFintavaSettings,
   type FintavaSettings,
 } from './fintava-config';
 import {
@@ -291,6 +293,19 @@ export class FintavaClient {
 
   constructor(config: ConfigService) {
     const get = (key: string) => config.get<string>(key);
+    if (fintavaIsUnconfigured(get)) {
+      // Production before OPS-10: start, send nothing. The key, if one is
+      // set without a base URL, is dropped so it cannot go anywhere.
+      this.settings = unconfiguredFintavaSettings();
+      this.#apiKey = '';
+      this.logger.warn(
+        `${FINTAVA_CONFIG_KEYS.baseUrl} is not set: Fintava is not configured on this server. ` +
+          'Wallet routes answer 503 and nothing is sent to Fintava until it is set.',
+      );
+      return;
+    }
+    // A set value is checked here, at boot: a wrong or non-Fintava host
+    // stops the app (MONEY-06).
     this.settings = readFintavaSettings(get);
     this.#apiKey = (get(FINTAVA_CONFIG_KEYS.apiKey) ?? '').trim();
   }
@@ -366,7 +381,7 @@ export class FintavaClient {
       refusalMayLeaveRecord?: boolean;
     } = {},
   ): Promise<Answer> {
-    if (this.#apiKey === '') {
+    if (this.#apiKey === '' || this.settings.environment === 'unconfigured') {
       throw this.fail(op, { kind: 'not_configured' });
     }
     const url = new URL(`${this.settings.baseUrl}${path}`);

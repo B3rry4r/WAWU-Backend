@@ -22,7 +22,7 @@ caller from the token.
 | Method and path | Response (`data`) | Request | Served by |
 |---|---|---|---|
 | `GET /money/wallet` | `WalletView` | | MONEY-12 (state from MONEY-13, `pin` from MONEY-09, `beneficiaryCount` from WALLET-14) |
-| `GET /money/wallet/balance` | `WalletBalanceView` | | MONEY-11 |
+| `GET /money/wallet/balance` | `WalletBalanceView` | | MONEY-11 (served) |
 | `GET /money/pin` | `PinStateView` | | MONEY-09 |
 | `POST /money/pin` | `PinStateView` | `SetPinDto` | MONEY-09 |
 | `PUT /money/pin` | `PinStateView` | `ChangePinDto`, `X-Transaction-Pin` (current) | MONEY-09 |

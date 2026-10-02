@@ -15,16 +15,13 @@ import {
   MoneyErrors,
   WALLET_GATE_ERRORS,
 } from './money-contract';
-import type {
-  PinResetView,
-  PinStateView,
-  WalletBalanceView,
-  WalletView,
-} from './money-view.type';
+import type { PinResetView, PinStateView, WalletView } from './money-view.type';
 
 /**
  * The Naira wallet itself and its transaction PIN (task MONEY-04 contract;
- * see money-contract.ts for why these handlers are declarations).
+ * see money-contract.ts for why these handlers are declarations). The
+ * balance, GET /money/wallet/balance, is served by MONEY-11 in
+ * src/money/balance/money-balance.controller.ts.
  *
  * Every route reads the caller from their token. None takes a wawuUserId:
  * a wallet route that accepts somebody else's id is one slip away from
@@ -43,17 +40,6 @@ export class MoneyWalletController {
   @BuiltBy('MONEY-12')
   wallet(): Promise<WalletView> {
     return declaredOnly('MONEY-12');
-  }
-
-  /**
-   * Fintava's available balance, asked for on every call (W1, W9, W13).
-   * 503 provider_unreachable when the bank does not answer (W6): never a 0.
-   */
-  @Get('wallet/balance')
-  @BuiltBy('MONEY-11')
-  @MoneyErrors(...WALLET_GATE_ERRORS, 'provider_unreachable')
-  balance(): Promise<WalletBalanceView> {
-    return declaredOnly('MONEY-11');
   }
 }
 
