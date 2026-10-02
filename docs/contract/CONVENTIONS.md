@@ -75,7 +75,9 @@ module AppModule mounts (importing a new module into `app.module.ts` is a
 AppModule since MONEY-09): `GET`, `POST` and `PUT /money/pin` and
 `POST /money/pin/verify` (MONEY-09); `GET /money/wallet/balance`
 (MONEY-11), which reads the caller's wallet from `FintavaWallet` (no row:
-`409 wallet_not_open`) and asks Fintava on every request. A served route and a declared one may share a
+`409 wallet_not_open`) and asks Fintava on every request; `GET /money/identity`,
+`POST /money/identity/bvn` and `PUT /money/identity/occupation` (KYC-01),
+Open your wallet's identity step (section 8). A served route and a declared one may share a
 schema (the error envelope, the PIN DTOs); the emitter keeps one copy when
 the two are identical and still fails when they differ. A task that serves
 more routes adds them to `SERVED_MONEY_ROUTES` in
@@ -209,6 +211,12 @@ Every refusal is the envelope this backend already answers with
 | `target_not_found` | 404 | the thing being paid for does not exist | |
 | `target_not_payable` | 409 | it exists but cannot be bought now (already owned, sold out, closed) | |
 | `not_found` | 404 | no such transfer, payment, hold or transaction for this caller | |
+| `bvn_not_confirmed` | 422 | Fintava did not confirm the BVN (unknown or invalid) (KYC-01) | `checksLeft` |
+| `bvn_phone_mismatch` | 422 | the BVN's phone is not the account's phone (A14); nothing from the BVN record is answered | `checksLeft` |
+| `phone_not_nigerian` | 422 | the account's phone is not a Nigerian mobile, so no BVN can match it; Fintava is not asked | |
+| `identity_checks_exhausted` | 429 | the person has used today's BVN checks | `retryAfterSeconds` |
+| `bvn_not_checked` | 409 | A5's occupation sent before a BVN check passed | |
+| `wallet_already_open` | 409 | a BVN check from someone whose wallet is open | |
 
 The same table is `MONEY_ERROR_STATUS` in `src/money/money-contract.ts`; each
 operation in the contract lists the codes it can answer with, grouped by
@@ -358,3 +366,41 @@ one retry at a time per payment.
   returned and from owner config (R-1), never from the canvas.
 - **Times** are ISO 8601 UTC strings. A month is `YYYY-MM` in Africa/Lagos
   time. Ids are UUIDs.
+
+## 8. Open your wallet's identity step (KYC-01)
+
+- **Routes** (`src/money/identity/`): `POST /money/identity/bvn` with
+  `{ bvn, nin }` (A26) runs Fintava's `GET /compliance/verify/bvn` through
+  the MONEY-06 client and answers `BvnCheckView`: A5's prefill (`firstName`,
+  `middleName`, `lastName`, `dateOfBirth` as `YYYY-MM-DD`, `gender` as
+  `male` or `female`, each null when Fintava did not give it in a form we
+  read) and the step's state. `GET /money/identity` answers that state
+  (`WalletIdentityView`: the BVN's last 4 digits and when it passed, the
+  NIN's last 4, the occupation, checks left today). `PUT
+  /money/identity/occupation` stores A5's occupation once a check passed.
+- **What is stored.** The time the check passed, an HMAC-SHA256 of the BVN
+  and of the NIN under `IDENTITY_HASH_KEY` (a keyed hash: an 11-digit number
+  has 10^11 values, so a plain or salted hash can be walked), the last 4
+  digits of each, the account phone that matched (E.164), and the
+  occupation. Never the full BVN or NIN, the BVN record's name, date of
+  birth, gender, phone or photo, or the address. The prefill is answered
+  once and not kept. The steps after this one (KYC-02's selfie, MONEY-12's
+  account opening) take the BVN and NIN from the app again and check them
+  with `WalletIdentityService.matchesCheckedIdentity`.
+- **A14.** The BVN record's phone must be the account's phone (the token's
+  `phone`, compared after both are normalised as in section 2). If it is
+  not, or the record has none: `422 bvn_phone_mismatch` with A14's own
+  sentence. The answer carries nothing from the BVN record, not even a
+  masked phone (A14 draws none), so a BVN typed by someone else reveals
+  nothing about its owner.
+- **Limits** (Fintava charges every check, even a refused one). Per person:
+  3 checks in any 24 hours (`BVN_CHECKS_PER_DAY`, PROVISIONAL), counted in
+  `BvnCheckAttempt`; the fourth is `429 identity_checks_exhausted` with
+  `retryAfterSeconds`, and Fintava is not asked. A check that never reached
+  the provider (no key, a key refused, the merchant gate) is given back.
+  Per address: the app's global throttler, `short` 3 a minute and `medium`
+  20 an hour on this route (PROVISIONAL); its 429 has no `reason`.
+- **Without settings.** No `FINTAVA_*` (production before OPS-10) or no
+  `IDENTITY_HASH_KEY`: the server starts, and the BVN check answers
+  `503 provider_unreachable` without calling out or counting a check.
+

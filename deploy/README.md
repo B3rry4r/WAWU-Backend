@@ -107,6 +107,12 @@ FINTAVA_TIMEOUT_MS=
 FINTAVA_MONEY_TIMEOUT_MS=
 FINTAVA_CHECK_TIMEOUT_MS=
 FINTAVA_RESEND_SAFETY_MS=
+# The BVN check (KYC-01). IDENTITY_HASH_KEY is the secret the BVN and NIN
+# are hashed under: `openssl rand -hex 32`, set once, never changed (every
+# stored hash would stop matching). Unset, the server starts and the BVN
+# check answers 503. BVN_CHECKS_PER_DAY may stay empty (3, provisional).
+IDENTITY_HASH_KEY=
+BVN_CHECKS_PER_DAY=
 
 GEMINI_API_KEY=
 
