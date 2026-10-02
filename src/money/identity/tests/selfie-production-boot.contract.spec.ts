@@ -99,6 +99,7 @@ describe('production boot without Fintava settings or the identity key: the self
   const IMAGE = Buffer.concat([
     Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
     Buffer.alloc(3000, 9),
+    Buffer.from([0xff, 0xd9]),
   ]).toString('base64');
 
   beforeAll(async () => {

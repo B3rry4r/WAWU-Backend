@@ -3313,6 +3313,15 @@ model SelfieMatchAttempt {
   /// When Fintava's answer came back; null while pending.
   settledAt  DateTime?
   createdAt  DateTime  @default(now())
+  /// The passed BVN check this selfie was compared against, read once at the
+  /// start of the request (migration 20261002230000): when that check passed
+  /// (WalletIdentity.bvnVerifiedAt) and its BVN's keyed hash
+  /// (WalletIdentity.bvnHash, never the BVN). A match counts only while both
+  /// still equal the person's current check, so a selfie matched to one BVN
+  /// never counts for another checked meanwhile. Null on a row written
+  /// before the columns existed: such a row never counts as a match.
+  bvnVerifiedAt DateTime?
+  bvnHash       String?
 
   @@index([wawuUserId, createdAt])
 }

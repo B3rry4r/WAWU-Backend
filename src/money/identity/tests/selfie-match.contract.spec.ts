@@ -19,6 +19,7 @@ import {
   fintavaError,
   SELFIE_200,
   SELFIE_400,
+  SELFIE_MATCHED,
   selfieAnswer,
   type SeenRequest,
 } from '../../../../test/fintava/fintava-double';
@@ -49,10 +50,12 @@ import { WalletIdentityService } from '../wallet-identity.service';
  * WAWU ID's JWKS (WAWU_ID_JWKS_URL), and the real MONEY-06 Fintava client
  * talking over a socket to the local double (test/fintava/fintava-double.ts).
  * The double answers with the failed match the sandbox really sent
- * (`SELFIE_400`) and, for a pass, Fintava's 2xx envelope around its
- * documented example (`SELFIE_200`) or a richer answer that echoes the BVN,
- * the BVN photo and the selfie back (`selfieAnswer`): no sandbox BVN is known
- * to pass (mobile repo `docs/fintava/sandbox/README.md`, question 11).
+ * (`SELFIE_400`) and, for a pass, a made-up explicit `match: true`
+ * (`SELFIE_MATCHED`) or a richer answer that echoes the BVN, the BVN photo
+ * and the selfie back (`selfieAnswer`): no sandbox BVN is known to pass
+ * (mobile repo `docs/fintava/sandbox/README.md`, question 11). Fintava's
+ * documented 2xx (`SELFIE_200`, the `{}` example) carries no verdict and is
+ * never a match (verifier round 1, defect 1).
  *
  * Each person runs the BVN check (KYC-01) first, through its own route, as
  * the app does. Every log line the app writes during the whole file is
@@ -84,14 +87,27 @@ const NIN = '70290000999';
 /** Every selfie sent in this file, so the final scans can look for each. */
 const images: string[] = [];
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+/** A PNG's IHDR chunk: length 13, `IHDR`, 1 x 1, 8-bit RGB, and a CRC. */
+const PNG_IHDR = Buffer.from([
+  0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00,
+  0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xde,
+]);
+const PNG_IEND = Buffer.from([
+  0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+]);
 const JPEG_MAGIC = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+const JPEG_END = Buffer.from([0xff, 0xd9]);
 
-/** A made-up image: the format's magic bytes, then random bytes (base64). */
+/** The bytes of a made-up image: the format's start, `body`, its end. */
+function imageBytes(kind: 'png' | 'jpeg', body: Buffer): Buffer {
+  return kind === 'png'
+    ? Buffer.concat([PNG_MAGIC, PNG_IHDR, body, PNG_IEND])
+    : Buffer.concat([JPEG_MAGIC, body, JPEG_END]);
+}
+
+/** A made-up image: the format's start, random bytes, its end (base64). */
 function selfie(kind: 'png' | 'jpeg' = 'jpeg', bytes = 4_000): string {
-  const image = Buffer.concat([
-    kind === 'png' ? PNG_MAGIC : JPEG_MAGIC,
-    randomBytes(bytes),
-  ]).toString('base64');
+  const image = imageBytes(kind, randomBytes(bytes)).toString('base64');
   images.push(image);
   return image;
 }
@@ -308,6 +324,8 @@ describe('Selfie match to the BVN photo (KYC-02) over HTTP', () => {
       expect(row).toMatchObject({ outcome: 'matched', confidence: 97.25 });
       expect(row.settledAt).not.toBeNull();
       expect(Object.keys(row).sort()).toEqual([
+        'bvnHash',
+        'bvnVerifiedAt',
         'confidence',
         'createdAt',
         'id',
@@ -315,6 +333,10 @@ describe('Selfie match to the BVN photo (KYC-02) over HTTP', () => {
         'settledAt',
         'wawuUserId',
       ]);
+      // Tied to the BVN check it was compared against (defect 2).
+      const check = await identity.currentBvnCheck(user.id);
+      expect(row.bvnVerifiedAt).toEqual(check!.verifiedAt);
+      expect(row.bvnHash).toBe(check!.bvnHash);
 
       // Nothing Fintava echoed is answered.
       expect(res.text).not.toContain(BVN);
@@ -325,10 +347,10 @@ describe('Selfie match to the BVN photo (KYC-02) over HTTP', () => {
       expect(view).toEqual(out.data);
     });
 
-    it('Fintava’s documented 2xx (no score) passes with no confidence stored', async () => {
+    it('only an explicit match passes: the narrowest stand-in, no score, no confidence stored', async () => {
       const user = person();
       await bvnChecked(user);
-      answerSelfie({ status: 200, body: SELFIE_200 });
+      answerSelfie({ status: 200, body: SELFIE_MATCHED });
       await match(user, { bvn: BVN, image: selfie('png') }).expect(200);
       const [row] = await rows(user);
       expect(row).toMatchObject({ outcome: 'matched', confidence: null });
@@ -340,10 +362,10 @@ describe('Selfie match to the BVN photo (KYC-02) over HTTP', () => {
     it('a matched selfie is not sent again (409 selfie_already_matched, nothing charged)', async () => {
       const user = person();
       await bvnChecked(user);
-      answerSelfie({ status: 200, body: SELFIE_200 });
+      answerSelfie({ status: 200, body: SELFIE_MATCHED });
       await match(user, { bvn: BVN, image: selfie() }).expect(200);
       double.reset();
-      answerSelfie({ status: 200, body: SELFIE_200 });
+      answerSelfie({ status: 200, body: SELFIE_MATCHED });
       const res = await match(user, { bvn: BVN, image: selfie() }).expect(409);
       expect(body<null>(res).reason?.code).toBe('selfie_already_matched');
       expect(selfieCalls()).toHaveLength(0);
@@ -353,7 +375,7 @@ describe('Selfie match to the BVN photo (KYC-02) over HTTP', () => {
     it('a new BVN check needs a new selfie: the earlier match no longer counts', async () => {
       const user = person();
       await bvnChecked(user);
-      answerSelfie({ status: 200, body: SELFIE_200 });
+      answerSelfie({ status: 200, body: SELFIE_MATCHED });
       await match(user, { bvn: BVN, image: selfie() }).expect(200);
       // A later BVN check that passes (the person changed their BVN).
       await new Promise((r) => setTimeout(r, 5));
@@ -362,8 +384,169 @@ describe('Selfie match to the BVN photo (KYC-02) over HTTP', () => {
       expect(view).toEqual({ matchedAt: null, checksLeft: 2 });
       // The old BVN is no longer the checked one; the new one can be matched.
       await match(user, { bvn: BVN, image: selfie() }).expect(409);
-      answerSelfie({ status: 200, body: SELFIE_200 });
+      answerSelfie({ status: 200, body: SELFIE_MATCHED });
       await match(user, { bvn: OTHER_BVN, image: selfie() }).expect(200);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe('a selfie matched against one BVN never counts for another (defect 2)', () => {
+    it('a BVN check for another BVN that passes between the comparison and the match does not inherit it', async () => {
+      const user = person();
+      await bvnChecked(user); // BVN A passes.
+      const checkA = await identity.currentBvnCheck(user.id);
+      // Fintava will say the selfie matches the photo of the BVN it is sent.
+      answerSelfie({ status: 200, body: SELFIE_MATCHED });
+      double.on('GET', '/compliance/verify/bvn', {
+        status: 200,
+        body: { data: { ...BVN_200.data, phone_number1: BVN_PHONE_SAME } },
+      });
+
+      // The race, made deterministic: the match has compared BVN A with the
+      // passed check and is about to write its attempt row; at exactly that
+      // moment a BVN check for BVN B passes for the same person (B's check
+      // needs B's phone on the account: the SIM-swap case).
+      const delegate = prisma.selfieMatchAttempt;
+      const create = delegate.create.bind(delegate) as (
+        a: unknown,
+      ) => Promise<unknown>;
+      let raced = false;
+      const spy = jest.spyOn(delegate, 'create').mockImplementation(((
+        args: unknown,
+      ) => {
+        if (raced) return create(args);
+        raced = true;
+        return (async () => {
+          await http()
+            .post('/api/hub/money/identity/bvn')
+            .set('Authorization', user.auth)
+            .send({ bvn: OTHER_BVN, nin: NIN })
+            .expect(200);
+          await new Promise((r) => setTimeout(r, 5));
+          return create(args);
+        })();
+      }) as never);
+      let res: Response;
+      try {
+        res = await match(user, { bvn: BVN, image: selfie() });
+      } finally {
+        spy.mockRestore();
+      }
+      expect(raced).toBe(true);
+
+      // Fintava was asked about BVN A, and said it matched.
+      expect(selfieCalls()).toHaveLength(1);
+      expect((selfieCalls()[0].body as { bvn: string }).bvn).toBe(BVN);
+      // The person's current check is now BVN B's.
+      const checkB = await identity.currentBvnCheck(user.id);
+      expect(checkB!.bvnHash).not.toBe(checkA!.bvnHash);
+      await expect(identity.checkedBvn(user.id, OTHER_BVN)).resolves.toEqual(
+        checkB,
+      );
+
+      // The match is recorded against A's check, and does not count for B.
+      expect(res.status).toBe(409);
+      expect(body<null>(res).reason?.code).toBe('bvn_not_checked');
+      const [row] = await rows(user);
+      expect(row.outcome).toBe('matched');
+      expect(row.bvnVerifiedAt).toEqual(checkA!.verifiedAt);
+      expect(row.bvnHash).toBe(checkA!.bvnHash);
+      await expect(
+        app.get(SelfieMatchService).selfieMatched(user.id),
+      ).resolves.toBe(false);
+      const view = body<SelfieMatchView>(await read(user).expect(200)).data!;
+      expect(view).toEqual({ matchedAt: null, checksLeft: 2 });
+
+      // B's own selfie can still be matched, and then counts.
+      double.reset();
+      answerSelfie({ status: 200, body: SELFIE_MATCHED });
+      await match(user, { bvn: OTHER_BVN, image: selfie() }).expect(200);
+      await expect(
+        app.get(SelfieMatchService).selfieMatched(user.id),
+      ).resolves.toBe(true);
+    });
+
+    it('a matched row counts only when both its check time and its BVN hash are the current check’s', async () => {
+      const user = person();
+      await bvnChecked(user);
+      const check = (await identity.currentBvnCheck(user.id))!;
+      const later = new Date(Date.now() + 1_000);
+      const matched = { wawuUserId: user.id, outcome: 'matched' };
+      await prisma.selfieMatchAttempt.createMany({
+        data: [
+          // Written after the check, but tied to no check (a row from before
+          // the columns existed): never a match.
+          { ...matched, settledAt: later, createdAt: later },
+          // The same check time, another BVN's hash.
+          {
+            ...matched,
+            settledAt: later,
+            bvnVerifiedAt: check.verifiedAt,
+            bvnHash: 'another-bvn-hash',
+          },
+          // This BVN's hash, an earlier check of it.
+          {
+            ...matched,
+            settledAt: later,
+            bvnVerifiedAt: new Date(check.verifiedAt.getTime() - 60_000),
+            bvnHash: check.bvnHash,
+          },
+          // Tied to this check, but not a match.
+          {
+            wawuUserId: user.id,
+            outcome: 'not_matched',
+            settledAt: later,
+            bvnVerifiedAt: check.verifiedAt,
+            bvnHash: check.bvnHash,
+          },
+        ],
+      });
+      await expect(
+        app.get(SelfieMatchService).selfieMatched(user.id),
+      ).resolves.toBe(false);
+      expect(
+        body<SelfieMatchView>(await read(user).expect(200)).data!.matchedAt,
+      ).toBeNull();
+
+      await prisma.selfieMatchAttempt.create({
+        data: {
+          ...matched,
+          settledAt: later,
+          bvnVerifiedAt: check.verifiedAt,
+          bvnHash: check.bvnHash,
+        },
+      });
+      await expect(
+        app.get(SelfieMatchService).selfieMatched(user.id),
+      ).resolves.toBe(true);
+    });
+
+    it('re-checking the same BVN needs a new selfie: the old match was tied to the old check', async () => {
+      const user = person();
+      await bvnChecked(user);
+      answerSelfie({ status: 200, body: SELFIE_MATCHED });
+      await match(user, { bvn: BVN, image: selfie() }).expect(200);
+      await new Promise((r) => setTimeout(r, 5));
+      await bvnChecked(user, BVN);
+      await expect(
+        app.get(SelfieMatchService).selfieMatched(user.id),
+      ).resolves.toBe(false);
+      answerSelfie({ status: 200, body: SELFIE_MATCHED });
+      await match(user, { bvn: BVN, image: selfie() }).expect(200);
+    });
+
+    it('the BVN-only lookup the selfie uses, and the BVN-and-NIN one account opening uses', async () => {
+      const user = person();
+      await bvnChecked(user);
+      const check = await identity.currentBvnCheck(user.id);
+      await expect(identity.checkedBvn(user.id, BVN)).resolves.toEqual(check);
+      await expect(identity.checkedBvn(user.id, OTHER_BVN)).resolves.toBeNull();
+      await expect(
+        identity.matchesCheckedIdentity(user.id, BVN, NIN),
+      ).resolves.toBe(true);
+      await expect(
+        identity.matchesCheckedIdentity(user.id, BVN, '70290000000'),
+      ).resolves.toBe(false);
     });
   });
 
@@ -401,6 +584,81 @@ describe('Selfie match to the BVN photo (KYC-02) over HTTP', () => {
       expect(body<null>(res).reason?.code).toBe('selfie_not_matched');
       const [row] = await rows(user);
       expect(row).toMatchObject({ outcome: 'not_matched', confidence: 31.5 });
+      await expect(
+        app.get(SelfieMatchService).selfieMatched(user.id),
+      ).resolves.toBe(false);
+    });
+
+    // Verifier round 1, defect 1: each of these 2xx answers made the route
+    // answer 200 and set a match. Now an explicit "no" is A16 (422, counted)
+    // and an answer with no verdict is 503 (counted: it was charged); in
+    // neither does anything count as matched.
+    const notAMatch: Array<[string, number, unknown, 422 | 503]> = [
+      ['the documented {} in the envelope', 200, SELFIE_200, 503],
+      [
+        'status "failed" in the envelope',
+        200,
+        { status: 'failed', message: 'Face does not match', data: {} },
+        422,
+      ],
+      ['data.status "failed"', 200, { data: { status: 'failed' } }, 422],
+      ['match "false"', 200, { data: { match: 'false' } }, 422],
+      ['match 0', 200, { data: { match: 0 } }, 422],
+      ['match null', 200, { data: { match: null } }, 503],
+      ['faceMatch false', 200, { data: { faceMatch: false } }, 422],
+      ['selfie_match false', 200, { data: { selfie_match: false } }, 422],
+      [
+        'match false two levels down',
+        200,
+        { data: { result: { selfie_verification: { match: false } } } },
+        422,
+      ],
+      ['confidence 0 alone', 200, { data: { confidence: 0 } }, 503],
+      ['201 { data: {} }', 201, { data: {} }, 503],
+      ['{}', 200, {}, 503],
+      ['data null', 200, { data: null }, 503],
+      ['data a string', 200, { data: 'ok' }, 503],
+      ['data an array', 200, { data: [] }, 503],
+      [
+        'match true but the envelope says failed',
+        200,
+        { status: 'failed', data: { match: true } },
+        422,
+      ],
+    ];
+    it.each(notAMatch)(
+      'a 2xx with %s (HTTP %i) sets no match: %i, counted',
+      async (_name, status, answer, expected) => {
+        const user = person();
+        await bvnChecked(user);
+        answerSelfie({ status, body: answer as object });
+        const res = await match(user, { bvn: BVN, image: selfie() }).expect(
+          expected,
+        );
+        const out = body<null>(res);
+        expect(out.data).toBeNull();
+        expect(out.reason?.code).toBe(
+          expected === 422 ? 'selfie_not_matched' : 'provider_unreachable',
+        );
+        expect(selfieCalls()).toHaveLength(1);
+        const [row] = await rows(user);
+        expect(row.outcome).toBe(
+          expected === 422 ? 'not_matched' : 'unavailable',
+        );
+        await expect(
+          app.get(SelfieMatchService).selfieMatched(user.id),
+        ).resolves.toBe(false);
+        const view = body<SelfieMatchView>(await read(user).expect(200)).data!;
+        expect(view).toEqual({ matchedAt: null, checksLeft: 2 });
+      },
+    );
+
+    it('a 204 with no body sets no match: 503, counted', async () => {
+      const user = person();
+      await bvnChecked(user);
+      answerSelfie({ status: 204 });
+      await match(user, { bvn: BVN, image: selfie() }).expect(503);
+      expect((await rows(user)).map((r) => r.outcome)).toEqual(['unavailable']);
       await expect(
         app.get(SelfieMatchService).selfieMatched(user.id),
       ).resolves.toBe(false);
@@ -473,7 +731,7 @@ describe('Selfie match to the BVN photo (KYC-02) over HTTP', () => {
           createdAt: new Date(Date.now() - 25 * 60 * 60_000),
         })),
       });
-      answerSelfie({ status: 200, body: SELFIE_200 });
+      answerSelfie({ status: 200, body: SELFIE_MATCHED });
       await match(user, { bvn: BVN, image: selfie() }).expect(200);
     });
 
@@ -504,13 +762,13 @@ describe('Selfie match to the BVN photo (KYC-02) over HTTP', () => {
   describe('refused before anything is charged', () => {
     it('without a passed BVN check, or with a BVN other than the one that passed: 409 bvn_not_checked', async () => {
       const none = person();
-      answerSelfie({ status: 200, body: SELFIE_200 });
+      answerSelfie({ status: 200, body: SELFIE_MATCHED });
       const one = await match(none, { bvn: BVN, image: selfie() }).expect(409);
       expect(body<null>(one).reason?.code).toBe('bvn_not_checked');
 
       const checked = person();
       await bvnChecked(checked);
-      answerSelfie({ status: 200, body: SELFIE_200 });
+      answerSelfie({ status: 200, body: SELFIE_MATCHED });
       const two = await match(checked, {
         bvn: OTHER_BVN,
         image: selfie(),
@@ -534,7 +792,7 @@ describe('Selfie match to the BVN photo (KYC-02) over HTTP', () => {
           accountNumber: `18${String(Date.now()).slice(-8)}`,
         },
       });
-      answerSelfie({ status: 200, body: SELFIE_200 });
+      answerSelfie({ status: 200, body: SELFIE_MATCHED });
       const res = await match(user, { bvn: BVN, image: selfie() }).expect(409);
       expect(body<null>(res).reason?.code).toBe('wallet_already_open');
       expect(selfieCalls()).toHaveLength(0);
@@ -597,15 +855,90 @@ describe('Selfie match to the BVN photo (KYC-02) over HTTP', () => {
     it('the image check accepts JPEG and PNG of 1 KB up to the cap, and nothing else', () => {
       expect(isSelfieImage(selfie('jpeg', 1_000))).toBe(true);
       expect(isSelfieImage(selfie('png', 1_000))).toBe(true);
-      const atCap = Buffer.concat([
-        JPEG_MAGIC,
-        randomBytes((SELFIE_IMAGE_MAX_CHARS / 4) * 3 - JPEG_MAGIC.length),
-      ]).toString('base64');
+      const atCap = imageBytes(
+        'jpeg',
+        randomBytes(
+          (SELFIE_IMAGE_MAX_CHARS / 4) * 3 -
+            JPEG_MAGIC.length -
+            JPEG_END.length,
+        ),
+      ).toString('base64');
       expect(atCap.length).toBe(SELFIE_IMAGE_MAX_CHARS);
       expect(isSelfieImage(atCap)).toBe(true);
       expect(isSelfieImage(`${atCap}AAAA`)).toBe(false);
       expect(isSelfieImage(selfie('jpeg', 900))).toBe(false);
       expect(isSelfieImage(null)).toBe(false);
+    });
+
+    it('a file that only starts like a JPEG or PNG (a polyglot) is refused: both ends are checked (defect 3)', async () => {
+      const b64 = (b: Buffer) => b.toString('base64');
+      const zip = Buffer.concat([
+        Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+        randomBytes(1500),
+        Buffer.from([0x50, 0x4b, 0x05, 0x06]),
+        Buffer.alloc(18),
+      ]);
+      const html = Buffer.from(
+        `<html><body>${'<p>not a photo</p>'.repeat(100)}</body></html>`,
+      );
+      const realJpeg = imageBytes('jpeg', randomBytes(3000));
+      const realPng = imageBytes('png', randomBytes(3000));
+      expect(isSelfieImage(b64(realJpeg))).toBe(true);
+      expect(isSelfieImage(b64(realPng))).toBe(true);
+
+      const polyglots: Array<[string, Buffer]> = [
+        ['JPEG magic, then HTML', Buffer.concat([JPEG_MAGIC, html])],
+        ['JPEG magic, then a ZIP', Buffer.concat([JPEG_MAGIC, zip])],
+        [
+          'JPEG magic, then random bytes',
+          Buffer.concat([JPEG_MAGIC, randomBytes(3000)]),
+        ],
+        ['a JPEG with a ZIP appended', Buffer.concat([realJpeg, zip])],
+        [
+          'a JPEG with one byte after its end',
+          Buffer.concat([realJpeg, Buffer.from([0x00])]),
+        ],
+        [
+          'a JPEG end marker without its start',
+          Buffer.concat([randomBytes(3000), JPEG_END]),
+        ],
+        [
+          'PNG magic on a JPEG body',
+          Buffer.concat([PNG_MAGIC, realJpeg.subarray(3)]),
+        ],
+        [
+          'PNG signature and IEND, no IHDR first',
+          Buffer.concat([PNG_MAGIC, randomBytes(3000), PNG_IEND]),
+        ],
+        [
+          'PNG signature and IHDR, no IEND last',
+          Buffer.concat([PNG_MAGIC, PNG_IHDR, randomBytes(3000)]),
+        ],
+        ['a PNG with a ZIP appended', Buffer.concat([realPng, zip])],
+        [
+          'a PNG whose IEND is cut short',
+          realPng.subarray(0, realPng.length - 1),
+        ],
+      ];
+      for (const [name, bytes] of polyglots) {
+        expect({ name, ok: isSelfieImage(b64(bytes)) }).toEqual({
+          name,
+          ok: false,
+        });
+      }
+
+      // Through the route: each is a 400 before Fintava is asked or charged.
+      const user = person();
+      await bvnChecked(user);
+      answerSelfie({ status: 200, body: SELFIE_MATCHED });
+      for (const [, bytes] of polyglots) {
+        const image = b64(bytes);
+        images.push(image);
+        const res = await match(user, { bvn: BVN, image }).expect(400);
+        body(res);
+      }
+      expect(selfieCalls()).toHaveLength(0);
+      expect(await rows(user)).toHaveLength(0);
     });
   });
 
@@ -702,10 +1035,10 @@ describe('Selfie match to the BVN photo (KYC-02) over HTTP', () => {
       const a = person();
       const b = person();
       await bvnChecked(a);
-      answerSelfie({ status: 200, body: SELFIE_200 });
+      answerSelfie({ status: 200, body: SELFIE_MATCHED });
       await match(a, { bvn: BVN, image: selfie() }).expect(200);
       double.reset();
-      answerSelfie({ status: 200, body: SELFIE_200 });
+      answerSelfie({ status: 200, body: SELFIE_MATCHED });
 
       // B has no BVN check: A's BVN does not let B in.
       const one = await match(b, { bvn: BVN, image: selfie() }).expect(409);
@@ -716,7 +1049,7 @@ describe('Selfie match to the BVN photo (KYC-02) over HTTP', () => {
       );
       // B's own BVN check, then A's BVN: still not B's.
       await bvnChecked(b, OTHER_BVN);
-      answerSelfie({ status: 200, body: SELFIE_200 });
+      answerSelfie({ status: 200, body: SELFIE_MATCHED });
       await match(b, { bvn: BVN, image: selfie() }).expect(409);
       expect(selfieCalls()).toHaveLength(0);
 

@@ -354,9 +354,9 @@ Listed, not resolved. Each names what the canvas draws, what Fintava does
   last 4 digits only (CONVENTIONS.md section 8), so MONEY-12's request
   carries the BVN, NIN, address and A5's name and date of birth from the app
   again and checks the BVN and NIN with
-  `WalletIdentityService.matchesCheckedIdentity`, and that the selfie
-  matched after the last BVN check with `SelfieMatchService.selfieMatched`
-  (KYC-02). The result is declared
+  `WalletIdentityService.matchesCheckedIdentity` (the NIN is required), and
+  that the selfie matched against the current BVN check with
+  `SelfieMatchService.selfieMatched` (KYC-02). The result is declared
   (`WalletView.state`, `account`).
 - **W27 "Report a problem"** needs a support conversation that carries a
   transaction reference; no such route exists in the backend.

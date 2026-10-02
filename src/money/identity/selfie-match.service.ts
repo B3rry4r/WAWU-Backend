@@ -18,6 +18,7 @@ import {
 import type { SelfieMatchView } from './identity-view.type';
 import {
   BVN_NOT_CHECKED_MESSAGE,
+  type PassedBvnCheck,
   WALLET_ALREADY_OPEN_MESSAGE,
   WalletIdentityService,
 } from './wallet-identity.service';
@@ -56,14 +57,22 @@ const NOT_CHARGED: readonly FintavaErrorKind[] = ['not_configured', 'auth'];
  * BVN photo or anything else Fintava answers with (the MONEY-06 client
  * passes on only the verdict and a confidence score, and logs no body; it
  * masks image-like runs in Fintava's messages). The BVN is compared with
- * the keyed hash KYC-01 stored (WalletIdentityService.matchesCheckedIdentity)
- * and is never stored either.
+ * the keyed hash KYC-01 stored (WalletIdentityService.checkedBvn) and is
+ * never stored either.
  *
  * What is stored, one SelfieMatchAttempt row per match sent: the outcome,
- * when it was taken and answered, and Fintava's confidence score when it
- * gives one. That row is also the per-person daily limit, counted the same
- * way as the BVN check's (reserveDailyAttempt), so parallel requests cannot
- * get past it.
+ * when it was taken and answered, Fintava's confidence score when it gives
+ * one, and the passed BVN check it was compared against (when it passed and
+ * its keyed hash), read once at the start of the request. A match counts
+ * only while that is still the person's current check: a BVN check for
+ * another BVN that passes while the selfie is being matched does not inherit
+ * it. The row is also the per-person daily limit, counted the same way as
+ * the BVN check's (reserveDailyAttempt), so parallel requests cannot get
+ * past it.
+ *
+ * Only an explicit match from Fintava sets a match (the MONEY-06 client
+ * reads the answer failing closed): an explicit "no" is A16, and an answer
+ * with no verdict is counted and answered 503, never a match.
  *
  * Everything is keyed on the caller's token: no route names another person.
  */
@@ -80,18 +89,18 @@ export class SelfieMatchService {
 
   async view(wawuUserId: string): Promise<SelfieMatchView> {
     const [matchedAt, used] = await Promise.all([
-      this.matchedAt(wawuUserId),
-      this.ledger.count(wawuUserId, this.since()),
+      this.currentMatchedAt(wawuUserId),
+      this.used(wawuUserId, this.since()),
     ]);
     return this.toView(matchedAt, this.left(used));
   }
 
   /**
-   * True when this person's selfie matched the BVN photo after their last
+   * True when this person's selfie matched the BVN photo of their current
    * passed BVN check. For account opening (MONEY-12).
    */
   async selfieMatched(wawuUserId: string): Promise<boolean> {
-    return (await this.matchedAt(wawuUserId)) !== null;
+    return (await this.currentMatchedAt(wawuUserId)) !== null;
   }
 
   async match(
@@ -113,12 +122,12 @@ export class SelfieMatchService {
       throw new MoneyError('wallet_already_open', WALLET_ALREADY_OPEN_MESSAGE);
     }
     // The BVN must be the one whose check passed (compared as a keyed hash).
-    if (
-      !(await this.identity.matchesCheckedIdentity(wawuUserId, input.bvn, null))
-    ) {
+    // That check is read once, here, and everything below is tied to it.
+    const check = await this.identity.checkedBvn(wawuUserId, input.bvn);
+    if (!check) {
       throw new MoneyError('bvn_not_checked', BVN_NOT_CHECKED_MESSAGE);
     }
-    if (await this.selfieMatched(wawuUserId)) {
+    if ((await this.matchedAt(wawuUserId, check)) !== null) {
       throw new MoneyError(
         'selfie_already_matched',
         SELFIE_ALREADY_MATCHED_MESSAGE,
@@ -126,7 +135,7 @@ export class SelfieMatchService {
     }
 
     const attempt = await reserveDailyAttempt(
-      this.ledger,
+      this.ledger(check),
       wawuUserId,
       this.hasher.selfieChecksPerDay,
       (retryAfterSeconds) =>
@@ -166,59 +175,88 @@ export class SelfieMatchService {
       await this.settle(attempt.id, 'not_matched', result.confidence);
       throw this.notMatched(attempt.used);
     }
-    const settledAt = new Date();
     await this.prisma.selfieMatchAttempt.update({
       where: { id: attempt.id },
       data: {
         outcome: 'matched',
         confidence: result.confidence,
-        settledAt,
+        settledAt: new Date(),
       },
     });
-    return this.toView(settledAt, this.left(attempt.used));
+    // The match is for the check it was compared against. If another BVN
+    // check passed meanwhile, that is the current check now and this
+    // selfie does not count for it: the BVN sent is no longer the checked
+    // one.
+    const matchedAt = await this.currentMatchedAt(wawuUserId);
+    if (matchedAt === null) {
+      throw new MoneyError('bvn_not_checked', BVN_NOT_CHECKED_MESSAGE);
+    }
+    return this.toView(matchedAt, this.left(attempt.used));
   }
 
   // -------------------------------------------------------------------------
 
-  /** SelfieMatchAttempt, as the shared daily limit counts it. */
-  private readonly ledger: DailyAttemptLedger = {
-    create: async (wawuUserId) =>
-      (
-        await this.prisma.selfieMatchAttempt.create({
-          data: { wawuUserId },
-          select: { id: true },
-        })
-      ).id,
-    count: (wawuUserId, since) =>
-      this.prisma.selfieMatchAttempt.count({
-        where: { wawuUserId, createdAt: { gt: since } },
-      }),
-    remove: async (id) => {
-      await this.prisma.selfieMatchAttempt.delete({ where: { id } });
-    },
-    oldestSince: async (wawuUserId, since) =>
-      (
-        await this.prisma.selfieMatchAttempt.findFirst({
-          where: { wawuUserId, createdAt: { gt: since } },
-          orderBy: { createdAt: 'asc' },
-          select: { createdAt: true },
-        })
-      )?.createdAt ?? null,
-  };
+  /**
+   * SelfieMatchAttempt, as the shared daily limit counts it. A row it
+   * writes records the BVN check the selfie is compared against.
+   */
+  private ledger(check: PassedBvnCheck): DailyAttemptLedger {
+    return {
+      create: async (wawuUserId) =>
+        (
+          await this.prisma.selfieMatchAttempt.create({
+            data: {
+              wawuUserId,
+              bvnVerifiedAt: check.verifiedAt,
+              bvnHash: check.bvnHash,
+            },
+            select: { id: true },
+          })
+        ).id,
+      count: (wawuUserId, since) => this.used(wawuUserId, since),
+      remove: async (id) => {
+        await this.prisma.selfieMatchAttempt.delete({ where: { id } });
+      },
+      oldestSince: async (wawuUserId, since) =>
+        (
+          await this.prisma.selfieMatchAttempt.findFirst({
+            where: { wawuUserId, createdAt: { gt: since } },
+            orderBy: { createdAt: 'asc' },
+            select: { createdAt: true },
+          })
+        )?.createdAt ?? null,
+    };
+  }
+
+  private used(wawuUserId: string, since: Date): Promise<number> {
+    return this.prisma.selfieMatchAttempt.count({
+      where: { wawuUserId, createdAt: { gt: since } },
+    });
+  }
+
+  /** matchedAt, for the person's passed BVN check as it stands now. */
+  private async currentMatchedAt(wawuUserId: string): Promise<Date | null> {
+    const check = await this.identity.currentBvnCheck(wawuUserId);
+    return check ? this.matchedAt(wawuUserId, check) : null;
+  }
 
   /**
-   * When the selfie last matched, if that was after the BVN check that
-   * passed last: a selfie counts only for the BVN it was matched against,
-   * and a new BVN check (the same BVN or another) needs a new selfie.
+   * When the selfie matched against this BVN check, or null: a selfie
+   * counts only for the check it was compared against (the same time and
+   * the same keyed hash), so a new BVN check (the same BVN or another) needs
+   * a new selfie, and a check that passed while a selfie was being matched
+   * does not inherit it.
    */
-  private async matchedAt(wawuUserId: string): Promise<Date | null> {
-    const verifiedAt = await this.identity.bvnVerifiedAt(wawuUserId);
-    if (!verifiedAt) return null;
+  private async matchedAt(
+    wawuUserId: string,
+    check: PassedBvnCheck,
+  ): Promise<Date | null> {
     const row = await this.prisma.selfieMatchAttempt.findFirst({
       where: {
         wawuUserId,
         outcome: 'matched',
-        createdAt: { gt: verifiedAt },
+        bvnVerifiedAt: check.verifiedAt,
+        bvnHash: check.bvnHash,
       },
       orderBy: { settledAt: 'desc' },
       select: { settledAt: true },

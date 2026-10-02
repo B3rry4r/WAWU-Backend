@@ -121,22 +121,50 @@ function scalars(o: Obj): Scalars {
 }
 
 /**
- * The names a selfie answer could carry its verdict and score under. The
- * success body is unseen (mobile repo `docs/fintava/naira-api.md`, question
- * 6), so these are read where they appear, in `data` or one object below
- * it, and nothing else is: a verdict field set to `false` is a failed match
- * whatever the status, and the first finite number under a score name is
- * the confidence. Strings that look like numbers are read too.
+ * Reading a selfie match's 2xx answer (KYC-02), failing closed.
+ *
+ * Fintava documents no verdict field: the reference page's 200 example is
+ * `{}` with an empty schema, and the success body is unseen (mobile repo
+ * `docs/fintava/naira-api.md`, question 6; a failed match is a 400,
+ * `sandbox/05-bvn-selfie.md`). So a match is never assumed from a 2xx. It
+ * is a match only when one of SELFIE_PASS_KEYS, in `data` or one object
+ * below it, is the boolean `true`, and nothing anywhere in the answer says
+ * otherwise. Until Fintava shows its real success body (and these names are
+ * narrowed to its field), every answer it is documented to give is read as
+ * having no verdict, so no selfie passes.
+ *
+ * Three readings:
+ * - match: as above.
+ * - no match (`matched: false`, a failed match the caller counts): a field
+ *   whose name says match or verif set to `false`, `0` or a word like
+ *   "false", "no" or "failed"; a `status`, `result`, `outcome` or `state`
+ *   that is `false` or says it failed; or `success: false`, anywhere in the
+ *   answer, the envelope included.
+ * - no verdict (everything else: `{}`, `match: null`, `match: "yes"`, a
+ *   verdict under an unknown name only, a score alone, a status that is
+ *   neither a success nor a failure): a FintavaShapeError, which the client
+ *   turns into `bad_response`. The selfie service counts it (it was
+ *   charged) and answers 503; it never sets a match.
  */
-const SELFIE_VERDICT_KEYS = [
+const SELFIE_PASS_KEYS = [
   'match',
   'matched',
   'is_match',
   'isMatch',
-  'verified',
-  'is_verified',
-  'isVerified',
+  'face_match',
+  'faceMatch',
+  'selfie_match',
+  'selfieMatch',
 ];
+/** Any field named like a verdict: each one must be `true` for a match. */
+const SELFIE_VERDICT_NAME = /match|verif/i;
+/** Fields that report how the call went, in the envelope or in `data`. */
+const SELFIE_STATUS_NAME = /^(status|result|outcome|state)$/i;
+const SELFIE_SUCCESS_NAME = /^(success|successful|is_success|isSuccess)$/i;
+const SELFIE_FAILED_WORD =
+  /^(false|no|n|0|fail|failed|failure|mismatch|mismatched|unmatched|not[ _-]?match(ed)?|no[ _-]?match|rejected|declined|unverified|not[ _-]?verified|invalid)$/i;
+const SELFIE_SUCCESS_WORD =
+  /^(success|successful|ok|matched|match|verified|passed|completed|approved|true)$/i;
 const SELFIE_SCORE_KEYS = [
   'confidence',
   'confidence_value',
@@ -146,14 +174,33 @@ const SELFIE_SCORE_KEYS = [
   'similarity',
   'score',
 ];
+/** How deep the answer is read for a verdict that says no. */
+const SELFIE_MAX_DEPTH = 8;
 
-function readSelfieResult(data: Obj): FintavaSelfieResult {
+type Field = { key: string; value: unknown };
+
+/** Every scalar in `v`, with the name of the field it sits under. */
+function selfieFields(v: unknown, key = '', depth = 0, out: Field[] = []) {
+  if (depth > SELFIE_MAX_DEPTH) return out;
+  if (Array.isArray(v)) {
+    for (const item of v) selfieFields(item, key, depth + 1, out);
+  } else if (isObj(v)) {
+    for (const [k, item] of Object.entries(v)) {
+      selfieFields(item, k, depth + 1, out);
+    }
+  } else {
+    out.push({ key, value: v });
+  }
+  return out;
+}
+
+function saysFailed(value: unknown): boolean {
+  if (value === false || value === 0) return true;
+  return typeof value === 'string' && SELFIE_FAILED_WORD.test(value.trim());
+}
+
+function readSelfieResult(data: Obj, body: Obj): FintavaSelfieResult {
   const levels = [data, ...Object.values(data).filter(isObj)];
-  const verdicts = levels.flatMap((o) =>
-    SELFIE_VERDICT_KEYS.map((k) => o[k]).filter(
-      (v): v is boolean => typeof v === 'boolean',
-    ),
-  );
   let confidence: number | null = null;
   for (const o of levels) {
     for (const k of SELFIE_SCORE_KEYS) {
@@ -167,7 +214,39 @@ function readSelfieResult(data: Obj): FintavaSelfieResult {
       if (confidence === null && Number.isFinite(n)) confidence = n;
     }
   }
-  return { matched: !verdicts.includes(false), confidence };
+
+  // The whole answer, the envelope included, is read for anything that
+  // says no; the envelope's `data` is read as part of it.
+  const fields = selfieFields(body);
+  const verdicts = fields.filter((f) => SELFIE_VERDICT_NAME.test(f.key));
+  const statuses = fields.filter((f) => SELFIE_STATUS_NAME.test(f.key));
+  const successFlags = fields.filter((f) => SELFIE_SUCCESS_NAME.test(f.key));
+
+  const no =
+    verdicts.some((f) => saysFailed(f.value)) ||
+    statuses.some(
+      (f) =>
+        f.value === false ||
+        (typeof f.value === 'string' &&
+          SELFIE_FAILED_WORD.test(f.value.trim())),
+    ) ||
+    successFlags.some((f) => f.value === false);
+  if (no) return { matched: false, confidence };
+
+  const yes =
+    levels.some((o) => SELFIE_PASS_KEYS.some((k) => o[k] === true)) &&
+    verdicts.every((f) => f.value === true) &&
+    statuses.every(
+      (f) =>
+        f.value === true ||
+        (typeof f.value === 'number' && f.value >= 200 && f.value < 300) ||
+        (typeof f.value === 'string' &&
+          SELFIE_SUCCESS_WORD.test(f.value.trim())),
+    ) &&
+    successFlags.every((f) => f.value === true);
+  if (yes) return { matched: true, confidence };
+
+  throw new FintavaShapeError('the selfie answer carries no match verdict');
 }
 
 function readTransaction(v: unknown): FintavaTransaction {
@@ -623,7 +702,9 @@ export class FintavaClient {
     const answer = await this.request(op, '/compliance/verify/bvn/selfie', {
       body: { bvn: input.bvn, image: input.imageBase64 },
     });
-    return this.read(op, answer, (data) => readSelfieResult(obj(data, 'data')));
+    return this.read(op, answer, (data, body) =>
+      readSelfieResult(obj(data, 'data'), body),
+    );
   }
 
   /** `GET /compliance/verify/phone-number`. Charged, even for "not found". */

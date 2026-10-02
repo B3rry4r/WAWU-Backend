@@ -442,12 +442,15 @@ export interface FintavaSelfieInput {
 /**
  * A selfie match's answer. It is a face match against the BVN record's
  * photo, not a liveness check (Fintava offers none). The success body is
- * unseen (a failed match is a 400, `sandbox/05-`; question 6): a 2xx with a
- * `data` object is read as a match unless it says otherwise, and nothing
- * else of it is passed on (it may echo the BVN or carry a photo).
+ * unseen (a failed match is a 400, `sandbox/05-`; question 6) and Fintava
+ * documents no verdict field (its 200 example is `{}`), so it is read
+ * failing closed: a match only on an explicit boolean `true` verdict with
+ * nothing saying otherwise; an explicit "no" is `matched: false`; an answer
+ * with no verdict is a `bad_response` error, never a match. Nothing else of
+ * it is passed on (it may echo the BVN or carry a photo).
  */
 export interface FintavaSelfieResult {
-  /** False only when a 2xx says so in a match field set to `false`. */
+  /** True only on an explicit `true` verdict; false on an explicit "no". */
   matched: boolean;
   /** Fintava's confidence score, as sent, when the answer has one; else null. */
   confidence: number | null;

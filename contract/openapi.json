@@ -20032,7 +20032,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "A6: matches the selfie against the BVN record's photo with Fintava\n(charged per match, a failed one too). A face match, not a liveness\ncheck. Needs a passed BVN check, and the BVN it passed with\n(`bvn_not_checked` otherwise). A failed match is A16\n(`selfie_not_matched`, with matches left today); the fourth in 24 hours\nis `selfie_checks_exhausted`, and Fintava is not asked. Neither the\nselfie nor the BVN photo is stored or logged. Limited per address by the\napp's throttler, as the BVN check is.",
+        "summary": "A6: matches the selfie against the BVN record's photo with Fintava\n(charged per match, a failed one too). A face match, not a liveness\ncheck. Needs a passed BVN check, and the BVN it passed with\n(`bvn_not_checked` otherwise). A failed match is A16\n(`selfie_not_matched`, with matches left today); the fourth in 24 hours\nis `selfie_checks_exhausted`, and Fintava is not asked. Only an explicit\nmatch from Fintava passes: an answer with no verdict is\n`provider_unreachable` and still counts. A match counts only for the\nBVN check it was compared against (`bvn_not_checked` if another check\npassed meanwhile). Neither the\nselfie nor the BVN photo is stored or logged. Limited per address by the\napp's throttler, as the BVN check is.",
         "tags": [
           "MoneyIdentity"
         ],

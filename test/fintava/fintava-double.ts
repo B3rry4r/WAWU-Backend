@@ -603,14 +603,27 @@ export const BVN_200 = {
 };
 
 /**
- * A selfie match that passed (KYC-02). The success body is unseen in the
- * sandbox (no BVN it knows, question 11; the reference page's example is
- * `{}`), so this is Fintava's usual 2xx envelope, `{ data, status, message }`
- * as every other check answers, around that empty example: a match with no
- * score.
+ * Fintava's documented 200 for a selfie match (KYC-02): its usual envelope,
+ * `{ data, status, message }` as every other check answers, around the
+ * reference page's only example, `{}`. It carries no verdict, so since
+ * verifier round 1 (defect 1) it is NOT a match: the client reads it as
+ * `bad_response` and the route answers 503, counted.
  */
 export const SELFIE_200 = {
   data: {},
+  status: 200,
+  message: 'successful',
+};
+
+/**
+ * A stand-in for a selfie match that passed: the envelope around an explicit
+ * `match: true`. Made up, not seen: no sandbox BVN passes (question 11) and
+ * Fintava documents no verdict field (question 6). It is the narrowest
+ * answer the client reads as a match, so a test passing on it proves the
+ * pass path, not Fintava's real body.
+ */
+export const SELFIE_MATCHED = {
+  data: { match: true },
   status: 200,
   message: 'successful',
 };

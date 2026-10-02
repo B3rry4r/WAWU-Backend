@@ -96,7 +96,11 @@ export class MoneyIdentityController {
    * check. Needs a passed BVN check, and the BVN it passed with
    * (`bvn_not_checked` otherwise). A failed match is A16
    * (`selfie_not_matched`, with matches left today); the fourth in 24 hours
-   * is `selfie_checks_exhausted`, and Fintava is not asked. Neither the
+   * is `selfie_checks_exhausted`, and Fintava is not asked. Only an explicit
+   * match from Fintava passes: an answer with no verdict is
+   * `provider_unreachable` and still counts. A match counts only for the
+   * BVN check it was compared against (`bvn_not_checked` if another check
+   * passed meanwhile). Neither the
    * selfie nor the BVN photo is stored or logged. Limited per address by the
    * app's throttler, as the BVN check is.
    */

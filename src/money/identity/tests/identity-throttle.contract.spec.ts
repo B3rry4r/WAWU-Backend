@@ -284,6 +284,7 @@ describe('BVN check throttle through the global ThrottlerGuard (KYC-01)', () => 
   const IMAGE = Buffer.concat([
     Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
     Buffer.alloc(3000, 7),
+    Buffer.from([0xff, 0xd9]),
   ]).toString('base64');
 
   it('the fourth selfie match from one address within a minute is 429 from the guard and never reaches Fintava', async () => {
