@@ -150,6 +150,16 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // CreatorWallet above, removing it removes WAWU's pointer, not the account
   // at Fintava, which is why deletion needs an empty wallet first (R-17).
   { model: 'FintavaWallet', column: 'wawuUserId', disposition: 'OWNED' },
+  // The ledger's rows on this person's wallet (MONEY-10), like
+  // WalletLedgerEntry above; their FintavaLedgerReference rows go with them
+  // (cascade). Deletion needs an empty wallet first (R-17). Default (agent),
+  // owner may override: how long money records are kept after an account
+  // is deleted is the owner's call.
+  {
+    model: 'FintavaLedgerEntry',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
 
   // Last: everything above may reference these.
   { model: 'CreatorState', column: 'wawuUserId', disposition: 'OWNED' },
@@ -192,6 +202,13 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'viewerWawuId',
     disposition: 'COUNTERPARTY',
   },
+  // The other side named on somebody else's ledger row (MONEY-10): their
+  // money record survives.
+  {
+    model: 'FintavaLedgerEntry',
+    column: 'counterpartyWawuUserId',
+    disposition: 'COUNTERPARTY',
+  },
 
   // ── admin audit trail, kept on purpose ──────────────────────────────────
   { model: 'AdminKycAudit', column: 'subjectWawuUserId', disposition: 'AUDIT' },
@@ -225,6 +242,8 @@ export const NOT_A_USER_REFERENCE: ReadonlyArray<{
 }> = [
   { model: 'Product', column: 'wawuPick' },
   { model: 'Product', column: 'wawuVerified' },
+  // WAWU's fee in kobo on a ledger row (MONEY-10), not a person.
+  { model: 'FintavaLedgerEntry', column: 'wawuFeeKobo' },
 ];
 
 /** The rows a purge actually removes. */

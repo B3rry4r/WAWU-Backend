@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { FintavaModule } from '../fintava/fintava.module';
 import { MoneyBalanceController } from './balance/money-balance.controller';
+import { LedgerModule } from './ledger/ledger.module';
 import { WalletBalanceService } from './balance/wallet-balance.service';
 import { MoneyPinController } from './pin/money-pin.controller';
 import { TransactionPinGuard } from './pin/transaction-pin.guard';
@@ -21,9 +22,12 @@ import { TransactionPinService } from './pin/transaction-pin.service';
  * The server starts without any FINTAVA_* setting (the client is then
  * unconfigured and the balance answers 503); the settings are needed for the
  * wallet to work (deploy/README.md step 4).
+ *
+ * MONEY-10: the ledger (LedgerModule), fed from the stored Fintava
+ * deliveries by a sweep. It adds no route.
  */
 @Module({
-  imports: [ConfigModule, FintavaModule],
+  imports: [ConfigModule, FintavaModule, LedgerModule],
   controllers: [MoneyPinController, MoneyBalanceController],
   providers: [TransactionPinService, TransactionPinGuard, WalletBalanceService],
   exports: [TransactionPinService, TransactionPinGuard],
