@@ -95,6 +95,11 @@ FLUTTERWAVE_WEBHOOK_HASH=
 # live base URL here: the client never assumes live, and refuses any host
 # other than Fintava's. The timeouts may stay empty (defaults in
 # .env.example). Live values are put here by OPS-10.
+# These are needed for the wallet to work, not for the server to start.
+# With FINTAVA_BASE_URL unset the server starts, logs one warning ("Fintava
+# is not configured on this server"), sends nothing to Fintava, and the
+# wallet routes answer 503 provider_unreachable (MONEY-11). A value that IS
+# set is checked at boot: anything but Fintava's two hosts stops the server.
 # FINTAVA_WEBHOOK_SECRET is the live dashboard's webhook secret. OPS-10
 # registers this webhook URL in Fintava's live dashboard (MONEY-07):
 #   https://<the API's public host>/api/hub/webhooks/fintava
