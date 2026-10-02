@@ -281,8 +281,9 @@ function buildObject(type, depth) {
     const propType = decl
       ? checker.getTypeOfSymbolAtLocation(prop, decl)
       : checker.getDeclaredTypeOfSymbol(prop);
-    const schema = toSchema(propType, depth + 1);
+    let schema = toSchema(propType, depth + 1);
     if (schema === null) continue; // pure undefined/void property
+    if (declaredIn(type, NULLABLE_REF_AS_ALLOF_DIRS)) schema = nullableRefAsAllOf(schema);
     properties[prop.getName()] = schema;
     const optional = prop.flags & ts.SymbolFlags.Optional;
     if (!optional) required.push(prop.getName());
@@ -291,6 +292,34 @@ function buildObject(type, depth) {
   const out = { type: 'object', properties };
   if (required.length) out.required = required;
   return out;
+}
+
+/**
+ * `{ $ref, nullable: true }` is how unionToSchema writes `Named | null`, and
+ * OpenAPI 3.0 ignores every sibling of a $ref: generators (openapi-typescript
+ * included) read it as plain `Named`, so a field that can be null is typed
+ * as never null. `{ allOf: [{ $ref }], nullable: true }` is the 3.0 form that
+ * keeps the null.
+ *
+ * Only for types declared under these folders (task MONEY-04's wallet
+ * contract), so no schema a served route already publishes changes shape in
+ * the contract. The eight served schemas still written the old way are listed
+ * in docs/contract/WALLET.md, section 5.
+ */
+const NULLABLE_REF_AS_ALLOF_DIRS = [path.join(ROOT, 'src', 'money') + path.sep];
+
+function declaredIn(type, dirs) {
+  const symbol = type.aliasSymbol ?? type.getSymbol();
+  const file = symbol?.declarations?.[0]?.getSourceFile()?.fileName;
+  if (!file) return false;
+  const resolved = path.resolve(file);
+  return dirs.some((dir) => resolved.startsWith(dir));
+}
+
+function nullableRefAsAllOf(schema) {
+  if (!schema || !schema.$ref || !schema.nullable) return schema;
+  const { $ref, nullable, ...rest } = schema;
+  return { ...rest, allOf: [{ $ref }], nullable };
 }
 
 /** Promise<T> -> T, then Paginated<T>/PaginatedListResponse<T> -> T[]. */
@@ -361,8 +390,9 @@ function main() {
           checker.getReturnTypeOfSignature(sig),
         );
 
-        const inner = toSchema(returnType, 0);
+        let inner = toSchema(returnType, 0);
         if (inner === null) continue; // void: no body to describe
+        if (route.startsWith(`${GLOBAL_PREFIX}/money/`)) inner = nullableRefAsAllOf(inner);
         const schema = paginated ? { type: 'array', items: inner } : inner;
 
         for (const code of Object.keys(op.responses ?? {})) {

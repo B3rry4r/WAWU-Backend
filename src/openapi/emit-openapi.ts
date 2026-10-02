@@ -1,8 +1,15 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { NestFactory } from '@nestjs/core';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import {
+  DocumentBuilder,
+  SwaggerModule,
+  type OpenAPIObject,
+  type OperationObject,
+  type PathItemObject,
+} from '@nestjs/swagger';
 import { AppModule } from '../app.module';
+import { MoneyContractModule } from '../money/money-contract.module';
 
 /**
  * Emits the frozen API contract (openapi.json) that the web client generates
@@ -49,6 +56,7 @@ async function emit(): Promise<void> {
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
+  const declared = await addDeclaredRoutes(document, config);
 
   // cwd, not __dirname: `nest build` nests output under dist/src, so a path
   // relative to this file lands the contract inside dist/ and gets wiped by
@@ -59,9 +67,84 @@ async function emit(): Promise<void> {
 
   const paths = Object.keys(document.paths ?? {}).length;
   const schemas = Object.keys(document.components?.schemas ?? {}).length;
-  console.log(`openapi.json written: ${paths} paths, ${schemas} schemas -> ${out}`);
+  console.log(
+    `openapi.json written: ${paths} paths, ${schemas} schemas -> ${out}`,
+  );
+  console.log(
+    `  of which declared, not served (x-wawu-served: false): ${declared} operations`,
+  );
 
   await app.close();
+}
+
+/**
+ * Routes that are part of the contract before anything serves them.
+ *
+ * MoneyContractModule (task MONEY-04) declares the Naira wallet routes so the
+ * mobile app can generate its types and build its screens before the Fintava
+ * client exists. AppModule does not import it, so the served document above
+ * never sees it; this builds a second document from it, in the same preview
+ * mode, and copies its operations and schemas in. Each copied operation is
+ * marked `x-wawu-served: false` and keeps the `x-wawu-built-by` task its
+ * declaration names, so a declared route is never mistaken for a live one.
+ *
+ * A route that is both served and declared fails the emit: the task that
+ * serves a route deletes its declaration in the same change.
+ */
+async function addDeclaredRoutes(
+  document: OpenAPIObject,
+  config: Omit<OpenAPIObject, 'paths'>,
+): Promise<number> {
+  const declaredApp = await NestFactory.create(MoneyContractModule, {
+    preview: true,
+    logger: false,
+  });
+  declaredApp.setGlobalPrefix('api/hub');
+  const declaredDoc = SwaggerModule.createDocument(declaredApp, config);
+  await declaredApp.close();
+
+  let count = 0;
+  for (const [path, item] of Object.entries(declaredDoc.paths ?? {})) {
+    const target = (document.paths[path] ??= {});
+    for (const [method, op] of Object.entries(item)) {
+      if (!isOperation(op)) continue;
+      const key = method as keyof PathItemObject;
+      if (target[key]) {
+        throw new Error(
+          `${method.toUpperCase()} ${path} is served and also declared in MoneyContractModule. Delete the declaration.`,
+        );
+      }
+      const builtBy: unknown = (op as unknown as Record<string, unknown>)[
+        'x-wawu-built-by'
+      ];
+      const note = `Declared by MONEY-04, not served yet${typeof builtBy === 'string' ? `: ${builtBy} serves it` : ''}.`;
+      Object.assign(target, {
+        [key]: {
+          ...op,
+          description: op.description ? `${note}\n\n${op.description}` : note,
+          'x-wawu-served': false,
+        },
+      });
+      count++;
+    }
+  }
+
+  const schemas = declaredDoc.components?.schemas ?? {};
+  document.components ??= {};
+  document.components.schemas ??= {};
+  for (const [name, schema] of Object.entries(schemas)) {
+    if (document.components.schemas[name]) {
+      throw new Error(
+        `Schema ${name} is defined by a served route and by MoneyContractModule. Rename one of them.`,
+      );
+    }
+    document.components.schemas[name] = schema;
+  }
+  return count;
+}
+
+function isOperation(value: unknown): value is OperationObject {
+  return typeof value === 'object' && value !== null && 'responses' in value;
 }
 
 emit().catch((err) => {
