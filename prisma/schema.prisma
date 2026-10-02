@@ -3237,6 +3237,63 @@ model FintavaWebhookEvent {
   @@index([dataCustomerReference])
 }
 
+/// ─────────────────────────────────────────────────────────────────────────
+/// WHO OPENS A WALLET (tables added by task KYC-01)
+///
+/// The BVN check that starts Open your wallet (R-6: identity is checked when
+/// someone opens a wallet, never at sign-up). Fintava's
+/// `GET /compliance/verify/bvn` answers name, date of birth, phone, gender
+/// and a photo; the name, date of birth and gender go back to the app once,
+/// in the check's answer, for A5. None of it is kept here.
+///
+/// What is kept, and nothing more:
+/// - when the BVN passed, a KEYED hash of it (HMAC-SHA256 under
+///   IDENTITY_HASH_KEY, never a plain or salted hash: a BVN has only 10^11
+///   values, so anything without a server secret can be walked in minutes)
+///   and its last 4 digits;
+/// - the same for the NIN taken on the same screen (A26), which Fintava
+///   needs to open the account (MONEY-12);
+/// - the account phone that matched the BVN's phone, E.164 (BACKEND_GAPS
+///   G-11: the one phone number identity checks have proved);
+/// - the occupation typed on A5.
+/// The full BVN and NIN are never stored and never logged: the app sends
+/// them again to the steps that need them (KYC-02's selfie, MONEY-12's
+/// account opening), which check them against these hashes. The address is
+/// not held at all: it goes straight to account opening.
+/// ─────────────────────────────────────────────────────────────────────────
+model WalletIdentity {
+  wawuUserId    String    @id
+  /// HMAC-SHA256 of the BVN under IDENTITY_HASH_KEY, hex. Null until a check passes.
+  bvnHash       String?
+  bvnLast4      String?
+  /// When the BVN check last passed (the phone matched).
+  bvnVerifiedAt DateTime?
+  /// HMAC-SHA256 of the NIN under IDENTITY_HASH_KEY, hex.
+  ninHash       String?
+  ninLast4      String?
+  /// The account's phone, E.164, when it matched the BVN's phone.
+  verifiedPhone String?
+  /// Typed on A5.
+  occupation    String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+/// One row per BVN check sent (or about to be sent) to Fintava, which charges
+/// for each one even when it says no (mobile repo
+/// `docs/fintava/sandbox/04-bvn-check.md`). It is how the per-person daily
+/// limit is counted; it holds no part of the BVN.
+model BvnCheckAttempt {
+  id         String   @id @default(uuid())
+  wawuUserId String
+  /// `pending` while Fintava is being asked; then `verified`,
+  /// `phone_mismatch`, `refused` or `unavailable`.
+  outcome    String   @default("pending")
+  createdAt  DateTime @default(now())
+
+  @@index([wawuUserId, createdAt])
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 /// FREE CHAT BETWEEN TWO USERS (task INBOX-06, DECISIONS R-13)
 ///

@@ -30,6 +30,9 @@ const SERVED_MONEY_ROUTES: Record<string, string> = {
   'PUT /api/hub/money/pin': 'MONEY-09',
   'POST /api/hub/money/pin/verify': 'MONEY-09',
   'GET /api/hub/money/wallet/balance': 'MONEY-11',
+  'GET /api/hub/money/identity': 'KYC-01',
+  'POST /api/hub/money/identity/bvn': 'KYC-01',
+  'PUT /api/hub/money/identity/occupation': 'KYC-01',
 };
 
 type ModuleRef =
