@@ -7,6 +7,10 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import {
+  CHAT_FOLDER_CONTENT_TYPES,
+  type ChatUploadFolder,
+} from '../../chat/chat-limits';
 
 /**
  * Upload destinations the client may ask for. Closed set: a caller cannot
@@ -44,7 +48,17 @@ export const UPLOAD_FOLDERS = [
   'event/speaker',
 ] as const;
 
-export type UploadFolder = (typeof UPLOAD_FOLDERS)[number];
+/** The folders a client may name on POST /uploads/presign. */
+export type PublicUploadFolder = (typeof UPLOAD_FOLDERS)[number];
+
+/**
+ * Every folder the presigner writes to: the public ones, plus the chat
+ * folders (task INBOX-06). Chat uploads go through POST /chats/:chatId/
+ * attachments, which checks the chat and any block first, so the chat
+ * folders are deliberately not in UPLOAD_FOLDERS and the public route still
+ * refuses them.
+ */
+export type UploadFolder = PublicUploadFolder | ChatUploadFolder;
 
 /** 512MB — the largest asset the product allows (video). */
 export const MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
@@ -92,6 +106,7 @@ export const FOLDER_CONTENT_TYPES: Record<UploadFolder, readonly string[]> = {
   'community/image': IMAGE,
   'community/message': IMAGE,
   'event/speaker': IMAGE,
+  ...CHAT_FOLDER_CONTENT_TYPES,
 };
 
 /**
@@ -161,7 +176,7 @@ export function serveAs(key: string): { contentType: string; inline: boolean } {
 
 export class PresignUploadDto {
   @IsIn(UPLOAD_FOLDERS)
-  folder: UploadFolder;
+  folder: PublicUploadFolder;
 
   /** e.g. "image/jpeg", "video/mp4", "application/pdf". */
   @IsString()
