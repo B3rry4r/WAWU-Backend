@@ -6,9 +6,9 @@ the WAWU mobile app, the web app (`wawuafrica`) and the admin dashboard.
 ## The mobile app is the product
 
 - **The mobile app is the product and the authority.** Its repo is
-  `MOXN-AFRICA/wawu-wmt-mobile`; it is an Expo app (R-3, owner, 1 Oct 2026).
-  This backend changes to fit it. The web follows it after launch
-  (`DECISIONS.md` in the mobile repo, section "Authority").
+  `MOXN-AFRICA/wawu-wmt-mobile`. This backend changes to fit it. The web
+  follows it after launch (DECISIONS.md, Authority (owner, 1 Oct 2026), in the
+  mobile repo). The app is built with Expo (R-3, owner, 1 Oct 2026).
 - **Rulings live in the mobile repo's `DECISIONS.md`.** Every ruling id here
   (R-1 and so on) is from there. A ruling outranks a code comment, a line in
   `README.md`, and anything in `.pipeline/`.
@@ -24,8 +24,10 @@ matters most here:
   web or the dashboard calls today is renamed, retyped or widened. Add, then
   move, then remove; a removal is its own task, after two weeks with no calls.
 - **Protected routes.** `.pipeline/protected-registry.json` lists the routes the
-  web and dashboard call (frozen 22 Aug 2026). Nothing in it changes
-  behaviour. The regression suite built from it is task MONEY-01 (pass V3).
+  web calls: 129 endpoints, frozen 22 Aug 2026, none under `admin/`. Nothing
+  in it changes behaviour. It does not cover the admin dashboard's routes yet.
+  Task MONEY-01 extends it to the dashboard and builds the regression suite
+  from it (pass V3). Until then, treat the dashboard's routes as live too.
 - **Fenced files.** `prisma/schema.prisma` (except an additive migration the
   task names), `src/common/**`, `src/app.module.ts`, auth guards and
   `contract/**`. To change one, add a row to the mobile repo's
