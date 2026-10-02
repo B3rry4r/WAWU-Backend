@@ -81,6 +81,106 @@ every table, so check `DATABASE_URL` first. Note that re-seeding alone does
 **not** repair a mutated seed row: `prisma/seed.ts` upserts with `update: {}`,
 so an existing row is left exactly as the last test run left it.
 
+## Protected route suite (MONEY-01, V3)
+
+Nothing the live web app or the admin dashboard uses may change behaviour while
+this backend grows. This suite is the tripwire, and V3 in the mobile repo's
+`docs/WORKFLOW.md` is "run it before and after".
+
+**What is protected.** `.pipeline/protected-registry.json`, section
+`protectedRoutes`: every Hub route that `wawuafrica` (web) and `wawu-dashboard`
+call today, read from each repo's `origin/main` (commits in
+`protectedRoutes.sources`). 235 routes: 169 from the web, 72 from the dashboard,
+6 from both. Each entry carries its callers (file:line, or the dashboard's route
+key), its auth (`public`, `user-optional`, `user`, `creator`, `admin` plus the
+guards and admin roles), a probe, and the status and response shape that probe
+got from `main` when the list was locked (`protectedRoutes.lock`).
+
+**What a run proves**, one test per route, in the registry's order
+(`src/protected-routes/protected-routes.regression.spec.ts`, generated from the
+registry; nothing route-specific is written in it):
+
+1. the route is still mounted with the same guards and admin roles;
+2. the auth contract holds on the wire: no token and a malformed token are 401
+   on user routes, an admin token is 401 on user routes and a WAWU ID token is
+   401 on admin routes, a plain user is 403 on creator routes, an admin outside
+   the route's roles is 403;
+3. the probe gets the locked status and a body of the locked shape.
+
+"Shape" (`test/protected-routes/shape.ts`) is structure, never values: a key
+that disappeared or was renamed fails, a key that appeared fails (a widened
+response goes to the owner, WORKFLOW section 9), a type that changed fails, a
+list that became an object fails. `null` where a value was recorded passes, and
+an array recorded empty accepts any elements, because those depend on the data
+a run happens to see. Message text and headers are not pinned.
+
+The probes are a scenario, not isolated calls: four WAWU IDs are registered
+fresh in the mock, four admins (one per role) are created, a creator uploads,
+submits KYC, an admin approves it, a buyer unlocks, tips and DMs, and so on.
+Later probes read ids earlier ones captured, so **read the first failure**: the
+ones after it may only be its echo.
+
+**Running it on this checkout.** Postgres with a migrated, seeded test database,
+and the mock WAWU ID (the suite starts one if the port is free):
+
+```bash
+npm run test:protected
+```
+
+It also runs inside `npm run test:contract` and the CI `npx jest` step, like
+every other spec. The run leaves the database exactly as it found it: every
+table is snapshotted before the first request and restored after the last
+(`test/protected-routes/db-snapshot.ts`), and the suite refuses a database whose
+name does not contain `test` or `protected`.
+
+**Running it against any branch (V3).** The code comes from the ref you name;
+the suite and the lock come from `PROTECTED_LOCK_REF` (default `origin/main`),
+so a branch cannot pass by editing its own copy of the lock. Nothing is checked
+out: the ref is exported with `git archive` into a temporary directory.
+
+```bash
+export DATABASE_URL=postgresql://postgres:postgres@localhost:5432/wawu_hub_protected_test?schema=public
+export WAWU_ID_BASE_URL=http://localhost:4001
+
+scripts/protected-routes/run.sh --fresh origin/main     # before: main, on a new database
+scripts/protected-routes/run.sh --fresh wmt/MONEY-06    # after: the task branch
+```
+
+`--fresh` drops, recreates, migrates and seeds the database first (only a name
+containing `test` or `protected`); without it the branch's migrations are
+applied to the database as it is. With no ref it runs this checkout. Until
+MONEY-01 is merged, `origin/main` has no lock: use
+`PROTECTED_LOCK_REF=wmt/MONEY-01`. Exit code 0 is green.
+
+**The environment is pinned** to CI's (`test/protected-routes/harness.ts`): no
+Flutterwave secret key, no storage, no Gemini, no WellaHealth, so a developer's
+`.env` cannot change an answer. Non-local network calls are refused as if
+offline. Routes that need one of those services are locked at the answer they
+give without it, and say so: each expectation's `coverage` is `success` (215),
+`refusal` (6, a deliberate 4xx) or `unavailable` (14, a 5xx from a dependency
+that is not configured).
+
+**When it goes red.** A red run stops the task and goes to the owner (WORKFLOW
+section 9). The failure names the route, what was sent, the status and body
+that came back, and each shape difference. `PROTECTED_ROUTES_TRACE=<file>`
+writes every probe's request and response as JSON lines.
+
+**When a client starts calling a new route**, or stops calling one:
+
+```bash
+npm run protected:callers -- --web ../wawuafrica --dashboard ../wawu-dashboard
+```
+
+reads both clients at `origin/main` and lists every call that is not protected
+and every protected route nobody calls any more (exit 1 if there are any). A new
+route gets an entry with a probe, and the list is re-locked.
+
+**Re-locking** (`npm run protected:lock`) re-records every expectation from what
+the code answers now and rewrites `protectedRoutes.lock`. It is how the list was
+made against `main`, and it is an owner decision, never the way to turn a red
+run green. A registry edited without re-locking fails the first test (the lock
+is a sha256 of the setup steps and every route).
+
 ## Admin surface (`/api/hub/admin/*`)
 
 The admin dashboard authenticates against this backend's **own** `AdminUser`
