@@ -7206,7 +7206,23 @@
         "as": "buyer",
         "body": {
           "accountType": "user",
-          "bio": "Protected route suite buyer."
+          "handle": "prs_b{{nonce}}",
+          "bio": "Protected route suite buyer.",
+          "headline": "Producer and educator",
+          "company": "WAWU Studio",
+          "interests": [
+            "technology"
+          ],
+          "instagramHandle": "wawu.studio",
+          "whatsappHandle": "2348012345678",
+          "xHandle": "wawustudio",
+          "tiktokHandle": "wawustudio",
+          "youtubeUrl": "https://youtube.com/@wawustudio",
+          "facebookUrl": "https://facebook.com/wawustudio",
+          "linkedinUrl": "https://linkedin.com/company/wawustudio",
+          "websiteUrl": "https://wawu.test",
+          "avatarUrl": "https://cdn.wawu.test/avatar.png",
+          "coverUrl": "https://cdn.wawu.test/cover.png"
         }
       },
       {
@@ -7223,7 +7239,22 @@
         "body": {
           "accountType": "creator",
           "handle": "prs_k{{nonce}}",
-          "bio": "Protected route suite second creator."
+          "bio": "Protected route suite second creator.",
+          "headline": "Producer and educator",
+          "company": "WAWU Studio",
+          "interests": [
+            "technology"
+          ],
+          "instagramHandle": "wawu.studio",
+          "whatsappHandle": "2348012345678",
+          "xHandle": "wawustudio",
+          "tiktokHandle": "wawustudio",
+          "youtubeUrl": "https://youtube.com/@wawustudio",
+          "facebookUrl": "https://facebook.com/wawustudio",
+          "linkedinUrl": "https://linkedin.com/company/wawustudio",
+          "websiteUrl": "https://wawu.test",
+          "avatarUrl": "https://cdn.wawu.test/avatar.png",
+          "coverUrl": "https://cdn.wawu.test/cover.png"
         }
       },
       {
@@ -7242,9 +7273,9 @@
       }
     ],
     "lock": {
-      "lockedAt": "2026-10-02T01:25:31.332Z",
-      "lockedAgainst": "231cb64ab3bf0011243142f637880027a1a988b4",
-      "sha256": "fd76456d8a8c375e605e2f63eec701f67406970bbe636ab755a5955d04209e74"
+      "lockedAt": "2026-10-02T02:12:53.279Z",
+      "lockedAgainst": "5f2658af9b0ad7f867fc98d4e392fc7e52ec506e",
+      "sha256": "16412917c3d78d12686d277a5a05b80781a73b8e68fcb12c57b4f090ccbdae01"
     },
     "routes": [
       {
@@ -7474,78 +7505,6 @@
         }
       },
       {
-        "id": "GET /search",
-        "method": "GET",
-        "path": "/search",
-        "callers": {
-          "web": [
-            "src/lib/api/search.ts:196"
-          ],
-          "dashboard": []
-        },
-        "auth": {
-          "kind": "user-optional",
-          "guards": [
-            "OptionalWawuAuthGuard"
-          ],
-          "adminRoles": null
-        },
-        "probe": {
-          "as": "buyer",
-          "query": {
-            "q": "design"
-          }
-        },
-        "expect": {
-          "status": 200,
-          "coverage": "success",
-          "shape": {
-            "data": {
-              "communities": [],
-              "content": [],
-              "creators": []
-            },
-            "message": "string",
-            "statusCode": "number"
-          }
-        }
-      },
-      {
-        "id": "GET /search/closest",
-        "method": "GET",
-        "path": "/search/closest",
-        "callers": {
-          "web": [
-            "src/lib/api/search.ts:210"
-          ],
-          "dashboard": []
-        },
-        "auth": {
-          "kind": "user-optional",
-          "guards": [
-            "OptionalWawuAuthGuard"
-          ],
-          "adminRoles": null
-        },
-        "probe": {
-          "as": "buyer",
-          "query": {
-            "q": "desgin"
-          }
-        },
-        "expect": {
-          "status": 200,
-          "coverage": "success",
-          "shape": {
-            "data": {
-              "items": []
-            },
-            "message": "string",
-            "statusCode": "number"
-          }
-        }
-      },
-      {
         "id": "GET /creators",
         "method": "GET",
         "path": "/creators",
@@ -7602,42 +7561,6 @@
         }
       },
       {
-        "id": "GET /professionals",
-        "method": "GET",
-        "path": "/professionals",
-        "callers": {
-          "web": [
-            "src/lib/api/professionals.ts:31"
-          ],
-          "dashboard": []
-        },
-        "auth": {
-          "kind": "user-optional",
-          "guards": [
-            "OptionalWawuAuthGuard"
-          ],
-          "adminRoles": null
-        },
-        "probe": {
-          "as": "buyer"
-        },
-        "expect": {
-          "status": 200,
-          "coverage": "success",
-          "shape": {
-            "data": [],
-            "message": "string",
-            "pagination": {
-              "currentPage": "number",
-              "nextPage": "null",
-              "perPage": "number",
-              "total": "number"
-            },
-            "statusCode": "number"
-          }
-        }
-      },
-      {
         "id": "PATCH /users/me",
         "method": "PATCH",
         "path": "/users/me",
@@ -7662,9 +7585,21 @@
             "accountType": "creator",
             "handle": "prs_t{{nonce}}",
             "bio": "Protected route suite creator.",
+            "headline": "Producer and educator",
+            "company": "WAWU Studio",
             "interests": [
               "technology"
-            ]
+            ],
+            "instagramHandle": "wawu.studio",
+            "whatsappHandle": "2348012345678",
+            "xHandle": "wawustudio",
+            "tiktokHandle": "wawustudio",
+            "youtubeUrl": "https://youtube.com/@wawustudio",
+            "facebookUrl": "https://facebook.com/wawustudio",
+            "linkedinUrl": "https://linkedin.com/company/wawustudio",
+            "websiteUrl": "https://wawu.test",
+            "avatarUrl": "https://cdn.wawu.test/avatar.png",
+            "coverUrl": "https://cdn.wawu.test/cover.png"
           },
           "why": "No name fields: names are saved in WAWU ID, and mock-wawu-id has no /internal/users/:id/name, so a name would 502 here and nowhere real."
         },
@@ -7674,30 +7609,30 @@
           "shape": {
             "data": {
               "accountType": "string",
-              "avatarUrl": "null",
+              "avatarUrl": "string",
               "bio": "string",
-              "company": "null",
-              "coverUrl": "null",
+              "company": "string",
+              "coverUrl": "string",
               "createdAt": "string",
               "creatorVerifiedAt": "null",
               "creatorVerifiedUntil": "null",
-              "facebookUrl": "null",
+              "facebookUrl": "string",
               "handle": "string",
-              "headline": "null",
-              "instagramHandle": "null",
+              "headline": "string",
+              "instagramHandle": "string",
               "interests": [
                 "string"
               ],
-              "linkedinUrl": "null",
+              "linkedinUrl": "string",
               "professionalVerifiedAt": "null",
               "professionalVerifiedUntil": "null",
-              "tiktokHandle": "null",
+              "tiktokHandle": "string",
               "unpaidWarnedAt": "null",
               "wawuUserId": "string",
-              "websiteUrl": "null",
-              "whatsappHandle": "null",
-              "xHandle": "null",
-              "youtubeUrl": "null"
+              "websiteUrl": "string",
+              "whatsappHandle": "string",
+              "xHandle": "string",
+              "youtubeUrl": "string"
             },
             "message": "string",
             "statusCode": "number"
@@ -7731,28 +7666,28 @@
           "shape": {
             "data": {
               "accountType": "string",
-              "avatarUrl": "null",
+              "avatarUrl": "string",
               "bio": "string",
-              "company": "null",
+              "company": "string",
               "country": "string",
-              "coverUrl": "null",
+              "coverUrl": "string",
               "createdAt": "string",
               "dialCode": "null",
               "email": "string",
               "exp": "number",
               "experience": [],
-              "facebookUrl": "null",
+              "facebookUrl": "string",
               "firstName": "string",
               "gender": "null",
               "handle": "string",
-              "headline": "null",
+              "headline": "string",
               "iat": "number",
-              "instagramHandle": "null",
+              "instagramHandle": "string",
               "interests": [
                 "string"
               ],
               "lastName": "string",
-              "linkedinUrl": "null",
+              "linkedinUrl": "string",
               "occupation": "null",
               "phone": "string",
               "platformRefs": {
@@ -7761,7 +7696,7 @@
               "state": "null",
               "status": "string",
               "sub": "string",
-              "tiktokHandle": "null",
+              "tiktokHandle": "string",
               "trustScore": "number",
               "unpaidWarnedAt": "null",
               "verification": {
@@ -7776,10 +7711,10 @@
               },
               "verificationTier": "string",
               "wawuUserId": "string",
-              "websiteUrl": "null",
-              "whatsappHandle": "null",
-              "xHandle": "null",
-              "youtubeUrl": "null"
+              "websiteUrl": "string",
+              "whatsappHandle": "string",
+              "xHandle": "string",
+              "youtubeUrl": "string"
             },
             "message": "string",
             "statusCode": "number"
@@ -7816,9 +7751,7 @@
               "monthStart": "string",
               "postCount": "number",
               "productsSoldThisMonth": "number",
-              "profileCompletenessMissing": [
-                "string"
-              ],
+              "profileCompletenessMissing": [],
               "profileCompletenessPct": "number",
               "profileViewsThisMonth": "number",
               "wawuUserId": "string"
@@ -7850,7 +7783,10 @@
           "body": {
             "title": "Producer",
             "company": "WAWU Studio",
-            "startedOn": "2024-01"
+            "location": "Lagos",
+            "startedOn": "2024-01",
+            "endedOn": "2025-06",
+            "description": "Produced the studio sessions."
           },
           "capture": {
             "experienceId": "data.id"
@@ -7863,10 +7799,10 @@
             "data": {
               "company": "string",
               "current": "boolean",
-              "description": "null",
-              "endedOn": "null",
+              "description": "string",
+              "endedOn": "string",
               "id": "string",
-              "location": "null",
+              "location": "string",
               "startedOn": "string",
               "title": "string"
             },
@@ -7908,10 +7844,10 @@
             "data": {
               "company": "string",
               "current": "boolean",
-              "description": "null",
-              "endedOn": "null",
+              "description": "string",
+              "endedOn": "string",
               "id": "string",
-              "location": "null",
+              "location": "string",
               "startedOn": "string",
               "title": "string"
             },
@@ -8219,6 +8155,87 @@
         }
       },
       {
+        "id": "GET /users/me [new account]",
+        "method": "GET",
+        "path": "/users/me",
+        "variant": "new account",
+        "callers": {
+          "web": [
+            "src/lib/api/auth.ts:328",
+            "src/lib/api/verification.ts:379"
+          ],
+          "dashboard": []
+        },
+        "auth": {
+          "kind": "user",
+          "guards": [
+            "WawuAuthGuard"
+          ],
+          "adminRoles": null
+        },
+        "probe": {
+          "as": "newcomer",
+          "why": "A WAWU ID with no profile here yet: the prefill branch of getMe."
+        },
+        "expect": {
+          "status": 200,
+          "coverage": "success",
+          "shape": {
+            "data": {
+              "accountType": "null",
+              "avatarUrl": "null",
+              "bio": "null",
+              "company": "null",
+              "country": "string",
+              "coverUrl": "null",
+              "createdAt": "null",
+              "dialCode": "null",
+              "email": "string",
+              "exp": "number",
+              "experience": [],
+              "facebookUrl": "null",
+              "firstName": "string",
+              "gender": "null",
+              "handle": "null",
+              "headline": "null",
+              "iat": "number",
+              "instagramHandle": "null",
+              "interests": [],
+              "lastName": "string",
+              "linkedinUrl": "null",
+              "occupation": "null",
+              "phone": "string",
+              "platformRefs": {
+                "wawuafricaAppUserId": "string"
+              },
+              "state": "null",
+              "status": "string",
+              "sub": "string",
+              "tiktokHandle": "null",
+              "trustScore": "number",
+              "verification": {
+                "creator": {
+                  "expiresAt": "null",
+                  "verified": "boolean"
+                },
+                "professional": {
+                  "expiresAt": "null",
+                  "verified": "boolean"
+                }
+              },
+              "verificationTier": "string",
+              "wawuUserId": "string",
+              "websiteUrl": "null",
+              "whatsappHandle": "null",
+              "xHandle": "null",
+              "youtubeUrl": "null"
+            },
+            "message": "string",
+            "statusCode": "number"
+          }
+        }
+      },
+      {
         "id": "GET /learn/playbook",
         "method": "GET",
         "path": "/learn/playbook",
@@ -8291,13 +8308,56 @@
           "as": "buyer",
           "params": {
             "id": "{{courseId}}"
-          }
+          },
+          "why": "Locked on its 403: on main nobody can START a course, because the free-course slots still come from the removed creator subscription (course-enrollment.service.ts). The success shape is the variant below."
         },
         "expect": {
           "status": 403,
           "coverage": "refusal",
           "shape": {
             "data": "null",
+            "message": "string",
+            "statusCode": "number"
+          }
+        }
+      },
+      {
+        "id": "POST /learn/courses/:id/enrol [already enrolled]",
+        "method": "POST",
+        "path": "/learn/courses/:id/enrol",
+        "variant": "already enrolled",
+        "callers": {
+          "web": [
+            "src/lib/api/learn.ts:71"
+          ],
+          "dashboard": []
+        },
+        "auth": {
+          "kind": "user",
+          "guards": [
+            "WawuAuthGuard"
+          ],
+          "adminRoles": null
+        },
+        "probe": {
+          "as": "seeded",
+          "params": {
+            "id": "50000000-0000-4000-8000-000000000001"
+          },
+          "why": "The seeded user is enrolled in the seeded course (prisma/seed.ts), so this is the idempotent success branch; it writes nothing."
+        },
+        "expect": {
+          "status": 200,
+          "coverage": "success",
+          "shape": {
+            "data": {
+              "enrolledCourseIds": [
+                "string"
+              ],
+              "externalHostUrl": "string",
+              "freeCoursesTotal": "number",
+              "freeCoursesUsed": "number"
+            },
             "message": "string",
             "statusCode": "number"
           }
@@ -8364,10 +8424,14 @@
           }
         },
         "expect": {
-          "status": 503,
-          "coverage": "unavailable",
+          "status": 200,
+          "coverage": "success",
           "shape": {
-            "data": "null",
+            "data": {
+              "fileUrl": "string",
+              "key": "string",
+              "uploadUrl": "string"
+            },
             "message": "string",
             "statusCode": "number"
           }
@@ -8398,6 +8462,13 @@
             "title": "Protected suite video",
             "description": "A video the protected route suite lists.",
             "category": "technology",
+            "tags": [
+              "editing",
+              "studio"
+            ],
+            "specializations": [
+              "video_editing"
+            ],
             "accessType": "paid",
             "price": 1500,
             "previewAsset": "https://cdn.wawu.test/p.mp4",
@@ -8449,9 +8520,13 @@
               "price": "number",
               "ratingPct": "null",
               "slug": "string",
-              "specializations": [],
+              "specializations": [
+                "string"
+              ],
               "status": "string",
-              "tags": [],
+              "tags": [
+                "string"
+              ],
               "title": "string",
               "views": "number"
             },
@@ -8484,6 +8559,48 @@
             "dmPrice": 500,
             "dmResponseHours": 48
           }
+        },
+        "expect": {
+          "status": 200,
+          "coverage": "success",
+          "shape": {
+            "data": {
+              "dmEnabled": "boolean",
+              "dmPrice": "number",
+              "dmResponseHours": "number",
+              "kycStatus": "string",
+              "slotsTotal": "number",
+              "slotsUsed": "number",
+              "wawuUserId": "string"
+            },
+            "message": "string",
+            "statusCode": "number"
+          }
+        }
+      },
+      {
+        "id": "GET /creator/state [returning user]",
+        "method": "GET",
+        "path": "/creator/state",
+        "variant": "returning user",
+        "callers": {
+          "web": [
+            "src/lib/api/auth.ts:349",
+            "src/lib/api/auth.ts:500",
+            "src/lib/api/verification.ts:392"
+          ],
+          "dashboard": []
+        },
+        "auth": {
+          "kind": "user",
+          "guards": [
+            "WawuAuthGuard"
+          ],
+          "adminRoles": null
+        },
+        "probe": {
+          "as": "creator",
+          "why": "The first read had no CreatorState row (the starting state); the first upload created one, so this is the stored-row branch."
         },
         "expect": {
           "status": 200,
@@ -8548,9 +8665,13 @@
                 "price": "number",
                 "ratingPct": "null",
                 "slug": "string",
-                "specializations": [],
+                "specializations": [
+                  "string"
+                ],
                 "status": "string",
-                "tags": [],
+                "tags": [
+                  "string"
+                ],
                 "title": "string",
                 "views": "number"
               }
@@ -8613,9 +8734,13 @@
               "price": "number",
               "ratingPct": "null",
               "slug": "string",
-              "specializations": [],
+              "specializations": [
+                "string"
+              ],
               "status": "string",
-              "tags": [],
+              "tags": [
+                "string"
+              ],
               "title": "string",
               "views": "number"
             },
@@ -8680,7 +8805,9 @@
                 "price": "number",
                 "slug": "string",
                 "status": "string",
-                "tags": [],
+                "tags": [
+                  "string"
+                ],
                 "title": "string",
                 "waitingHours": "number"
               }
@@ -8760,7 +8887,9 @@
               "reviewHistory": [],
               "slug": "string",
               "status": "string",
-              "tags": [],
+              "tags": [
+                "string"
+              ],
               "title": "string",
               "views": "number",
               "waitingHours": "number"
@@ -8847,7 +8976,9 @@
                 ],
                 "slug": "string",
                 "status": "string",
-                "tags": [],
+                "tags": [
+                  "string"
+                ],
                 "title": "string",
                 "views": "number",
                 "waitingHours": "number"
@@ -9046,7 +9177,9 @@
                 "price": "number",
                 "ratingPct": "null|number",
                 "slug": "string",
-                "specializations": [],
+                "specializations": [
+                  "string"
+                ],
                 "status": "string",
                 "tags": [
                   "string"
@@ -9110,9 +9243,13 @@
               "price": "number",
               "ratingPct": "null",
               "slug": "string",
-              "specializations": [],
+              "specializations": [
+                "string"
+              ],
               "status": "string",
-              "tags": [],
+              "tags": [
+                "string"
+              ],
               "title": "string",
               "views": "number"
             },
@@ -9419,9 +9556,13 @@
               "price": "number",
               "ratingPct": "number",
               "slug": "string",
-              "specializations": [],
+              "specializations": [
+                "string"
+              ],
               "status": "string",
-              "tags": [],
+              "tags": [
+                "string"
+              ],
               "title": "string",
               "views": "number"
             },
@@ -9507,8 +9648,8 @@
             "data": [
               {
                 "author": {
-                  "avatarUrl": "null",
-                  "handle": "null",
+                  "avatarUrl": "string",
+                  "handle": "string",
                   "name": "string",
                   "verification": {
                     "creator": {
@@ -9743,10 +9884,12 @@
           }
         },
         "expect": {
-          "status": 502,
-          "coverage": "unavailable",
+          "status": 200,
+          "coverage": "success",
           "shape": {
-            "data": "null",
+            "data": {
+              "link": "string"
+            },
             "message": "string",
             "statusCode": "number"
           }
@@ -10061,10 +10204,26 @@
           }
         },
         "expect": {
-          "status": 503,
-          "coverage": "unavailable",
+          "status": 200,
+          "coverage": "success",
           "shape": {
-            "data": "null",
+            "data": {
+              "audit": {
+                "actedAt": "string",
+                "actedByAdminEmail": "string",
+                "actedByAdminId": "string",
+                "actedByAdminRole": "string",
+                "action": "string",
+                "id": "string",
+                "newStatus": "null",
+                "previousStatus": "null",
+                "reason": "null"
+              },
+              "expiresAt": "string",
+              "expiresInSeconds": "number",
+              "signed": "boolean",
+              "url": "string"
+            },
             "message": "string",
             "statusCode": "number"
           }
@@ -10270,36 +10429,6 @@
         }
       },
       {
-        "id": "GET /wallet/history",
-        "method": "GET",
-        "path": "/wallet/history",
-        "callers": {
-          "web": [
-            "src/lib/api/wallet.ts:52"
-          ],
-          "dashboard": []
-        },
-        "auth": {
-          "kind": "user",
-          "guards": [
-            "WawuAuthGuard"
-          ],
-          "adminRoles": null
-        },
-        "probe": {
-          "as": "creator"
-        },
-        "expect": {
-          "status": 200,
-          "coverage": "success",
-          "shape": {
-            "data": [],
-            "message": "string",
-            "statusCode": "number"
-          }
-        }
-      },
-      {
         "id": "GET /wallet/banks",
         "method": "GET",
         "path": "/wallet/banks",
@@ -10397,10 +10526,56 @@
           }
         },
         "expect": {
-          "status": 400,
-          "coverage": "refusal",
+          "status": 201,
+          "coverage": "success",
           "shape": {
-            "data": "null",
+            "data": {
+              "accountName": "string",
+              "amount": "number",
+              "reference": "string",
+              "status": "string"
+            },
+            "message": "string",
+            "statusCode": "number"
+          }
+        }
+      },
+      {
+        "id": "GET /wallet/history",
+        "method": "GET",
+        "path": "/wallet/history",
+        "callers": {
+          "web": [
+            "src/lib/api/wallet.ts:52"
+          ],
+          "dashboard": []
+        },
+        "auth": {
+          "kind": "user",
+          "guards": [
+            "WawuAuthGuard"
+          ],
+          "adminRoles": null
+        },
+        "probe": {
+          "as": "creator"
+        },
+        "expect": {
+          "status": 200,
+          "coverage": "success",
+          "shape": {
+            "data": [
+              {
+                "amount": "number",
+                "createdAt": "string",
+                "failureReason": "null",
+                "id": "string",
+                "kind": "string",
+                "reference": "string",
+                "settledAt": "null",
+                "status": "string"
+              }
+            ],
             "message": "string",
             "statusCode": "number"
           }
@@ -10951,10 +11126,29 @@
           }
         },
         "expect": {
-          "status": 503,
-          "coverage": "unavailable",
+          "status": 200,
+          "coverage": "success",
           "shape": {
-            "data": "null",
+            "data": {
+              "audit": {
+                "actedAt": "string",
+                "actedByAdminEmail": "string",
+                "actedByAdminId": "string",
+                "actedByAdminRole": "string",
+                "action": "string",
+                "documentIndex": "number",
+                "id": "string",
+                "newStatus": "null",
+                "previousStatus": "null",
+                "reason": "null",
+                "tierElevatedAtWawuId": "boolean"
+              },
+              "expiresAt": "string",
+              "expiresInSeconds": "number",
+              "index": "number",
+              "signed": "boolean",
+              "url": "string"
+            },
             "message": "string",
             "statusCode": "number"
           }
@@ -11018,10 +11212,10 @@
                     "actedByAdminId": "string",
                     "actedByAdminRole": "string",
                     "action": "string",
-                    "documentIndex": "null",
+                    "documentIndex": "null|number",
                     "id": "string",
-                    "newStatus": "string",
-                    "previousStatus": "string",
+                    "newStatus": "null|string",
+                    "previousStatus": "null|string",
                     "reason": "null",
                     "tierElevatedAtWawuId": "boolean"
                   }
@@ -11186,28 +11380,28 @@
           "coverage": "success",
           "shape": {
             "data": {
-              "avatarUrl": "null",
+              "avatarUrl": "string",
               "bio": "string",
               "communityCount": "number",
-              "company": "null",
+              "company": "string",
               "contentCount": "number",
-              "coverUrl": "null",
+              "coverUrl": "string",
               "dmEnabled": "boolean",
               "dmPrice": "number",
               "dmResponseHours": "number",
               "evgScore": "number",
               "experience": [],
-              "facebookUrl": "null",
+              "facebookUrl": "string",
               "followerCount": "number",
               "followingCount": "number",
               "handle": "string",
-              "headline": "null",
-              "instagramHandle": "null",
+              "headline": "string",
+              "instagramHandle": "string",
               "interests": [
                 "string"
               ],
-              "linkedinUrl": "null",
-              "tiktokHandle": "null",
+              "linkedinUrl": "string",
+              "tiktokHandle": "string",
               "verification": {
                 "creator": {
                   "expiresAt": "null",
@@ -11219,10 +11413,10 @@
                 }
               },
               "wawuUserId": "string",
-              "websiteUrl": "null",
-              "whatsappHandle": "null",
-              "xHandle": "null",
-              "youtubeUrl": "null"
+              "websiteUrl": "string",
+              "whatsappHandle": "string",
+              "xHandle": "string",
+              "youtubeUrl": "string"
             },
             "message": "string",
             "statusCode": "number"
@@ -11256,28 +11450,28 @@
           "coverage": "success",
           "shape": {
             "data": {
-              "avatarUrl": "null",
+              "avatarUrl": "string",
               "bio": "string",
               "communityCount": "number",
-              "company": "null",
+              "company": "string",
               "contentCount": "number",
-              "coverUrl": "null",
+              "coverUrl": "string",
               "dmEnabled": "boolean",
               "dmPrice": "number",
               "dmResponseHours": "number",
               "evgScore": "number",
               "experience": [],
-              "facebookUrl": "null",
+              "facebookUrl": "string",
               "followerCount": "number",
               "followingCount": "number",
               "handle": "string",
-              "headline": "null",
-              "instagramHandle": "null",
+              "headline": "string",
+              "instagramHandle": "string",
               "interests": [
                 "string"
               ],
-              "linkedinUrl": "null",
-              "tiktokHandle": "null",
+              "linkedinUrl": "string",
+              "tiktokHandle": "string",
               "verification": {
                 "creator": {
                   "expiresAt": "null",
@@ -11289,10 +11483,10 @@
                 }
               },
               "wawuUserId": "string",
-              "websiteUrl": "null",
-              "whatsappHandle": "null",
-              "xHandle": "null",
-              "youtubeUrl": "null"
+              "websiteUrl": "string",
+              "whatsappHandle": "string",
+              "xHandle": "string",
+              "youtubeUrl": "string"
             },
             "message": "string",
             "statusCode": "number"
@@ -11349,9 +11543,13 @@
                 "price": "number",
                 "ratingPct": "number",
                 "slug": "string",
-                "specializations": [],
+                "specializations": [
+                  "string"
+                ],
                 "status": "string",
-                "tags": [],
+                "tags": [
+                  "string"
+                ],
                 "title": "string",
                 "views": "number"
               }
@@ -11415,9 +11613,13 @@
                 "price": "number",
                 "ratingPct": "number",
                 "slug": "string",
-                "specializations": [],
+                "specializations": [
+                  "string"
+                ],
                 "status": "string",
-                "tags": [],
+                "tags": [
+                  "string"
+                ],
                 "title": "string",
                 "views": "number"
               }
@@ -11714,7 +11916,7 @@
                 "flutterwaveTxRef": "string",
                 "id": "string",
                 "otherParty": {
-                  "avatarUrl": "null",
+                  "avatarUrl": "string",
                   "handle": "string",
                   "name": "string",
                   "verification": {
@@ -11787,8 +11989,8 @@
                 "flutterwaveTxRef": "string",
                 "id": "string",
                 "otherParty": {
-                  "avatarUrl": "null",
-                  "handle": "null",
+                  "avatarUrl": "string",
+                  "handle": "string",
                   "name": "string",
                   "verification": {
                     "creator": {
@@ -11860,8 +12062,8 @@
               "flutterwaveTxRef": "string",
               "id": "string",
               "otherParty": {
-                "avatarUrl": "null",
-                "handle": "null",
+                "avatarUrl": "string",
+                "handle": "string",
                 "name": "string",
                 "verification": {
                   "creator": {
@@ -12102,6 +12304,121 @@
         }
       },
       {
+        "id": "GET /credits [returning user]",
+        "method": "GET",
+        "path": "/credits",
+        "variant": "returning user",
+        "callers": {
+          "web": [
+            "src/lib/api/communities.ts:188",
+            "src/lib/api/verification.ts:406"
+          ],
+          "dashboard": []
+        },
+        "auth": {
+          "kind": "user",
+          "guards": [
+            "WawuAuthGuard"
+          ],
+          "adminRoles": null
+        },
+        "probe": {
+          "as": "buyer",
+          "why": "The first GET /credits created the row; this reads it back after a credit purchase (the existing-row branch of getOrCreate)."
+        },
+        "expect": {
+          "status": 200,
+          "coverage": "success",
+          "shape": {
+            "data": {
+              "creditBalance": "number",
+              "trialEndsAt": "null",
+              "userWawuId": "string"
+            },
+            "message": "string",
+            "statusCode": "number"
+          }
+        }
+      },
+      {
+        "id": "GET /settings/notifications [returning user]",
+        "method": "GET",
+        "path": "/settings/notifications",
+        "variant": "returning user",
+        "callers": {
+          "web": [
+            "src/lib/api/settings.ts:80"
+          ],
+          "dashboard": []
+        },
+        "auth": {
+          "kind": "user",
+          "guards": [
+            "WawuAuthGuard"
+          ],
+          "adminRoles": null
+        },
+        "probe": {
+          "as": "buyer",
+          "why": "The row exists now (first read created it, PATCH changed it)."
+        },
+        "expect": {
+          "status": 200,
+          "coverage": "success",
+          "shape": {
+            "data": {
+              "communityDigest": "boolean",
+              "dmReminders": "boolean",
+              "newFollowers": "boolean",
+              "newReplies": "boolean",
+              "promotions": "boolean",
+              "refunds": "boolean",
+              "userWawuId": "string"
+            },
+            "message": "string",
+            "statusCode": "number"
+          }
+        }
+      },
+      {
+        "id": "GET /settings/privacy [returning user]",
+        "method": "GET",
+        "path": "/settings/privacy",
+        "variant": "returning user",
+        "callers": {
+          "web": [
+            "src/lib/api/settings.ts:147"
+          ],
+          "dashboard": []
+        },
+        "auth": {
+          "kind": "user",
+          "guards": [
+            "WawuAuthGuard"
+          ],
+          "adminRoles": null
+        },
+        "probe": {
+          "as": "buyer",
+          "why": "The row exists now (first read created it, PATCH changed it)."
+        },
+        "expect": {
+          "status": 200,
+          "coverage": "success",
+          "shape": {
+            "data": {
+              "showFollowing": "boolean",
+              "showInMemberLists": "boolean",
+              "showPurchases": "boolean",
+              "showSavedItems": "boolean",
+              "userWawuId": "string"
+            },
+            "message": "string",
+            "statusCode": "number"
+          }
+        }
+      },
+      {
         "id": "POST /communities",
         "method": "POST",
         "path": "/communities",
@@ -12124,7 +12441,8 @@
           "body": {
             "name": "Protected Suite Circle",
             "description": "A private room the protected route suite runs.",
-            "kind": "private"
+            "kind": "private",
+            "imageUrl": "https://cdn.wawu.test/circle.png"
           },
           "capture": {
             "communityId": "data.id"
@@ -12138,7 +12456,7 @@
               "description": "string",
               "hostWawuId": "string",
               "id": "string",
-              "imageUrl": "null",
+              "imageUrl": "string",
               "kind": "string",
               "memberCount": "number",
               "messagesToday": "number",
@@ -12184,7 +12502,7 @@
               "description": "string",
               "hostWawuId": "string",
               "id": "string",
-              "imageUrl": "null",
+              "imageUrl": "string",
               "kind": "string",
               "memberCount": "number",
               "messagesToday": "number",
@@ -12225,7 +12543,7 @@
                 "description": "string",
                 "hostWawuId": "string",
                 "id": "string",
-                "imageUrl": "null",
+                "imageUrl": "null|string",
                 "kind": "string",
                 "memberCount": "number",
                 "messagesToday": "number",
@@ -12274,7 +12592,7 @@
               "description": "string",
               "hostWawuId": "string",
               "id": "string",
-              "imageUrl": "null",
+              "imageUrl": "string",
               "kind": "string",
               "memberCount": "number",
               "messagesToday": "number",
@@ -12397,9 +12715,9 @@
           "shape": {
             "data": [
               {
-                "avatarUrl": "null",
+                "avatarUrl": "string",
                 "communityId": "string",
-                "handle": "null",
+                "handle": "string",
                 "id": "string",
                 "joinedAt": "null",
                 "requestedAt": "string",
@@ -12584,8 +12902,8 @@
                 "id": "string",
                 "imageUrl": "null",
                 "sender": {
-                  "avatarUrl": "null",
-                  "handle": "null",
+                  "avatarUrl": "string",
+                  "handle": "string",
                   "name": "string",
                   "verification": {
                     "creator": {
@@ -12730,7 +13048,26 @@
             "format": "online",
             "type": "webinar",
             "startsAt": "{{future}}",
-            "location": "Online"
+            "endsAt": "{{futureEnd}}",
+            "timeLabel": "6pm WAT",
+            "timezone": "Africa/Lagos",
+            "location": "Online",
+            "address": "12 Protected Close, Yaba",
+            "venueName": "WAWU Studio",
+            "externalUrl": "https://wawu.test/live",
+            "bannerUrl": "https://cdn.wawu.test/banner.png",
+            "category": "training",
+            "contactEmail": "events@wawu.test",
+            "contactPhone": "+2348012345678",
+            "hostOrgBio": "A studio that teaches creators.",
+            "speakers": [
+              {
+                "name": "Tobi Protected",
+                "title": "Producer",
+                "photoUrl": "https://cdn.wawu.test/tobi.png",
+                "order": 0
+              }
+            ]
           },
           "capture": {
             "eventId": "data.id"
@@ -12741,23 +13078,23 @@
           "coverage": "success",
           "shape": {
             "data": {
-              "address": "null",
-              "bannerUrl": "null",
+              "address": "string",
+              "bannerUrl": "string",
               "cancelReason": "null",
               "cancelledAt": "null",
               "category": "string",
-              "contactEmail": "null",
-              "contactPhone": "null",
+              "contactEmail": "string",
+              "contactPhone": "string",
               "createdAt": "string",
               "description": "string",
-              "endsAt": "null",
-              "externalUrl": "null",
+              "endsAt": "string",
+              "externalUrl": "string",
               "featured": "boolean",
               "format": "string",
               "goingCount": "number",
               "hasRecap": "boolean",
               "hostOrg": "string",
-              "hostOrgBio": "null",
+              "hostOrgBio": "string",
               "hostVerification": {
                 "creator": {
                   "expiresAt": "null",
@@ -12776,16 +13113,24 @@
               "priceFromNaira": "null",
               "recapText": "null",
               "recapUrl": "null",
-              "speakers": [],
+              "speakers": [
+                {
+                  "initials": "string",
+                  "name": "string",
+                  "order": "number",
+                  "photoUrl": "string",
+                  "title": "string"
+                }
+              ],
               "startsAt": "string",
               "status": "string",
               "ticketed": "boolean",
-              "timeLabel": "null",
-              "timezone": "null",
+              "timeLabel": "string",
+              "timezone": "string",
               "type": "string",
               "userGoing": "boolean",
               "userSaved": "boolean",
-              "venueName": "null"
+              "venueName": "string"
             },
             "message": "string",
             "statusCode": "number"
@@ -12823,23 +13168,23 @@
           "coverage": "success",
           "shape": {
             "data": {
-              "address": "null",
-              "bannerUrl": "null",
+              "address": "string",
+              "bannerUrl": "string",
               "cancelReason": "null",
               "cancelledAt": "null",
               "category": "string",
-              "contactEmail": "null",
-              "contactPhone": "null",
+              "contactEmail": "string",
+              "contactPhone": "string",
               "createdAt": "string",
               "description": "string",
-              "endsAt": "null",
-              "externalUrl": "null",
+              "endsAt": "string",
+              "externalUrl": "string",
               "featured": "boolean",
               "format": "string",
               "goingCount": "number",
               "hasRecap": "boolean",
               "hostOrg": "string",
-              "hostOrgBio": "null",
+              "hostOrgBio": "string",
               "hostVerification": {
                 "creator": {
                   "expiresAt": "null",
@@ -12858,16 +13203,24 @@
               "priceFromNaira": "null",
               "recapText": "null",
               "recapUrl": "null",
-              "speakers": [],
+              "speakers": [
+                {
+                  "initials": "string",
+                  "name": "string",
+                  "order": "number",
+                  "photoUrl": "string",
+                  "title": "string"
+                }
+              ],
               "startsAt": "string",
               "status": "string",
               "ticketed": "boolean",
-              "timeLabel": "null",
-              "timezone": "null",
+              "timeLabel": "string",
+              "timezone": "string",
               "type": "string",
               "userGoing": "boolean",
               "userSaved": "boolean",
-              "venueName": "null"
+              "venueName": "string"
             },
             "message": "string",
             "statusCode": "number"
@@ -12905,11 +13258,11 @@
           "shape": {
             "data": [
               {
-                "address": "null",
+                "address": "string",
                 "createdAt": "string",
                 "description": "string",
-                "endsAt": "null",
-                "externalUrl": "null",
+                "endsAt": "string",
+                "externalUrl": "string",
                 "featured": "boolean",
                 "format": "string",
                 "goingCount": "number",
@@ -12920,18 +13273,26 @@
                   "wawuUserId": "string"
                 },
                 "hostOrg": "string",
-                "hostOrgBio": "null",
+                "hostOrgBio": "string",
                 "id": "string",
                 "lastDecisionReason": "null",
                 "location": "string",
                 "name": "string",
                 "recapText": "null",
                 "recapUrl": "null",
-                "speakers": [],
+                "speakers": [
+                  {
+                    "initials": "string",
+                    "name": "string",
+                    "order": "number",
+                    "photoUrl": "string",
+                    "title": "string"
+                  }
+                ],
                 "startsAt": "string",
                 "status": "string",
-                "timeLabel": "null",
-                "timezone": "null",
+                "timeLabel": "string",
+                "timezone": "string",
                 "type": "string",
                 "updatedAt": "string",
                 "waitingHours": "number"
@@ -12979,11 +13340,11 @@
           "shape": {
             "data": [
               {
-                "address": "null",
+                "address": "string",
                 "createdAt": "string",
                 "description": "string",
-                "endsAt": "null",
-                "externalUrl": "null",
+                "endsAt": "string",
+                "externalUrl": "string",
                 "featured": "boolean",
                 "format": "string",
                 "goingCount": "number",
@@ -12994,18 +13355,26 @@
                   "wawuUserId": "string"
                 },
                 "hostOrg": "string",
-                "hostOrgBio": "null",
+                "hostOrgBio": "string",
                 "id": "string",
                 "lastDecisionReason": "null",
                 "location": "string",
                 "name": "string",
                 "recapText": "null",
                 "recapUrl": "null",
-                "speakers": [],
+                "speakers": [
+                  {
+                    "initials": "string",
+                    "name": "string",
+                    "order": "number",
+                    "photoUrl": "string",
+                    "title": "string"
+                  }
+                ],
                 "startsAt": "string",
                 "status": "string",
-                "timeLabel": "null",
-                "timezone": "null",
+                "timeLabel": "string",
+                "timezone": "string",
                 "type": "string",
                 "updatedAt": "string",
                 "waitingHours": "number"
@@ -13055,11 +13424,11 @@
           "coverage": "success",
           "shape": {
             "data": {
-              "address": "null",
+              "address": "string",
               "createdAt": "string",
               "description": "string",
-              "endsAt": "null",
-              "externalUrl": "null",
+              "endsAt": "string",
+              "externalUrl": "string",
               "featured": "boolean",
               "format": "string",
               "goingCount": "number",
@@ -13070,7 +13439,7 @@
                 "wawuUserId": "string"
               },
               "hostOrg": "string",
-              "hostOrgBio": "null",
+              "hostOrgBio": "string",
               "id": "string",
               "lastDecisionReason": "null",
               "location": "string",
@@ -13078,11 +13447,19 @@
               "recapText": "null",
               "recapUrl": "null",
               "reviewHistory": [],
-              "speakers": [],
+              "speakers": [
+                {
+                  "initials": "string",
+                  "name": "string",
+                  "order": "number",
+                  "photoUrl": "string",
+                  "title": "string"
+                }
+              ],
               "startsAt": "string",
               "status": "string",
-              "timeLabel": "null",
-              "timezone": "null",
+              "timeLabel": "string",
+              "timezone": "string",
               "type": "string",
               "updatedAt": "string",
               "waitingHours": "number"
@@ -13125,11 +13502,11 @@
           "shape": {
             "data": {
               "event": {
-                "address": "null",
+                "address": "string",
                 "createdAt": "string",
                 "description": "string",
-                "endsAt": "null",
-                "externalUrl": "null",
+                "endsAt": "string",
+                "externalUrl": "string",
                 "featured": "boolean",
                 "format": "string",
                 "goingCount": "number",
@@ -13140,7 +13517,7 @@
                   "wawuUserId": "string"
                 },
                 "hostOrg": "string",
-                "hostOrgBio": "null",
+                "hostOrgBio": "string",
                 "id": "string",
                 "lastDecisionReason": "null",
                 "location": "string",
@@ -13162,11 +13539,19 @@
                     "reviewedByAdminRole": "string"
                   }
                 ],
-                "speakers": [],
+                "speakers": [
+                  {
+                    "initials": "string",
+                    "name": "string",
+                    "order": "number",
+                    "photoUrl": "string",
+                    "title": "string"
+                  }
+                ],
                 "startsAt": "string",
                 "status": "string",
-                "timeLabel": "null",
-                "timezone": "null",
+                "timeLabel": "string",
+                "timezone": "string",
                 "type": "string",
                 "updatedAt": "string",
                 "waitingHours": "number"
@@ -13342,11 +13727,11 @@
           "shape": {
             "data": {
               "event": {
-                "address": "null",
+                "address": "string",
                 "createdAt": "string",
                 "description": "string",
-                "endsAt": "null",
-                "externalUrl": "null",
+                "endsAt": "string",
+                "externalUrl": "string",
                 "featured": "boolean",
                 "format": "string",
                 "goingCount": "number",
@@ -13357,7 +13742,7 @@
                   "wawuUserId": "string"
                 },
                 "hostOrg": "string",
-                "hostOrgBio": "null",
+                "hostOrgBio": "string",
                 "id": "string",
                 "lastDecisionReason": "null",
                 "location": "string",
@@ -13379,11 +13764,19 @@
                     "reviewedByAdminRole": "string"
                   }
                 ],
-                "speakers": [],
+                "speakers": [
+                  {
+                    "initials": "string",
+                    "name": "string",
+                    "order": "number",
+                    "photoUrl": "string",
+                    "title": "string"
+                  }
+                ],
                 "startsAt": "string",
                 "status": "string",
-                "timeLabel": "null",
-                "timezone": "null",
+                "timeLabel": "string",
+                "timezone": "string",
                 "type": "string",
                 "updatedAt": "string",
                 "waitingHours": "number"
@@ -13440,11 +13833,11 @@
           "shape": {
             "data": {
               "event": {
-                "address": "null",
+                "address": "string",
                 "createdAt": "string",
                 "description": "string",
-                "endsAt": "null",
-                "externalUrl": "null",
+                "endsAt": "string",
+                "externalUrl": "string",
                 "featured": "boolean",
                 "format": "string",
                 "goingCount": "number",
@@ -13455,7 +13848,7 @@
                   "wawuUserId": "string"
                 },
                 "hostOrg": "string",
-                "hostOrgBio": "null",
+                "hostOrgBio": "string",
                 "id": "string",
                 "lastDecisionReason": "null",
                 "location": "string",
@@ -13477,11 +13870,19 @@
                     "reviewedByAdminRole": "string"
                   }
                 ],
-                "speakers": [],
+                "speakers": [
+                  {
+                    "initials": "string",
+                    "name": "string",
+                    "order": "number",
+                    "photoUrl": "string",
+                    "title": "string"
+                  }
+                ],
                 "startsAt": "string",
                 "status": "string",
-                "timeLabel": "null",
-                "timezone": "null",
+                "timeLabel": "string",
+                "timezone": "string",
                 "type": "string",
                 "updatedAt": "string",
                 "waitingHours": "number"
@@ -13636,23 +14037,23 @@
           "shape": {
             "data": [
               {
-                "address": "null",
-                "bannerUrl": "null",
+                "address": "string",
+                "bannerUrl": "string",
                 "cancelReason": "null",
                 "cancelledAt": "null",
                 "category": "string",
-                "contactEmail": "null",
-                "contactPhone": "null",
+                "contactEmail": "string",
+                "contactPhone": "string",
                 "createdAt": "string",
                 "description": "string",
-                "endsAt": "null",
-                "externalUrl": "null",
+                "endsAt": "string",
+                "externalUrl": "string",
                 "featured": "boolean",
                 "format": "string",
                 "goingCount": "number",
                 "hasRecap": "boolean",
                 "hostOrg": "string",
-                "hostOrgBio": "null",
+                "hostOrgBio": "string",
                 "hostVerification": {
                   "creator": {
                     "expiresAt": "null",
@@ -13671,16 +14072,24 @@
                 "priceFromNaira": "number",
                 "recapText": "null",
                 "recapUrl": "null",
-                "speakers": [],
+                "speakers": [
+                  {
+                    "initials": "string",
+                    "name": "string",
+                    "order": "number",
+                    "photoUrl": "string",
+                    "title": "string"
+                  }
+                ],
                 "startsAt": "string",
                 "status": "string",
                 "ticketed": "boolean",
-                "timeLabel": "null",
-                "timezone": "null",
+                "timeLabel": "string",
+                "timezone": "string",
                 "type": "string",
                 "userGoing": "boolean",
                 "userSaved": "boolean",
-                "venueName": "null"
+                "venueName": "string"
               }
             ],
             "message": "string",
@@ -13720,23 +14129,23 @@
           "shape": {
             "data": [
               {
-                "address": "null",
-                "bannerUrl": "null",
+                "address": "null|string",
+                "bannerUrl": "null|string",
                 "cancelReason": "null",
                 "cancelledAt": "null",
                 "category": "string",
-                "contactEmail": "null",
-                "contactPhone": "null",
+                "contactEmail": "null|string",
+                "contactPhone": "null|string",
                 "createdAt": "string",
                 "description": "string",
-                "endsAt": "null",
-                "externalUrl": "null",
+                "endsAt": "null|string",
+                "externalUrl": "null|string",
                 "featured": "boolean",
                 "format": "string",
                 "goingCount": "number",
                 "hasRecap": "boolean",
                 "hostOrg": "string",
-                "hostOrgBio": "null",
+                "hostOrgBio": "null|string",
                 "hostVerification": {
                   "creator": {
                     "expiresAt": "null",
@@ -13755,16 +14164,24 @@
                 "priceFromNaira": "null|number",
                 "recapText": "null",
                 "recapUrl": "null",
-                "speakers": [],
+                "speakers": [
+                  {
+                    "initials": "string",
+                    "name": "string",
+                    "order": "number",
+                    "photoUrl": "string",
+                    "title": "string"
+                  }
+                ],
                 "startsAt": "string",
                 "status": "string",
                 "ticketed": "boolean",
-                "timeLabel": "null",
-                "timezone": "null",
+                "timeLabel": "null|string",
+                "timezone": "null|string",
                 "type": "string",
                 "userGoing": "boolean",
                 "userSaved": "boolean",
-                "venueName": "null"
+                "venueName": "null|string"
               }
             ],
             "message": "string",
@@ -13806,23 +14223,23 @@
           "coverage": "success",
           "shape": {
             "data": {
-              "address": "null",
-              "bannerUrl": "null",
+              "address": "string",
+              "bannerUrl": "string",
               "cancelReason": "null",
               "cancelledAt": "null",
               "category": "string",
-              "contactEmail": "null",
-              "contactPhone": "null",
+              "contactEmail": "string",
+              "contactPhone": "string",
               "createdAt": "string",
               "description": "string",
-              "endsAt": "null",
-              "externalUrl": "null",
+              "endsAt": "string",
+              "externalUrl": "string",
               "featured": "boolean",
               "format": "string",
               "goingCount": "number",
               "hasRecap": "boolean",
               "hostOrg": "string",
-              "hostOrgBio": "null",
+              "hostOrgBio": "string",
               "hostVerification": {
                 "creator": {
                   "expiresAt": "null",
@@ -13841,16 +14258,24 @@
               "priceFromNaira": "number",
               "recapText": "null",
               "recapUrl": "null",
-              "speakers": [],
+              "speakers": [
+                {
+                  "initials": "string",
+                  "name": "string",
+                  "order": "number",
+                  "photoUrl": "string",
+                  "title": "string"
+                }
+              ],
               "startsAt": "string",
               "status": "string",
               "ticketed": "boolean",
-              "timeLabel": "null",
-              "timezone": "null",
+              "timeLabel": "string",
+              "timezone": "string",
               "type": "string",
               "userGoing": "boolean",
               "userSaved": "boolean",
-              "venueName": "null"
+              "venueName": "string"
             },
             "message": "string",
             "statusCode": "number"
@@ -14065,7 +14490,7 @@
                 "checkedInAt": "null",
                 "code": "string",
                 "event": {
-                  "bannerUrl": "null",
+                  "bannerUrl": "string",
                   "cancelledAt": "null",
                   "id": "string",
                   "location": "string",
@@ -14257,11 +14682,11 @@
           "shape": {
             "data": {
               "event": {
-                "address": "null",
+                "address": "string",
                 "createdAt": "string",
                 "description": "string",
-                "endsAt": "null",
-                "externalUrl": "null",
+                "endsAt": "string",
+                "externalUrl": "string",
                 "featured": "boolean",
                 "format": "string",
                 "goingCount": "number",
@@ -14272,7 +14697,7 @@
                   "wawuUserId": "string"
                 },
                 "hostOrg": "string",
-                "hostOrgBio": "null",
+                "hostOrgBio": "string",
                 "id": "string",
                 "lastDecisionReason": "string",
                 "location": "string",
@@ -14294,11 +14719,19 @@
                     "reviewedByAdminRole": "string"
                   }
                 ],
-                "speakers": [],
+                "speakers": [
+                  {
+                    "initials": "string",
+                    "name": "string",
+                    "order": "number",
+                    "photoUrl": "string",
+                    "title": "string"
+                  }
+                ],
                 "startsAt": "string",
                 "status": "string",
-                "timeLabel": "null",
-                "timezone": "null",
+                "timeLabel": "string",
+                "timezone": "string",
                 "type": "string",
                 "updatedAt": "string",
                 "waitingHours": "number"
@@ -14355,11 +14788,11 @@
           "shape": {
             "data": {
               "event": {
-                "address": "null",
+                "address": "string",
                 "createdAt": "string",
                 "description": "string",
-                "endsAt": "null",
-                "externalUrl": "null",
+                "endsAt": "string",
+                "externalUrl": "string",
                 "featured": "boolean",
                 "format": "string",
                 "goingCount": "number",
@@ -14370,7 +14803,7 @@
                   "wawuUserId": "string"
                 },
                 "hostOrg": "string",
-                "hostOrgBio": "null",
+                "hostOrgBio": "string",
                 "id": "string",
                 "lastDecisionReason": "null",
                 "location": "string",
@@ -14392,11 +14825,19 @@
                     "reviewedByAdminRole": "string"
                   }
                 ],
-                "speakers": [],
+                "speakers": [
+                  {
+                    "initials": "string",
+                    "name": "string",
+                    "order": "number",
+                    "photoUrl": "string",
+                    "title": "string"
+                  }
+                ],
                 "startsAt": "string",
                 "status": "string",
-                "timeLabel": "null",
-                "timezone": "null",
+                "timeLabel": "string",
+                "timezone": "string",
                 "type": "string",
                 "updatedAt": "string",
                 "waitingHours": "number"
@@ -14450,6 +14891,9 @@
             "category": "lighting_studio",
             "subcategory": "ring-lights",
             "priceNaira": 25000,
+            "compareAtNaira": 30000,
+            "wawuVerified": true,
+            "wawuPick": true,
             "stock": 10,
             "images": [
               "https://cdn.wawu.test/ring.png"
@@ -14468,7 +14912,7 @@
             "data": {
               "brand": "string",
               "category": "string",
-              "compareAtNaira": "null",
+              "compareAtNaira": "number",
               "createdAt": "string",
               "description": "string",
               "id": "string",
@@ -14527,6 +14971,9 @@
             "category": "lighting_studio",
             "subcategory": "ring-lights",
             "priceNaira": 24000,
+            "compareAtNaira": 30000,
+            "wawuVerified": true,
+            "wawuPick": true,
             "stock": 10,
             "images": [
               "https://cdn.wawu.test/ring.png"
@@ -14541,7 +14988,7 @@
             "data": {
               "brand": "string",
               "category": "string",
-              "compareAtNaira": "null",
+              "compareAtNaira": "number",
               "createdAt": "string",
               "description": "string",
               "id": "string",
@@ -14600,7 +15047,7 @@
               {
                 "brand": "string",
                 "category": "string",
-                "compareAtNaira": "null",
+                "compareAtNaira": "number",
                 "createdAt": "string",
                 "description": "string",
                 "id": "string",
@@ -14668,7 +15115,7 @@
             "data": {
               "brand": "string",
               "category": "string",
-              "compareAtNaira": "null",
+              "compareAtNaira": "number",
               "createdAt": "string",
               "description": "string",
               "id": "string",
@@ -14722,7 +15169,7 @@
               {
                 "brand": "string",
                 "category": "string",
-                "compareAtNaira": "null",
+                "compareAtNaira": "number",
                 "description": "string",
                 "id": "string",
                 "images": [
@@ -14781,7 +15228,7 @@
             "data": {
               "brand": "string",
               "category": "string",
-              "compareAtNaira": "null",
+              "compareAtNaira": "number",
               "description": "string",
               "id": "string",
               "images": [
@@ -14876,7 +15323,7 @@
                   "product": {
                     "brand": "string",
                     "category": "string",
-                    "compareAtNaira": "null",
+                    "compareAtNaira": "number",
                     "description": "string",
                     "id": "string",
                     "images": [
@@ -14944,7 +15391,7 @@
                   "product": {
                     "brand": "string",
                     "category": "string",
-                    "compareAtNaira": "null",
+                    "compareAtNaira": "number",
                     "description": "string",
                     "id": "string",
                     "images": [
@@ -15006,7 +15453,7 @@
                   "product": {
                     "brand": "string",
                     "category": "string",
-                    "compareAtNaira": "null",
+                    "compareAtNaira": "number",
                     "description": "string",
                     "id": "string",
                     "images": [
@@ -15058,7 +15505,8 @@
             "deliveryPhone": "+2348012345678",
             "deliveryAddress": "12 Protected Close, Yaba",
             "deliveryCity": "Lagos",
-            "deliveryState": "Lagos"
+            "deliveryState": "Lagos",
+            "deliveryNote": "Call on arrival."
           },
           "capture": {
             "shopOrderId": "data.orderId",
@@ -15077,97 +15525,6 @@
                 "txRef": "string"
               },
               "orderId": "string"
-            },
-            "message": "string",
-            "statusCode": "number"
-          }
-        }
-      },
-      {
-        "id": "GET /shop/orders",
-        "method": "GET",
-        "path": "/shop/orders",
-        "callers": {
-          "web": [
-            "src/lib/api/shop.ts:216"
-          ],
-          "dashboard": []
-        },
-        "auth": {
-          "kind": "user",
-          "guards": [
-            "WawuAuthGuard"
-          ],
-          "adminRoles": null
-        },
-        "probe": {
-          "as": "buyer"
-        },
-        "expect": {
-          "status": 200,
-          "coverage": "success",
-          "shape": {
-            "data": [],
-            "message": "string",
-            "statusCode": "number"
-          }
-        }
-      },
-      {
-        "id": "GET /shop/orders/:orderId",
-        "method": "GET",
-        "path": "/shop/orders/:orderId",
-        "callers": {
-          "web": [
-            "src/lib/api/shop.ts:226"
-          ],
-          "dashboard": []
-        },
-        "auth": {
-          "kind": "user",
-          "guards": [
-            "WawuAuthGuard"
-          ],
-          "adminRoles": null
-        },
-        "probe": {
-          "as": "buyer",
-          "params": {
-            "orderId": "{{shopOrderId}}"
-          }
-        },
-        "expect": {
-          "status": 200,
-          "coverage": "success",
-          "shape": {
-            "data": {
-              "createdAt": "string",
-              "deliveredAt": "null",
-              "deliveryAddress": "string",
-              "deliveryCity": "string",
-              "deliveryNaira": "number",
-              "deliveryName": "string",
-              "deliveryNote": "null",
-              "deliveryPhone": "string",
-              "deliveryState": "string",
-              "dispatchedAt": "null",
-              "fulfilment": "string",
-              "id": "string",
-              "items": [
-                {
-                  "id": "string",
-                  "imageUrl": "string",
-                  "name": "string",
-                  "priceNaira": "number",
-                  "productId": "string",
-                  "quantity": "number"
-                }
-              ],
-              "paidAt": "null",
-              "status": "string",
-              "subtotalNaira": "number",
-              "totalNaira": "number",
-              "trackingNote": "null"
             },
             "message": "string",
             "statusCode": "number"
@@ -15213,7 +15570,128 @@
               "deliveryCity": "string",
               "deliveryNaira": "number",
               "deliveryName": "string",
-              "deliveryNote": "null",
+              "deliveryNote": "string",
+              "deliveryPhone": "string",
+              "deliveryState": "string",
+              "dispatchedAt": "null",
+              "fulfilment": "string",
+              "id": "string",
+              "items": [
+                {
+                  "id": "string",
+                  "imageUrl": "string",
+                  "name": "string",
+                  "priceNaira": "number",
+                  "productId": "string",
+                  "quantity": "number"
+                }
+              ],
+              "paidAt": "string",
+              "status": "string",
+              "subtotalNaira": "number",
+              "totalNaira": "number",
+              "trackingNote": "null"
+            },
+            "message": "string",
+            "statusCode": "number"
+          }
+        }
+      },
+      {
+        "id": "GET /shop/orders",
+        "method": "GET",
+        "path": "/shop/orders",
+        "callers": {
+          "web": [
+            "src/lib/api/shop.ts:216"
+          ],
+          "dashboard": []
+        },
+        "auth": {
+          "kind": "user",
+          "guards": [
+            "WawuAuthGuard"
+          ],
+          "adminRoles": null
+        },
+        "probe": {
+          "as": "buyer"
+        },
+        "expect": {
+          "status": 200,
+          "coverage": "success",
+          "shape": {
+            "data": [
+              {
+                "createdAt": "string",
+                "deliveredAt": "null",
+                "deliveryAddress": "string",
+                "deliveryCity": "string",
+                "deliveryNaira": "number",
+                "deliveryName": "string",
+                "deliveryNote": "string",
+                "deliveryPhone": "string",
+                "deliveryState": "string",
+                "dispatchedAt": "null",
+                "fulfilment": "string",
+                "id": "string",
+                "items": [
+                  {
+                    "id": "string",
+                    "imageUrl": "string",
+                    "name": "string",
+                    "priceNaira": "number",
+                    "productId": "string",
+                    "quantity": "number"
+                  }
+                ],
+                "paidAt": "string",
+                "status": "string",
+                "subtotalNaira": "number",
+                "totalNaira": "number",
+                "trackingNote": "null"
+              }
+            ],
+            "message": "string",
+            "statusCode": "number"
+          }
+        }
+      },
+      {
+        "id": "GET /shop/orders/:orderId",
+        "method": "GET",
+        "path": "/shop/orders/:orderId",
+        "callers": {
+          "web": [
+            "src/lib/api/shop.ts:226"
+          ],
+          "dashboard": []
+        },
+        "auth": {
+          "kind": "user",
+          "guards": [
+            "WawuAuthGuard"
+          ],
+          "adminRoles": null
+        },
+        "probe": {
+          "as": "buyer",
+          "params": {
+            "orderId": "{{shopOrderId}}"
+          }
+        },
+        "expect": {
+          "status": 200,
+          "coverage": "success",
+          "shape": {
+            "data": {
+              "createdAt": "string",
+              "deliveredAt": "null",
+              "deliveryAddress": "string",
+              "deliveryCity": "string",
+              "deliveryNaira": "number",
+              "deliveryName": "string",
+              "deliveryNote": "string",
               "deliveryPhone": "string",
               "deliveryState": "string",
               "dispatchedAt": "null",
@@ -15326,7 +15804,7 @@
                 "deliveryAddress": "string",
                 "deliveryCity": "string",
                 "deliveryName": "string",
-                "deliveryNote": "null",
+                "deliveryNote": "string",
                 "deliveryPhone": "string",
                 "deliveryState": "string",
                 "dispatchedAt": "null",
@@ -15390,7 +15868,8 @@
             "id": "{{shopOrderId}}"
           },
           "body": {
-            "fulfilment": "dispatched"
+            "fulfilment": "dispatched",
+            "trackingNote": "GIG Logistics, waybill 1234"
           }
         },
         "expect": {
@@ -15404,7 +15883,7 @@
               "deliveryAddress": "string",
               "deliveryCity": "string",
               "deliveryName": "string",
-              "deliveryNote": "null",
+              "deliveryNote": "string",
               "deliveryPhone": "string",
               "deliveryState": "string",
               "dispatchedAt": "string",
@@ -15417,7 +15896,7 @@
               "status": "string",
               "subtotalNaira": "number",
               "totalNaira": "number",
-              "trackingNote": "null"
+              "trackingNote": "string"
             },
             "message": "string",
             "statusCode": "number"
@@ -15609,7 +16088,10 @@
             "names": [
               "Protected Ventures"
             ],
-            "nature": "Media production"
+            "nature": "Media production",
+            "documents": [
+              "https://cdn.wawu.test/cac/id.pdf"
+            ]
           },
           "capture": {
             "cacTxRef": "data.flutterwaveConfig.txRef"
@@ -15666,7 +16148,9 @@
               "applicantWawuId": "string",
               "appliedDate": "string",
               "certificateExpectedBy": "string",
-              "documents": [],
+              "documents": [
+                "string"
+              ],
               "id": "string",
               "kind": "string",
               "reference": "string",
@@ -15713,7 +16197,10 @@
             "targetMarkets": [
               "Ghana"
             ],
-            "yearlyVolume": "Under 10 million naira"
+            "yearlyVolume": "Under 10 million naira",
+            "documents": [
+              "https://cdn.wawu.test/nepc/cert.pdf"
+            ]
           },
           "capture": {
             "nepcAppId": "data.id"
@@ -15728,7 +16215,9 @@
               "applicantWawuId": "string",
               "appliedDate": "string",
               "certificateExpectedBy": "null",
-              "documents": [],
+              "documents": [
+                "string"
+              ],
               "id": "string",
               "kind": "string",
               "reference": "string",
@@ -15770,7 +16259,10 @@
           "as": "buyer",
           "body": {
             "kind": "loans",
-            "note": "A small equipment loan for a studio."
+            "note": "A small equipment loan for a studio.",
+            "documents": [
+              "https://cdn.wawu.test/loans/statement.pdf"
+            ]
           },
           "capture": {
             "partnerAppId": "data.id"
@@ -15785,7 +16277,9 @@
               "applicantWawuId": "string",
               "appliedDate": "string",
               "certificateExpectedBy": "null",
-              "documents": [],
+              "documents": [
+                "string"
+              ],
               "id": "string",
               "kind": "string",
               "reference": "string",
@@ -15839,7 +16333,9 @@
                 "applicantWawuId": "string",
                 "appliedDate": "string",
                 "certificateExpectedBy": "null|string",
-                "documents": [],
+                "documents": [
+                  "string"
+                ],
                 "id": "string",
                 "kind": "string",
                 "reference": "string",
@@ -15899,7 +16395,9 @@
               "applicantWawuId": "string",
               "appliedDate": "string",
               "certificateExpectedBy": "null",
-              "documents": [],
+              "documents": [
+                "string"
+              ],
               "id": "string",
               "kind": "string",
               "reference": "string",
@@ -16013,7 +16511,9 @@
               "appliedDate": "string",
               "certificateExpectedBy": "null",
               "documentCount": "number",
-              "documents": [],
+              "documents": [
+                "string"
+              ],
               "id": "string",
               "kind": "string",
               "latestUpdateLabel": "string",
@@ -16081,7 +16581,9 @@
               "applicantWawuId": "string",
               "appliedDate": "string",
               "certificateExpectedBy": "null",
-              "documents": [],
+              "documents": [
+                "string"
+              ],
               "id": "string",
               "kind": "string",
               "reference": "string",
@@ -16141,7 +16643,9 @@
               "applicantWawuId": "string",
               "appliedDate": "string",
               "certificateExpectedBy": "null",
-              "documents": [],
+              "documents": [
+                "string"
+              ],
               "id": "string",
               "kind": "string",
               "reference": "string",
@@ -16201,7 +16705,9 @@
               "applicantWawuId": "string",
               "appliedDate": "string",
               "certificateExpectedBy": "null",
-              "documents": [],
+              "documents": [
+                "string"
+              ],
               "id": "string",
               "kind": "string",
               "reference": "string",
@@ -16243,10 +16749,18 @@
           "as": "buyer"
         },
         "expect": {
-          "status": 502,
-          "coverage": "unavailable",
+          "status": 200,
+          "coverage": "success",
           "shape": {
-            "data": "null",
+            "data": [
+              {
+                "code": "string",
+                "country": "string",
+                "description": "string",
+                "id": "number",
+                "name": "string"
+              }
+            ],
             "message": "string",
             "statusCode": "number"
           }
@@ -16276,10 +16790,19 @@
           }
         },
         "expect": {
-          "status": 502,
-          "coverage": "unavailable",
+          "status": 200,
+          "coverage": "success",
           "shape": {
-            "data": "null",
+            "data": [
+              {
+                "biller_code": "string",
+                "country_code": "string",
+                "description": "string",
+                "id": "number",
+                "logo": "null",
+                "name": "string"
+              }
+            ],
             "message": "string",
             "statusCode": "number"
           }
@@ -16309,10 +16832,22 @@
           }
         },
         "expect": {
-          "status": 502,
-          "coverage": "unavailable",
+          "status": 200,
+          "coverage": "success",
           "shape": {
-            "data": "null",
+            "data": [
+              {
+                "amount": "number",
+                "biller_code": "string",
+                "category_name": "string",
+                "fee": "number",
+                "id": "number",
+                "item_code": "string",
+                "label_name": "string",
+                "name": "string",
+                "short_name": "string"
+              }
+            ],
             "message": "string",
             "statusCode": "number"
           }
@@ -16343,10 +16878,16 @@
           }
         },
         "expect": {
-          "status": 502,
-          "coverage": "unavailable",
+          "status": 200,
+          "coverage": "success",
           "shape": {
-            "data": "null",
+            "data": {
+              "customer": "string",
+              "fee": "number",
+              "maximum": "number",
+              "minimum": "number",
+              "name": "string"
+            },
             "message": "string",
             "statusCode": "number"
           }
@@ -16380,7 +16921,9 @@
             "amount": 500
           },
           "capture": {
-            "billId": "data.billPaymentId"
+            "billId": "data.billPaymentId",
+            "billTxRef": "data.flutterwaveConfig.txRef",
+            "billAmount": "data.flutterwaveConfig.amount"
           }
         },
         "expect": {
@@ -16395,6 +16938,58 @@
                 "publicKey": "string",
                 "txRef": "string"
               }
+            },
+            "message": "string",
+            "statusCode": "number"
+          }
+        }
+      },
+      {
+        "id": "POST /bills/:id/verify",
+        "method": "POST",
+        "path": "/bills/:id/verify",
+        "callers": {
+          "web": [
+            "src/app/(app)/services/pay/page.tsx:228 (verifyPath, called from src/app/payment/return/page.tsx:57)",
+            "src/lib/api/lifestyle.ts:123"
+          ],
+          "dashboard": []
+        },
+        "auth": {
+          "kind": "user",
+          "guards": [
+            "WawuAuthGuard"
+          ],
+          "adminRoles": null
+        },
+        "probe": {
+          "as": "buyer",
+          "params": {
+            "id": "{{billId}}"
+          },
+          "body": {
+            "transactionId": "flwtx-{{billAmount}}-{{billTxRef}}"
+          },
+          "why": "flwtx-<amount>-<txRef>: the canned Flutterwave verify answer (test/protected-routes/providers.ts)."
+        },
+        "expect": {
+          "status": 200,
+          "coverage": "success",
+          "shape": {
+            "data": {
+              "amount": "number",
+              "billerName": "string",
+              "category": "string",
+              "createdAt": "string",
+              "customerRef": "string",
+              "deliveredAt": "null",
+              "failureReason": "null",
+              "fee": "number",
+              "id": "string",
+              "providerReference": "string",
+              "refundReference": "null",
+              "refundedAt": "null",
+              "status": "string"
             },
             "message": "string",
             "statusCode": "number"
@@ -16436,7 +17031,7 @@
                 "failureReason": "null",
                 "fee": "number",
                 "id": "string",
-                "providerReference": "null",
+                "providerReference": "string",
                 "refundReference": "null",
                 "refundedAt": "null",
                 "status": "string"
@@ -16449,43 +17044,6 @@
               "perPage": "number",
               "total": "number"
             },
-            "statusCode": "number"
-          }
-        }
-      },
-      {
-        "id": "POST /bills/:id/verify",
-        "method": "POST",
-        "path": "/bills/:id/verify",
-        "callers": {
-          "web": [
-            "src/app/(app)/services/pay/page.tsx:228 (verifyPath, called from src/app/payment/return/page.tsx:57)",
-            "src/lib/api/lifestyle.ts:123"
-          ],
-          "dashboard": []
-        },
-        "auth": {
-          "kind": "user",
-          "guards": [
-            "WawuAuthGuard"
-          ],
-          "adminRoles": null
-        },
-        "probe": {
-          "as": "buyer",
-          "params": {
-            "id": "{{billId}}"
-          },
-          "body": {
-            "transactionId": "protected-tx-bill"
-          }
-        },
-        "expect": {
-          "status": 502,
-          "coverage": "unavailable",
-          "shape": {
-            "data": "null",
-            "message": "string",
             "statusCode": "number"
           }
         }
@@ -16513,13 +17071,62 @@
           ]
         },
         "probe": {
-          "as": "superadmin"
+          "as": "superadmin",
+          "before": [
+            {
+              "api": "POST /bills/init",
+              "as": "member",
+              "body": {
+                "category": "AIRTIME",
+                "billerCode": "BIL099",
+                "itemCode": "AT099",
+                "billerName": "MTN",
+                "customerRef": "08000000000",
+                "amount": 300
+              },
+              "capture": {
+                "badBillId": "data.billPaymentId",
+                "badBillTxRef": "data.flutterwaveConfig.txRef",
+                "badBillAmount": "data.flutterwaveConfig.amount"
+              }
+            },
+            {
+              "api": "POST /bills/:id/verify",
+              "as": "member",
+              "params": {
+                "id": "{{badBillId}}"
+              },
+              "body": {
+                "transactionId": "flwtx-{{badBillAmount}}-{{badBillTxRef}}"
+              },
+              "tolerate": true
+            }
+          ],
+          "why": "The canned biller refuses customer 08000000000, so that bill is paid and failed: a row for the queue."
         },
         "expect": {
           "status": 200,
           "coverage": "success",
           "shape": {
-            "data": [],
+            "data": [
+              {
+                "amount": "number",
+                "billerName": "string",
+                "buyerWawuId": "string",
+                "category": "string",
+                "createdAt": "string",
+                "customerRef": "string",
+                "deliveredAt": "null",
+                "failureReason": "string",
+                "fee": "number",
+                "flutterwaveTxRef": "string",
+                "id": "string",
+                "providerReference": "null",
+                "refundReference": "null",
+                "refundedAt": "null",
+                "status": "string"
+              }
+            ],
             "message": "string",
             "statusCode": "number"
           }
@@ -16546,10 +17153,23 @@
           "as": "buyer"
         },
         "expect": {
-          "status": 502,
-          "coverage": "unavailable",
+          "status": 200,
+          "coverage": "success",
           "shape": {
-            "data": "null",
+            "data": [
+              {
+                "dependants": "number",
+                "numberOfMonths": "number",
+                "paymentPlan": "string",
+                "planBenefits": [
+                  "string"
+                ],
+                "planCode": "string",
+                "planDescription": "string",
+                "planName": "string",
+                "price": "number"
+              }
+            ],
             "message": "string",
             "statusCode": "number"
           }
@@ -16575,19 +17195,89 @@
         "probe": {
           "as": "buyer",
           "body": {
-            "planCode": "basic",
+            "planCode": "WAWU-BASIC",
             "firstName": "Bola",
             "lastName": "Buyer",
             "phoneNumber": "08012345678",
             "gender": "Female",
-            "dateOfBirth": "1994-05-21"
+            "dateOfBirth": "1994-05-21",
+            "email": "bola@test.wawu.dev",
+            "location": "Lagos"
+          },
+          "capture": {
+            "careId": "data.subscriptionId",
+            "careTxRef": "data.flutterwaveConfig.txRef",
+            "careAmount": "data.flutterwaveConfig.amount"
           }
         },
         "expect": {
-          "status": 502,
-          "coverage": "unavailable",
+          "status": 200,
+          "coverage": "success",
           "shape": {
-            "data": "null",
+            "data": {
+              "flutterwaveConfig": {
+                "amount": "number",
+                "currency": "string",
+                "publicKey": "string",
+                "txRef": "string"
+              },
+              "plan": {
+                "code": "string",
+                "name": "string",
+                "price": "number"
+              },
+              "subscriptionId": "string"
+            },
+            "message": "string",
+            "statusCode": "number"
+          }
+        }
+      },
+      {
+        "id": "POST /care/subscriptions/:id/verify",
+        "method": "POST",
+        "path": "/care/subscriptions/:id/verify",
+        "callers": {
+          "web": [
+            "src/app/(app)/services/care/page.tsx:86 (verifyPath, called from src/app/payment/return/page.tsx:57)",
+            "src/lib/api/lifestyle.ts:182"
+          ],
+          "dashboard": []
+        },
+        "auth": {
+          "kind": "user",
+          "guards": [
+            "WawuAuthGuard"
+          ],
+          "adminRoles": null
+        },
+        "probe": {
+          "as": "buyer",
+          "params": {
+            "id": "{{careId}}"
+          },
+          "body": {
+            "transactionId": "flwtx-{{careAmount}}-{{careTxRef}}"
+          }
+        },
+        "expect": {
+          "status": 200,
+          "coverage": "success",
+          "shape": {
+            "data": {
+              "createdAt": "string",
+              "expiresAt": "string",
+              "id": "string",
+              "phoneNumber": "string",
+              "planCode": "string",
+              "planName": "string",
+              "policyNumber": "string",
+              "price": "number",
+              "refundReference": "null",
+              "refundedAt": "null",
+              "startsAt": "string",
+              "status": "string"
+            },
             "message": "string",
             "statusCode": "number"
           }
@@ -16617,44 +17307,22 @@
           "status": 200,
           "coverage": "success",
           "shape": {
-            "data": [],
-            "message": "string",
-            "statusCode": "number"
-          }
-        }
-      },
-      {
-        "id": "POST /care/subscriptions/:id/verify",
-        "method": "POST",
-        "path": "/care/subscriptions/:id/verify",
-        "callers": {
-          "web": [
-            "src/app/(app)/services/care/page.tsx:86 (verifyPath, called from src/app/payment/return/page.tsx:57)",
-            "src/lib/api/lifestyle.ts:182"
-          ],
-          "dashboard": []
-        },
-        "auth": {
-          "kind": "user",
-          "guards": [
-            "WawuAuthGuard"
-          ],
-          "adminRoles": null
-        },
-        "probe": {
-          "as": "buyer",
-          "params": {
-            "id": "{{absentUuid}}"
-          },
-          "body": {
-            "transactionId": "protected-tx-care"
-          }
-        },
-        "expect": {
-          "status": 404,
-          "coverage": "refusal",
-          "shape": {
-            "data": "null",
+            "data": [
+              {
+                "createdAt": "string",
+                "expiresAt": "string",
+                "id": "string",
+                "phoneNumber": "string",
+                "planCode": "string",
+                "planName": "string",
+                "policyNumber": "string",
+                "price": "number",
+                "refundReference": "null",
+                "refundedAt": "null",
+                "startsAt": "string",
+                "status": "string"
+              }
+            ],
             "message": "string",
             "statusCode": "number"
           }
@@ -16683,13 +17351,62 @@
           ]
         },
         "probe": {
-          "as": "superadmin"
+          "as": "superadmin",
+          "before": [
+            {
+              "api": "POST /care/subscriptions/init",
+              "as": "member",
+              "body": {
+                "planCode": "WAWU-BASIC",
+                "firstName": "Mide",
+                "lastName": "Member",
+                "phoneNumber": "08000000000",
+                "gender": "Male",
+                "dateOfBirth": "1990-01-15"
+              },
+              "capture": {
+                "badCareId": "data.subscriptionId",
+                "badCareTxRef": "data.flutterwaveConfig.txRef",
+                "badCareAmount": "data.flutterwaveConfig.amount"
+              }
+            },
+            {
+              "api": "POST /care/subscriptions/:id/verify",
+              "as": "member",
+              "params": {
+                "id": "{{badCareId}}"
+              },
+              "body": {
+                "transactionId": "flwtx-{{badCareAmount}}-{{badCareTxRef}}"
+              },
+              "tolerate": true
+            }
+          ],
+          "why": "The canned WellaHealth refuses phone 08000000000, so that cover is paid and not enrolled: a row for the queue."
         },
         "expect": {
           "status": 200,
           "coverage": "success",
           "shape": {
-            "data": [],
+            "data": [
+              {
+                "createdAt": "string",
+                "expiresAt": "null",
+                "failureReason": "string",
+                "flutterwaveTxRef": "string",
+                "id": "string",
+                "phoneNumber": "string",
+                "planCode": "string",
+                "planName": "string",
+                "policyNumber": "null",
+                "price": "number",
+                "refundReference": "null",
+                "refundedAt": "null",
+                "startsAt": "null",
+                "status": "string",
+                "wawuUserId": "string"
+              }
+            ],
             "message": "string",
             "statusCode": "number"
           }
@@ -17224,6 +17941,10 @@
           "as": "buyer",
           "params": {
             "id": "{{legalId}}"
+          },
+          "capture": {
+            "legalTxRef": "data.flutterwaveConfig.txRef",
+            "legalAmount": "data.flutterwaveConfig.amount"
           }
         },
         "expect": {
@@ -17293,14 +18014,39 @@
             "id": "{{legalId}}"
           },
           "body": {
-            "transactionId": "protected-tx-legal"
+            "transactionId": "flwtx-{{legalAmount}}-{{legalTxRef}}"
           }
         },
         "expect": {
-          "status": 502,
-          "coverage": "unavailable",
+          "status": 200,
+          "coverage": "success",
           "shape": {
-            "data": "null",
+            "data": {
+              "cancellationReason": "null",
+              "cancelledAt": "null",
+              "category": "string",
+              "consultationFee": "null",
+              "consultationMedium": "null",
+              "consultationPaidAt": "null",
+              "contractSigned": "boolean",
+              "contractSignedAs": "string",
+              "contractSignedAt": "string",
+              "createdAt": "string",
+              "deliverableUrl": "null",
+              "deliveredAt": "null",
+              "documents": [
+                "string"
+              ],
+              "id": "string",
+              "path": "string",
+              "quoteAmount": "number",
+              "quoteNote": "string",
+              "scheduledFor": "null",
+              "serviceCode": "string",
+              "serviceName": "string",
+              "servicePaidAt": "string",
+              "status": "string"
+            },
             "message": "string",
             "statusCode": "number"
           }
@@ -17337,10 +18083,35 @@
           }
         },
         "expect": {
-          "status": 409,
-          "coverage": "refusal",
+          "status": 200,
+          "coverage": "success",
           "shape": {
-            "data": "null",
+            "data": {
+              "cancellationReason": "null",
+              "cancelledAt": "null",
+              "category": "string",
+              "consultationFee": "null",
+              "consultationMedium": "null",
+              "consultationPaidAt": "null",
+              "contractSigned": "boolean",
+              "contractSignedAs": "string",
+              "contractSignedAt": "string",
+              "createdAt": "string",
+              "deliverableUrl": "string",
+              "deliveredAt": "string",
+              "documents": [
+                "string"
+              ],
+              "id": "string",
+              "path": "string",
+              "quoteAmount": "number",
+              "quoteNote": "string",
+              "scheduledFor": "null",
+              "serviceCode": "string",
+              "serviceName": "string",
+              "servicePaidAt": "string",
+              "status": "string"
+            },
             "message": "string",
             "statusCode": "number"
           }
@@ -17372,12 +18143,22 @@
             "medium": "chat",
             "scheduledFor": "{{future}}"
           },
+          "capture": {
+            "consultTxRef": "data.flutterwaveConfig.txRef",
+            "consultAmount": "data.flutterwaveConfig.amount"
+          },
           "before": [
             {
               "api": "POST /legal/requests",
               "as": "buyer",
               "body": {
-                "serviceCode": "partnership-agreement"
+                "serviceCode": "partnership-agreement",
+                "details": {
+                  "partners": 2
+                },
+                "documents": [
+                  "https://cdn.wawu.test/legal/draft.pdf"
+                ]
               },
               "capture": {
                 "legal2Id": "data.id"
@@ -17410,7 +18191,9 @@
                 "createdAt": "string",
                 "deliverableUrl": "null",
                 "deliveredAt": "null",
-                "documents": [],
+                "documents": [
+                  "string"
+                ],
                 "id": "string",
                 "path": "string",
                 "quoteAmount": "null",
@@ -17451,14 +18234,39 @@
             "id": "{{legal2Id}}"
           },
           "body": {
-            "transactionId": "protected-tx-consult"
+            "transactionId": "flwtx-{{consultAmount}}-{{consultTxRef}}"
           }
         },
         "expect": {
-          "status": 502,
-          "coverage": "unavailable",
+          "status": 200,
+          "coverage": "success",
           "shape": {
-            "data": "null",
+            "data": {
+              "cancellationReason": "null",
+              "cancelledAt": "null",
+              "category": "string",
+              "consultationFee": "number",
+              "consultationMedium": "string",
+              "consultationPaidAt": "string",
+              "contractSigned": "boolean",
+              "contractSignedAs": "null",
+              "contractSignedAt": "null",
+              "createdAt": "string",
+              "deliverableUrl": "null",
+              "deliveredAt": "null",
+              "documents": [
+                "string"
+              ],
+              "id": "string",
+              "path": "string",
+              "quoteAmount": "null",
+              "quoteNote": "null",
+              "scheduledFor": "string",
+              "serviceCode": "string",
+              "serviceName": "string",
+              "servicePaidAt": "null",
+              "status": "string"
+            },
             "message": "string",
             "statusCode": "number"
           }
@@ -17495,10 +18303,35 @@
           }
         },
         "expect": {
-          "status": 400,
-          "coverage": "refusal",
+          "status": 200,
+          "coverage": "success",
           "shape": {
-            "data": "null",
+            "data": {
+              "cancellationReason": "null",
+              "cancelledAt": "null",
+              "category": "string",
+              "consultationFee": "number",
+              "consultationMedium": "string",
+              "consultationPaidAt": "string",
+              "contractSigned": "boolean",
+              "contractSignedAs": "null",
+              "contractSignedAt": "null",
+              "createdAt": "string",
+              "deliverableUrl": "null",
+              "deliveredAt": "null",
+              "documents": [
+                "string"
+              ],
+              "id": "string",
+              "path": "string",
+              "quoteAmount": "null",
+              "quoteNote": "null",
+              "scheduledFor": "string",
+              "serviceCode": "string",
+              "serviceName": "string",
+              "servicePaidAt": "null",
+              "status": "string"
+            },
             "message": "string",
             "statusCode": "number"
           }
@@ -17528,11 +18361,23 @@
         "probe": {
           "as": "superadmin",
           "params": {
-            "id": "{{legal2Id}}"
+            "id": "{{legal3Id}}"
           },
           "body": {
             "reason": "The client asked to stop this request."
-          }
+          },
+          "before": [
+            {
+              "api": "POST /legal/requests",
+              "as": "buyer",
+              "body": {
+                "serviceCode": "employment-agreement"
+              },
+              "capture": {
+                "legal3Id": "data.id"
+              }
+            }
+          ]
         },
         "expect": {
           "status": 200,
@@ -17542,8 +18387,8 @@
               "cancellationReason": "string",
               "cancelledAt": "string",
               "category": "string",
-              "consultationFee": "number",
-              "consultationMedium": "string",
+              "consultationFee": "null",
+              "consultationMedium": "null",
               "consultationPaidAt": "null",
               "contractSigned": "boolean",
               "contractSignedAs": "null",
@@ -17826,7 +18671,20 @@
           },
           "body": {
             "answers": {
-              "client_type": "creator"
+              "client_type": "creator",
+              "based_in": "nigeria",
+              "jurisdiction": "nigeria",
+              "description": "A supplier wants me to sign a two year equipment contract and I want it reviewed.",
+              "stage": "ready",
+              "urgency": "soon",
+              "outcome": [
+                "review_document"
+              ],
+              "engagement": "advice_first",
+              "has_documents": "no",
+              "other_party": "no",
+              "involves_money": "no",
+              "contract_signed": "not_signed"
             }
           }
         },
@@ -17836,7 +18694,20 @@
           "shape": {
             "data": {
               "answers": {
-                "client_type": "string"
+                "based_in": "string",
+                "client_type": "string",
+                "contract_signed": "string",
+                "description": "string",
+                "engagement": "string",
+                "has_documents": "string",
+                "involves_money": "string",
+                "jurisdiction": "string",
+                "other_party": "string",
+                "outcome": [
+                  "string"
+                ],
+                "stage": "string",
+                "urgency": "string"
               },
               "brief": "null",
               "documents": [],
@@ -17844,9 +18715,7 @@
               "legalRequestId": "null",
               "matter": "string",
               "matterLabel": "string",
-              "outstandingRequired": [
-                "string"
-              ],
+              "outstandingRequired": [],
               "questions": [
                 {
                   "helper?": "string",
@@ -17899,10 +18768,80 @@
           }
         },
         "expect": {
-          "status": 400,
-          "coverage": "refusal",
+          "status": 201,
+          "coverage": "success",
           "shape": {
-            "data": "null",
+            "data": {
+              "answers": {
+                "based_in": "string",
+                "client_type": "string",
+                "contract_signed": "string",
+                "description": "string",
+                "engagement": "string",
+                "has_documents": "string",
+                "involves_money": "string",
+                "jurisdiction": "string",
+                "other_party": "string",
+                "outcome": [
+                  "string"
+                ],
+                "stage": "string",
+                "urgency": "string"
+              },
+              "brief": {
+                "analysis": {
+                  "keyIssues": [
+                    "string"
+                  ],
+                  "questionsToClarify": [
+                    "string"
+                  ],
+                  "risks": [
+                    "string"
+                  ],
+                  "summary": "string"
+                },
+                "documentCount": "number",
+                "facts": [
+                  {
+                    "answer": "string",
+                    "question": "string"
+                  }
+                ],
+                "generatedAt": "string",
+                "generatedBy": "string",
+                "matter": "string",
+                "matterLabel": "string"
+              },
+              "documents": [],
+              "id": "string",
+              "legalRequestId": "string",
+              "matter": "string",
+              "matterLabel": "string",
+              "outstandingRequired": [],
+              "questions": [
+                {
+                  "helper?": "string",
+                  "id": "string",
+                  "kind": "string",
+                  "level": "string",
+                  "options?": [
+                    {
+                      "label": "string",
+                      "value": "string"
+                    }
+                  ],
+                  "placeholder?": "string",
+                  "prompt": "string",
+                  "step": "number",
+                  "stepTitle": "string",
+                  "suggestions?": [
+                    "string"
+                  ]
+                }
+              ],
+              "status": "string"
+            },
             "message": "string",
             "statusCode": "number"
           }
@@ -17931,7 +18870,9 @@
             "category": "technology",
             "headline": "Protected suite engineer",
             "about": "Builds and tests the routes the WAWU web app depends on, every single day.",
-            "credentialKind": "portfolio",
+            "credentialKind": "licence",
+            "licenceNumber": "LIC-2024-001",
+            "issuingBody": "Computer Professionals Registration Council",
             "services": [
               "API reviews"
             ],
@@ -17956,8 +18897,8 @@
               ],
               "headline": "string",
               "id": "string",
-              "issuingBody": "null",
-              "licenceNumber": "null",
+              "issuingBody": "string",
+              "licenceNumber": "string",
               "listed": "boolean",
               "rejectionReason": "null",
               "reviewedAt": "null",
@@ -18007,8 +18948,8 @@
                 ],
                 "headline": "string",
                 "id": "string",
-                "issuingBody": "null",
-                "licenceNumber": "null",
+                "issuingBody": "string",
+                "licenceNumber": "string",
                 "listed": "boolean",
                 "rejectionReason": "null",
                 "reviewedAt": "null",
@@ -18061,8 +19002,8 @@
                 "documentCount": "number",
                 "headline": "string",
                 "id": "string",
-                "issuingBody": "null",
-                "licenceNumber": "null",
+                "issuingBody": "string",
+                "licenceNumber": "string",
                 "name": "string",
                 "regulated": "boolean",
                 "status": "string",
@@ -18127,8 +19068,8 @@
               "handle": "string",
               "headline": "string",
               "id": "string",
-              "issuingBody": "null",
-              "licenceNumber": "null",
+              "issuingBody": "string",
+              "licenceNumber": "string",
               "name": "string",
               "otherCategories": [],
               "regulated": "boolean",
@@ -18177,10 +19118,12 @@
           }
         },
         "expect": {
-          "status": 503,
-          "coverage": "unavailable",
+          "status": 200,
+          "coverage": "success",
           "shape": {
-            "data": "null",
+            "data": {
+              "url": "string"
+            },
             "message": "string",
             "statusCode": "number"
           }
@@ -18268,8 +19211,8 @@
               ],
               "headline": "string",
               "id": "string",
-              "issuingBody": "null",
-              "licenceNumber": "null",
+              "issuingBody": "string",
+              "licenceNumber": "string",
               "listed": "boolean",
               "rejectionReason": "null",
               "reviewedAt": "string",
@@ -18314,7 +19257,7 @@
           "shape": {
             "data": {
               "about": "string",
-              "avatarUrl": "null",
+              "avatarUrl": "string",
               "category": "string",
               "credentialKind": "string",
               "dmEnabled": "boolean",
@@ -18323,7 +19266,7 @@
               "handle": "string",
               "headline": "string",
               "id": "string",
-              "issuingBody": "null",
+              "issuingBody": "string",
               "name": "string",
               "pieceCount": "number",
               "ratingAvg": "null",
@@ -18342,6 +19285,244 @@
                 }
               },
               "wawuId": "string"
+            },
+            "message": "string",
+            "statusCode": "number"
+          }
+        }
+      },
+      {
+        "id": "GET /professionals",
+        "method": "GET",
+        "path": "/professionals",
+        "callers": {
+          "web": [
+            "src/lib/api/professionals.ts:31"
+          ],
+          "dashboard": []
+        },
+        "auth": {
+          "kind": "user-optional",
+          "guards": [
+            "OptionalWawuAuthGuard"
+          ],
+          "adminRoles": null
+        },
+        "probe": {
+          "as": "buyer"
+        },
+        "expect": {
+          "status": 200,
+          "coverage": "success",
+          "shape": {
+            "data": [
+              {
+                "avatarUrl": "string",
+                "category": "string",
+                "dmEnabled": "boolean",
+                "dmPrice": "number",
+                "dmResponseHours": "number",
+                "handle": "string",
+                "headline": "string",
+                "id": "string",
+                "name": "string",
+                "pieceCount": "number",
+                "ratingAvg": "null",
+                "reviewCount": "number",
+                "services": [
+                  "string"
+                ],
+                "verification": {
+                  "creator": {
+                    "expiresAt": "null",
+                    "verified": "boolean"
+                  },
+                  "professional": {
+                    "expiresAt": "null",
+                    "verified": "boolean"
+                  }
+                },
+                "wawuId": "string"
+              }
+            ],
+            "message": "string",
+            "pagination": {
+              "currentPage": "number",
+              "nextPage": "null",
+              "perPage": "number",
+              "total": "number"
+            },
+            "statusCode": "number"
+          }
+        }
+      },
+      {
+        "id": "GET /search",
+        "method": "GET",
+        "path": "/search",
+        "callers": {
+          "web": [
+            "src/lib/api/search.ts:196"
+          ],
+          "dashboard": []
+        },
+        "auth": {
+          "kind": "user-optional",
+          "guards": [
+            "OptionalWawuAuthGuard"
+          ],
+          "adminRoles": null
+        },
+        "probe": {
+          "as": "buyer",
+          "query": {
+            "q": "Protected"
+          },
+          "why": "Runs after content is live and a creator is listed, so content and creators have items whose shape is locked. communities is [] on main for every query (search-response.service.ts returns it empty unconditionally)."
+        },
+        "expect": {
+          "status": 200,
+          "coverage": "success",
+          "shape": {
+            "data": {
+              "communities": [],
+              "content": [
+                {
+                  "accessType": "string",
+                  "category": "string",
+                  "commentCount": "number",
+                  "contentType": "string",
+                  "createdAt": "string",
+                  "creatorFirstUploadFree": "boolean",
+                  "creatorWawuId": "string",
+                  "description": "string",
+                  "durationLabel": "null",
+                  "fullAssetLocked": "boolean",
+                  "fullAssetUrl": "string",
+                  "id": "string",
+                  "likes": "number",
+                  "pageCount": "null",
+                  "previewAssetUrl": "string",
+                  "price": "number",
+                  "ratingPct": "number",
+                  "slug": "string",
+                  "specializations": [
+                    "string"
+                  ],
+                  "status": "string",
+                  "tags": [
+                    "string"
+                  ],
+                  "title": "string",
+                  "views": "number"
+                }
+              ],
+              "creators": [
+                {
+                  "avatarUrl": "string",
+                  "bio": "string",
+                  "communityCount": "number",
+                  "company": "string",
+                  "contentCount": "number",
+                  "coverUrl": "string",
+                  "dmEnabled": "boolean",
+                  "dmPrice": "null|number",
+                  "dmResponseHours": "number",
+                  "evgScore": "number",
+                  "experience": [],
+                  "facebookUrl": "string",
+                  "followerCount": "number",
+                  "followingCount": "number",
+                  "handle": "string",
+                  "headline": "string",
+                  "instagramHandle": "string",
+                  "interests": [
+                    "string"
+                  ],
+                  "linkedinUrl": "string",
+                  "tiktokHandle": "string",
+                  "verification": {
+                    "creator": {
+                      "expiresAt": "null",
+                      "verified": "boolean"
+                    },
+                    "professional": {
+                      "expiresAt": "null",
+                      "verified": "boolean"
+                    }
+                  },
+                  "wawuUserId": "string",
+                  "websiteUrl": "string",
+                  "whatsappHandle": "string",
+                  "xHandle": "string",
+                  "youtubeUrl": "string"
+                }
+              ]
+            },
+            "message": "string",
+            "statusCode": "number"
+          }
+        }
+      },
+      {
+        "id": "GET /search/closest",
+        "method": "GET",
+        "path": "/search/closest",
+        "callers": {
+          "web": [
+            "src/lib/api/search.ts:210"
+          ],
+          "dashboard": []
+        },
+        "auth": {
+          "kind": "user-optional",
+          "guards": [
+            "OptionalWawuAuthGuard"
+          ],
+          "adminRoles": null
+        },
+        "probe": {
+          "as": "buyer",
+          "query": {
+            "q": "Protectd suite"
+          }
+        },
+        "expect": {
+          "status": 200,
+          "coverage": "success",
+          "shape": {
+            "data": {
+              "items": [
+                {
+                  "accessType": "string",
+                  "category": "string",
+                  "commentCount": "number",
+                  "contentType": "string",
+                  "createdAt": "string",
+                  "creatorFirstUploadFree": "boolean",
+                  "creatorWawuId": "string",
+                  "description": "string",
+                  "durationLabel": "null",
+                  "fullAssetLocked": "boolean",
+                  "fullAssetUrl": "null",
+                  "id": "string",
+                  "likes": "number",
+                  "pageCount": "null",
+                  "previewAssetUrl": "string",
+                  "price": "number",
+                  "ratingPct": "number",
+                  "slug": "string",
+                  "specializations": [
+                    "string"
+                  ],
+                  "status": "string",
+                  "tags": [
+                    "string"
+                  ],
+                  "title": "string",
+                  "views": "number"
+                }
+              ]
             },
             "message": "string",
             "statusCode": "number"
@@ -18567,7 +19748,10 @@
           "body": {
             "title": "Protected suite notice",
             "body": "A campaign the protected route suite composes.",
-            "audience": "buyers"
+            "audience": "buyers",
+            "imageUrl": "https://cdn.wawu.test/campaign.png",
+            "actionLabel": "Open WAWU",
+            "actionHref": "/explore"
           },
           "capture": {
             "campaignId": "data.id"
@@ -18578,8 +19762,8 @@
           "coverage": "success",
           "shape": {
             "data": {
-              "actionHref": "null",
-              "actionLabel": "null",
+              "actionHref": "string",
+              "actionLabel": "string",
               "audience": "string",
               "body": "string",
               "createdAt": "string",
@@ -18590,7 +19774,7 @@
               "dispatchedByAdminEmail": "null",
               "failureReason": "null",
               "id": "string",
-              "imageUrl": "null",
+              "imageUrl": "string",
               "recipientCount": "number",
               "status": "string",
               "title": "string",
@@ -18635,8 +19819,8 @@
           "shape": {
             "data": [
               {
-                "actionHref": "null",
-                "actionLabel": "null",
+                "actionHref": "string",
+                "actionLabel": "string",
                 "audience": "string",
                 "body": "string",
                 "createdAt": "string",
@@ -18647,7 +19831,7 @@
                 "dispatchedByAdminEmail": "null",
                 "failureReason": "null",
                 "id": "string",
-                "imageUrl": "null",
+                "imageUrl": "string",
                 "recipientCount": "number",
                 "status": "string",
                 "title": "string",
@@ -18699,8 +19883,8 @@
           "coverage": "success",
           "shape": {
             "data": {
-              "actionHref": "null",
-              "actionLabel": "null",
+              "actionHref": "string",
+              "actionLabel": "string",
               "audience": "string",
               "body": "string",
               "createdAt": "string",
@@ -18711,7 +19895,7 @@
               "dispatchedByAdminEmail": "null",
               "failureReason": "null",
               "id": "string",
-              "imageUrl": "null",
+              "imageUrl": "string",
               "recipientCount": "number",
               "status": "string",
               "title": "string",
@@ -18752,7 +19936,10 @@
           "body": {
             "title": "Protected suite notice",
             "body": "A campaign the protected route suite composed and edited.",
-            "audience": "buyers"
+            "audience": "buyers",
+            "imageUrl": "https://cdn.wawu.test/campaign.png",
+            "actionLabel": "Open WAWU",
+            "actionHref": "/explore"
           }
         },
         "expect": {
@@ -18760,8 +19947,8 @@
           "coverage": "success",
           "shape": {
             "data": {
-              "actionHref": "null",
-              "actionLabel": "null",
+              "actionHref": "string",
+              "actionLabel": "string",
               "audience": "string",
               "body": "string",
               "createdAt": "string",
@@ -18772,7 +19959,7 @@
               "dispatchedByAdminEmail": "null",
               "failureReason": "null",
               "id": "string",
-              "imageUrl": "null",
+              "imageUrl": "string",
               "recipientCount": "number",
               "status": "string",
               "title": "string",
@@ -18818,8 +20005,8 @@
           "shape": {
             "data": {
               "campaign": {
-                "actionHref": "null",
-                "actionLabel": "null",
+                "actionHref": "string",
+                "actionLabel": "string",
                 "audience": "string",
                 "body": "string",
                 "createdAt": "string",
@@ -18830,7 +20017,7 @@
                 "dispatchedByAdminEmail": "string",
                 "failureReason": "null",
                 "id": "string",
-                "imageUrl": "null",
+                "imageUrl": "string",
                 "recipientCount": "number",
                 "status": "string",
                 "title": "string",
@@ -19385,7 +20572,7 @@
             "data": [
               {
                 "buyer": {
-                  "handle": "null|string",
+                  "handle": "string",
                   "wawuId": "string"
                 },
                 "creator": {
@@ -19475,7 +20662,25 @@
               "withdrawals": {
                 "completedNaira": "number",
                 "failedNaira": "number",
-                "items": [],
+                "items": [
+                  {
+                    "accountName": "string",
+                    "accountNumberLast4": "string",
+                    "amountNaira": "number",
+                    "bankCode": "string",
+                    "createdAt": "string",
+                    "creator": {
+                      "handle": "string",
+                      "wawuId": "string"
+                    },
+                    "failureReason": "null",
+                    "id": "string",
+                    "reference": "string",
+                    "settledAt": "null",
+                    "status": "string",
+                    "transferId": "string"
+                  }
+                ],
                 "page": "number",
                 "pendingNaira": "number",
                 "perPage": "number",
@@ -19596,7 +20801,21 @@
                 "wawuId": "string"
               },
               "currency": "string",
-              "history": [],
+              "history": [
+                {
+                  "amountNaira": "number",
+                  "createdAt": "string",
+                  "failureReason": "null",
+                  "id": "string",
+                  "kind": "string",
+                  "reference": "string",
+                  "settledAt": "null",
+                  "sourceId": "null",
+                  "sourceType": "null",
+                  "status": "string",
+                  "transferId": "string"
+                }
+              ],
               "historyTotal": "number",
               "kycStatus": "string",
               "lifetime": {
@@ -20050,7 +21269,9 @@
                 ],
                 "slug": "string",
                 "status": "string",
-                "tags": [],
+                "tags": [
+                  "string"
+                ],
                 "title": "string",
                 "views": "number",
                 "waitingHours": "number"

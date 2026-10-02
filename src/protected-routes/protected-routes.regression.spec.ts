@@ -11,6 +11,8 @@ import type { Server } from 'http';
 import { Client } from 'pg';
 import request from 'supertest';
 import { AppModule } from '../app.module';
+import { FlutterwaveWalletClient } from '../wallet/flutterwave-wallet.client';
+import { FLUTTERWAVE_WALLET_GATEWAY } from '../wallet/flutterwave-wallet.gateway';
 import { AllExceptionsFilter } from '../common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../common/interceptors/response.interceptor';
 import {
@@ -26,6 +28,7 @@ import {
   createAdmins,
   ensureMockWawuId,
   fillPath,
+  loginSeeded,
   pick,
   registerIdentity,
   resolve,
@@ -139,7 +142,13 @@ describe('Protected routes (MONEY-01, V3 regression)', () => {
     network = sealNetwork();
 
     const nonce = `${Date.now()}`.slice(-8);
-    const people = ['buyer', 'creator', 'creator2', 'member'] as const;
+    const people = [
+      'buyer',
+      'creator',
+      'creator2',
+      'member',
+      'newcomer',
+    ] as const;
     for (const [i, who] of people.entries()) {
       const id = await registerIdentity(who, nonce, i);
       tokens[who] = id.token;
@@ -153,12 +162,24 @@ describe('Protected routes (MONEY-01, V3 regression)', () => {
       'future',
       new Date(Date.now() + 45 * 24 * 3600 * 1000).toISOString(),
     );
+    ctx.set(
+      'futureEnd',
+      new Date(
+        Date.now() + 45 * 24 * 3600 * 1000 + 2 * 3600 * 1000,
+      ).toISOString(),
+    );
 
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       // The global limit is 20 requests a second (app.module.ts); this suite
       // is a burst. Throttling is not part of any route's contract here.
       .overrideGuard(ThrottlerGuard)
       .useValue({ canActivate: () => true })
+      // Under jest the wallet module wires its in-memory mock gateway, whose
+      // balances only ever come from a funding cron that does not run here,
+      // so a withdrawal could never succeed. The production client against
+      // the canned Flutterwave (providers.ts) runs the code production runs.
+      .overrideProvider(FLUTTERWAVE_WALLET_GATEWAY)
+      .useClass(FlutterwaveWalletClient)
       .compile();
     app = moduleRef.createNestApplication();
     // The same globals src/main.ts installs, minus helmet/compression, which
@@ -190,6 +211,10 @@ describe('Protected routes (MONEY-01, V3 regression)', () => {
         res.body as { data: { accessToken: string } }
       ).data.accessToken;
     }
+    // One seeded account (prisma/seed.ts, CI seeds it too), used ONLY for
+    // reads of rows nothing a protected route can create any more: the
+    // seeded course enrolment.
+    tokens.seeded = await loginSeeded('user@test.wawu.dev');
     ctx.set('superadmin.email', adminEmail('superadmin', nonce));
     ctx.set('adminPassword', ADMIN_PASSWORD);
 
@@ -226,7 +251,7 @@ describe('Protected routes (MONEY-01, V3 regression)', () => {
     if (step.body !== undefined)
       req = req.send(resolve(step.body, ctx) as object);
     const res = await req;
-    if (res.status >= 400) {
+    if (res.status >= 400 && !step.tolerate) {
       throw new Error(
         `${where} step ${step.api} as ${step.as} failed: ${res.status} ${res.text.slice(0, 300)}`,
       );
@@ -392,6 +417,7 @@ describe('Protected routes (MONEY-01, V3 regression)', () => {
 
       // 3. The probe itself.
       const before = network!.attempts.length;
+      const servedBefore = network!.served.length;
       const res = await send(
         probe.as === 'anonymous' ? null : tokens[probe.as],
       );
@@ -402,7 +428,7 @@ describe('Protected routes (MONEY-01, V3 regression)', () => {
       if (TRACE) {
         appendFileSync(
           TRACE,
-          `${JSON.stringify({ id: route.id, url, as: probe.as, sent: body ?? null, status: res.status, body: res.text.slice(0, 2000) })}\n`,
+          `${JSON.stringify({ id: route.id, url, as: probe.as, sent: body ?? null, status: res.status, providers: network!.served.slice(servedBefore), body: res.text.slice(0, 2000) })}\n`,
         );
       }
       for (const [key, dotted] of Object.entries(probe.capture ?? {})) {

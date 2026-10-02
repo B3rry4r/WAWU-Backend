@@ -1,0 +1,103 @@
+name: Protected routes (V3)
+
+# MONEY-01. Nothing the live web app or the admin dashboard uses may change
+# behaviour while this backend grows.
+#
+# The protected route suite also runs inside deploy.yml's `npx jest` step,
+# but there it reads the branch's OWN copy of the lock, and a lock is only a
+# hash of its own content: a branch that edits an entry and recomputes the
+# hash passes itself. This job closes that: it runs the PR's code against the
+# lock on the BASE branch (scripts/protected-routes/run.sh with
+# PROTECTED_LOCK_REF=origin/<base>), so the only way a lock change lands is
+# through the registry diff this job prints, reviewed by the owner, who
+# applies the `relock-approved` label to let the PR be checked against its
+# own new lock instead. Labels can only be set by people with triage rights.
+#
+# deploy.yml is untouched: this workflow runs on pull requests only.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  workflow_dispatch:
+
+concurrency:
+  group: protected-routes-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  v3:
+    name: Protected route suite against the base branch's lock
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports: ['5432:5432']
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/wawu_hub_protected_test?schema=public
+      WAWU_ID_BASE_URL: http://localhost:4001
+      WAWU_ID_JWKS_URL: http://localhost:4001/.well-known/jwks.json
+      ADMIN_JWT_SECRET: ci-only-admin-secret-not-a-real-one-000000
+      ADMIN_JWT_REFRESH_SECRET: ci-only-admin-refresh-secret-not-a-real-one-0
+      BASE_REF: ${{ github.base_ref || 'main' }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # run.sh exports refs with `git archive`, so both sides' history
+          # has to be here.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --no-audit --no-fund
+
+      - name: Start mock WAWU ID
+        # Same as deploy.yml: the keypair is generated, never committed.
+        run: |
+          cd mock-wawu-id
+          npm ci --no-audit --no-fund
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out private.pem -quiet
+          openssl rsa -in private.pem -pubout -out public.pem 2>/dev/null
+          nohup node server.js > /tmp/mock.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4001/health >/dev/null && echo "mock up" && exit 0
+            sleep 1
+          done
+          cat /tmp/mock.log >&2
+          exit 1
+
+      - name: What this branch changes in the lock
+        id: lock
+        run: |
+          git fetch --no-tags origin "$BASE_REF"
+          set +e
+          python3 scripts/protected-routes/lock-diff.py "origin/$BASE_REF" HEAD | tee -a "$GITHUB_STEP_SUMMARY"
+          diff_status=${PIPESTATUS[0]}
+          set -e
+          if [ "$diff_status" = 2 ]; then
+            # The base has no suite yet: only the PR that introduces it.
+            echo "ref=HEAD" >> "$GITHUB_OUTPUT"
+            echo "Checked against this branch's own lock: the base has none yet." | tee -a "$GITHUB_STEP_SUMMARY"
+          elif [ "$diff_status" = 1 ] && ${{ contains(github.event.pull_request.labels.*.name, 'relock-approved') }}; then
+            echo "ref=HEAD" >> "$GITHUB_OUTPUT"
+            echo "The owner approved this lock change (label relock-approved): checked against the branch's new lock." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ref=origin/$BASE_REF" >> "$GITHUB_OUTPUT"
+            echo "Checked against the lock on origin/$BASE_REF." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Run the suite (code from this branch, lock as chosen above)
+        run: PROTECTED_LOCK_REF='${{ steps.lock.outputs.ref }}' scripts/protected-routes/run.sh --fresh HEAD

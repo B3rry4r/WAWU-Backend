@@ -91,7 +91,10 @@ this backend grows. This suite is the tripwire, and V3 in the mobile repo's
 `protectedRoutes`: every Hub route that `wawuafrica` (web) and `wawu-dashboard`
 call today, read from each repo's `origin/main` (commits in
 `protectedRoutes.sources`). 235 routes: 169 from the web, 72 from the dashboard,
-6 from both. Each entry carries its callers (file:line, or the dashboard's route
+6 from both, in 241 entries: six routes whose answer branches on state the
+caller already has (GET /credits, /settings/notifications, /settings/privacy,
+/creator/state, /users/me, POST /learn/courses/:id/enrol) have a second entry
+with a `variant` that pins the other branch. Each entry carries its callers (file:line, or the dashboard's route
 key), its auth (`public`, `user-optional`, `user`, `creator`, `admin` plus the
 guards and admin roles), a probe, and the status and response shape that probe
 got from `main` when the list was locked (`protectedRoutes.lock`).
@@ -114,8 +117,10 @@ list that became an object fails. `null` where a value was recorded passes, and
 an array recorded empty accepts any elements, because those depend on the data
 a run happens to see. Message text and headers are not pinned.
 
-The probes are a scenario, not isolated calls: four WAWU IDs are registered
-fresh in the mock, four admins (one per role) are created, a creator uploads,
+The probes are a scenario, not isolated calls: five WAWU IDs are registered
+fresh in the mock (one never used, for "new account" variants), four admins
+(one per role) are created, one seeded account is read for the seeded course
+enrolment, a creator uploads,
 submits KYC, an admin approves it, a buyer unlocks, tips and DMs, and so on.
 Later probes read ids earlier ones captured, so **read the first failure**: the
 ones after it may only be its echo.
@@ -127,11 +132,19 @@ and the mock WAWU ID (the suite starts one if the port is free):
 npm run test:protected
 ```
 
-It also runs inside `npm run test:contract` and the CI `npx jest` step, like
-every other spec. The run leaves the database exactly as it found it: every
+It also runs inside `npm run test:contract` and deploy.yml's `npx jest` step,
+like every other spec, but there it reads the branch's own copy of the lock.
+**What enforces V3 in CI is `.github/workflows/protected-routes.yml`**: on every
+pull request it runs the PR's code against the lock on the base branch, and
+prints what the PR changes in the lock (`scripts/protected-routes/lock-diff.py`)
+to the job summary. A PR that changes the lock is red until the owner applies
+the `relock-approved` label; then it is checked against its own new lock. The
+PR that introduces the suite is checked against its own lock (the base has
+none). The run leaves the database exactly as it found it: every
 table is snapshotted before the first request and restored after the last
-(`test/protected-routes/db-snapshot.ts`), and the suite refuses a database whose
-name does not contain `test` or `protected`.
+(`test/protected-routes/db-snapshot.ts`), and the suite refuses a database that is not on
+this machine (`localhost`, `127.0.0.1`, `::1`) or whose name does not contain
+`test` or `protected`.
 
 **Running it against any branch (V3).** The code comes from the ref you name;
 the suite and the lock come from `PROTECTED_LOCK_REF` (default `origin/main`),
@@ -146,19 +159,32 @@ scripts/protected-routes/run.sh --fresh origin/main     # before: main, on a new
 scripts/protected-routes/run.sh --fresh wmt/MONEY-06    # after: the task branch
 ```
 
-`--fresh` drops, recreates, migrates and seeds the database first (only a name
-containing `test` or `protected`); without it the branch's migrations are
-applied to the database as it is. With no ref it runs this checkout. Until
+`--fresh` drops, recreates, migrates and seeds the database first; without it
+the branch's migrations are applied to the database as it is. Either way
+`run.sh` refuses, before it touches anything, a `DATABASE_URL` whose host is
+not this machine or whose name does not contain `test` or `protected`. With no ref it runs this checkout. Until
 MONEY-01 is merged, `origin/main` has no lock: use
 `PROTECTED_LOCK_REF=wmt/MONEY-01`. Exit code 0 is green.
 
-**The environment is pinned** to CI's (`test/protected-routes/harness.ts`): no
-Flutterwave secret key, no storage, no Gemini, no WellaHealth, so a developer's
-`.env` cannot change an answer. Non-local network calls are refused as if
-offline. Routes that need one of those services are locked at the answer they
-give without it, and say so: each expectation's `coverage` is `success` (215),
-`refusal` (6, a deliberate 4xx) or `unavailable` (14, a 5xx from a dependency
-that is not configured).
+**The environment is pinned** (`test/protected-routes/harness.ts`), so a
+developer's `.env` cannot change an answer, and the process is sealed from the
+internet. Third-party credentials are dummies, and the providers this backend
+calls over `fetch` are answered by canned doubles in
+`test/protected-routes/providers.ts`, shaped like each provider's real response
+as the code reads it: Flutterwave (checkout verify, bills, payout subaccounts,
+transfers, banks, hosted links), WellaHealth (plans, enrolment) and Gemini (the
+legal intake brief). Object storage needs no double: presigning is local. So
+every route is locked on its success answer except one: a NEW enrolment
+(POST /learn/courses/:id/enrol) is refused for everybody on main, because its
+free-course slots still come from the removed creator subscription; it is
+locked on that 403, and its `already enrolled` variant locks the success shape.
+A payment verify sends `flwtx-<amount>-<txRef>` as the transaction id, which
+the double answers as a successful payment of that amount. Two switches fill
+the operator queues: the biller refuses customer `08000000000`, WellaHealth
+refuses phone `08000000000`. Under jest `NODE_ENV` is `test`, so the five
+modules with a Mock Flutterwave adapter use it, as in CI; the wallet gateway is
+overridden to the production client against the double, because the mock's
+balance only ever comes from a funding cron that does not run here.
 
 **When it goes red.** A red run stops the task and goes to the owner (WORKFLOW
 section 9). The failure names the route, what was sent, the status and body

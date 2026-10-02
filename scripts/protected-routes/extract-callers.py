@@ -224,13 +224,14 @@ def main():
         if not hits:
             problems.append(f'{client} calls {method} {path} ({ref}) and it is NOT protected')
             continue
-        called.add(hits[0]['id'])
+        # Every entry of that route counts, including its variants.
+        called.update(r['id'] for r in hits if r['path'] == hits[0]['path'])
     for r in routes:
         if r['id'] not in called:
             problems.append(f'{r["id"]} is protected but neither client calls it any more (a removal task decides)')
     for p in problems:
         print(p)
-    print(f'{len(calls)} call sites, {len(called)} of {len(routes)} protected routes called, {len(problems)} differences')
+    print(f'{len(calls)} call sites, {len(called)} of {len(routes)} protected entries called, {len(problems)} differences')
     return 1 if problems else 0
 
 

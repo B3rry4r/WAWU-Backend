@@ -27,6 +27,24 @@ LOCK_REF="${PROTECTED_LOCK_REF:-origin/main}"
 REPO="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 
 : "${DATABASE_URL:?Set DATABASE_URL to a disposable test database}"
+# Refuse a database that is not local and disposable BEFORE anything touches
+# it: both branches below migrate, and --fresh drops it. Same rule as the suite
+# (test/protected-routes/db-snapshot.ts), checked here first because the suite
+# itself only runs after the migrate.
+node -e '
+  const u = new URL(process.env.DATABASE_URL);
+  const host = u.hostname;
+  const name = u.pathname.slice(1);
+  if (!["localhost", "127.0.0.1", "::1", "[::1]"].includes(host)) {
+    console.error(`refusing: DATABASE_URL host "${host}" is not this machine`);
+    process.exit(1);
+  }
+  if (!/test|protected/i.test(name)) {
+    console.error(`refusing: database "${name}" does not look like a test database (needs "test" or "protected" in its name)`);
+    process.exit(1);
+  }
+'
+
 export WAWU_ID_BASE_URL="${WAWU_ID_BASE_URL:-http://localhost:4001}"
 export WAWU_ID_JWKS_URL="${WAWU_ID_JWKS_URL:-$WAWU_ID_BASE_URL/.well-known/jwks.json}"
 
@@ -39,6 +57,10 @@ else
   echo "lock:  $LOCK_REF ($(git -C "$REPO" rev-parse --short "$LOCK_REF"))"
   git -C "$REPO" archive "$REF" | tar -x -C "$WORK"
   rm -rf "$WORK/src/protected-routes" "$WORK/test/protected-routes"
+  if ! git -C "$REPO" cat-file -e "$LOCK_REF:src/protected-routes" 2>/dev/null; then
+    echo "refusing: $LOCK_REF has no protected route suite (set PROTECTED_LOCK_REF to a ref that has one)" >&2
+    exit 1
+  fi
   git -C "$REPO" archive "$LOCK_REF" src/protected-routes test/protected-routes .pipeline/protected-registry.json \
     | tar -x -C "$WORK"
   if cmp -s "$REPO/package-lock.json" "$WORK/package-lock.json" && [ -d "$REPO/node_modules" ]; then
@@ -59,7 +81,10 @@ if [ "$FRESH" = 1 ]; then
     const { Client } = require("pg");
     const url = new URL(process.env.DATABASE_URL);
     const name = url.pathname.slice(1);
-    if (!/test|protected/i.test(name)) { console.error(`refusing to recreate ${name}`); process.exit(1); }
+    if (!["localhost", "127.0.0.1", "::1", "[::1]"].includes(url.hostname) || !/test|protected/i.test(name)) {
+      console.error(`refusing to recreate ${url.hostname}/${name}`);
+      process.exit(1);
+    }
     url.pathname = "/postgres";
     const c = new Client({ connectionString: url.toString() });
     (async () => {

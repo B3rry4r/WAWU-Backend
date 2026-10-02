@@ -26,9 +26,24 @@ export interface DbSnapshot {
 
 const SKIP_TABLES = new Set(['_prisma_migrations']);
 
-/** Refuses anything that does not look like a disposable test database. */
+/** The hosts the suite will touch. A disposable database is a local one. */
+export const LOCAL_DB_HOSTS = ['localhost', '127.0.0.1', '::1', '[::1]'];
+
+/**
+ * Refuses anything that does not look like a disposable test database: the
+ * host must be this machine and the name must say "test" or "protected".
+ * PROTECTED_ROUTES_ALLOW_DB=<name> waives the NAME check only; nothing waives
+ * the host check, because the restore rewrites every table it finds.
+ */
 export function assertDisposableDatabase(url: string): void {
-  const name = new URL(url).pathname.replace(/^\//, '');
+  const parsed = new URL(url);
+  const host = parsed.hostname;
+  if (!LOCAL_DB_HOSTS.includes(host)) {
+    throw new Error(
+      `The protected route suite only runs against a database on this machine; DATABASE_URL points at "${host}".`,
+    );
+  }
+  const name = parsed.pathname.replace(/^\//, '');
   if (
     /test|protected/i.test(name) ||
     process.env.PROTECTED_ROUTES_ALLOW_DB === name

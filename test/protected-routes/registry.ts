@@ -17,6 +17,10 @@ export type Actor =
   | 'creator'
   | 'creator2'
   | 'member'
+  /** Registered in WAWU ID and never used here before: no profile, no rows. */
+  | 'newcomer'
+  /** mock-wawu-id's seeded user@test.wawu.dev, for reads of seeded rows only. */
+  | 'seeded'
   | 'superadmin'
   | 'reviewer'
   | 'support'
@@ -47,6 +51,8 @@ export type Step =
       query?: Record<string, string>;
       body?: unknown;
       capture?: Record<string, string>;
+      /** The step is EXPECTED to be refused (it sets up a failure an operator queue lists). */
+      tolerate?: boolean;
     }
   | { sql: string; values?: string[]; capture?: Record<string, string> };
 
@@ -82,7 +88,14 @@ export interface Expectation {
 }
 
 export interface ProtectedRoute {
+  /** `METHOD /path`, plus ` [variant]` for a second probe of the same route. */
   id: string;
+  /**
+   * A second entry for a route whose handler branches on state the caller
+   * already has (a get-or-create read, say): the first entry pins one branch,
+   * this one the other.
+   */
+  variant?: string;
   method: string;
   /** Without the `/api/hub` prefix, like every other path in this registry. */
   path: string;

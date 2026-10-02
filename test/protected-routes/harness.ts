@@ -2,6 +2,7 @@ import { ChildProcess, spawn } from 'child_process';
 import * as path from 'path';
 import * as argon2 from 'argon2';
 import { Client } from 'pg';
+import { fakeProvider, WELLAHEALTH_BASE } from './providers';
 import type { Actor } from './registry';
 
 /**
@@ -13,37 +14,44 @@ import type { Actor } from './registry';
 // ── environment ──────────────────────────────────────────────────────────
 
 /**
- * The suite pins the configuration the lock was recorded under, which is the
- * CI configuration (.github/workflows/deploy.yml): no payment keys, no storage,
- * no AI, no partner APIs. Every value is set explicitly, empty where CI leaves
- * it unset, because ConfigModule would otherwise fill a gap from a developer's
- * own `.env` and the same code would answer differently on two machines.
+ * The suite pins the configuration the lock was recorded under, so a
+ * developer's own `.env` cannot change an answer: ConfigModule only fills
+ * variables that are not already set, and every one here is set.
  *
- * Empty behaves as unset for every reader of these variables: each one tests
- * truthiness or compares to a literal, except GEMINI_MODEL and STORAGE_REGION
- * (`?? default`), which are only read once GEMINI_API_KEY or the STORAGE_*
- * credentials are set, and those are pinned empty.
+ * Every third-party credential is a dummy, and every provider host is served
+ * by the canned doubles in providers.ts (through `sealNetwork`), so the routes
+ * that need Flutterwave, WellaHealth, Gemini or object storage reach their
+ * success path with no network. Storage needs no double at all: presigning
+ * and signed read URLs are computed locally by the AWS SDK, and the only call
+ * that would reach the bucket (a HEAD on stale uploads) never runs for the
+ * fresh rows a run creates.
  *
- * FLUTTERWAVE_PUBLIC_KEY is the one value set to something: production sets
- * it, and payment-init responses carry it, so the lock should see the field.
+ * Under jest NODE_ENV is "test", so the five modules with a Mock Flutterwave
+ * adapter still use it (src/common/flutterwave/require-payment-config.ts),
+ * exactly as every other contract spec and CI do. The key matters to the
+ * clients that read it directly: checkout verification, bills, wallet and
+ * hosted payment links.
+ *
+ * Empty behaves as unset for every reader of the empty ones: each tests
+ * truthiness or compares to a literal.
  */
 const PINNED_ENV: Record<string, string> = {
-  FLUTTERWAVE_SECRET_KEY: '',
+  FLUTTERWAVE_SECRET_KEY: 'FLWSECK_TEST-protected-routes-suite-X',
   FLUTTERWAVE_SECRET_HASH: '',
   FLUTTERWAVE_MODE: '',
-  FLUTTERWAVE_PUBLIC_KEY: 'FLWPUBK_TEST-protected-routes-suite',
-  GEMINI_API_KEY: '',
-  GEMINI_MODEL: '',
-  STORAGE_ENDPOINT: '',
-  STORAGE_REGION: '',
-  STORAGE_BUCKET: '',
-  STORAGE_ACCESS_KEY_ID: '',
-  STORAGE_SECRET_ACCESS_KEY: '',
-  STORAGE_FORCE_PATH_STYLE: '',
-  WELLAHEALTH_BASE_URL: '',
-  WELLAHEALTH_CLIENT_ID: '',
-  WELLAHEALTH_CLIENT_SECRET: '',
-  WELLAHEALTH_PARTNER_CODE: '',
+  FLUTTERWAVE_PUBLIC_KEY: 'FLWPUBK_TEST-protected-routes-suite-X',
+  GEMINI_API_KEY: 'protected-routes-suite-gemini-key',
+  GEMINI_MODEL: 'gemini-3.7-flash',
+  STORAGE_ENDPOINT: 'https://storage.protected-suite.test',
+  STORAGE_REGION: 'auto',
+  STORAGE_BUCKET: 'wawu-protected-suite',
+  STORAGE_ACCESS_KEY_ID: 'protected-suite-access-key',
+  STORAGE_SECRET_ACCESS_KEY: 'protected-suite-secret-access-key',
+  STORAGE_FORCE_PATH_STYLE: 'true',
+  WELLAHEALTH_BASE_URL: WELLAHEALTH_BASE,
+  WELLAHEALTH_CLIENT_ID: 'protected-suite-client',
+  WELLAHEALTH_CLIENT_SECRET: 'protected-suite-secret',
+  WELLAHEALTH_PARTNER_CODE: 'WAWU-SUITE',
   WALLET_FUNDING: '',
   WAWU_ADMIN_KEY: '',
   ADMIN_WAWU_USER_IDS: '',
@@ -84,16 +92,20 @@ export function pinEnvironment(): () => void {
 /**
  * Seals the process off from the internet for the duration of the suite.
  *
- * With no keys configured most adapters never call out, but a few build a
- * request anyway and only fail on the answer. Answers from the real
- * Flutterwave would make the lock depend on the network and on their uptime.
- * Every non-local fetch is refused as if the machine were offline, which is a
- * state the code already has to handle, and every refusal is recorded so the
- * report can say which routes tried.
+ * Localhost passes (the mock WAWU ID). A provider host is answered by its
+ * canned double (providers.ts). Anything else is refused as if the machine
+ * were offline, a state the code already has to handle. Answers from the real
+ * providers would make the lock depend on the network and on their uptime.
+ * Both kinds are recorded so the report can say which routes reached out.
  */
-export function sealNetwork(): { attempts: string[]; restore: () => void } {
+export function sealNetwork(): {
+  attempts: string[];
+  served: string[];
+  restore: () => void;
+} {
   const original = globalThis.fetch;
   const attempts: string[] = [];
+  const served: string[] = [];
   const sealed: typeof fetch = (input, init) => {
     const url =
       typeof input === 'string'
@@ -101,9 +113,17 @@ export function sealNetwork(): { attempts: string[]; restore: () => void } {
         : input instanceof URL
           ? input.href
           : input.url;
-    const host = new URL(url).hostname;
+    const parsed = new URL(url);
+    const host = parsed.hostname;
     if (host === 'localhost' || host === '127.0.0.1' || host === '::1')
       return original(input, init);
+    const canned = fakeProvider(parsed, init);
+    if (canned) {
+      served.push(
+        `${(init?.method ?? 'GET').toUpperCase()} ${parsed.host}${parsed.pathname}`,
+      );
+      return Promise.resolve(canned);
+    }
     attempts.push(url);
     return Promise.reject(
       new TypeError(
@@ -112,7 +132,7 @@ export function sealNetwork(): { attempts: string[]; restore: () => void } {
     );
   };
   globalThis.fetch = sealed;
-  return { attempts, restore: () => (globalThis.fetch = original) };
+  return { attempts, served, restore: () => (globalThis.fetch = original) };
 }
 
 // ── mock WAWU ID ─────────────────────────────────────────────────────────
@@ -186,6 +206,20 @@ export async function registerIdentity(
     user: { id: string };
   };
   return { sub: body.user.id, token: body.accessToken };
+}
+
+/** A token for one of mock-wawu-id's seeded accounts (login by identifier). */
+export async function loginSeeded(identifier: string): Promise<string> {
+  const res = await fetch(`${WAWU_ID_BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ identifier }),
+  });
+  if (!res.ok)
+    throw new Error(
+      `mock-wawu-id login failed for ${identifier}: ${res.status}`,
+    );
+  return ((await res.json()) as { accessToken: string }).accessToken;
 }
 
 // ── admins ───────────────────────────────────────────────────────────────
