@@ -101,4 +101,44 @@ else
   npx prisma migrate deploy >/dev/null
 fi
 
-npx jest --runInBand --forceExit src/protected-routes
+# Jest runs with a config written HERE, not the one in the code under test's
+# package.json, and the result is checked here too: a branch must not be able
+# to make the suite pass by excluding it (testPathIgnorePatterns,
+# passWithNoTests, a narrowed testRegex). Every locked entry must have run and
+# passed, plus the two whole-registry tests.
+OUT="$(mktemp -d "${TMPDIR:-/tmp}/protected-routes-run.XXXXXX")"
+cat > "$OUT/jest.json" <<JSON
+{
+  "rootDir": "$WORK/src",
+  "moduleFileExtensions": ["js", "json", "ts"],
+  "testRegex": "protected-routes/.*\\\\.spec\\\\.ts\$",
+  "transform": {
+    "^.+\\\\.(t|j)s\$": ["ts-jest", { "tsconfig": { "module": "commonjs", "moduleResolution": "node", "resolvePackageJsonExports": false } }]
+  },
+  "transformIgnorePatterns": ["node_modules/(?!(jose)/)"],
+  "moduleNameMapper": { "^(\\\\.{1,2}/.*)\\\\.js\$": "\$1" },
+  "testEnvironment": "node"
+}
+JSON
+set +e
+npx jest --config "$OUT/jest.json" --runInBand --forceExit \
+  --json --outputFile="$OUT/result.json"
+JEST_STATUS=$?
+set -e
+node -e '
+  const fs = require("fs");
+  const [resultFile, registryFile] = process.argv.slice(1);
+  const result = JSON.parse(fs.readFileSync(resultFile, "utf8"));
+  const entries = JSON.parse(fs.readFileSync(registryFile, "utf8")).protectedRoutes.routes.length;
+  const suite = result.testResults.find((t) => t.name.endsWith("protected-routes.regression.spec.ts"));
+  const passed = suite ? suite.assertionResults.filter((a) => a.status === "passed").length : 0;
+  const ran = suite ? suite.assertionResults.length : 0;
+  const want = entries + 2;
+  if (ran !== want || passed !== want || result.numFailedTests !== 0 || result.numPendingTests !== 0) {
+    console.error(`protected route suite: ${passed} of ${want} required tests passed (${ran} ran, ${result.numFailedTests} failed, ${result.numPendingTests} skipped)`);
+    process.exit(1);
+  }
+  console.log(`protected route suite: all ${want} required tests passed`);
+' "$OUT/result.json" "$WORK/.pipeline/protected-registry.json" || JEST_STATUS=1
+rm -rf "$OUT"
+exit "$JEST_STATUS"

@@ -7273,9 +7273,9 @@
       }
     ],
     "lock": {
-      "lockedAt": "2026-10-02T02:12:53.279Z",
-      "lockedAgainst": "5f2658af9b0ad7f867fc98d4e392fc7e52ec506e",
-      "sha256": "16412917c3d78d12686d277a5a05b80781a73b8e68fcb12c57b4f090ccbdae01"
+      "lockedAt": "2026-10-02T02:40:04.662Z",
+      "lockedAgainst": "ddb572723b8be6c8d4387519580546fffbe08a10",
+      "sha256": "755ce4fa4f80138ff7393d2e7cbda32c687b10cf1522d6e345fb8ce65f07591f"
     },
     "routes": [
       {
@@ -20759,6 +20759,77 @@
         }
       },
       {
+        "id": "GET /admin/finance/wallets [withBalances]",
+        "method": "GET",
+        "path": "/admin/finance/wallets",
+        "variant": "withBalances",
+        "callers": {
+          "web": [],
+          "dashboard": [
+            "adminFinanceListWallets"
+          ]
+        },
+        "auth": {
+          "kind": "admin",
+          "guards": [
+            "AdminAuthGuard",
+            "AdminRolesGuard"
+          ],
+          "adminRoles": [
+            "superadmin",
+            "finance"
+          ]
+        },
+        "probe": {
+          "as": "superadmin",
+          "query": {
+            "withBalances": "true"
+          },
+          "why": "The dashboard toggle: each row then carries Flutterwave balance (the canned double)."
+        },
+        "expect": {
+          "status": 200,
+          "coverage": "success",
+          "shape": {
+            "data": [
+              {
+                "balance": {
+                  "ngn": "number",
+                  "source": "string",
+                  "unavailableReason": "null"
+                },
+                "creator": {
+                  "handle": "string",
+                  "wawuId": "string"
+                },
+                "kycStatus": "string",
+                "lifetime": {
+                  "earnedInstructedNaira": "number",
+                  "earningsPendingNaira": "number",
+                  "withdrawnNaira": "number"
+                },
+                "payoutSubaccount": {
+                  "accountNumberLast4": "string",
+                  "accountReference": "string",
+                  "bankName": "string",
+                  "openedAt": "string",
+                  "status": "string"
+                },
+                "withdrawalsEnabled": "boolean"
+              }
+            ],
+            "message": "string",
+            "pagination": {
+              "currentPage": "number",
+              "nextPage": "null",
+              "perPage": "number",
+              "total": "number"
+            },
+            "statusCode": "number"
+          }
+        }
+      },
+      {
         "id": "GET /admin/finance/wallets/:wawuId",
         "method": "GET",
         "path": "/admin/finance/wallets/:wawuId",
@@ -20862,10 +20933,11 @@
           "as": "superadmin",
           "before": [
             {
-              "sql": "INSERT INTO \"PaymentWebhookReceipt\" (id, \"deliveryKey\", event, \"txRef\", \"transactionId\", status, flow, detail, payload, \"receivedAt\") VALUES (gen_random_uuid(), $1, 'charge.completed', $2, 'protected-tx-webhook', 'unmatched', NULL, 'No pending charge matched this reference.', '{\"event\":\"charge.completed\"}'::jsonb, now()) RETURNING id",
+              "sql": "INSERT INTO \"PaymentWebhookReceipt\" (id, \"deliveryKey\", event, \"txRef\", \"transactionId\", status, flow, detail, payload, \"receivedAt\") VALUES (gen_random_uuid(), $1, 'charge.completed', $2, 'protected-tx-webhook', 'unmatched', NULL, 'No pending charge matched this reference.', $3::jsonb, now()) RETURNING id",
               "values": [
                 "charge.completed:protected-{{nonce}}",
-                "protected-{{nonce}}"
+                "protected-{{nonce}}",
+                "{\"event\":\"charge.completed\",\"data\":{\"id\":4471230,\"tx_ref\":\"protected-{{nonce}}\",\"flw_ref\":\"FLW-MOCK-protected-{{nonce}}\",\"amount\":1500,\"charged_amount\":1521,\"currency\":\"NGN\",\"status\":\"successful\",\"payment_type\":\"card\",\"created_at\":\"2026-10-02T09:15:00.000Z\",\"customer\":{\"id\":215604,\"email\":\"bola@test.wawu.dev\",\"name\":\"Bola Buyer\"}}}"
               ],
               "capture": {
                 "receiptId": "id"
@@ -20937,14 +21009,14 @@
           "shape": {
             "data": {
               "charge": {
-                "amount": "null",
-                "chargeCreatedAt": "null",
-                "chargeStatus": "null",
-                "chargedAmount": "null",
-                "currency": "null",
-                "customerEmail": "null",
-                "flwRef": "null",
-                "paymentType": "null"
+                "amount": "number",
+                "chargeCreatedAt": "string",
+                "chargeStatus": "string",
+                "chargedAmount": "number",
+                "currency": "string",
+                "customerEmail": "string",
+                "flwRef": "string",
+                "paymentType": "string"
               },
               "deliveryKey": "string",
               "detail": "string",
@@ -20959,6 +21031,22 @@
               "flow": "null",
               "id": "string",
               "payload": {
+                "data": {
+                  "amount": "number",
+                  "charged_amount": "number",
+                  "created_at": "string",
+                  "currency": "string",
+                  "customer": {
+                    "email": "string",
+                    "id": "number",
+                    "name": "string"
+                  },
+                  "flw_ref": "string",
+                  "id": "number",
+                  "payment_type": "string",
+                  "status": "string",
+                  "tx_ref": "string"
+                },
                 "event": "string"
               },
               "receivedAt": "string",
@@ -21012,14 +21100,14 @@
               "outcome": "string",
               "receipt": {
                 "charge": {
-                  "amount": "null",
-                  "chargeCreatedAt": "null",
-                  "chargeStatus": "null",
-                  "chargedAmount": "null",
-                  "currency": "null",
-                  "customerEmail": "null",
-                  "flwRef": "null",
-                  "paymentType": "null"
+                  "amount": "number",
+                  "chargeCreatedAt": "string",
+                  "chargeStatus": "string",
+                  "chargedAmount": "number",
+                  "currency": "string",
+                  "customerEmail": "string",
+                  "flwRef": "string",
+                  "paymentType": "string"
                 },
                 "deliveryKey": "string",
                 "detail": "string",
@@ -21034,6 +21122,22 @@
                 "flow": "null",
                 "id": "string",
                 "payload": {
+                  "data": {
+                    "amount": "number",
+                    "charged_amount": "number",
+                    "created_at": "string",
+                    "currency": "string",
+                    "customer": {
+                      "email": "string",
+                      "id": "number",
+                      "name": "string"
+                    },
+                    "flw_ref": "string",
+                    "id": "number",
+                    "payment_type": "string",
+                    "status": "string",
+                    "tx_ref": "string"
+                  },
                   "event": "string"
                 },
                 "receivedAt": "string",

@@ -133,18 +133,27 @@ npm run test:protected
 ```
 
 It also runs inside `npm run test:contract` and deploy.yml's `npx jest` step,
-like every other spec, but there it reads the branch's own copy of the lock.
-**What enforces V3 in CI is `.github/workflows/protected-routes.yml`**: on every
-pull request it runs the PR's code against the lock on the base branch, and
-prints what the PR changes in the lock (`scripts/protected-routes/lock-diff.py`)
-to the job summary. A PR that changes the lock is red until the owner applies
-the `relock-approved` label; then it is checked against its own new lock. The
-PR that introduces the suite is checked against its own lock (the base has
-none). The run leaves the database exactly as it found it: every
-table is snapshotted before the first request and restored after the last
-(`test/protected-routes/db-snapshot.ts`), and the suite refuses a database that is not on
-this machine (`localhost`, `127.0.0.1`, `::1`) or whose name does not contain
-`test` or `protected`.
+like every other spec, but there it is the branch's own copy of the suite and
+lock. **What enforces V3 in CI is `.github/workflows/protected-routes.yml`**
+(`permissions: contents: read`). It checks out the BASE branch and runs the
+base's `scripts/protected-routes/ci-check.sh`, `run.sh`, `lock-diff.py` and
+suite against the pull request's head commit, so a pull request cannot loosen
+the checker or its own lock. `run.sh` writes its own jest config and fails
+unless every locked entry ran and passed. A pull request that changes the lock
+or any checker file (`src/`, `test/`, `scripts/protected-routes`, the workflow)
+is checked against the base's lock, and its lock diff goes in the job summary.
+That holds until the owner applies `relock-approved` after its latest push:
+only the run that label triggers counts it, and a later push needs it again.
+The pull request that introduces the suite is checked against its own lock
+(the base has none).
+
+**For the owner (repository settings, not code):** make the "Protected route
+suite against the base branch's checker and lock" check required on `main`.
+Add CODEOWNERS entries, with required review, for `.github/`,
+`scripts/protected-routes/`, `test/protected-routes/`, `src/protected-routes/`
+and `.pipeline/protected-registry.json`. On `pull_request` GitHub runs the
+workflow file from the pull request, so those two settings are what protect
+the workflow itself.
 
 **Running it against any branch (V3).** The code comes from the ref you name;
 the suite and the lock come from `PROTECTED_LOCK_REF` (default `origin/main`),

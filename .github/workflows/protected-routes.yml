@@ -3,22 +3,38 @@ name: Protected routes (V3)
 # MONEY-01. Nothing the live web app or the admin dashboard uses may change
 # behaviour while this backend grows.
 #
-# The protected route suite also runs inside deploy.yml's `npx jest` step,
-# but there it reads the branch's OWN copy of the lock, and a lock is only a
-# hash of its own content: a branch that edits an entry and recomputes the
-# hash passes itself. This job closes that: it runs the PR's code against the
-# lock on the BASE branch (scripts/protected-routes/run.sh with
-# PROTECTED_LOCK_REF=origin/<base>), so the only way a lock change lands is
-# through the registry diff this job prints, reviewed by the owner, who
-# applies the `relock-approved` label to let the PR be checked against its
-# own new lock instead. Labels can only be set by people with triage rights.
+# The suite also runs inside deploy.yml's `npx jest` step, but there it is the
+# branch's own copy of the suite and the lock, which a branch can edit. This
+# job holds a pull request to the BASE branch's checker:
 #
-# deploy.yml is untouched: this workflow runs on pull requests only.
+#   - The base branch is checked out (into ./base). The pull request's head
+#     commit is only fetched into it as an object; nothing of the pull
+#     request's is executed except the code under test.
+#   - scripts/protected-routes/ci-check.sh, run.sh, lock-diff.py and the suite
+#     (src/ and test/protected-routes, the registry) all come from the base.
+#     run.sh also writes its own jest config and checks that every locked entry
+#     ran, so the pull request's package.json cannot exclude the suite.
+#   - A pull request that changes the lock or any checker file is checked
+#     against the base's lock (and fails if its code no longer matches it)
+#     unless the owner applied the `relock-approved` label AFTER its latest
+#     push: only the run triggered by that `labeled` event counts it, and any
+#     later push is a `synchronize` run that does not. The lock diff is in the
+#     job summary either way.
+#   - The pull request that introduces the suite is checked against its own
+#     (the base has none yet).
+#
+# On `pull_request` GitHub runs the workflow FILE from the pull request, so
+# this file is protected by CODEOWNERS and by making the job a required check
+# (README, "Protected route suite": repository settings, not code).
+# deploy.yml is untouched: this runs on pull requests only.
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: protected-routes-${{ github.ref }}
@@ -26,7 +42,7 @@ concurrency:
 
 jobs:
   v3:
-    name: Protected route suite against the base branch's lock
+    name: Protected route suite against the base branch's checker and lock
     runs-on: ubuntu-latest
 
     services:
@@ -48,26 +64,45 @@ jobs:
       WAWU_ID_JWKS_URL: http://localhost:4001/.well-known/jwks.json
       ADMIN_JWT_SECRET: ci-only-admin-secret-not-a-real-one-000000
       ADMIN_JWT_REFRESH_SECRET: ci-only-admin-refresh-secret-not-a-real-one-0
-      BASE_REF: ${{ github.base_ref || 'main' }}
+      # 1 only on the run the owner's label itself triggered (see above).
+      RELOCK_APPROVED: ${{ (github.event.action == 'labeled' && github.event.label.name == 'relock-approved') && '1' || '0' }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out the BASE branch (the checker)
+        uses: actions/checkout@v4
         with:
-          # run.sh exports refs with `git archive`, so both sides' history
-          # has to be here.
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          path: base
           fetch-depth: 0
+
+      - name: Fetch the pull request's head commit (the code under test)
+        id: shas
+        working-directory: base
+        run: |
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            git fetch --no-tags origin \
+              "+refs/pull/${{ github.event.pull_request.number }}/head:refs/remotes/pr/head"
+            PR_SHA="$(git rev-parse refs/remotes/pr/head)"
+            test "$PR_SHA" = "${{ github.event.pull_request.head.sha }}"
+          else
+            PR_SHA="$(git rev-parse HEAD)"
+          fi
+          echo "base=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "pr=$PR_SHA" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: base/package-lock.json
 
-      - run: npm ci --no-audit --no-fund
+      - name: Install the base's dependencies
+        working-directory: base
+        run: npm ci --no-audit --no-fund
 
-      - name: Start mock WAWU ID
-        # Same as deploy.yml: the keypair is generated, never committed.
+      - name: Start mock WAWU ID (the base's)
+        working-directory: base/mock-wawu-id
         run: |
-          cd mock-wawu-id
           npm ci --no-audit --no-fund
           openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out private.pem -quiet
           openssl rsa -in private.pem -pubout -out public.pem 2>/dev/null
@@ -79,25 +114,15 @@ jobs:
           cat /tmp/mock.log >&2
           exit 1
 
-      - name: What this branch changes in the lock
-        id: lock
+      - name: Run the suite (base's checker, pull request's code)
+        working-directory: base
         run: |
-          git fetch --no-tags origin "$BASE_REF"
-          set +e
-          python3 scripts/protected-routes/lock-diff.py "origin/$BASE_REF" HEAD | tee -a "$GITHUB_STEP_SUMMARY"
-          diff_status=${PIPESTATUS[0]}
-          set -e
-          if [ "$diff_status" = 2 ]; then
-            # The base has no suite yet: only the PR that introduces it.
-            echo "ref=HEAD" >> "$GITHUB_OUTPUT"
-            echo "Checked against this branch's own lock: the base has none yet." | tee -a "$GITHUB_STEP_SUMMARY"
-          elif [ "$diff_status" = 1 ] && ${{ contains(github.event.pull_request.labels.*.name, 'relock-approved') }}; then
-            echo "ref=HEAD" >> "$GITHUB_OUTPUT"
-            echo "The owner approved this lock change (label relock-approved): checked against the branch's new lock." | tee -a "$GITHUB_STEP_SUMMARY"
+          BASE_SHA='${{ steps.shas.outputs.base }}'
+          PR_SHA='${{ steps.shas.outputs.pr }}'
+          if git cat-file -e "$BASE_SHA:scripts/protected-routes/ci-check.sh" 2>/dev/null; then
+            git show "$BASE_SHA:scripts/protected-routes/ci-check.sh" > .protected-ci-check.sh
           else
-            echo "ref=origin/$BASE_REF" >> "$GITHUB_OUTPUT"
-            echo "Checked against the lock on origin/$BASE_REF." | tee -a "$GITHUB_STEP_SUMMARY"
+            # Only the pull request that introduces the suite gets here.
+            git show "$PR_SHA:scripts/protected-routes/ci-check.sh" > .protected-ci-check.sh
           fi
-
-      - name: Run the suite (code from this branch, lock as chosen above)
-        run: PROTECTED_LOCK_REF='${{ steps.lock.outputs.ref }}' scripts/protected-routes/run.sh --fresh HEAD
+          bash .protected-ci-check.sh "$BASE_SHA" "$PR_SHA" "$RELOCK_APPROVED"
