@@ -268,20 +268,37 @@ Put the **sandbox** values in `wawu-backend/.env` and restart. Never the live
 ones: local testing is sandbox only, and `up.sh` refuses any Fintava URL but the sandbox
 and any Cardex key that is not `cdx_test_`.
 
-As of OPS-03 no Hub code reads these yet. MONEY-06 adds the Fintava client
-and MONEY-07 the Fintava webhook route; WALLET-33 does the same for Cardex.
+MONEY-06 added the Fintava client and MONEY-07 the Fintava webhook route,
+`POST /api/hub/webhooks/fintava`; WALLET-33 does the same for Cardex.
 To receive their webhooks locally:
 
 1. Start a tunnel to port 3001 (section 7).
 2. In the Fintava (or Cardex) dashboard, set the webhook URL to the tunnel's
-   `https://` address followed by the webhook route that task adds under
-   `/api/hub/`.
+   `https://` address followed by the webhook route: for Fintava,
+   `https://<random>.trycloudflare.com/api/hub/webhooks/fintava`.
 3. Set the dashboard's webhook secret as `FINTAVA_WEBHOOK_SECRET` (or
    `CARDEX_WEBHOOK_SECRET`) in `.env`, and restart.
 4. When the tunnel restarts with a new address, update the dashboard.
 
 Fintava's sandbox retries a webhook hourly for 72 hours until it gets a 200,
 so a delivery missed while the tunnel was down arrives later on its own.
+
+**Without a tunnel** (the usual case, DECISIONS R-25), send the endpoint a
+delivery yourself: a body in Fintava's documented format, signed with your
+local `FINTAVA_WEBHOOK_SECRET` as Fintava signs it (HMAC-SHA512 of the exact
+bytes, hex). With the secret in your shell:
+
+```bash
+BODY='{"event":"account_funded","data":{"reference":"LOCAL-1","amount":"100.00","status":"success"}}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha512 -hmac "$FINTAVA_WEBHOOK_SECRET" -hex | sed 's/^.* //')
+curl -sS -X POST http://localhost:3001/api/hub/webhooks/fintava \
+  -H 'Content-Type: application/json' -H "x-fintava-signature: $SIG" --data "$BODY"
+```
+
+It answers 200 with `outcome: "recorded"` the first time and `"duplicate"`
+after; the row is in `FintavaWebhookEvent`. The test
+`src/fintava/webhook/tests/fintava-webhook.contract.spec.ts` sends every
+documented event this way.
 
 ## 9. What differs from the server
 

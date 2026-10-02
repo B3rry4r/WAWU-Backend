@@ -3108,3 +3108,85 @@ model FintavaWallet {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// FINTAVA WEBHOOK EVENTS (task MONEY-07)
+///
+/// Every signed delivery Fintava sends to `POST /api/hub/webhooks/fintava`,
+/// recorded once and acknowledged. Nothing here moves money or touches a
+/// balance: the ledger (MONEY-10) and the pending sweep (MONEY-08) read the
+/// `pending` rows and mark them `processed` or `failed`. Fintava's balance
+/// stays the only balance.
+///
+/// Fintava sends no event id and no timestamp (mobile repo
+/// `docs/fintava/naira-api.md`, "Webhooks"), so a delivery is identified by
+/// its event, the transaction reference it carries and the status it
+/// reports. The unique constraint over those three IS the replay protection:
+/// the insert is `ON CONFLICT DO NOTHING`, so a retry, a replayed capture or
+/// two copies arriving at the same moment leave one row.
+/// ─────────────────────────────────────────────────────────────────────────
+enum FintavaWebhookProcessing {
+  /// Recorded; waiting for the task that consumes this event.
+  pending
+  /// The consuming task handled it.
+  processed
+  /// The consuming task tried and could not; `note` says why.
+  failed
+  /// The delivery named no event we know (or none). Kept for review.
+  unrecognised
+}
+
+model FintavaWebhookEvent {
+  id String @id @default(uuid())
+
+  /// The event name, trimmed and lower case (`VIRTUAL_WALLET_PAYMENT` is
+  /// `virtual_wallet_payment`), read from the body's `event` field or, when
+  /// that is missing, its `type` field. Empty when the delivery named none.
+  event    String
+  /// The event name exactly as sent, when there was one.
+  eventRaw String?
+
+  /// The transaction reference this delivery is keyed on, read from `data`
+  /// in the order the event's entry in FINTAVA_WEBHOOK_EVENTS
+  /// (src/fintava/webhook/fintava-webhook-event.ts) lists. When the
+  /// delivery carries none, the SHA-256 of its raw body (`sha256:<hex>`),
+  /// so a byte-identical retry still lands on the same row.
+  reference      String
+  /// Where `reference` came from: `data.reference`, `data.customerReference`,
+  /// `data.reversalRef`, ..., or `body.sha256`. Every text column here has
+  /// any NUL replaced by U+FFFD (Postgres text cannot hold one), the same way
+  /// every time, so a replay still lands on the same key.
+  referenceField String
+  /// Fintava's own status for the transaction (`data.status`, else
+  /// `data.paymentStatus`), upper case; empty when it sent none. Part of the
+  /// key so a later delivery reporting a new status is recorded too.
+  fintavaStatus  String
+
+  /// `data.reference` and `data.customerReference` (or `CustomerReference`)
+  /// as sent, so a consumer can match either to what it stored. A transfer
+  /// RESPONSE swaps these two names (`sandbox/11-`); whether a delivery does
+  /// too is unconfirmed until a real one is recorded (OPS-10), so neither
+  /// is assumed to be ours.
+  dataReference         String?
+  dataCustomerReference String?
+
+  /// The body exactly as delivered: the bytes the signature covers, kept
+  /// byte for byte (`bytea`, so a NUL or any other byte fits). Personal data
+  /// lives here and in `payload`, never in a log.
+  rawBody Bytes
+  /// The same body parsed, with every NUL (`\u0000`) in a key or a string
+  /// replaced by U+FFFD: Postgres json cannot hold a NUL, and a delivery it
+  /// refused would be retried and lost. `rawBody` keeps the original.
+  payload Json
+
+  processingStatus FintavaWebhookProcessing @default(pending)
+  /// Set by the consuming task: what it did, or why it could not.
+  note             String?
+  receivedAt       DateTime                 @default(now())
+  processedAt      DateTime?
+
+  @@unique([event, reference, fintavaStatus])
+  @@index([processingStatus, receivedAt])
+  @@index([dataReference])
+  @@index([dataCustomerReference])
+}
