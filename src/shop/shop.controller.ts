@@ -7,97 +7,102 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
-  Query,
   UseGuards,
 } from '@nestjs/common';
+import { ApiParam } from '@nestjs/swagger';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { OptionalWawuAuthGuard } from '../search-response/guards/optional-wawu-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { ShopService } from './shop.service';
+import { VerifyShopOrderDto } from './dto/shop.dto';
 import {
-  AddToCartDto,
-  CheckoutDto,
-  ListProductsDto,
-  SetCartQuantityDto,
-  VerifyShopOrderDto,
-} from './dto/shop.dto';
-import type { ProductCategory } from '../../generated/prisma/enums';
+  SHOP_RETIRED_MESSAGE,
+  ShopRetiredRoute,
+  shopRetired,
+} from './shop-retired';
 
 /**
- * WAWU Commerce — `/api/hub/shop/*`.
+ * WAWU Shop, retired: `/api/hub/shop/*` (R-2, OPS-08).
  *
- * ── WHO CAN SEE WHAT ──────────────────────────────────────────────────────
- * BROWSING IS PUBLIC. A storefront a stranger cannot open sells nothing, and
- * a shared product link has to work before somebody has an account. Everything
- * that touches a cart, an order or money needs a token.
+ * Browsing, the cart and checkout answer 410 Gone. A buyer's orders and the
+ * settling of a charge opened before the shop closed still work; see
+ * `shop-retired.ts` for why each one stays.
  *
  * ── ROUTE ORDER ───────────────────────────────────────────────────────────
  * Every static segment (`/cart`, `/orders`, `/categories`) is declared BEFORE
- * `:slug`, or the catch-all swallows them. This codebase has been bitten by
- * exactly that shape before.
+ * `:slug`, or the catch-all swallows them. The retired routes stay mounted,
+ * with the guards they always had, so an old client gets a clear 410 rather
+ * than a 404 that reads as a broken link.
  */
 @Controller('shop')
 export class ShopController {
   constructor(private readonly service: ShopService) {}
 
-  /* ---- browsing: public ---- */
+  /* ---- browsing: retired ---- */
 
+  @ShopRetiredRoute(SHOP_RETIRED_MESSAGE)
   @UseGuards(OptionalWawuAuthGuard)
   @Get('products')
-  listProducts(@Query() query: ListProductsDto) {
-    return this.service.listProducts(query);
+  listProducts(): never {
+    throw shopRetired();
   }
 
-  /** The subcategories in an aisle that actually have stock. */
+  @ShopRetiredRoute(SHOP_RETIRED_MESSAGE)
   @UseGuards(OptionalWawuAuthGuard)
+  @ApiParam({ name: 'category', type: String })
   @Get('categories/:category/subcategories')
-  subcategories(@Param('category') category: ProductCategory) {
-    return this.service.listSubcategories(category);
+  subcategories(): never {
+    throw shopRetired();
   }
 
-  /* ---- cart: the brief's "WOW" ---- */
+  /* ---- cart: retired ---- */
 
+  @ShopRetiredRoute(SHOP_RETIRED_MESSAGE)
   @UseGuards(WawuAuthGuard)
   @Get('cart')
-  cart(@CurrentUser() user: WawuJwtClaims) {
-    return this.service.getCart(user.sub);
+  cart(): never {
+    throw shopRetired();
   }
 
+  @ShopRetiredRoute(SHOP_RETIRED_MESSAGE)
   @UseGuards(WawuAuthGuard)
   @Post('cart')
-  addToCart(@CurrentUser() user: WawuJwtClaims, @Body() dto: AddToCartDto) {
-    return this.service.addToCart(user.sub, dto.productId, dto.quantity);
+  addToCart(): never {
+    throw shopRetired();
   }
 
+  @ShopRetiredRoute(SHOP_RETIRED_MESSAGE)
   @UseGuards(WawuAuthGuard)
+  @ApiParam({ name: 'productId', type: String })
   @Patch('cart/:productId')
-  setQuantity(
-    @CurrentUser() user: WawuJwtClaims,
-    @Param('productId', ParseUUIDPipe) productId: string,
-    @Body() dto: SetCartQuantityDto,
-  ) {
-    return this.service.setCartQuantity(user.sub, productId, dto.quantity);
+  setQuantity(): never {
+    throw shopRetired();
   }
 
+  @ShopRetiredRoute(SHOP_RETIRED_MESSAGE)
   @UseGuards(WawuAuthGuard)
+  @ApiParam({ name: 'productId', type: String })
   @Delete('cart/:productId')
-  removeFromCart(
-    @CurrentUser() user: WawuJwtClaims,
-    @Param('productId', ParseUUIDPipe) productId: string,
-  ) {
-    return this.service.removeFromCart(user.sub, productId);
+  removeFromCart(): never {
+    throw shopRetired();
   }
 
-  /* ---- checkout and orders ---- */
+  /* ---- checkout: retired ---- */
 
-  /** Opens a charge. Nothing is reserved and no stock moves until verify. */
+  @ShopRetiredRoute(SHOP_RETIRED_MESSAGE)
   @UseGuards(WawuAuthGuard)
   @Post('checkout')
-  checkout(@CurrentUser() user: WawuJwtClaims, @Body() dto: CheckoutDto) {
-    return this.service.checkout(user.sub, dto);
+  checkout(): never {
+    throw shopRetired();
   }
 
+  /* ---- orders: still served ---- */
+
+  /**
+   * Settles a charge opened before the shop closed. Idempotent: a paid order
+   * comes back as it is.
+   */
   @UseGuards(WawuAuthGuard)
   @Post('orders/:orderId/verify')
   verify(
@@ -124,12 +129,14 @@ export class ShopController {
   }
 
   /**
-   * One product by slug. LAST, because `:slug` would otherwise swallow
-   * `/cart`, `/orders` and `/categories`.
+   * One product by slug: retired. LAST, because `:slug` would otherwise
+   * swallow `/cart`, `/orders` and `/categories`.
    */
+  @ShopRetiredRoute(SHOP_RETIRED_MESSAGE)
   @UseGuards(OptionalWawuAuthGuard)
+  @ApiParam({ name: 'slug', type: String })
   @Get(':slug')
-  product(@Param('slug') slug: string) {
-    return this.service.getProduct(slug);
+  product(): never {
+    throw shopRetired();
   }
 }

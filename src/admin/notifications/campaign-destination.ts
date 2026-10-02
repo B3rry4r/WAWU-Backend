@@ -12,7 +12,8 @@ import { BadRequestException } from '@nestjs/common';
  * So the destination is not a URL an admin types. It is one of a fixed set of
  * in-app routes, every one of which is a screen that exists in WAWU-Web
  * today. Adding a destination is a code change with a reviewer, which is the
- * correct amount of friction for this.
+ * correct amount of friction for this. Shop was taken off when it was retired
+ * (R-2, OPS-08): a campaign must not send everybody to a closed surface.
  *
  * External links are refused outright rather than allowlisted by host. WAWU
  * has two sibling products (WAWUBasket, WAWUBeauty) that a campaign will
@@ -24,7 +25,6 @@ export const CAMPAIGN_DESTINATIONS = [
   { href: '/home', label: 'Home feed' },
   { href: '/explore', label: 'Explore' },
   { href: '/events', label: 'Events' },
-  { href: '/shop', label: 'Shop' },
   { href: '/learn', label: 'Learn' },
   { href: '/services', label: 'Services' },
   { href: '/communities', label: 'Communities' },

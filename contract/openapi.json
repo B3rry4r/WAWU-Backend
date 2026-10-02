@@ -9728,115 +9728,60 @@
     "/api/hub/shop/products": {
       "get": {
         "operationId": "ShopController_listProducts",
-        "parameters": [
-          {
-            "name": "category",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "enum": [
-                "professional",
-                "audio_music",
-                "video_film",
-                "lighting_studio",
-                "photography",
-                "computing",
-                "art_design",
-                "gaming_streaming",
-                "content_creation",
-                "live_events",
-                "power_accessories"
-              ]
-            }
-          },
-          {
-            "name": "subcategory",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "maxLength": 60,
-              "type": "string"
-            }
-          },
-          {
-            "name": "search",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "maxLength": 80,
-              "type": "string"
-            }
-          },
-          {
-            "name": "maxPriceNaira",
-            "required": false,
-            "in": "query",
-            "description": "The brief's \"shop by budget\" — a ceiling, not a band.",
-            "schema": {
-              "minimum": 1,
-              "maximum": 100000000,
-              "type": "number"
-            }
-          },
-          {
-            "name": "wawuPick",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "boolean"
-            }
-          },
-          {
-            "name": "page",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "minimum": 1,
-              "type": "number"
-            }
-          },
-          {
-            "name": "perPage",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "minimum": 1,
-              "maximum": 60,
-              "type": "number"
-            }
-          }
-        ],
+        "parameters": [],
         "responses": {
           "200": {
             "description": "",
             "content": {
               "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "410": {
+            "description": "reason.code: shop_retired. WAWU Shop has closed and no longer takes orders. Orders you already placed are still in your purchases.",
+            "content": {
+              "application/json": {
                 "schema": {
                   "type": "object",
-                  "properties": {
-                    "items": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/ProductView"
-                      }
-                    },
-                    "total": {
-                      "type": "number"
-                    },
-                    "currentPage": {
-                      "type": "number"
-                    },
-                    "perPage": {
-                      "type": "number"
-                    }
-                  },
                   "required": [
-                    "items",
-                    "total",
-                    "currentPage",
-                    "perPage"
-                  ]
+                    "statusCode",
+                    "message",
+                    "data",
+                    "reason"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "number",
+                      "enum": [
+                        410
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "null"
+                    },
+                    "reason": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "shop_retired"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -9844,7 +9789,8 @@
         },
         "tags": [
           "Shop"
-        ]
+        ],
+        "x-wawu-retired-by": "OPS-08"
       }
     },
     "/api/hub/shop/categories/{category}/subcategories": {
@@ -9856,19 +9802,6 @@
             "required": true,
             "in": "path",
             "schema": {
-              "enum": [
-                "professional",
-                "audio_music",
-                "video_film",
-                "lighting_studio",
-                "photography",
-                "computing",
-                "art_design",
-                "gaming_streaming",
-                "content_creation",
-                "live_events",
-                "power_accessories"
-              ],
               "type": "string"
             }
           }
@@ -9878,20 +9811,63 @@
             "description": "",
             "content": {
               "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "410": {
+            "description": "reason.code: shop_retired. WAWU Shop has closed and no longer takes orders. Orders you already placed are still in your purchases.",
+            "content": {
+              "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "data",
+                    "reason"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "number",
+                      "enum": [
+                        410
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "null"
+                    },
+                    "reason": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "shop_retired"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
                   }
                 }
               }
             }
           }
         },
-        "summary": "The subcategories in an aisle that actually have stock.",
         "tags": [
           "Shop"
-        ]
+        ],
+        "x-wawu-retired-by": "OPS-08"
       }
     },
     "/api/hub/shop/cart": {
@@ -9903,8 +9879,54 @@
             "description": "",
             "content": {
               "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "410": {
+            "description": "reason.code: shop_retired. WAWU Shop has closed and no longer takes orders. Orders you already placed are still in your purchases.",
+            "content": {
+              "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CartView"
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "data",
+                    "reason"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "number",
+                      "enum": [
+                        410
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "null"
+                    },
+                    "reason": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "shop_retired"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -9912,28 +9934,65 @@
         },
         "tags": [
           "Shop"
-        ]
+        ],
+        "x-wawu-retired-by": "OPS-08"
       },
       "post": {
         "operationId": "ShopController_addToCart",
         "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AddToCartDto"
-              }
-            }
-          }
-        },
         "responses": {
           "201": {
             "description": "",
             "content": {
               "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "410": {
+            "description": "reason.code: shop_retired. WAWU Shop has closed and no longer takes orders. Orders you already placed are still in your purchases.",
+            "content": {
+              "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CartView"
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "data",
+                    "reason"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "number",
+                      "enum": [
+                        410
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "null"
+                    },
+                    "reason": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "shop_retired"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -9941,7 +10000,8 @@
         },
         "tags": [
           "Shop"
-        ]
+        ],
+        "x-wawu-retired-by": "OPS-08"
       }
     },
     "/api/hub/shop/cart/{productId}": {
@@ -9957,23 +10017,59 @@
             }
           }
         ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SetCartQuantityDto"
-              }
-            }
-          }
-        },
         "responses": {
           "200": {
             "description": "",
             "content": {
               "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "410": {
+            "description": "reason.code: shop_retired. WAWU Shop has closed and no longer takes orders. Orders you already placed are still in your purchases.",
+            "content": {
+              "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CartView"
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "data",
+                    "reason"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "number",
+                      "enum": [
+                        410
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "null"
+                    },
+                    "reason": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "shop_retired"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -9981,7 +10077,8 @@
         },
         "tags": [
           "Shop"
-        ]
+        ],
+        "x-wawu-retired-by": "OPS-08"
       },
       "delete": {
         "operationId": "ShopController_removeFromCart",
@@ -10000,8 +10097,54 @@
             "description": "",
             "content": {
               "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "410": {
+            "description": "reason.code: shop_retired. WAWU Shop has closed and no longer takes orders. Orders you already placed are still in your purchases.",
+            "content": {
+              "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CartView"
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "data",
+                    "reason"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "number",
+                      "enum": [
+                        410
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "null"
+                    },
+                    "reason": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "shop_retired"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -10009,30 +10152,67 @@
         },
         "tags": [
           "Shop"
-        ]
+        ],
+        "x-wawu-retired-by": "OPS-08"
       }
     },
     "/api/hub/shop/checkout": {
       "post": {
         "operationId": "ShopController_checkout",
         "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CheckoutDto"
-              }
-            }
-          }
-        },
         "responses": {
           "201": {
             "description": "",
             "content": {
               "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "410": {
+            "description": "reason.code: shop_retired. WAWU Shop has closed and no longer takes orders. Orders you already placed are still in your purchases.",
+            "content": {
+              "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ShopCheckoutView"
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "data",
+                    "reason"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "number",
+                      "enum": [
+                        410
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "null"
+                    },
+                    "reason": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "shop_retired"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -10040,7 +10220,8 @@
         },
         "tags": [
           "Shop"
-        ]
+        ],
+        "x-wawu-retired-by": "OPS-08"
       }
     },
     "/api/hub/shop/orders/{orderId}/verify": {
@@ -10155,17 +10336,64 @@
             "description": "",
             "content": {
               "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "410": {
+            "description": "reason.code: shop_retired. WAWU Shop has closed and no longer takes orders. Orders you already placed are still in your purchases.",
+            "content": {
+              "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProductView"
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "data",
+                    "reason"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "number",
+                      "enum": [
+                        410
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "null"
+                    },
+                    "reason": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "shop_retired"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
           }
         },
-        "summary": "One product by slug. LAST, because `:slug` would otherwise swallow\n`/cart`, `/orders` and `/categories`.",
+        "summary": "One product by slug: retired. LAST, because `:slug` would otherwise\nswallow `/cart`, `/orders` and `/categories`.",
         "tags": [
           "Shop"
-        ]
+        ],
+        "x-wawu-retired-by": "OPS-08"
       }
     },
     "/api/hub/admin/shop/products": {
@@ -10277,31 +10505,69 @@
       "post": {
         "operationId": "AdminShopController_create",
         "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpsertProductDto"
-              }
-            }
-          }
-        },
         "responses": {
           "201": {
             "description": "",
             "content": {
               "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "410": {
+            "description": "reason.code: shop_retired. WAWU Shop has closed, so products can no longer be added or changed. Orders already placed can still be read and dispatched.",
+            "content": {
+              "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AdminProductView"
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "data",
+                    "reason"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "number",
+                      "enum": [
+                        410
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "null"
+                    },
+                    "reason": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "shop_retired"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
           }
         },
+        "summary": "Retired with the shop: nothing new is stocked (R-2, OPS-08).",
         "tags": [
           "AdminShop"
-        ]
+        ],
+        "x-wawu-retired-by": "OPS-08"
       }
     },
     "/api/hub/admin/shop/products/{id}": {
@@ -10345,31 +10611,69 @@
             }
           }
         ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpsertProductDto"
-              }
-            }
-          }
-        },
         "responses": {
           "200": {
             "description": "",
             "content": {
               "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "410": {
+            "description": "reason.code: shop_retired. WAWU Shop has closed, so products can no longer be added or changed. Orders already placed can still be read and dispatched.",
+            "content": {
+              "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AdminProductView"
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "data",
+                    "reason"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "number",
+                      "enum": [
+                        410
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "null"
+                    },
+                    "reason": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "shop_retired"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
           }
         },
+        "summary": "Retired with the shop: the catalogue is kept as it was, for past orders.",
         "tags": [
           "AdminShop"
-        ]
+        ],
+        "x-wawu-retired-by": "OPS-08"
       }
     },
     "/api/hub/admin/shop/orders": {
@@ -12365,27 +12669,6 @@
                             "type": "string",
                             "enum": [
                               "Events"
-                            ]
-                          }
-                        },
-                        "required": [
-                          "href",
-                          "label"
-                        ]
-                      },
-                      {
-                        "type": "object",
-                        "properties": {
-                          "href": {
-                            "type": "string",
-                            "enum": [
-                              "/shop"
-                            ]
-                          },
-                          "label": {
-                            "type": "string",
-                            "enum": [
-                              "Shop"
                             ]
                           }
                         },
@@ -22550,79 +22833,6 @@
           }
         }
       },
-      "AddToCartDto": {
-        "type": "object",
-        "properties": {
-          "productId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "quantity": {
-            "type": "number",
-            "minimum": 1,
-            "maximum": 20
-          }
-        },
-        "required": [
-          "productId",
-          "quantity"
-        ]
-      },
-      "SetCartQuantityDto": {
-        "type": "object",
-        "properties": {
-          "quantity": {
-            "type": "number",
-            "description": "Zero is meaningful: it removes the line.",
-            "minimum": 0,
-            "maximum": 20
-          }
-        },
-        "required": [
-          "quantity"
-        ]
-      },
-      "CheckoutDto": {
-        "type": "object",
-        "properties": {
-          "deliveryName": {
-            "type": "string",
-            "minLength": 2,
-            "maxLength": 120
-          },
-          "deliveryPhone": {
-            "type": "string",
-            "minLength": 7,
-            "maxLength": 30
-          },
-          "deliveryAddress": {
-            "type": "string",
-            "minLength": 6,
-            "maxLength": 300
-          },
-          "deliveryCity": {
-            "type": "string",
-            "minLength": 2,
-            "maxLength": 80
-          },
-          "deliveryState": {
-            "type": "string",
-            "minLength": 2,
-            "maxLength": 80
-          },
-          "deliveryNote": {
-            "type": "string",
-            "maxLength": 300
-          }
-        },
-        "required": [
-          "deliveryName",
-          "deliveryPhone",
-          "deliveryAddress",
-          "deliveryCity",
-          "deliveryState"
-        ]
-      },
       "VerifyShopOrderDto": {
         "type": "object",
         "properties": {
@@ -22638,95 +22848,6 @@
         "required": [
           "transaction_id",
           "tx_ref"
-        ]
-      },
-      "UpsertProductDto": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "minLength": 2,
-            "maxLength": 160
-          },
-          "brand": {
-            "type": "string",
-            "maxLength": 80
-          },
-          "description": {
-            "type": "string",
-            "minLength": 10,
-            "maxLength": 5000
-          },
-          "category": {
-            "enum": [
-              "professional",
-              "audio_music",
-              "video_film",
-              "lighting_studio",
-              "photography",
-              "computing",
-              "art_design",
-              "gaming_streaming",
-              "content_creation",
-              "live_events",
-              "power_accessories"
-            ],
-            "type": "string"
-          },
-          "subcategory": {
-            "type": "string",
-            "minLength": 2,
-            "maxLength": 60
-          },
-          "priceNaira": {
-            "type": "number",
-            "description": "At least ₦1. A product priced at nothing is a mistake nobody notices until\nit sells out, and it cannot be charged for through a payment provider.",
-            "minimum": 1,
-            "maximum": 100000000
-          },
-          "compareAtNaira": {
-            "type": "number",
-            "description": "The \"was\" price. The service refuses one that does not exceed the price.",
-            "minimum": 1,
-            "maximum": 100000000
-          },
-          "stock": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1000000
-          },
-          "images": {
-            "description": "At least one image is required for a LIVE product — the brief's whole\ndesign is \"large imagery, minimal text\", and a card with no picture is a\ngrey box in the middle of it. Enforced on publish rather than on save, so\na draft can be written before the photos arrive.",
-            "maxItems": 8,
-            "type": "array",
-            "items": {
-              "type": "string",
-              "format": "uri"
-            }
-          },
-          "wawuVerified": {
-            "type": "boolean"
-          },
-          "wawuPick": {
-            "type": "boolean"
-          },
-          "status": {
-            "enum": [
-              "live",
-              "draft",
-              "hidden"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "name",
-          "description",
-          "category",
-          "subcategory",
-          "priceNaira",
-          "stock",
-          "images"
         ]
       },
       "UpdateFulfilmentDto": {
@@ -26930,187 +27051,6 @@
           "planName",
           "planCode",
           "price"
-        ]
-      },
-      "ProductView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "slug": {
-            "type": "string"
-          },
-          "brand": {
-            "type": "string",
-            "nullable": true
-          },
-          "description": {
-            "type": "string"
-          },
-          "category": {
-            "type": "string",
-            "enum": [
-              "audio_music",
-              "video_film",
-              "lighting_studio",
-              "photography",
-              "computing",
-              "art_design",
-              "gaming_streaming",
-              "content_creation",
-              "live_events",
-              "professional",
-              "power_accessories"
-            ]
-          },
-          "subcategory": {
-            "type": "string"
-          },
-          "priceNaira": {
-            "type": "number"
-          },
-          "compareAtNaira": {
-            "type": "number",
-            "nullable": true
-          },
-          "inStock": {
-            "type": "boolean"
-          },
-          "lowStock": {
-            "type": "boolean"
-          },
-          "images": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "wawuVerified": {
-            "type": "boolean"
-          },
-          "wawuPick": {
-            "type": "boolean"
-          },
-          "ratingAvg": {
-            "type": "number",
-            "nullable": true
-          },
-          "ratingCount": {
-            "type": "number"
-          }
-        },
-        "required": [
-          "id",
-          "name",
-          "slug",
-          "brand",
-          "description",
-          "category",
-          "subcategory",
-          "priceNaira",
-          "compareAtNaira",
-          "inStock",
-          "lowStock",
-          "images",
-          "wawuVerified",
-          "wawuPick",
-          "ratingAvg",
-          "ratingCount"
-        ]
-      },
-      "CartItemView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "quantity": {
-            "type": "number"
-          },
-          "product": {
-            "$ref": "#/components/schemas/ProductView"
-          },
-          "lineTotalNaira": {
-            "type": "number"
-          }
-        },
-        "required": [
-          "id",
-          "quantity",
-          "product",
-          "lineTotalNaira"
-        ]
-      },
-      "CartView": {
-        "type": "object",
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/CartItemView"
-            }
-          },
-          "itemCount": {
-            "type": "number"
-          },
-          "subtotalNaira": {
-            "type": "number"
-          },
-          "deliveryNaira": {
-            "type": "number"
-          },
-          "totalNaira": {
-            "type": "number"
-          }
-        },
-        "required": [
-          "items",
-          "itemCount",
-          "subtotalNaira",
-          "deliveryNaira",
-          "totalNaira"
-        ]
-      },
-      "ShopCheckoutView": {
-        "type": "object",
-        "properties": {
-          "orderId": {
-            "type": "string"
-          },
-          "flutterwaveConfig": {
-            "type": "object",
-            "properties": {
-              "txRef": {
-                "type": "string"
-              },
-              "amount": {
-                "type": "number"
-              },
-              "currency": {
-                "type": "string",
-                "enum": [
-                  "NGN"
-                ]
-              },
-              "publicKey": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "txRef",
-              "amount",
-              "currency",
-              "publicKey"
-            ]
-          }
-        },
-        "required": [
-          "orderId",
-          "flutterwaveConfig"
         ]
       },
       "ShopOrderItemView": {

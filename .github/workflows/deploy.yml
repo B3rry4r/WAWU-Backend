@@ -137,12 +137,17 @@ jobs:
       - name: Smoke test the live service
         # A deploy that "succeeded" but serves 502 is not a deploy. This is the
         # check that turns the run red when the box is broken.
+        #
+        # It probes /api/hub/health (src/app.controller.ts): no guard, no
+        # database read, and it stays. It used to probe /api/hub/shop/products,
+        # which answers 410 since Shop was retired (R-2, OPS-08), so every deploy
+        # after that would have failed here. Only 200 counts: health has no auth
+        # to answer 401 with, so a 401 would mean something else answered.
         run: |
           for i in $(seq 1 15); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' https://${{ secrets.API_DOMAIN }}/api/hub/shop/products || true)
+            code=$(curl -s -o /dev/null -w '%{http_code}' https://${{ secrets.API_DOMAIN }}/api/hub/health || true)
             echo "attempt $i: HTTP $code"
-            # 200 = serving. 401 also proves the app is up and authenticating.
-            if [ "$code" = "200" ] || [ "$code" = "401" ]; then exit 0; fi
+            if [ "$code" = "200" ]; then exit 0; fi
             sleep 4
           done
           echo "Service did not answer after the deploy." >&2
