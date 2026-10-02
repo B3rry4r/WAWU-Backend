@@ -190,6 +190,15 @@ if [[ ! -f "$HUB_ENV" ]]; then
   env_set "$HUB_ENV" WAWU_ID_INTERNAL_SERVICE_KEY "$(env_get "$ID_ENV" INTERNAL_SERVICE_KEY)"
 fi
 
+# ---------------------------------------------------------------- identity hash key (KYC-01)
+# The BVN check stores only a keyed hash of the BVN and NIN. A local .env
+# without a key gets a random one, so the check works locally; an existing
+# key is never replaced (stored hashes would stop matching).
+if [[ -z "$(env_get "$HUB_ENV" IDENTITY_HASH_KEY)" ]]; then
+  say "Adding a random IDENTITY_HASH_KEY to $HUB_ENV"
+  env_set "$HUB_ENV" IDENTITY_HASH_KEY "$(node -p 'require("crypto").randomBytes(32).toString("hex")')"
+fi
+
 # ---------------------------------------------------------------- settings given on this run
 # Applied to files that already exist too, so fixing LOCAL_PG_URL (or a port)
 # after a failed run works without editing anything by hand.
