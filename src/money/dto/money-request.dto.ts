@@ -48,11 +48,16 @@ const BANK_CODE_PATTERN = /^[0-9]{3,6}$/;
 const NUBAN_PATTERN = /^[0-9]{10}$/;
 
 /**
- * The largest single amount any money route accepts: ₦10,000,000, the most
- * WAWU's Fintava merchant account moves in one transaction (limits.md). A
- * bound on blast radius; the person's own limit is the daily limit.
+ * The largest amount validation lets through: the largest integer a JSON
+ * number carries exactly. It is a correctness bound, not a money rule.
+ * The money rules are applied by the service, never here, so they answer
+ * with a reason (CONVENTIONS.md section 1):
+ * - a customer's own send is bounded by the daily limit;
+ * - anything through WAWU's merchant wallet (a payment, a hold, a payout) is
+ *   bounded by MERCHANT_MAX_PER_TXN_KOBO from config, and above it the answer
+ *   is `amount_out_of_range` with `maximumKobo` (Lead ruling, 2 Oct 2026).
  */
-export const MAX_AMOUNT_KOBO = 1_000_000_000;
+const MAX_EXACT_KOBO = Number.MAX_SAFE_INTEGER;
 
 /** A payment's target id as the owning feature returns it: a uuid, or a short slug such as a tick kind. */
 const TARGET_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -195,7 +200,7 @@ export class FeeQuoteQueryDto {
   @ApiProperty({ type: 'integer' })
   @IsInt()
   @Min(1)
-  @Max(MAX_AMOUNT_KOBO)
+  @Max(MAX_EXACT_KOBO)
   amountKobo!: number;
 }
 
@@ -208,7 +213,7 @@ export class WawuTransferDto {
   @ApiProperty({ type: 'integer' })
   @IsInt()
   @Min(1)
-  @Max(MAX_AMOUNT_KOBO)
+  @Max(MAX_EXACT_KOBO)
   amountKobo!: number;
 
   /** `totalKobo` from the fee quote the person saw. A different server total is `quote_changed`. */
@@ -245,7 +250,7 @@ export class BankTransferDto {
   @ApiProperty({ type: 'integer' })
   @IsInt()
   @Min(1)
-  @Max(MAX_AMOUNT_KOBO)
+  @Max(MAX_EXACT_KOBO)
   amountKobo!: number;
 
   /** `totalKobo` from the fee quote the person saw. A different server total is `quote_changed`. */
@@ -281,7 +286,7 @@ export class PaymentQuoteQueryDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  @Max(MAX_AMOUNT_KOBO)
+  @Max(MAX_EXACT_KOBO)
   amountKobo?: number;
 }
 
@@ -300,7 +305,7 @@ export class PaymentDto {
   @IsOptional()
   @IsInt()
   @Min(1)
-  @Max(MAX_AMOUNT_KOBO)
+  @Max(MAX_EXACT_KOBO)
   amountKobo?: number;
 
   /** `totalKobo` from the payment quote the person saw. A different server total is `quote_changed`. */
@@ -356,6 +361,15 @@ export class TransactionListQueryDto extends CursorQueryDto {
   @MinLength(2)
   @MaxLength(60)
   q?: string;
+
+  /**
+   * A grouped row's `group.key`: lists the movements it stands for, one per
+   * row, instead of the history. Opaque: send it back as given.
+   */
+  @IsOptional()
+  @IsString()
+  @Length(1, 200)
+  group?: string;
 
   /** Only rows from this month, YYYY-MM in Africa/Lagos time (W28 "Bills in September"). */
   @ApiPropertyOptional({ pattern: MONTH_PATTERN.source })

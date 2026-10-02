@@ -78,7 +78,7 @@ module AppModule mounts (importing a new module into `app.module.ts` is a
 - Every amount in a money route is a **JSON integer number of kobo** in a
   field whose name ends in `Kobo` (`amountKobo`, `totalKobo`,
   `providerFeeKobo`). ₦25,065.00 is `2506500`. Never a float, never a string,
-  never naira with decimals. Request DTOs declare these `type: integer`.
+  never naira with decimals.
 - Grounded in the backend as it is: where money is split it is already kobo
   integers (`CreditSpendEarning.hostShareKobo` and `platformShareKobo`;
   `splitKoboByBps` and `nairaToKobo` in `src/admin/finance/finance-streams.ts`,
@@ -92,10 +92,18 @@ module AppModule mounts (importing a new module into `app.module.ts` is a
   than 2 decimal places rather than rounding it; outbound it writes kobo as a
   2-decimal naira value built from integer division. Never `x * 100` on a
   float.
-- The largest single amount any money route accepts is `1000000000` kobo
-  (₦10,000,000, the most WAWU's Fintava merchant account moves in one
-  transaction, `limits.md`). It is a bound on blast radius; a person's real
-  ceiling is their daily limit.
+- **Caps are rules, not validation.** Request DTOs bound an amount only by
+  what a JSON number carries exactly. A customer's own send is bounded by the
+  daily limit (`daily_limit_exceeded`). Money that goes through WAWU's
+  merchant wallet (a payment, a hold and its release or refund, a payout from
+  WAWU) is bounded by `MERCHANT_MAX_PER_TXN_KOBO` from config (₦10,000,000,
+  Fintava's per-transaction cap on the merchant account, `limits.md`); above
+  it the answer is `400 amount_out_of_range` with `maximumKobo`, and the
+  amount is never split (Lead ruling 1, 2 Oct 2026, `WALLET.md`).
+- The contract says so too: every field and parameter whose name ends in
+  `Kobo` is `"type": "integer"` in `contract/openapi.json`, responses and
+  errors included (`scripts/enrich-contract.js` reads the name;
+  `money-contract.spec.ts` checks every one).
 - A balance is only ever Fintava's (`GET /money/wallet/balance`,
   `availableBalance`). No route sums ledger rows and calls the result a
   balance.
@@ -179,8 +187,8 @@ Every refusal is the envelope this backend already answers with
 | `pin_mismatch` | 400 | the two entries of a new PIN differ | |
 | `reset_code_invalid` | 400 | wrong or expired reset code | `triesLeft` |
 | `insufficient_funds` | 402 | balance below the total (MONEY-19, W13, H17) | `balanceKobo`, `totalKobo`, `shortfallKobo` |
-| `daily_limit_exceeded` | 403 | the send passes today's limit; stopped before money moves | `totalKobo`, `remainingTodayKobo` |
-| `amount_out_of_range` | 400 | below the minimum or above the maximum | `minimumKobo`, `maximumKobo` |
+| `daily_limit_exceeded` | 403 | the send or purchase passes today's limit; stopped before money moves | `totalKobo`, `remainingTodayKobo` |
+| `amount_out_of_range` | 400 | below the minimum, or above `MERCHANT_MAX_PER_TXN_KOBO` on money through WAWU's merchant wallet | `minimumKobo`, `maximumKobo` |
 | `quote_changed` | 409 | `expectedTotalKobo` differs from the server's total | `feeQuote` or `paymentQuote` |
 | `name_check_failed` | 422 | the bank did not confirm the account | |
 | `recipient_not_found` | 404 | no such WAWU user | |

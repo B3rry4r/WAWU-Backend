@@ -20459,7 +20459,7 @@
             "description": "What the recipient should get, in kobo.",
             "schema": {
               "minimum": 1,
-              "maximum": 1000000000,
+              "maximum": 9007199254740991,
               "type": "integer"
             }
           }
@@ -20891,7 +20891,7 @@
             "description": "Only for a tip, where the payer chooses the amount. Refused on every other kind.",
             "schema": {
               "minimum": 1,
-              "maximum": 1000000000,
+              "maximum": 9007199254740991,
               "type": "integer"
             }
           }
@@ -20953,7 +20953,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "What the pay sheet shows before the PIN (H14, H17): the price from the\nserver's own record of the item, Fintava's charge, the total, the balance\nand the shortfall. Nothing is reserved.",
+        "summary": "What the pay sheet shows before the PIN (H14, H17): the price from the\nserver's own record of the item, Fintava's charge, the total, the balance\nand the shortfall, and whether it fits today's limit. Nothing is\nreserved. A total above MERCHANT_MAX_PER_TXN_KOBO is amount_out_of_range.",
         "tags": [
           "MoneyPayment"
         ],
@@ -21029,7 +21029,7 @@
             }
           },
           "403": {
-            "description": "reason.code: pin_required, pin_incorrect",
+            "description": "reason.code: pin_required, pin_incorrect, daily_limit_exceeded",
             "content": {
               "application/json": {
                 "schema": {
@@ -21084,7 +21084,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "Pay from the wallet. Answers completed, or pending when Fintava has not\nconfirmed the debit yet (H18, E10): the app polls GET /money/payments/{id}.\nA held kind answers with its hold.",
+        "summary": "Pay from the wallet. Answers completed, or pending when Fintava has not\nconfirmed the debit yet (H18, E10): the app polls GET /money/payments/{id}.\nA held kind answers with its hold. The money goes through WAWU's\nmerchant wallet, so a total above MERCHANT_MAX_PER_TXN_KOBO (config) is\nrefused with amount_out_of_range and maximumKobo, never split; a total\npast today's limit is daily_limit_exceeded (Lead rulings, 2 Oct 2026).",
         "tags": [
           "MoneyPayment"
         ],
@@ -21368,6 +21368,17 @@
             "schema": {
               "minLength": 2,
               "maxLength": 60,
+              "type": "string"
+            }
+          },
+          {
+            "name": "group",
+            "required": false,
+            "in": "query",
+            "description": "A grouped row's `group.key`: lists the movements it stands for, one per\nrow, instead of the history. Opaque: send it back as given.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
               "type": "string"
             }
           },
@@ -24041,6 +24052,30 @@
             ],
             "type": "string"
           },
+          "balanceKobo": {
+            "type": "integer",
+            "description": "insufficient_funds: Fintava's available balance when the payment was refused."
+          },
+          "totalKobo": {
+            "type": "integer",
+            "description": "insufficient_funds, daily_limit_exceeded: the total the request needed (amount plus fees)."
+          },
+          "shortfallKobo": {
+            "type": "integer",
+            "description": "insufficient_funds: totalKobo minus balanceKobo, what to add before trying again."
+          },
+          "remainingTodayKobo": {
+            "type": "integer",
+            "description": "daily_limit_exceeded: what is left of today's limit."
+          },
+          "minimumKobo": {
+            "type": "integer",
+            "description": "amount_out_of_range: the smallest amount accepted."
+          },
+          "maximumKobo": {
+            "type": "integer",
+            "description": "amount_out_of_range: the largest amount accepted."
+          },
           "feeQuote": {
             "description": "quote_changed on a transfer: the quote as it stands now.",
             "allOf": [
@@ -24077,30 +24112,6 @@
           "lockedUntil": {
             "type": "string",
             "description": "pin_locked: when the lock ends, ISO 8601 UTC."
-          },
-          "balanceKobo": {
-            "type": "number",
-            "description": "insufficient_funds: Fintava's available balance when the payment was refused."
-          },
-          "totalKobo": {
-            "type": "number",
-            "description": "insufficient_funds, daily_limit_exceeded: the total the request needed (amount plus fees)."
-          },
-          "shortfallKobo": {
-            "type": "number",
-            "description": "insufficient_funds: totalKobo minus balanceKobo, what to add before trying again."
-          },
-          "remainingTodayKobo": {
-            "type": "number",
-            "description": "daily_limit_exceeded: what is left of today's limit."
-          },
-          "minimumKobo": {
-            "type": "number",
-            "description": "amount_out_of_range: the smallest amount accepted."
-          },
-          "maximumKobo": {
-            "type": "number",
-            "description": "amount_out_of_range: the largest amount accepted."
           },
           "retryAfterSeconds": {
             "type": "number",
@@ -24275,7 +24286,7 @@
             "type": "integer",
             "description": "What the recipient gets, in kobo.",
             "minimum": 1,
-            "maximum": 1000000000
+            "maximum": 9007199254740991
           },
           "expectedTotalKobo": {
             "type": "integer",
@@ -24313,7 +24324,7 @@
             "type": "integer",
             "description": "What the bank account gets, in kobo.",
             "minimum": 1,
-            "maximum": 1000000000
+            "maximum": 9007199254740991
           },
           "expectedTotalKobo": {
             "type": "integer",
@@ -24357,7 +24368,7 @@
             "type": "integer",
             "description": "Only for a tip. Every other price is the server's own record of the item.",
             "minimum": 1,
-            "maximum": 1000000000
+            "maximum": 9007199254740991
           },
           "expectedTotalKobo": {
             "type": "integer",
@@ -28308,13 +28319,13 @@
         "type": "object",
         "properties": {
           "grossKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "wawuShareKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "creatorShareKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "transactionCount": {
             "type": "number"
@@ -28358,13 +28369,13 @@
             }
           },
           "grossKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "wawuShareKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "creatorShareKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "transactionCount": {
             "type": "number"
@@ -28395,13 +28406,13 @@
             "type": "number"
           },
           "fundedGrossKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "hostShareKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "platformShareKobo": {
-            "type": "number"
+            "type": "integer"
           }
         },
         "required": [
@@ -28503,13 +28514,13 @@
             "nullable": true
           },
           "grossKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "wawuShareKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "creatorShareKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "status": {
             "type": "string",
@@ -31693,13 +31704,13 @@
         "type": "object",
         "properties": {
           "providerFeeKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "wawuFeeKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "totalFeeKobo": {
-            "type": "number"
+            "type": "integer"
           }
         },
         "required": [
@@ -31779,6 +31790,29 @@
           "title"
         ]
       },
+      "TransactionGroupView": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "count": {
+            "type": "number"
+          },
+          "firstAt": {
+            "type": "string"
+          },
+          "lastAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "count",
+          "firstAt",
+          "lastAt"
+        ]
+      },
       "TransactionView": {
         "type": "object",
         "properties": {
@@ -31815,13 +31849,13 @@
             ]
           },
           "amountKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "fee": {
             "$ref": "#/components/schemas/FeeBreakdown"
           },
           "totalKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "description": {
             "type": "string"
@@ -31857,6 +31891,14 @@
             "type": "string",
             "nullable": true
           },
+          "group": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TransactionGroupView"
+              }
+            ],
+            "nullable": true
+          },
           "createdAt": {
             "type": "string"
           }
@@ -31876,6 +31918,7 @@
           "reference",
           "transferId",
           "paymentId",
+          "group",
           "createdAt"
         ]
       },
@@ -31905,10 +31948,10 @@
             "type": "string"
           },
           "inKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "outKobo": {
-            "type": "number"
+            "type": "integer"
           }
         },
         "required": [
@@ -31983,24 +32026,31 @@
             "nullable": true
           },
           "priceKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "fee": {
             "$ref": "#/components/schemas/FeeBreakdown"
           },
           "totalKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "balanceKobo": {
-            "type": "number",
+            "type": "integer",
             "nullable": true
           },
           "shortfallKobo": {
-            "type": "number",
+            "type": "integer",
             "nullable": true
           },
           "willBeHeld": {
             "type": "boolean"
+          },
+          "withinDailyLimit": {
+            "type": "boolean"
+          },
+          "remainingTodayKobo": {
+            "type": "integer",
+            "nullable": true
           }
         },
         "required": [
@@ -32013,7 +32063,9 @@
           "totalKobo",
           "balanceKobo",
           "shortfallKobo",
-          "willBeHeld"
+          "willBeHeld",
+          "withinDailyLimit",
+          "remainingTodayKobo"
         ]
       },
       "HoldView": {
@@ -32048,7 +32100,7 @@
             ]
           },
           "amountKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "releaseCondition": {
             "type": "string",
@@ -32077,7 +32129,7 @@
             "nullable": true
           },
           "refundedKobo": {
-            "type": "number",
+            "type": "integer",
             "nullable": true
           }
         },
@@ -32131,13 +32183,13 @@
             ]
           },
           "priceKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "fee": {
             "$ref": "#/components/schemas/FeeBreakdown"
           },
           "totalKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "reference": {
             "type": "string"
@@ -32376,19 +32428,19 @@
             ]
           },
           "amountKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "fee": {
             "$ref": "#/components/schemas/FeeBreakdown"
           },
           "totalKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "withinDailyLimit": {
             "type": "boolean"
           },
           "remainingTodayKobo": {
-            "type": "number",
+            "type": "integer",
             "nullable": true
           }
         },
@@ -32423,10 +32475,10 @@
         "type": "object",
         "properties": {
           "returnedKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "keptKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "reversedAt": {
             "type": "string"
@@ -32461,13 +32513,13 @@
             ]
           },
           "amountKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "fee": {
             "$ref": "#/components/schemas/FeeBreakdown"
           },
           "totalKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "note": {
             "type": "string",
@@ -32581,13 +32633,13 @@
             "nullable": true
           },
           "dailyLimitKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "usedTodayKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "remainingTodayKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "resetsAt": {
             "type": "string"
@@ -32698,7 +32750,7 @@
         "type": "object",
         "properties": {
           "availableKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "asOf": {
             "type": "string"

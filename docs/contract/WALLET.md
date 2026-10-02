@@ -47,7 +47,7 @@ caller from the token.
 | `GET /money/payments/{id}` | `PaymentView` | | MONEY-19 |
 | `GET /money/holds?role=&cursor=&limit=` | `HoldPage` | | MONEY-18 |
 | `GET /money/holds/{id}` | `HoldView` | | MONEY-18 |
-| `GET /money/transactions?filter=&q=&month=&cursor=&limit=` | `TransactionPage` | | MONEY-15 |
+| `GET /money/transactions?filter=&q=&month=&group=&cursor=&limit=` | `TransactionPage` | | MONEY-15 |
 | `GET /money/transactions/summary?month=` | `MonthlySummaryView` | | MONEY-15 |
 | `GET /money/transactions/{id}` | `TransactionView` | | MONEY-15 |
 
@@ -56,6 +56,47 @@ has no route of its own. Releasing or refunding a hold is never a client
 request: the owning feature does it (MONEY-18), so holds are read-only here.
 Every refusal each route can give is listed on its operation in the contract,
 by status, with the `reason.code` values (CONVENTIONS.md section 3).
+
+### Lead rulings, 2 Oct 2026 (round 2 of MONEY-04)
+
+1. **The ₦10,000,000 cap is the merchant wallet's, and only the merchant
+   wallet's.** It is Fintava's per-transaction cap on WAWU's merchant account
+   (`limits.md`). It applies only to money that goes through WAWU's merchant
+   wallet: wallet payments (`POST /money/payments`, quoted by
+   `GET /money/payments/quote`), holds and their release or refund
+   (MONEY-18), and payouts from WAWU (WALLET-17, school payouts). It does not
+   apply to a customer's own send (`/money/transfers/wawu`,
+   `/money/transfers/bank`, a withdrawal); those are bounded by the daily
+   limit. The figure is read from config, `MERCHANT_MAX_PER_TXN_KOBO`
+   (`.env.example`, `1000000000`), never a constant. Above it the answer is
+   `400 amount_out_of_range` with `maximumKobo`, not a plain validation 400:
+   request DTOs bound amounts only by what a JSON number carries exactly.
+   Refuse, never split: splitting is not built.
+2. **A purchase counts toward the daily limit, like a send.** It debits the
+   buyer's wallet the same way. `GET /money/payments/quote` carries
+   `withinDailyLimit` and `remainingTodayKobo`, and `POST /money/payments`
+   declares `403 daily_limit_exceeded`, exactly as the transfers do. Whether
+   Fintava's tier limit counts wallet to wallet purchases is Fintava's to
+   confirm (section 4, item 4; question 16 in the mobile repo's
+   `docs/fintava/naira-api.md`).
+3. **History groups what W26 draws as one row.** The canvas decides the UI,
+   so the contract serves W26's "Unlock · Lighting night shoots · 3 buyers ·
+   +₦7,500.00". The rule, following W26 (rows grouped under a day label):
+   - unlock earnings (`category: earning`, link kind `content_unlock`) of the
+     **same content piece** on the **same Africa/Lagos day** become one row
+     when there are two or more;
+   - that row's `amountKobo`, `fee` and `totalKobo` are the sums, its
+     `createdAt` is the latest unlock (`group.lastAt`), its `link` is the
+     piece, its `description` carries the count, and `group` is
+     `{ key, count, firstAt, lastAt }`;
+   - `GET /money/transactions?group=<key>` lists the unlocks in it, one per
+     row (cursor-paged like the history);
+   - nothing else groups: tips, sends, bills, refunds and every money-out row
+     stay one row per movement, and `group` is null on them;
+   - filters and search see the grouped row (an unlock group is `money_in`
+     and `content`); the monthly summary sums movements, so grouping never
+     changes it.
+   MONEY-15 builds it.
 
 ### Pay from wallet: what `targetId` is
 
@@ -86,12 +127,21 @@ in `components.schemas`, so the app gets one type per shape:
 `BeneficiaryView`, `PayoutAccountView`, `FeeBreakdown`, `FeeQuoteView`,
 `TransferView`, `TransferTimelineEntry`, `TransferReversalView`,
 `PaymentQuoteView`, `PaymentView`, `HoldView`, `HoldPage`, `TransactionView`,
-`TransactionCounterpartyView`, `TransactionLinkView`, `TransactionPage`,
+`TransactionCounterpartyView`, `TransactionLinkView`, `TransactionGroupView`,
+`TransactionPage`,
 `MonthlySummaryView`, and for errors `MoneyErrorEnvelope` and
 `MoneyErrorReason`. Request bodies are named too (`SetPinDto`,
 `WawuTransferDto`, `BankTransferDto`, `PaymentDto` and the rest).
 `src/money/tests/money-contract.spec.ts` fails if a money success body
 becomes an inline object.
+
+Every field ending in `Kobo` is `"type": "integer"` (round 2). The rule goes
+by name, so it also reaches four served admin finance schemas
+(`AdminFinanceMoneyView`, `AdminFinanceStreamTotalsView`,
+`AdminFinanceCreditsAttributionView`, `AdminFinanceTransactionView`: 12 fields
+that were `number`). Those values are already whole kobo on the wire, and
+openapi-typescript generates `number` for both, so no client type and no
+response changes; the protected route suite was run again on it.
 
 G-1 for the routes that existed before this task is not done here (section 5).
 
@@ -144,6 +194,7 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 | W19 Withdraw on its way | timeline with a time per step | `TransferView.timeline` (`requested`, `sent_to_bank`, `completed`) |
 | | fee breakdown, total paid, reference | `fee`, `totalKobo`, `reference` |
 | W26 History | rows across every kind of movement, cursor pages | `GET /money/transactions` → `TransactionPage` |
+| | one row for several unlocks of the same piece ("Unlock · Lighting night shoots · 3 buyers · +₦7,500.00") | `TransactionView.group` (`count`, `key`); `GET /money/transactions?group=<key>` lists its unlocks (Lead ruling 3, section 1) |
 | | per row: counterparty, avatar, description, signed amount, time | `TransactionView.counterparty`, `description`, `direction` + `totalKobo`, `createdAt` |
 | | filter chips; search | `filter` (`all`, `money_in`, `money_out`, `bills`, `content`); `q` |
 | | In and Out this month | `GET /money/transactions/summary?month=` → `inKobo`, `outKobo` |
@@ -171,6 +222,7 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 | | Create your transaction PIN | `WalletView.pin.isSet` |
 | A9 Create PIN, A10 Confirm PIN | set; a mismatch | `POST /money/pin`; `400 pin_mismatch` (no state drawn; the app shows the message) |
 | H14 Unlock sheet (MONEY-03), W10 "Pay from wallet" | price, Fintava's charge, total, balance | `GET /money/payments/quote` → `priceKobo`, `fee`, `totalKobo`, `balanceKobo` |
+| | over today's limit, stopped before the PIN | `PaymentQuoteView.withinDailyLimit`, `remainingTodayKobo`; on pay `403 daily_limit_exceeded` (Lead ruling 2) |
 | H17 Not enough in wallet | the shortfall including the charge | `PaymentQuoteView.shortfallKobo`; on pay `402 insufficient_funds.shortfallKobo` |
 | H15 PIN (MONEY-02) | PIN on the payment; tries; lock | `X-Transaction-Pin` on `POST /money/payments`; `pin_incorrect`, `pin_locked` |
 | H18 Couldn't confirm, E10 | still confirming, then paid or reversed | `PaymentView.status: pending`; poll `GET /money/payments/{id}` |
@@ -214,7 +266,8 @@ Listed, not resolved. Each names what the canvas draws, what Fintava does
    R-19 moves the price into WAWU's merchant wallet. So the payer's balance
    drops at once (nothing shows as "reserved"), held money counts in WAWU's
    balance, and WAWU's ₦10,000,000 per-transaction cap (`limits.md`) bounds a
-   single hold or school-fee payout. The contract shows holds as their own
+   single payment, hold or school-fee payout (refused above it, never split:
+   Lead ruling 1). The contract shows holds as their own
    read-only list (`HoldView`, `GET /money/holds`), never inside the balance.
 4. **Tiers and limits.** The canvas draws "Tier 1 · Limit ₦300,000 balance"
    (A8) and "Tier 2 account · ₦5,000,000 daily · BVN + NIN verified" (W35),
@@ -226,7 +279,11 @@ Listed, not resolved. Each names what the canvas draws, what Fintava does
    (`TIER_3`, `sandbox/22-`); which tier a new customer gets, and whether the
    API reports it, is unknown. "Open your wallet" already collects everything
    Tier 3 asks for. The contract has `WalletView.limits` (null hides the row)
-   and `daily_limit_exceeded`, figures from config.
+   and `daily_limit_exceeded`, figures from config. **Purchases:** Lead ruling 2
+   counts a wallet purchase toward the daily limit like a send, but Fintava's
+   policy only speaks of transaction limits; whether a wallet to wallet
+   purchase into WAWU's merchant wallet counts toward the customer's tier
+   limit is for Fintava to confirm (question 16).
 5. **The bank is Loma Bank, not "Fintava MFB".** The canvas prints "Fintava
    MFB" (W1, W5, W15, W35, A8, W41) and a banner "Licensed by the CBN.
    Deposits insured by NDIC". Fintava's records say "Loma Bank", its bank list
@@ -306,18 +363,21 @@ Listed, not resolved. Each names what the canvas draws, what Fintava does
   directly are inlined (one legal request shape 14 times); and the
   `Paginated<T>` shape is inlined 12 times (on the five optional-paging lists
   as a second `oneOf` branch with `items`, although the wire carries an array
-  and a `pagination` block).
+  and a `pagination` block). Fixing them retypes protected routes' contract
+  entries, so it is a separate task with a V3 run, not part of the wallet
+  contract.
 - **Nullable named fields on served routes read as never null.** The
   enricher writes `Named | null` as `{ $ref, nullable: true }`; OpenAPI 3.0
   ignores a `$ref`'s siblings, so openapi-typescript generates plain `Named`.
   The wallet contract uses `{ allOf: [{ $ref }], nullable: true }`
   (`scripts/enrich-contract.js`, limited to `src/money/`), which keeps the
-  null. Eight served schemas still use the old form and so tell clients a
+  null. Eleven served fields still use the old form and so tell clients a
   nullable field is never null: `BlockedAccount.blockedUser`,
   `DirectMessage.otherParty`, `ServiceApplicationOpsDetailView.submission`,
+  `AdminFinanceTransactionView.creator`, `AdminFinanceTransactionView.buyer`,
+  `AdminFinanceWalletView.payoutSubaccount`,
   `AdminFinanceWalletDetailView.payoutSubaccount`, `Comment.author`,
   `CommunityMessage.sender`, `IntakeView.brief`, `IntakeDetailView.brief`.
   Correcting them changes generated client types for live routes, so it goes
-  with the G-1 task above. Fixing them retypes protected routes'
-  contract entries, so it is a separate task with a V3 run, not part of the
-  wallet contract.
+  with the G-1 task above. (Round 2: the first count said eight and missed
+  the three `AdminFinance*` fields.)

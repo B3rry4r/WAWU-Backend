@@ -322,6 +322,15 @@ export interface PaymentQuoteView {
   shortfallKobo: number | null;
   /** True when this kind is held until something happens (paid DM, ticket, bill). */
   willBeHeld: boolean;
+  /**
+   * False when this payment would pass today's limit; it is then stopped
+   * before the PIN, as a send is (Lead ruling, 2 Oct 2026: a purchase debits
+   * the buyer's wallet like a send). Whether Fintava counts purchases toward
+   * the tier limit is still Fintava's to confirm.
+   */
+  withinDailyLimit: boolean;
+  /** What is left of today's limit; null when no limit is known. */
+  remainingTodayKobo: number | null;
 }
 
 export type HoldStatus = 'held' | 'released' | 'refunded';
@@ -418,8 +427,25 @@ export interface TransactionLinkView {
 }
 
 /**
+ * Several movements shown as one history row (W26: "Unlock · Lighting night
+ * shoots · 3 buyers · +₦7,500.00"). Only unlock earnings of the same content
+ * piece on the same Africa/Lagos day group; docs/contract/WALLET.md section 1
+ * has the rule (Lead ruling, 2 Oct 2026; MONEY-15 builds it).
+ */
+export interface TransactionGroupView {
+  /** Opaque. GET /money/transactions?group=<key> lists the movements in it, one per row. */
+  key: string;
+  /** How many movements the row stands for (W26's "3 buyers"). */
+  count: number;
+  /** The earliest and the latest movement in the group. The row's createdAt is lastAt. */
+  firstAt: string;
+  lastAt: string;
+}
+
+/**
  * One row of the wallet's history, from our ledger mirrored from Fintava
- * (MONEY-10). A row is never added up into a balance.
+ * (MONEY-10). A row is never added up into a balance. A grouped row's
+ * amounts are the sums of its movements and its `group` is set.
  */
 export interface TransactionView {
   id: string;
@@ -440,6 +466,8 @@ export interface TransactionView {
   /** Set when the row is a transfer or a payment, to open its own receipt. */
   transferId: string | null;
   paymentId: string | null;
+  /** Set when the row stands for several movements (W26); null on an ordinary row. */
+  group: TransactionGroupView | null;
   createdAt: string;
 }
 

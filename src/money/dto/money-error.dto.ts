@@ -38,21 +38,27 @@ export class MoneyErrorReason {
   lockedUntil?: string;
 
   /** insufficient_funds: Fintava's available balance when the payment was refused. */
+  @ApiPropertyOptional({ type: 'integer' })
   balanceKobo?: number;
 
   /** insufficient_funds, daily_limit_exceeded: the total the request needed (amount plus fees). */
+  @ApiPropertyOptional({ type: 'integer' })
   totalKobo?: number;
 
   /** insufficient_funds: totalKobo minus balanceKobo, what to add before trying again. */
+  @ApiPropertyOptional({ type: 'integer' })
   shortfallKobo?: number;
 
   /** daily_limit_exceeded: what is left of today's limit. */
+  @ApiPropertyOptional({ type: 'integer' })
   remainingTodayKobo?: number;
 
   /** amount_out_of_range: the smallest amount accepted. */
+  @ApiPropertyOptional({ type: 'integer' })
   minimumKobo?: number;
 
   /** amount_out_of_range: the largest amount accepted. */
+  @ApiPropertyOptional({ type: 'integer' })
   maximumKobo?: number;
 
   /** quote_changed on a transfer: the quote as it stands now. */

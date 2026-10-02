@@ -208,6 +208,42 @@ describe('money contract (MONEY-04)', () => {
       }
     });
 
+    it('types every field and parameter whose name ends in Kobo as an integer', () => {
+      const wrong: string[] = [];
+      let seen = 0;
+      const walk = (node: unknown, where: string): void => {
+        if (Array.isArray(node))
+          return node.forEach((n, i) => walk(n, `${where}/${i}`));
+        if (!node || typeof node !== 'object') return;
+        const obj = node as Record<string, unknown>;
+        if (obj.properties && typeof obj.properties === 'object') {
+          for (const [name, prop] of Object.entries(
+            obj.properties as Record<string, { type?: string }>,
+          )) {
+            if (!name.endsWith('Kobo')) continue;
+            seen++;
+            if (prop.type !== 'integer')
+              wrong.push(`${where}/${name}: ${String(prop.type)}`);
+          }
+        }
+        if (
+          typeof obj.name === 'string' &&
+          obj.name.endsWith('Kobo') &&
+          'in' in obj
+        ) {
+          seen++;
+          const type = (obj.schema as { type?: string } | undefined)?.type;
+          if (type !== 'integer')
+            wrong.push(`${where} parameter ${obj.name}: ${String(type)}`);
+        }
+        for (const [key, value] of Object.entries(obj))
+          walk(value, `${where}/${key}`);
+      };
+      walk(spec, '');
+      expect(seen).toBeGreaterThan(0);
+      expect(wrong).toEqual([]);
+    });
+
     it('never puts a PIN in a URL', () => {
       for (const { route, op } of moneyOps) {
         const inUrl = (

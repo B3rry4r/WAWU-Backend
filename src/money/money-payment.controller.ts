@@ -49,7 +49,8 @@ export class MoneyPaymentController {
   /**
    * What the pay sheet shows before the PIN (H14, H17): the price from the
    * server's own record of the item, Fintava's charge, the total, the balance
-   * and the shortfall. Nothing is reserved.
+   * and the shortfall, and whether it fits today's limit. Nothing is
+   * reserved. A total above MERCHANT_MAX_PER_TXN_KOBO is amount_out_of_range.
    */
   @Get('payments/quote')
   @BuiltBy('MONEY-17')
@@ -66,13 +67,21 @@ export class MoneyPaymentController {
   /**
    * Pay from the wallet. Answers completed, or pending when Fintava has not
    * confirmed the debit yet (H18, E10): the app polls GET /money/payments/{id}.
-   * A held kind answers with its hold.
+   * A held kind answers with its hold. The money goes through WAWU's
+   * merchant wallet, so a total above MERCHANT_MAX_PER_TXN_KOBO (config) is
+   * refused with amount_out_of_range and maximumKobo, never split; a total
+   * past today's limit is daily_limit_exceeded (Lead rulings, 2 Oct 2026).
    */
   @Post('payments')
   @BuiltBy('MONEY-17')
   @IdempotencyKeyHeader()
   @TransactionPinHeader()
-  @MoneyErrors(...DEBIT_GATE_ERRORS, 'target_not_found', 'target_not_payable')
+  @MoneyErrors(
+    ...DEBIT_GATE_ERRORS,
+    'daily_limit_exceeded',
+    'target_not_found',
+    'target_not_payable',
+  )
   pay(@Body() dto: PaymentDto): Promise<PaymentView> {
     return declaredOnly('MONEY-17', dto);
   }

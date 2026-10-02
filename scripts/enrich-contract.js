@@ -284,6 +284,7 @@ function buildObject(type, depth) {
     let schema = toSchema(propType, depth + 1);
     if (schema === null) continue; // pure undefined/void property
     if (declaredIn(type, NULLABLE_REF_AS_ALLOF_DIRS)) schema = nullableRefAsAllOf(schema);
+    schema = koboAsInteger(prop.getName(), schema);
     properties[prop.getName()] = schema;
     const optional = prop.flags & ts.SymbolFlags.Optional;
     if (!optional) required.push(prop.getName());
@@ -303,7 +304,7 @@ function buildObject(type, depth) {
  *
  * Only for types declared under these folders (task MONEY-04's wallet
  * contract), so no schema a served route already publishes changes shape in
- * the contract. The eight served schemas still written the old way are listed
+ * the contract. The eleven served fields still written the old way are listed
  * in docs/contract/WALLET.md, section 5.
  */
 const NULLABLE_REF_AS_ALLOF_DIRS = [path.join(ROOT, 'src', 'money') + path.sep];
@@ -320,6 +321,18 @@ function nullableRefAsAllOf(schema) {
   if (!schema || !schema.$ref || !schema.nullable) return schema;
   const { $ref, nullable, ...rest } = schema;
   return { ...rest, allOf: [{ $ref }], nullable };
+}
+
+/**
+ * A field whose name ends in `Kobo` is an integer number of kobo, everywhere
+ * (docs/contract/CONVENTIONS.md section 1), but TypeScript has one `number`
+ * and the checker cannot say which. The name is the contract, so the schema
+ * says `integer`. The wire is unchanged, and openapi-typescript generates
+ * `number` for both, so no generated client type changes.
+ */
+function koboAsInteger(name, schema) {
+  if (!name.endsWith('Kobo') || !schema || schema.type !== 'number') return schema;
+  return { ...schema, type: 'integer' };
 }
 
 /** Promise<T> -> T, then Paginated<T>/PaginatedListResponse<T> -> T[]. */
