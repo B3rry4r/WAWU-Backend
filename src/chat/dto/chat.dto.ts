@@ -13,6 +13,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { CHAT_FOLDER_CONTENT_TYPES, CHAT_LIMITS } from '../chat-limits';
+import { MAX_UPLOAD_BYTES } from '../../storage/dto/presign-upload.dto';
 
 /** POST /chats: open the chat with one person, or get the one that exists. */
 export class OpenChatDto {
@@ -100,9 +101,13 @@ export class ChatUploadDto {
   @IsIn(CHAT_ATTACHMENT_TYPES)
   contentType: string;
 
-  /** Exact size in bytes; the upload link is signed for this length. */
+  /**
+   * Exact size in bytes; the upload link is signed for this length. Up to
+   * 512 MB, the limit every upload already has (MAX_UPLOAD_BYTES).
+   */
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(MAX_UPLOAD_BYTES)
   contentLength: number;
 }

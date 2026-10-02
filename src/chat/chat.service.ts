@@ -63,6 +63,7 @@ interface ReadMarks {
   mine: Date | null;
   mineMessageId: string | null;
   other: Date | null;
+  otherMessageId: string | null;
 }
 
 /** A cursor is the last row's time and id, base64url so the app treats it as opaque. */
@@ -485,7 +486,16 @@ export class ChatService {
       where: {
         conversationId: chatId,
         wawuUserId: me,
-        OR: [{ lastReadAt: null }, { lastReadAt: { lt: message.createdAt } }],
+        // Messages are ordered by (createdAt, id), so two sent in the same
+        // millisecond are told apart by id; the mark follows that order.
+        OR: [
+          { lastReadAt: null },
+          { lastReadAt: { lt: message.createdAt } },
+          {
+            lastReadAt: message.createdAt,
+            lastReadMessageId: { lt: message.id },
+          },
+        ],
       },
       data: { lastReadAt: message.createdAt, lastReadMessageId: message.id },
     });
@@ -500,7 +510,12 @@ export class ChatService {
     });
     const out = new Map<string, ReadMarks>();
     for (const id of chatIds) {
-      out.set(id, { mine: null, mineMessageId: null, other: null });
+      out.set(id, {
+        mine: null,
+        mineMessageId: null,
+        other: null,
+        otherMessageId: null,
+      });
     }
     for (const r of rows) {
       const m = out.get(r.conversationId)!;
@@ -509,6 +524,7 @@ export class ChatService {
         m.mineMessageId = r.lastReadMessageId;
       } else {
         m.other = r.lastReadAt;
+        m.otherMessageId = r.lastReadMessageId;
       }
     }
     return out;
@@ -521,12 +537,22 @@ export class ChatService {
   ): Promise<Map<string, number>> {
     const counts = await Promise.all(
       chatIds.map(async (id) => {
-        const mine = marks.get(id)?.mine ?? null;
+        const m = marks.get(id);
         const n = await this.prisma.chatMessage.count({
           where: {
             conversationId: id,
             senderWawuId: { not: me },
-            ...(mine ? { createdAt: { gt: mine } } : {}),
+            ...(m?.mine
+              ? {
+                  OR: [
+                    { createdAt: { gt: m.mine } },
+                    {
+                      createdAt: m.mine,
+                      id: { gt: m.mineMessageId ?? '' },
+                    },
+                  ],
+                }
+              : {}),
           },
         });
         return [id, n] as const;
@@ -647,6 +673,7 @@ export class ChatService {
   ): Promise<ChatMessage> {
     const mine = row.senderWawuId === me;
     const otherRead = marks?.other ?? null;
+    const otherReadId = marks?.otherMessageId ?? '';
     return {
       id: row.id,
       chatId: row.conversationId,
@@ -666,7 +693,10 @@ export class ChatService {
       clientMessageId: mine ? row.clientMessageId : null,
       createdAt: row.createdAt.toISOString(),
       readState: mine
-        ? otherRead && otherRead.getTime() >= row.createdAt.getTime()
+        ? otherRead &&
+          (otherRead.getTime() > row.createdAt.getTime() ||
+            (otherRead.getTime() === row.createdAt.getTime() &&
+              otherReadId >= row.id))
           ? 'read'
           : 'sent'
         : null,

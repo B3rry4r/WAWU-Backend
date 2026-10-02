@@ -3082,6 +3082,33 @@ model TransactionPin {
   updatedAt   DateTime  @updatedAt
 }
 
+/// ─────────────────────────────────────────────────────────────────────────
+/// THE NAIRA WALLET AT FINTAVA (table added by task MONEY-11)
+///
+/// WAWU's pointer to a person's account at Fintava (Loma Bank's licence,
+/// R-1): which Fintava wallet is theirs. It is NOT the balance and holds no
+/// money figure at all: the balance is read from Fintava on every request
+/// (GET /money/wallet/balance, MONEY-11) and never stored or summed here.
+///
+/// No row means no wallet yet (R-6): the money routes answer
+/// `409 wallet_not_open` and the app leads to Open your wallet. MONEY-12
+/// writes the row when Fintava's `POST /create/customer` answers, with the
+/// three ids it returns (mobile repo `docs/fintava/naira-api.md`,
+/// "Identifiers": they are not interchangeable), and adds what it needs for
+/// the opening state. One wallet per person, one person per wallet.
+/// ─────────────────────────────────────────────────────────────────────────
+model FintavaWallet {
+  wawuUserId    String   @id
+  /// `userInfo.id`: history (`/txn?customerId=`) and the bank-send `sourceId`.
+  customerId    String   @unique
+  /// `wallet.id`: the balance, freeze and unfreeze.
+  walletId      String   @unique
+  /// The NUBAN at Loma Bank: wallet-to-wallet sends and name checks.
+  accountNumber String   @unique
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 /// FREE CHAT BETWEEN TWO USERS (task INBOX-06, DECISIONS R-13)
 ///

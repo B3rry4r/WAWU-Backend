@@ -29,6 +29,7 @@ import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
 import { BlockedAccountModule } from '../../blocked-account/blocked-account.module';
 import { ChatModule } from '../chat.module';
 import { CHAT_LIMITS } from '../chat-limits';
+import { MAX_UPLOAD_BYTES } from '../../storage/dto/presign-upload.dto';
 import type {
   ChatMessage,
   ChatMessagePage,
@@ -519,6 +520,22 @@ describe('Free chat (contract, INBOX-06)', () => {
       expect([200, 503]).toContain(ok.status);
     });
 
+    it('upload links: a photo or video keeps the 512 MB limit every upload has', async () => {
+      for (const contentLength of [MAX_UPLOAD_BYTES + 1, 600 * 1024 * 1024]) {
+        await as(ada)
+          .post(`/chats/${chatId}/attachments`, {
+            contentType: 'video/mp4',
+            contentLength,
+          })
+          .expect(400);
+      }
+      const atLimit = await as(ada).post(`/chats/${chatId}/attachments`, {
+        contentType: 'video/mp4',
+        contentLength: MAX_UPLOAD_BYTES,
+      });
+      expect([200, 503]).toContain(atLimit.status);
+    });
+
     it('the public upload route still refuses the chat folders', async () => {
       await as(ada)
         .post('/uploads/presign', {
@@ -554,6 +571,53 @@ describe('Free chat (contract, INBOX-06)', () => {
       await as(ada).get(`/chats/${chatId}/messages?cursor=bm9wZQ`).expect(400);
       await as(ada).get(`/chats/${chatId}/messages?limit=0`).expect(400);
       await as(ada).get(`/chats/${chatId}/messages?limit=101`).expect(400);
+    });
+  });
+
+  describe('two messages in the same millisecond', () => {
+    // Read marks follow the list order, (createdAt, id); a mark that compared
+    // times alone would call both read, or neither unread, when only one was.
+    it('reading up to the first of two same-time messages leaves the second unread and "sent"', async () => {
+      const opened = await as(ada)
+        .post('/chats', { wawuId: dayo.sub })
+        .expect(200);
+      const dayoChat = chat(opened).id;
+      const at = new Date();
+      const [low, high] = [randomUUID(), randomUUID()].sort();
+      await prisma.chatMessage.createMany({
+        data: [low, high].map((id) => ({
+          id,
+          conversationId: dayoChat,
+          senderWawuId: ada.sub,
+          kind: 'text',
+          text: `same time ${id.slice(0, 4)}`,
+          createdAt: at,
+        })),
+      });
+
+      const before = await as(dayo).get(`/chats/${dayoChat}`).expect(200);
+      expect(chat(before).unreadCount).toBe(2);
+
+      const mark = await as(dayo)
+        .post(`/chats/${dayoChat}/read`, { messageId: low })
+        .expect(200);
+      expect(readMark(mark)).toMatchObject({
+        lastReadMessageId: low,
+        unreadCount: 1,
+      });
+
+      const page = await as(ada).get(`/chats/${dayoChat}/messages`).expect(200);
+      const state = new Map(
+        messages(page).items.map((m) => [m.id, m.readState]),
+      );
+      expect(state.get(low)).toBe('read');
+      expect(state.get(high)).toBe('sent');
+
+      const all = await as(dayo).post(`/chats/${dayoChat}/read`).expect(200);
+      expect(readMark(all)).toMatchObject({
+        lastReadMessageId: high,
+        unreadCount: 0,
+      });
     });
   });
 
