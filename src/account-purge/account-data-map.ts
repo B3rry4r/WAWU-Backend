@@ -79,6 +79,8 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'ProfileExperience', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'CourseEnrollment', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CommunityMembership', column: 'userWawuId', disposition: 'OWNED' },
+  // How far this person has read in each community (INBOX-01).
+  { model: 'CommunityReadMarker', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'Notification', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'NotificationSettings', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'PrivacySettings', column: 'userWawuId', disposition: 'OWNED' },

@@ -285,6 +285,10 @@ describe('Community join requests (contract)', () => {
       await prisma.creditsState.deleteMany({
         where: { userWawuId: { in: ownedSubs } },
       });
+      // Approving and declining notify the requester (INBOX-01).
+      await prisma.notification.deleteMany({
+        where: { userWawuId: { in: ownedSubs } },
+      });
       await prisma.creatorState.deleteMany({
         where: { wawuUserId: { in: ownedSubs } },
       });
