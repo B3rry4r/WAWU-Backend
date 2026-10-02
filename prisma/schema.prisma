@@ -3053,3 +3053,31 @@ model WalletWithdrawal {
 
   @@index([wawuUserId, createdAt])
 }
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// THE TRANSACTION PIN (task MONEY-09)
+///
+/// The four digits every movement of money asks for (W11, W36). Fintava has
+/// no wallet PIN, so this one is WAWU's: it guards WAWU's API, not the account
+/// at the bank. One row per person, created when they set their first PIN, so
+/// everyone who existed before this table has no PIN (no row) until they set
+/// one. docs/contract/CONVENTIONS.md section 5 is the contract.
+/// ─────────────────────────────────────────────────────────────────────────
+model TransactionPin {
+  wawuUserId  String    @id
+  /// argon2id, encoded with its own random salt (a fresh one on every set or
+  /// change, so no two people share one). The PIN itself is never stored,
+  /// logged or returned.
+  pinHash     String
+  /// Wrong tries in a row. A try is counted before the hash is compared, so
+  /// tries sent at the same moment cannot get past the limit together. Back
+  /// to 0 on a right PIN, a new PIN, or once a lock has ended.
+  failedTries Int       @default(0)
+  /// Set when the last allowed try was wrong; null when not locked. A lock
+  /// that has passed is treated as no lock (and cleared on the next try).
+  lockedUntil DateTime?
+  /// When the PIN was set or last changed (W35 "last changed").
+  setAt       DateTime  @default(now())
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}

@@ -19392,6 +19392,276 @@
         ]
       }
     },
+    "/api/hub/money/pin": {
+      "get": {
+        "operationId": "MoneyPinController_state",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PinStateView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Is a PIN set, when it last changed, tries left, and the lock if any.",
+        "tags": [
+          "MoneyPin"
+        ],
+        "x-wawu-built-by": "MONEY-09"
+      },
+      "post": {
+        "operationId": "MoneyPinController_set",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPinDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PinStateView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: pin_mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, pin_already_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Set the first PIN (A9, A10, W36). Both entries in one request; a difference is pin_mismatch.",
+        "tags": [
+          "MoneyPin"
+        ],
+        "x-wawu-built-by": "MONEY-09"
+      },
+      "put": {
+        "operationId": "MoneyPinController_change",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN. Only ever in this header: never in a URL, a body or a log.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePinDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PinStateView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: pin_mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Change the PIN. The current PIN is X-Transaction-Pin.",
+        "tags": [
+          "MoneyPin"
+        ],
+        "x-wawu-built-by": "MONEY-09"
+      }
+    },
+    "/api/hub/money/pin/verify": {
+      "post": {
+        "operationId": "MoneyPinController_verify",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN. Only ever in this header: never in a URL, a body or a log.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PinStateView"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Check the PIN without moving money, for a screen that must confirm the\nperson before it changes something. A wrong PIN counts toward the lock\nexactly as it does on a debit.",
+        "tags": [
+          "MoneyPin"
+        ],
+        "x-wawu-built-by": "MONEY-09"
+      }
+    },
     "/api/hub/money/wallet": {
       "get": {
         "operationId": "MoneyWalletController_wallet",
@@ -19482,287 +19752,9 @@
         "x-wawu-served": false
       }
     },
-    "/api/hub/money/pin": {
-      "get": {
-        "operationId": "MoneyPinController_state",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PinStateView"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Is a PIN set, when it last changed, tries left, and the lock if any.",
-        "tags": [
-          "MoneyPin"
-        ],
-        "x-wawu-built-by": "MONEY-09",
-        "description": "Declared by MONEY-04, not served yet: MONEY-09 serves it.",
-        "x-wawu-served": false
-      },
-      "post": {
-        "operationId": "MoneyPinController_set",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SetPinDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PinStateView"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "reason.code: pin_mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, pin_already_set",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Set the first PIN (A9, A10, W36). Both entries in one request; a difference is pin_mismatch.",
-        "tags": [
-          "MoneyPin"
-        ],
-        "x-wawu-built-by": "MONEY-09",
-        "description": "Declared by MONEY-04, not served yet: MONEY-09 serves it.",
-        "x-wawu-served": false
-      },
-      "put": {
-        "operationId": "MoneyPinController_change",
-        "parameters": [
-          {
-            "name": "X-Transaction-Pin",
-            "in": "header",
-            "description": "The four-digit transaction PIN. Only ever in this header: never in a URL, a body or a log.",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[0-9]{4}$"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ChangePinDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PinStateView"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "reason.code: pin_mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "reason.code: pin_required, pin_incorrect",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen, pin_locked",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Change the PIN. The current PIN is X-Transaction-Pin.",
-        "tags": [
-          "MoneyPin"
-        ],
-        "x-wawu-built-by": "MONEY-09",
-        "description": "Declared by MONEY-04, not served yet: MONEY-09 serves it.",
-        "x-wawu-served": false
-      }
-    },
-    "/api/hub/money/pin/verify": {
-      "post": {
-        "operationId": "MoneyPinController_verify",
-        "parameters": [
-          {
-            "name": "X-Transaction-Pin",
-            "in": "header",
-            "description": "The four-digit transaction PIN. Only ever in this header: never in a URL, a body or a log.",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[0-9]{4}$"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PinStateView"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "reason.code: pin_required, pin_incorrect",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen, pin_locked",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Check the PIN without moving money, for a screen that must confirm the\nperson before it changes something. A wrong PIN counts toward the lock\nexactly as it does on a debit.",
-        "tags": [
-          "MoneyPin"
-        ],
-        "x-wawu-built-by": "MONEY-09",
-        "description": "Declared by MONEY-04, not served yet: MONEY-09 serves it.",
-        "x-wawu-served": false
-      }
-    },
     "/api/hub/money/pin/reset": {
       "post": {
-        "operationId": "MoneyPinController_startReset",
+        "operationId": "MoneyPinResetController_startReset",
         "parameters": [],
         "responses": {
           "201": {
@@ -19803,7 +19795,7 @@
         ],
         "summary": "Forgot PIN (W37): send a code to the phone on file. Answers again with a new code once resendAvailableAt has passed.",
         "tags": [
-          "MoneyPin"
+          "MoneyPinReset"
         ],
         "x-wawu-built-by": "MONEY-14",
         "description": "Declared by MONEY-04, not served yet: MONEY-14 serves it.",
@@ -19812,7 +19804,7 @@
     },
     "/api/hub/money/pin/reset/confirm": {
       "post": {
-        "operationId": "MoneyPinController_confirmReset",
+        "operationId": "MoneyPinResetController_confirmReset",
         "parameters": [],
         "requestBody": {
           "required": true,
@@ -19873,7 +19865,7 @@
         ],
         "summary": "The code and the new PIN. Clears the lock and the wrong-try count.",
         "tags": [
-          "MoneyPin"
+          "MoneyPinReset"
         ],
         "x-wawu-built-by": "MONEY-14",
         "description": "Declared by MONEY-04, not served yet: MONEY-14 serves it.",
@@ -31700,6 +31692,31 @@
           "legalRequestId"
         ]
       },
+      "PinStateView": {
+        "type": "object",
+        "properties": {
+          "isSet": {
+            "type": "boolean"
+          },
+          "changedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "triesLeft": {
+            "type": "number"
+          },
+          "lockedUntil": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "isSet",
+          "changedAt",
+          "triesLeft",
+          "lockedUntil"
+        ]
+      },
       "FeeBreakdown": {
         "type": "object",
         "properties": {
@@ -32651,31 +32668,6 @@
           "usedTodayKobo",
           "remainingTodayKobo",
           "resetsAt"
-        ]
-      },
-      "PinStateView": {
-        "type": "object",
-        "properties": {
-          "isSet": {
-            "type": "boolean"
-          },
-          "changedAt": {
-            "type": "string",
-            "nullable": true
-          },
-          "triesLeft": {
-            "type": "number"
-          },
-          "lockedUntil": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "isSet",
-          "changedAt",
-          "triesLeft",
-          "lockedUntil"
         ]
       },
       "BankTransferAccessView": {

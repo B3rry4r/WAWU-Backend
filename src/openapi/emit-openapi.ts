@@ -133,9 +133,15 @@ async function addDeclaredRoutes(
   document.components ??= {};
   document.components.schemas ??= {};
   for (const [name, schema] of Object.entries(schemas)) {
-    if (document.components.schemas[name]) {
+    const served = document.components.schemas[name];
+    if (served) {
+      // A served money route and a declared one share the contract's own
+      // classes (MoneyErrorEnvelope, the PIN DTOs once MONEY-09 serves the
+      // PIN): the same class emits the same schema, and one copy is kept. A
+      // different schema under the same name is still a collision.
+      if (JSON.stringify(served) === JSON.stringify(schema)) continue;
       throw new Error(
-        `Schema ${name} is defined by a served route and by MoneyContractModule. Rename one of them.`,
+        `Schema ${name} is defined by a served route and by MoneyContractModule, differently. Rename one of them.`,
       );
     }
     document.components.schemas[name] = schema;
