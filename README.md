@@ -135,17 +135,29 @@ npm run test:protected
 It also runs inside `npm run test:contract` and deploy.yml's `npx jest` step,
 like every other spec, but there it is the branch's own copy of the suite and
 lock. **What enforces V3 in CI is `.github/workflows/protected-routes.yml`**
-(`permissions: contents: read`). It checks out the BASE branch and runs the
-base's `scripts/protected-routes/ci-check.sh`, `run.sh`, `lock-diff.py` and
-suite against the pull request's head commit, so a pull request cannot loosen
-the checker or its own lock. `run.sh` writes its own jest config and fails
-unless every locked entry ran and passed. A pull request that changes the lock
-or any checker file (`src/`, `test/`, `scripts/protected-routes`, the workflow)
-is checked against the base's lock, and its lock diff goes in the job summary.
+(`permissions: contents: read`, no persisted credentials). It checks out the
+BASE branch and runs the base's `scripts/protected-routes/ci-check.sh`,
+`run.sh`, `lock-diff.py` and suite against the pull request's head commit.
+`run.sh` writes its own jest config and fails unless every locked entry ran
+and passed. A pull request that changes the lock or any checker file (`src/`,
+`test/`, `scripts/protected-routes`, the workflow), measured from its merge
+base, is checked against the base's lock, and its lock diff goes in the job
+summary. A line the pull request adds outside the checker (Markdown aside)
+that names `test/protected-routes`, `src/protected-routes`, `compareShape` or
+`protected-registry` fails the check.
 That holds until the owner applies `relock-approved` after its latest push:
 only the run that label triggers counts it, and a later push needs it again.
 The pull request that introduces the suite is checked against its own lock
 (the base has none).
+
+**What this does and does not stop.** It catches accidental changes to a
+protected route's shape, auth or status, and accidental or casual edits to the
+lock and the checker. It does not block deliberate tampering: the pull
+request's own code still runs during the check, so a seed script
+(`npm run db:seed`), `prisma.config.ts`, or app code loaded into the same
+process can rewrite or patch the checker before it runs. The reference
+tripwire above catches the plain versions of those; an obfuscated one is caught
+only by review of the diff, which is where deliberate tampering is visible.
 
 **For the owner (repository settings, not code):** make the "Protected route
 suite against the base branch's checker and lock" check required on `main`.
@@ -157,7 +169,8 @@ the workflow itself.
 
 **Running it against any branch (V3).** The code comes from the ref you name;
 the suite and the lock come from `PROTECTED_LOCK_REF` (default `origin/main`),
-so a branch cannot pass by editing its own copy of the lock. Nothing is checked
+so an edit to a branch's own copy of the lock is not what it is checked
+against (deliberate tampering aside: see above). Nothing is checked
 out: the ref is exported with `git archive` into a temporary directory.
 
 ```bash

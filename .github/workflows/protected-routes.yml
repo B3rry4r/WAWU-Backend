@@ -7,13 +7,14 @@ name: Protected routes (V3)
 # branch's own copy of the suite and the lock, which a branch can edit. This
 # job holds a pull request to the BASE branch's checker:
 #
-#   - The base branch is checked out (into ./base). The pull request's head
-#     commit is only fetched into it as an object; nothing of the pull
-#     request's is executed except the code under test.
+#   - The base branch is checked out into ./base and the pull request's head
+#     into ./pr, both without persisted credentials. The head is fetched into
+#     ./base as objects; of the pull request, only the code under test runs.
 #   - scripts/protected-routes/ci-check.sh, run.sh, lock-diff.py and the suite
 #     (src/ and test/protected-routes, the registry) all come from the base.
 #     run.sh also writes its own jest config and checks that every locked entry
-#     ran, so the pull request's package.json cannot exclude the suite.
+#     ran, so a jest setting in the pull request's package.json does not
+#     exclude the suite.
 #   - A pull request that changes the lock or any checker file is checked
 #     against the base's lock (and fails if its code no longer matches it)
 #     unless the owner applied the `relock-approved` label AFTER its latest
@@ -22,6 +23,14 @@ name: Protected routes (V3)
 #     job summary either way.
 #   - The pull request that introduces the suite is checked against its own
 #     (the base has none yet).
+#   - What a pull request changed is measured from its merge base with the
+#     base branch. Code outside the checker that names it (the suite, the
+#     shape comparison, the registry) fails the check unless the owner approved.
+#
+# Scope: this catches accidental breakage and accidental or casual edits to
+# the lock and the checker. The pull request's own code still runs (seed
+# scripts, prisma.config.ts, the app), so deliberate tampering is not blocked
+# here; it is visible in the diff and caught by review.
 #
 # On `pull_request` GitHub runs the workflow FILE from the pull request, so
 # this file is protected by CODEOWNERS and by making the job a required check
@@ -31,7 +40,6 @@ name: Protected routes (V3)
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -71,22 +79,27 @@ jobs:
       - name: Check out the BASE branch (the checker)
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          ref: ${{ github.event.pull_request.base.sha }}
           path: base
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Fetch the pull request's head commit (the code under test)
+      - name: Check out the pull request's head commit (the code under test)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: pr
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bring the pull request's commits into the base checkout as objects
         id: shas
         working-directory: base
         run: |
-          if [ "${{ github.event_name }}" = pull_request ]; then
-            git fetch --no-tags origin \
-              "+refs/pull/${{ github.event.pull_request.number }}/head:refs/remotes/pr/head"
-            PR_SHA="$(git rev-parse refs/remotes/pr/head)"
-            test "$PR_SHA" = "${{ github.event.pull_request.head.sha }}"
-          else
-            PR_SHA="$(git rev-parse HEAD)"
-          fi
+          # A local fetch from ./pr: no credentials, nothing checked out.
+          git fetch --no-tags ../pr "+HEAD:refs/remotes/pr/head"
+          PR_SHA="$(git rev-parse refs/remotes/pr/head)"
+          test "$PR_SHA" = "${{ github.event.pull_request.head.sha }}"
           echo "base=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "pr=$PR_SHA" >> "$GITHUB_OUTPUT"
 

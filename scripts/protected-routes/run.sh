@@ -9,8 +9,8 @@
 #
 # With a <ref>, the CODE comes from <ref> and the SUITE and the LOCK
 # (src/protected-routes, test/protected-routes, .pipeline/protected-registry.json)
-# come from $PROTECTED_LOCK_REF (default origin/main). A branch therefore cannot
-# pass by loosening its own copy of the lock. Nothing is checked out: <ref> is
+# come from $PROTECTED_LOCK_REF (default origin/main), so an edit to a branch's
+# own copy of the lock is not what it is checked against. Nothing is checked out: <ref> is
 # exported with `git archive` into a temporary directory, so the working tree,
 # its branch and its uncommitted changes are never touched.
 #

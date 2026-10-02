@@ -124,8 +124,8 @@ export const DEFAULT_REGISTRY_PATH = path.resolve(
 
 /**
  * `PROTECTED_REGISTRY` lets V3 run the lock from main against a branch's code:
- * a branch cannot loosen the lock it is checked against by editing its own
- * copy (README, "Protected route suite").
+ * editing a branch's own copy does not change the lock it is checked against
+ * (README, "Protected route suite", for what this does not cover).
  */
 export function registryPath(): string {
   return process.env.PROTECTED_REGISTRY
