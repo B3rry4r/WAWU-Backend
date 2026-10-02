@@ -95,6 +95,10 @@ FLUTTERWAVE_WEBHOOK_HASH=
 # live base URL here: the client never assumes live, and refuses any host
 # other than Fintava's. The timeouts may stay empty (defaults in
 # .env.example). Live values are put here by OPS-10.
+# FINTAVA_WEBHOOK_SECRET is the live dashboard's webhook secret. OPS-10
+# registers this webhook URL in Fintava's live dashboard (MONEY-07):
+#   https://<the API's public host>/api/hub/webhooks/fintava
+# Without the secret every delivery is refused with 401 (fails closed).
 FINTAVA_BASE_URL=
 FINTAVA_API_KEY=
 FINTAVA_WEBHOOK_SECRET=
