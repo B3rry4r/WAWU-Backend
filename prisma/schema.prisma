@@ -3126,7 +3126,9 @@ model FintavaWebhookEvent {
   /// so a byte-identical retry still lands on the same row.
   reference      String
   /// Where `reference` came from: `data.reference`, `data.customerReference`,
-  /// `data.reversalRef`, ..., or `body.sha256`.
+  /// `data.reversalRef`, ..., or `body.sha256`. Every text column here has
+  /// any NUL replaced by U+FFFD (Postgres text cannot hold one), the same way
+  /// every time, so a replay still lands on the same key.
   referenceField String
   /// Fintava's own status for the transaction (`data.status`, else
   /// `data.paymentStatus`), upper case; empty when it sent none. Part of the
@@ -3141,9 +3143,13 @@ model FintavaWebhookEvent {
   dataReference         String?
   dataCustomerReference String?
 
-  /// The body exactly as delivered (the bytes the signature covers), and the
-  /// same body parsed. Personal data lives here, never in a log.
-  rawBody String
+  /// The body exactly as delivered: the bytes the signature covers, kept
+  /// byte for byte (`bytea`, so a NUL or any other byte fits). Personal data
+  /// lives here and in `payload`, never in a log.
+  rawBody Bytes
+  /// The same body parsed, with every NUL (`\u0000`) in a key or a string
+  /// replaced by U+FFFD: Postgres json cannot hold a NUL, and a delivery it
+  /// refused would be retried and lost. `rawBody` keeps the original.
   payload Json
 
   processingStatus FintavaWebhookProcessing @default(pending)

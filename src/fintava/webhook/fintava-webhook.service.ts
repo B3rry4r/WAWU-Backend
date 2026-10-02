@@ -7,6 +7,7 @@ import { Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
   FINTAVA_WEBHOOK_EVENTS,
+  jsonWithoutNul,
   readFintavaWebhook,
 } from './fintava-webhook-event';
 import type { FintavaWebhookAck } from './fintava-webhook-view.type';
@@ -52,11 +53,13 @@ export class FintavaWebhookService {
             fintavaStatus: delivery.fintavaStatus,
             dataReference: delivery.dataReference,
             dataCustomerReference: delivery.dataCustomerReference,
-            rawBody: rawBody.toString('utf8'),
+            // The exact bytes, NUL and all (bytea); the parsed copy with
+            // NUL replaced, since json cannot hold one.
+            rawBody: new Uint8Array(rawBody),
             payload:
               body === null || body === undefined
                 ? Prisma.JsonNull
-                : (body as Prisma.InputJsonValue),
+                : (jsonWithoutNul(body) as Prisma.InputJsonValue),
             processingStatus: delivery.known ? 'pending' : 'unrecognised',
           },
         ],

@@ -10,6 +10,7 @@ import {
 import { ApiTags } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import type { Request } from 'express';
+import { SKIP_EVERY_HUB_THROTTLER } from '../../hub-throttlers';
 import { FintavaSignatureGuard } from './fintava-signature.guard';
 import { FintavaWebhookService } from './fintava-webhook.service';
 import type { FintavaWebhookAck } from './fintava-webhook-view.type';
@@ -23,17 +24,21 @@ import type { FintavaWebhookAck } from './fintava-webhook-view.type';
  * mobile repo's `contract/mobile-exclusions.json` leaves out of the app's
  * client. No token; FintavaSignatureGuard is the only credential.
  *
- * Throttling is skipped, as for Flutterwave: Fintava retries every 3
- * minutes and then hourly, and a 429 would only delay money being
- * recorded. Every request is bounded by the signature check and one insert.
+ * Every named throttler is skipped (SKIP_EVERY_HUB_THROTTLER, built from
+ * the names AppModule registers): a 429 is not logged, and Fintava resends
+ * a refused delivery only 3 minutes later, then hourly. A bare
+ * `@SkipThrottle()` would skip only a throttler called `default`, which
+ * this app does not have. Every request is still bounded by the signature
+ * check and one insert.
  *
  * Status codes are the retry contract:
  *   200: recorded, or a duplicate of one already recorded. Do not resend.
  *   400: no JSON body. 401: signature missing or wrong, or no secret set.
  *        Never recorded.
  *   503: the database could not take it. Please resend.
+ * Never 429: no rate limit applies (above).
  */
-@SkipThrottle()
+@SkipThrottle(SKIP_EVERY_HUB_THROTTLER)
 @ApiTags('PaymentWebhook')
 @Controller('webhooks/fintava')
 export class FintavaWebhookController {

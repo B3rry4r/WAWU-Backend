@@ -71,6 +71,7 @@ import { MoneyModule } from './money/money.module';
 import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
 import { PaymentWebhookModule } from './payment-webhook/payment-webhook.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { HUB_THROTTLERS } from './hub-throttlers';
 import { APP_GUARD } from '@nestjs/core';
 // Phase 5 build (waves 0-3, all 39 registry resources) is now complete.
 // The deferred Flutterwave webhook has now shipped as PaymentWebhookModule
@@ -83,10 +84,9 @@ import { APP_GUARD } from '@nestjs/core';
     // Rate limiting: @nestjs/throttler was a dependency but was never
     // registered, leaving presign, search and every payment-verify endpoint
     // unlimited — a storage-cost and scan-cost DoS from a single account.
-    ThrottlerModule.forRoot([
-      { name: 'short', ttl: 1_000, limit: 20 },
-      { name: 'medium', ttl: 60_000, limit: 200 },
-    ]),
+    // The limits themselves (short 20/s, medium 200/min) live in
+    // src/hub-throttlers.ts, so a webhook can skip every one by name.
+    ThrottlerModule.forRoot([...HUB_THROTTLERS]),
     ScheduleModule.forRoot(),
     // MUST stay ahead of SchedulerModule, and of everything else that pulls in
     // DirectMessageModule (SchedulerModule, PaymentWebhookModule, ShopModule,

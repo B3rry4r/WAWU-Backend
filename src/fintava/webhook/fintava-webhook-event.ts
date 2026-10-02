@@ -124,10 +124,35 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+/**
+ * Postgres text and json cannot hold a NUL (`\u0000`), and a delivery the
+ * database refuses is retried for 72 hours and then lost. Every string we
+ * store is passed through this: each NUL becomes U+FFFD, the same way every
+ * time, so a replay still produces the same key. The raw body is stored
+ * as bytes and keeps the original.
+ */
+export function withoutNul(s: string): string {
+  return s.includes('\u0000') ? s.split('\u0000').join('\uFFFD') : s;
+}
+
+/** The parsed body with withoutNul applied to every key and string. */
+export function jsonWithoutNul(value: unknown): unknown {
+  if (typeof value === 'string') return withoutNul(value);
+  if (Array.isArray(value)) return value.map(jsonWithoutNul);
+  if (typeof value === 'object' && value !== null) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[withoutNul(k)] = jsonWithoutNul(v);
+    }
+    return out;
+  }
+  return value;
+}
+
 /** A non-empty string or a finite number, as trimmed text; else null. */
 function text(v: unknown, max: number): string | null {
   let s: string;
-  if (typeof v === 'string') s = v.trim();
+  if (typeof v === 'string') s = withoutNul(v).trim();
   else if (typeof v === 'number' && Number.isFinite(v)) s = String(v);
   else return null;
   return s.length > 0 && s.length <= max ? s : null;

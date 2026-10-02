@@ -10,6 +10,10 @@
 -- ON CONFLICT DO NOTHING, so a retry or two copies arriving together leave
 -- one row.
 --
+-- "rawBody" is BYTEA: the exact bytes Fintava signed, NUL included. The
+-- parsed "payload" and the text columns hold NUL as U+FFFD, since Postgres
+-- text and json refuse a NUL.
+--
 -- `prisma migrate diff` also proposes dropping "ContentPiece_specializations_idx".
 -- That index predates this task (schema drift, not ours) and is left alone.
 
@@ -26,7 +30,7 @@ CREATE TABLE "FintavaWebhookEvent" (
     "fintavaStatus" TEXT NOT NULL,
     "dataReference" TEXT,
     "dataCustomerReference" TEXT,
-    "rawBody" TEXT NOT NULL,
+    "rawBody" BYTEA NOT NULL,
     "payload" JSONB NOT NULL,
     "processingStatus" "FintavaWebhookProcessing" NOT NULL DEFAULT 'pending',
     "note" TEXT,

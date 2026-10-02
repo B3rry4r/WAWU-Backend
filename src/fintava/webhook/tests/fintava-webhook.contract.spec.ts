@@ -11,7 +11,10 @@ import {
   ValidationPipe,
 } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { THROTTLER_SKIP } from '@nestjs/throttler/dist/throttler.constants';
 import request, { type Response } from 'supertest';
 import {
   accountFunded,
@@ -26,6 +29,11 @@ import { AllExceptionsFilter } from '../../../common/filters/all-exceptions.filt
 import { ResponseInterceptor } from '../../../common/interceptors/response.interceptor';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { HUB_APP_OPTIONS } from '../../../hub-app-options';
+import {
+  HUB_THROTTLERS,
+  SKIP_EVERY_HUB_THROTTLER,
+} from '../../../hub-throttlers';
+import { FintavaWebhookController } from '../fintava-webhook.controller';
 import {
   FINTAVA_SIGNATURE_HEADER,
   signFintavaBody,
@@ -93,11 +101,22 @@ const everyLevel = () =>
     logLevels: ['log', 'error', 'warn', 'debug', 'verbose', 'fatal'],
   });
 
+/**
+ * The app as production composes it for this route: the same options
+ * (raw body), pipe, filter and interceptor, AND AppModule's rate limits
+ * (HUB_THROTTLERS) behind the same global ThrottlerGuard, so a route that
+ * forgets to skip them is refused here as it would be live.
+ */
 async function buildApp(options = HUB_APP_OPTIONS) {
   // setLogger: a TestingModule otherwise swaps in Nest's TestingLogger,
   // which prints errors only and would hide every other line from the check.
   const moduleRef = await Test.createTestingModule({
-    imports: [ConfigModule.forRoot({ isGlobal: true }), FintavaWebhookModule],
+    imports: [
+      ConfigModule.forRoot({ isGlobal: true }),
+      ThrottlerModule.forRoot([...HUB_THROTTLERS]),
+      FintavaWebhookModule,
+    ],
+    providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
   })
     .setLogger(everyLevel())
     .compile();
@@ -147,6 +166,19 @@ describe('Fintava webhooks (MONEY-07) over HTTP', () => {
   const rowsFor = (reference: string) =>
     prisma.fintavaWebhookEvent.findMany({ where: { reference } });
 
+  /** Rows whose raw bytes contain `fragment` (rawBody is bytea). */
+  async function rowsWithRaw(fragment: string) {
+    const ids = await prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM "FintavaWebhookEvent"
+      WHERE position(convert_to(${fragment}, 'UTF8') in "rawBody") > 0`;
+    return prisma.fintavaWebhookEvent.findMany({
+      where: { id: { in: ids.map((r) => r.id) } },
+    });
+  }
+
+  const rawText = (row: { rawBody: Uint8Array }) =>
+    Buffer.from(row.rawBody).toString('utf8');
+
   beforeAll(async () => {
     capture(process.stdout, 'write');
     capture(process.stderr, 'write');
@@ -161,9 +193,9 @@ describe('Fintava webhooks (MONEY-07) over HTTP', () => {
   });
 
   afterAll(async () => {
-    await prisma.fintavaWebhookEvent.deleteMany({
-      where: { rawBody: { contains: RUN } },
-    });
+    await prisma.$executeRaw`
+      DELETE FROM "FintavaWebhookEvent"
+      WHERE position(convert_to(${RUN}, 'UTF8') in "rawBody") > 0`;
     await app.close();
     if (previousSecret === undefined) delete process.env.FINTAVA_WEBHOOK_SECRET;
     else process.env.FINTAVA_WEBHOOK_SECRET = previousSecret;
@@ -250,8 +282,8 @@ describe('Fintava webhooks (MONEY-07) over HTTP', () => {
         processingStatus: 'pending',
         processedAt: null,
         note: null,
-        rawBody: text,
       });
+      expect(Buffer.from(rows[0].rawBody).equals(Buffer.from(text))).toBe(true);
       expect(rows[0].payload).toEqual(JSON.parse(text));
       expect(rows[0].receivedAt).toBeInstanceOf(Date);
     });
@@ -339,7 +371,7 @@ describe('Fintava webhooks (MONEY-07) over HTTP', () => {
       const res = await send(text);
       expect(res.status).toBe(200);
       const [row] = await rowsFor(`RAW-${RUN}`);
-      expect(row.rawBody).toBe(text);
+      expect(rawText(row)).toBe(text);
       expect(row.payload).toEqual({
         data: {
           amount: 100,
@@ -362,11 +394,7 @@ describe('Fintava webhooks (MONEY-07) over HTTP', () => {
         )
         .send(text);
       expect(res.status).toBe(400);
-      expect(
-        await prisma.fintavaWebhookEvent.count({
-          where: { rawBody: { contains: `FORM-${RUN}` } },
-        }),
-      ).toBe(0);
+      expect(await rowsWithRaw(`FORM-${RUN}`)).toHaveLength(0);
     });
 
     it('an app built without rawBody refuses every delivery (400) and stores nothing, so main.ts must keep it', async () => {
@@ -444,9 +472,7 @@ describe('Fintava webhooks (MONEY-07) over HTTP', () => {
       const card = cardPayment(`${RUN}-card`);
       expect(ack(await send(card)).outcome).toBe('recorded');
       expect(ack(await send(card)).outcome).toBe('duplicate');
-      const cardRows = await prisma.fintavaWebhookEvent.findMany({
-        where: { rawBody: { contains: `${RUN}-card` } },
-      });
+      const cardRows = await rowsWithRaw(`${RUN}-card`);
       expect(cardRows).toHaveLength(1);
       expect(cardRows[0]).toMatchObject({
         event: 'card_payment',
@@ -464,6 +490,92 @@ describe('Fintava webhooks (MONEY-07) over HTTP', () => {
       });
       const [row] = await rowsFor(`UNK-${RUN}`);
       expect(row.processingStatus).toBe('unrecognised');
+    });
+  });
+
+  describe('no rate limit applies to the webhook', () => {
+    it('30 different signed deliveries in the same second, through the real global ThrottlerGuard: 30 times 200, 30 rows, no 429', async () => {
+      // AppModule allows 20 a second (`short`): without the skip, 10 of
+      // these are refused with 429 and lost until Fintava resends.
+      const shortLimit = HUB_THROTTLERS.find((t) => t.name === 'short')!;
+      const count = shortLimit.limit + 10;
+      const bodies = Array.from({ length: count }, (_, i) =>
+        walletToWallet(`${RUN}-burst-${i}`),
+      );
+      const started = Date.now();
+      const results = await Promise.all(bodies.map((b) => send(b)));
+      expect(Date.now() - started).toBeLessThan(shortLimit.ttl);
+      expect(results.map((r) => r.status)).toEqual(Array(count).fill(200));
+      expect(results.every((r) => ack(r).outcome === 'recorded')).toBe(true);
+      expect(await rowsWithRaw(`${RUN}-burst-`)).toHaveLength(count);
+    });
+
+    it('the skip names every throttler AppModule registers, so a new one is skipped too', () => {
+      const names = HUB_THROTTLERS.map((t) => t.name);
+      expect(Object.keys(SKIP_EVERY_HUB_THROTTLER).sort()).toEqual(
+        [...names].sort(),
+      );
+      for (const name of names) {
+        expect(
+          Reflect.getMetadata(THROTTLER_SKIP + name, FintavaWebhookController),
+        ).toBe(true);
+      }
+      const appModule = readFileSync(
+        join(__dirname, '../../../app.module.ts'),
+        'utf8',
+      );
+      expect(appModule).toMatch(
+        /ThrottlerModule\.forRoot\(\[\.\.\.HUB_THROTTLERS\]\)/,
+      );
+    });
+  });
+
+  describe('a delivery with a NUL in it', () => {
+    it('is stored once: raw bytes exact, NUL replaced in the payload and the key, and a replay is a duplicate', async () => {
+      // JSON writes a NUL as the escape \u0000; Postgres text and json
+      // refuse it, so before the fix every retry answered 503.
+      const text =
+        `{"event":"customer_bank_transfer","data":{` +
+        `"customerReference":"NUL\\u0000REF-${RUN}",` +
+        `"reference":"NULREF2-${RUN}",` +
+        `"description":"Pay\\u0000ment from \\u0000 bank",` +
+        `"na\\u0000me":"x","status":"SUCCESS"}}`;
+      expect(text).toContain('\\u0000');
+
+      const first = await send(text);
+      expect(first.status).toBe(200);
+      expect(ack(first)).toEqual({
+        outcome: 'recorded',
+        event: 'customer_bank_transfer',
+      });
+      expect(ack(await send(text)).outcome).toBe('duplicate');
+      expect(ack(await send(text)).outcome).toBe('duplicate');
+
+      const rows = await rowsFor(`NUL�REF-${RUN}`);
+      expect(rows).toHaveLength(1);
+      const [row] = rows;
+      expect(row).toMatchObject({
+        referenceField: 'data.customerReference',
+        dataCustomerReference: `NUL�REF-${RUN}`,
+        processingStatus: 'pending',
+      });
+      // The bytes Fintava signed, exactly.
+      expect(Buffer.from(row.rawBody).equals(Buffer.from(text, 'utf8'))).toBe(
+        true,
+      );
+      expect(signFintavaBody(SECRET, Buffer.from(row.rawBody))).toBe(
+        signFintavaBody(SECRET, Buffer.from(text, 'utf8')),
+      );
+      expect(row.payload).toEqual({
+        event: 'customer_bank_transfer',
+        data: {
+          customerReference: `NUL�REF-${RUN}`,
+          reference: `NULREF2-${RUN}`,
+          description: 'Pay�ment from � bank',
+          'na�me': 'x',
+          status: 'SUCCESS',
+        },
+      });
     });
   });
 

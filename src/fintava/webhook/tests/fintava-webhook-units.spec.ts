@@ -9,7 +9,9 @@ import {
 } from '../../../../test/fintava/fintava-webhook-payloads';
 import {
   FINTAVA_WEBHOOK_EVENTS,
+  jsonWithoutNul,
   readFintavaWebhook,
+  withoutNul,
 } from '../fintava-webhook-event';
 import { fintavaSignatureMatches, signFintavaBody } from '../fintava-signature';
 
@@ -225,5 +227,34 @@ describe('reading a delivery: event, key and status', () => {
       expect(spec.consumers.length).toBeGreaterThan(0);
       expect(spec.references.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('NUL, which Postgres text and json cannot hold', () => {
+  it('becomes U+FFFD in every string and key, the same way every time', () => {
+    expect(withoutNul('a\u0000b\u0000')).toBe('a\uFFFDb\uFFFD');
+    expect(withoutNul('plain')).toBe('plain');
+    expect(
+      jsonWithoutNul({
+        'k\u0000': ['x\u0000', 1, null, true, { y: 'z\u0000' }],
+      }),
+    ).toEqual({ 'k\uFFFD': ['x\uFFFD', 1, null, true, { y: 'z\uFFFD' }] });
+  });
+
+  it('a NUL in a reference or an event name is replaced before it becomes the key', () => {
+    const text =
+      '{"event":"account_funded","data":{"reference":"R\\u0000X","status":"succ\\u0000ess"}}';
+    const a = read(text);
+    expect(a).toMatchObject({
+      reference: 'R\uFFFDX',
+      dataReference: 'R\uFFFDX',
+      fintavaStatus: 'SUCC\uFFFDESS',
+    });
+    expect(read(text)).toEqual(a);
+    expect(read('{"event":"acc\\u0000ount","data":{}}')).toMatchObject({
+      event: '',
+      eventRaw: 'acc\uFFFDount',
+      known: false,
+    });
   });
 });
