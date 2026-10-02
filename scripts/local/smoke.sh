@@ -15,10 +15,8 @@ HUB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ID_DIR="${WAWU_ID_DIR:-$HUB_DIR/../wawu-id}"
 ID_LOG="${WAWU_ID_LOG:-$HUB_DIR/.local/logs/wawu-id.log}"
 
-env_get() {
-  local line; line="$(grep -E "^$2=" "$1" | tail -n 1 || true)"
-  line="${line#*=}"; line="${line%\"}"; line="${line#\"}"; printf '%s' "$line"
-}
+# Reads the value the way the services do (dotenv), see envfile.js.
+env_get() { node "$HUB_DIR/scripts/local/envfile.js" get "$1" "$2"; }
 fail() { printf 'FAIL  %s\n' "$*" >&2; exit 1; }
 pass() { printf 'PASS  %s\n' "$*"; }
 # json FILTER: reads JSON on stdin, prints the JS expression FILTER evaluated against it as `j`.

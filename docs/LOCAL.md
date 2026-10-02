@@ -23,8 +23,8 @@ tests"). This page runs the **real** `wawu-id`.
 
 ```bash
 mkdir wawu && cd wawu
-git clone https://github.com/<org>/wawu-backend.git
-git clone https://github.com/<org>/wawu-id.git
+git clone https://github.com/B3rry4r/WAWU-Backend.git wawu-backend
+git clone https://github.com/B3rry4r/wawu-id.git wawu-id
 ```
 
 If `wawu-id` lives somewhere else, set `WAWU_ID_DIR=/path/to/wawu-id` before
@@ -35,7 +35,9 @@ step 4.
 You need **no keys** to start. The script writes a `.env` in each repo with
 local-only values: a freshly generated signing key for `wawu-id`, a random
 service key shared by the two, and local database addresses. Both `.env`
-files are gitignored and are never overwritten once they exist.
+files are gitignored. Once they exist, the script changes them only when you
+give it a setting (section 4, "Settings"), and then only the lines that
+setting controls.
 
 Sandbox keys (Fintava, Cardex) go in `wawu-backend/.env` only, never in a
 committed file and never in the mobile app (section 7).
@@ -46,8 +48,11 @@ committed file and never in the mobile app (section 7).
 create databases.
 
 - macOS: `brew install postgresql@16 && brew services start postgresql@16`
-- Ubuntu: `sudo apt install postgresql-16`, then
-  `sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'postgres';"`
+- Ubuntu 24.04: `sudo apt install postgresql-16`, then
+  `sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'postgres';"`.
+  Ubuntu 22.04 does not ship Postgres 16: add the PostgreSQL apt repository
+  first (https://www.postgresql.org/download/linux/ubuntu/), then the same
+  two commands.
 
 **Option B, Docker.**
 
@@ -59,15 +64,18 @@ docker run -d --name wawu-local-postgres \
 
 The script assumes `postgresql://postgres:postgres@localhost:5432`. If yours
 differs (another user, password or port, for example `-p 5433:5432` because
-5432 is taken), say so once:
+5432 is taken), give it `LOCAL_PG_URL` (section 4, "Settings"):
 
 ```bash
-export LOCAL_PG_URL=postgresql://me:secret@localhost:5433
+LOCAL_PG_URL=postgresql://me:secret@localhost:5433 scripts/local/up.sh
 ```
 
+That also fixes a run that already failed on the wrong password or port:
+rerun with the right `LOCAL_PG_URL` and it rewrites `DATABASE_URL` in both
+`.env` files, keeping the database names.
+
 You do not create the databases. Migrating creates `wawu_hub_local` and
-`wawu_id_local` if they are missing (names can be changed with `HUB_DB` and
-`ID_DB`).
+`wawu_id_local` if they are missing (`HUB_DB` and `ID_DB` change the names).
 
 ## 4. Start everything
 
@@ -79,10 +87,12 @@ scripts/local/up.sh
 
 On a fresh clone this takes a few minutes. It:
 
-1. checks Node, the `wawu-id` checkout and your settings;
-2. writes `wawu-id/.env` and a signing keypair in `wawu-id/keys/` (both
-   gitignored there), and `wawu-backend/.env` from `.env.example`;
-3. runs `npm ci` in each repo that has no `node_modules`;
+1. checks Node and the `wawu-id` checkout;
+2. runs `npm ci` in each repo that has no `node_modules`;
+3. writes `wawu-id/.env` and a signing keypair in `wawu-id/keys/` (both
+   gitignored there), and `wawu-backend/.env` from `.env.example`, if they
+   are missing, applies any settings you gave, and runs the safety checks
+   below;
 4. migrates both databases (`prisma migrate deploy`);
 5. seeds the Hub (`prisma/seed.ts`) and gives the same three accounts a
    sign-in on `wawu-id` (`scripts/local/seed-wawu-id.js`);
@@ -96,15 +106,37 @@ scripts/local/up.sh --detach     # start
 scripts/local/down.sh            # stop
 ```
 
-Logs are in `wawu-backend/.local/logs/` (`wawu-id.log`, `hub-api.log`, and
-one file per setup step if a step fails).
+Logs are in `wawu-backend/.local/logs/`: `wawu-id.log` and `hub-api.log`
+for the running services, and one file per setup step (`id-install`,
+`id-migrate`, `hub-migrate`, `hub-seed`, `id-seed`, `id-build`, `hub-build`
+and so on), rewritten on every run.
 
-It refuses to run, and changes nothing, if either `.env` points at a
-database that is not on this machine, if `NODE_ENV` is `production`, if
-`FINTAVA_BASE_URL` is Fintava's live API, or if `CARDEX_API_KEY` is not a
-`cdx_test_` key. It also ignores any `DATABASE_URL` or `PORT` exported in
-your terminal, so a variable left over from another project cannot redirect
-it.
+**Settings.** All optional, given as environment variables on the command
+line. A setting you give is written into both `.env` files on that run (so
+it also corrects a run that failed); one you leave out keeps what the `.env`
+files already say, or the default the first time.
+
+| Setting | Default | What it changes |
+| --- | --- | --- |
+| `LOCAL_PG_URL` | `postgresql://postgres:postgres@localhost:5432` | the Postgres server (user, password, host, port) in both `DATABASE_URL`s |
+| `HUB_DB` | `wawu_hub_local` | the Hub's database name |
+| `ID_DB` | `wawu_id_local` | `wawu-id`'s database name |
+| `HUB_PORT` | `3001` | the Hub's port, and where `wawu-id` calls it |
+| `ID_PORT` | `3002` | `wawu-id`'s port, and where the Hub fetches its signing keys |
+| `WAWU_ID_DIR` | `../wawu-id` | where the `wawu-id` checkout is |
+
+For example, with 3001 and 3002 already taken:
+`HUB_PORT=3101 ID_PORT=3102 scripts/local/up.sh`. If you move the ports, use
+the new ones in the addresses below.
+
+**Safety.** It refuses to run, before touching any database, if either
+`.env` points at a database that is not on this machine, if `NODE_ENV` is
+`production`, if `FINTAVA_BASE_URL` is set to anything but Fintava's sandbox
+host, or if `CARDEX_API_KEY` is not a `cdx_test_` key. It reads the `.env`
+files with dotenv, exactly as the services do, so `export KEY=...`, indented
+lines and a later duplicate line are all seen. It also ignores any of those
+variables exported in your terminal (`DATABASE_URL`, `PORT` and the rest),
+so one left over from another project cannot redirect it.
 
 ## 5. Check it works
 
@@ -230,7 +262,7 @@ CARDEX_WEBHOOK_SECRET=
 ```
 
 Put the **sandbox** values in `wawu-backend/.env` and restart. Never the live
-ones: local testing is sandbox only, and `up.sh` refuses Fintava's live URL
+ones: local testing is sandbox only, and `up.sh` refuses any Fintava URL but the sandbox
 and any Cardex key that is not `cdx_test_`.
 
 As of OPS-03 no Hub code reads these yet. MONEY-06 adds the Fintava client
@@ -272,7 +304,8 @@ Know these before trusting a local result:
 ## 10. Reset and troubleshooting
 
 **Start again from empty.** Stop the stack, then drop only your local
-databases and run `up.sh` again:
+databases (the names in your `.env` files, if you changed them with
+`HUB_DB`/`ID_DB`) and run `up.sh` again:
 
 ```bash
 scripts/local/down.sh
@@ -281,14 +314,21 @@ dropdb -h localhost -U postgres wawu_id_local
 scripts/local/up.sh
 ```
 
-To regenerate a `.env`, delete it and run `up.sh` (the `wawu-id` keypair in
-`wawu-id/keys/` is reused unless you delete that too).
+**Regenerating a `.env`.** Delete one or both and run `up.sh`. A file written
+next to a surviving one copies what must match from it (the shared service
+key, both ports), so deleting only `wawu-id/.env` or only
+`wawu-backend/.env` is safe. What it cannot recover is a database name you
+had changed: pass `HUB_DB` / `ID_DB` again on that run. To go back to every
+default, delete both. The keypair in `wawu-id/keys/` is reused unless you
+delete it too.
 
 | Symptom | Cause |
 | --- | --- |
-| `Port 3001 (Hub API) is already in use` | Another copy is running. `scripts/local/down.sh`, or stop what is on the port. |
-| `DATABASE_URL on "<host>", not this machine` | A `.env` from elsewhere is in place. Point it at local Postgres, or delete it and rerun. |
-| `hub-migrate failed`, `P1001` in its log | Postgres is not running, or `LOCAL_PG_URL` is wrong. |
+| `Port 3001 (Hub API) is already in use` (or 3002, `wawu-id`) | Another copy is running: `scripts/local/down.sh`. Something else owns the port: stop it, or move ours with `HUB_PORT=<free port>` / `ID_PORT=<free port>` (section 4, "Settings"). |
+| `DATABASE_URL on "<host>", not this machine` | A `.env` from elsewhere is in place. Rerun with `LOCAL_PG_URL=...` to point it at local Postgres, or delete both `.env` files and rerun. |
+| `id-migrate failed` (it runs first) or `hub-migrate failed`, `P1000` in its log | Postgres refused the user or password. Rerun with the right one: `LOCAL_PG_URL=postgresql://USER:PASSWORD@localhost:5432 scripts/local/up.sh`. It rewrites both `.env` files. |
+| `id-migrate failed` or `hub-migrate failed`, `P1001` in its log | Postgres is not running, or the host or port is wrong. Start it, or rerun with the right `LOCAL_PG_URL`. |
+| `WAWU_ID_INTERNAL_SERVICE_KEY ... differ` | The two `.env` files were edited apart. Set the same value in both, or delete both and rerun. |
 | Every authenticated call is 401 | The Hub checks tokens against `WAWU_ID_JWKS_URL`. It must be the running `wawu-id`'s port, and the token must come from that `wawu-id`. `up.sh` checks the port. |
 | `EMAIL_NOT_VERIFIED` on login | Confirm the email first (section 6). |
 | Web app: "blocked by CORS policy" | Add the web app's origin to `CORS_ORIGIN` (section 7). |
