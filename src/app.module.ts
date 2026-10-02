@@ -68,6 +68,7 @@ import { SchedulerModule } from './scheduler/scheduler.module';
 import { AccountPurgeModule } from './account-purge/account-purge.module';
 import { WalletModule } from './wallet/wallet.module';
 import { MoneyModule } from './money/money.module';
+import { ChatModule } from './chat/chat.module';
 import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
 import { PaymentWebhookModule } from './payment-webhook/payment-webhook.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
@@ -330,6 +331,9 @@ import { APP_GUARD } from '@nestjs/core';
     // so it can neither shadow nor be shadowed wherever it sits. The declared,
     // unserved half (MoneyContractModule) is never imported here.
     MoneyModule,
+    // Free chat between two users (task INBOX-06). `@Controller('chats')` is a
+    // first segment nothing else declares, so it cannot shadow or be shadowed.
+    ChatModule,
     // Fintava's webhooks (task MONEY-07): POST /webhooks/fintava, recorded
     // once, no money moved. `webhooks/fintava` is a fixed path no other
     // controller declares, beside the unchanged `webhooks/flutterwave`.
