@@ -49,6 +49,9 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     disposition: 'AUTHORED',
   },
   { model: 'DmReport', column: 'reporterWawuId', disposition: 'AUTHORED' },
+  // A free chat message (INBOX-06) is this person's writing; it goes with
+  // them. The other person's messages in the same chat stay.
+  { model: 'ChatMessage', column: 'senderWawuId', disposition: 'AUTHORED' },
   // A rating IS writing, even when it is only a number: it is this person's
   // opinion, it is published under their account, and it moves an average
   // other people read. Leaving it behind would keep their judgment of a
@@ -81,6 +84,8 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'PrivacySettings', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'DataExportRequest', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'BlockedAccount', column: 'userWawuId', disposition: 'OWNED' },
+  // How far this person had read in each chat: theirs alone.
+  { model: 'ChatParticipant', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'CreditsState', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CreditPurchase', column: 'userWawuId', disposition: 'OWNED' },
   // What somebody paid for their own tick. OWNED rather than AUDIT: the
@@ -177,6 +182,19 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   {
     model: 'BlockedAccount',
     column: 'blockedWawuId',
+    disposition: 'COUNTERPARTY',
+  },
+  // A chat is shared by two people. Deleting the row would delete the other
+  // person's messages with it (they cascade), so the chat stays for them and
+  // this account's id on it is scrubbed by WAWU ID's anonymize, as above.
+  {
+    model: 'ChatConversation',
+    column: 'userAWawuId',
+    disposition: 'COUNTERPARTY',
+  },
+  {
+    model: 'ChatConversation',
+    column: 'userBWawuId',
     disposition: 'COUNTERPARTY',
   },
   // Views this account made of OTHER people's profiles. Deleting them would
