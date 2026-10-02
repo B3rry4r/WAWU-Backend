@@ -4,11 +4,13 @@ import helmet from 'helmet';
 import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
+import { HUB_APP_OPTIONS } from './hub-app-options';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  // rawBody: true, for the Fintava webhook signature (src/hub-app-options.ts).
+  const app = await NestFactory.create(AppModule, HUB_APP_OPTIONS);
 
   app.use(helmet());
   app.use(compression());
@@ -17,8 +19,13 @@ async function bootstrap() {
   // credentials that is a production footgun, so in production an explicit
   // CORS_ORIGIN allowlist is required; other environments keep the permissive
   // default for local tooling.
-  const corsOrigin = process.env.CORS_ORIGIN?.split(',').map((o) => o.trim()).filter(Boolean);
-  if (process.env.NODE_ENV === 'production' && (!corsOrigin || corsOrigin.length === 0)) {
+  const corsOrigin = process.env.CORS_ORIGIN?.split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+  if (
+    process.env.NODE_ENV === 'production' &&
+    (!corsOrigin || corsOrigin.length === 0)
+  ) {
     throw new Error(
       'CORS_ORIGIN must list the allowed origins in production. Refusing to start with a reflect-any-origin CORS policy.',
     );
@@ -28,7 +35,11 @@ async function bootstrap() {
   app.setGlobalPrefix('api/hub');
 
   app.useGlobalPipes(
-    new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    }),
   );
   app.useGlobalFilters(new AllExceptionsFilter());
   app.useGlobalInterceptors(new ResponseInterceptor());
@@ -41,4 +52,4 @@ async function bootstrap() {
   await app.listen(port);
   console.log(`WAWU Hub API listening on :${port} (prefix /api/hub)`);
 }
-bootstrap();
+void bootstrap();
