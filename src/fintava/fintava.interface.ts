@@ -13,7 +13,12 @@
  */
 
 /** Where the client sends requests. Live is reachable from config only. */
-export type FintavaEnvironment = 'sandbox' | 'live' | 'local';
+/**
+ * Where the client sends requests. `unconfigured`: production with
+ * FINTAVA_BASE_URL not set (before OPS-10): the server runs, the client sends
+ * nothing and every call fails as `not_configured`.
+ */
+export type FintavaEnvironment = 'sandbox' | 'live' | 'local' | 'unconfigured';
 
 /** Fintava's transaction status values (upper case; `sandbox/10-`). */
 export const FINTAVA_TXN_STATUSES = [

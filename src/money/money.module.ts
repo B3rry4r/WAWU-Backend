@@ -17,9 +17,10 @@ import { TransactionPinService } from './pin/transaction-pin.service';
  * its service are exported for that.
  *
  * MONEY-11: the balance, read from Fintava through the MONEY-06 client on
- * every request. Importing FintavaModule here is what mounts that client in
- * the app: in production the server does not start until FINTAVA_BASE_URL
- * is set (deploy/README.md step 4).
+ * every request. Importing FintavaModule here mounts that client in the app.
+ * The server starts without any FINTAVA_* setting (the client is then
+ * unconfigured and the balance answers 503); the settings are needed for the
+ * wallet to work (deploy/README.md step 4).
  */
 @Module({
   imports: [ConfigModule, FintavaModule],
