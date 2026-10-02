@@ -87,6 +87,8 @@ describe('Notification switches (contract, SETTINGS-07)', () => {
   let basicToken: string;
   let proToken: string;
   const saved = new Map<string, unknown>();
+  /** Purchases USER_PLAIN already had, so afterAll removes only what this spec made. */
+  let purchasesBefore: string[] = [];
 
   const emittedFor = (userWawuId: string, kind?: string) =>
     prisma.notification.findMany({
@@ -215,6 +217,12 @@ describe('Notification switches (contract, SETTINGS-07)', () => {
         }),
       );
     }
+    purchasesBefore = (
+      await prisma.purchase.findMany({
+        where: { buyerWawuId: USER_PLAIN },
+        select: { id: true },
+      })
+    ).map((p) => p.id);
     await clearEmitted();
   }, 40000);
 
@@ -243,7 +251,7 @@ describe('Notification switches (contract, SETTINGS-07)', () => {
       },
     });
     await prisma.purchase.deleteMany({
-      where: { buyerWawuId: USER_PLAIN, contentId: CONTENT_PDF_TEMPLATE },
+      where: { buyerWawuId: USER_PLAIN, id: { notIn: purchasesBefore } },
     });
     await app?.close();
     await moduleRef?.close();

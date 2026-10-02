@@ -28,7 +28,8 @@ import { composeNotification, type NotificationEvent } from '../notification-eve
 const RECIPIENT = 'e1000000-0000-4000-8000-000000000001';
 const RECIPIENT_MUTED = 'e1000000-0000-4000-8000-000000000002';
 const RECIPIENT_NO_SETTINGS_ROW = 'e1000000-0000-4000-8000-000000000003';
-const ALL_RECIPIENTS = [RECIPIENT, RECIPIENT_MUTED, RECIPIENT_NO_SETTINGS_ROW];
+const RECIPIENT_MONEY_OFF = 'e1000000-0000-4000-8000-000000000004';
+const ALL_RECIPIENTS = [RECIPIENT, RECIPIENT_MUTED, RECIPIENT_NO_SETTINGS_ROW, RECIPIENT_MONEY_OFF];
 
 /** Every kind, with a representative payload. Used for the copy sweep. */
 const ONE_OF_EVERY_KIND = (userWawuId: string): NotificationEvent[] => [
@@ -76,6 +77,13 @@ describe('NotificationService.emit (contract)', () => {
         refunds: false,
         promotions: false,
         communityDigest: false,
+      },
+    });
+    await prisma.notificationSettings.create({
+      data: {
+        userWawuId: RECIPIENT_MONEY_OFF,
+        moneyIn: false,
+        contentReviews: false,
       },
     });
     await wipe();
@@ -199,7 +207,14 @@ describe('NotificationService.emit (contract)', () => {
       expect(await prisma.notification.count({ where: { userWawuId: RECIPIENT } })).toBe(3);
     });
 
-    it('money-settlement kinds are NOT suppressible — every flag off still records that money moved', async () => {
+    it('tips and sales are delivered while moneyIn is unset (NULL), whatever the six older flags say; dm_received is never gated', async () => {
+      // RECIPIENT_MUTED has every older flag off and moneyIn NULL. NULL means
+      // "never asked", which must keep meaning ON: if it ever stops, this fails.
+      const muted = await prisma.notificationSettings.findUnique({
+        where: { userWawuId: RECIPIENT_MUTED },
+      });
+      expect(muted?.moneyIn).toBeNull();
+
       const rows = await Promise.all([
         notifications.emit({ kind: 'sale', userWawuId: RECIPIENT_MUTED, contentTitle: 'X', netAmount: 100 }),
         notifications.emit({ kind: 'tip_received', userWawuId: RECIPIENT_MUTED, netAmount: 100 }),
@@ -208,6 +223,45 @@ describe('NotificationService.emit (contract)', () => {
 
       expect(rows.every((r) => r !== null)).toBe(true);
       expect(await prisma.notification.count({ where: { userWawuId: RECIPIENT_MUTED } })).toBe(3);
+    });
+
+    it('moneyIn=false suppresses sale and tip_received but not dm_received; contentReviews=false suppresses both review kinds', async () => {
+      const off = RECIPIENT_MONEY_OFF;
+      const sale = await notifications.emit({
+        kind: 'sale',
+        userWawuId: off,
+        contentTitle: 'X',
+        netAmount: 100,
+      });
+      const tip = await notifications.emit({
+        kind: 'tip_received',
+        userWawuId: off,
+        netAmount: 100,
+      });
+      const published = await notifications.emit({
+        kind: 'content_published',
+        userWawuId: off,
+        contentTitle: 'X',
+      });
+      const rejected = await notifications.emit({
+        kind: 'content_rejected',
+        userWawuId: off,
+        contentTitle: 'X',
+      });
+      const dm = await notifications.emit({
+        kind: 'dm_received',
+        userWawuId: off,
+        amount: 300,
+      });
+
+      expect(sale).toBeNull();
+      expect(tip).toBeNull();
+      expect(published).toBeNull();
+      expect(rejected).toBeNull();
+      expect(dm).not.toBeNull();
+      expect(
+        await prisma.notification.count({ where: { userWawuId: off } }),
+      ).toBe(1);
     });
 
     it('a user with no NotificationSettings row falls back to the model defaults (gated kinds allowed)', async () => {
