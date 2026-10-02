@@ -94,5 +94,12 @@ export const MONEY_ERROR_CODES = [
   'target_not_found',
   'target_not_payable',
   'not_found',
+  // Open your wallet's identity step (KYC-01).
+  'bvn_not_confirmed',
+  'bvn_phone_mismatch',
+  'phone_not_nigerian',
+  'identity_checks_exhausted',
+  'bvn_not_checked',
+  'wallet_already_open',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];

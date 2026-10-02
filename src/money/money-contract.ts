@@ -46,6 +46,12 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   target_not_found: 404,
   target_not_payable: 409,
   not_found: 404,
+  bvn_not_confirmed: 422,
+  bvn_phone_mismatch: 422,
+  phone_not_nigerian: 422,
+  identity_checks_exhausted: 429,
+  bvn_not_checked: 409,
+  wallet_already_open: 409,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */
