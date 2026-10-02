@@ -54,10 +54,15 @@ export type NotificationPrismaClient = PrismaService | Prisma.TransactionClient;
  *                     backfilled (see the migration, and DECISIONS.md D17c).
  *   communityDigest — a periodic digest job that does not exist.
  *
- * Money-settlement kinds (sale, tip_received, dm_received) are intentionally
- * NOT suppressible by any flag: they are the record of a completed
- * transaction, and no notification preference should be able to hide the fact
- * that money changed hands.
+ * SETTINGS-07 (the Settings "Money in" and "Reviews" switches) makes `sale`
+ * and `tip_received` suppressible by `moneyIn`, and `content_published` and
+ * `content_rejected` by `contentReviews`. Suppressing the notification never
+ * touches the payment or the review: the money, the ledger row and the
+ * content status are written before emit() is called. `dm_received` stays
+ * ungated: no switch on the screen covers it.
+ *
+ * This is the only place a notification is decided, so any push sender
+ * (INBOX-03) must send only for a row emit() returned, never from the event.
  */
 const SETTINGS_GATE: Partial<
   Record<NotificationKind, keyof NotificationSettings>
@@ -66,6 +71,17 @@ const SETTINGS_GATE: Partial<
   dm_deadline: 'dmReminders',
   dm_refunded: 'refunds',
   campaign: 'promotions',
+  // SETTINGS-07. "Money in" covers tips and sales; "Reviews" covers an upload
+  // approved or sent back. Both columns are nullable and NULL reads as ON, so
+  // nobody who has not touched the switch notices anything.
+  tip_received: 'moneyIn',
+  sale: 'moneyIn',
+  content_published: 'contentReviews',
+  content_rejected: 'contentReviews',
+  // `communityMessages` is stored (Settings saves it) but gates NOTHING yet:
+  // no community message notification kind or sender exists. The task that
+  // adds that kind (and any other new kind) must add its entry here, or the
+  // switch can never mute it.
 };
 
 /**
@@ -85,19 +101,25 @@ const SETTINGS_GATE: Partial<
  * be the thing that creates the row — a write here would put a settings
  * upsert on the hot path of every payment verify.
  */
-const SETTINGS_DEFAULTS: Record<keyof NotificationSettings, boolean | string> =
-  {
-    userWawuId: '',
-    newReplies: true,
-    newFollowers: true,
-    dmReminders: true,
-    refunds: true,
-    // Mirrors the Prisma default, which C8 flipped to true. An account with no
-    // settings row has never been asked, and this is the answer given for it:
-    // announcements are on, and the Settings toggle turns them off.
-    promotions: true,
-    communityDigest: true,
-  };
+const SETTINGS_DEFAULTS: Record<
+  keyof NotificationSettings,
+  boolean | string | null
+> = {
+  userWawuId: '',
+  newReplies: true,
+  newFollowers: true,
+  dmReminders: true,
+  refunds: true,
+  // Mirrors the Prisma default, which C8 flipped to true. An account with no
+  // settings row has never been asked, and this is the answer given for it:
+  // announcements are on, and the Settings toggle turns them off.
+  promotions: true,
+  communityDigest: true,
+  // NULL = never asked = ON (see the schema). Only an explicit false mutes.
+  moneyIn: null,
+  contentReviews: null,
+  communityMessages: null,
+};
 
 @Injectable()
 export class NotificationService {
@@ -213,7 +235,10 @@ export class NotificationService {
     const optedOut = new Set(
       (
         await this.prisma.notificationSettings.findMany({
-          where: { userWawuId: { in: [...recipientWawuIds] }, promotions: false },
+          where: {
+            userWawuId: { in: [...recipientWawuIds] },
+            promotions: false,
+          },
           select: { userWawuId: true },
         })
       ).map((r) => r.userWawuId),
