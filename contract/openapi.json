@@ -17877,6 +17877,10 @@
                       "type": "string",
                       "nullable": true
                     },
+                    "headline": {
+                      "type": "string",
+                      "nullable": true
+                    },
                     "company": {
                       "type": "string",
                       "nullable": true
@@ -17920,6 +17924,7 @@
                     "youtubeUrl",
                     "facebookUrl",
                     "linkedinUrl",
+                    "headline",
                     "company",
                     "creatorVerifiedAt",
                     "creatorVerifiedUntil",
@@ -19385,6 +19390,2184 @@
         "tags": [
           "Event"
         ]
+      }
+    },
+    "/api/hub/money/wallet": {
+      "get": {
+        "operationId": "MoneyWalletController_wallet",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The wallet as WAWU records it: state, account details, limits, PIN state.\nNever calls Fintava and never carries a balance. With no wallet it answers\n200 with state not_open (R-6), so the Wallet tab can lead to Open your wallet.",
+        "tags": [
+          "MoneyWallet"
+        ],
+        "x-wawu-built-by": "MONEY-12",
+        "description": "Declared by MONEY-04, not served yet: MONEY-12 serves it.",
+        "x-wawu-served": false
+      }
+    },
+    "/api/hub/money/wallet/balance": {
+      "get": {
+        "operationId": "MoneyWalletController_balance",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletBalanceView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Fintava's available balance, asked for on every call (W1, W9, W13).\n503 provider_unreachable when the bank does not answer (W6): never a 0.",
+        "tags": [
+          "MoneyWallet"
+        ],
+        "x-wawu-built-by": "MONEY-11",
+        "description": "Declared by MONEY-04, not served yet: MONEY-11 serves it.",
+        "x-wawu-served": false
+      }
+    },
+    "/api/hub/money/pin": {
+      "get": {
+        "operationId": "MoneyPinController_state",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PinStateView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Is a PIN set, when it last changed, tries left, and the lock if any.",
+        "tags": [
+          "MoneyPin"
+        ],
+        "x-wawu-built-by": "MONEY-09",
+        "description": "Declared by MONEY-04, not served yet: MONEY-09 serves it.",
+        "x-wawu-served": false
+      },
+      "post": {
+        "operationId": "MoneyPinController_set",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPinDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PinStateView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: pin_mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, pin_already_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Set the first PIN (A9, A10, W36). Both entries in one request; a difference is pin_mismatch.",
+        "tags": [
+          "MoneyPin"
+        ],
+        "x-wawu-built-by": "MONEY-09",
+        "description": "Declared by MONEY-04, not served yet: MONEY-09 serves it.",
+        "x-wawu-served": false
+      },
+      "put": {
+        "operationId": "MoneyPinController_change",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN. Only ever in this header: never in a URL, a body or a log.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePinDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PinStateView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: pin_mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Change the PIN. The current PIN is X-Transaction-Pin.",
+        "tags": [
+          "MoneyPin"
+        ],
+        "x-wawu-built-by": "MONEY-09",
+        "description": "Declared by MONEY-04, not served yet: MONEY-09 serves it.",
+        "x-wawu-served": false
+      }
+    },
+    "/api/hub/money/pin/verify": {
+      "post": {
+        "operationId": "MoneyPinController_verify",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN. Only ever in this header: never in a URL, a body or a log.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PinStateView"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Check the PIN without moving money, for a screen that must confirm the\nperson before it changes something. A wrong PIN counts toward the lock\nexactly as it does on a debit.",
+        "tags": [
+          "MoneyPin"
+        ],
+        "x-wawu-built-by": "MONEY-09",
+        "description": "Declared by MONEY-04, not served yet: MONEY-09 serves it.",
+        "x-wawu-served": false
+      }
+    },
+    "/api/hub/money/pin/reset": {
+      "post": {
+        "operationId": "MoneyPinController_startReset",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PinResetView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Forgot PIN (W37): send a code to the phone on file. Answers again with a new code once resendAvailableAt has passed.",
+        "tags": [
+          "MoneyPin"
+        ],
+        "x-wawu-built-by": "MONEY-14",
+        "description": "Declared by MONEY-04, not served yet: MONEY-14 serves it.",
+        "x-wawu-served": false
+      }
+    },
+    "/api/hub/money/pin/reset/confirm": {
+      "post": {
+        "operationId": "MoneyPinController_confirmReset",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmPinResetDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PinStateView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: reset_code_invalid, pin_mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The code and the new PIN. Clears the lock and the wrong-try count.",
+        "tags": [
+          "MoneyPin"
+        ],
+        "x-wawu-built-by": "MONEY-14",
+        "description": "Declared by MONEY-04, not served yet: MONEY-14 serves it.",
+        "x-wawu-served": false
+      }
+    },
+    "/api/hub/money/banks": {
+      "get": {
+        "operationId": "MoneyTransferController_banks",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BankView"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Fintava's bank list, in one unpaged array. Key on `code`: some names repeat.",
+        "tags": [
+          "MoneyTransfer"
+        ],
+        "x-wawu-built-by": "WALLET-09",
+        "description": "Declared by MONEY-04, not served yet: WALLET-09 serves it.",
+        "x-wawu-served": false
+      }
+    },
+    "/api/hub/money/banks/name-check": {
+      "post": {
+        "operationId": "MoneyTransferController_nameCheck",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NameCheckDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountNameView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reason.code: name_check_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Whose account this is, from the bank (W8, A21). W8's Continue unlocks only after this answers.",
+        "tags": [
+          "MoneyTransfer"
+        ],
+        "x-wawu-built-by": "WALLET-09",
+        "description": "Declared by MONEY-04, not served yet: WALLET-09 serves it.",
+        "x-wawu-served": false
+      }
+    },
+    "/api/hub/money/recipients": {
+      "get": {
+        "operationId": "MoneyTransferController_recipients",
+        "parameters": [
+          {
+            "name": "q",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minLength": 2,
+              "maxLength": 60,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RecipientView"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "WAWU users with an open wallet, by name, @handle or phone (W7). Blocked people never appear. At most 20.",
+        "tags": [
+          "MoneyTransfer"
+        ],
+        "x-wawu-built-by": "WALLET-08",
+        "description": "Declared by MONEY-04, not served yet: WALLET-08 serves it.",
+        "x-wawu-served": false
+      }
+    },
+    "/api/hub/money/recipients/recent": {
+      "get": {
+        "operationId": "MoneyTransferController_recentRecipients",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RecipientView"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The people this user sent money to most recently, newest first (W7). At most 10.",
+        "tags": [
+          "MoneyTransfer"
+        ],
+        "x-wawu-built-by": "WALLET-08",
+        "description": "Declared by MONEY-04, not served yet: WALLET-08 serves it.",
+        "x-wawu-served": false
+      }
+    },
+    "/api/hub/money/beneficiaries": {
+      "get": {
+        "operationId": "MoneyTransferController_beneficiaries",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BeneficiaryView"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Saved beneficiaries, newest first (W8). Their number is WalletView.beneficiaryCount (W35).",
+        "tags": [
+          "MoneyTransfer"
+        ],
+        "x-wawu-built-by": "WALLET-14",
+        "description": "Declared by MONEY-04, not served yet: WALLET-14 serves it.",
+        "x-wawu-served": false
+      },
+      "post": {
+        "operationId": "MoneyTransferController_addBeneficiary",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBeneficiaryDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BeneficiaryView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: self_transfer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: recipient_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, recipient_has_no_wallet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reason.code: name_check_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Save a beneficiary (W12 \"Save as beneficiary\"). Saving one already saved answers the existing one.",
+        "tags": [
+          "MoneyTransfer"
+        ],
+        "x-wawu-built-by": "WALLET-14",
+        "description": "Declared by MONEY-04, not served yet: WALLET-14 serves it.",
+        "x-wawu-served": false
+      }
+    },
+    "/api/hub/money/beneficiaries/{id}": {
+      "delete": {
+        "operationId": "MoneyTransferController_removeBeneficiary",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Remove a saved beneficiary. Removing one already gone is a 200.",
+        "tags": [
+          "MoneyTransfer"
+        ],
+        "x-wawu-built-by": "WALLET-14",
+        "description": "Declared by MONEY-04, not served yet: WALLET-14 serves it.",
+        "x-wawu-served": false
+      }
+    },
+    "/api/hub/money/payout-account": {
+      "get": {
+        "operationId": "MoneyTransferController_payoutAccount",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/PayoutAccountView"
+                    }
+                  ],
+                  "nullable": true
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The creator's payout account (A21, W17's default destination), or null when none is saved.",
+        "tags": [
+          "MoneyTransfer"
+        ],
+        "x-wawu-built-by": "WALLET-14",
+        "description": "Declared by MONEY-04, not served yet: WALLET-14 serves it.",
+        "x-wawu-served": false
+      },
+      "put": {
+        "operationId": "MoneyTransferController_setPayoutAccount",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PayoutAccountDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PayoutAccountView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reason.code: name_check_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Save or replace the payout account. The server name-checks it and compares the name with the BVN name.",
+        "tags": [
+          "MoneyTransfer"
+        ],
+        "x-wawu-built-by": "WALLET-14",
+        "description": "Declared by MONEY-04, not served yet: WALLET-14 serves it.",
+        "x-wawu-served": false
+      }
+    },
+    "/api/hub/money/fees/quote": {
+      "get": {
+        "operationId": "MoneyTransferController_feeQuote",
+        "parameters": [
+          {
+            "name": "kind",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "wawu_transfer",
+                "bank_transfer"
+              ]
+            }
+          },
+          {
+            "name": "amountKobo",
+            "required": true,
+            "in": "query",
+            "description": "What the recipient should get, in kobo.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeeQuoteView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "What a send will cost, before the PIN (W10, W17): Fintava's charge plus\nWAWU's fee from config (R-10), the total, and whether it fits today's\nlimit. Nothing is reserved; the send repeats totalKobo as expectedTotalKobo.",
+        "tags": [
+          "MoneyTransfer"
+        ],
+        "x-wawu-built-by": "WALLET-15",
+        "description": "Declared by MONEY-04, not served yet: WALLET-15 serves it.",
+        "x-wawu-served": false
+      }
+    },
+    "/api/hub/money/transfers/wawu": {
+      "post": {
+        "operationId": "MoneyTransferController_sendToWawuUser",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN. Only ever in this header: never in a URL, a body or a log.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WawuTransferDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range, self_transfer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, daily_limit_exceeded, recipient_blocked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: recipient_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, recipient_has_no_wallet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Send to a WAWU user (W10 to W12). Completes at once or is refused; never pending.",
+        "tags": [
+          "MoneyTransfer"
+        ],
+        "x-wawu-built-by": "WALLET-07",
+        "description": "Declared by MONEY-04, not served yet: WALLET-07 serves it.",
+        "x-wawu-served": false
+      }
+    },
+    "/api/hub/money/transfers/bank": {
+      "post": {
+        "operationId": "MoneyTransferController_sendToBank",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN. Only ever in this header: never in a URL, a body or a log.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BankTransferDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, daily_limit_exceeded, bank_transfers_blocked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reason.code: name_check_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Send to a bank account (W10 to W14), or withdraw to the payout account\n(W17 to W19). Answers pending; the bank's answer arrives later and the\napp reads it from GET /money/transfers/{id}.",
+        "tags": [
+          "MoneyTransfer"
+        ],
+        "x-wawu-built-by": "WALLET-09",
+        "description": "Declared by MONEY-04, not served yet: WALLET-09 serves it.",
+        "x-wawu-served": false
+      }
+    },
+    "/api/hub/money/transfers/{id}": {
+      "get": {
+        "operationId": "MoneyTransferController_transfer",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One send, as it stands now (W12 receipt, W14 failed, W19 timeline). Only the sender can read it.",
+        "tags": [
+          "MoneyTransfer"
+        ],
+        "x-wawu-built-by": "WALLET-07",
+        "description": "Declared by MONEY-04, not served yet: WALLET-07 serves it.",
+        "x-wawu-served": false
+      }
+    },
+    "/api/hub/money/payments/quote": {
+      "get": {
+        "operationId": "MoneyPaymentController_quote",
+        "parameters": [
+          {
+            "name": "kind",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "content_unlock",
+                "tip",
+                "credit_pack",
+                "verification",
+                "legal_fee",
+                "school_fee",
+                "paid_dm",
+                "event_ticket",
+                "bill"
+              ]
+            }
+          },
+          {
+            "name": "targetId",
+            "required": true,
+            "in": "query",
+            "description": "The id the owning feature returns for the thing being paid for (docs/contract/WALLET.md).",
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{1,64}$",
+              "type": "string"
+            }
+          },
+          {
+            "name": "amountKobo",
+            "required": false,
+            "in": "query",
+            "description": "Only for a tip, where the payer chooses the amount. Refused on every other kind.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentQuoteView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "What the pay sheet shows before the PIN (H14, H17): the price from the\nserver's own record of the item, Fintava's charge, the total, the balance\nand the shortfall, and whether it fits today's limit. Nothing is\nreserved. A total above MERCHANT_MAX_PER_TXN_KOBO is amount_out_of_range.",
+        "tags": [
+          "MoneyPayment"
+        ],
+        "x-wawu-built-by": "MONEY-17",
+        "description": "Declared by MONEY-04, not served yet: MONEY-17 serves it.",
+        "x-wawu-served": false
+      }
+    },
+    "/api/hub/money/payments": {
+      "post": {
+        "operationId": "MoneyPaymentController_pay",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN. Only ever in this header: never in a URL, a body or a log.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, daily_limit_exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, target_not_payable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Pay from the wallet. Answers completed, or pending when Fintava has not\nconfirmed the debit yet (H18, E10): the app polls GET /money/payments/{id}.\nA held kind answers with its hold. The money goes through WAWU's\nmerchant wallet, so a total above MERCHANT_MAX_PER_TXN_KOBO (config) is\nrefused with amount_out_of_range and maximumKobo, never split; a total\npast today's limit is daily_limit_exceeded (Lead rulings, 2 Oct 2026).",
+        "tags": [
+          "MoneyPayment"
+        ],
+        "x-wawu-built-by": "MONEY-17",
+        "description": "Declared by MONEY-04, not served yet: MONEY-17 serves it.",
+        "x-wawu-served": false
+      }
+    },
+    "/api/hub/money/payments/{id}": {
+      "get": {
+        "operationId": "MoneyPaymentController_payment",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One payment, as it stands now. Only the payer can read it.",
+        "tags": [
+          "MoneyPayment"
+        ],
+        "x-wawu-built-by": "MONEY-19",
+        "description": "Declared by MONEY-04, not served yet: MONEY-19 serves it.",
+        "x-wawu-served": false
+      }
+    },
+    "/api/hub/money/holds": {
+      "get": {
+        "operationId": "MoneyPaymentController_holds",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Rows per page, 1 to 100.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "role",
+            "required": true,
+            "in": "query",
+            "description": "payer: money I paid that is held. payee: money held for me.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "payer",
+                "payee"
+              ]
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "`nextCursor` from the previous page. Opaque: send it back as given. Absent for the first page.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HoldPage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Holds the caller paid (role=payer) or is owed (role=payee), newest first.",
+        "tags": [
+          "MoneyPayment"
+        ],
+        "x-wawu-built-by": "MONEY-18",
+        "description": "Declared by MONEY-04, not served yet: MONEY-18 serves it.",
+        "x-wawu-served": false
+      }
+    },
+    "/api/hub/money/holds/{id}": {
+      "get": {
+        "operationId": "MoneyPaymentController_hold",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HoldView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One hold. Its payer and its payee can read it; nobody else.",
+        "tags": [
+          "MoneyPayment"
+        ],
+        "x-wawu-built-by": "MONEY-18",
+        "description": "Declared by MONEY-04, not served yet: MONEY-18 serves it.",
+        "x-wawu-served": false
+      }
+    },
+    "/api/hub/money/transactions": {
+      "get": {
+        "operationId": "MoneyHistoryController_list",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Rows per page, 1 to 100.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "filter",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": "all",
+              "type": "string",
+              "enum": [
+                "all",
+                "money_in",
+                "money_out",
+                "bills",
+                "content"
+              ]
+            }
+          },
+          {
+            "name": "month",
+            "required": false,
+            "in": "query",
+            "description": "Only rows from this month, YYYY-MM in Africa/Lagos time (W28 \"Bills in September\").",
+            "schema": {
+              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "required": false,
+            "in": "query",
+            "description": "Free-text search over the counterparty's name, the description, the note and the reference.",
+            "schema": {
+              "minLength": 2,
+              "maxLength": 60,
+              "type": "string"
+            }
+          },
+          {
+            "name": "group",
+            "required": false,
+            "in": "query",
+            "description": "A grouped row's `group.key`: lists the movements it stands for, one per\nrow, instead of the history. Opaque: send it back as given.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "`nextCursor` from the previous page. Opaque: send it back as given. Absent for the first page.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionPage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "W26, W28: search, filter chips, an optional month. W1's recent rows are the first page with limit=3.",
+        "tags": [
+          "MoneyHistory"
+        ],
+        "x-wawu-built-by": "MONEY-15",
+        "description": "Declared by MONEY-04, not served yet: MONEY-15 serves it.",
+        "x-wawu-served": false
+      }
+    },
+    "/api/hub/money/transactions/summary": {
+      "get": {
+        "operationId": "MoneyHistoryController_summary",
+        "parameters": [
+          {
+            "name": "month",
+            "required": true,
+            "in": "query",
+            "description": "YYYY-MM in Africa/Lagos time.",
+            "schema": {
+              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MonthlySummaryView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "W26's In and Out for one month. Declared before transactions/{id} so the literal path wins.",
+        "tags": [
+          "MoneyHistory"
+        ],
+        "x-wawu-built-by": "MONEY-15",
+        "description": "Declared by MONEY-04, not served yet: MONEY-15 serves it.",
+        "x-wawu-served": false
+      }
+    },
+    "/api/hub/money/transactions/{id}": {
+      "get": {
+        "operationId": "MoneyHistoryController_detail",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One row as a receipt (W27). Only the wallet's owner can read it.",
+        "tags": [
+          "MoneyHistory"
+        ],
+        "x-wawu-built-by": "MONEY-15",
+        "description": "Declared by MONEY-04, not served yet: MONEY-15 serves it.",
+        "x-wawu-served": false
       }
     }
   },
@@ -21305,6 +23488,12 @@
             "maxLength": 30,
             "pattern": "^[a-zA-Z0-9_.]+$"
           },
+          "headline": {
+            "type": "string",
+            "nullable": true,
+            "description": "The one line under the name. A person's own sentence about what they do,\nnot a category: see the schema note on why the first interest was the\nwrong thing to render there.",
+            "maxLength": 120
+          },
           "company": {
             "type": "string",
             "nullable": true,
@@ -21827,6 +24016,376 @@
             }
           }
         }
+      },
+      "MoneyErrorReason": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "enum": [
+              "wallet_not_open",
+              "wallet_opening",
+              "wallet_frozen",
+              "provider_unreachable",
+              "idempotency_key_required",
+              "idempotency_key_reused",
+              "idempotency_in_progress",
+              "pin_required",
+              "pin_not_set",
+              "pin_already_set",
+              "pin_incorrect",
+              "pin_locked",
+              "pin_mismatch",
+              "reset_code_invalid",
+              "insufficient_funds",
+              "daily_limit_exceeded",
+              "amount_out_of_range",
+              "quote_changed",
+              "name_check_failed",
+              "recipient_not_found",
+              "recipient_has_no_wallet",
+              "recipient_blocked",
+              "self_transfer",
+              "bank_transfers_blocked",
+              "target_not_found",
+              "target_not_payable",
+              "not_found"
+            ],
+            "type": "string"
+          },
+          "balanceKobo": {
+            "type": "integer",
+            "description": "insufficient_funds: Fintava's available balance when the payment was refused."
+          },
+          "totalKobo": {
+            "type": "integer",
+            "description": "insufficient_funds, daily_limit_exceeded: the total the request needed (amount plus fees)."
+          },
+          "shortfallKobo": {
+            "type": "integer",
+            "description": "insufficient_funds: totalKobo minus balanceKobo, what to add before trying again."
+          },
+          "remainingTodayKobo": {
+            "type": "integer",
+            "description": "daily_limit_exceeded: what is left of today's limit."
+          },
+          "minimumKobo": {
+            "type": "integer",
+            "description": "amount_out_of_range: the smallest amount accepted."
+          },
+          "maximumKobo": {
+            "type": "integer",
+            "description": "amount_out_of_range: the largest amount accepted."
+          },
+          "feeQuote": {
+            "description": "quote_changed on a transfer: the quote as it stands now.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FeeQuoteView"
+              }
+            ]
+          },
+          "paymentQuote": {
+            "description": "quote_changed on a payment: the quote as it stands now.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PaymentQuoteView"
+              }
+            ]
+          },
+          "blockedBy": {
+            "description": "bank_transfers_blocked: why (W18).",
+            "enum": [
+              "kyc_pending",
+              "kyc_rejected",
+              "kyc_not_submitted"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "type": "string",
+            "description": "A sentence the app may show as it is. Never an em-dash, never a provider's raw text."
+          },
+          "triesLeft": {
+            "type": "number",
+            "description": "pin_incorrect: wrong tries left before the PIN locks. reset_code_invalid: tries left on this code."
+          },
+          "lockedUntil": {
+            "type": "string",
+            "description": "pin_locked: when the lock ends, ISO 8601 UTC."
+          },
+          "retryAfterSeconds": {
+            "type": "number",
+            "description": "provider_unreachable, idempotency_in_progress: seconds to wait before trying again."
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
+      "MoneyErrorEnvelope": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "description": "Always null on an error.",
+            "type": "object",
+            "nullable": true,
+            "example": null
+          },
+          "statusCode": {
+            "type": "number",
+            "description": "The HTTP status again."
+          },
+          "message": {
+            "type": "string",
+            "description": "Same as reason.message."
+          },
+          "reason": {
+            "$ref": "#/components/schemas/MoneyErrorReason"
+          }
+        },
+        "required": [
+          "data",
+          "statusCode",
+          "message",
+          "reason"
+        ]
+      },
+      "SetPinDto": {
+        "type": "object",
+        "properties": {
+          "pin": {
+            "type": "string",
+            "pattern": "^[0-9]{4}$"
+          },
+          "pinConfirmation": {
+            "type": "string",
+            "description": "The second entry (A10 \"Enter it again\"). A difference is `pin_mismatch`.",
+            "pattern": "^[0-9]{4}$"
+          }
+        },
+        "required": [
+          "pin",
+          "pinConfirmation"
+        ]
+      },
+      "ChangePinDto": {
+        "type": "object",
+        "properties": {
+          "newPin": {
+            "type": "string",
+            "pattern": "^[0-9]{4}$"
+          },
+          "newPinConfirmation": {
+            "type": "string",
+            "pattern": "^[0-9]{4}$"
+          }
+        },
+        "required": [
+          "newPin",
+          "newPinConfirmation"
+        ]
+      },
+      "ConfirmPinResetDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The code from the text message. Its length is set by whoever sends it (MONEY-14).",
+            "pattern": "^[0-9]{4,8}$"
+          },
+          "newPin": {
+            "type": "string",
+            "pattern": "^[0-9]{4}$"
+          },
+          "newPinConfirmation": {
+            "type": "string",
+            "pattern": "^[0-9]{4}$"
+          },
+          "resetId": {
+            "type": "string",
+            "description": "From POST /money/pin/reset.",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "code",
+          "newPin",
+          "newPinConfirmation",
+          "resetId"
+        ]
+      },
+      "NameCheckDto": {
+        "type": "object",
+        "properties": {
+          "bankCode": {
+            "type": "string",
+            "pattern": "^[0-9]{3,6}$"
+          },
+          "accountNumber": {
+            "type": "string",
+            "pattern": "^[0-9]{10}$"
+          }
+        },
+        "required": [
+          "bankCode",
+          "accountNumber"
+        ]
+      },
+      "CreateBeneficiaryDto": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "wawu_user",
+              "bank_account"
+            ],
+            "type": "string"
+          },
+          "bankCode": {
+            "type": "string",
+            "description": "Required when kind is bank_account.",
+            "pattern": "^[0-9]{3,6}$"
+          },
+          "accountNumber": {
+            "type": "string",
+            "description": "Required when kind is bank_account.",
+            "pattern": "^[0-9]{10}$"
+          },
+          "wawuUserId": {
+            "type": "string",
+            "description": "Required when kind is wawu_user.",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "PayoutAccountDto": {
+        "type": "object",
+        "properties": {
+          "bankCode": {
+            "type": "string",
+            "pattern": "^[0-9]{3,6}$"
+          },
+          "accountNumber": {
+            "type": "string",
+            "pattern": "^[0-9]{10}$"
+          }
+        },
+        "required": [
+          "bankCode",
+          "accountNumber"
+        ]
+      },
+      "WawuTransferDto": {
+        "type": "object",
+        "properties": {
+          "amountKobo": {
+            "type": "integer",
+            "description": "What the recipient gets, in kobo.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "expectedTotalKobo": {
+            "type": "integer",
+            "description": "`totalKobo` from the fee quote the person saw. A different server total is `quote_changed`.",
+            "minimum": 1
+          },
+          "recipientWawuUserId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "note": {
+            "type": "string",
+            "description": "W9's optional note.",
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "amountKobo",
+          "expectedTotalKobo",
+          "recipientWawuUserId"
+        ]
+      },
+      "BankTransferDto": {
+        "type": "object",
+        "properties": {
+          "bankCode": {
+            "type": "string",
+            "pattern": "^[0-9]{3,6}$"
+          },
+          "accountNumber": {
+            "type": "string",
+            "pattern": "^[0-9]{10}$"
+          },
+          "amountKobo": {
+            "type": "integer",
+            "description": "What the bank account gets, in kobo.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "expectedTotalKobo": {
+            "type": "integer",
+            "description": "`totalKobo` from the fee quote the person saw. A different server total is `quote_changed`.",
+            "minimum": 1
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "bankCode",
+          "accountNumber",
+          "amountKobo",
+          "expectedTotalKobo"
+        ]
+      },
+      "PaymentDto": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "content_unlock",
+              "tip",
+              "credit_pack",
+              "verification",
+              "legal_fee",
+              "school_fee",
+              "paid_dm",
+              "event_ticket",
+              "bill"
+            ],
+            "type": "string"
+          },
+          "targetId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
+          "amountKobo": {
+            "type": "integer",
+            "description": "Only for a tip. Every other price is the server's own record of the item.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "expectedTotalKobo": {
+            "type": "integer",
+            "description": "`totalKobo` from the payment quote the person saw. A different server total is `quote_changed`.",
+            "minimum": 1
+          },
+          "note": {
+            "type": "string",
+            "description": "Only for a tip: the message that goes with it, 500 characters as POST /tips takes today.",
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "kind",
+          "targetId",
+          "expectedTotalKobo"
+        ]
       },
       "AdminUserView": {
         "type": "object",
@@ -25760,13 +28319,13 @@
         "type": "object",
         "properties": {
           "grossKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "wawuShareKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "creatorShareKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "transactionCount": {
             "type": "number"
@@ -25810,13 +28369,13 @@
             }
           },
           "grossKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "wawuShareKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "creatorShareKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "transactionCount": {
             "type": "number"
@@ -25847,13 +28406,13 @@
             "type": "number"
           },
           "fundedGrossKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "hostShareKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "platformShareKobo": {
-            "type": "number"
+            "type": "integer"
           }
         },
         "required": [
@@ -25955,13 +28514,13 @@
             "nullable": true
           },
           "grossKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "wawuShareKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "creatorShareKobo": {
-            "type": "number"
+            "type": "integer"
           },
           "status": {
             "type": "string",
@@ -27945,6 +30504,10 @@
             "type": "string",
             "nullable": true
           },
+          "headline": {
+            "type": "string",
+            "nullable": true
+          },
           "company": {
             "type": "string",
             "nullable": true
@@ -28038,6 +30601,7 @@
           "youtubeUrl",
           "facebookUrl",
           "linkedinUrl",
+          "headline",
           "company",
           "sub",
           "email",
@@ -28151,6 +30715,10 @@
             "type": "string",
             "nullable": true
           },
+          "headline": {
+            "type": "string",
+            "nullable": true
+          },
           "company": {
             "type": "string",
             "nullable": true
@@ -28218,6 +30786,7 @@
           "instagramHandle",
           "whatsappHandle",
           "websiteUrl",
+          "headline",
           "company",
           "experience",
           "xHandle",
@@ -29129,6 +31698,1090 @@
           "brief",
           "completedAt",
           "legalRequestId"
+        ]
+      },
+      "FeeBreakdown": {
+        "type": "object",
+        "properties": {
+          "providerFeeKobo": {
+            "type": "integer"
+          },
+          "wawuFeeKobo": {
+            "type": "integer"
+          },
+          "totalFeeKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "providerFeeKobo",
+          "wawuFeeKobo",
+          "totalFeeKobo"
+        ]
+      },
+      "TransactionCounterpartyView": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "wawu_user",
+              "bank_account",
+              "biller",
+              "wawu"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "wawuUserId": {
+            "type": "string",
+            "nullable": true
+          },
+          "bankName": {
+            "type": "string",
+            "nullable": true
+          },
+          "accountNumberLast4": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "kind",
+          "name",
+          "avatarUrl",
+          "wawuUserId",
+          "bankName",
+          "accountNumberLast4"
+        ]
+      },
+      "TransactionLinkView": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "tip",
+              "verification",
+              "bill",
+              "content_unlock",
+              "credit_pack",
+              "legal_fee",
+              "school_fee",
+              "paid_dm",
+              "event_ticket"
+            ]
+          },
+          "targetId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "targetId",
+          "title"
+        ]
+      },
+      "TransactionGroupView": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "count": {
+            "type": "number"
+          },
+          "firstAt": {
+            "type": "string"
+          },
+          "lastAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "count",
+          "firstAt",
+          "lastAt"
+        ]
+      },
+      "TransactionView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "in",
+              "out"
+            ]
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "purchase",
+              "earning",
+              "reversal",
+              "transfer",
+              "top_up",
+              "bill",
+              "hold",
+              "refund"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "failed",
+              "completed",
+              "reversed"
+            ]
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "fee": {
+            "$ref": "#/components/schemas/FeeBreakdown"
+          },
+          "totalKobo": {
+            "type": "integer"
+          },
+          "description": {
+            "type": "string"
+          },
+          "counterparty": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TransactionCounterpartyView"
+              }
+            ],
+            "nullable": true
+          },
+          "link": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TransactionLinkView"
+              }
+            ],
+            "nullable": true
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "reference": {
+            "type": "string"
+          },
+          "transferId": {
+            "type": "string",
+            "nullable": true
+          },
+          "paymentId": {
+            "type": "string",
+            "nullable": true
+          },
+          "group": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TransactionGroupView"
+              }
+            ],
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "direction",
+          "category",
+          "status",
+          "amountKobo",
+          "fee",
+          "totalKobo",
+          "description",
+          "counterparty",
+          "link",
+          "note",
+          "reference",
+          "transferId",
+          "paymentId",
+          "group",
+          "createdAt"
+        ]
+      },
+      "TransactionPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransactionView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "MonthlySummaryView": {
+        "type": "object",
+        "properties": {
+          "month": {
+            "type": "string"
+          },
+          "inKobo": {
+            "type": "integer"
+          },
+          "outKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "month",
+          "inKobo",
+          "outKobo"
+        ]
+      },
+      "MoneyPartyView": {
+        "type": "object",
+        "properties": {
+          "wawuUserId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "tick": {
+            "type": "string",
+            "enum": [
+              "creator",
+              "professional"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "wawuUserId",
+          "displayName",
+          "handle",
+          "avatarUrl",
+          "tick"
+        ]
+      },
+      "PaymentQuoteView": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "tip",
+              "verification",
+              "bill",
+              "content_unlock",
+              "credit_pack",
+              "legal_fee",
+              "school_fee",
+              "paid_dm",
+              "event_ticket"
+            ]
+          },
+          "targetId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "payee": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MoneyPartyView"
+              }
+            ],
+            "nullable": true
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "fee": {
+            "$ref": "#/components/schemas/FeeBreakdown"
+          },
+          "totalKobo": {
+            "type": "integer"
+          },
+          "balanceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "shortfallKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "willBeHeld": {
+            "type": "boolean"
+          },
+          "withinDailyLimit": {
+            "type": "boolean"
+          },
+          "remainingTodayKobo": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "kind",
+          "targetId",
+          "title",
+          "payee",
+          "priceKobo",
+          "fee",
+          "totalKobo",
+          "balanceKobo",
+          "shortfallKobo",
+          "willBeHeld",
+          "withinDailyLimit",
+          "remainingTodayKobo"
+        ]
+      },
+      "HoldView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "paymentId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "tip",
+              "verification",
+              "bill",
+              "content_unlock",
+              "credit_pack",
+              "legal_fee",
+              "school_fee",
+              "paid_dm",
+              "event_ticket"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "refunded",
+              "held",
+              "released"
+            ]
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "releaseCondition": {
+            "type": "string",
+            "enum": [
+              "dm_answered",
+              "event_took_place",
+              "bill_delivered"
+            ]
+          },
+          "payer": {
+            "$ref": "#/components/schemas/MoneyPartyView"
+          },
+          "payee": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MoneyPartyView"
+              }
+            ],
+            "nullable": true
+          },
+          "heldAt": {
+            "type": "string"
+          },
+          "settledAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "refundedKobo": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "paymentId",
+          "kind",
+          "status",
+          "amountKobo",
+          "releaseCondition",
+          "payer",
+          "payee",
+          "heldAt",
+          "settledAt",
+          "refundedKobo"
+        ]
+      },
+      "PaymentView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "tip",
+              "verification",
+              "bill",
+              "content_unlock",
+              "credit_pack",
+              "legal_fee",
+              "school_fee",
+              "paid_dm",
+              "event_ticket"
+            ]
+          },
+          "targetId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "failed",
+              "completed",
+              "reversed"
+            ]
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "fee": {
+            "$ref": "#/components/schemas/FeeBreakdown"
+          },
+          "totalKobo": {
+            "type": "integer"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "hold": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HoldView"
+              }
+            ],
+            "nullable": true
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "completedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "targetId",
+          "title",
+          "status",
+          "priceKobo",
+          "fee",
+          "totalKobo",
+          "reference",
+          "hold",
+          "failureReason",
+          "createdAt",
+          "completedAt"
+        ]
+      },
+      "HoldPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HoldView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "BankView": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "name"
+        ]
+      },
+      "AccountNameView": {
+        "type": "object",
+        "properties": {
+          "bankCode": {
+            "type": "string"
+          },
+          "bankName": {
+            "type": "string"
+          },
+          "accountNumber": {
+            "type": "string"
+          },
+          "accountName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "bankCode",
+          "bankName",
+          "accountNumber",
+          "accountName"
+        ]
+      },
+      "RecipientView": {
+        "type": "object",
+        "properties": {
+          "wawuUserId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "tick": {
+            "type": "string",
+            "enum": [
+              "creator",
+              "professional"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "wawuUserId",
+          "displayName",
+          "handle",
+          "avatarUrl",
+          "tick"
+        ]
+      },
+      "BankAccountView": {
+        "type": "object",
+        "properties": {
+          "bankCode": {
+            "type": "string"
+          },
+          "bankName": {
+            "type": "string"
+          },
+          "accountNumber": {
+            "type": "string"
+          },
+          "accountName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "bankCode",
+          "bankName",
+          "accountNumber",
+          "accountName"
+        ]
+      },
+      "BeneficiaryView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "wawu_user",
+              "bank_account"
+            ]
+          },
+          "wawuUser": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MoneyPartyView"
+              }
+            ],
+            "nullable": true
+          },
+          "bankAccount": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BankAccountView"
+              }
+            ],
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "wawuUser",
+          "bankAccount",
+          "createdAt"
+        ]
+      },
+      "PayoutAccountView": {
+        "type": "object",
+        "properties": {
+          "bankCode": {
+            "type": "string"
+          },
+          "bankName": {
+            "type": "string"
+          },
+          "accountNumber": {
+            "type": "string"
+          },
+          "accountName": {
+            "type": "string"
+          },
+          "matchesBvnName": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "bankCode",
+          "bankName",
+          "accountNumber",
+          "accountName",
+          "matchesBvnName",
+          "updatedAt"
+        ]
+      },
+      "FeeQuoteView": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "wawu_transfer",
+              "bank_transfer"
+            ]
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "fee": {
+            "$ref": "#/components/schemas/FeeBreakdown"
+          },
+          "totalKobo": {
+            "type": "integer"
+          },
+          "withinDailyLimit": {
+            "type": "boolean"
+          },
+          "remainingTodayKobo": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "kind",
+          "amountKobo",
+          "fee",
+          "totalKobo",
+          "withinDailyLimit",
+          "remainingTodayKobo"
+        ]
+      },
+      "TransferTimelineEntry": {
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": "string",
+            "enum": [
+              "failed",
+              "completed",
+              "reversed",
+              "requested",
+              "sent_to_bank"
+            ]
+          }
+        },
+        "required": [
+          "step"
+        ]
+      },
+      "TransferReversalView": {
+        "type": "object",
+        "properties": {
+          "returnedKobo": {
+            "type": "integer"
+          },
+          "keptKobo": {
+            "type": "integer"
+          },
+          "reversedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "returnedKobo",
+          "keptKobo",
+          "reversedAt"
+        ]
+      },
+      "TransferView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "wawu_user",
+              "bank_account"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "failed",
+              "completed",
+              "reversed"
+            ]
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "fee": {
+            "$ref": "#/components/schemas/FeeBreakdown"
+          },
+          "totalKobo": {
+            "type": "integer"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "reference": {
+            "type": "string"
+          },
+          "toWawuUser": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MoneyPartyView"
+              }
+            ],
+            "nullable": true
+          },
+          "toBankAccount": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BankAccountView"
+              }
+            ],
+            "nullable": true
+          },
+          "timeline": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransferTimelineEntry"
+            }
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "reversal": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TransferReversalView"
+              }
+            ],
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "completedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "amountKobo",
+          "fee",
+          "totalKobo",
+          "note",
+          "reference",
+          "toWawuUser",
+          "toBankAccount",
+          "timeline",
+          "failureReason",
+          "reversal",
+          "createdAt",
+          "completedAt"
+        ]
+      },
+      "WalletAccountView": {
+        "type": "object",
+        "properties": {
+          "accountNumber": {
+            "type": "string"
+          },
+          "accountName": {
+            "type": "string"
+          },
+          "bankName": {
+            "type": "string"
+          },
+          "bankCode": {
+            "type": "string"
+          },
+          "licenceLine": {
+            "type": "string",
+            "nullable": true
+          },
+          "depositInsuranceLine": {
+            "type": "string",
+            "nullable": true
+          },
+          "openedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "accountNumber",
+          "accountName",
+          "bankName",
+          "bankCode",
+          "licenceLine",
+          "depositInsuranceLine",
+          "openedAt"
+        ]
+      },
+      "WalletLimitsView": {
+        "type": "object",
+        "properties": {
+          "tier": {
+            "type": "string",
+            "nullable": true
+          },
+          "dailyLimitKobo": {
+            "type": "integer"
+          },
+          "usedTodayKobo": {
+            "type": "integer"
+          },
+          "remainingTodayKobo": {
+            "type": "integer"
+          },
+          "resetsAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tier",
+          "dailyLimitKobo",
+          "usedTodayKobo",
+          "remainingTodayKobo",
+          "resetsAt"
+        ]
+      },
+      "PinStateView": {
+        "type": "object",
+        "properties": {
+          "isSet": {
+            "type": "boolean"
+          },
+          "changedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "triesLeft": {
+            "type": "number"
+          },
+          "lockedUntil": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "isSet",
+          "changedAt",
+          "triesLeft",
+          "lockedUntil"
+        ]
+      },
+      "BankTransferAccessView": {
+        "type": "object",
+        "properties": {
+          "allowed": {
+            "type": "boolean"
+          },
+          "blockedBy": {
+            "type": "string",
+            "enum": [
+              "kyc_pending",
+              "kyc_rejected",
+              "kyc_not_submitted"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "allowed",
+          "blockedBy"
+        ]
+      },
+      "WalletView": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "not_open",
+              "opening",
+              "frozen"
+            ]
+          },
+          "account": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WalletAccountView"
+              }
+            ],
+            "nullable": true
+          },
+          "limits": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WalletLimitsView"
+              }
+            ],
+            "nullable": true
+          },
+          "pin": {
+            "$ref": "#/components/schemas/PinStateView"
+          },
+          "bankTransfers": {
+            "$ref": "#/components/schemas/BankTransferAccessView"
+          },
+          "beneficiaryCount": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "state",
+          "account",
+          "limits",
+          "pin",
+          "bankTransfers",
+          "beneficiaryCount"
+        ]
+      },
+      "WalletBalanceView": {
+        "type": "object",
+        "properties": {
+          "availableKobo": {
+            "type": "integer"
+          },
+          "asOf": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "availableKobo",
+          "asOf"
+        ]
+      },
+      "PinResetView": {
+        "type": "object",
+        "properties": {
+          "resetId": {
+            "type": "string"
+          },
+          "sentTo": {
+            "type": "string"
+          },
+          "resendAvailableAt": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "resetId",
+          "sentTo",
+          "resendAvailableAt",
+          "expiresAt"
         ]
       }
     }

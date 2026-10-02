@@ -68,6 +68,11 @@ matters most here:
   as a balance.
 - What Fintava's API really does is in the mobile repo's `docs/fintava/`.
   Facts come from there and from real sandbox responses, never from the design.
+- **Money routes follow `docs/contract/CONVENTIONS.md`** (kobo, `+234`, one
+  error shape, `Idempotency-Key`, the `X-Transaction-Pin` header, cursor
+  pages). The Naira wallet routes are declared in `src/money/` and listed in
+  `docs/contract/WALLET.md`; they are in the contract marked
+  `x-wawu-served: false` until their task serves them (MONEY-04).
 
 ## Commands
 
