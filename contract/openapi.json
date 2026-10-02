@@ -17561,39 +17561,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "userWawuId": {
-                      "type": "string"
-                    },
-                    "newReplies": {
-                      "type": "boolean"
-                    },
-                    "newFollowers": {
-                      "type": "boolean"
-                    },
-                    "dmReminders": {
-                      "type": "boolean"
-                    },
-                    "refunds": {
-                      "type": "boolean"
-                    },
-                    "promotions": {
-                      "type": "boolean"
-                    },
-                    "communityDigest": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "userWawuId",
-                    "newReplies",
-                    "newFollowers",
-                    "dmReminders",
-                    "refunds",
-                    "promotions",
-                    "communityDigest"
-                  ]
+                  "$ref": "#/components/schemas/NotificationSettingsWire"
                 }
               }
             }
@@ -17622,39 +17590,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "userWawuId": {
-                      "type": "string"
-                    },
-                    "newReplies": {
-                      "type": "boolean"
-                    },
-                    "newFollowers": {
-                      "type": "boolean"
-                    },
-                    "dmReminders": {
-                      "type": "boolean"
-                    },
-                    "refunds": {
-                      "type": "boolean"
-                    },
-                    "promotions": {
-                      "type": "boolean"
-                    },
-                    "communityDigest": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "userWawuId",
-                    "newReplies",
-                    "newFollowers",
-                    "dmReminders",
-                    "refunds",
-                    "promotions",
-                    "communityDigest"
-                  ]
+                  "$ref": "#/components/schemas/NotificationSettingsWire"
                 }
               }
             }
@@ -23866,6 +23802,18 @@
           },
           "communityDigest": {
             "type": "boolean"
+          },
+          "moneyIn": {
+            "type": "boolean",
+            "description": "Tips and sales (SETTINGS-07). Optional; absent leaves it as it is."
+          },
+          "contentReviews": {
+            "type": "boolean",
+            "description": "An upload approved or sent back (SETTINGS-07). Optional; absent leaves it as it is."
+          },
+          "communityMessages": {
+            "type": "boolean",
+            "description": "Community messages (SETTINGS-07). Optional; absent leaves it as it is. Stored only: nothing sends that kind yet."
           }
         }
       },
@@ -30954,6 +30902,53 @@
           "freeCoursesTotal",
           "freeCoursesUsed",
           "enrolledCourseIds"
+        ]
+      },
+      "NotificationSettingsWire": {
+        "type": "object",
+        "properties": {
+          "userWawuId": {
+            "type": "string"
+          },
+          "newReplies": {
+            "type": "boolean"
+          },
+          "newFollowers": {
+            "type": "boolean"
+          },
+          "dmReminders": {
+            "type": "boolean"
+          },
+          "refunds": {
+            "type": "boolean"
+          },
+          "promotions": {
+            "type": "boolean"
+          },
+          "communityDigest": {
+            "type": "boolean"
+          },
+          "moneyIn": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "contentReviews": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "communityMessages": {
+            "type": "boolean",
+            "nullable": true
+          }
+        },
+        "required": [
+          "userWawuId",
+          "newReplies",
+          "newFollowers",
+          "dmReminders",
+          "refunds",
+          "promotions",
+          "communityDigest"
         ]
       },
       "ProfileExperienceView": {

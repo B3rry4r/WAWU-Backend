@@ -1033,11 +1033,11 @@ model Notification {
 }
 
 model NotificationSettings {
-  userWawuId      String  @id
-  newReplies      Boolean @default(true)
-  newFollowers    Boolean @default(true)
-  dmReminders     Boolean @default(true)
-  refunds         Boolean @default(true)
+  userWawuId        String   @id
+  newReplies        Boolean  @default(true)
+  newFollowers      Boolean  @default(true)
+  dmReminders       Boolean  @default(true)
+  refunds           Boolean  @default(true)
   /// "Offers and news" in Settings. Now the opt-out for admin-composed
   /// campaigns (kind `campaign`), which is the first thing that has ever read
   /// this column.
@@ -1049,8 +1049,20 @@ model NotificationSettings {
   /// alone, because it cannot be told apart from a deliberate opt-out. See
   /// DECISIONS.md D17c - whether to backfill is the product owner's call, not
   /// one to make quietly in a migration.
-  promotions      Boolean @default(true)
-  communityDigest Boolean @default(true)
+  promotions        Boolean  @default(true)
+  communityDigest   Boolean  @default(true)
+  /// "Money in" in Settings (SETTINGS-07): tips and sales. NULL means never
+  /// asked, which behaves as ON, exactly as before the column existed. Nullable
+  /// with no default on purpose: an existing row keeps reading and serialising
+  /// as it always did until its owner flips the switch.
+  moneyIn           Boolean?
+  /// "Reviews" in Settings (SETTINGS-07): an upload approved or sent back.
+  /// NULL means never asked, which behaves as ON.
+  contentReviews    Boolean?
+  /// "Community messages" in Settings (SETTINGS-07). NULL means never asked,
+  /// which behaves as ON. It gates nothing today: no community message kind
+  /// or sender exists yet, so this only stores the choice.
+  communityMessages Boolean?
 }
 
 // -----------------------------------------------------------------------------
