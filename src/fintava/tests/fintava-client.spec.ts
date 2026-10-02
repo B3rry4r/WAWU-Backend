@@ -717,7 +717,8 @@ describe('after a lost answer: reconcile before ANY resend', () => {
     amountKobo: 1000,
     customerReference: 'MONEY06-R-1',
   };
-  const longAgo = new Date(Date.now() - 10 * 60_000);
+  // Past the money timeout (30 s) plus the 10-minute safety window.
+  const longAgo = new Date(Date.now() - 15 * 60_000);
 
   it('found SUCCESS by reference: settled, nothing sent', async () => {
     double.on('GET', '/transaction/reference/MONEY06-R-1', {
@@ -738,6 +739,10 @@ describe('after a lost answer: reconcile before ANY resend', () => {
       status: 404,
       body: fintavaError(404, 'Transaction not found!'),
     });
+    double.on('GET', '/txn/merchant', {
+      status: 200,
+      body: merchantHistory([]),
+    });
     double.on('POST', '/transaction/wallet-to-wallet', {
       status: 200,
       body: W2W_200,
@@ -748,12 +753,21 @@ describe('after a lost answer: reconcile before ANY resend', () => {
     });
     expect(out.decision).toEqual({ action: 'resend_same_reference' });
     expect(out.receipt?.customerReference).toBe('MONEY06-R-1');
+    expect(double.seen.map((r) => `${r.method} ${r.path}`)).toEqual([
+      'GET /transaction/reference/MONEY06-R-1',
+      'GET /txn/merchant',
+      'POST /transaction/wallet-to-wallet',
+    ]);
     expect(
-      (double.seen[1].body as { CustomerReference: string }).CustomerReference,
+      (double.seen[2].body as { CustomerReference: string }).CustomerReference,
     ).toBe('MONEY06-R-1');
   });
 
   it('absent seconds after sending: wait, nothing sent', async () => {
+    double.on('GET', '/txn/merchant', {
+      status: 200,
+      body: merchantHistory([]),
+    });
     double.on('GET', '/transaction/reference/MONEY06-R-1', {
       status: 404,
       body: fintavaError(404, 'Transaction not found!'),
@@ -1269,5 +1283,235 @@ describe('11. bills: lists, preview, purchases', () => {
       amount: 500,
       planType: 'prepaid',
     });
+  });
+});
+
+describe('round 2: absent means only Fintava saying so, and never too soon', () => {
+  const merchantBank = {
+    accountNumber: '0123456789',
+    accountName: 'SIMI MICHELLE',
+    sortCode: '000013',
+    amountKobo: 10000,
+    customerReference: 'MONEY06-V-B-2',
+  };
+  const fifteenMinutesAgo = () => new Date(Date.now() - 15 * 60_000);
+  const posts = () => double.seen.filter((r) => r.method === 'POST').length;
+
+  const notFintava404s: Array<[string, unknown]> = [
+    [
+      'a framework route 404',
+      {
+        statusCode: 404,
+        message: 'Cannot GET /api/dev/transaction/reference/MONEY06-V-B-1',
+        error: 'Not Found',
+      },
+    ],
+    ['an empty body', ''],
+    ['an HTML gateway page', '<html><body>404 Not Found</body></html>'],
+    [
+      'a JSON 404 with another message',
+      fintavaError(404, 'Customer not found'),
+    ],
+  ];
+
+  it.each(notFintava404s)(
+    'the lookup answering %s is outcome_unknown, never absent',
+    async (_name, body) => {
+      double.on('GET', /^\/transaction\/reference\//, { status: 404, body });
+      const e = await failure(
+        client().getTransactionByReference('MONEY06-V-B-1'),
+      );
+      expect([e.kind, e.recordMayExist]).toEqual(['outcome_unknown', true]);
+    },
+  );
+
+  it.each(notFintava404s)(
+    'a bank retry after the lookup answers %s waits and sends nothing',
+    async (_name, body) => {
+      double.on('GET', /^\/transaction\/reference\//, { status: 404, body });
+      double.on('GET', '/txn/merchant', {
+        status: 200,
+        body: merchantHistory([]),
+      });
+      double.on('POST', '/bank/credit/merchant', {
+        status: 200,
+        body: W2W_200,
+      });
+      const out = await client().retryMerchantBankTransfer(merchantBank, {
+        previousReference: 'MONEY06-V-B-1',
+        attemptedAt: fifteenMinutesAgo(),
+      });
+      expect(out).toEqual({
+        decision: { action: 'wait', why: 'unrecognised' },
+        receipt: null,
+      });
+      expect(posts()).toBe(0);
+    },
+  );
+
+  it('the lookup by id answering a non-Fintava 404 is outcome_unknown too', async () => {
+    double.on('GET', /^\/transaction\/id\//, { status: 404, body: '' });
+    expect((await failure(client().getTransactionById('x'))).kind).toBe(
+      'outcome_unknown',
+    );
+  });
+
+  it('only `404 "Transaction not found!"` is absent', async () => {
+    double.on('GET', /^\/transaction\/reference\//, {
+      status: 404,
+      body: fintavaError(404, 'Transaction not found!'),
+    });
+    expect(await client().getTransactionByReference('MONEY06-V-B-1')).toEqual({
+      state: 'absent',
+    });
+  });
+
+  it('a 404 is not enough while history still shows the send: settled, nothing sent', async () => {
+    double.on('GET', /^\/transaction\/reference\//, {
+      status: 404,
+      body: fintavaError(404, 'Transaction not found!'),
+    });
+    double.on('GET', '/txn/merchant', {
+      status: 200,
+      body: merchantHistory([
+        historyRow({ CustomerReference: 'MONEY06-V-B-1', status: 'SUCCESS' }),
+      ]),
+    });
+    const out = await client().retryMerchantBankTransfer(merchantBank, {
+      previousReference: 'MONEY06-V-B-1',
+      attemptedAt: fifteenMinutesAgo(),
+    });
+    expect(out.decision.action).toBe('settled');
+    expect(posts()).toBe(0);
+  });
+
+  it('a 404 with history unreachable: wait, nothing sent', async () => {
+    double.on('GET', /^\/transaction\/reference\//, {
+      status: 404,
+      body: fintavaError(404, 'Transaction not found!'),
+    });
+    double.on('GET', '/txn/merchant', { status: 502, body: 'bad gateway' });
+    const out = await client().retryMerchantBankTransfer(merchantBank, {
+      previousReference: 'MONEY06-V-B-1',
+      attemptedAt: fifteenMinutesAgo(),
+    });
+    expect(out.decision).toEqual({ action: 'wait', why: 'unreachable' });
+    expect(posts()).toBe(0);
+  });
+
+  it("the verifier's case: a bank send done at 600 ms, timeout 200 ms, retry at once: sent once", async () => {
+    const c = client({ FINTAVA_MONEY_TIMEOUT_MS: '200' });
+    // Fintava finishes the first send after the client gave up; until then
+    // the lookup says not found and history has no row.
+    let landed = false;
+    double.on('POST', '/bank/credit/merchant', () => {
+      setTimeout(() => {
+        landed = true;
+      }, 600);
+      return { status: 200, body: W2W_200, delayMs: 600 };
+    });
+    double.on('GET', /^\/transaction\/reference\//, () =>
+      landed
+        ? {
+            status: 200,
+            body: recordByReference('MONEY06-V-B-1', 'SUCCESS', '100.00'),
+          }
+        : { status: 404, body: fintavaError(404, 'Transaction not found!') },
+    );
+    double.on('GET', '/txn/merchant', {
+      status: 200,
+      body: merchantHistory([]),
+    });
+
+    const attemptedAt = new Date();
+    const first = await failure(
+      c.merchantBankTransfer({
+        ...merchantBank,
+        customerReference: 'MONEY06-V-B-1',
+      }),
+    );
+    expect(first.kind).toBe('outcome_unknown');
+    const out = await c.retryMerchantBankTransfer(merchantBank, {
+      previousReference: 'MONEY06-V-B-1',
+      attemptedAt,
+    });
+    expect(out).toEqual({
+      decision: { action: 'wait', why: 'too_soon' },
+      receipt: null,
+    });
+    await new Promise((r) => setTimeout(r, 700));
+    expect(landed).toBe(true);
+    expect(
+      double.seen.filter((r) => r.path === '/bank/credit/merchant'),
+    ).toHaveLength(1);
+    // And once it has landed, a later retry finds it: settled, still one send.
+    const later = await c.retryMerchantBankTransfer(merchantBank, {
+      previousReference: 'MONEY06-V-B-1',
+      attemptedAt: fifteenMinutesAgo(),
+    });
+    expect(later.decision.action).toBe('settled');
+    expect(
+      double.seen.filter((r) => r.path === '/bank/credit/merchant'),
+    ).toHaveLength(1);
+  });
+
+  it('the same for wallet to wallet: retry at once after a timeout never resends', async () => {
+    const c = client({ FINTAVA_MONEY_TIMEOUT_MS: '200' });
+    double.on('POST', '/transaction/wallet-to-wallet', {
+      status: 200,
+      body: W2W_200,
+      delayMs: 600,
+    });
+    double.on('GET', /^\/transaction\/reference\//, {
+      status: 404,
+      body: fintavaError(404, 'Transaction not found!'),
+    });
+    double.on('GET', '/txn/merchant', {
+      status: 200,
+      body: merchantHistory([]),
+    });
+    const input = {
+      senderAccountNumber: MERCHANT_ACCOUNT,
+      receiverAccountNumber: CUSTOMER_A.accountNumber,
+      amountKobo: 1000,
+      customerReference: 'MONEY06-V-W-1',
+    };
+    const attemptedAt = new Date();
+    expect((await failure(c.walletToWallet(input))).kind).toBe(
+      'outcome_unknown',
+    );
+    const out = await c.retryWalletToWallet(input, {
+      sender: { kind: 'merchant' },
+      attemptedAt,
+    });
+    expect(out.decision).toEqual({ action: 'wait', why: 'too_soon' });
+    expect(double.seen.filter((r) => r.method === 'POST')).toHaveLength(1);
+  });
+
+  it('a repeated reference means the send exists: unknown outcome, never a plain failure', async () => {
+    double.on('POST', '/transaction/wallet-to-wallet', {
+      status: 400,
+      body: fintavaError(400, 'customerReference already exists'),
+    });
+    const e = await failure(
+      client().walletToWallet({
+        senderAccountNumber: MERCHANT_ACCOUNT,
+        receiverAccountNumber: CUSTOMER_A.accountNumber,
+        amountKobo: 1000,
+        customerReference: 'MONEY06-V-W-2',
+      }),
+    );
+    expect([e.kind, e.recordMayExist, e.reference]).toEqual([
+      'duplicate_reference',
+      true,
+      'MONEY06-V-W-2',
+    ]);
+    const body = e.toHttpException().getResponse() as {
+      message: string;
+      reason: { code: string };
+    };
+    expect(body.reason.code).toBe('provider_unreachable');
+    expect(body.message).toMatch(/still confirming/i);
+    expect(body.message).not.toMatch(/not available/i);
   });
 });

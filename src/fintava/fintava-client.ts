@@ -267,9 +267,14 @@ const RECONCILE_SKEW_MS = 10 * 60_000;
  * `docs/fintava/naira-api.md` and `sandbox/`):
  * - Every send carries OUR `CustomerReference`. A send whose answer was
  *   lost (timeout, no connection, 5xx) throws `outcome_unknown`; it is never
- *   sent again under the same reference until `reconcile` has asked Fintava
- *   (the lookup by reference, then history when the lookup answers `{}`).
+ *   sent again until `reconcile` has asked Fintava (the lookup by reference,
+ *   then history), and only once the money timeout plus a safety window
+ *   (FINTAVA_RESEND_SAFETY_MS) has passed since the first send.
  *   `retryWalletToWallet` and the bank retries do exactly that.
+ * - One retry at a time per payment: the caller (MONEY-08's status check and
+ *   pending sweep) must hold a lock on the payment while it calls a `retry*`
+ *   method. Two bank retries running together, each with its own new
+ *   reference, would both send.
  * - A 2xx is not proof: a send or purchase counts only when the body carries
  *   the transaction (`not_confirmed` otherwise).
  * - Errors are read by message as well as status (fintava-error.ts).
@@ -820,6 +825,32 @@ export class FintavaClient {
    * `reference`; never a transfer response's `reference` field, which is
    * not findable). Three answers: found, absent (404), unknown (200 `{}`).
    */
+  /**
+   * A failed lookup: absent only for Fintava's own JSON refusal
+   * `404 "Transaction not found!"` (`sandbox/11-`). Any other 404 (a
+   * framework "Cannot GET", an empty or HTML body, a gateway page, another
+   * message) says nothing about the send: `outcome_unknown`, so nothing is
+   * ever sent again on it.
+   */
+  private lookupFailure(op: Op, e: unknown, reference?: string): FintavaLookup {
+    if (!(e instanceof FintavaError) || e.httpStatus !== 404) throw e;
+    if (e.kind === 'auth' || e.kind === 'not_configured') throw e;
+    if (
+      e.kind === 'not_found' &&
+      e.messages.length === 1 &&
+      /^transaction not found!?$/i.test(e.messages[0].trim())
+    ) {
+      return { state: 'absent' };
+    }
+    throw this.fail(op, {
+      kind: 'outcome_unknown',
+      status: 404,
+      messages: e.messages.length ? e.messages : ['a 404 that is not Fintava'],
+      reference: reference ?? null,
+      recordMayExist: true,
+    });
+  }
+
   async getTransactionByReference(reference: string): Promise<FintavaLookup> {
     const op: Op = {
       name: 'transaction by reference',
@@ -834,10 +865,7 @@ export class FintavaClient {
         { reference },
       );
     } catch (e) {
-      if (e instanceof FintavaError && e.kind === 'not_found') {
-        return { state: 'absent' };
-      }
-      throw e;
+      return this.lookupFailure(op, e, reference);
     }
     return this.read(
       op,
@@ -860,7 +888,9 @@ export class FintavaClient {
   /**
    * `GET /transaction/id/{id}`: the full record, fees and bill fields
    * included. An unknown id is a 200 with `data: null` (absent). The
-   * customer identity it embeds is dropped.
+   * customer identity it embeds is dropped. Like the lookup by reference it
+   * can answer `{}` for a record that exists, so a resend is never decided
+   * from this call: `reconcile` does not use it.
    */
   async getTransactionById(id: string): Promise<FintavaLookup> {
     const op: Op = { name: 'transaction by id', method: 'GET', call: 'read' };
@@ -871,10 +901,7 @@ export class FintavaClient {
         `/transaction/id/${encodeURIComponent(id)}`,
       );
     } catch (e) {
-      if (e instanceof FintavaError && e.kind === 'not_found') {
-        return { state: 'absent' };
-      }
-      throw e;
+      return this.lookupFailure(op, e);
     }
     return this.read(op, answer, (data, body) => {
       if (data === null) return { state: 'absent' };
@@ -1019,29 +1046,66 @@ export class FintavaClient {
   // -------------------------------------------------------------------------
 
   /**
-   * What Fintava knows about one of our references. The lookup first; when
-   * it answers `{}`, the sender's history (the merchant's for WAWU's sends,
-   * the customer's for a customer's), newest first, back to `since`. A row
-   * missing from history is not proof (the merchant list is cached for
-   * about 5 minutes), so that is `unknown`, never `absent`.
+   * The sender's history (the merchant's for WAWU's sends, the customer's for
+   * a customer's), newest first, back to `since`: the row for `reference`,
+   * or null. Errors propagate.
+   */
+  private async findInHistory(
+    reference: string,
+    sender: FintavaSender,
+    since?: Date,
+  ): Promise<FintavaTransaction | null> {
+    const oldest = since ? since.getTime() - RECONCILE_SKEW_MS : null;
+    const take = historyTake();
+    for (let page = 1; page <= RECONCILE_MAX_PAGES; page += 1) {
+      const rows =
+        sender.kind === 'merchant'
+          ? await this.getMerchantHistory({ page, take, order: 'DESC' })
+          : await this.getCustomerHistory({
+              customerId: sender.customerId,
+              page,
+              take,
+            });
+      const hit = rows.items.find((t) => t.customerReference === reference);
+      if (hit) return hit;
+      const last = rows.items[rows.items.length - 1];
+      const pastSince =
+        oldest !== null &&
+        last !== undefined &&
+        Date.parse(last.createdAt) < oldest;
+      if (!rows.hasNextPage || pastSince || rows.items.length === 0) break;
+    }
+    return null;
+  }
+
+  /**
+   * What Fintava knows about one of our references: the lookup by
+   * reference, then the sender's history. Found in either is `found`.
+   * `absent` needs both: Fintava's own `404 "Transaction not found!"` AND no
+   * row in history. A lookup that answers `{}` with no row in history is
+   * `unknown` (a missing row is not proof: the merchant list is cached for
+   * about 5 minutes); so is any answer we cannot read or reach.
    */
   async reconcile(
     reference: string,
     sender: FintavaSender,
     since?: Date,
   ): Promise<FintavaReconciliation> {
+    const passThrough = (e: unknown) =>
+      !(e instanceof FintavaError) ||
+      e.kind === 'auth' ||
+      e.kind === 'not_configured';
     let lookup: FintavaLookup;
     try {
       lookup = await this.getTransactionByReference(reference);
     } catch (e) {
-      if (
-        e instanceof FintavaError &&
-        e.kind !== 'auth' &&
-        e.kind !== 'not_configured'
-      ) {
-        return { state: 'unknown', why: 'unreachable' };
-      }
-      throw e;
+      if (passThrough(e)) throw e;
+      const unrecognised =
+        e instanceof FintavaError && e.kind === 'outcome_unknown';
+      return {
+        state: 'unknown',
+        why: unrecognised ? 'unrecognised' : 'unreachable',
+      };
     }
     if (lookup.state === 'found') {
       return {
@@ -1050,44 +1114,17 @@ export class FintavaClient {
         transaction: lookup.transaction,
       };
     }
-    if (lookup.state === 'absent') return { state: 'absent' };
-
-    const oldest = since ? since.getTime() - RECONCILE_SKEW_MS : null;
-    const take = historyTake();
+    let row: FintavaTransaction | null;
     try {
-      for (let page = 1; page <= RECONCILE_MAX_PAGES; page += 1) {
-        const rows =
-          sender.kind === 'merchant'
-            ? await this.getMerchantHistory({
-                page,
-                take,
-                order: 'DESC',
-              })
-            : await this.getCustomerHistory({
-                customerId: sender.customerId,
-                page,
-                take,
-              });
-        const hit = rows.items.find((t) => t.customerReference === reference);
-        if (hit) return { state: 'found', source: 'history', transaction: hit };
-        const last = rows.items[rows.items.length - 1];
-        const pastSince =
-          oldest !== null &&
-          last !== undefined &&
-          Date.parse(last.createdAt) < oldest;
-        if (!rows.hasNextPage || pastSince || rows.items.length === 0) break;
-      }
+      row = await this.findInHistory(reference, sender, since);
     } catch (e) {
-      if (
-        e instanceof FintavaError &&
-        e.kind !== 'auth' &&
-        e.kind !== 'not_configured'
-      ) {
-        return { state: 'unknown', why: 'unreachable' };
-      }
-      throw e;
+      if (passThrough(e)) throw e;
+      return { state: 'unknown', why: 'unreachable' };
     }
-    return { state: 'unknown', why: 'empty_lookup' };
+    if (row) return { state: 'found', source: 'history', transaction: row };
+    return lookup.state === 'absent'
+      ? { state: 'absent' }
+      : { state: 'unknown', why: 'empty_lookup' };
   }
 
   private async decide(
@@ -1100,11 +1137,16 @@ export class FintavaClient {
     return decideFintavaRetry(kind, reconciliation, {
       attemptedAt,
       now: new Date(),
-      inFlightMs: this.settings.moneyTimeoutMs,
+      resendAfterMs:
+        this.settings.moneyTimeoutMs + this.settings.resendSafetyMs,
     });
   }
 
   /**
+   * Callers hold a lock on the payment for the whole call (MONEY-08): this
+   * method does not stop a second retry of the same payment running beside
+   * it.
+   *
    * The only way to send a wallet-to-wallet transfer again after
    * `outcome_unknown`: reconcile `input.customerReference` first, and send
    * again (same reference) only when Fintava says it has no such transfer.

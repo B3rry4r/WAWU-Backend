@@ -43,8 +43,11 @@ const B = {
   accountNumber: '1151496137',
 };
 const TEN_NAIRA = 1000;
-/** Longer than the money timeout below, so a 404 can be trusted. */
-const RETRY_AFTER_MS = 11_000;
+/**
+ * Longer than the money timeout plus the resend safety window set below
+ * (10 s + 60 s, the smallest window config allows), so a 404 can count.
+ */
+const RETRY_AFTER_MS = 71_000;
 
 /** A step that could not run, with the reason. */
 class NotRun extends Error {}
@@ -67,6 +70,7 @@ function client(key: string, moneyTimeoutMs = '10000'): FintavaClient {
       FINTAVA_BASE_URL: FINTAVA_SANDBOX_BASE_URL,
       FINTAVA_API_KEY: key,
       FINTAVA_MONEY_TIMEOUT_MS: moneyTimeoutMs,
+      FINTAVA_RESEND_SAFETY_MS: '60000',
     }),
   );
 }
@@ -439,7 +443,7 @@ async function main(): Promise<void> {
       const decision = decideFintavaRetry('bank_transfer', rec, {
         attemptedAt: new Date('2026-10-02T09:41:37Z'),
         now: new Date(),
-        inFlightMs: 30_000,
+        resendAfterMs: 30_000 + 600_000,
       });
       if (l.state === 'found')
         check(l.transaction.status === 'PENDING', 'PENDING');

@@ -257,11 +257,17 @@ all take it and refuse a repeat (OPS-02, `sandbox/13-`, `14-`; question 1
 answered). A send whose answer was lost is never sent again blindly: the
 Fintava client (MONEY-06, `src/fintava/`) asks Fintava first, by our
 reference and then from history, because a lookup can answer `200 {}`,
-which is neither found nor not found. Only a wallet-to-wallet send that
-Fintava says it does not have goes again under the same reference; a bank
-send goes again only under a new one (a refused bank send can leave a
-`PENDING` record and use its reference up). Anything still pending or
-unknown stays `pending` until MONEY-08 has asked Fintava again.
+which is neither found nor not found. Only Fintava's own JSON
+`404 "Transaction not found!"` with no row in the sender's history counts
+as "Fintava does not have it", and only once the money timeout plus a
+safety window (`FINTAVA_RESEND_SAFETY_MS`, ten minutes) has passed since
+the first send: Fintava keeps working after the client gives up. Then a
+wallet-to-wallet send goes again under the same reference, and a bank send
+only under a new one (a refused bank send can leave a `PENDING` record and
+use its reference up). A repeated reference means the earlier send exists:
+it is reconciled, never refunded or charged again. Anything still pending
+or unknown stays `pending` until MONEY-08 has asked Fintava again, holding
+one retry at a time per payment.
 
 ## 5. The transaction PIN
 

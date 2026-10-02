@@ -16,18 +16,20 @@ import type {
  *   moves money; it may also be a real send in flight. MONEY-08 and MONEY-16
  *   tell those apart, never a retry.
  * - Found and FAILURE or CANCELLED: the reference is used up; a new one.
- * - Absent (the lookup answered 404): a wallet-to-wallet send may go again
- *   under the same reference, because a refused one writes nothing and
- *   leaves its reference usable; a bank send only under a new reference.
- *   Not while the first request could still be running at Fintava (sooner
- *   than the money timeout after it was sent).
+ * - Absent (the lookup answered Fintava's own `404 "Transaction not
+ *   found!"` AND the sender's history has no row for the reference): a
+ *   wallet-to-wallet send may go again under the same reference, because a
+ *   refused one writes nothing and leaves its reference usable; a bank send
+ *   only under a new reference. Never sooner than `resendAfterMs` after the
+ *   first send (the money timeout plus a safety window): Fintava keeps
+ *   working after the client gives up, so a fresh 404 proves nothing.
  * - Unknown (the lookup answered `{}` and history did not show it, or
  *   Fintava could not be asked): wait. `{}` is never "not found".
  */
 export function decideFintavaRetry(
   kind: FintavaSendKind,
   reconciliation: FintavaReconciliation,
-  clock: { attemptedAt: Date; now: Date; inFlightMs: number },
+  clock: { attemptedAt: Date; now: Date; resendAfterMs: number },
 ): FintavaRetryDecision {
   switch (reconciliation.state) {
     case 'found': {
@@ -45,7 +47,9 @@ export function decideFintavaRetry(
     }
     case 'absent': {
       const age = clock.now.getTime() - clock.attemptedAt.getTime();
-      if (age < clock.inFlightMs) return { action: 'wait', why: 'too_soon' };
+      if (age < clock.resendAfterMs) {
+        return { action: 'wait', why: 'too_soon' };
+      }
       return kind === 'wallet_to_wallet'
         ? { action: 'resend_same_reference' }
         : { action: 'resend_new_reference', why: 'absent', transaction: null };

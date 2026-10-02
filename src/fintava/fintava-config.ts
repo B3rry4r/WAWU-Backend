@@ -9,10 +9,8 @@ export const FINTAVA_SANDBOX_BASE_URL = 'https://dev.fintavapay.com/api/dev';
  * in config cannot send the key somewhere else. `local` is for a test double
  * on this machine, the only place plain http is allowed.
  */
-const HOSTS: Record<string, FintavaEnvironment> = {
-  'dev.fintavapay.com': 'sandbox',
-  'live.fintavapay.com': 'live',
-};
+const SANDBOX_HOST = 'dev.fintavapay.com';
+const LIVE_HOST = 'live.fintavapay.com';
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 /**
@@ -31,12 +29,25 @@ export const FINTAVA_DEFAULTS = {
   retryAfterSeconds: 30,
 } as const;
 
+/**
+ * PROVISIONAL(FINTAVA-RESEND-SAFETY, owner=YOU, why=Fintava says nothing on how long a send it accepted can take to show; a send abandoned at 3 s landed)
+ *
+ * How long after the money timeout a send whose answer was lost must stay
+ * untouched before Fintava saying it has no such send (a 404 by reference,
+ * and no row in history) may lead to sending it again. Fintava keeps
+ * working after the client gives up (mobile repo
+ * `docs/fintava/sandbox/26-money06-client.md`). Ten minutes is also past
+ * the about-5-minute cache on the merchant history.
+ */
+export const FINTAVA_RESEND_SAFETY_MS = 10 * 60_000;
+
 export const FINTAVA_CONFIG_KEYS = {
   baseUrl: 'FINTAVA_BASE_URL',
   apiKey: 'FINTAVA_API_KEY',
   readTimeoutMs: 'FINTAVA_TIMEOUT_MS',
   moneyTimeoutMs: 'FINTAVA_MONEY_TIMEOUT_MS',
   checkTimeoutMs: 'FINTAVA_CHECK_TIMEOUT_MS',
+  resendSafetyMs: 'FINTAVA_RESEND_SAFETY_MS',
 } as const;
 
 /** Everything the client needs except the key, which is kept apart. */
@@ -49,6 +60,11 @@ export interface FintavaSettings {
   moneyTimeoutMs: number;
   /** The BVN, selfie and phone checks (an upstream provider is called). */
   checkTimeoutMs: number;
+  /**
+   * Added to `moneyTimeoutMs`: a lost send is never sent again sooner than
+   * both after it was first sent.
+   */
+  resendSafetyMs: number;
 }
 
 /** A Fintava setting that is present but wrong. Stops the app at boot. */
@@ -59,12 +75,17 @@ export class FintavaConfigError extends Error {
   }
 }
 
-function timeout(raw: string | undefined, key: string, fallback: number) {
+function timeout(
+  raw: string | undefined,
+  key: string,
+  fallback: number,
+  range: [number, number] = [50, 300_000],
+) {
   if (raw === undefined || raw.trim() === '') return fallback;
   const n = Number(raw);
-  if (!Number.isInteger(n) || n < 50 || n > 300_000) {
+  if (!Number.isInteger(n) || n < range[0] || n > range[1]) {
     throw new FintavaConfigError(
-      `${key} must be a whole number of milliseconds from 50 to 300000.`,
+      `${key} must be a whole number of milliseconds from ${range[0]} to ${range[1]}.`,
     );
   }
   return n;
@@ -103,7 +124,10 @@ export function readFintavaSettings(
     }
     environment = 'local';
   } else if (url.protocol === 'https:') {
-    environment = HOSTS[url.hostname];
+    // Exact string comparison, never a lookup in an object: an object would
+    // also answer for `constructor`, `__proto__` and the like.
+    if (url.hostname === SANDBOX_HOST) environment = 'sandbox';
+    else if (url.hostname === LIVE_HOST) environment = 'live';
   }
   if (!environment) {
     throw new FintavaConfigError(
@@ -133,6 +157,12 @@ export function readFintavaSettings(
       get(FINTAVA_CONFIG_KEYS.checkTimeoutMs),
       FINTAVA_CONFIG_KEYS.checkTimeoutMs,
       FINTAVA_DEFAULTS.checkTimeoutMs,
+    ),
+    resendSafetyMs: timeout(
+      get(FINTAVA_CONFIG_KEYS.resendSafetyMs),
+      FINTAVA_CONFIG_KEYS.resendSafetyMs,
+      FINTAVA_RESEND_SAFETY_MS,
+      [60_000, 86_400_000],
     ),
   };
 }

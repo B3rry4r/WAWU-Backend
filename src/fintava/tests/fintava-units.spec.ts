@@ -102,6 +102,7 @@ describe('Fintava settings: sandbox by default, live from config only', () => {
       readTimeoutMs: 15000,
       moneyTimeoutMs: 30000,
       checkTimeoutMs: 30000,
+      resendSafetyMs: 600000,
     });
   });
 
@@ -129,6 +130,35 @@ describe('Fintava settings: sandbox by default, live from config only', () => {
     ['not a url'],
   ])('never sends the key to %p', (url) => {
     expect(() => read({ FINTAVA_BASE_URL: url })).toThrow(FintavaConfigError);
+  });
+
+  it.each([
+    ['constructor'],
+    ['__proto__'],
+    ['toString'],
+    ['hasOwnProperty'],
+    ['valueOf'],
+    ['isPrototypeOf'],
+  ])(
+    'refuses the object-key host https://%s, in test and in production',
+    (host) => {
+      for (const env of ['test', 'production']) {
+        expect(() =>
+          read({ FINTAVA_BASE_URL: `https://${host}/api/dev` }, env),
+        ).toThrow(FintavaConfigError);
+      }
+    },
+  );
+
+  it('reads the resend safety window, never below a minute', () => {
+    expect(read({ FINTAVA_RESEND_SAFETY_MS: '120000' }).resendSafetyMs).toBe(
+      120000,
+    );
+    for (const bad of ['0', '59999', 'soon', '-1']) {
+      expect(() => read({ FINTAVA_RESEND_SAFETY_MS: bad })).toThrow(
+        FintavaConfigError,
+      );
+    }
   });
 
   it('allows a double on this machine outside production', () => {
@@ -207,6 +237,23 @@ describe('Fintava error bodies: string, array and nested messages', () => {
       call: 'check',
     });
     expect(JSON.stringify(messages)).not.toContain('22212345678');
+  });
+
+  it('masks any run of 8 or more characters of a secret, not just all of it', () => {
+    const key = 'live_sk_Zq9Xw7Vb5Nm3Lk1Jh8Gf6Ds4Ap2';
+    expect(maskFintavaText(`echo ${key.slice(0, 20)} end`, [key])).toBe(
+      'echo [secret] end',
+    );
+    expect(maskFintavaText(`mid ${key.slice(10, 18)}!`, [key])).toBe(
+      'mid [secret]!',
+    );
+    // Seven characters in a row is not a run; a short tail is not either.
+    expect(maskFintavaText(`x ${key.slice(3, 10)} y`, [key])).toBe(
+      `x ${key.slice(3, 10)} y`,
+    );
+    expect(maskFintavaText('service not currently available', [key])).toBe(
+      'service not currently available',
+    );
   });
 
   it('masks long digit runs and emails', () => {
@@ -422,6 +469,19 @@ describe('Fintava error bodies: string, array and nested messages', () => {
       'write',
       'outcome_unknown',
     ],
+    [
+      'a framework route 404 on a send',
+      404,
+      {
+        statusCode: 404,
+        message: 'Cannot POST /api/dev/bank/credit',
+        error: 'Not Found',
+      },
+      'write',
+      'outcome_unknown',
+    ],
+    ['an empty 404 on a send', 404, null, 'write', 'outcome_unknown'],
+    ['an empty 404 on a read', 404, null, 'read', 'unavailable'],
     ['rate limited', 429, null, 'read', 'rate_limited'],
     [
       'cable "service not currently available" in a 201',
@@ -450,6 +510,7 @@ describe('Fintava errors in the backend error shape', () => {
     ['unavailable', 503, 'provider_unreachable'],
     ['outcome_unknown', 503, 'provider_unreachable'],
     ['payouts_blocked', 503, 'provider_unreachable'],
+    ['duplicate_reference', 503, 'provider_unreachable'],
     ['not_configured', 503, 'provider_unreachable'],
   ] as const)('%s answers %s %s', (kind, status, code) => {
     const http = err(kind).toHttpException();
@@ -480,6 +541,7 @@ describe('Fintava errors in the backend error shape', () => {
   it('marks what may have left a record', () => {
     expect(err('outcome_unknown').recordMayExist).toBe(true);
     expect(err('not_confirmed').recordMayExist).toBe(true);
+    expect(err('duplicate_reference').recordMayExist).toBe(true);
     expect(err('insufficient_funds').recordMayExist).toBe(false);
   });
 });
@@ -533,12 +595,12 @@ describe('what may be done with a send whose answer was lost', () => {
   const later = {
     attemptedAt,
     now: new Date('2026-10-02T10:05:00Z'),
-    inFlightMs: 30000,
+    resendAfterMs: 30000,
   };
   const soon = {
     attemptedAt,
     now: new Date('2026-10-02T10:00:10Z'),
-    inFlightMs: 30000,
+    resendAfterMs: 30000,
   };
   const found = (status: string): FintavaReconciliation => ({
     state: 'found',
@@ -590,6 +652,20 @@ describe('what may be done with a send whose answer was lost', () => {
       why: 'absent',
       transaction: null,
     });
+  });
+
+  it('absent inside the money timeout plus the safety window: wait', () => {
+    const window = {
+      attemptedAt,
+      now: new Date('2026-10-02T10:09:00Z'),
+      resendAfterMs: 30_000 + 600_000,
+    };
+    for (const kind of ['wallet_to_wallet', 'bank_transfer'] as const) {
+      expect(decideFintavaRetry(kind, { state: 'absent' }, window)).toEqual({
+        action: 'wait',
+        why: 'too_soon',
+      });
+    }
   });
 
   it('absent too soon after sending is not proof: wait', () => {

@@ -30,7 +30,12 @@ export const FINTAVA_ERROR_KINDS = [
   'insufficient_funds',
   /** "Kindly confirm both customer accounts are active": a frozen sender or receiver. */
   'wallet_inactive',
-  /** Our `CustomerReference` was used before. */
+  /**
+   * Our `CustomerReference` was used before: Fintava already has a send
+   * under it, so money may have moved. An unknown outcome like
+   * `outcome_unknown` (`recordMayExist` is true): reconcile, never refund
+   * or charge again on it.
+   */
   'duplicate_reference',
   'not_found',
   /** "Airtime amount is less than 100". */
@@ -54,6 +59,16 @@ export const FINTAVA_ERROR_KINDS = [
 export type FintavaErrorKind = (typeof FINTAVA_ERROR_KINDS)[number];
 
 /**
+ * The kinds after which a write may have happened: the caller treats each
+ * as "pending, reconcile", never as a failure to refund or retry blindly.
+ */
+export const FINTAVA_UNKNOWN_OUTCOMES: readonly FintavaErrorKind[] = [
+  'outcome_unknown',
+  'not_confirmed',
+  'duplicate_reference',
+];
+
+/**
  * A failed Fintava call. It carries no request or response body and no
  * header: `messages` are Fintava's texts with digits and emails masked, so
  * the error can be logged as it is. Its `message` names the operation, never
@@ -69,9 +84,11 @@ export class FintavaError extends Error {
   readonly reference: string | null;
   /**
    * True when money may have moved or a record may exist although the call
-   * failed: an unknown outcome, a 2xx without a transaction, or any refusal
-   * of a bank send (a refused bank send can still write a PENDING record and
-   * use its reference up, `sandbox/14-`).
+   * failed: an unknown outcome, a 2xx without a transaction, a repeated
+   * reference (the earlier send exists), or any refusal of a bank send (a
+   * refused bank send can still write a PENDING record and use its
+   * reference up, `sandbox/14-`). A caller never refunds or charges again
+   * while this is true; it reconciles.
    */
   readonly recordMayExist: boolean;
 
@@ -95,8 +112,7 @@ export class FintavaError extends Error {
     this.messages = args.messages ?? [];
     this.reference = args.reference ?? null;
     this.recordMayExist =
-      args.recordMayExist ??
-      (args.kind === 'outcome_unknown' || args.kind === 'not_confirmed');
+      args.recordMayExist ?? FINTAVA_UNKNOWN_OUTCOMES.includes(args.kind);
   }
 
   /** The error in this backend's own shape, for a route to throw. */
@@ -141,17 +157,47 @@ export function readFintavaMessages(body: unknown): {
   return { messages: texts(m), nested: false };
 }
 
+/** Longest run of characters, from 8 up, that the text shares with a secret. */
+function maskSecretRuns(text: string, secret: string): string {
+  const MIN = 8;
+  if (secret.length < MIN) {
+    return secret.length > 0 ? text.split(secret).join('[secret]') : text;
+  }
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    let len = 0;
+    const head = text.slice(i, i + MIN);
+    if (head.length === MIN && secret.includes(head)) {
+      len = MIN;
+      while (
+        i + len < text.length &&
+        secret.includes(text.slice(i, i + len + 1))
+      ) {
+        len += 1;
+      }
+    }
+    if (len >= MIN) {
+      out += '[secret]';
+      i += len;
+    } else {
+      out += text[i];
+      i += 1;
+    }
+  }
+  return out;
+}
+
 /**
  * Masks what could identify a person or open the account in a text Fintava
- * sent: the given secrets (the API key) first, then any `Bearer` token, then
- * runs of 7 or more digits keep their last 4 (a BVN, NIN, phone or account
- * number), and an email keeps its domain. Also caps the length.
+ * sent: any run of 8 or more characters of a given secret (the API key)
+ * first, then any `Bearer` token, then runs of 7 or more digits keep their
+ * last 4 (a BVN, NIN, phone or account number), and an email keeps its
+ * domain. Also caps the length.
  */
 export function maskFintavaText(text: string, secrets: string[] = []): string {
-  let out = text;
-  for (const secret of secrets) {
-    if (secret.length > 0) out = out.split(secret).join('[secret]');
-  }
+  let out = text.slice(0, 2000);
+  for (const secret of secrets) out = maskSecretRuns(out, secret);
   return out
     .replace(/bearer\s+\S+/gi, '[credential]')
     .replace(/\d{7,}/g, (d) => `${'*'.repeat(d.length - 4)}${d.slice(-4)}`)
@@ -190,6 +236,15 @@ export function classifyFintavaFailure(args: {
     if (status === 401 || AUTH.test(all)) return 'auth';
     if (status === 429) return 'rate_limited';
     if (status >= 500) {
+      return args.call === 'write' ? 'outcome_unknown' : 'unavailable';
+    }
+    // A 404 that is not Fintava's own JSON refusal (an empty or HTML body, a
+    // gateway page, a framework "Cannot GET ...") says nothing about the
+    // money or the record: unknown, never "not found".
+    if (
+      status === 404 &&
+      (raw.length === 0 || /^cannot (get|post|put|patch|delete)\b/i.test(all))
+    ) {
       return args.call === 'write' ? 'outcome_unknown' : 'unavailable';
     }
     for (const [re, k] of RULES) if (re.test(all)) return k;
@@ -253,6 +308,7 @@ export function fintavaErrorToHttp(
       );
     case 'outcome_unknown':
     case 'not_confirmed':
+    case 'duplicate_reference':
       return new MoneyError(
         'provider_unreachable',
         'We are still confirming this payment. Check your history before you try again.',

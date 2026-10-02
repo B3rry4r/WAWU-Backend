@@ -88,6 +88,8 @@ function echo(status: number, lead = 'Invalid API key') {
       status,
       `${lead} ${String(req.headers.authorization)}`,
       `bvn ${req.query.bvn ?? BVN} phone ${req.query.phone_number ?? PHONE_LOCAL}`,
+      // Part of the key with no "Bearer" in front of it.
+      `fragment ${String(req.headers.authorization).slice(10, 30)} and ${KEY.slice(20, 29)}`,
     ),
   });
 }

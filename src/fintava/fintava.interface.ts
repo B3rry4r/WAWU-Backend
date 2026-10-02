@@ -251,14 +251,19 @@ export type FintavaReconciliation =
       transaction: FintavaTransaction;
     }
   | { state: 'absent' }
-  | { state: 'unknown'; why: 'empty_lookup' | 'unreachable' | 'too_soon' };
+  | {
+      state: 'unknown';
+      why: 'empty_lookup' | 'unreachable' | 'unrecognised' | 'too_soon';
+    };
 
 /**
  * What may be done with a send whose outcome was unknown:
  * - `settled`: it went through. Never send it again.
  * - `wait`: pending, or Fintava cannot say. Never send; ask Fintava again on the next check.
  * - `resend_same_reference`: wallet-to-wallet only, when the lookup answered
- *   404. A refused wallet-to-wallet send writes nothing and leaves its
+ *   Fintava's own `404 "Transaction not found!"`, history has no row, and
+ *   the money timeout plus the safety window has passed since the first
+ *   send. A refused wallet-to-wallet send writes nothing and leaves its
  *   reference usable (`sandbox/13-`).
  * - `resend_new_reference`: the old reference is used up (a failed record,
  *   or any bank send: a refused bank send can leave a PENDING record and
@@ -268,7 +273,12 @@ export type FintavaRetryDecision =
   | { action: 'settled'; transaction: FintavaTransaction }
   | {
       action: 'wait';
-      why: 'pending' | 'empty_lookup' | 'unreachable' | 'too_soon';
+      why:
+        | 'pending'
+        | 'empty_lookup'
+        | 'unreachable'
+        | 'unrecognised'
+        | 'too_soon';
     }
   | { action: 'resend_same_reference' }
   | {
