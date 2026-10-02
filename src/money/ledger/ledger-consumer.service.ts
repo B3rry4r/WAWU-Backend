@@ -11,6 +11,7 @@ import type {
 } from '../../fintava/fintava.interface';
 import type { TransferStatus } from '../money-view.type';
 import {
+  FINTAVA_WALLET_BANK_CODE,
   LEDGER_CONFIG_KEYS,
   LEDGER_DEFAULTS,
   ledgerConfirmWindowMs,
@@ -203,11 +204,22 @@ export class LedgerConsumerService {
         outcome = await this.consumeMovement(event, reading, age);
       }
     } catch (e) {
-      if (!(e instanceof MerchantAccountUnknown)) throw e;
-      outcome = await this.wait(
-        event.id,
-        "ledger: WAWU's merchant account number could not be read from Fintava; tried again on the next sweep",
-      );
+      if (e instanceof RangeError) {
+        // A figure the ledger cannot hold exactly. The reader refuses these
+        // before any Fintava call; this is the backstop, so a delivery never
+        // stays pending for ever on one.
+        outcome = await this.finish(event.id, () => ({
+          status: 'failed',
+          note: `ledger: ${e.message}`,
+        }));
+      } else if (e instanceof MerchantAccountUnknown) {
+        outcome = await this.wait(
+          event.id,
+          "ledger: WAWU's merchant account number could not be read from Fintava; tried again on the next sweep",
+        );
+      } else {
+        throw e;
+      }
     }
     if (outcome === 'waiting') this.backOff(event.id, now);
     else this.retryAt.delete(event.id);
@@ -223,13 +235,10 @@ export class LedgerConsumerService {
     m: LedgerWebhookMovement,
     age: number,
   ): Promise<LedgerConsumeOutcome> {
-    let fromParty = m.from;
-    let toParty = m.to;
-    let from = await this.resolve(fromParty);
-    let to = await this.resolve(toParty);
-    if (m.partiesMaySwap && !to && from && from.wallet.kind === 'user') {
-      [fromParty, toParty, from, to] = [toParty, fromParty, to, from];
-    }
+    const fromParty = m.from;
+    const toParty = m.to;
+    const from = await this.resolve(fromParty);
+    const to = await this.resolve(toParty);
     if (!from && !to) {
       return this.finish(event.id, () => ({
         status: 'processed',
@@ -585,9 +594,16 @@ export class LedgerConsumerService {
     eventId: string,
     note: string,
   ): Promise<LedgerConsumeOutcome> {
+    const text = note.slice(0, 1000);
+    // Written only when it changes: a delivery retried with the same reason
+    // (Fintava not configured, say) leaves its row alone.
     await this.prisma.fintavaWebhookEvent.updateMany({
-      where: { id: eventId, processingStatus: 'pending' },
-      data: { note: note.slice(0, 1000) },
+      where: {
+        id: eventId,
+        processingStatus: 'pending',
+        OR: [{ note: null }, { note: { not: text } }],
+      },
+      data: { note: text },
     });
     return 'waiting';
   }
@@ -602,6 +618,9 @@ export class LedgerConsumerService {
   /** WAWU's merchant account number, read from Fintava once per process. */
   private async merchantAccount(): Promise<string> {
     if (this.merchantAccountNumber) return this.merchantAccountNumber;
+    if (this.fintava.environment === 'unconfigured') {
+      throw new MerchantAccountUnknown();
+    }
     try {
       const m = await this.fintava.getMerchantBalance();
       this.merchantAccountNumber = m.accountNumber;
@@ -612,10 +631,22 @@ export class LedgerConsumerService {
     }
   }
 
-  /** The WAWU wallet a party is, if any. */
+  /**
+   * The WAWU wallet a party is, if any. A NUBAN is unique only within its
+   * bank, so an account number alone never names a WAWU wallet unless the
+   * delivery puts that account at Fintava:
+   * - a party the delivery names with Fintava's customerId is found by that
+   *   id and nothing else (an id that is not ours is not ours);
+   * - a `bank_account` is a WAWU wallet only when its bank code is
+   *   Fintava's own (FINTAVA_WALLET_BANK_CODE); otherwise it is someone at
+   *   another bank, never a WAWU user, whatever its number;
+   * - a `fintava_wallet` (or a `bank_account` at Fintava's bank) is found by
+   *   its account numbers, in the order the delivery gives them, among the
+   *   people's wallets and then WAWU's merchant wallet.
+   */
   private async resolve(party: LedgerParty | null): Promise<OurWallet | null> {
     if (!party) return null;
-    if (party.merchant) {
+    if (party.where === 'merchant') {
       return {
         wallet: {
           kind: 'merchant',
@@ -624,25 +655,38 @@ export class LedgerConsumerService {
         customerId: null,
       };
     }
-    const or: Prisma.FintavaWalletWhereInput[] = [];
-    if (party.customerId) or.push({ customerId: party.customerId });
-    if (party.accountNumbers.length) {
-      or.push({ accountNumber: { in: party.accountNumbers } });
-    }
-    if (or.length === 0) return null;
-    const w = await this.prisma.fintavaWallet.findFirst({
-      where: { OR: or },
-      select: { wawuUserId: true, accountNumber: true, customerId: true },
+    const select = { wawuUserId: true, accountNumber: true, customerId: true };
+    const ours = (w: {
+      wawuUserId: string;
+      accountNumber: string;
+      customerId: string;
+    }): OurWallet => ({
+      wallet: {
+        kind: 'user',
+        wawuUserId: w.wawuUserId,
+        accountNumber: w.accountNumber,
+      },
+      customerId: w.customerId,
     });
-    if (w) {
-      return {
-        wallet: {
-          kind: 'user',
-          wawuUserId: w.wawuUserId,
-          accountNumber: w.accountNumber,
-        },
-        customerId: w.customerId,
-      };
+    if (party.customerId) {
+      const w = await this.prisma.fintavaWallet.findUnique({
+        where: { customerId: party.customerId },
+        select,
+      });
+      return w ? ours(w) : null;
+    }
+    if (
+      party.where === 'bank_account' &&
+      party.bankCode !== FINTAVA_WALLET_BANK_CODE
+    ) {
+      return null;
+    }
+    for (const accountNumber of party.accountNumbers) {
+      const w = await this.prisma.fintavaWallet.findUnique({
+        where: { accountNumber },
+        select,
+      });
+      if (w) return ours(w);
     }
     if (party.accountNumbers.length) {
       const merchant = await this.merchantAccount();
@@ -717,6 +761,10 @@ export class LedgerConsumerService {
     amountKobo: number,
     around: Date,
   ): Promise<Confirmation> {
+    if (this.fintava.environment === 'unconfigured') {
+      // Nothing is sent; one answer, not a warning per reference.
+      return { state: 'unknown', why: 'not_configured' };
+    }
     const refs = [...new Set(references)].filter(
       (r) => !r.startsWith('sha256:'),
     );

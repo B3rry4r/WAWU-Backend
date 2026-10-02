@@ -2,6 +2,14 @@
  * The ledger's timings (task MONEY-10). Each is overridable in config.
  */
 
+/**
+ * The bank code of every Fintava wallet: Loma Bank, `090620` in Fintava's
+ * own bank list (mobile repo `docs/fintava/naira-api.md`, "Banks";
+ * `sandbox/01-bank-list.md`). A party named at a bank is a WAWU wallet only
+ * at this bank, since a NUBAN is unique only within its bank.
+ */
+export const FINTAVA_WALLET_BANK_CODE = '090620';
+
 /** Config keys. None is required: the server starts without any of them. */
 export const LEDGER_CONFIG_KEYS = {
   confirmWindowHours: 'LEDGER_CONFIRM_WINDOW_HOURS',

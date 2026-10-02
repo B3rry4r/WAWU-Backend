@@ -31,18 +31,33 @@ export const LEDGER_WEBHOOK_EVENTS = [
 export type LedgerWebhookEvent = (typeof LEDGER_WEBHOOK_EVENTS)[number];
 
 /**
+ * Where a party's account is, as the event defines it:
+ * - `fintava_wallet`: a wallet at Fintava (Loma Bank), by the event's
+ *   meaning (both sides of a wallet-to-wallet send, the sender of a
+ *   customer's bank send, the account `account_funded` funds);
+ * - `bank_account`: an account at a bank, named with that bank's code (the
+ *   destination of a bank send, the sender of `account_funded`). A NUBAN is
+ *   unique only within its bank, so this is a WAWU wallet only when the bank
+ *   is Fintava's own (FINTAVA_WALLET_BANK_CODE), never by number alone;
+ * - `merchant`: WAWU's merchant wallet by definition (a virtual wallet's
+ *   payment lands there).
+ */
+export type LedgerPartyWhere = 'fintava_wallet' | 'bank_account' | 'merchant';
+
+/**
  * One party to a movement, as a delivery names it. The consumer decides
- * whether it is one of WAWU's wallets: a person's (FintavaWallet, by
- * account number or Fintava customerId) or WAWU's merchant wallet.
+ * whether it is one of WAWU's wallets: a person's (FintavaWallet: by
+ * Fintava's customerId when the delivery names one, else by account
+ * number) or WAWU's merchant wallet.
  */
 export interface LedgerParty {
-  /** Every account number the delivery gives for this party. */
+  where: LedgerPartyWhere;
+  /** Every account number the delivery gives for this party, in order. */
   accountNumbers: string[];
   /** Fintava's customerId, when the delivery names one. */
   customerId: string | null;
-  /** True for the party that is WAWU's merchant wallet by definition. */
-  merchant: boolean;
   name: string | null;
+  /** The bank's code, for a `bank_account`. */
   bankCode: string | null;
 }
 
@@ -67,12 +82,6 @@ export interface LedgerWebhookMovement {
    * only, `sandbox/09-`, `10-`), so the signed delivery is the record.
    */
   trustAlone: boolean;
-  /**
-   * True when the docs leave open which named party is which
-   * (`account_funded`): the consumer then takes as the receiver whichever
-   * of the two is a WAWU wallet.
-   */
-  partiesMaySwap: boolean;
 }
 
 export interface LedgerWebhookReversal {
@@ -152,21 +161,56 @@ function kobo(o: Obj, key: string): number {
 }
 
 function party(
+  where: LedgerPartyWhere,
   accountNumbers: (string | null)[],
-  customerId: string | null,
-  name: string | null,
-  bankCode: string | null = null,
-  merchant = false,
+  o: {
+    customerId?: string | null;
+    name?: string | null;
+    bankCode?: string | null;
+  } = {},
 ): LedgerParty {
   return {
+    where,
     accountNumbers: [
       ...new Set(accountNumbers.filter((a): a is string => !!a)),
     ],
-    customerId,
-    merchant,
-    name,
-    bankCode,
+    customerId: o.customerId ?? null,
+    name: o.name ?? null,
+    bankCode: o.bankCode ?? null,
   };
+}
+
+/** An amount the ledger refuses: never rounded, never clamped. */
+class LedgerAmountError extends Error {}
+
+/**
+ * Every figure of a movement, checked before anything else happens (and so
+ * before any Fintava call): the amount is above 0, a fee is not below 0, the
+ * total is above 0, and amount plus fee stays a whole number a number holds
+ * exactly. A delivery that fails is `unreadable` and its event `failed`.
+ */
+function checkedMovement(m: LedgerWebhookMovement): LedgerWebhookMovement {
+  if (m.amountKobo <= 0)
+    throw new LedgerAmountError('the amount is not above 0');
+  if (m.feeKobo < 0) throw new LedgerAmountError('the fee is below 0');
+  if (m.totalKobo <= 0) throw new LedgerAmountError('the total is not above 0');
+  if (!Number.isSafeInteger(m.amountKobo + m.feeKobo)) {
+    throw new LedgerAmountError('amount and fee pass 2^53 kobo');
+  }
+  return m;
+}
+
+function checkedReversal(r: LedgerWebhookReversal): LedgerWebhookReversal {
+  if (r.amountKobo !== null && r.amountKobo <= 0) {
+    throw new LedgerAmountError('the reversed amount is not above 0');
+  }
+  if (r.chargesKobo !== null && r.chargesKobo < 0) {
+    throw new LedgerAmountError('the reversed charges are below 0');
+  }
+  if (r.totalKobo !== null && r.totalKobo <= 0) {
+    throw new LedgerAmountError('the reversed total is not above 0');
+  }
+  return r;
 }
 
 /**
@@ -185,15 +229,15 @@ export function readLedgerWebhook(
   try {
     switch (event) {
       case 'wallet_to_wallet_transfer_v2':
-        return walletToWallet(data, eventReference);
+        return checkedMovement(walletToWallet(data, eventReference));
       case 'account_funded':
-        return accountFunded(data, eventReference);
+        return checkedMovement(accountFunded(data, eventReference));
       case 'customer_bank_transfer':
-        return customerBankTransfer(data, eventReference);
+        return checkedMovement(customerBankTransfer(data, eventReference));
       case 'virtual_wallet_payment':
-        return virtualWalletPayment(data, eventReference);
+        return checkedMovement(virtualWalletPayment(data, eventReference));
       case 'debit_transfer_reversal':
-        return reversal(data);
+        return checkedReversal(reversal(data));
       default:
         return {
           kind: 'unreadable',
@@ -201,6 +245,9 @@ export function readLedgerWebhook(
         };
     }
   } catch (e) {
+    if (e instanceof LedgerAmountError) {
+      return { kind: 'unreadable', why: e.message };
+    }
     if (e instanceof FintavaAmountError) {
       return {
         kind: 'unreadable',
@@ -221,7 +268,7 @@ export function readLedgerWebhook(
  * balances after the move, but the movement is still confirmed with Fintava
  * when the ledger does not already hold it (ledger-consumer.service.ts).
  */
-function walletToWallet(d: Obj, eventReference: string): LedgerWebhookReading {
+function walletToWallet(d: Obj, eventReference: string): LedgerWebhookMovement {
   const amountKobo = kobo(d, 'amount');
   const feeKobo = fintavaAmountToKoboOrNull(d.transaction_fee) ?? 0;
   const totalKobo = fintavaAmountToKoboOrNull(d.total) ?? amountKobo + feeKobo;
@@ -238,30 +285,31 @@ function walletToWallet(d: Obj, eventReference: string): LedgerWebhookReading {
     ],
     sessionId: text(d, 'sessionID', 'sessionId'),
     from: party(
+      'fintava_wallet',
       [text(d, 'source_customer_accno'), text(d, 'source_customer_wallet')],
-      null,
-      text(d, 'source_customer_accname'),
+      { name: text(d, 'source_customer_accname') },
     ),
     to: party(
+      'fintava_wallet',
       [text(d, 'target_customer_accno'), text(d, 'target_customer_wallet')],
-      null,
-      text(d, 'target_customer_accname'),
+      { name: text(d, 'target_customer_accname') },
     ),
     category: 'transfer',
     narration: text(d, 'narration', 'description'),
     trustAlone: false,
-    partiesMaySwap: false,
   };
 }
 
 /**
- * `account_funded`: money in from another bank. `userId` is read as the
- * receiving customer's Fintava customerId. Of the two account pairs, the one
- * that is a WAWU wallet is the receiver and the other is the sender
- * (Default (agent), owner may override: the docs name `beneficiary*` and
- * the plain `account*` fields without saying which side each is).
+ * `account_funded`: money in from another bank. Default (agent), owner may
+ * override, until a real delivery shows the fields: `userId` is the
+ * receiving customer's Fintava customerId, and the receiver is found by it;
+ * only a delivery without one falls back to `beneficiaryAccountNumber`. The
+ * plain `accountName` and `accountNumber`, beside `senderBankSortcode`, are
+ * the sender at the other bank: a `bank_account`, so it is never taken for a
+ * WAWU wallet by its number (MONEY-10 verifier, defect 1).
  */
-function accountFunded(d: Obj, eventReference: string): LedgerWebhookReading {
+function accountFunded(d: Obj, eventReference: string): LedgerWebhookMovement {
   const amountKobo = kobo(d, 'amount');
   return {
     kind: 'movement',
@@ -274,21 +322,17 @@ function accountFunded(d: Obj, eventReference: string): LedgerWebhookReading {
     totalKobo: amountKobo,
     references: [...texts(d, 'reference', 'sessionID'), eventReference],
     sessionId: text(d, 'sessionID', 'sessionId'),
-    from: party(
-      [text(d, 'accountNumber')],
-      null,
-      text(d, 'accountName'),
-      text(d, 'senderBankSortcode'),
-    ),
-    to: party(
-      [text(d, 'beneficiaryAccountNumber')],
-      text(d, 'userId', 'customerId'),
-      text(d, 'beneficiaryAccountName'),
-    ),
+    from: party('bank_account', [text(d, 'accountNumber')], {
+      name: text(d, 'accountName'),
+      bankCode: text(d, 'senderBankSortcode'),
+    }),
+    to: party('fintava_wallet', [text(d, 'beneficiaryAccountNumber')], {
+      customerId: text(d, 'userId', 'customerId'),
+      name: text(d, 'beneficiaryAccountName'),
+    }),
     category: 'top_up',
     narration: text(d, 'narration', 'description'),
     trustAlone: true,
-    partiesMaySwap: true,
   };
 }
 
@@ -299,7 +343,7 @@ function accountFunded(d: Obj, eventReference: string): LedgerWebhookReading {
 function customerBankTransfer(
   d: Obj,
   eventReference: string,
-): LedgerWebhookReading {
+): LedgerWebhookMovement {
   const amountKobo = kobo(d, 'amount');
   const feeKobo = fintavaAmountToKoboOrNull(d.charges) ?? 0;
   const totalKobo = fintavaAmountToKoboOrNull(d.total) ?? amountKobo + feeKobo;
@@ -322,16 +366,16 @@ function customerBankTransfer(
       eventReference,
     ],
     sessionId: text(d, 'sessionID', 'sessionId'),
-    from: party(
-      [text(d, 'senderAccountNumber')],
-      text(d, 'customerId'),
-      text(d, 'senderName'),
-    ),
-    to: party([dest.account], null, null, dest.bank),
+    from: party('fintava_wallet', [text(d, 'senderAccountNumber')], {
+      customerId: text(d, 'customerId'),
+      name: text(d, 'senderName'),
+    }),
+    // The destination is at a bank, named by its code: a WAWU wallet only
+    // when that bank is Fintava's own (the consumer checks).
+    to: party('bank_account', [dest.account], { bankCode: dest.bank }),
     category: 'transfer',
     narration: text(d, 'narration', 'description'),
     trustAlone: false,
-    partiesMaySwap: false,
   };
 }
 
@@ -339,7 +383,7 @@ function customerBankTransfer(
 function virtualWalletPayment(
   d: Obj,
   eventReference: string,
-): LedgerWebhookReading {
+): LedgerWebhookMovement {
   const amountKobo = kobo(d, 'amount');
   return {
     kind: 'movement',
@@ -355,12 +399,11 @@ function virtualWalletPayment(
       eventReference,
     ],
     sessionId: null,
-    from: party([], null, text(d, 'customerName')),
-    to: party([], null, null, null, true),
+    from: party('bank_account', [], { name: text(d, 'customerName') }),
+    to: party('merchant', []),
     category: 'top_up',
     narration: text(d, 'description'),
     trustAlone: true,
-    partiesMaySwap: false,
   };
 }
 
@@ -370,7 +413,7 @@ function virtualWalletPayment(
  * reversal's own. `amount`, `charges` and `total` are kept as reported:
  * whether the charge is returned is not confirmed, so nothing is assumed.
  */
-function reversal(d: Obj): LedgerWebhookReading {
+function reversal(d: Obj): LedgerWebhookReversal {
   return {
     kind: 'reversal',
     status: ledgerStatusOf(text(d, 'status')),

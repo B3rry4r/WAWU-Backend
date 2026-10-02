@@ -46,9 +46,12 @@ describe('ledger: reading the documented deliveries', () => {
       from: {
         accountNumbers: ['0020886993', '0031886994'],
         customerId: null,
-        merchant: false,
+        where: 'fintava_wallet',
       },
-      to: { accountNumbers: ['0040497763', '0032497867'] },
+      to: {
+        where: 'fintava_wallet',
+        accountNumbers: ['0040497763', '0032497867'],
+      },
     });
     expect(r.kind === 'movement' && r.references).toEqual([
       '48VYIuIAZTSVQlZ8O900JdcUJ0imoVZ1L-u1',
@@ -69,12 +72,17 @@ describe('ledger: reading the documented deliveries', () => {
       totalKobo: 10000,
       category: 'top_up',
       trustAlone: true,
-      partiesMaySwap: true,
       to: {
+        where: 'fintava_wallet',
         customerId: 'bf61c3cf-4894-4a01-91b1-e4c5e2fa2b08',
         accountNumbers: ['0094886003'],
       },
-      from: { accountNumbers: ['0865231291'], bankCode: '000014' },
+      // The sender is at another bank: never a WAWU wallet by number.
+      from: {
+        where: 'bank_account',
+        accountNumbers: ['0865231291'],
+        bankCode: '000014',
+      },
       sessionId: '000914231311144221237185422093',
     });
   });
@@ -91,8 +99,15 @@ describe('ledger: reading the documented deliveries', () => {
       amountKobo: 10000,
       feeKobo: 3075,
       totalKobo: 13075,
-      from: { customerId: 'e17402-0d82-4774-a020-716d819d0' },
-      to: { accountNumbers: ['81450'], bankCode: '100004' },
+      from: {
+        where: 'fintava_wallet',
+        customerId: 'e17402-0d82-4774-a020-716d819d0',
+      },
+      to: {
+        where: 'bank_account',
+        accountNumbers: ['81450'],
+        bankCode: '100004',
+      },
     });
   });
 
@@ -106,7 +121,7 @@ describe('ledger: reading the documented deliveries', () => {
       kind: 'movement',
       status: 'completed',
       amountKobo: 65000,
-      to: { merchant: true },
+      to: { where: 'merchant' },
     });
   });
 
@@ -157,6 +172,50 @@ describe('ledger: reading the documented deliveries', () => {
       kind: 'unreadable',
       why: 'an amount is not naira with at most 2 decimals',
     });
+  });
+
+  it('a non-positive amount or total, a negative fee, a negative reversal figure, or amount plus fee past 2^53: unreadable, with the reason', () => {
+    const w2w = (over: Record<string, unknown>) => {
+      const b = parse(walletToWallet('neg')) as {
+        data: Record<string, unknown>;
+      };
+      Object.assign(b.data, over);
+      return readLedgerWebhook('wallet_to_wallet_transfer_v2', b, 'k');
+    };
+    const why = (r: ReturnType<typeof readLedgerWebhook>) =>
+      r.kind === 'unreadable' ? r.why : r.kind;
+    expect(why(w2w({ amount: -10, total: -10 }))).toBe(
+      'the amount is not above 0',
+    );
+    expect(why(w2w({ amount: '-10.00', total: 10 }))).toBe(
+      'the amount is not above 0',
+    );
+    expect(why(w2w({ amount: 0, total: 0 }))).toBe('the amount is not above 0');
+    expect(why(w2w({ amount: '0.00', total: '0.00' }))).toBe(
+      'the amount is not above 0',
+    );
+    expect(why(w2w({ transaction_fee: -1 }))).toBe('the fee is below 0');
+    expect(why(w2w({ total: -10 }))).toBe('the total is not above 0');
+    expect(why(w2w({ total: 0 }))).toBe('the total is not above 0');
+    expect(
+      why(
+        w2w({ amount: '90071992547409.91', transaction_fee: 1, total: null }),
+      ),
+    ).toBe('amount and fee pass 2^53 kobo');
+    expect(why(w2w({ amount: '90071992547410.00' }))).toBe(
+      'an amount is not naira with at most 2 decimals',
+    );
+    const rev = (over: Record<string, unknown>) => {
+      const b = parse(debitTransferReversal('neg')) as {
+        data: Record<string, unknown>;
+      };
+      Object.assign(b.data, over);
+      return why(readLedgerWebhook('debit_transfer_reversal', b, 'k'));
+    };
+    expect(rev({ amount: -100 })).toBe('the reversed amount is not above 0');
+    expect(rev({ charges: -1 })).toBe('the reversed charges are below 0');
+    expect(rev({ total: 0 })).toBe('the reversed total is not above 0');
+    expect(rev({})).toBe('reversal');
   });
 
   it("status words: Fintava's to the ledger's; anything else is null (confirmed with Fintava)", () => {

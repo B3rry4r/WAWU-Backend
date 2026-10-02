@@ -145,6 +145,7 @@ function bankTransferDelivery(o: {
   customerReference: string;
   reference: string;
   status: string;
+  destination?: string;
 }) {
   return JSON.stringify(
     {
@@ -159,7 +160,7 @@ function bankTransferDelivery(o: {
         status: o.status,
         total: 130.75,
         description: 'Payment',
-        destination: '81450/100004',
+        destination: o.destination ?? '81450/100004',
         sessionID: `S-${o.reference}`,
         customerReference: o.customerReference,
         senderName: 'Bayo Sandbox',
@@ -1196,6 +1197,384 @@ describe('The ledger (MONEY-10) fed by stored Fintava deliveries', () => {
           })
         ).status,
       ).toBe('pending');
+    });
+  });
+
+  describe('whose wallet: an account number at another bank is never a WAWU user', () => {
+    it('a bank send to an account at GTBank whose number equals a WAWU wallet number writes nothing on that person (verifier A3)', async () => {
+      const victim = await addWallet();
+      const sender = await addWallet();
+      const ours = ref('BT');
+      const e = await deliver(
+        bankTransferDelivery({
+          customerId: sender.customerId,
+          customerReference: ours,
+          reference: ref('FINBT'),
+          status: 'SUCCESS',
+          destination: `${victim.accountNumber}/000013`,
+        }),
+        ours,
+      );
+      expect(await consumer.consume(e, new Date(Date.now() + 73 * HOUR))).toBe(
+        'processed',
+      );
+      expect(
+        await prisma.fintavaLedgerEntry.count({
+          where: { accountNumber: victim.accountNumber },
+        }),
+      ).toBe(0);
+      const sent = await prisma.fintavaLedgerEntry.findMany({
+        where: { wawuUserId: sender.wawuUserId },
+      });
+      expect(sent.map((r) => `${r.direction} ${r.amountKobo}`)).toEqual([
+        'out 10000',
+      ]);
+      expect(sent[0]).toMatchObject({
+        counterpartyKind: 'bank_account',
+        counterpartyWawuUserId: null,
+        counterpartyAccountNumber: victim.accountNumber,
+        counterpartyBankCode: '000013',
+      });
+    });
+
+    it("the same send to that number at Fintava's own bank (090620) is money in for that person", async () => {
+      const receiver = await addWallet();
+      const sender = await addWallet();
+      const ours = ref('BT');
+      const e = await deliver(
+        bankTransferDelivery({
+          customerId: sender.customerId,
+          customerReference: ours,
+          reference: ref('FINBT'),
+          status: 'SUCCESS',
+          destination: `${receiver.accountNumber}/090620`,
+        }),
+        ours,
+      );
+      expect(await consumer.consume(e, new Date(Date.now() + 73 * HOUR))).toBe(
+        'processed',
+      );
+      const got = await prisma.fintavaLedgerEntry.findMany({
+        where: { wawuUserId: receiver.wawuUserId },
+      });
+      expect(got.map((r) => `${r.direction} ${r.amountKobo}`)).toEqual([
+        'in 10000',
+      ]);
+    });
+
+    it('money in from Access Bank (000014) whose sender number equals a WAWU wallet number writes nothing on that person (verifier A4)', async () => {
+      const victim = await addWallet();
+      const a = await addWallet();
+      const r = ref('AF');
+      const funded = (o: {
+        userId?: string;
+        beneficiary: string;
+        reference: string;
+      }) =>
+        JSON.stringify(
+          {
+            event: 'account_funded',
+            data: {
+              ...(o.userId ? { userId: o.userId } : {}),
+              amount: '100.00',
+              reference: o.reference,
+              senderBankSortcode: '000014',
+              sessionID: ref('SESSION'),
+              channelCode: '3',
+              status: 'success',
+              accountName: 'John Doe',
+              beneficiaryAccountName: 'Ada',
+              beneficiaryAccountNumber: o.beneficiary,
+              accountNumber: victim.accountNumber,
+            },
+          },
+          null,
+          2,
+        );
+      const e = await deliver(
+        funded({
+          userId: a.customerId,
+          beneficiary: a.accountNumber,
+          reference: r,
+        }),
+        r,
+      );
+      expect(await consumer.consume(e)).toBe('processed');
+      expect(
+        await prisma.fintavaLedgerEntry.count({
+          where: { accountNumber: victim.accountNumber },
+        }),
+      ).toBe(0);
+      const got = await prisma.fintavaLedgerEntry.findMany({
+        where: { wawuUserId: a.wawuUserId },
+      });
+      expect(got.map((x) => `${x.direction} ${x.amountKobo}`)).toEqual([
+        'in 10000',
+      ]);
+
+      // A customerId that is not ours is not ours, whatever number sits beside it.
+      const r2 = ref('AF');
+      const e2 = await deliver(
+        funded({
+          userId: randomUUID(),
+          beneficiary: a.accountNumber,
+          reference: r2,
+        }),
+        r2,
+      );
+      expect(await consumer.consume(e2)).toBe('processed');
+      expect((await event(e2)).note).toBe(
+        'ledger: no WAWU wallet on either side; nothing recorded',
+      );
+      expect(await rowsFor(r2)).toHaveLength(0);
+    });
+  });
+
+  describe('figures the ledger refuses settle at once, with no Fintava call', () => {
+    it('a negative or zero amount, a negative fee or total, amount plus fee past 2^53, or a negative reversal: failed with the reason', async () => {
+      const a = await addWallet();
+      const cases: Array<[Record<string, unknown>, string]> = [
+        [{ amount: -10, total: -10 }, 'the amount is not above 0'],
+        [{ amount: '-10.00', total: '-10.00' }, 'the amount is not above 0'],
+        [{ amount: 0, total: 0 }, 'the amount is not above 0'],
+        [{ amount: '0.00', total: '0.00' }, 'the amount is not above 0'],
+        [{ amount: 10, total: 10, transaction_fee: -1 }, 'the fee is below 0'],
+        [{ amount: 10, total: -10 }, 'the total is not above 0'],
+        [
+          { amount: '90071992547409.91', transaction_fee: 1, total: null },
+          'amount and fee pass 2^53 kobo',
+        ],
+      ];
+      for (const [over, why] of cases) {
+        const tag = ref('AMT');
+        const body = JSON.parse(
+          w2wDelivery({
+            from: '0020886993',
+            to: a.accountNumber,
+            amount: 1,
+            reference: tag,
+          }),
+        ) as { data: Record<string, unknown> };
+        Object.assign(body.data, over);
+        const e = await deliver(JSON.stringify(body, null, 2), tag);
+        const before = double.seen.length;
+        expect(await consumer.consume(e)).toBe('failed');
+        expect(double.seen.length).toBe(before);
+        expect((await event(e)).note).toBe(`ledger: ${why}`);
+        expect(await rowsFor(tag)).toHaveLength(0);
+      }
+      const ours = ref('FIO');
+      const e = await deliver(
+        reversalDelivery({
+          customerId: a.customerId,
+          customerReference: ours,
+          transactionReference: ref('TX'),
+          reversalRef: ref('REV'),
+        }).replace('"amount": 100,', '"amount": -100,'),
+        ours,
+      );
+      const before = double.seen.length;
+      expect(await consumer.consume(e)).toBe('failed');
+      expect(double.seen.length).toBe(before);
+      expect((await event(e)).note).toBe(
+        'ledger: the reversed amount is not above 0',
+      );
+    });
+  });
+
+  describe('the guards a race would need', () => {
+    it('a holder folded away while a writer waits for its lock: the writer re-reads and folds into the row that now holds the reference', async () => {
+      const a = await addWallet();
+      const r1 = ref('RACE');
+      const r2 = ref('RACE');
+      const wallet = {
+        kind: 'user' as const,
+        wawuUserId: a.wawuUserId,
+        accountNumber: a.accountNumber,
+      };
+      const x = await ledger.record({
+        wallet,
+        direction: 'in',
+        status: 'completed',
+        category: 'transfer',
+        amountKobo: 500,
+        references: { delivery: [r1] },
+        source: 'webhook',
+      });
+      let release = () => {};
+      const gate = new Promise<void>((r) => (release = r));
+      const yId = randomUUID();
+      // Another merge: it holds X, then folds X into a new row Y and deletes X.
+      const folding = prisma.$transaction(
+        async (tx) => {
+          await tx.$queryRaw`SELECT "id" FROM "FintavaLedgerEntry" WHERE "id" = ${x.entryId} FOR UPDATE`;
+          await gate;
+          const row = await tx.fintavaLedgerEntry.findUniqueOrThrow({
+            where: { id: x.entryId },
+          });
+          await tx.fintavaLedgerEntry.create({ data: { ...row, id: yId } });
+          await tx.fintavaLedgerReference.updateMany({
+            where: { entryId: x.entryId },
+            data: { entryId: yId },
+          });
+          await tx.fintavaLedgerEntry.delete({ where: { id: x.entryId } });
+        },
+        { timeout: 20_000, maxWait: 10_000 },
+      );
+      // The writer, inside a caller's transaction as the consumer runs it
+      // (so no retry hides a wrong fold).
+      const writer = prisma.$transaction(
+        (tx) =>
+          ledger.record(
+            {
+              wallet,
+              direction: 'in',
+              status: 'completed',
+              category: 'transfer',
+              amountKobo: 500,
+              references: { delivery: [r1, r2] },
+              source: 'webhook',
+            },
+            tx,
+          ),
+        { timeout: 20_000, maxWait: 10_000 },
+      );
+      for (let i = 0; i < 400; i += 1) {
+        const [w] = await prisma.$queryRaw<Array<{ n: bigint }>>`
+          SELECT count(*)::bigint AS n FROM pg_stat_activity
+           WHERE datname = current_database() AND wait_event_type = 'Lock'`;
+        if (w.n > 0n) break;
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      release();
+      await folding;
+      const res = await writer;
+      expect(res).toMatchObject({ entryId: yId, created: false });
+      const rows = await rowsFor(r1, r2);
+      expect(rows.map((r) => r.id)).toEqual([yId]);
+      const held = await prisma.fintavaLedgerReference.findMany({
+        where: { entryId: yId },
+      });
+      expect(held.map((h) => h.value).sort()).toEqual([r1, r2].sort());
+    });
+
+    it('a reversal names only debits: an in row holding the same reference is never reversed', async () => {
+      const a = await addWallet();
+      const b = await addWallet();
+      const ours = ref('FIO');
+      const out = await ledger.record({
+        wallet: {
+          kind: 'user',
+          wawuUserId: a.wawuUserId,
+          accountNumber: a.accountNumber,
+        },
+        direction: 'out',
+        status: 'completed',
+        category: 'transfer',
+        amountKobo: 1000,
+        references: { customerReference: ours },
+        source: 'send',
+      });
+      const inRow = await ledger.record({
+        wallet: {
+          kind: 'user',
+          wawuUserId: b.wawuUserId,
+          accountNumber: b.accountNumber,
+        },
+        direction: 'in',
+        status: 'completed',
+        category: 'transfer',
+        amountKobo: 1000,
+        references: { delivery: [ours] },
+        source: 'webhook',
+      });
+      const e = await deliver(
+        reversalDelivery({
+          customerId: a.customerId,
+          customerReference: ours,
+          transactionReference: ref('TX'),
+          reversalRef: ref('REV'),
+        }),
+        ours,
+      );
+      expect(await consumer.consume(e)).toBe('processed');
+      const [o, i] = await Promise.all([
+        prisma.fintavaLedgerEntry.findUniqueOrThrow({
+          where: { id: out.entryId },
+        }),
+        prisma.fintavaLedgerEntry.findUniqueOrThrow({
+          where: { id: inRow.entryId },
+        }),
+      ]);
+      expect(o.status).toBe('reversed');
+      expect(i.status).toBe('completed');
+      expect(i.reversedAt).toBeNull();
+    });
+
+    it('a delivery read as pending but already processed when its lock is taken: nothing is written again', async () => {
+      const a = await addWallet();
+      const r = ref('DONE');
+      const e = await deliver(
+        w2wDelivery({
+          from: '0020886993',
+          to: a.accountNumber,
+          amount: 3,
+          reference: r,
+        }),
+        r,
+      );
+      await prisma.fintavaWebhookEvent.update({
+        where: { id: e },
+        data: { processingStatus: 'processed', note: 'done elsewhere' },
+      });
+      // What a second worker does after its stale read: take the lock and write.
+      let wrote = false;
+      const finish = (
+        consumer as unknown as {
+          finish: (
+            id: string,
+            write: () => { status: 'processed'; note: string },
+          ) => Promise<string>;
+        }
+      ).finish.bind(consumer);
+      const outcome = await finish(e, () => {
+        wrote = true;
+        return { status: 'processed', note: 'written twice' };
+      });
+      expect(outcome).toBe('skipped');
+      expect(wrote).toBe(false);
+      expect((await event(e)).note).toBe('done elsewhere');
+    });
+
+    it('a waiting delivery retried for the same reason is not rewritten; a new reason is', async () => {
+      const a = await addWallet();
+      const fin = ref('FIN');
+      byReference.set(fin, { status: 200, body: {} });
+      const e = await deliver(
+        w2wDelivery({
+          from: '0020886993',
+          to: a.accountNumber,
+          amount: 4,
+          reference: fin,
+        }),
+        fin,
+      );
+      const xmin = async () =>
+        (
+          await prisma.$queryRaw<Array<{ x: string }>>`
+            SELECT xmin::text AS x FROM "FintavaWebhookEvent" WHERE "id" = ${e}`
+        )[0].x;
+      expect(await consumer.consume(e)).toBe('waiting');
+      const first = await xmin();
+      expect(await consumer.consume(e)).toBe('waiting');
+      expect(await xmin()).toBe(first);
+      byReference.set(fin, {
+        status: 500,
+        body: fintavaError(500, 'read ECONNRESET'),
+      });
+      expect(await consumer.consume(e)).toBe('waiting');
+      expect(await xmin()).not.toBe(first);
+      expect((await event(e)).note).toMatch(/\(unreachable\)/);
     });
   });
 
