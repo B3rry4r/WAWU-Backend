@@ -61,8 +61,8 @@ const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
  * the same machine and appends the caller's address as the LAST entry of
  * X-Forwarded-For (`$proxy_add_x_forwarded_for`, deploy/install-services.sh),
  * so: from a loopback peer, that last entry; from anyone else, their own
- * address. Entries a caller writes themselves sit to the left of nginx's
- * and are never read, and a caller who reaches the app directly cannot use
+ * address. Entries a caller writes themselves sit to the left of nginx's,
+ * so they do not count, and a caller who reaches the app directly cannot use
  * the header at all.
  */
 type TrackedRequest = {
