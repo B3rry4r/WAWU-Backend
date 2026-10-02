@@ -3260,6 +3260,29 @@ model BvnCheckAttempt {
   @@index([wawuUserId, createdAt])
 }
 
+/// One row per selfie match sent (or about to be sent) to Fintava (task
+/// KYC-02): Fintava's `POST /compliance/verify/bvn/selfie` compares a selfie
+/// with the BVN record's photo, a face match and not a liveness check. Each
+/// one is charged even when the faces do not match (mobile repo
+/// `docs/fintava/sandbox/05-bvn-selfie.md`), so this is how the per-person
+/// daily limit is counted, and it is the record of the result. It never
+/// holds the selfie, the BVN photo or any part of the BVN: only the outcome,
+/// when, and Fintava's confidence score when it gives one.
+model SelfieMatchAttempt {
+  id         String    @id @default(uuid())
+  wawuUserId String
+  /// `pending` while Fintava is being asked; then `matched`, `not_matched`
+  /// or `unavailable`.
+  outcome    String    @default("pending")
+  /// Fintava's confidence score for this match, as sent, when it sends one.
+  confidence Float?
+  /// When Fintava's answer came back; null while pending.
+  settledAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([wawuUserId, createdAt])
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 /// FREE CHAT BETWEEN TWO USERS (task INBOX-06, DECISIONS R-13)
 ///

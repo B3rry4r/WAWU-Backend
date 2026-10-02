@@ -160,6 +160,9 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // the record of their BVN checks. All of it is theirs and goes with them.
   { model: 'WalletIdentity', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'BvnCheckAttempt', column: 'wawuUserId', disposition: 'OWNED' },
+  // The record of this person's selfie matches (KYC-02): outcome, time and
+  // confidence only, never the image.
+  { model: 'SelfieMatchAttempt', column: 'wawuUserId', disposition: 'OWNED' },
 
   // Last: everything above may reference these.
   { model: 'CreatorState', column: 'wawuUserId', disposition: 'OWNED' },

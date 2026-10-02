@@ -191,15 +191,17 @@ function maskSecretRuns(text: string, secret: string): string {
 /**
  * Masks what could identify a person or open the account in a text Fintava
  * sent: any run of 8 or more characters of a given secret (the API key)
- * first, then any `Bearer` token, then runs of 7 or more digits keep their
- * last 4 (a BVN, NIN, phone or account number), and an email keeps its
- * domain. Also caps the length.
+ * first, then any `Bearer` token, then any run of 40 or more base64
+ * characters (an image: a selfie or a BVN photo echoed back, KYC-02), then
+ * runs of 7 or more digits keep their last 4 (a BVN, NIN, phone or account
+ * number), and an email keeps its domain. Also caps the length.
  */
 export function maskFintavaText(text: string, secrets: string[] = []): string {
   let out = text.slice(0, 2000);
   for (const secret of secrets) out = maskSecretRuns(out, secret);
   return out
     .replace(/bearer\s+\S+/gi, '[credential]')
+    .replace(/[A-Za-z0-9+/]{40,}={0,2}/g, '[data]')
     .replace(/\d{7,}/g, (d) => `${'*'.repeat(d.length - 4)}${d.slice(-4)}`)
     .replace(/[^\s@"']+@([^\s@"']+)/g, '***@$1')
     .slice(0, 200);

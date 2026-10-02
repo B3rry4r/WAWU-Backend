@@ -25,6 +25,9 @@ import {
   NAME_ENQUIRY,
   RECORD_BY_ID,
   recordByReference,
+  SELFIE_200,
+  SELFIE_400,
+  selfieAnswer,
   W2W_200,
   WALLET_BALANCE,
 } from '../../../test/fintava/fintava-double';
@@ -226,6 +229,96 @@ describe('1. identity checks (charged; typed, never run against the sandbox here
   it('refuses a malformed BVN before paying for a check', async () => {
     const e = await failure(client().verifyBvn('123'));
     expect(e.kind).toBe('validation');
+    expect(double.seen).toHaveLength(0);
+  });
+});
+
+describe('1b. the selfie match (KYC-02): typed verdict and score, nothing else passed on', () => {
+  const IMAGE = 'iVBORw0KGgo'.padEnd(64, 'A');
+  const sent = { bvn: '12345678901', image: IMAGE };
+  const selfie = () =>
+    client().verifyBvnSelfie({ bvn: sent.bvn, imageBase64: IMAGE });
+
+  it('sends the BVN and the base64 image in a JSON body, with the key', async () => {
+    double.on('POST', '/compliance/verify/bvn/selfie', {
+      status: 200,
+      body: SELFIE_200,
+    });
+    await selfie();
+    expect(double.seen).toHaveLength(1);
+    expect(double.seen[0].body).toEqual({ bvn: sent.bvn, image: IMAGE });
+    expect(double.seen[0].query).toEqual({});
+    expect(double.seen[0].headers.authorization).toBe(`Bearer ${KEY}`);
+    expect(double.seen[0].headers['content-type']).toBe('application/json');
+  });
+
+  it('a 2xx with a data object is a match; with no score the confidence is null', async () => {
+    double.on('POST', '/compliance/verify/bvn/selfie', {
+      status: 200,
+      body: SELFIE_200,
+    });
+    await expect(selfie()).resolves.toEqual({
+      matched: true,
+      confidence: null,
+    });
+  });
+
+  it('reads a score, and a verdict field set to false is a failed match even on a 2xx', async () => {
+    double.on('POST', '/compliance/verify/bvn/selfie', {
+      status: 200,
+      body: selfieAnswer(sent, { match: true, confidence_value: 99.5 }),
+    });
+    await expect(selfie()).resolves.toEqual({
+      matched: true,
+      confidence: 99.5,
+    });
+    double.reset();
+    double.on('POST', '/compliance/verify/bvn/selfie', {
+      status: 200,
+      body: { data: { verified: false, confidence: '12.25' } },
+    });
+    await expect(selfie()).resolves.toEqual({
+      matched: false,
+      confidence: 12.25,
+    });
+  });
+
+  it('passes on nothing else of the answer: not the BVN, the photo or the image it echoed', async () => {
+    double.on('POST', '/compliance/verify/bvn/selfie', {
+      status: 200,
+      body: selfieAnswer(sent, { match: true, confidence: 88 }),
+    });
+    const result = await selfie();
+    expect(Object.keys(result).sort()).toEqual(['confidence', 'matched']);
+    const text = JSON.stringify(result);
+    expect(text).not.toContain(sent.bvn);
+    expect(text).not.toContain('QkFTRTY0UEhPVE8');
+    expect(text).not.toContain(IMAGE);
+  });
+
+  it('the sandbox’s failed match is identity_refused; a body we cannot read is bad_response', async () => {
+    double.on('POST', '/compliance/verify/bvn/selfie', {
+      status: 400,
+      body: SELFIE_400,
+    });
+    expect((await failure(selfie())).kind).toBe('identity_refused');
+    double.reset();
+    double.on('POST', '/compliance/verify/bvn/selfie', {
+      status: 200,
+      body: { status: 200, message: 'successful' },
+    });
+    expect((await failure(selfie())).kind).toBe('bad_response');
+  });
+
+  it('refuses a malformed BVN, an empty image or a data: URL before paying for a match', async () => {
+    const c = client();
+    for (const input of [
+      { bvn: '123', imageBase64: IMAGE },
+      { bvn: sent.bvn, imageBase64: '' },
+      { bvn: sent.bvn, imageBase64: `data:image/png;base64,${IMAGE}` },
+    ]) {
+      expect((await failure(c.verifyBvnSelfie(input))).kind).toBe('validation');
+    }
     expect(double.seen).toHaveLength(0);
   });
 });

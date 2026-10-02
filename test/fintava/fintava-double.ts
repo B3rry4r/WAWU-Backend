@@ -601,3 +601,45 @@ export const BVN_200 = {
     image: 'aGVsbG8=',
   },
 };
+
+/**
+ * A selfie match that passed (KYC-02). The success body is unseen in the
+ * sandbox (no BVN it knows, question 11; the reference page's example is
+ * `{}`), so this is Fintava's usual 2xx envelope, `{ data, status, message }`
+ * as every other check answers, around that empty example: a match with no
+ * score.
+ */
+export const SELFIE_200 = {
+  data: {},
+  status: 200,
+  message: 'successful',
+};
+
+/**
+ * The same, as a richer provider answer might look: a verdict, a score, and
+ * the worst case for storage and logs, the BVN, the BVN record's photo and
+ * the selfie itself echoed back. Built per call, from what was sent.
+ */
+export function selfieAnswer(
+  sent: { bvn: string; image: string },
+  verdict: Record<string, unknown>,
+) {
+  return {
+    data: {
+      bvn: sent.bvn,
+      image: sent.image,
+      photo: `${'QkFTRTY0UEhPVE8'.repeat(20)}`,
+      selfie_verification: verdict,
+    },
+    status: 200,
+    message: 'successful',
+  };
+}
+
+/** The sandbox's own failed match (`sandbox/05-bvn-selfie.md`), charged ₦10. */
+export const SELFIE_400 = {
+  status: 400,
+  timestamp: '2026-10-02T09:43:35.262Z',
+  message: ['Request failed with status code 404'],
+  path: '/api/dev/compliance/verify/bvn/selfie',
+};

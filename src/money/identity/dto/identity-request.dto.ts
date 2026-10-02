@@ -1,5 +1,6 @@
+import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsString, Matches, MaxLength } from 'class-validator';
+import { IsString, Matches, MaxLength, ValidateBy } from 'class-validator';
 
 /**
  * Request bodies of Open your wallet's identity step (task KYC-01).
@@ -31,4 +32,66 @@ export class IdentityOccupationDto {
     message: 'occupation must be 2 to 80 characters and include a letter',
   })
   occupation!: string;
+}
+
+/** The longest selfie accepted, in base64 characters (about 75 KB of image). */
+export const SELFIE_IMAGE_MAX_CHARS = 100_000;
+/** The smallest selfie accepted, in bytes once decoded: anything smaller is not a photo. */
+export const SELFIE_IMAGE_MIN_BYTES = 1_000;
+
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/**
+ * True when `value` is plain base64 (no `data:` prefix, no spaces) of a
+ * JPEG or PNG of at least SELFIE_IMAGE_MIN_BYTES. Checked before Fintava is
+ * asked, because every selfie match is charged, a broken one too.
+ */
+export function isSelfieImage(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  if (value.length > SELFIE_IMAGE_MAX_CHARS || value.length % 4 !== 0) {
+    return false;
+  }
+  if (!BASE64.test(value)) return false;
+  const bytes = Buffer.from(value, 'base64');
+  if (bytes.length < SELFIE_IMAGE_MIN_BYTES) return false;
+  const jpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  const png = bytes
+    .subarray(0, 8)
+    .equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  return jpeg || png;
+}
+
+/**
+ * The selfie step (task KYC-02, A6). The BVN is the one whose check passed
+ * (KYC-01); it is compared with the stored keyed hash, never stored. The
+ * image is matched once and dropped: it is never stored or logged, and no
+ * validation message repeats it.
+ */
+export class SelfieMatchDto {
+  /** The BVN whose check passed: 11 digits, no spaces. */
+  @Matches(/^[0-9]{11}$/, { message: 'bvn must be 11 digits' })
+  bvn!: string;
+
+  /**
+   * The selfie: plain base64 (no `data:` prefix) of a JPEG or PNG, 1 KB to
+   * about 75 KB (at most 100,000 base64 characters). A face match against
+   * the BVN photo, not a liveness check.
+   */
+  @ApiProperty({
+    type: 'string',
+    format: 'byte',
+    maxLength: SELFIE_IMAGE_MAX_CHARS,
+  })
+  @IsString({ message: 'image must be a base64 JPEG or PNG' })
+  @ValidateBy(
+    {
+      name: 'isSelfieImage',
+      validator: { validate: (value: unknown) => isSelfieImage(value) },
+    },
+    {
+      message:
+        'image must be a base64 JPEG or PNG of 1 KB to 75 KB, without a data: prefix',
+    },
+  )
+  image!: string;
 }

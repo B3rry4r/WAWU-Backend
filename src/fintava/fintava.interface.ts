@@ -440,10 +440,15 @@ export interface FintavaSelfieInput {
 }
 
 /**
- * The success body is unseen (a failed match is a 400, `sandbox/05-`); a
- * 2xx with a `data` object is read as a match and its scalars are kept.
+ * A selfie match's answer. It is a face match against the BVN record's
+ * photo, not a liveness check (Fintava offers none). The success body is
+ * unseen (a failed match is a 400, `sandbox/05-`; question 6): a 2xx with a
+ * `data` object is read as a match unless it says otherwise, and nothing
+ * else of it is passed on (it may echo the BVN or carry a photo).
  */
 export interface FintavaSelfieResult {
-  matched: true;
-  details: Record<string, string | number | boolean | null>;
+  /** False only when a 2xx says so in a match field set to `false`. */
+  matched: boolean;
+  /** Fintava's confidence score, as sent, when the answer has one; else null. */
+  confidence: number | null;
 }

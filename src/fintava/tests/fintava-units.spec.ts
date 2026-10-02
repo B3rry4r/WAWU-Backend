@@ -256,6 +256,19 @@ describe('Fintava error bodies: string, array and nested messages', () => {
     );
   });
 
+  it('masks an image echoed back (a run of 40 or more base64 characters), but not ordinary text (KYC-02)', () => {
+    const image = `/9j/4AAQSkZJRgABAQ${'AAAQABAAD/2wBDAAgGBgcGBQgHBwcJ'.repeat(40)}==`;
+    const masked = maskFintavaText(`Face not matched for image ${image}`);
+    expect(masked).toBe('Face not matched for image [data]');
+    expect(masked).not.toContain('/9j/');
+    // 39 base64 characters in a row is not a run.
+    const short = 'A'.repeat(39);
+    expect(maskFintavaText(`ref ${short}`)).toBe(`ref ${short}`);
+    expect(maskFintavaText('Request failed with status code 404')).toBe(
+      'Request failed with status code 404',
+    );
+  });
+
   it('masks long digit runs and emails', () => {
     expect(maskFintavaText('BVN 22212345678 for ada@example.com')).toBe(
       'BVN *******5678 for ***@example.com',

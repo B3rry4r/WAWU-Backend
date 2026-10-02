@@ -120,6 +120,56 @@ function scalars(o: Obj): Scalars {
   return out;
 }
 
+/**
+ * The names a selfie answer could carry its verdict and score under. The
+ * success body is unseen (mobile repo `docs/fintava/naira-api.md`, question
+ * 6), so these are read where they appear, in `data` or one object below
+ * it, and nothing else is: a verdict field set to `false` is a failed match
+ * whatever the status, and the first finite number under a score name is
+ * the confidence. Strings that look like numbers are read too.
+ */
+const SELFIE_VERDICT_KEYS = [
+  'match',
+  'matched',
+  'is_match',
+  'isMatch',
+  'verified',
+  'is_verified',
+  'isVerified',
+];
+const SELFIE_SCORE_KEYS = [
+  'confidence',
+  'confidence_value',
+  'confidenceValue',
+  'confidence_score',
+  'confidenceScore',
+  'similarity',
+  'score',
+];
+
+function readSelfieResult(data: Obj): FintavaSelfieResult {
+  const levels = [data, ...Object.values(data).filter(isObj)];
+  const verdicts = levels.flatMap((o) =>
+    SELFIE_VERDICT_KEYS.map((k) => o[k]).filter(
+      (v): v is boolean => typeof v === 'boolean',
+    ),
+  );
+  let confidence: number | null = null;
+  for (const o of levels) {
+    for (const k of SELFIE_SCORE_KEYS) {
+      const raw = o[k];
+      const n =
+        typeof raw === 'number'
+          ? raw
+          : typeof raw === 'string' && raw.trim() !== ''
+            ? Number(raw)
+            : NaN;
+      if (confidence === null && Number.isFinite(n)) confidence = n;
+    }
+  }
+  return { matched: !verdicts.includes(false), confidence };
+}
+
 function readTransaction(v: unknown): FintavaTransaction {
   const o = obj(v, 'transaction');
   const customer = isObj(o.customer) ? o.customer : null;
@@ -573,10 +623,7 @@ export class FintavaClient {
     const answer = await this.request(op, '/compliance/verify/bvn/selfie', {
       body: { bvn: input.bvn, image: input.imageBase64 },
     });
-    return this.read(op, answer, (data) => ({
-      matched: true as const,
-      details: scalars(obj(data, 'data')),
-    }));
+    return this.read(op, answer, (data) => readSelfieResult(obj(data, 'data')));
   }
 
   /** `GET /compliance/verify/phone-number`. Charged, even for "not found". */

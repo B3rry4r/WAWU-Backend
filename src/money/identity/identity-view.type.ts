@@ -48,3 +48,19 @@ export interface BvnCheckView {
   identity: WalletIdentityView;
   prefill: BvnPrefillView;
 }
+
+/**
+ * The selfie step of Open your wallet (task KYC-02): GET and POST
+ * /money/identity/selfie. The selfie is matched against the BVN record's
+ * photo by Fintava; it is a face match, not a liveness check. Neither the
+ * selfie nor the photo is kept, and nothing here carries either.
+ */
+export interface SelfieMatchView {
+  /**
+   * When the selfie last matched the BVN photo, for the BVN check that
+   * passed last (a new BVN check needs a new selfie); null if it has not.
+   */
+  matchedAt: string | null;
+  /** Selfie matches this person may still run in the current 24 hours. */
+  checksLeft: number;
+}
