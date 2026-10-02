@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { ValidationPipe } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
@@ -11,6 +11,7 @@ import {
   ThrottlerModule,
 } from '@nestjs/throttler';
 import { THROTTLER_SKIP } from '@nestjs/throttler/dist/throttler.constants';
+import type { NextFunction, Request, Response } from 'express';
 import request from 'supertest';
 import { AllExceptionsFilter } from '../../common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../../common/interceptors/response.interceptor';
@@ -44,6 +45,8 @@ const RUN = `o11-${randomUUID().slice(0, 8)}`;
 const PATH = '/api/hub/webhooks/flutterwave';
 /** One Flutterwave sender, as nginx's X-Forwarded-For would name it. */
 const FLUTTERWAVE_ADDRESS = '203.0.113.40';
+/** Another sender, only for warming the app up before a timed burst. */
+const WARM_UP_ADDRESS = '203.0.113.41';
 
 const SHORT = HUB_THROTTLERS.find((t) => t.name === 'short')!;
 
@@ -75,6 +78,14 @@ async function buildApp() {
   }).compile();
   const app = moduleRef.createNestApplication(HUB_APP_OPTIONS);
   applyHubHttpSettings(app);
+  // Observes only: notes when each delivery reaches the app, ahead of the
+  // guard, and passes it on untouched. The throttler's window counts
+  // arrivals, so that is what a burst is timed by (see burst()).
+  const arrivals: number[] = [];
+  app.use(PATH, (_req: Request, _res: Response, next: NextFunction) => {
+    arrivals.push(Date.now());
+    next();
+  });
   app.setGlobalPrefix('api/hub');
   app.useGlobalPipes(
     new ValidationPipe({
@@ -88,35 +99,62 @@ async function buildApp() {
   // Port 0: the OS picks a free one, so nothing here can collide.
   await app.listen(0, '127.0.0.1');
   const { port } = (app.getHttpServer() as Server).address() as AddressInfo;
-  return { app, moduleRef, url: `http://127.0.0.1:${port}` };
+  return { app, moduleRef, arrivals, url: `http://127.0.0.1:${port}` };
 }
 
-/** `count` different signed deliveries, all sent at once. */
-async function burst(url: string, label: string, count: number) {
-  const started = Date.now();
+type Built = Awaited<ReturnType<typeof buildApp>>;
+
+/**
+ * `count` different signed deliveries from `sender`, all sent at once.
+ *
+ * `span` is the time from the first delivery reaching the app to the last.
+ * The `short` throttler counts a caller's arrivals within 1 s of the first,
+ * so a span under 1 s means every delivery fell in one window: without the
+ * skip, the 21st onward would be refused. The time until the last RESPONSE
+ * is not used: each delivery also writes a receipt, and on a busy machine
+ * those writes alone take more than a second (the flake the OPS-11 verifier
+ * found).
+ */
+async function burst(
+  app: Built,
+  label: string,
+  count: number,
+  sender = FLUTTERWAVE_ADDRESS,
+) {
+  app.arrivals.length = 0;
   const results = await Promise.all(
     Array.from({ length: count }, (_, i) =>
-      request(url)
+      request(app.url)
         .post(PATH)
         .set('verif-hash', SECRET_HASH)
-        .set('X-Forwarded-For', FLUTTERWAVE_ADDRESS)
+        .set('X-Forwarded-For', sender)
         .send(chargeCompleted(`${RUN}-${label}-${i}`)),
     ),
   );
-  return { results, elapsed: Date.now() - started };
+  expect(app.arrivals).toHaveLength(count);
+  const span = Math.max(...app.arrivals) - Math.min(...app.arrivals);
+  return { results, span };
+}
+
+/**
+ * A fresh app's first requests open the database pool and pay every
+ * first-call cost. Before a timed burst, 10 deliveries at once from ANOTHER
+ * sender (its own bucket, so the burst's sender starts with a full one in
+ * either variant) warm the app up.
+ */
+async function warmUp(app: Built, label: string) {
+  const { results } = await burst(app, `warm-${label}`, 10, WARM_UP_ADDRESS);
+  expect(results.map((r) => r.status)).toEqual(Array(10).fill(200));
 }
 
 describe('Flutterwave webhook rate limits (OPS-11)', () => {
-  let app: INestApplication;
-  let url: string;
+  let built: Built;
   let prisma: PrismaService;
   const previousHash = process.env.FLUTTERWAVE_SECRET_HASH;
 
   beforeAll(async () => {
     process.env.FLUTTERWAVE_SECRET_HASH = SECRET_HASH;
-    const built = await buildApp();
-    app = built.app;
-    url = built.url;
+    built = await buildApp();
     prisma = built.moduleRef.get(PrismaService);
   }, 30000);
 
@@ -124,7 +162,7 @@ describe('Flutterwave webhook rate limits (OPS-11)', () => {
     await prisma?.paymentWebhookReceipt.deleteMany({
       where: { txRef: { startsWith: RUN } },
     });
-    await app?.close();
+    await built?.app.close();
     if (previousHash === undefined) delete process.env.FLUTTERWAVE_SECRET_HASH;
     else process.env.FLUTTERWAVE_SECRET_HASH = previousHash;
   });
@@ -133,8 +171,9 @@ describe('Flutterwave webhook rate limits (OPS-11)', () => {
     // AppModule allows 20 a second (`short`) per caller: without the skip,
     // 10 of these are refused with 429 and wait for Flutterwave's resend.
     const count = SHORT.limit + 10;
-    const { results, elapsed } = await burst(url, 'burst', count);
-    expect(elapsed).toBeLessThan(SHORT.ttl);
+    await warmUp(built, 'burst');
+    const { results, span } = await burst(built, 'burst', count);
+    expect(span).toBeLessThan(SHORT.ttl);
     expect(results.map((r) => r.status)).toEqual(Array(count).fill(200));
     expect(
       results.every(
@@ -168,8 +207,9 @@ describe('Flutterwave webhook rate limits (OPS-11)', () => {
     const bare = await buildApp();
     try {
       const count = SHORT.limit + 10;
-      const { results, elapsed } = await burst(bare.url, 'bare', count);
-      expect(elapsed).toBeLessThan(SHORT.ttl);
+      await warmUp(bare, 'bare');
+      const { results, span } = await burst(bare, 'bare', count);
+      expect(span).toBeLessThan(SHORT.ttl);
       const statuses = results.map((r) => r.status);
       expect(statuses.filter((s) => s === 200)).toHaveLength(SHORT.limit);
       expect(statuses.filter((s) => s === 429)).toHaveLength(10);

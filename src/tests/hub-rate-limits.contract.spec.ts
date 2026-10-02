@@ -238,7 +238,7 @@ describe('Rate limits behind nginx (OPS-11)', () => {
       );
     });
 
-    it('only the two payment webhooks skip the limits; the one other override (admin login and refresh) is unchanged', () => {
+    it('only the two payment webhooks skip the limits; the only other overrides are admin login and refresh, and the BVN check (KYC-01), which only tighten them', () => {
       const root = join(__dirname, '..');
       const files: string[] = [];
       const walk = (dir: string) => {
@@ -261,6 +261,7 @@ describe('Rate limits behind nginx (OPS-11)', () => {
       ]);
       expect(using(/^\s*@Throttle\(/m)).toEqual([
         'admin/auth/admin-auth.controller.ts',
+        'money/identity/money-identity.controller.ts',
       ]);
     });
 
