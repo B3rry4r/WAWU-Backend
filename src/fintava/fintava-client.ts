@@ -258,27 +258,130 @@ interface Answer {
 }
 
 /**
- * Reads an answer's body, at most `cap` bytes of it. A declared
- * Content-Length over the cap, or more bytes than the cap arriving, aborts
- * the request (the connection is dropped, nothing more is read) and answers
- * null. Otherwise the body as text, decoded as `Response.text()` decodes it
- * (UTF-8, a leading BOM dropped); a body that fails mid-way (a timeout, a
- * reset) is '' as `res.text()` failing was.
+ * One Fintava exchange's deadline (task FIX-01): the headers AND the body,
+ * from the moment the request is sent until the body is fully read or the
+ * read has failed.
+ *
+ * Why not `AbortSignal.timeout(...)`: once `fetch` has answered with the
+ * headers, nothing holds that signal (nor undici's own controller, which
+ * follows it through a WeakRef), so a garbage collection takes its timer
+ * away and a body that stalls is held until undici's 300 s body timeout.
+ * Here a plain `setTimeout` holds this object (and through it the
+ * controller and the body's reader) until `end()` clears it, and at the
+ * deadline it acts on what this client itself holds: it aborts the
+ * controller, cancels the reader (which ends a pending read and drops the
+ * connection), and rejects a `fetch` still waiting for headers.
+ *
+ * Cancelling the reader is the part that matters after the headers.
+ * Aborting a controller we hold is not enough on its own: undici reaches its
+ * own request controller from our signal through a WeakRef, and once the
+ * headers are in, a collection can take that controller, so the abort
+ * reaches nothing (a test aborting only the controller hangs under forced
+ * GC, `fintava-stall.spec.ts`).
  */
-async function readCapped(
+class FintavaDeadline {
+  readonly controller = new AbortController();
+  #timedOut = false;
+  #reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  #onTimeout: ((reason: Error) => void) | null = null;
+  readonly #timer: NodeJS.Timeout;
+
+  constructor(ms: number) {
+    this.#timer = setTimeout(() => this.#expire(), ms);
+  }
+
+  get timedOut(): boolean {
+    return this.#timedOut;
+  }
+
+  #expire(): void {
+    this.#timedOut = true;
+    const reason = new DOMException(
+      'Fintava did not answer in time',
+      'TimeoutError',
+    );
+    this.controller.abort(reason);
+    this.#reader?.cancel(reason).catch(() => undefined);
+    this.#onTimeout?.(reason);
+  }
+
+  /**
+   * `fetch`'s answer, or a rejection at the deadline even if `fetch` never
+   * settles. A response that arrives after the deadline has its body
+   * cancelled, so its connection is not left open.
+   */
+  headers(answer: Promise<Response>): Promise<Response> {
+    return new Promise<Response>((resolve, reject) => {
+      this.#onTimeout = reject;
+      answer.then(
+        (res) => {
+          this.#onTimeout = null;
+          if (this.#timedOut) {
+            res.body?.cancel().catch(() => undefined);
+            return;
+          }
+          resolve(res);
+        },
+        (e: unknown) => {
+          this.#onTimeout = null;
+          reject(e instanceof Error ? e : new Error('fetch failed'));
+        },
+      );
+    });
+  }
+
+  /** The body's reader, cancelled at the deadline. */
+  watch(reader: ReadableStreamDefaultReader<Uint8Array>): void {
+    this.#reader = reader;
+    if (this.#timedOut) reader.cancel().catch(() => undefined);
+  }
+
+  /** Drops the connection on purpose (an answer over the cap). */
+  stop(): void {
+    this.controller.abort();
+  }
+
+  /** The exchange is over: the timer is cleared and nothing is held. */
+  end(): void {
+    clearTimeout(this.#timer);
+    this.#reader = null;
+    this.#onTimeout = null;
+  }
+}
+
+/**
+ * What reading a body gave: its text, an answer over the cap, or nothing
+ * (the read failed part-way; `deadline.timedOut` says whether the deadline
+ * is why).
+ */
+type BodyRead =
+  { kind: 'text'; text: string } | { kind: 'over' } | { kind: 'failed' };
+
+/**
+ * Reads an answer's body, at most `cap` bytes of it (no cap when
+ * undefined), through a reader the deadline can cancel. A declared
+ * Content-Length over the cap, or more bytes than the cap arriving, drops
+ * the connection (nothing more is read) and answers `over`. Otherwise the
+ * body as text, decoded as `Response.text()` decodes it (UTF-8, a leading
+ * BOM dropped). A read that fails, or that the deadline cut short, is
+ * `failed`: a cut-short body is never taken for a whole one.
+ */
+async function readBody(
   res: Response,
-  cap: number,
-  stop: AbortController,
-): Promise<string | null> {
+  cap: number | undefined,
+  deadline: FintavaDeadline,
+): Promise<BodyRead> {
   const declared = res.headers.get('content-length');
-  if (declared !== null && /^\d+$/.test(declared.trim())) {
+  if (cap !== undefined && declared !== null && /^\d+$/.test(declared.trim())) {
     if (Number(declared.trim()) > cap) {
-      stop.abort();
-      return null;
+      deadline.stop();
+      res.body?.cancel().catch(() => undefined);
+      return { kind: 'over' };
     }
   }
-  if (res.body === null) return '';
+  if (res.body === null) return { kind: 'text', text: '' };
   const reader = res.body.getReader();
+  deadline.watch(reader);
   const chunks: Uint8Array[] = [];
   let size = 0;
   try {
@@ -286,17 +389,23 @@ async function readCapped(
       const { done, value } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > cap) {
-        stop.abort();
+      if (cap !== undefined && size > cap) {
+        deadline.stop();
         reader.cancel().catch(() => undefined);
-        return null;
+        return { kind: 'over' };
       }
       chunks.push(value);
     }
   } catch {
-    return '';
+    return { kind: 'failed' };
   }
-  return new TextDecoder('utf-8').decode(Buffer.concat(chunks));
+  // A cancelled reader ends with `done`: at the deadline that is a cut-short
+  // body, not the end of one.
+  if (deadline.timedOut) return { kind: 'failed' };
+  return {
+    kind: 'text',
+    text: new TextDecoder('utf-8').decode(Buffer.concat(chunks)),
+  };
 }
 
 /**
@@ -454,55 +563,58 @@ export class FintavaClient {
 
     const started = Date.now();
     const cap = opts.maxAnswerBytes;
-    const stop = cap === undefined ? null : new AbortController();
-    const timeout = AbortSignal.timeout(this.timeoutFor(op.call));
-    let res: Response;
-    try {
-      res = await fetch(url, {
-        method: op.method,
-        headers,
-        body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-        signal:
-          stop === null ? timeout : AbortSignal.any([timeout, stop.signal]),
-        redirect: 'error',
-      });
-    } catch (e) {
-      // No answer is not evidence about the money (a send may have landed).
-      // Read by name, not instanceof: fetch's TimeoutError is a DOMException
-      // from another realm under some runners.
-      const why = (e as { name?: unknown } | null)?.name;
-      throw this.fail(op, {
+    // The whole exchange, headers and body, runs under one deadline (FIX-01).
+    const deadline = new FintavaDeadline(this.timeoutFor(op.call));
+    // No answer, or an answer cut short by the deadline, is not evidence
+    // about the money (a send may have landed).
+    const lost = (why: string) =>
+      this.fail(op, {
         kind: op.call === 'write' ? 'outcome_unknown' : 'unavailable',
-        messages: [why === 'TimeoutError' ? 'timed out' : 'no connection'],
+        messages: [why],
+        reference: opts.reference,
+      });
+    let res: Response;
+    let read: BodyRead;
+    try {
+      try {
+        res = await deadline.headers(
+          fetch(url, {
+            method: op.method,
+            headers,
+            body:
+              opts.body === undefined ? undefined : JSON.stringify(opts.body),
+            signal: deadline.controller.signal,
+            redirect: 'error',
+          }),
+        );
+      } catch {
+        throw lost(deadline.timedOut ? 'timed out' : 'no connection');
+      }
+      read = await readBody(res, cap, deadline);
+    } finally {
+      deadline.end();
+    }
+
+    if (read.kind === 'over') {
+      throw this.fail(op, {
+        kind: op.call === 'write' ? 'not_confirmed' : 'bad_response',
+        status: res.status,
+        messages: [`the answer is over ${cap} bytes`],
         reference: opts.reference,
       });
     }
-
+    // The deadline passed while the body was arriving: the same timeout as
+    // one that passes before the headers, never a reading of a part-body
+    // (a stalled 400 is not a refusal, a stalled 2xx is not a result).
+    if (read.kind === 'failed' && deadline.timedOut) throw lost('timed out');
+    // Any other failed read (the connection reset mid-body) is an empty
+    // body, as `res.text()` failing was.
+    const text = read.kind === 'text' ? read.text : '';
     let body: unknown = null;
-    let text = '';
-    if (stop !== null && cap !== undefined) {
-      const capped = await readCapped(res, cap, stop);
-      if (capped === null) {
-        throw this.fail(op, {
-          kind: op.call === 'write' ? 'not_confirmed' : 'bad_response',
-          status: res.status,
-          messages: [`the answer is over ${cap} bytes`],
-          reference: opts.reference,
-        });
-      }
-      text = capped;
-      try {
-        body = text === '' ? null : (JSON.parse(text) as unknown);
-      } catch {
-        body = null;
-      }
-    } else {
-      try {
-        text = await res.text();
-        body = text === '' ? null : (JSON.parse(text) as unknown);
-      } catch {
-        body = null;
-      }
+    try {
+      body = text === '' ? null : (JSON.parse(text) as unknown);
+    } catch {
+      body = null;
     }
     const ms = Date.now() - started;
 
