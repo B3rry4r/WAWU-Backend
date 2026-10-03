@@ -494,6 +494,9 @@ model ContentPiece {
   comments  Comment[]
   purchases Purchase[]
   savedBy   SavedItem[]
+  likedBy   ContentLike[]
+  viewedBy  ContentView[]
+  sharedBy  ContentShare[]
 
   @@index([creatorWawuId])
   @@index([status])
@@ -604,6 +607,56 @@ model SavedItem {
   @@unique([userWawuId, contentId])
   @@index([userWawuId])
   @@index([contentId])
+}
+
+/// One person's like on one piece of content (HOME-04). Mirrors CommentLike:
+/// a join row with a unique (user, content) pair, so "did THIS viewer like
+/// THIS piece" is answerable and a repeat POST is a no-op rather than a second
+/// count. `ContentPiece.likes` stays the counter every existing response and
+/// the ranking already read; it moves only when a row is really created or
+/// removed.
+model ContentLike {
+  id         String       @id @default(uuid())
+  userWawuId String
+  contentId  String
+  content    ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  likedAt    DateTime     @default(now())
+
+  @@unique([userWawuId, contentId])
+  @@index([userWawuId])
+  @@index([contentId])
+}
+
+/// One person opened one piece on one day (HOME-04). Same rule as
+/// ProfileView: one row per viewer per UTC day, which the unique key enforces,
+/// because a number that goes up on every refresh measures nothing. The
+/// owner's own opens and anonymous reads write nothing.
+/// `ContentPiece.views` is the counter; it moves only when a row is created.
+model ContentView {
+  id           String       @id @default(uuid())
+  contentId    String
+  content      ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  viewerWawuId String
+  viewedOn     DateTime     @db.Date
+  viewedAt     DateTime     @default(now())
+
+  @@unique([contentId, viewerWawuId, viewedOn])
+  @@index([viewerWawuId])
+}
+
+/// One person shared one piece on one day (HOME-04). A share count is the
+/// number of rows; no counter column on ContentPiece, because a new column
+/// there would widen every live content response (protected-registry H-1).
+model ContentShare {
+  id            String       @id @default(uuid())
+  contentId     String
+  content       ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  sharerWawuId  String
+  sharedOn      DateTime     @db.Date
+  sharedAt      DateTime     @default(now())
+
+  @@unique([contentId, sharerWawuId, sharedOn])
+  @@index([sharerWawuId])
 }
 
 /// One person looked at one profile, on one day.

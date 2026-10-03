@@ -1,6 +1,11 @@
 import { Module } from '@nestjs/common';
 import { ContentPieceController } from './content-piece.controller';
 import { PublicContentController } from './public-content.controller';
+import {
+  ContentEngagementController,
+  FeedController,
+} from './content-engagement.controller';
+import { ContentEngagementService } from './content-engagement.service';
 import { ContentPieceService } from './content-piece.service';
 import { CreatorAccountGuard } from './guards/creator-account-guard';
 import { FLUTTERWAVE_CLIENT } from './flutterwave-client.interface';
@@ -21,9 +26,15 @@ import { StorageModule } from '../storage/storage.module';
  */
 @Module({
   imports: [NotificationModule, StorageModule],
-  controllers: [ContentPieceController, PublicContentController],
+  controllers: [
+    ContentPieceController,
+    PublicContentController,
+    ContentEngagementController,
+    FeedController,
+  ],
   providers: [
     ContentPieceService,
+    ContentEngagementService,
     CreatorAccountGuard,
     RealFlutterwaveAdapter,
     MockFlutterwaveAdapter,
