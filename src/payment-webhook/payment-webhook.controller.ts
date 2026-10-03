@@ -1,13 +1,11 @@
-import {
-  Body,
-  Controller,
-  HttpCode,
-  Post,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, HttpCode, Post, UseGuards } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
+import { SKIP_EVERY_HUB_THROTTLER } from '../hub-throttlers';
 import { FlutterwaveSignatureGuard } from './guards/flutterwave-signature.guard';
-import { PaymentWebhookService, type WebhookResult } from './payment-webhook.service';
+import {
+  PaymentWebhookService,
+  type WebhookResult,
+} from './payment-webhook.service';
 
 /**
  * `POST /api/hub/webhooks/flutterwave` — the address the Flutterwave
@@ -19,7 +17,10 @@ import { PaymentWebhookService, type WebhookResult } from './payment-webhook.ser
  *
  * Throttling is skipped deliberately. Flutterwave retries in bursts, and a
  * 429 here means a paid customer gets nothing — the endpoint is already
- * bounded by the signature guard and by the unique delivery claim.
+ * bounded by the signature guard and by the unique delivery claim. Every
+ * named throttler is skipped (SKIP_EVERY_HUB_THROTTLER, task OPS-11): the
+ * bare `@SkipThrottle()` this had skipped only a throttler called `default`,
+ * which this app does not have, so a burst over 20/s was answered 429.
  *
  * Status codes are the retry contract:
  *   200 — handled (settled, refused, duplicate, unmatched or ignored). Do not
@@ -28,7 +29,7 @@ import { PaymentWebhookService, type WebhookResult } from './payment-webhook.ser
  *   5xx — we could not finish (Flutterwave unreachable, database down).
  *         Please redeliver; the receipt is left reclaimable.
  */
-@SkipThrottle()
+@SkipThrottle(SKIP_EVERY_HUB_THROTTLER)
 @Controller('webhooks/flutterwave')
 export class PaymentWebhookController {
   constructor(private readonly webhooks: PaymentWebhookService) {}
