@@ -10,7 +10,7 @@ import {
   type PaymentKind,
   type TransactionFilter,
 } from '../dto/money-enums';
-import { BALANCE_OPENING_MESSAGE } from '../balance/wallet-balance.service';
+import type { OpenWallet } from '../gate/wallet-gate';
 import { MoneyError } from '../money-error';
 import type {
   FeeBreakdown,
@@ -21,7 +21,6 @@ import type {
   TransactionView,
   TransferStatus,
 } from '../money-view.type';
-import { stoppedOnIdentity } from '../opening/opening-stops';
 import {
   decodeCursor,
   decodeGroupKey,
@@ -41,20 +40,13 @@ import {
   LINK_LABEL_CATEGORIES,
 } from './history-labels';
 
-/** No wallet yet (R-6): the app leads to Open your wallet (MONEY-12, MONEY-13). */
-export const HISTORY_NOT_OPEN_MESSAGE =
-  'Open your wallet to see your transactions.';
-
 /** No such row for this caller: someone else's is the same 404 (CONVENTIONS.md section 3). */
 export const HISTORY_NOT_FOUND_MESSAGE = 'We could not find that transaction.';
 
 export const BAD_MONTH_MESSAGE = 'month must look like 2026-09';
 
-/** The caller's wallet, as the ledger keys its rows. */
-interface HistoryWallet {
-  wawuUserId: string;
-  accountNumber: string;
-}
+/** The caller's wallet, as the ledger keys its rows (the gate's OpenWallet). */
+type HistoryWallet = Pick<OpenWallet, 'wawuUserId' | 'accountNumber'>;
 
 /** Which rows a query reads. */
 type Scope =
@@ -231,8 +223,9 @@ function checkedMonth(month: string): string {
  * rows up into a balance (the balance is Fintava's, GET /money/wallet/balance).
  *
  * - **Whose rows.** Only rows on the caller's own Fintava wallet
- *   (`walletKind` user, the token's wawuUserId and that wallet's account
- *   number). Someone else's row is the same 404 as no row.
+ *   (`walletKind` user, the token's wawuUserId and the account number of
+ *   the wallet the gate found, MONEY-13). Someone else's row is the same
+ *   404 as no row. No wallet yet never reaches here: the gate answers it.
  * - **Status.** Each row's status is the ledger's, which only Fintava's own
  *   word moves (a send's answer, a signed delivery, a lookup, MONEY-08's
  *   sweep). A row the sweep has not settled stays `pending`; a row whose
@@ -261,10 +254,9 @@ export class TransactionHistoryService {
   constructor(private readonly prisma: PrismaService) {}
 
   async list(
-    wawuUserId: string,
+    wallet: OpenWallet,
     query: TransactionListQueryDto,
   ): Promise<TransactionPage> {
-    const wallet = await this.walletOf(wawuUserId);
     const limit = query.limit ?? 20;
     const cursor = query.cursor ? decodeCursor(query.cursor) : null;
     const scope: Scope = query.group
@@ -290,18 +282,16 @@ export class TransactionHistoryService {
     };
   }
 
-  async detail(wawuUserId: string, id: string): Promise<TransactionView> {
-    const wallet = await this.walletOf(wawuUserId);
+  async detail(wallet: OpenWallet, id: string): Promise<TransactionView> {
     const [row] = await this.read(wallet, { kind: 'one', id }, null, 1);
     if (!row) throw new MoneyError('not_found', HISTORY_NOT_FOUND_MESSAGE);
     return this.view(row);
   }
 
   async summary(
-    wawuUserId: string,
+    wallet: OpenWallet,
     query: MonthlySummaryQueryDto,
   ): Promise<MonthlySummaryView> {
-    const wallet = await this.walletOf(wawuUserId);
     const month = checkedMonth(query.month);
     const totals = await this.prisma.$queryRaw<
       Array<{ direction: 'in' | 'out'; total: string }>
@@ -320,28 +310,6 @@ export class TransactionHistoryService {
       return t ? koboFromText(t.total) : 0;
     };
     return { month, inKobo: of('in'), outKobo: of('out') };
-  }
-
-  /**
-   * The wallet history reads, found from the token only. No wallet: the
-   * same answers as the balance (MONEY-11): `wallet_opening` while
-   * MONEY-12 opens it, else `wallet_not_open`. The ledger is ours, so a
-   * frozen wallet's history still reads (nothing here asks Fintava).
-   */
-  private async walletOf(wawuUserId: string): Promise<HistoryWallet> {
-    const wallet = await this.prisma.fintavaWallet.findUnique({
-      where: { wawuUserId },
-      select: { accountNumber: true },
-    });
-    if (wallet) return { wawuUserId, accountNumber: wallet.accountNumber };
-    const opening = await this.prisma.fintavaWalletOpening.findUnique({
-      where: { wawuUserId },
-      select: { state: true, failure: true },
-    });
-    if (opening && opening.state !== 'failed' && !stoppedOnIdentity(opening)) {
-      throw new MoneyError('wallet_opening', BALANCE_OPENING_MESSAGE);
-    }
-    throw new MoneyError('wallet_not_open', HISTORY_NOT_OPEN_MESSAGE);
   }
 
   private read(

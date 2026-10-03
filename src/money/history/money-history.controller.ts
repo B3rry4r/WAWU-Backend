@@ -8,13 +8,16 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
-import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
-import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
 import {
   MonthlySummaryQueryDto,
   TransactionListQueryDto,
 } from '../dto/money-request.dto';
+import {
+  CurrentWallet,
+  type OpenWallet,
+  RequireOpenWallet,
+} from '../gate/wallet-gate';
 import { BuiltBy, MoneyErrors, WALLET_GATE_ERRORS } from '../money-contract';
 import type {
   MonthlySummaryView,
@@ -30,6 +33,9 @@ import { TransactionHistoryService } from './transaction-history.service';
  * the refusals are the contract's own, unchanged.
  *
  * The caller is the token: no route takes a wallet id or a wawuUserId.
+ * Every route is behind the wallet gate (MONEY-13): no wallet yet is `409
+ * wallet_not_open` (or `wallet_opening`), in the same words as every
+ * wallet route, before anything is read.
  * `no-store` because a row's status moves as Fintava confirms it.
  * Nothing here calls Fintava, so none of these answers `provider_unreachable`.
  */
@@ -43,35 +49,38 @@ export class MoneyHistoryController {
   @Get('transactions')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('MONEY-15')
+  @RequireOpenWallet()
   @MoneyErrors(...WALLET_GATE_ERRORS)
   list(
-    @CurrentUser() user: WawuJwtClaims,
+    @CurrentWallet() wallet: OpenWallet,
     @Query() query: TransactionListQueryDto,
   ): Promise<TransactionPage> {
-    return this.history.list(user.sub, query);
+    return this.history.list(wallet, query);
   }
 
   /** W26's In and Out for one month. Declared before transactions/{id} so the literal path wins. */
   @Get('transactions/summary')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('MONEY-15')
+  @RequireOpenWallet()
   @MoneyErrors(...WALLET_GATE_ERRORS)
   summary(
-    @CurrentUser() user: WawuJwtClaims,
+    @CurrentWallet() wallet: OpenWallet,
     @Query() query: MonthlySummaryQueryDto,
   ): Promise<MonthlySummaryView> {
-    return this.history.summary(user.sub, query);
+    return this.history.summary(wallet, query);
   }
 
   /** One row as a receipt (W27). Only the wallet's owner can read it. */
   @Get('transactions/:id')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('MONEY-15')
+  @RequireOpenWallet()
   @MoneyErrors(...WALLET_GATE_ERRORS, 'not_found')
   detail(
-    @CurrentUser() user: WawuJwtClaims,
+    @CurrentWallet() wallet: OpenWallet,
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<TransactionView> {
-    return this.history.detail(user.sub, id);
+    return this.history.detail(wallet, id);
   }
 }

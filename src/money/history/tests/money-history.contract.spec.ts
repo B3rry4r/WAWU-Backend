@@ -19,6 +19,10 @@ import { ResponseInterceptor } from '../../../common/interceptors/response.inter
 import { PrismaModule } from '../../../common/prisma/prisma.module';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import type { MoneyErrorReason } from '../../dto/money-error.dto';
+import {
+  NO_WALLET_MESSAGE,
+  WALLET_OPENING_MESSAGE,
+} from '../../gate/wallet-gate';
 import type { LedgerMovementInput } from '../../ledger/ledger.interface';
 import { LedgerService } from '../../ledger/ledger.service';
 import { MoneyModule } from '../../money.module';
@@ -240,7 +244,7 @@ describe('GET /money/transactions, /summary, /{id} (MONEY-15) over HTTP', () => 
         const res = await get(u.auth, path).expect(409);
         expect(body(res).reason).toEqual({
           code: 'wallet_not_open',
-          message: 'Open your wallet to see your transactions.',
+          message: NO_WALLET_MESSAGE,
         });
         expect(body(res).data).toBeNull();
       }
@@ -257,8 +261,17 @@ describe('GET /money/transactions, /summary, /{id} (MONEY-15) over HTTP', () => 
           phone: `+23480${String(Date.now()).slice(-8)}`,
         },
       });
-      const res = await get(u.auth, BASE).expect(409);
-      expect(body(res).reason?.code).toBe('wallet_opening');
+      for (const path of [
+        BASE,
+        `${BASE}/summary?month=2026-09`,
+        `${BASE}/${randomUUID()}`,
+      ]) {
+        const res = await get(u.auth, path).expect(409);
+        expect(body(res).reason).toEqual({
+          code: 'wallet_opening',
+          message: WALLET_OPENING_MESSAGE,
+        });
+      }
     });
 
     it("someone else's transaction is the same 404 as one that does not exist", async () => {
