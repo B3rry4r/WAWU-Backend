@@ -13,7 +13,6 @@ import { ApiBearerAuth } from '@nestjs/swagger';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import {
   BankTransferDto,
-  FeeQuoteQueryDto,
   NameCheckDto,
   RecipientSearchQueryDto,
   WawuTransferDto,
@@ -30,16 +29,15 @@ import {
 import type {
   AccountNameView,
   BankView,
-  FeeQuoteView,
   RecipientView,
   TransferView,
 } from './money-view.type';
 
 /**
  * Sending money: to another WAWU user (WALLET-07, WALLET-08) and to any
- * Nigerian bank account (WALLET-09), with the name check and the fee quote
- * (WALLET-15). Saved beneficiaries and the payout account are served by
- * WALLET-14 (src/money/saved-accounts/).
+ * Nigerian bank account (WALLET-09), with the name check. The fee quote is
+ * served by WALLET-15 (src/money/fees/), saved beneficiaries and the payout
+ * account by WALLET-14 (src/money/saved-accounts/).
  * A withdrawal (W17) is a bank send to the payout account. Task MONEY-04
  * contract; see money-contract.ts for why these handlers are declarations.
  */
@@ -80,18 +78,6 @@ export class MoneyTransferController {
   @MoneyErrors(...WALLET_GATE_ERRORS)
   recentRecipients(): Promise<RecipientView[]> {
     return declaredOnly('WALLET-08');
-  }
-
-  /**
-   * What a send will cost, before the PIN (W10, W17): Fintava's charge plus
-   * WAWU's fee from config (R-10), the total, and whether it fits today's
-   * limit. Nothing is reserved; the send repeats totalKobo as expectedTotalKobo.
-   */
-  @Get('fees/quote')
-  @BuiltBy('WALLET-15')
-  @MoneyErrors(...WALLET_GATE_ERRORS, 'amount_out_of_range')
-  feeQuote(@Query() query: FeeQuoteQueryDto): Promise<FeeQuoteView> {
-    return declaredOnly('WALLET-15', query);
   }
 
   /** Send to a WAWU user (W10 to W12). Completes at once or is refused; never pending. */
