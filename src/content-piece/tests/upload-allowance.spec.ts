@@ -1,6 +1,6 @@
 import { ForbiddenException } from '@nestjs/common';
 import { ContentPieceService } from '../content-piece.service';
-import { MAX_ITEMS_PER_ACCOUNT } from '../../common/creator-allowance';
+import { FREE_UPLOADS, TICK_UPLOADS } from '../../common/creator-allowance';
 import type { CreateContentDto } from '../dto/create-content.dto';
 
 /**
@@ -9,15 +9,50 @@ import type { CreateContentDto } from '../dto/create-content.dto';
  * could publish an unlimited number of pieces.
  *
  * The cap used to be a per-tier ladder with a free/paid sub-split. It is now
- * one flat number per account (build brief B2, "Maximum 5 items per account"),
- * counted across products, content AND services, so these tests are about that
- * one number and the transaction that claims against it.
+ * one number per account that a tick raises (R-7: 5 uploads, 25 with a tick),
+ * with no free/paid split (R-8: free pieces are allowed and count), so these
+ * tests are about that number and the transaction that claims against it.
  *
  * These run against a hand-built Prisma double rather than a database: the
  * rule under test is arithmetic over counts, and the contract spec that needs
  * real Postgres already covers the wire shape.
  */
-function buildService(opts: { used: number; hasState?: boolean }) {
+/** The four stored tick columns on UserProfile (verification-state.ts). */
+type TickRow = Record<
+  | 'creatorVerifiedAt'
+  | 'creatorVerifiedUntil'
+  | 'professionalVerifiedAt'
+  | 'professionalVerifiedUntil',
+  Date | null
+>;
+const NO_TICK: TickRow = {
+  creatorVerifiedAt: null,
+  creatorVerifiedUntil: null,
+  professionalVerifiedAt: null,
+  professionalVerifiedUntil: null,
+};
+const CREATOR_TICK: TickRow = {
+  ...NO_TICK,
+  creatorVerifiedAt: new Date('2026-01-01T00:00:00Z'),
+  creatorVerifiedUntil: new Date('2099-01-01T00:00:00Z'),
+};
+const PROFESSIONAL_TICK: TickRow = {
+  ...NO_TICK,
+  professionalVerifiedAt: new Date('2026-01-01T00:00:00Z'),
+  professionalVerifiedUntil: null,
+};
+const LAPSED_TICK: TickRow = {
+  ...NO_TICK,
+  creatorVerifiedAt: new Date('2024-01-01T00:00:00Z'),
+  creatorVerifiedUntil: new Date('2025-01-01T00:00:00Z'),
+};
+
+function buildService(opts: {
+  used: number;
+  hasState?: boolean;
+  /** The creator's UserProfile tick columns; null for no profile row. */
+  ticks?: TickRow | null;
+}) {
   const state = {
     wawuUserId: 'creator-1',
     slotsUsed: opts.used,
@@ -67,6 +102,11 @@ function buildService(opts: { used: number; hasState?: boolean }) {
     creatorState: {
       findUnique: jest.fn(() => Promise.resolve(hasState ? state : null)),
     },
+    userProfile: {
+      findUnique: jest.fn(() =>
+        Promise.resolve(opts.ticks === undefined ? NO_TICK : opts.ticks),
+      ),
+    },
     $transaction: jest.fn((fn: (t: typeof tx) => unknown) => fn(tx)),
   };
 
@@ -101,10 +141,11 @@ function dto(accessType: 'free' | 'paid'): CreateContentDto {
 }
 
 describe('ContentPieceService upload allowances', () => {
-  it('caps an account at the flat per-account limit', () => {
-    // The one number the brief names. If it moves, this test is what says so
+  it("caps an account at R-7's numbers: 5 without a tick, 25 with one", () => {
+    // The numbers the ruling names. If one moves, this test is what says so
     // before a creator finds out by being refused an upload.
-    expect(MAX_ITEMS_PER_ACCOUNT).toBe(5);
+    expect(FREE_UPLOADS).toBe(5);
+    expect(TICK_UPLOADS).toBe(25);
   });
 
   it('claims a slot when the upload is within allowance', async () => {
@@ -116,12 +157,12 @@ describe('ContentPieceService upload allowances', () => {
   it('refuses the sixth upload, whatever kind it is', async () => {
     for (const kind of ['free', 'paid'] as const) {
       const { service, state } = buildService({
-        used: MAX_ITEMS_PER_ACCOUNT,
+        used: FREE_UPLOADS,
       });
       await expect(service.create('creator-1', dto(kind))).rejects.toThrow(
         ForbiddenException,
       );
-      expect(state.slotsUsed).toBe(MAX_ITEMS_PER_ACCOUNT);
+      expect(state.slotsUsed).toBe(FREE_UPLOADS);
     }
   });
 
@@ -148,7 +189,7 @@ describe('ContentPieceService upload allowances', () => {
   });
 
   it('does not claim a slot when the write is rejected', async () => {
-    const { service, tx } = buildService({ used: MAX_ITEMS_PER_ACCOUNT });
+    const { service, tx } = buildService({ used: FREE_UPLOADS });
     await expect(service.create('creator-1', dto('free'))).rejects.toThrow();
     expect(tx.contentPiece.create).not.toHaveBeenCalled();
   });
@@ -161,5 +202,116 @@ describe('ContentPieceService upload allowances', () => {
     await service.create('creator-1', dto('free'));
     expect(tx.creatorState.upsert).toHaveBeenCalled();
     expect(tx.contentPiece.create).toHaveBeenCalled();
+  });
+  it('an unticked creator cannot make a 6th upload, and is told what a tick gives', async () => {
+    const { service, state, tx } = buildService({ used: 5, ticks: NO_TICK });
+    const refusal = await service
+      .create('creator-1', dto('paid'))
+      .catch((e: unknown) => e);
+    expect(refusal).toBeInstanceOf(ForbiddenException);
+    expect((refusal as ForbiddenException).getResponse()).toEqual({
+      message:
+        'You have used all 5 of your upload slots. Remove an item to free one up.',
+      reason: {
+        code: 'upload_limit_reached',
+        uploadsAllowed: 5,
+        tickHeld: false,
+        uploadsWithTick: 25,
+      },
+    });
+    expect(state.slotsUsed).toBe(5);
+    expect(tx.contentPiece.create).not.toHaveBeenCalled();
+  });
+
+  it('a creator with a tick can make a 6th upload and every one up to the 25th', async () => {
+    const { service, state } = buildService({ used: 5, ticks: CREATOR_TICK });
+    for (let n = 6; n <= 25; n += 1) {
+      await service.create('creator-1', dto(n % 2 ? 'free' : 'paid'));
+    }
+    expect(state.slotsUsed).toBe(25);
+  });
+
+  it('a creator with a tick cannot make a 26th upload', async () => {
+    const { service, state, tx } = buildService({
+      used: 25,
+      ticks: CREATOR_TICK,
+    });
+    const refusal = await service
+      .create('creator-1', dto('free'))
+      .catch((e: unknown) => e);
+    expect(refusal).toBeInstanceOf(ForbiddenException);
+    expect(
+      ((refusal as ForbiddenException).getResponse() as { reason: unknown })
+        .reason,
+    ).toEqual({
+      code: 'upload_limit_reached',
+      uploadsAllowed: 25,
+      tickHeld: true,
+      uploadsWithTick: 25,
+    });
+    expect(state.slotsUsed).toBe(25);
+    expect(tx.contentPiece.create).not.toHaveBeenCalled();
+  });
+
+  it('a creator with the professional tick gets the same 25 as the creator tick', async () => {
+    const { service, state } = buildService({
+      used: 24,
+      ticks: PROFESSIONAL_TICK,
+    });
+    await service.create('creator-1', dto('paid'));
+    expect(state.slotsUsed).toBe(25);
+  });
+
+  it('a creator whose tick has lapsed is held to 5 again', async () => {
+    const { service } = buildService({ used: 5, ticks: LAPSED_TICK });
+    await expect(service.create('creator-1', dto('paid'))).rejects.toThrow(
+      ForbiddenException,
+    );
+  });
+
+  it('a creator with no profile row is held to 5', async () => {
+    const { service } = buildService({ used: 5, ticks: null });
+    await expect(service.create('creator-1', dto('paid'))).rejects.toThrow(
+      ForbiddenException,
+    );
+  });
+
+  it('a creator can publish a FREE piece as their first upload, and it takes a slot', async () => {
+    const { service, state, tx } = buildService({ used: 0 });
+    const created = await service.create('creator-1', dto('free'));
+    expect(created.accessType).toBe('free');
+    expect(created.price).toBe(0);
+    expect(state.slotsUsed).toBe(1);
+    expect(tx.contentPiece.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('a creator can publish free pieces after paid ones, and each counts toward the cap', async () => {
+    const { service, state } = buildService({ used: 0 });
+    await service.create('creator-1', dto('paid'));
+    await service.create('creator-1', dto('free'));
+    await service.create('creator-1', dto('free'));
+    await service.create('creator-1', dto('paid'));
+    await service.create('creator-1', dto('free'));
+    expect(state.slotsUsed).toBe(5);
+    // The 6th is refused whichever kind it is: free pieces used up the cap.
+    await expect(service.create('creator-1', dto('free'))).rejects.toThrow(
+      ForbiddenException,
+    );
+  });
+
+  it('a creator above the new cap keeps every piece: the refusal changes nothing', async () => {
+    // 12 pieces from a lapsed tick, cap now 5. The refusal must not touch
+    // the count or write anything; the pieces themselves are never read for
+    // deletion on this path at all.
+    const { service, state, tx } = buildService({
+      used: 12,
+      ticks: LAPSED_TICK,
+    });
+    await expect(service.create('creator-1', dto('paid'))).rejects.toThrow(
+      ForbiddenException,
+    );
+    expect(state.slotsUsed).toBe(12);
+    expect(tx.contentPiece.create).not.toHaveBeenCalled();
+    expect(Object.keys(tx.contentPiece)).toEqual(['count', 'create']);
   });
 });

@@ -2,14 +2,18 @@ import { ForbiddenException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import type { CreatorStateResponse } from '../common/types/creator-state.type';
 import type { UpdateDmSettingsDto } from './dto/update-dm-settings.dto';
-import { uploadAllowanceFor } from '../common/creator-allowance';
-
+import {
+  TICK_COLUMNS,
+  holdsTick,
+  uploadAllowanceFor,
+} from '../common/creator-allowance';
 
 /**
  * CreatorState is the creator-only entitlement/gate resource. There is one
  * gate left on it: kycStatus gates EARNING. The upload gate went with
  * subscriptions (build brief B1: "Do not gate uploads behind payment"), so
- * uploading is now bounded only by the flat cap in creator-allowance.ts.
+ * uploading is bounded only by the cap in creator-allowance.ts, which a
+ * tick raises (R-7).
  * Both endpoints on this resource require the caller to already
  * be a creator: the "creator" role in the registry's endpoint contract is
  * enforced here by requiring a CreatorState row to exist for the caller's
@@ -31,21 +35,25 @@ export class CreatorStateService {
    * rather than stored, so it cannot drift out of step with the submissions
    * table.
    */
-  private toResponse(state: {
-    wawuUserId: string;
-    kycStatus: string;
-    slotsUsed: number;
-    dmPrice: number | null;
-    dmEnabled: boolean;
-    dmResponseHours: number;
-  }, hasSubmitted = true): CreatorStateResponse {
+  private toResponse(
+    state: {
+      wawuUserId: string;
+      kycStatus: string;
+      slotsUsed: number;
+      dmPrice: number | null;
+      dmEnabled: boolean;
+      dmResponseHours: number;
+    },
+    hasSubmitted: boolean,
+    tickHeld: boolean,
+  ): CreatorStateResponse {
     return {
       ...state,
       kycStatus:
         state.kycStatus === 'pending' && !hasSubmitted
           ? 'not_started'
           : state.kycStatus,
-      slotsTotal: uploadAllowanceFor().total,
+      slotsTotal: uploadAllowanceFor(tickHeld).total,
     } as CreatorStateResponse;
   }
 
@@ -55,9 +63,10 @@ export class CreatorStateService {
       this.prisma.kycSubmission.count({ where: { wawuUserId } }),
       this.prisma.userProfile.findUnique({
         where: { wawuUserId },
-        select: { accountType: true },
+        select: { accountType: true, ...TICK_COLUMNS },
       }),
     ]);
+    const tickHeld = holdsTick(profile);
     if (!state) {
       // A PLAIN USER gets 403, because this is not their area. A CREATOR
       // account with no row yet is a normal account and gets a real answer.
@@ -77,9 +86,9 @@ export class CreatorStateService {
       // no row. That is every new creator, and it is not an error: this used
       // to throw and the app rendered the raw sentence with a "Try again"
       // button that could never work.
-      return this.startingState(wawuUserId, submissionCount > 0);
+      return this.startingState(wawuUserId, submissionCount > 0, tickHeld);
     }
-    return this.toResponse(state, submissionCount > 0);
+    return this.toResponse(state, submissionCount > 0, tickHeld);
   }
 
   /**
@@ -92,6 +101,7 @@ export class CreatorStateService {
   private startingState(
     wawuUserId: string,
     hasSubmitted: boolean,
+    tickHeld: boolean,
   ): CreatorStateResponse {
     return this.toResponse(
       {
@@ -103,16 +113,26 @@ export class CreatorStateService {
         dmResponseHours: 24,
       },
       hasSubmitted,
+      tickHeld,
     );
   }
 
-  async updateDmSettings(wawuUserId: string, dto: UpdateDmSettingsDto): Promise<CreatorStateResponse> {
-    const [existing, submissionCount] = await Promise.all([
+  async updateDmSettings(
+    wawuUserId: string,
+    dto: UpdateDmSettingsDto,
+  ): Promise<CreatorStateResponse> {
+    const [existing, submissionCount, profile] = await Promise.all([
       this.prisma.creatorState.findUnique({ where: { wawuUserId } }),
       this.prisma.kycSubmission.count({ where: { wawuUserId } }),
+      this.prisma.userProfile.findUnique({
+        where: { wawuUserId },
+        select: TICK_COLUMNS,
+      }),
     ]);
     if (!existing) {
-      throw new ForbiddenException('This account has no creator state - a creator account type is required.');
+      throw new ForbiddenException(
+        'This account has no creator state - a creator account type is required.',
+      );
     }
     const updated = await this.prisma.creatorState.update({
       where: { wawuUserId },
@@ -130,6 +150,7 @@ export class CreatorStateService {
     // default to `true` made this endpoint report 'pending' for an account
     // GET /creator/state reported as 'not_started' — the same creator saw two
     // different KYC states depending on which call refreshed the screen.
-    return this.toResponse(updated, submissionCount > 0);
+    // The tick is passed the same way, so both report the same slotsTotal.
+    return this.toResponse(updated, submissionCount > 0, holdsTick(profile));
   }
 }

@@ -5,14 +5,15 @@
  *
  * - A PDF may be up to 20 MB: the figure the "Add to chat" sheet (I13) shows
  *   under File. Nothing else in the system names it.
- * - A photo or video is held to the storage limit every upload already has
- *   (MAX_UPLOAD_BYTES in src/storage/dto/presign-upload.dto.ts, and the
- *   account's own storage allowance), so no new figure is made up for it.
+ * - A photo or video is held to the per-file limit every upload already has
+ *   (MAX_UPLOAD_BYTES in src/storage/dto/presign-upload.dto.ts), so no new
+ *   figure is made up for it.
  * - Text is held to 2,000 characters, the length a community message already
  *   allows (CreateCommunityMessageDto), so the two kinds of chat agree.
  *
- * Every upload also counts against the sender's storage allowance, as every
- * other upload does.
+ * Chat uploads are outside the storage allowance (R-7 limits creator content
+ * only, see CONTENT_FOLDERS in src/storage/storage.service.ts): they are not
+ * counted against it and not refused by it.
  */
 export const CHAT_LIMITS = {
   fileMaxBytes: 20 * 1024 * 1024,

@@ -331,9 +331,9 @@ model ProfileExperience {
 /// approved` still gates EARNING, and is untouched: KYC and payment were
 /// always independent gates and only the payment one was removed.
 ///
-/// `slotsTotal` remains deliberately NOT a column, but it no longer derives
-/// from a tier — it is the flat per-account cap in creator-tier-allowance.ts
-/// (brief B2: "Maximum 5 items per account. Hard cap, enforced server-side").
+/// `slotsTotal` remains deliberately NOT a column, and it does not derive from
+/// a tier: it is the upload cap in src/common/creator-allowance.ts, 5 without
+/// a verification tick and 25 with one (R-7).
 model CreatorState {
   wawuUserId      String       @id
   kycStatus       ReviewStatus @default(pending)
@@ -480,6 +480,8 @@ model ContentPiece {
   pageCount              Int?
   previewAssetUrl        String
   fullAssetUrl           String?
+  /// True for a creator's first piece, free or paid (R-8 removed the rule that
+  /// it must be free). Old name kept: renaming it would break clients.
   creatorFirstUploadFree Boolean       @default(false)
   status                 ContentStatus @default(pending)
   views                  Int           @default(0)

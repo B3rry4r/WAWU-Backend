@@ -1,6 +1,6 @@
 import { ForbiddenException } from '@nestjs/common';
 import { CreatorStateService } from '../creator-state.service';
-import { MAX_ITEMS_PER_ACCOUNT } from '../../common/creator-allowance';
+import { FREE_UPLOADS, TICK_UPLOADS } from '../../common/creator-allowance';
 
 /**
  * WHO IS ALLOWED TO BE A CREATOR, when there is no CreatorState row yet.
@@ -17,7 +17,32 @@ import { MAX_ITEMS_PER_ACCOUNT } from '../../common/creator-allowance';
  * never more. The refusal cases below are what hold that line.
  */
 describe('creator state gate, with no row yet', () => {
-  function build(opts: { accountType?: string | null; submissions?: number }) {
+  // R-7: the cap a creator sees comes from their tick. The four stored tick
+  // columns, as UserProfile holds them, for a creator with no tick and for
+  // one whose creator tick runs to 2099.
+  const NO_TICK: Record<
+    | 'creatorVerifiedAt'
+    | 'creatorVerifiedUntil'
+    | 'professionalVerifiedAt'
+    | 'professionalVerifiedUntil',
+    Date | null
+  > = {
+    creatorVerifiedAt: null,
+    creatorVerifiedUntil: null,
+    professionalVerifiedAt: null,
+    professionalVerifiedUntil: null,
+  };
+  const CREATOR_TICK = {
+    ...NO_TICK,
+    creatorVerifiedAt: new Date('2026-01-01T00:00:00Z'),
+    creatorVerifiedUntil: new Date('2099-01-01T00:00:00Z'),
+  };
+
+  function build(opts: {
+    accountType?: string | null;
+    submissions?: number;
+    ticks?: typeof NO_TICK;
+  }) {
     const prisma = {
       creatorState: { findUnique: jest.fn().mockResolvedValue(null) },
       kycSubmission: {
@@ -29,7 +54,7 @@ describe('creator state gate, with no row yet', () => {
           .mockResolvedValue(
             opts.accountType === undefined
               ? null
-              : { accountType: opts.accountType },
+              : { accountType: opts.accountType, ...(opts.ticks ?? NO_TICK) },
           ),
       },
     };
@@ -39,7 +64,16 @@ describe('creator state gate, with no row yet', () => {
   it('answers a creator who has not published anything yet', async () => {
     const state = await build({ accountType: 'creator' }).getState('u1');
     expect(state.slotsUsed).toBe(0);
-    expect(state.slotsTotal).toBe(MAX_ITEMS_PER_ACCOUNT);
+    expect(state.slotsTotal).toBe(FREE_UPLOADS);
+  });
+
+  it('shows a creator with a tick 25 upload slots, not 5', async () => {
+    const state = await build({
+      accountType: 'creator',
+      ticks: CREATOR_TICK,
+    }).getState('u1');
+    expect(state.slotsTotal).toBe(TICK_UPLOADS);
+    expect(TICK_UPLOADS).toBe(25);
   });
 
   it('reports the KYC gate as not_started before anything is submitted', async () => {
