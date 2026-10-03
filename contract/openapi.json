@@ -20221,6 +20221,110 @@
         "x-wawu-built-by": "KYC-01"
       }
     },
+    "/api/hub/money/identity/selfie": {
+      "get": {
+        "operationId": "MoneyIdentityController_getSelfie",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelfieMatchView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The selfie step: whether the selfie has matched the BVN photo, and matches left today.",
+        "tags": [
+          "MoneyIdentity"
+        ],
+        "x-wawu-built-by": "KYC-02"
+      },
+      "post": {
+        "operationId": "MoneyIdentityController_matchSelfie",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelfieMatchDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelfieMatchView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: selfie_already_matched, bvn_not_checked, wallet_already_open",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reason.code: selfie_not_matched",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "reason.code: selfie_checks_exhausted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "A6: matches the selfie against the BVN record's photo with Fintava\n(charged per match, a failed one too). A face match, not a liveness\ncheck. Needs a passed BVN check, and the BVN it passed with\n(`bvn_not_checked` otherwise). A failed match is A16\n(`selfie_not_matched`, with matches left today); the fourth in 24 hours\nis `selfie_checks_exhausted`, and Fintava is not asked. Only an explicit\nmatch from Fintava passes: an answer with no verdict is\n`provider_unreachable` and still counts. A match counts only for the\nBVN check it was compared against (`bvn_not_checked` if another check\npassed meanwhile). Neither the\nselfie nor the BVN photo is stored or logged. Limited per address by the\napp's throttler, as the BVN check is.",
+        "tags": [
+          "MoneyIdentity"
+        ],
+        "x-wawu-built-by": "KYC-02"
+      }
+    },
     "/api/hub/money/identity/occupation": {
       "put": {
         "operationId": "MoneyIdentityController_setOccupation",
@@ -24741,7 +24845,10 @@
               "phone_not_nigerian",
               "identity_checks_exhausted",
               "bvn_not_checked",
-              "wallet_already_open"
+              "wallet_already_open",
+              "selfie_not_matched",
+              "selfie_checks_exhausted",
+              "selfie_already_matched"
             ],
             "type": "string"
           },
@@ -24808,11 +24915,11 @@
           },
           "retryAfterSeconds": {
             "type": "number",
-            "description": "provider_unreachable, idempotency_in_progress, identity_checks_exhausted: seconds to wait before trying again."
+            "description": "provider_unreachable, idempotency_in_progress, identity_checks_exhausted, selfie_checks_exhausted: seconds to wait before trying again."
           },
           "checksLeft": {
             "type": "number",
-            "description": "bvn_not_confirmed, bvn_phone_mismatch: BVN checks left in the current 24 hours."
+            "description": "bvn_not_confirmed, bvn_phone_mismatch: BVN checks left in the current 24 hours. selfie_not_matched: selfie matches left in the current 24 hours."
           }
         },
         "required": [
@@ -24900,6 +25007,26 @@
         "required": [
           "bvn",
           "nin"
+        ]
+      },
+      "SelfieMatchDto": {
+        "type": "object",
+        "properties": {
+          "image": {
+            "type": "string",
+            "description": "The selfie: plain base64 (no `data:` prefix) of a JPEG or PNG, 1 KB to\nabout 75 KB (at most 100,000 base64 characters), at most 2,048 pixels\non each side. A face match against the BVN photo, not a liveness check.",
+            "format": "byte",
+            "maxLength": 100000
+          },
+          "bvn": {
+            "type": "string",
+            "description": "The BVN whose check passed: 11 digits, no spaces.",
+            "pattern": "^[0-9]{11}$"
+          }
+        },
+        "required": [
+          "image",
+          "bvn"
         ]
       },
       "IdentityOccupationDto": {
@@ -32713,6 +32840,22 @@
         "required": [
           "identity",
           "prefill"
+        ]
+      },
+      "SelfieMatchView": {
+        "type": "object",
+        "properties": {
+          "matchedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "checksLeft": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "matchedAt",
+          "checksLeft"
         ]
       },
       "PinStateView": {

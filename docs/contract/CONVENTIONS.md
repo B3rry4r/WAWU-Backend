@@ -215,8 +215,11 @@ Every refusal is the envelope this backend already answers with
 | `bvn_phone_mismatch` | 422 | the BVN's phone is not the account's phone (A14); nothing from the BVN record is answered | `checksLeft` |
 | `phone_not_nigerian` | 422 | the account's phone is not a Nigerian mobile, so no BVN can match it; Fintava is not asked | |
 | `identity_checks_exhausted` | 429 | the person has used today's BVN checks | `retryAfterSeconds` |
-| `bvn_not_checked` | 409 | A5's occupation sent before a BVN check passed | |
-| `wallet_already_open` | 409 | a BVN check from someone whose wallet is open | |
+| `bvn_not_checked` | 409 | A5's occupation, or a selfie match, sent before a BVN check passed; or a selfie match with a BVN other than the one that passed, or one whose BVN check was replaced by another while it was being matched | |
+| `wallet_already_open` | 409 | a BVN check or selfie match from someone whose wallet is open | |
+| `selfie_not_matched` | 422 | Fintava did not match the selfie to the BVN photo (A16) (KYC-02) | `checksLeft` |
+| `selfie_checks_exhausted` | 429 | the person has used today's selfie matches (A16 and the retry rule); Fintava is not asked | `retryAfterSeconds` |
+| `selfie_already_matched` | 409 | a selfie match from someone whose selfie already matched against their current BVN check | |
 
 The same table is `MONEY_ERROR_STATUS` in `src/money/money-contract.ts`; each
 operation in the contract lists the codes it can answer with, grouped by
@@ -367,7 +370,7 @@ one retry at a time per payment.
 - **Times** are ISO 8601 UTC strings. A month is `YYYY-MM` in Africa/Lagos
   time. Ids are UUIDs.
 
-## 8. Open your wallet's identity step (KYC-01)
+## 8. Open your wallet's identity step (KYC-01, KYC-02)
 
 - **Routes** (`src/money/identity/`): `POST /money/identity/bvn` with
   `{ bvn, nin }` (A26) runs Fintava's `GET /compliance/verify/bvn` through
@@ -384,9 +387,10 @@ one retry at a time per payment.
   digits of each, the account phone that matched (E.164), and the
   occupation. Never the full BVN or NIN, the BVN record's name, date of
   birth, gender, phone or photo, or the address. The prefill is answered
-  once and not kept. The steps after this one (KYC-02's selfie, MONEY-12's
-  account opening) take the BVN and NIN from the app again and check them
-  with `WalletIdentityService.matchesCheckedIdentity`.
+  once and not kept. The steps after this one take them from the app again:
+  MONEY-12's account opening checks the BVN and the NIN with
+  `WalletIdentityService.matchesCheckedIdentity` (the NIN is required);
+  KYC-02's selfie, sent the BVN only, uses `checkedBvn`.
 - **A14.** The BVN record's phone must be the account's phone (the token's
   `phone`, compared after both are normalised as in section 2). If it is
   not, or the record has none: `422 bvn_phone_mismatch` with A14's own
@@ -408,3 +412,93 @@ one retry at a time per payment.
   `IDENTITY_HASH_KEY`: the server starts, and the BVN check answers
   `503 provider_unreachable` without calling out or counting a check.
 
+### The selfie match to the BVN photo (KYC-02)
+
+- **Routes** (`src/money/identity/`): `POST /money/identity/selfie` with
+  `{ bvn, image }` (A6) runs Fintava's `POST /compliance/verify/bvn/selfie`
+  through the MONEY-06 client and answers `SelfieMatchView` (`matchedAt`,
+  `checksLeft`). `GET /money/identity/selfie` answers the same state. It is
+  a face match against the BVN record's photo, not a liveness check:
+  Fintava offers none, and no answer, message or screen may claim one.
+- **Input.** `image` is plain base64 (no `data:` prefix) of a JPEG or PNG,
+  1 KB to about 75 KB (at most 100,000 base64 characters), at most 2,048
+  pixels on each side (`SELFIE_MAX_SIDE_PX`, read from the PNG's IHDR or the
+  JPEG's frame header before any pixels are inflated; Default (agent), owner
+  may override): the app (KYC-03) downscales and compresses its capture to
+  fit both before sending it. The file is walked from its first byte to
+  its last (`src/money/identity/selfie-image.ts`): a PNG chunk by chunk
+  (each length inside the file and each CRC correct, IHDR first, PLTE when
+  needed, one run of IDAT whose data inflates to exactly the rows IHDR
+  describes, IEND last with nothing after); a JPEG marker by marker (SOI,
+  segment lengths inside the file, a frame header before the first scan,
+  well-formed scan headers; in a scan an `FF` is followed only by `00`,
+  `D0` to `D7`, another scan's table segment, or the EOI that must be the
+  last two bytes). A file framed with the right first and last bytes, an
+  image with anything appended, or a cut one is a 400 before Fintava is
+  asked (every match is charged, a broken one too). The app sends the
+  capture as its encoder wrote it (no trailer after the end). The cap sits below the
+  server's global JSON body limit (100 KB), so the route needs no parser
+  change. `bvn` must be the one whose check passed, compared with the stored
+  keyed hash (`WalletIdentityService.checkedBvn`); otherwise `409
+  bvn_not_checked`.
+- **What is stored.** One `SelfieMatchAttempt` row per match sent: the
+  outcome (`matched`, `not_matched`, `unavailable`), when it was taken and
+  answered, Fintava's confidence score when its answer carries one, and the
+  passed BVN check it was compared against (`bvnVerifiedAt` and the keyed
+  `bvnHash`, as in `WalletIdentity`), read once at the start of the request.
+  Never the selfie, the BVN photo, the BVN or any part of it, or anything else
+  Fintava answers with. The client passes on only the verdict; it logs no
+  body, and masks base64-like runs in Fintava's messages.
+- **Reading Fintava's answer, by allowlist** (`src/fintava/fintava-selfie-answer.ts`).
+  The success body is unseen (no sandbox BVN passes, mobile repo
+  `docs/fintava/sandbox/README.md` questions 6 and 11) and Fintava
+  documents no verdict field (its 200 example is `{}`). So the answer is
+  compared with exact shapes, not searched for a "no": HTTP 200 exactly,
+  `content-type: application/json` (optionally `; charset=utf-8`), JSON with
+  no key named twice at any level, and every key on the allowlist. A match
+  is only Fintava's success envelope as its other checks answer it
+  (`{ data, status: 200, message: "successful" }`, `message` optional)
+  whose `data` holds exactly one key, one of the candidate verdict names
+  (`match`, `matched`, `is_match`, `isMatch`, `face_match`, `faceMatch`,
+  `selfie_match`, `selfieMatch`), set to `true`. The same with `false`, or
+  Fintava's documented failure envelope (`{ status: 400, timestamp,
+  message, path }`) in a 200, is an explicit "no": `422
+  selfie_not_matched`, counted. Anything else (the documented `{}`, a
+  score, a second verdict, an unknown key, a status word, an error field,
+  anything deeper, a 201 or 202, another content type) has no verdict: `503
+  provider_unreachable`, counted (it was charged), never a match. So until
+  Fintava shows its real success body, no selfie passes; the verdict names
+  are narrowed (and a score field added, if it has one) when it does. No
+  score is read today, so `confidence` is null. The answer is read with a
+  cap of 4,096 bytes (`SELFIE_ANSWER_MAX_BYTES`; every readable answer is
+  under 200), of any status: a declared Content-Length over it, or more
+  bytes than it arriving, drops the connection at once and is `503
+  provider_unreachable`, counted, never a match, never buffered or parsed
+  (a 400 or 401 over the cap included). Default (agent), owner may
+  override. A failed match is the
+  sandbox's `400 ["Request failed with status code 404"]`, charged ₦10
+  there.
+- **Result.** A match counts only for the BVN check it was compared
+  against: `matchedAt` and `selfieMatched` need the row's `bvnVerifiedAt`
+  and `bvnHash` to equal the person's current check. A later passed BVN
+  check (the same BVN or another) needs a new selfie, and one that passes
+  while a selfie is being matched does not inherit it (the match answers
+  `409 bvn_not_checked`). Once matched, a further match is `409
+  selfie_already_matched` and is not sent. Account opening (MONEY-12) reads
+  `SelfieMatchService.selfieMatched`, and should read the passed check once
+  and require the matched row tied to that exact check (its `bvnVerifiedAt`
+  and `bvnHash`), in the same read as the BVN and NIN comparison: two
+  separate reads of "the current check" can race as KYC-02's defect 2 did.
+- **Limits** (each match is charged, a failed one too). Per person: 3 in
+  any 24 hours (`SELFIE_CHECKS_PER_DAY`, PROVISIONAL), counted in
+  `SelfieMatchAttempt` with the BVN check's limiter (`reserveDailyAttempt`:
+  row first, count after, so parallel requests cannot pass it). A failed
+  match is `422 selfie_not_matched` with A16's words and `checksLeft`; the
+  fourth is `429 selfie_checks_exhausted` with `retryAfterSeconds`, and
+  Fintava is not asked. A match that never reached the provider (no key, a
+  key refused) is given back; a timeout or a 5xx counts (it may have been
+  charged). Per address: the BVN check's `short` 3 a minute and `medium` 20
+  an hour, with its own count (`BVN_CHECK_THROTTLE`, `bvnCheckTracker`).
+- **Without settings.** No `FINTAVA_*` or no `IDENTITY_HASH_KEY`: the server
+  starts, the match answers `503 provider_unreachable` without calling out
+  or counting, and the read still answers.

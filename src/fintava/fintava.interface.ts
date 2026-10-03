@@ -440,10 +440,22 @@ export interface FintavaSelfieInput {
 }
 
 /**
- * The success body is unseen (a failed match is a 400, `sandbox/05-`); a
- * 2xx with a `data` object is read as a match and its scalars are kept.
+ * A selfie match's answer. It is a face match against the BVN record's
+ * photo, not a liveness check (Fintava offers none). The success body is
+ * unseen (a failed match is a 400, `sandbox/05-`; question 6) and Fintava
+ * documents no verdict field (its 200 example is `{}`), so it is read by
+ * allowlist (`fintava-selfie-answer.ts`): HTTP 200, JSON, no key named twice,
+ * and exactly the documented envelope around one verdict field set to a
+ * boolean. `true` is a match, `false` an explicit "no"; any other answer is a
+ * `bad_response` error, never a match. Nothing else of it is passed on.
  */
 export interface FintavaSelfieResult {
-  matched: true;
-  details: Record<string, string | number | boolean | null>;
+  /** True only on an explicit `true` verdict; false on an explicit "no". */
+  matched: boolean;
+  /**
+   * Fintava's confidence score. Always null today: no score field is on the
+   * allowlist until Fintava's success body is seen (an answer carrying one
+   * is unreadable).
+   */
+  confidence: number | null;
 }

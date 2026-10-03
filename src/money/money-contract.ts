@@ -52,6 +52,9 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   identity_checks_exhausted: 429,
   bvn_not_checked: 409,
   wallet_already_open: 409,
+  selfie_not_matched: 422,
+  selfie_checks_exhausted: 429,
+  selfie_already_matched: 409,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */

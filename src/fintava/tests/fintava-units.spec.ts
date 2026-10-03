@@ -256,6 +256,35 @@ describe('Fintava error bodies: string, array and nested messages', () => {
     );
   });
 
+  it('masks an image echoed back (a run of 40 or more base64 characters), but not ordinary text (KYC-02)', () => {
+    const image = `/9j/4AAQSkZJRgABAQ${'AAAQABAAD/2wBDAAgGBgcGBQgHBwcJ'.repeat(40)}==`;
+    const masked = maskFintavaText(`Face not matched for image ${image}`);
+    expect(masked).toBe('Face not matched for image [data]');
+    expect(masked).not.toContain('/9j/');
+    // 39 base64 characters in a row is not a run.
+    const short = 'A'.repeat(39);
+    expect(maskFintavaText(`ref ${short}`)).toBe(`ref ${short}`);
+    expect(maskFintavaText('Request failed with status code 404')).toBe(
+      'Request failed with status code 404',
+    );
+  });
+
+  it('masks a base64 run from exactly 40 characters, and caps every message at 200 characters (KYC-02 round 2)', () => {
+    // The threshold is pinned at 40: a run of 40 is masked, whatever it is
+    // made of, and so is one of 41 or 399 (a mutant at 400 would leave them).
+    for (const n of [40, 41, 120, 399]) {
+      const run = 'Qk9'.repeat(200).slice(0, n);
+      expect(maskFintavaText(`echo ${run} end`)).toBe('echo [data] end');
+    }
+    // The cap is pinned at 200: a long, harmless message is cut there, and
+    // a 24-character fragment of an echoed image past it never survives.
+    const words = 'face not matched '.repeat(100);
+    expect(maskFintavaText(words)).toHaveLength(200);
+    expect(maskFintavaText(words)).toBe(words.slice(0, 200));
+    const tail = 'zz-/9j/4AAQSkZJRgABAQ-zz';
+    expect(maskFintavaText(`${'x '.repeat(150)}${tail}`)).not.toContain(tail);
+  });
+
   it('masks long digit runs and emails', () => {
     expect(maskFintavaText('BVN 22212345678 for ada@example.com')).toBe(
       'BVN *******5678 for ***@example.com',

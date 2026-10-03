@@ -75,10 +75,10 @@ export class MoneyErrorReason {
   })
   blockedBy?: BankTransferBlock;
 
-  /** provider_unreachable, idempotency_in_progress, identity_checks_exhausted: seconds to wait before trying again. */
+  /** provider_unreachable, idempotency_in_progress, identity_checks_exhausted, selfie_checks_exhausted: seconds to wait before trying again. */
   retryAfterSeconds?: number;
 
-  /** bvn_not_confirmed, bvn_phone_mismatch: BVN checks left in the current 24 hours. */
+  /** bvn_not_confirmed, bvn_phone_mismatch: BVN checks left in the current 24 hours. selfie_not_matched: selfie matches left in the current 24 hours. */
   checksLeft?: number;
 }
 

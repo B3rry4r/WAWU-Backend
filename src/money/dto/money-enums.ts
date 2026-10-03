@@ -101,5 +101,9 @@ export const MONEY_ERROR_CODES = [
   'identity_checks_exhausted',
   'bvn_not_checked',
   'wallet_already_open',
+  // The selfie match to the BVN photo (KYC-02).
+  'selfie_not_matched',
+  'selfie_checks_exhausted',
+  'selfie_already_matched',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];

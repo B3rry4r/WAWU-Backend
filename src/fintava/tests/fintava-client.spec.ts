@@ -25,9 +25,21 @@ import {
   NAME_ENQUIRY,
   RECORD_BY_ID,
   recordByReference,
+  SELFIE_200,
+  SELFIE_400,
+  SELFIE_MATCHED,
+  selfieAnswer,
   W2W_200,
   WALLET_BALANCE,
+  type CannedAnswer,
 } from '../../../test/fintava/fintava-double';
+import {
+  extraKeyBodies,
+  SELFIE_MATCH_ANSWERS,
+  SELFIE_NO_ANSWERS,
+  SELFIE_UNREADABLE_ANSWERS,
+} from '../../../test/fintava/selfie-answers';
+
 import { FintavaClient } from '../fintava-client';
 import { FintavaError } from '../fintava-error';
 import { FintavaModule } from '../fintava.module';
@@ -227,6 +239,116 @@ describe('1. identity checks (charged; typed, never run against the sandbox here
     const e = await failure(client().verifyBvn('123'));
     expect(e.kind).toBe('validation');
     expect(double.seen).toHaveLength(0);
+  });
+});
+
+describe('1b. the selfie match (KYC-02): read by allowlist, never a match outside the exact shape', () => {
+  const IMAGE = 'iVBORw0KGgo'.padEnd(64, 'A');
+  const sent = { bvn: '12345678901', image: IMAGE };
+  const selfie = () =>
+    client().verifyBvnSelfie({ bvn: sent.bvn, imageBase64: IMAGE });
+  const answer = (a: CannedAnswer) =>
+    double.on('POST', '/compliance/verify/bvn/selfie', a);
+
+  it('sends the BVN and the base64 image in a JSON body, with the key', async () => {
+    answer({ status: 200, body: SELFIE_MATCHED });
+    await selfie();
+    expect(double.seen).toHaveLength(1);
+    expect(double.seen[0].body).toEqual({ bvn: sent.bvn, image: IMAGE });
+    expect(double.seen[0].query).toEqual({});
+    expect(double.seen[0].headers.authorization).toBe(`Bearer ${KEY}`);
+    expect(double.seen[0].headers['content-type']).toBe('application/json');
+  });
+
+  it.each(SELFIE_MATCH_ANSWERS)(
+    'a match: %s (no score is read, so the confidence is null)',
+    async (_name, a) => {
+      answer(a);
+      await expect(selfie()).resolves.toEqual({
+        matched: true,
+        confidence: null,
+      });
+    },
+  );
+
+  it.each(SELFIE_NO_ANSWERS)('an explicit "no": %s', async (_name, a) => {
+    answer(a);
+    await expect(selfie()).resolves.toEqual({
+      matched: false,
+      confidence: null,
+    });
+  });
+
+  // Verifier rounds 1 and 2 (defect 1, findings 1 and 2), and more: every
+  // answer outside the exact shape is bad_response, never a match.
+  it.each(SELFIE_UNREADABLE_ANSWERS)(
+    'no verdict, bad_response: %s',
+    async (_name, a) => {
+      answer(a);
+      const e = await failure(selfie());
+      expect(e.kind).toBe('bad_response');
+      expect(e.httpStatus).toBe(a.status);
+    },
+  );
+
+  it('an HTTP 300 around `match: true` is not read either', async () => {
+    answer({ status: 300, body: SELFIE_MATCHED });
+    const e = await failure(selfie());
+    expect(e.kind).not.toBe('bad_response');
+    expect(e.httpStatus).toBe(300);
+  });
+
+  it('Fintava’s documented 2xx (`{}` in the envelope) has no verdict: bad_response, never a match', async () => {
+    answer({ status: 200, body: SELFIE_200 });
+    expect((await failure(selfie())).kind).toBe('bad_response');
+  });
+
+  it('a body that echoes the BVN, the photo and the image is not read, and nothing of it is passed on', async () => {
+    answer({
+      status: 200,
+      body: selfieAnswer(sent, { match: true, confidence: 88 }),
+    });
+    const e = await failure(selfie());
+    expect(e.kind).toBe('bad_response');
+    const text = JSON.stringify({ ...e, message: e.message });
+    expect(text).not.toContain(sent.bvn);
+    expect(text).not.toContain('QkFTRTY0UEhPVE8');
+    expect(text).not.toContain(IMAGE);
+  });
+
+  it('the sandbox’s failed match (HTTP 400) is identity_refused', async () => {
+    answer({ status: 400, body: SELFIE_400 });
+    expect((await failure(selfie())).kind).toBe('identity_refused');
+  });
+
+  it('refuses a malformed BVN, an empty image or a data: URL before paying for a match', async () => {
+    const c = client();
+    for (const input of [
+      { bvn: '123', imageBase64: IMAGE },
+      { bvn: sent.bvn, imageBase64: '' },
+      { bvn: sent.bvn, imageBase64: `data:image/png;base64,${IMAGE}` },
+    ]) {
+      expect((await failure(c.verifyBvnSelfie(input))).kind).toBe('validation');
+    }
+    expect(double.seen).toHaveLength(0);
+  });
+
+  /**
+   * The allowlist, as a property: take the one accepted body and add any
+   * single extra key, at the top or inside `data`, with any value; or name
+   * an existing key twice. It must never be a match. Over the socket for a
+   * sample here; every case through the reader itself in
+   * fintava-selfie-answer.spec.ts.
+   */
+  it('the accepted body plus any one extra key is never a match (sample over the socket)', async () => {
+    const cases = extraKeyBodies().filter((_, i) => i % 97 === 0);
+    expect(cases.length).toBeGreaterThan(40);
+    for (const raw of cases) {
+      double.reset();
+      answer({ status: 200, body: raw });
+      const e = await failure(selfie());
+      expect({ raw, kind: e.kind }).toEqual({ raw, kind: 'bad_response' });
+    }
   });
 });
 
