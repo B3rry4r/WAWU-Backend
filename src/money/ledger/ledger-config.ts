@@ -13,6 +13,7 @@ export const FINTAVA_WALLET_BANK_CODE = '090620';
 /** Config keys. None is required: the server starts without any of them. */
 export const LEDGER_CONFIG_KEYS = {
   confirmWindowHours: 'LEDGER_CONFIRM_WINDOW_HOURS',
+  statusCheckAfterMinutes: 'LEDGER_STATUS_CHECK_AFTER_MINUTES',
 } as const;
 
 /**
@@ -45,4 +46,32 @@ export function ledgerConfirmWindowMs(raw: string | undefined): number {
     );
   }
   return hours * 3_600_000;
+}
+
+/**
+ * PROVISIONAL(LEDGER-STATUS-CHECK-AFTER, owner=YOU, why=Fintava publishes no time within which a webhook arrives; deliveries are consumed every 30 seconds, so 2 minutes gives the webhook four sweeps first)
+ *
+ * The pending sweep (task MONEY-08): how old a `pending` ledger row must be
+ * before the sweep asks Fintava about it. Younger rows are left to their
+ * webhook. A row it cannot settle yet is asked again after 1, 2, 4 ...
+ * minutes, at most an hour apart.
+ */
+export const LEDGER_STATUS_DEFAULTS = {
+  checkAfterMinutes: 2,
+  /** Rows checked per sweep, oldest first. */
+  batch: 50,
+  /** References of a row tried with the lookup when it has none of ours. */
+  lookups: 4,
+} as const;
+
+export function ledgerStatusCheckAfterMs(raw: string | undefined): number {
+  const text = (raw ?? '').trim();
+  if (text === '') return LEDGER_STATUS_DEFAULTS.checkAfterMinutes * 60_000;
+  const minutes = Number(text);
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 24 * 60) {
+    throw new Error(
+      `${LEDGER_CONFIG_KEYS.statusCheckAfterMinutes} must be a whole number of minutes from 1 to 1440.`,
+    );
+  }
+  return minutes * 60_000;
 }

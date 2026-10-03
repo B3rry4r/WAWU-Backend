@@ -32,11 +32,17 @@ const KIND_ORDER: readonly LedgerReferenceKind[] = [
  * Which statuses a row may move to from where it is. A movement only moves
  * forward: a reversed row never goes back to completed because a late
  * delivery said SUCCESS, and a sighting that says `pending` changes nothing.
+ *
+ * A completed row never becomes `failed` (MONEY-08, the MONEY-10 verifier's
+ * U-1): money that left stays shown as gone until Fintava's reversal says it
+ * came back (`reversed`). A later report of FAILED for it is a disagreement
+ * with Fintava, recorded on `discrepancy` (LedgerService.merge) for MONEY-16,
+ * never applied.
  */
 const MAY_BECOME: Record<TransferStatus, readonly TransferStatus[]> = {
   pending: [],
   completed: ['pending'],
-  failed: ['pending', 'completed'],
+  failed: ['pending'],
   reversed: ['pending', 'completed', 'failed'],
 };
 
@@ -46,6 +52,20 @@ export function ledgerStatusMayMove(
 ): boolean {
   return MAY_BECOME[to].includes(from);
 }
+
+/**
+ * The failure reason MONEY-08's status check writes when Fintava has no
+ * record of one of our sends (its own `404 "Transaction not found!"` and no
+ * row in the sender's history, past the resend window). It is the only
+ * `failed` that is our inference rather than Fintava's word, so it is the
+ * only one a later sighting may undo (LedgerService.merge): Fintava's own
+ * record of the reference outranks our reading of its silence.
+ */
+export const LEDGER_ABSENT_FAILURE =
+  'Fintava has no record of this transfer, so no money moved.';
+
+/** The failure reason when Fintava's own record says FAILURE or CANCELLED. */
+export const LEDGER_FINTAVA_FAILURE = 'Fintava reports this transfer failed.';
 
 export interface LedgerReferenceRow {
   value: string;
@@ -283,6 +303,55 @@ export class LedgerService {
     return [...new Set(hits.map((h) => h.entryId))].sort();
   }
 
+  /**
+   * MONEY-08: a `pending` row whose send Fintava has no record of becomes
+   * `failed` with LEDGER_ABSENT_FAILURE. Locked and re-checked: a row that
+   * is no longer pending, or carries a disagreement, is left alone (false).
+   */
+  async markAbsentFailed(entryId: string): Promise<boolean> {
+    return this.prisma.$transaction(async (tx) => {
+      const held = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT "id" FROM "FintavaLedgerEntry"
+         WHERE "id" = ${entryId} AND "status" = 'pending'
+           AND "discrepancy" IS NULL
+         FOR UPDATE`;
+      if (held.length === 0) return false;
+      await tx.fintavaLedgerEntry.update({
+        where: { id: entryId },
+        data: { status: 'failed', failureReason: LEDGER_ABSENT_FAILURE },
+      });
+      return true;
+    });
+  }
+
+  /**
+   * MONEY-08: records a disagreement with Fintava on a row without changing
+   * anything else (the stored figures and status stand; MONEY-16 reports
+   * it). A note already on the row is not written twice.
+   */
+  async noteDiscrepancy(entryId: string, note: string): Promise<boolean> {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "FintavaLedgerEntry" WHERE "id" = ${entryId} FOR UPDATE`;
+      const row = await tx.fintavaLedgerEntry.findUnique({
+        where: { id: entryId },
+        select: { discrepancy: true },
+      });
+      if (!row || (row.discrepancy ?? '').split('; ').includes(note)) {
+        return false;
+      }
+      await tx.fintavaLedgerEntry.update({
+        where: { id: entryId },
+        data: {
+          discrepancy: [row.discrepancy, note]
+            .filter(Boolean)
+            .join('; ')
+            .slice(0, 1000),
+        },
+      });
+      return true;
+    });
+  }
+
   private async recordIn(
     tx: Prisma.TransactionClient,
     input: LedgerMovementInput,
@@ -493,17 +562,41 @@ export class LedgerService {
     }
     if (owns) data.category = s.category;
 
-    if (ledgerStatusMayMove(row.status, s.status)) {
+    const differs: string[] = [];
+    const absentFailure =
+      row.status === 'failed' && row.failureReason === LEDGER_ABSENT_FAILURE;
+    if (absentFailure && (s.status === 'pending' || s.status === 'completed')) {
+      // Marked failed because Fintava had no record of it (MONEY-08), and
+      // now a sighting of the same reference exists: a resend under the same
+      // reference, or a record Fintava did not serve before. Fintava's
+      // record wins; the earlier reading is kept on `discrepancy` for review.
+      data.status = s.status;
+      data.failureReason = null;
+      if (s.status === 'completed' && row.completedAt === null) {
+        data.completedAt = now;
+      }
+      differs.push(`status failed (no record at Fintava) vs ${s.status}`);
+    } else if (ledgerStatusMayMove(row.status, s.status)) {
       data.status = s.status;
       if (s.status === 'completed' && row.completedAt === null) {
         data.completedAt = now;
       }
+    } else if (
+      (row.status === 'completed' && s.status === 'failed') ||
+      (row.status === 'failed' && s.status === 'completed')
+    ) {
+      // Fintava said one and now says the other (U-1). Neither is applied
+      // over the other: the stored status stands and the disagreement is
+      // recorded, as for an amount.
+      differs.push(`status ${row.status} vs ${s.status}`);
+    }
+    if (absentFailure && s.status === 'failed' && s.failureReason) {
+      data.failureReason = s.failureReason;
     }
     if (s.occurredAt.getTime() < row.occurredAt.getTime()) {
       data.occurredAt = s.occurredAt;
     }
 
-    const differs: string[] = [];
     if (s.amountKobo !== row.amountKobo) {
       differs.push(`amountKobo ${row.amountKobo} vs ${s.amountKobo}`);
     }

@@ -303,6 +303,10 @@ describe('ledger: references and status', () => {
     expect(ledgerStatusMayMove('completed', 'pending')).toBe(false);
     expect(ledgerStatusMayMove('failed', 'completed')).toBe(false);
     expect(ledgerStatusMayMove('completed', 'completed')).toBe(false);
+    // MONEY-08 (U-1): money that left is never re-labelled failed; only a
+    // reversal moves a completed row.
+    expect(ledgerStatusMayMove('completed', 'failed')).toBe(false);
+    expect(ledgerStatusMayMove('pending', 'failed')).toBe(true);
   });
 
   it('the confirm window: 72 hours unless set, whole hours from 1 to 720', () => {
