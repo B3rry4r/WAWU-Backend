@@ -79,6 +79,8 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'ProfileExperience', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'CourseEnrollment', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CommunityMembership', column: 'userWawuId', disposition: 'OWNED' },
+  // How far this person has read in each community (INBOX-01).
+  { model: 'CommunityReadMarker', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'Notification', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'NotificationSettings', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'PrivacySettings', column: 'userWawuId', disposition: 'OWNED' },
@@ -155,6 +157,16 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // CreatorWallet above, removing it removes WAWU's pointer, not the account
   // at Fintava, which is why deletion needs an empty wallet first (R-17).
   { model: 'FintavaWallet', column: 'wawuUserId', disposition: 'OWNED' },
+  // The ledger's rows on this person's wallet (MONEY-10), like
+  // WalletLedgerEntry above; their FintavaLedgerReference rows go with them
+  // (cascade). Deletion needs an empty wallet first (R-17). Default (agent),
+  // owner may override: how long money records are kept after an account
+  // is deleted is the owner's call.
+  {
+    model: 'FintavaLedgerEntry',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
   // Open your wallet's identity step (KYC-01): keyed hashes and last 4 digits
   // of this person's BVN and NIN, their verified phone and occupation, and
   // the record of their BVN checks. All of it is theirs and goes with them.
@@ -215,6 +227,13 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'viewerWawuId',
     disposition: 'COUNTERPARTY',
   },
+  // The other side named on somebody else's ledger row (MONEY-10): their
+  // money record survives.
+  {
+    model: 'FintavaLedgerEntry',
+    column: 'counterpartyWawuUserId',
+    disposition: 'COUNTERPARTY',
+  },
 
   // ── admin audit trail, kept on purpose ──────────────────────────────────
   { model: 'AdminKycAudit', column: 'subjectWawuUserId', disposition: 'AUDIT' },
@@ -248,6 +267,8 @@ export const NOT_A_USER_REFERENCE: ReadonlyArray<{
 }> = [
   { model: 'Product', column: 'wawuPick' },
   { model: 'Product', column: 'wawuVerified' },
+  // WAWU's fee in kobo on a ledger row (MONEY-10), not a person.
+  { model: 'FintavaLedgerEntry', column: 'wawuFeeKobo' },
 ];
 
 /** The rows a purge actually removes. */

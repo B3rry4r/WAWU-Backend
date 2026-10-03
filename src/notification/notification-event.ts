@@ -12,9 +12,11 @@
  * balance / cash-out language anywhere). Keeping every string in one file
  * is what makes that reviewable.
  *
- * The kinds are exactly the ones the web client renders — see
- * WAWU-Web/src/types/notification.ts. Anything not in this union cannot be
- * written.
+ * Anything not in this union cannot be written. The union started as exactly
+ * the kinds the web client renders (WAWU-Web/src/types/notification.ts); it
+ * no longer is: INBOX-01 added `community_join_approved` and
+ * `community_join_declined` for the app, which the web's list does not name
+ * (mobile repo BACKEND_GAPS.md G-32).
  *
  * Build brief C8 adds the only two kinds that are not a report of a
  * transaction: `campaign` (an admin-composed announcement, the one kind whose
@@ -24,7 +26,10 @@
  * of sentences.
  */
 
-/** Exactly the union in WAWU-Web/src/types/notification.ts. */
+/**
+ * The web's union (WAWU-Web/src/types/notification.ts) plus the two INBOX-01
+ * kinds at the end.
+ */
 export type NotificationKind =
   | 'dm_deadline'
   | 'sale'
@@ -40,7 +45,12 @@ export type NotificationKind =
   /** An admin-composed announcement or promotion, fanned out from a NotificationCampaign. */
   | 'campaign'
   /** The recurring "you are not verified yet" prompt from brief B1. */
-  | 'verify_reminder';
+  | 'verify_reminder'
+  // INBOX-01: the answer to a request to join a private community.
+  /** The host let the requester in. */
+  | 'community_join_approved'
+  /** The host said no. */
+  | 'community_join_declined';
 
 /** Exactly the union in WAWU-Web/src/types/notification.ts. */
 export type NotificationTone =
@@ -124,6 +134,23 @@ export type NotificationEvent =
       kind: 'verify_reminder';
       userWawuId: string;
       audience: 'creator' | 'professional';
+    }
+  /**
+   * INBOX-01. A host answered a request to join their private community.
+   * Recipient: the person who asked, never the host. Emitted only when the
+   * answer changed something: an approval that flipped `pending` to `joined`,
+   * or a decline that removed a pending request.
+   */
+  | {
+      kind: 'community_join_approved';
+      userWawuId: string;
+      communityId: string;
+      communityName: string;
+    }
+  | {
+      kind: 'community_join_declined';
+      userWawuId: string;
+      communityName: string;
     };
 
 /** The row `emit()` will write, before it reaches Prisma. */
@@ -143,10 +170,13 @@ export interface NotificationDraft {
    */
   imageUrl: string | null;
   /**
-   * An in-app path this notification opens. Only the two C8 kinds set it.
-   * Every transactional kind is routed by `kind` on the client, because where
-   * "your DM is about to expire" goes is a property of the event, not
-   * something a composer should be able to retarget.
+   * An in-app path this notification opens. The two C8 kinds set it, and so
+   * does `community_join_approved`, whose destination is one particular room
+   * that `kind` alone cannot name; that path is built here from the room's
+   * id, never typed by anyone. Every other transactional kind is routed by
+   * `kind` on the client, because where "your DM is about to expire" goes is
+   * a property of the event, not something a composer should be able to
+   * retarget.
    */
   actionHref: string | null;
   /** Set only on `campaign`, so a dispatch can be counted and audited. */
@@ -420,5 +450,37 @@ export function composeNotification(
         campaignId: null,
       };
     }
+
+    /**
+     * INBOX-01. "We'll let you know when she answers" (I31) is this pair.
+     * The approval opens the room: `/communities/<id>`, under the
+     * `/communities` destination campaigns already use, built from the id and
+     * never from input.
+     */
+    case 'community_join_approved':
+      return {
+        ...base,
+        title: 'Request approved',
+        body: `The host of “${event.communityName}” approved your request to join. You're in.`,
+        tone: 'success',
+        amount: null,
+        creditsCount: null,
+        actionLabel: 'Open room',
+        imageUrl: null,
+        actionHref: `/communities/${event.communityId}`,
+        campaignId: null,
+      };
+
+    case 'community_join_declined':
+      return {
+        ...base,
+        title: 'Request declined',
+        body: `The host of “${event.communityName}” declined your request to join.`,
+        tone: 'neutral',
+        amount: null,
+        creditsCount: null,
+        actionLabel: null,
+        ...NO_RICH_MEDIA,
+      };
   }
 }
