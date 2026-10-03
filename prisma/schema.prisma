@@ -3790,3 +3790,113 @@ model MoneyPayoutAccount {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
+
+// -----------------------------------------------------------------------------
+// Schools (task SCHOOLS-01): schools, their courses and each course's dated
+// intakes with a seat limit. Added from the dashboard (SCHOOLS-02), read by the
+// app's SC1-SC3 and SC10 (SCHOOLS-04), enrolled into by SCHOOLS-07.
+//
+// Not the Learn tables above: LearnCourse / CourseEnrollment are WAWU's own
+// courses hosted elsewhere and their enrol gate references the removed
+// subscription. School enrolments never read them (SCHOOLS-07).
+//
+// No rating column on School: nothing writes a school rating and no screen
+// collects one, so it is left off at launch until the owner rules (R-32).
+// -----------------------------------------------------------------------------
+
+/// SC1's category chips, exactly: Tech, Business, Creative, Languages,
+/// Vocational. "All" is the absence of a filter, not a category.
+enum SchoolCategory {
+  tech
+  business
+  creative
+  languages
+  vocational
+}
+
+/// How a course is taught. SC2 lists it beside the length ("12 weeks ·
+/// Online"); where the classes meet is the intake's `location`.
+enum SchoolCourseMode {
+  online
+  in_person
+  hybrid
+}
+
+model School {
+  id          String         @id @default(uuid())
+  name        String
+  category    SchoolCategory
+  /// Display place, as SC2 prints it: "Yaba, Lagos". SC1 shows it on the card.
+  location    String
+  /// SC2's "Since 2016". Null when the school has not said.
+  foundedYear Int?
+  /// SC2's expertise chips, in the order the dashboard set them.
+  expertise   String[]
+  /// SC2's blurb.
+  about       String
+  /// The school's logo image (a storage URL). Null: the app draws initials.
+  logo        String?
+  /// The school's own application page, for "Or apply on the school's
+  /// website" (SC9, SCHOOLS-10). Null: the school takes no outside sign-ups.
+  applyUrl    String?
+  /// Where the enrolment report goes: the student's details, course and
+  /// intake (SCHOOLS-09). Never shown in the app.
+  reportEmail String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  courses SchoolCourse[]
+
+  @@index([category])
+  @@index([name])
+}
+
+model SchoolCourse {
+  id        String           @id @default(uuid())
+  schoolId  String
+  school    School           @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  title     String
+  /// SC3's "Length 12 weeks".
+  weeks     Int
+  mode      SchoolCourseMode
+  /// SC3's numbered syllabus, in order.
+  syllabus  String[]
+  /// SC3's "You get": "Certificate", "mentor", "portfolio".
+  outcomes  String[]
+  /// The course fee in integer kobo (docs/contract/CONVENTIONS.md section 1).
+  /// Int carries up to 21,474,836.47 naira, above the 10,000,000 naira
+  /// merchant cap any one payment is bounded by.
+  priceKobo Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  intakes CourseIntake[]
+
+  @@index([schoolId])
+}
+
+/// One dated class of a course. Seats are claimed by a CONDITIONAL write
+/// (seatsTaken < capacity) inside the enrolment transaction, the
+/// Product.stock pattern (SCHOOLS-07); the database also refuses a row whose
+/// seatsTaken is negative or above capacity.
+model CourseIntake {
+  id         String       @id @default(uuid())
+  courseId   String
+  course     SchoolCourse @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  /// The day classes start (SC3's "Starts Mon 3 November"). A calendar date,
+  /// not an instant, so no time zone moves it.
+  startDate  DateTime     @db.Date
+  /// SC4's "Weekend class", SC3's "Saturdays".
+  schedule   String
+  /// Where this intake meets ("Yaba"). Null for an online intake.
+  location   String?
+  capacity   Int
+  seatsTaken Int          @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([courseId, startDate])
+}
