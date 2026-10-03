@@ -17,6 +17,8 @@
 import type {
   ApprovalBiometricKind,
   BeneficiaryKind,
+  BillCategory,
+  FeePartCode,
   FeeQuoteKind,
   PaymentKind,
 } from './dto/money-enums';
@@ -247,22 +249,55 @@ export interface PayoutAccountView {
 /* ------------------------------------------------------------------ */
 
 /**
- * GET /money/fees/quote: what a send will cost before the PIN (W10, W17).
- * The send request repeats `totalKobo` as `expectedTotalKobo`; if the fee
- * changed in between, the send is refused with `quote_changed` and the new
- * quote, so the fee shown is always the fee charged.
+ * One line of a fee quote, so a review screen can show each charge as its
+ * own row (an electricity bill: the bill charge, WAWU's bill fee and the
+ * balance-transfer charge). The parts add up to `fee.totalFeeKobo`; a part
+ * can be 0 (WAWU's bill fee today, the airtime charge).
+ */
+export interface FeeQuotePartView {
+  code: FeePartCode;
+  /** Who the charge is for: Fintava (`provider`) or WAWU (`wawu`). */
+  source: 'provider' | 'wawu';
+  amountKobo: number;
+}
+
+/**
+ * GET /money/fees/quote (WALLET-15): what a send, a withdrawal, a purchase
+ * or a bill will cost before the PIN (W10, W17, H14). Every figure comes from
+ * the server's fee schedule (R-10, config), never from the app or the canvas.
+ *
+ * The send or payment that follows repeats `totalKobo` as
+ * `expectedTotalKobo` and may carry `quoteToken`: if the fee changed in
+ * between, or the quote is past `expiresAt`, it is refused with
+ * `quote_changed` and the new quote, so the fee shown is always the fee
+ * charged. Nothing is reserved.
  */
 export interface FeeQuoteView {
   kind: FeeQuoteKind;
-  /** What the recipient gets ("They get ₦25,000"). */
+  /** The bill's category on a bill; null on every other kind. */
+  billCategory: BillCategory | null;
+  /**
+   * What the recipient gets on a send ("They get ₦25,000"), the price on a
+   * purchase, the bill's own amount on a bill.
+   */
   amountKobo: number;
   fee: FeeBreakdown;
+  /** Each charge in `fee`, in the order a review screen lists them. */
+  parts: FeeQuotePartView[];
   /** amountKobo + fee.totalFeeKobo: what leaves the wallet, and what the button shows. */
   totalKobo: number;
-  /** False when this send would pass today's limit (stopped before the PIN). */
+  /** False when this would pass today's limit (stopped before the PIN). */
   withinDailyLimit: boolean;
   /** What is left of today's limit; null when no limit is known. */
   remainingTodayKobo: number | null;
+  /**
+   * This quote, signed by the server: the request that pays it can send it
+   * back so the server can check the quote is its own, for this person and
+   * this amount, and not past `expiresAt`. Opaque to the app.
+   */
+  quoteToken: string;
+  /** After this the quote is no longer honoured; ask for a new one. */
+  expiresAt: string;
 }
 
 /* ------------------------------------------------------------------ */
