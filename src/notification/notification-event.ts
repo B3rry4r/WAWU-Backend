@@ -16,7 +16,7 @@
  * the kinds the web client renders (WAWU-Web/src/types/notification.ts); it
  * no longer is: INBOX-01 added `community_join_approved` and
  * `community_join_declined` for the app, which the web's list does not name
- * (mobile repo BACKEND_GAPS.md G-27).
+ * (mobile repo BACKEND_GAPS.md G-32).
  *
  * Build brief C8 adds the only two kinds that are not a report of a
  * transaction: `campaign` (an admin-composed announcement, the one kind whose
