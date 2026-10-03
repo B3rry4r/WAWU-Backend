@@ -188,17 +188,22 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
     expect(half).toEqual([]);
   });
 
-  it('the gated routes today: the PIN and the balance', () => {
+  it('the gated routes today: the PIN, the balance, beneficiaries and the payout account', () => {
     expect(
       mounted
         .filter((r) => r.guards.includes(WalletGateGuard))
         .map((r) => r.key)
         .sort(),
     ).toEqual([
+      'DELETE money/beneficiaries/:id',
+      'GET money/beneficiaries',
+      'GET money/payout-account',
       'GET money/pin',
       'GET money/wallet/balance',
+      'POST money/beneficiaries',
       'POST money/pin',
       'POST money/pin/verify',
+      'PUT money/payout-account',
       'PUT money/pin',
     ]);
   });

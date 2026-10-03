@@ -389,12 +389,17 @@ describe('No wallet yet: every wallet route answers the same (MONEY-13) over HTT
     }
   });
 
-  it('tries every gated route: the PIN routes and the balance', () => {
+  it('tries every gated route: the PIN routes, the balance, beneficiaries and the payout account', () => {
     expect(routes.map((r) => `${r.method} ${r.path}`).sort()).toEqual([
+      'delete /api/hub/money/beneficiaries/:id',
+      'get /api/hub/money/beneficiaries',
+      'get /api/hub/money/payout-account',
       'get /api/hub/money/pin',
       'get /api/hub/money/wallet/balance',
+      'post /api/hub/money/beneficiaries',
       'post /api/hub/money/pin',
       'post /api/hub/money/pin/verify',
+      'put /api/hub/money/payout-account',
       'put /api/hub/money/pin',
     ]);
   });

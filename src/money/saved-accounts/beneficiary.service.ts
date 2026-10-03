@@ -10,7 +10,6 @@ import type {
   MoneyPartyView,
 } from '../money-view.type';
 import { BankAccountCheckService } from './bank-account-check.service';
-import { requireOpenWallet } from './open-wallet-gate';
 
 /**
  * PROVISIONAL(BENEFICIARIES-MAX, owner=YOU, why=no ruling or design names how many beneficiaries a person may save; the contract wants a stated maximum on short lists)
@@ -79,7 +78,6 @@ export class BeneficiaryService {
   ) {}
 
   async list(owner: string): Promise<BeneficiaryView[]> {
-    await requireOpenWallet(this.prisma, owner);
     return this.toViews(await visibleBeneficiaries(this.prisma, owner));
   }
 
@@ -98,7 +96,6 @@ export class BeneficiaryService {
         ? dto.bankCode !== undefined || dto.accountNumber !== undefined
         : dto.wawuUserId !== undefined;
     if (mixed) throw new BadRequestException(BENEFICIARY_MIXED_MESSAGE);
-    await requireOpenWallet(this.prisma, owner);
     if (dto.kind === 'wawu_user') {
       return this.addWawuUser(owner, dto.wawuUserId!);
     }
@@ -106,7 +103,6 @@ export class BeneficiaryService {
   }
 
   async remove(owner: string, id: string): Promise<void> {
-    await requireOpenWallet(this.prisma, owner);
     await this.prisma.moneyBeneficiary.deleteMany({
       where: { id, ownerWawuId: owner },
     });

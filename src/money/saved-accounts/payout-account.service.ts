@@ -5,7 +5,6 @@ import { IdentityHasher } from '../identity/identity-config';
 import type { PayoutAccountDto } from '../dto/money-request.dto';
 import type { PayoutAccountView } from '../money-view.type';
 import { BankAccountCheckService } from './bank-account-check.service';
-import { requireOpenWallet } from './open-wallet-gate';
 
 type PayoutRow = {
   bankCode: string;
@@ -47,7 +46,6 @@ export class PayoutAccountService {
   ) {}
 
   async get(wawuUserId: string): Promise<PayoutAccountView | null> {
-    await requireOpenWallet(this.prisma, wawuUserId);
     const row = await this.prisma.moneyPayoutAccount.findUnique({
       where: { wawuUserId },
       select: PAYOUT_SELECT,
@@ -60,7 +58,6 @@ export class PayoutAccountService {
     wawuUserId: string,
     dto: PayoutAccountDto,
   ): Promise<PayoutAccountView> {
-    await requireOpenWallet(this.prisma, wawuUserId);
     const account = await this.banks.check(dto.bankCode, dto.accountNumber);
     const row = await this.prisma.moneyPayoutAccount.upsert({
       where: { wawuUserId },

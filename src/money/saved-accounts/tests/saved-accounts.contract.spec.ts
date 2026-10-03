@@ -42,7 +42,7 @@ import {
   NAME_CHECK_FAILED_MESSAGE,
 } from '../bank-account-check.service';
 import { BENEFICIARIES_MAX } from '../beneficiary.service';
-import { SAVED_ACCOUNTS_NOT_OPEN_MESSAGE } from '../open-wallet-gate';
+import { NO_WALLET_MESSAGE } from '../../gate/wallet-gate';
 
 /**
  * Saved beneficiaries and the payout account (task WALLET-14) over HTTP:
@@ -1054,12 +1054,7 @@ describe('Saved beneficiaries and the payout account (WALLET-14) over HTTP', () 
       const who = person();
       bank();
       for (const res of await Promise.all(routes(who))) {
-        expectRefusal(
-          res,
-          409,
-          'wallet_not_open',
-          SAVED_ACCOUNTS_NOT_OPEN_MESSAGE,
-        );
+        expectRefusal(res, 409, 'wallet_not_open', NO_WALLET_MESSAGE);
       }
       expect(double.seen).toHaveLength(0);
     });

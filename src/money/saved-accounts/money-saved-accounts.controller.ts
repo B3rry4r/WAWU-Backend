@@ -11,13 +11,16 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
-import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
-import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
 import {
   CreateBeneficiaryDto,
   PayoutAccountDto,
 } from '../dto/money-request.dto';
+import {
+  CurrentWallet,
+  type OpenWallet,
+  RequireOpenWallet,
+} from '../gate/wallet-gate';
 import { BuiltBy, MoneyErrors, WALLET_GATE_ERRORS } from '../money-contract';
 import type { BeneficiaryView, PayoutAccountView } from '../money-view.type';
 import { BeneficiaryService } from './beneficiary.service';
@@ -29,8 +32,10 @@ import { PayoutAccountService } from './payout-account.service';
  * A21's payout bank and W17's default destination. Declared by MONEY-04,
  * served here (docs/contract/CONVENTIONS.md section 0).
  *
- * The caller is the token: no route takes a wawuUserId of whose list or
- * account to act on. Every answer is `no-store`: it carries account numbers
+ * Every route needs an open wallet (MONEY-13's gate, `@RequireOpenWallet()`:
+ * `409 wallet_not_open` or `409 wallet_opening` before anything else runs),
+ * and acts on the wallet the gate found for the caller's token: no route
+ * takes a wawuUserId of whose list or account to act on. Every answer is `no-store`: it carries account numbers
  * and the names banks hold for them.
  */
 @ApiBearerAuth('wawu-id')
@@ -46,9 +51,10 @@ export class MoneySavedAccountsController {
   @Get('beneficiaries')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('WALLET-14')
+  @RequireOpenWallet()
   @MoneyErrors(...WALLET_GATE_ERRORS)
-  list(@CurrentUser() user: WawuJwtClaims): Promise<BeneficiaryView[]> {
-    return this.beneficiaries.list(user.sub);
+  list(@CurrentWallet() wallet: OpenWallet): Promise<BeneficiaryView[]> {
+    return this.beneficiaries.list(wallet.wawuUserId);
   }
 
   /**
@@ -60,6 +66,7 @@ export class MoneySavedAccountsController {
   @Post('beneficiaries')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('WALLET-14')
+  @RequireOpenWallet()
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'recipient_not_found',
@@ -70,33 +77,35 @@ export class MoneySavedAccountsController {
     'provider_unreachable',
   )
   add(
-    @CurrentUser() user: WawuJwtClaims,
+    @CurrentWallet() wallet: OpenWallet,
     @Body() dto: CreateBeneficiaryDto,
   ): Promise<BeneficiaryView> {
-    return this.beneficiaries.add(user.sub, dto);
+    return this.beneficiaries.add(wallet.wawuUserId, dto);
   }
 
   /** Remove a saved beneficiary. Removing one already gone, or not the caller's, is a 200 that removes nothing. */
   @Delete('beneficiaries/:id')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('WALLET-14')
+  @RequireOpenWallet()
   @MoneyErrors(...WALLET_GATE_ERRORS)
   remove(
-    @CurrentUser() user: WawuJwtClaims,
+    @CurrentWallet() wallet: OpenWallet,
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<void> {
-    return this.beneficiaries.remove(user.sub, id);
+    return this.beneficiaries.remove(wallet.wawuUserId, id);
   }
 
   /** The payout account (A21, W17's default destination), or null when none is saved. */
   @Get('payout-account')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('WALLET-14')
+  @RequireOpenWallet()
   @MoneyErrors(...WALLET_GATE_ERRORS)
   getPayoutAccount(
-    @CurrentUser() user: WawuJwtClaims,
+    @CurrentWallet() wallet: OpenWallet,
   ): Promise<PayoutAccountView | null> {
-    return this.payout.get(user.sub);
+    return this.payout.get(wallet.wawuUserId);
   }
 
   /**
@@ -107,15 +116,16 @@ export class MoneySavedAccountsController {
   @Put('payout-account')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('WALLET-14')
+  @RequireOpenWallet()
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'name_check_failed',
     'provider_unreachable',
   )
   setPayoutAccount(
-    @CurrentUser() user: WawuJwtClaims,
+    @CurrentWallet() wallet: OpenWallet,
     @Body() dto: PayoutAccountDto,
   ): Promise<PayoutAccountView> {
-    return this.payout.set(user.sub, dto);
+    return this.payout.set(wallet.wawuUserId, dto);
   }
 }

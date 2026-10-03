@@ -635,10 +635,11 @@ one retry at a time per payment.
   `accountNumber`; the other kind's fields are a plain 400), `DELETE
   /money/beneficiaries/{id}`, `GET /money/payout-account` (`null` when none)
   and `PUT /money/payout-account` (`PayoutAccountDto`). All need an open
-  wallet: `409 wallet_not_open`, `409 wallet_opening` as the balance answers
-  them (MONEY-13's gate replaces the check when it lands; `wallet_frozen` is
-  declared, not answered, since nothing stores a freeze yet). Every answer
-  is `no-store`.
+  wallet: they run MONEY-13's gate (`@RequireOpenWallet()`, before the body
+  is read), so they answer `409 wallet_not_open` and `409 wallet_opening`
+  exactly as every wallet route does, and act on the wallet it found
+  (`@CurrentWallet()`). `wallet_frozen` is declared, not answered (the
+  gate's own rule). Every answer is `no-store`.
 - **A bank account is the bank's word, never the app's.** Before a bank
   account is saved (as a beneficiary or the payout account), its bank code
   must be in Fintava's bank list (`GET /banks`, kept in memory for an hour)
