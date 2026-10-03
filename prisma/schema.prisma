@@ -3426,6 +3426,17 @@ model WalletIdentity {
   verifiedPhone String?
   /// Typed on A5.
   occupation    String?
+  /// The BVN record's first and last name as keyed hashes, one per word
+  /// (WALLET-14): `{ "v": 2, "check": hex, "first": [hex...], "last":
+  /// [hex...] }`, each word HMAC-SHA256 under IDENTITY_HASH_KEY over
+  /// `name:<wawuUserId>:<bvnVerifiedAt>:<WORD>`, so the same word differs
+  /// across people and checks and no hash can be matched to a name stored
+  /// elsewhere without the key. Written with every passed check, null when
+  /// Fintava gave no first or last name in a form we read. Never the name
+  /// itself. Read only to compare a payout account's name with the BVN name
+  /// (A21, `PayoutAccountView.matchesBvnName`); any other shape, or a
+  /// `check` that does not recompute, reads as no BVN name.
+  bvnNameKeys   Json?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 }
@@ -3730,4 +3741,162 @@ model FintavaLedgerReference {
   @@id([accountNumber, direction, value])
   @@index([entryId])
   @@index([value])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// SAVED BENEFICIARIES AND THE PAYOUT ACCOUNT (task WALLET-14)
+///
+/// A beneficiary is a place this person sends money to again (W8, W12 "Save
+/// as beneficiary", W35's count): another WAWU user with a wallet, or a bank
+/// account whose name the bank confirmed through Fintava's name check when it
+/// was saved. The account name is the bank's, never one the person typed.
+/// One row per place per person (the two unique keys); saving it again
+/// answers the row already there.
+/// ─────────────────────────────────────────────────────────────────────────
+model MoneyBeneficiary {
+  id              String   @id @default(uuid())
+  /// Whose list this is.
+  ownerWawuId     String
+  /// `wawu_user` or `bank_account`.
+  kind            String
+  /// Set when kind is wawu_user: who the money goes to.
+  recipientWawuId String?
+  /// Set when kind is bank_account. Fintava's bank code (`GET /banks`).
+  bankCode        String?
+  /// The bank's name from Fintava's list when the account was saved.
+  bankName        String?
+  /// NUBAN, 10 digits.
+  accountNumber   String?
+  /// The name the bank returned on the name check.
+  accountName     String?
+  createdAt       DateTime @default(now())
+
+  @@unique([ownerWawuId, recipientWawuId])
+  @@unique([ownerWawuId, bankCode, accountNumber])
+  @@index([ownerWawuId, createdAt])
+}
+
+/// The account a person's withdrawals go to by default (A21, W17). One per
+/// person; saving another replaces it. The bank code is Fintava's and the
+/// name is the one the bank returned on the name check, never typed. Whether
+/// that name matches the BVN name is worked out on every read, from
+/// `WalletIdentity.bvnNameKeys`, so it is never stale.
+model MoneyPayoutAccount {
+  wawuUserId    String   @id
+  bankCode      String
+  bankName      String
+  accountNumber String
+  accountName   String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+// -----------------------------------------------------------------------------
+// Schools (task SCHOOLS-01): schools, their courses and each course's dated
+// intakes with a seat limit. Added from the dashboard (SCHOOLS-02), read by the
+// app's SC1-SC3 and SC10 (SCHOOLS-04), enrolled into by SCHOOLS-07.
+//
+// Not the Learn tables above: LearnCourse / CourseEnrollment are WAWU's own
+// courses hosted elsewhere and their enrol gate references the removed
+// subscription. School enrolments never read them (SCHOOLS-07).
+//
+// No rating column on School: nothing writes a school rating and no screen
+// collects one, so it is left off at launch until the owner rules (R-32).
+// -----------------------------------------------------------------------------
+
+/// SC1's category chips, exactly: Tech, Business, Creative, Languages,
+/// Vocational. "All" is the absence of a filter, not a category.
+enum SchoolCategory {
+  tech
+  business
+  creative
+  languages
+  vocational
+}
+
+/// How a course is taught. SC2 lists it beside the length ("12 weeks ·
+/// Online"); where the classes meet is the intake's `location`.
+enum SchoolCourseMode {
+  online
+  in_person
+  hybrid
+}
+
+model School {
+  id          String         @id @default(uuid())
+  name        String
+  category    SchoolCategory
+  /// Display place, as SC2 prints it: "Yaba, Lagos". SC1 shows it on the card.
+  location    String
+  /// SC2's "Since 2016". Null when the school has not said.
+  foundedYear Int?
+  /// SC2's expertise chips, in the order the dashboard set them.
+  expertise   String[]
+  /// SC2's blurb.
+  about       String
+  /// The school's logo image (a storage URL). Null: the app draws initials.
+  logo        String?
+  /// The school's own application page, for "Or apply on the school's
+  /// website" (SC9, SCHOOLS-10). Null: the school takes no outside sign-ups.
+  applyUrl    String?
+  /// Where the enrolment report goes: the student's details, course and
+  /// intake (SCHOOLS-09). Never shown in the app.
+  reportEmail String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  courses SchoolCourse[]
+
+  @@index([category])
+  @@index([name])
+}
+
+model SchoolCourse {
+  id        String           @id @default(uuid())
+  schoolId  String
+  school    School           @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  title     String
+  /// SC3's "Length 12 weeks".
+  weeks     Int
+  mode      SchoolCourseMode
+  /// SC3's numbered syllabus, in order.
+  syllabus  String[]
+  /// SC3's "You get": "Certificate", "mentor", "portfolio".
+  outcomes  String[]
+  /// The course fee in integer kobo (docs/contract/CONVENTIONS.md section 1).
+  /// Int carries up to 21,474,836.47 naira, above the 10,000,000 naira
+  /// merchant cap any one payment is bounded by.
+  priceKobo Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  intakes CourseIntake[]
+
+  @@index([schoolId])
+}
+
+/// One dated class of a course. Seats are claimed by a CONDITIONAL write
+/// (seatsTaken < capacity) inside the enrolment transaction, the
+/// Product.stock pattern (SCHOOLS-07); the database also refuses a row whose
+/// seatsTaken is negative or above capacity.
+model CourseIntake {
+  id         String       @id @default(uuid())
+  courseId   String
+  course     SchoolCourse @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  /// The day classes start (SC3's "Starts Mon 3 November"). A calendar date,
+  /// not an instant, so no time zone moves it.
+  startDate  DateTime     @db.Date
+  /// SC4's "Weekend class", SC3's "Saturdays".
+  schedule   String
+  /// Where this intake meets ("Yaba"). Null for an online intake.
+  location   String?
+  capacity   Int
+  seatsTaken Int          @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([courseId, startDate])
 }

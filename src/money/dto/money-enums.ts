@@ -94,6 +94,8 @@ export const MONEY_ERROR_CODES = [
   'recipient_has_no_wallet',
   'recipient_blocked',
   'self_transfer',
+  // Saved beneficiaries (WALLET-14).
+  'beneficiary_limit_reached',
   'bank_transfers_blocked',
   'target_not_found',
   'target_not_payable',
