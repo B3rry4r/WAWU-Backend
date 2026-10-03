@@ -17,14 +17,17 @@ import type {
  *   tell those apart, never a retry.
  * - Found and FAILURE or CANCELLED: the reference is used up; a new one.
  * - Absent (the lookup answered Fintava's own `404 "Transaction not
- *   found!"` AND the sender's history has no row for the reference): a
+ *   found!"` AND a complete walk of the sender's history, back to the
+ *   send's time, has no row for the reference): a
  *   wallet-to-wallet send may go again under the same reference, because a
  *   refused one writes nothing and leaves its reference usable; a bank send
  *   only under a new reference. Never sooner than `resendAfterMs` after the
  *   first send (the money timeout plus a safety window): Fintava keeps
  *   working after the client gives up, so a fresh 404 proves nothing.
- * - Unknown (the lookup answered `{}` and history did not show it, or
- *   Fintava could not be asked): wait. `{}` is never "not found".
+ * - Unknown (the lookup answered `{}` and history did not show it, the
+ *   history walk stopped before the send's time, or Fintava could not be
+ *   asked): wait. `{}` is never "not found", and neither is a history
+ *   walk cut off by its page limit.
  */
 export function decideFintavaRetry(
   kind: FintavaSendKind,

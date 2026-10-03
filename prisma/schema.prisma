@@ -3259,8 +3259,7 @@ model FintavaWebhookEvent {
   /// every time, so a replay still lands on the same key.
   referenceField String
   /// Fintava's own status for the transaction (`data.status`, else
-  /// `data.paymentStatus`), upper case; empty when it sent none. Part of the
-  /// key so a later delivery reporting a new status is recorded too.
+  /// `data.paymentStatus`), upper case; empty when it sent none.
   fintavaStatus  String
 
   /// `data.reference` and `data.customerReference` (or `CustomerReference`)
@@ -3280,13 +3279,22 @@ model FintavaWebhookEvent {
   /// refused would be retried and lost. `rawBody` keeps the original.
   payload Json
 
+  /// The key (MONEY-08 round 3): the SHA-256, hex, of `rawBody`, the exact
+  /// bytes Fintava signed. A retry or replay of the same delivery is the
+  /// same bytes and lands on the same row; any other body, even for the same
+  /// transaction and status (another amount, say), is a delivery of its own
+  /// and reaches its consumer. Filled for every row; nullable only because
+  /// it was added to a table that already had rows.
+  bodySha256 String? @unique
+
   processingStatus FintavaWebhookProcessing @default(pending)
   /// Set by the consuming task: what it did, or why it could not.
   note             String?
   receivedAt       DateTime                 @default(now())
   processedAt      DateTime?
 
-  @@unique([event, reference, fintavaStatus])
+  /// Was the unique key until MONEY-08 round 3; now only an index.
+  @@index([event, reference, fintavaStatus])
   @@index([processingStatus, receivedAt])
   @@index([dataReference])
   @@index([dataCustomerReference])
@@ -3576,7 +3584,9 @@ model FintavaLedgerEntry {
   /// Why a movement failed, when Fintava said so.
   failureReason String?
   /// Set when a later sighting of this movement disagreed with what is
-  /// stored (an amount): the stored figure is kept and MONEY-16 reports it.
+  /// stored (an amount, or a status Fintava gave both ways): the stored
+  /// figure is kept, the status is not moved by that sighting, the sweep
+  /// leaves the row alone, and MONEY-16 reports it (a stop: WORKFLOW 10).
   discrepancy   String?
 
   /// How the ledger first learned of it: send, webhook, lookup or history.
@@ -3590,12 +3600,29 @@ model FintavaLedgerEntry {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
+  /// MONEY-08, the pending sweep's schedule, kept on the row so that a
+  /// restart or a second server keeps it. When Fintava is next asked about
+  /// this `pending` row; null until the first check, which is due at
+  /// createdAt (or revivedAt) plus LEDGER_STATUS_CHECK_AFTER_MINUTES.
+  nextCheckAt  DateTime?
+  /// How many times the sweep has asked about it. The rest before the next
+  /// check doubles with each one, 1, 2, 4 ... minutes, at most 60.
+  statusChecks Int       @default(0)
+  /// MONEY-08: when a row failed because Fintava had no record of it
+  /// (LEDGER_ABSENT_FAILURE) was seen again and taken back to its sighting's
+  /// status, and which kind of sighting did it (send, webhook, lookup or
+  /// history). A revival is not a disagreement with Fintava, so it is never
+  /// written on `discrepancy`, and the row stays in the sweep.
+  revivedAt    DateTime?
+  revivedBy    String?
+
   references FintavaLedgerReference[]
 
   @@index([wawuUserId, occurredAt])
   @@index([accountNumber, occurredAt])
   @@index([status, occurredAt])
   @@index([customerReference])
+  @@index([status, nextCheckAt])
 }
 
 /// Every reference one ledger row is known by. The primary key is the

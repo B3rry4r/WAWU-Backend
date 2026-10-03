@@ -450,6 +450,49 @@ function historyTake(): number {
   return 60 + Math.floor(Math.random() * 41);
 }
 const RECONCILE_MAX_PAGES = 5;
+
+/**
+ * Whether one page of a history walk can be trusted to say where the walk
+ * is (MONEY-08 round 3). Fintava's pages carry `page`, `take`, `itemCount`,
+ * `pageCount` and `hasNextPage` (`sandbox/09-`, `10-`: an empty history is
+ * page 1 of 0, with no rows and no next page). A page is consistent when:
+ * - it is the page asked for;
+ * - `pageCount` is `itemCount` over `take`, rounded up, and the page is not
+ *   past it (an empty history is page 1, of 0 pages as Fintava says, or of
+ *   1, which hides no row either);
+ * - `hasNextPage` is true exactly when the page is before the last;
+ * - it holds the rows those figures promise: `take` on a page before the
+ *   last, the rest on the last (so an empty page while more follow, or an
+ *   empty last page of a non-empty history, is not consistent);
+ * - its totals are the first page's: a history that changed while it was
+ *   read may have moved a row past the pages read.
+ * An inconsistent page makes the walk incomplete, never complete.
+ */
+export function historyPageConsistent(
+  p: FintavaPage<unknown>,
+  asked: number,
+  first: FintavaPage<unknown> | null,
+): boolean {
+  if (p.page !== asked || p.take < 1) return false;
+  // An empty history is page 1 of 0 at Fintava; page 1 of 1 hides no row
+  // either, so both are read as the one empty page.
+  const empty = p.itemCount === 0 && p.pageCount <= 1;
+  if (!empty && p.pageCount !== Math.ceil(p.itemCount / p.take)) return false;
+  const last = Math.max(p.pageCount, 1);
+  if (p.page > last) return false;
+  if (p.hasNextPage !== (!empty && p.page < p.pageCount)) return false;
+  const expected = p.hasNextPage ? p.take : p.itemCount - (p.page - 1) * p.take;
+  if (p.items.length !== expected) return false;
+  if (
+    first !== null &&
+    (first.itemCount !== p.itemCount ||
+      first.pageCount !== p.pageCount ||
+      first.take !== p.take)
+  ) {
+    return false;
+  }
+  return true;
+}
 /** History rows are compared with our send time minus this, for clock skew. */
 const RECONCILE_SKEW_MS = 10 * 60_000;
 
@@ -1402,15 +1445,29 @@ export class FintavaClient {
   /**
    * The sender's history (the merchant's for WAWU's sends, the customer's for
    * a customer's), newest first, back to `since`: the row for `reference`,
-   * or null. Errors propagate.
+   * `null` when the walk was complete and found none, or `'incomplete'`
+   * otherwise. An unfinished walk has not shown that the row is missing
+   * (MONEY-08 rounds 2 and 3): the send may sit on a page it did not read.
+   * Errors propagate.
+   *
+   * Complete means one of, and nothing else:
+   * - Fintava says there is no next page (`hasNextPage` false), or
+   * - the walk has passed `since`: a page's oldest row is older than
+   *   `since` less the clock skew.
+   * Every page read must also be consistent (historyPageConsistent): its own
+   * number, its rows and its totals agree with each other and with the
+   * pages before it. An empty page while Fintava says more follow, a page
+   * past the total, or a total that changes between pages, makes the walk
+   * incomplete. It also stops, incomplete, at RECONCILE_MAX_PAGES.
    */
   private async findInHistory(
     reference: string,
     sender: FintavaSender,
     since?: Date,
-  ): Promise<FintavaTransaction | null> {
+  ): Promise<FintavaTransaction | null | 'incomplete'> {
     const oldest = since ? since.getTime() - RECONCILE_SKEW_MS : null;
     const take = historyTake();
+    let first: FintavaPage<FintavaTransaction> | null = null;
     for (let page = 1; page <= RECONCILE_MAX_PAGES; page += 1) {
       const rows =
         sender.kind === 'merchant'
@@ -1420,16 +1477,20 @@ export class FintavaClient {
               page,
               take,
             });
+      // Our row is ours wherever it turns up.
       const hit = rows.items.find((t) => t.customerReference === reference);
       if (hit) return hit;
+      if (!historyPageConsistent(rows, page, first)) return 'incomplete';
+      first ??= rows;
+      if (!rows.hasNextPage) return null;
       const last = rows.items[rows.items.length - 1];
       const pastSince =
         oldest !== null &&
         last !== undefined &&
         Date.parse(last.createdAt) < oldest;
-      if (!rows.hasNextPage || pastSince || rows.items.length === 0) break;
+      if (pastSince) return null;
     }
-    return null;
+    return 'incomplete';
   }
 
   /**
@@ -1438,7 +1499,9 @@ export class FintavaClient {
    * `absent` needs both: Fintava's own `404 "Transaction not found!"` AND no
    * row in history. A lookup that answers `{}` with no row in history is
    * `unknown` (a missing row is not proof: the merchant list is cached for
-   * about 5 minutes); so is any answer we cannot read or reach.
+   * about 5 minutes); so is any answer we cannot read or reach, and so is a
+   * 404 whose history walk stopped before it reached `since`
+   * (`history_incomplete`): only a complete walk shows there is no row.
    */
   async reconcile(
     reference: string,
@@ -1468,12 +1531,18 @@ export class FintavaClient {
         transaction: lookup.transaction,
       };
     }
-    let row: FintavaTransaction | null;
+    let row: FintavaTransaction | null | 'incomplete';
     try {
       row = await this.findInHistory(reference, sender, since);
     } catch (e) {
       if (passThrough(e)) throw e;
       return { state: 'unknown', why: 'unreachable' };
+    }
+    if (row === 'incomplete') {
+      return {
+        state: 'unknown',
+        why: lookup.state === 'absent' ? 'history_incomplete' : 'empty_lookup',
+      };
     }
     if (row) return { state: 'found', source: 'history', transaction: row };
     return lookup.state === 'absent'
