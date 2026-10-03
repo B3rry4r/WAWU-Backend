@@ -7097,6 +7097,120 @@
         ]
       }
     },
+    "/api/hub/content/mine/library": {
+      "get": {
+        "operationId": "ContentPieceController_myLibrary",
+        "parameters": [
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "live",
+                "pending",
+                "rejected"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MyContentItem"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "M28: my pieces with sales and the reviewer's reason. Literal paths stay above ':id'.",
+        "tags": [
+          "ContentPiece"
+        ]
+      }
+    },
+    "/api/hub/content/mine/library/counts": {
+      "get": {
+        "operationId": "ContentPieceController_myLibraryCounts",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyContentCounts"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The numbers on the M28 filter tabs.",
+        "tags": [
+          "ContentPiece"
+        ]
+      }
+    },
+    "/api/hub/content/mine/library/{id}": {
+      "get": {
+        "operationId": "ContentPieceController_myPiece",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyContentItem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "M26: one of my pieces, with its latest rejection reason.",
+        "tags": [
+          "ContentPiece"
+        ]
+      }
+    },
     "/api/hub/content/purchases": {
       "get": {
         "operationId": "ContentPieceController_purchases",
@@ -7191,6 +7305,76 @@
             "description": ""
           }
         },
+        "tags": [
+          "ContentPiece"
+        ]
+      },
+      "patch": {
+        "operationId": "ContentPieceController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateContentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyContentItem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Edit the details or the file of a piece that is pending or rejected.",
+        "tags": [
+          "ContentPiece"
+        ]
+      }
+    },
+    "/api/hub/content/{id}/resubmit": {
+      "post": {
+        "operationId": "ContentPieceController_resubmit",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyContentItem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Send a rejected piece for review again.",
         "tags": [
           "ContentPiece"
         ]
@@ -23599,6 +23783,85 @@
           "fullAsset"
         ]
       },
+      "UpdateContentDto": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "agriculture_food",
+              "trade_commerce",
+              "business_entrepreneurship",
+              "finance",
+              "technology",
+              "education",
+              "healthcare",
+              "employment",
+              "entertainment_creative",
+              "beauty",
+              "family_lifestyle",
+              "culture_heritage",
+              "religion_faith",
+              "travel_tourism",
+              "real_estate",
+              "transport_logistics",
+              "manufacturing",
+              "energy_utilities",
+              "media_communications",
+              "professional_services",
+              "legal_services",
+              "insurance_pensions",
+              "sports_fitness",
+              "government_public",
+              "social_impact"
+            ]
+          },
+          "specializations": {
+            "description": "Replaces the whole list, as on create (at most three).",
+            "maxItems": 3,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "description": "Replaces the whole list, as on create (at most twenty).",
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "accessType": {
+            "type": "string",
+            "enum": [
+              "free",
+              "paid"
+            ]
+          },
+          "price": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10000000
+          },
+          "previewAsset": {
+            "type": "string",
+            "format": "uri"
+          },
+          "fullAsset": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      },
       "VerifyUnlockDto": {
         "type": "object",
         "properties": {
@@ -28757,6 +29020,172 @@
           "likes",
           "fullAssetUrl",
           "fullAssetLocked"
+        ]
+      },
+      "MyContentItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "live",
+              "rejected",
+              "removed"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "title": {
+            "type": "string"
+          },
+          "creatorWawuId": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string",
+            "enum": [
+              "video",
+              "course",
+              "audio",
+              "pdf",
+              "image",
+              "template"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "specializations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "accessType": {
+            "type": "string",
+            "enum": [
+              "free",
+              "paid"
+            ]
+          },
+          "price": {
+            "type": "number"
+          },
+          "durationLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "pageCount": {
+            "type": "number",
+            "nullable": true
+          },
+          "previewAssetUrl": {
+            "type": "string"
+          },
+          "creatorFirstUploadFree": {
+            "type": "boolean"
+          },
+          "views": {
+            "type": "number"
+          },
+          "ratingPct": {
+            "type": "number",
+            "nullable": true
+          },
+          "commentCount": {
+            "type": "number"
+          },
+          "likes": {
+            "type": "number"
+          },
+          "fullAssetUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "fullAssetLocked": {
+            "type": "boolean"
+          },
+          "salesCount": {
+            "type": "number"
+          },
+          "rejectionReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "rejectedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "createdAt",
+          "title",
+          "creatorWawuId",
+          "slug",
+          "contentType",
+          "description",
+          "category",
+          "specializations",
+          "tags",
+          "accessType",
+          "price",
+          "durationLabel",
+          "pageCount",
+          "previewAssetUrl",
+          "creatorFirstUploadFree",
+          "views",
+          "ratingPct",
+          "commentCount",
+          "likes",
+          "fullAssetUrl",
+          "fullAssetLocked",
+          "salesCount",
+          "rejectionReason",
+          "rejectedAt"
+        ]
+      },
+      "MyContentCounts": {
+        "type": "object",
+        "properties": {
+          "all": {
+            "type": "number"
+          },
+          "live": {
+            "type": "number"
+          },
+          "pending": {
+            "type": "number"
+          },
+          "rejected": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "all",
+          "live",
+          "pending",
+          "rejected"
         ]
       },
       "UnlockVerifyResult": {
