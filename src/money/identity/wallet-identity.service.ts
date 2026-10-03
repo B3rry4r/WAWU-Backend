@@ -10,7 +10,9 @@ import {
   type FintavaErrorKind,
 } from '../../fintava/fintava-error';
 import type { FintavaBvnIdentity } from '../../fintava/fintava.interface';
+import { Prisma } from '../../../generated/prisma/client';
 import { MoneyError } from '../money-error';
+import { bvnNameKeys } from './bvn-name';
 import type { BvnCheckDto } from './dto/identity-request.dto';
 import {
   BVN_CHECK_WINDOW_MS,
@@ -231,6 +233,12 @@ export class WalletIdentityService {
     }
 
     const verifiedAt = new Date();
+    // The BVN name as keyed hashes of its words, for the payout account's
+    // "matches your BVN" (WALLET-14). Replaced with every passed check, so
+    // it always belongs to the check beside it; never the name itself.
+    const nameKeys = bvnNameKeys(identity, (word) =>
+      this.hasher.hash('name', word),
+    );
     const fields = {
       bvnHash,
       bvnLast4,
@@ -238,6 +246,7 @@ export class WalletIdentityService {
       ninHash,
       ninLast4,
       verifiedPhone: `+234${ownPhone.slice(1)}`,
+      bvnNameKeys: nameKeys ? { ...nameKeys } : Prisma.DbNull,
     };
     const [row] = await this.prisma.$transaction([
       this.prisma.walletIdentity.upsert({

@@ -77,7 +77,9 @@ AppModule since MONEY-09): `GET`, `POST` and `PUT /money/pin` and
 (MONEY-11), which reads the caller's wallet from `FintavaWallet` (no row:
 `409 wallet_not_open`) and asks Fintava on every request; `GET /money/identity`,
 `POST /money/identity/bvn` and `PUT /money/identity/occupation` (KYC-01),
-Open your wallet's identity step (section 8). A served route and a declared one may share a
+Open your wallet's identity step (section 8); `GET`, `POST
+/money/beneficiaries`, `DELETE /money/beneficiaries/{id}`, `GET` and `PUT
+/money/payout-account` (WALLET-14, section 10). A served route and a declared one may share a
 schema (the error envelope, the PIN DTOs); the emitter keeps one copy when
 the two are identical and still fails when they differ. A task that serves
 more routes adds them to `SERVED_MONEY_ROUTES` in
@@ -206,7 +208,8 @@ Every refusal is the envelope this backend already answers with
 | `recipient_not_found` | 404 | no such WAWU user | |
 | `recipient_has_no_wallet` | 409 | they have not opened a wallet | |
 | `recipient_blocked` | 403 | a block between the two people | |
-| `self_transfer` | 400 | sending to yourself | |
+| `self_transfer` | 400 | sending to yourself, or saving yourself as a beneficiary | |
+| `beneficiary_limit_reached` | 409 | the person already keeps the most beneficiaries allowed (`BENEFICIARIES_MAX`, PROVISIONAL); one must be removed first (WALLET-14) | |
 | `bank_transfers_blocked` | 403 | sending to a bank is not allowed for this person now (W18) | `blockedBy` |
 | `target_not_found` | 404 | the thing being paid for does not exist | |
 | `target_not_payable` | 409 | it exists but cannot be bought now (already owned, sold out, closed) | |
@@ -390,7 +393,10 @@ one retry at a time per payment.
   has 10^11 values, so a plain or salted hash can be walked), the last 4
   digits of each, the account phone that matched (E.164), and the
   occupation. Never the full BVN or NIN, the BVN record's name, date of
-  birth, gender, phone or photo, or the address. The prefill is answered
+  birth, gender, phone or photo, or the address. Since WALLET-14 the words
+  of the BVN record's first and last name are kept as keyed hashes only
+  (`bvnNameKeys`, section 10), so a payout account's name can be compared
+  with the BVN name; the name itself is still never stored. The prefill is answered
   once and not kept. The steps after this one take them from the app again:
   MONEY-12's account opening checks the BVN and the NIN with
   `WalletIdentityService.matchesCheckedIdentity` (the NIN is required);
@@ -521,7 +527,8 @@ one retry at a time per payment.
   Bank", provisional, bank code `090620`, and the owner's licence and
   deposit-insurance lines, null until set). `limits` is null (G-7),
   `bankTransfers` is allowed for an open wallet (W18 is not built, R-28) and
-  `beneficiaryCount` is 0 until WALLET-14 serves beneficiaries. While an
+  `beneficiaryCount` counts the rows `GET /money/beneficiaries` shows
+  (WALLET-14, section 10; 0 without a wallet). While an
   opening is in flight the balance answers `409 wallet_opening`.
 - **Identity, read once.** The BVN and NIN must be the ones the passed check
   was run with (`checkedIdentity`: keyed hashes, one read, the NIN required;
@@ -585,3 +592,54 @@ one retry at a time per payment.
 - **Without settings.** No `FINTAVA_*` or no `IDENTITY_HASH_KEY`: the open
   answers `503 provider_unreachable` and sends nothing; `GET /money/wallet`
   still answers; the sweep does nothing.
+
+## 10. Saved beneficiaries and the payout account (WALLET-14)
+
+- **Routes** (`src/money/saved-accounts/`): `GET /money/beneficiaries`
+  (newest first, at most `BENEFICIARIES_MAX`), `POST /money/beneficiaries`
+  (`CreateBeneficiaryDto`: `kind` with `wawuUserId`, or with `bankCode` and
+  `accountNumber`; the other kind's fields are a plain 400), `DELETE
+  /money/beneficiaries/{id}`, `GET /money/payout-account` (`null` when none)
+  and `PUT /money/payout-account` (`PayoutAccountDto`). All need an open
+  wallet: `409 wallet_not_open`, `409 wallet_opening` as the balance answers
+  them (MONEY-13's gate replaces the check when it lands; `wallet_frozen` is
+  declared, not answered, since nothing stores a freeze yet). Every answer
+  is `no-store`.
+- **A bank account is the bank's word, never the app's.** Before a bank
+  account is saved (as a beneficiary or the payout account), its bank code
+  must be in Fintava's bank list (`GET /banks`, kept in memory for an hour)
+  and Fintava's name check (`GET /name/enquiry`, free) must confirm it:
+  `data.status` true, `responseCode` `"00"`, a non-empty name and the same
+  account number. The name saved is the one the bank returned. A body that
+  carries a name is refused by validation. A name check that does not
+  confirm the account, or a bank code not in the list, is `422
+  name_check_failed` and nothing is saved; Fintava not answering (or the
+  key refused) is `503 provider_unreachable` with `retryAfterSeconds`.
+- **The BVN name.** The BVN check (KYC-01) keeps, with every passed check,
+  the keyed hash (HMAC-SHA256 under `IDENTITY_HASH_KEY`, `name:<WORD>`) of
+  each word of the BVN record's first and last name
+  (`WalletIdentity.bvnNameKeys`, `{ first: [...], last: [...] }`); a record
+  without a readable first or last name keeps null. A word is the name in
+  capitals A to Z, accents taken off, split on anything else.
+- **`matchesBvnName`** is worked out on every read of the payout account:
+  true when every word of the BVN's first name and of its last name is a
+  word of the bank's account name, in any order (the middle name is not
+  needed; an initial in place of a name does not match). Default (agent),
+  owner may override. `false` is A21's flag: the account is saved and
+  shown as not matching, not refused (mobile repo BACKEND_GAPS G-46 for
+  what a withdrawal does with it). `null` when there is nothing to compare
+  with: no passed check, no name kept, `IDENTITY_HASH_KEY` unset, or the
+  wallet opened under a different BVN check (`FintavaWalletOpening.bvnHash`)
+  than the one that kept the name.
+- **Beneficiaries.** A WAWU user is saved only with an open wallet (`409
+  recipient_has_no_wallet`; no such person `404 recipient_not_found`;
+  yourself `400 self_transfer`), and shows their name from WAWU ID and
+  handle, avatar and tick from the profile, read on every list. Saving a
+  place already saved answers the row already there (unique per person and
+  place, also under parallel saves). At most `BENEFICIARIES_MAX` (50,
+  PROVISIONAL) per person, counted under a per-person lock, so parallel
+  saves cannot pass it: `409 beneficiary_limit_reached`. Removing is by id
+  among the caller's own rows: someone else's id, or one already gone,
+  removes nothing and answers the same 200. A saved WAWU user whose wallet
+  is gone (a deleted account) leaves the list, and `WalletView.beneficiaryCount`
+  (W35) counts exactly the rows the list shows.

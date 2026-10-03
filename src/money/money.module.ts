@@ -12,6 +12,11 @@ import { MoneyWalletController } from './opening/money-wallet-opening.controller
 import { WalletOpeningSettings } from './opening/wallet-opening-config';
 import { WalletOpeningService } from './opening/wallet-opening.service';
 import { MoneyPinController } from './pin/money-pin.controller';
+import { WawuAuthModule } from '../common/auth/wawu-auth.module';
+import { BankAccountCheckService } from './saved-accounts/bank-account-check.service';
+import { BeneficiaryService } from './saved-accounts/beneficiary.service';
+import { MoneySavedAccountsController } from './saved-accounts/money-saved-accounts.controller';
+import { PayoutAccountService } from './saved-accounts/payout-account.service';
 import { TransactionPinGuard } from './pin/transaction-pin.guard';
 import { TransactionPinService } from './pin/transaction-pin.service';
 
@@ -47,14 +52,20 @@ import { TransactionPinService } from './pin/transaction-pin.service';
  * reconciles a lost create answer every 30 seconds (it runs where
  * ScheduleModule.forRoot() is loaded, AppModule). WalletOpeningService is
  * exported for the routes that answer `wallet_opening` (MONEY-13).
+ *
+ * WALLET-14: saved beneficiaries and the payout account
+ * (`/money/beneficiaries`, `/money/payout-account`), name-checked with the
+ * bank through the same client; WawuAuthModule supplies WawuIdClient for the
+ * names of saved WAWU users.
  */
 @Module({
-  imports: [ConfigModule, FintavaModule, LedgerModule],
+  imports: [ConfigModule, FintavaModule, LedgerModule, WawuAuthModule],
   controllers: [
     MoneyPinController,
     MoneyBalanceController,
     MoneyIdentityController,
     MoneyWalletController,
+    MoneySavedAccountsController,
   ],
   providers: [
     TransactionPinService,
@@ -65,6 +76,9 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     SelfieMatchService,
     WalletOpeningSettings,
     WalletOpeningService,
+    BankAccountCheckService,
+    BeneficiaryService,
+    PayoutAccountService,
   ],
   exports: [
     TransactionPinService,

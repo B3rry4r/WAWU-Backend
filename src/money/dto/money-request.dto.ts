@@ -12,6 +12,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
 import {
   BENEFICIARY_KINDS,
@@ -146,20 +147,24 @@ export class RecipientSearchQueryDto {
   q!: string;
 }
 
-/** POST /money/beneficiaries. A bank account is name-checked by the server before it is saved. */
+/**
+ * POST /money/beneficiaries. A bank account is name-checked by the server
+ * before it is saved. The fields of the other kind are refused (a plain
+ * 400), so a body names exactly one place (WALLET-14).
+ */
 export class CreateBeneficiaryDto {
   @ApiProperty({ enum: BENEFICIARY_KINDS })
   @IsIn(BENEFICIARY_KINDS)
   kind!: BeneficiaryKind;
 
   /** Required when kind is wawu_user. */
-  @IsOptional()
+  @ValidateIf((o: CreateBeneficiaryDto) => o.kind === 'wawu_user')
   @IsUUID()
   wawuUserId?: string;
 
   /** Required when kind is bank_account. */
   @ApiPropertyOptional({ pattern: BANK_CODE_PATTERN.source })
-  @IsOptional()
+  @ValidateIf((o: CreateBeneficiaryDto) => o.kind === 'bank_account')
   @Matches(BANK_CODE_PATTERN, {
     message: 'bankCode must be a numeric bank code',
   })
@@ -167,7 +172,7 @@ export class CreateBeneficiaryDto {
 
   /** Required when kind is bank_account. */
   @ApiPropertyOptional({ pattern: NUBAN_PATTERN.source })
-  @IsOptional()
+  @ValidateIf((o: CreateBeneficiaryDto) => o.kind === 'bank_account')
   @Matches(NUBAN_PATTERN, { message: 'accountNumber must be 10 digits' })
   accountNumber?: string;
 }

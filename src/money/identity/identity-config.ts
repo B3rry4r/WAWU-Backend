@@ -224,8 +224,11 @@ export class IdentityHasher {
     return this.#key !== '';
   }
 
-  /** HMAC-SHA256, hex. `kind` keeps a BVN and a NIN with the same digits apart. */
-  hash(kind: 'bvn' | 'nin', value: string): string {
+  /**
+   * HMAC-SHA256, hex. `kind` keeps a BVN and a NIN with the same digits
+   * apart; `name` is one word of the BVN record's name (WALLET-14).
+   */
+  hash(kind: 'bvn' | 'nin' | 'name', value: string): string {
     if (!this.configured) {
       throw new IdentityConfigError(
         `${IDENTITY_CONFIG_KEYS.hashKey} is not set.`,

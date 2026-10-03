@@ -24,6 +24,7 @@ import { MoneyError } from '../money-error';
 import type { WalletState, WalletView } from '../money-view.type';
 import { TransactionPinService } from '../pin/transaction-pin.service';
 import type { OpenNairaWalletDto } from './dto/open-wallet.dto';
+import { visibleBeneficiaries } from '../saved-accounts/beneficiary.service';
 import { type IdentityStop, stoppedOnIdentity } from './opening-stops';
 import {
   WALLET_OPENING_DEFAULTS,
@@ -220,8 +221,10 @@ export class WalletOpeningService {
       // W18 is not built (R-28): a wallet only exists after the BVN and
       // selfie checks, so nothing blocks a bank send for its owner.
       bankTransfers: { allowed: wallet !== null, blockedBy: null },
-      // Nobody can save a beneficiary until WALLET-14 serves them.
-      beneficiaryCount: 0,
+      // The rows GET /money/beneficiaries shows (WALLET-14); none without a wallet.
+      beneficiaryCount: wallet
+        ? (await visibleBeneficiaries(this.prisma, wawuUserId)).length
+        : 0,
     };
   }
 
