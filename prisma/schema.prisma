@@ -692,11 +692,30 @@ model DirectMessage {
   refundLockedAt  DateTime?
 
   reports DmReport[]
+  /// Every creator reply bubble inside this question's window (INBOX-08).
+  /// `responseText` above stays the FIRST reply, for the web.
+  replies DmReply[]
 
   @@index([creatorWawuId])
   @@index([senderWawuId])
   @@index([status, deadlineAt])
+  @@index([creatorWawuId, status, deadlineAt])
+  @@index([senderWawuId, creatorWawuId, sentAt])
   @@index([refundStatus, refundLockedAt])
+}
+
+/// One creator reply bubble on a paid question (task INBOX-08). A question
+/// may carry several while its window is open. The first is also written to
+/// DirectMessage.responseText so the web's reading of that column is unchanged.
+model DmReply {
+  id            String        @id @default(uuid())
+  messageId     String
+  message       DirectMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  creatorWawuId String
+  text          String
+  createdAt     DateTime      @default(now())
+
+  @@index([messageId, createdAt])
 }
 
 /// Rolling per-creator stats maintained by the DM-deadline-sweep cron job
