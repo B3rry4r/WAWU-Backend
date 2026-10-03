@@ -1,11 +1,4 @@
-import {
-  Body,
-  Controller,
-  Get,
-  HttpCode,
-  Post,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, HttpCode, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { ConfirmPinResetDto } from './dto/money-request.dto';
@@ -15,38 +8,19 @@ import {
   MoneyErrors,
   WALLET_GATE_ERRORS,
 } from './money-contract';
-import type { PinResetView, PinStateView, WalletView } from './money-view.type';
-
-/**
- * The Naira wallet itself and its transaction PIN (task MONEY-04 contract;
- * see money-contract.ts for why these handlers are declarations). The
- * balance, GET /money/wallet/balance, is served by MONEY-11 in
- * src/money/balance/money-balance.controller.ts.
- *
- * Every route reads the caller from their token. None takes a wawuUserId:
- * a wallet route that accepts somebody else's id is one slip away from
- * draining their account, as WalletController already says.
- */
-@ApiBearerAuth('wawu-id')
-@UseGuards(WawuAuthGuard)
-@Controller('money')
-export class MoneyWalletController {
-  /**
-   * The wallet as WAWU records it: state, account details, limits, PIN state.
-   * Never calls Fintava and never carries a balance. With no wallet it answers
-   * 200 with state not_open (R-6), so the Wallet tab can lead to Open your wallet.
-   */
-  @Get('wallet')
-  @BuiltBy('MONEY-12')
-  wallet(): Promise<WalletView> {
-    return declaredOnly('MONEY-12');
-  }
-}
+import type { PinResetView, PinStateView } from './money-view.type';
 
 /**
  * Reset of the transaction PIN by a code to the phone (MONEY-14). The PIN
  * itself (GET, POST and PUT /money/pin, POST /money/pin/verify) is served by
- * MONEY-09 in src/money/pin/money-pin.controller.ts.
+ * MONEY-09 in src/money/pin/money-pin.controller.ts. The wallet itself,
+ * GET /money/wallet, is served by MONEY-12 in
+ * src/money/opening/money-wallet-opening.controller.ts, and its balance by
+ * MONEY-11 in src/money/balance/money-balance.controller.ts.
+ *
+ * Every route reads the caller from their token. None takes a wawuUserId:
+ * a wallet route that accepts somebody else's id is one slip away from
+ * draining their account, as WalletController already says.
  */
 @ApiBearerAuth('wawu-id')
 @UseGuards(WawuAuthGuard)

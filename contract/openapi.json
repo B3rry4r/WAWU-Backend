@@ -20087,6 +20087,102 @@
         "x-wawu-built-by": "KYC-01"
       }
     },
+    "/api/hub/money/wallet": {
+      "get": {
+        "operationId": "MoneyWalletController_wallet",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The wallet as WAWU records it: state, account details, limits, PIN state.\nNever calls Fintava and never carries a balance. With no wallet it answers\n200 with state not_open (R-6), so the Wallet tab can lead to Open your\nwallet; while the account is being opened, state opening (A7); once\nopen, the account number Fintava gave (W1, A8).",
+        "tags": [
+          "MoneyWallet"
+        ],
+        "x-wawu-built-by": "MONEY-12"
+      }
+    },
+    "/api/hub/money/wallet/open": {
+      "post": {
+        "operationId": "MoneyWalletController_open",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenNairaWalletDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: bvn_not_checked, selfie_required, identity_has_wallet, phone_held_by_other_identity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reason.code: account_not_opened",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The end of Open your wallet (A7): opens the person's account at Fintava\nwith the BVN and NIN whose check passed (KYC-01), after a selfie that\nmatched against that check (KYC-02), A5's name and date of birth, the\naddress typed, and the account's email. None of these is stored.\n\nSafe to repeat: one account per person, whatever the number of taps.\nAnswers the wallet: `open` with its account number, or `opening` while\nFintava's answer is being confirmed (a lost answer is checked with\nFintava, never sent again blindly; GET /money/wallet shows when it\nsettles). An open wallet is answered as it is, with nothing sent.",
+        "tags": [
+          "MoneyWallet"
+        ],
+        "x-wawu-built-by": "MONEY-12"
+      }
+    },
     "/api/hub/chats": {
       "post": {
         "operationId": "ChatController_open",
@@ -20383,36 +20479,6 @@
         "tags": [
           "PaymentWebhook"
         ]
-      }
-    },
-    "/api/hub/money/wallet": {
-      "get": {
-        "operationId": "MoneyWalletController_wallet",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WalletView"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "The wallet as WAWU records it: state, account details, limits, PIN state.\nNever calls Fintava and never carries a balance. With no wallet it answers\n200 with state not_open (R-6), so the Wallet tab can lead to Open your wallet.",
-        "tags": [
-          "MoneyWallet"
-        ],
-        "x-wawu-built-by": "MONEY-12",
-        "description": "Declared by MONEY-04, not served yet: MONEY-12 serves it.",
-        "x-wawu-served": false
       }
     },
     "/api/hub/money/pin/reset": {
@@ -24724,7 +24790,11 @@
               "wallet_already_open",
               "selfie_not_matched",
               "selfie_checks_exhausted",
-              "selfie_already_matched"
+              "selfie_already_matched",
+              "selfie_required",
+              "identity_has_wallet",
+              "account_not_opened",
+              "phone_held_by_other_identity"
             ],
             "type": "string"
           },
@@ -24917,6 +24987,47 @@
         },
         "required": [
           "occupation"
+        ]
+      },
+      "OpenNairaWalletDto": {
+        "type": "object",
+        "properties": {
+          "bvn": {
+            "type": "string",
+            "description": "The BVN whose check passed: 11 digits, no spaces.",
+            "pattern": "^[0-9]{11}$"
+          },
+          "nin": {
+            "type": "string",
+            "description": "The NIN given with that check: 11 digits, no spaces.",
+            "pattern": "^[0-9]{11}$"
+          },
+          "firstName": {
+            "type": "string",
+            "description": "A5's first name, as the BVN check prefilled it."
+          },
+          "lastName": {
+            "type": "string",
+            "description": "A5's last name, as the BVN check prefilled it."
+          },
+          "dateOfBirth": {
+            "type": "string",
+            "description": "A5's date of birth, `YYYY-MM-DD`."
+          },
+          "address": {
+            "type": "string",
+            "description": "The full home address in one line (street, town, state), 5 to 200\ncharacters with a letter in it. Fintava takes it as one field.",
+            "maxLength": 200,
+            "pattern": "^(?=.*\\p{L})[^\\p{Cc}<>]{5,200}$"
+          }
+        },
+        "required": [
+          "bvn",
+          "nin",
+          "firstName",
+          "lastName",
+          "dateOfBirth",
+          "address"
         ]
       },
       "OpenChatDto": {
@@ -32915,6 +33026,71 @@
           "checksLeft"
         ]
       },
+      "WalletAccountView": {
+        "type": "object",
+        "properties": {
+          "accountNumber": {
+            "type": "string"
+          },
+          "accountName": {
+            "type": "string"
+          },
+          "bankName": {
+            "type": "string"
+          },
+          "bankCode": {
+            "type": "string"
+          },
+          "licenceLine": {
+            "type": "string",
+            "nullable": true
+          },
+          "depositInsuranceLine": {
+            "type": "string",
+            "nullable": true
+          },
+          "openedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "accountNumber",
+          "accountName",
+          "bankName",
+          "bankCode",
+          "licenceLine",
+          "depositInsuranceLine",
+          "openedAt"
+        ]
+      },
+      "WalletLimitsView": {
+        "type": "object",
+        "properties": {
+          "tier": {
+            "type": "string",
+            "nullable": true
+          },
+          "dailyLimitKobo": {
+            "type": "integer"
+          },
+          "usedTodayKobo": {
+            "type": "integer"
+          },
+          "remainingTodayKobo": {
+            "type": "integer"
+          },
+          "resetsAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tier",
+          "dailyLimitKobo",
+          "usedTodayKobo",
+          "remainingTodayKobo",
+          "resetsAt"
+        ]
+      },
       "PinStateView": {
         "type": "object",
         "properties": {
@@ -32938,6 +33114,74 @@
           "changedAt",
           "triesLeft",
           "lockedUntil"
+        ]
+      },
+      "BankTransferAccessView": {
+        "type": "object",
+        "properties": {
+          "allowed": {
+            "type": "boolean"
+          },
+          "blockedBy": {
+            "type": "string",
+            "enum": [
+              "kyc_pending",
+              "kyc_rejected",
+              "kyc_not_submitted"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "allowed",
+          "blockedBy"
+        ]
+      },
+      "WalletView": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "not_open",
+              "opening",
+              "frozen"
+            ]
+          },
+          "account": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WalletAccountView"
+              }
+            ],
+            "nullable": true
+          },
+          "limits": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WalletLimitsView"
+              }
+            ],
+            "nullable": true
+          },
+          "pin": {
+            "$ref": "#/components/schemas/PinStateView"
+          },
+          "bankTransfers": {
+            "$ref": "#/components/schemas/BankTransferAccessView"
+          },
+          "beneficiaryCount": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "state",
+          "account",
+          "limits",
+          "pin",
+          "bankTransfers",
+          "beneficiaryCount"
         ]
       },
       "ChatPerson": {
@@ -34073,139 +34317,6 @@
           "reversal",
           "createdAt",
           "completedAt"
-        ]
-      },
-      "WalletAccountView": {
-        "type": "object",
-        "properties": {
-          "accountNumber": {
-            "type": "string"
-          },
-          "accountName": {
-            "type": "string"
-          },
-          "bankName": {
-            "type": "string"
-          },
-          "bankCode": {
-            "type": "string"
-          },
-          "licenceLine": {
-            "type": "string",
-            "nullable": true
-          },
-          "depositInsuranceLine": {
-            "type": "string",
-            "nullable": true
-          },
-          "openedAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "accountNumber",
-          "accountName",
-          "bankName",
-          "bankCode",
-          "licenceLine",
-          "depositInsuranceLine",
-          "openedAt"
-        ]
-      },
-      "WalletLimitsView": {
-        "type": "object",
-        "properties": {
-          "tier": {
-            "type": "string",
-            "nullable": true
-          },
-          "dailyLimitKobo": {
-            "type": "integer"
-          },
-          "usedTodayKobo": {
-            "type": "integer"
-          },
-          "remainingTodayKobo": {
-            "type": "integer"
-          },
-          "resetsAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "tier",
-          "dailyLimitKobo",
-          "usedTodayKobo",
-          "remainingTodayKobo",
-          "resetsAt"
-        ]
-      },
-      "BankTransferAccessView": {
-        "type": "object",
-        "properties": {
-          "allowed": {
-            "type": "boolean"
-          },
-          "blockedBy": {
-            "type": "string",
-            "enum": [
-              "kyc_pending",
-              "kyc_rejected",
-              "kyc_not_submitted"
-            ],
-            "nullable": true
-          }
-        },
-        "required": [
-          "allowed",
-          "blockedBy"
-        ]
-      },
-      "WalletView": {
-        "type": "object",
-        "properties": {
-          "state": {
-            "type": "string",
-            "enum": [
-              "open",
-              "not_open",
-              "opening",
-              "frozen"
-            ]
-          },
-          "account": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/WalletAccountView"
-              }
-            ],
-            "nullable": true
-          },
-          "limits": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/WalletLimitsView"
-              }
-            ],
-            "nullable": true
-          },
-          "pin": {
-            "$ref": "#/components/schemas/PinStateView"
-          },
-          "bankTransfers": {
-            "$ref": "#/components/schemas/BankTransferAccessView"
-          },
-          "beneficiaryCount": {
-            "type": "number"
-          }
-        },
-        "required": [
-          "state",
-          "account",
-          "limits",
-          "pin",
-          "bankTransfers",
-          "beneficiaryCount"
         ]
       },
       "PinResetView": {

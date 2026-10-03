@@ -21,7 +21,8 @@ caller from the token.
 
 | Method and path | Response (`data`) | Request | Served by |
 |---|---|---|---|
-| `GET /money/wallet` | `WalletView` | | MONEY-12 (state from MONEY-13, `pin` from MONEY-09, `beneficiaryCount` from WALLET-14) |
+| `GET /money/wallet` | `WalletView` | | MONEY-12 (served; `pin` from MONEY-09, `beneficiaryCount` 0 until WALLET-14) |
+| `POST /money/wallet/open` | `WalletView` | `OpenNairaWalletDto` | MONEY-12 (served; CONVENTIONS.md section 9) |
 | `GET /money/wallet/balance` | `WalletBalanceView` | | MONEY-11 (served) |
 | `GET /money/pin` | `PinStateView` | | MONEY-09 |
 | `POST /money/pin` | `PinStateView` | `SetPinDto` | MONEY-09 |
@@ -218,7 +219,7 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 | A26 BVN and NIN, A14 BVN phone differs | BVN check, NIN kept for opening, phone compare, checks left | `POST /money/identity/bvn` → `BvnCheckView`; `422 bvn_phone_mismatch` (A14), `bvn_not_confirmed`, `429 identity_checks_exhausted` (KYC-01, CONVENTIONS.md section 8) |
 | A5 Confirm your details | name, date of birth, gender from the BVN; occupation | `BvnCheckView.prefill` (answered once, not stored); `PUT /money/identity/occupation`; the address goes to account opening (MONEY-12), not stored |
 | A6 Selfie, A16 Face doesn't match | face match against the BVN photo (not a liveness check), retries | `POST /money/identity/selfie` `{ bvn, image }` → `SelfieMatchView`; `422 selfie_not_matched` (A16, with `checksLeft`), `429 selfie_checks_exhausted` (A16 and the retry rule), `409 bvn_not_checked` (KYC-02, CONVENTIONS.md section 8) |
-| A7 Matched | face-match result; account being opened | `SelfieMatchView.matchedAt` (KYC-02); `GET /money/identity/selfie`; then `GET /money/wallet` → `state: opening` |
+| A7 Matched | face-match result; account being opened | `SelfieMatchView.matchedAt` (KYC-02); `GET /money/identity/selfie`; then `POST /money/wallet/open` (MONEY-12) → `WalletView`, `state: opening` until `GET /money/wallet` reads `open` |
 | A8 Wallet open | account name, number, bank name | `GET /money/wallet` → `account` |
 | | limit (a row that can hide; no "Tier 1") | `WalletView.limits` (null hides) |
 | | Create your transaction PIN | `WalletView.pin.isSet` |
@@ -349,15 +350,12 @@ Listed, not resolved. Each names what the canvas draws, what Fintava does
   the `X-Device-Approval` format). Not declared here because the approval
   scheme (a device key signature or a biometric-gated secret) is MONEY-14's
   design.
-- **The request that opens a wallet** (MONEY-12) is not declared. KYC-01
-  settled where the checked identity lives: on the Hub, as keyed hashes and
-  last 4 digits only (CONVENTIONS.md section 8), so MONEY-12's request
-  carries the BVN, NIN, address and A5's name and date of birth from the app
-  again and checks the BVN and NIN with
-  `WalletIdentityService.matchesCheckedIdentity` (the NIN is required), and
-  that the selfie matched against the current BVN check with
-  `SelfieMatchService.selfieMatched` (KYC-02). The result is declared
-  (`WalletView.state`, `account`).
+- **The request that opens a wallet** is served by MONEY-12: `POST
+  /money/wallet/open` (CONVENTIONS.md section 9). It carries the BVN, NIN,
+  address and A5's name and date of birth from the app again, reads the
+  passed check once (`WalletIdentityService.checkedIdentity`, the NIN
+  required) and requires a selfie matched against exactly that check
+  (`SelfieMatchService.matchedFor`).
 - **W27 "Report a problem"** needs a support conversation that carries a
   transaction reference; no such route exists in the backend.
 - **G-1 for the routes that existed before.** The served contract still

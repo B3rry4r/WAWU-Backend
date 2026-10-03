@@ -3151,8 +3151,63 @@ model FintavaWallet {
   walletId      String   @unique
   /// The NUBAN at Loma Bank: wallet-to-wallet sends and name checks.
   accountNumber String   @unique
+  /// `wallet.accountName` as Fintava answered when the account opened
+  /// (MONEY-12, W1, A8). Null on a row written before the column existed.
+  accountName   String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// OPENING A PERSON'S FINTAVA ACCOUNT (task MONEY-12)
+///
+/// One row per person who asked to open a wallet: the record that makes
+/// opening safe to retry. Fintava's `POST /create/customer` refuses neither
+/// a repeated BVN nor a repeated call (mobile repo
+/// `docs/fintava/sandbox/07-create-customer.md`), so nothing at Fintava
+/// stops a second account: this row does. Its primary key is the claim (one
+/// opening in flight per person, whatever the number of taps or servers),
+/// and the two unique keys stop a second WAWU account opening another
+/// Fintava account for the same BVN or phone.
+///
+/// `state`:
+///   opening   create was sent (or is about to be) under this attempt
+///   unknown   the answer was lost: reconciled with Fintava, never resent
+///             blindly (wallet-opening.service.ts)
+///   failed    Fintava refused, or reconciling proved nothing was created:
+///             a new attempt may start
+///   open      FintavaWallet holds the account
+///   conflict  Fintava has an account for this phone that another WAWU
+///             account already holds: needs a person to look at it
+///
+/// Never the BVN, the NIN, the name, the date of birth or the address: the
+/// keyed hash of the BVN (as WalletIdentity keeps it) and the phone that the
+/// BVN check proved, which is how a lost answer is found again.
+/// ─────────────────────────────────────────────────────────────────────────
+model FintavaWalletOpening {
+  wawuUserId       String    @id
+  state            String    @default("opening")
+  /// WalletIdentity.bvnHash of the passed check this opening was tied to.
+  bvnHash          String    @unique
+  /// WalletIdentity.bvnVerifiedAt of that check.
+  bvnVerifiedAt    DateTime
+  /// WalletIdentity.verifiedPhone (E.164): sent to Fintava, and how a lost
+  /// answer is looked up (`/customers/details?phone=`).
+  phone            String    @unique
+  /// Create requests sent so far (each one a new attempt).
+  attempts         Int       @default(1)
+  /// When the current attempt started: no resend before the money timeout
+  /// plus the resend safety window has passed since then.
+  attemptStartedAt DateTime  @default(now())
+  /// Why the last attempt did not open the account: our own word, never
+  /// Fintava's text.
+  failure          String?
+  /// When Fintava was last asked about a lost answer.
+  checkedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([state, attemptStartedAt])
 }
 
 /// ─────────────────────────────────────────────────────────────────────────
