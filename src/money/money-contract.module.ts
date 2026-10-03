@@ -1,5 +1,4 @@
 import { Module } from '@nestjs/common';
-import { MoneyHistoryController } from './money-history.controller';
 import { MoneyPaymentController } from './money-payment.controller';
 import { MoneyTransferController } from './money-transfer.controller';
 import { MoneyPinResetController } from './money-wallet.controller';
@@ -14,15 +13,14 @@ import { MoneyPinResetController } from './money-wallet.controller';
  * these routes moves that handler into a controller a mounted module owns
  * and deletes it here in the same change; the emitter refuses a route that
  * is declared here and served as well. Served so far: the transaction PIN
- * (MONEY-09, MoneyModule), the balance (MONEY-11) and the wallet itself
- * (MONEY-12).
+ * (MONEY-09, MoneyModule), the balance (MONEY-11), the wallet itself
+ * (MONEY-12) and the history (MONEY-15).
  */
 @Module({
   controllers: [
     MoneyPinResetController,
     MoneyTransferController,
     MoneyPaymentController,
-    MoneyHistoryController,
   ],
 })
 export class MoneyContractModule {}

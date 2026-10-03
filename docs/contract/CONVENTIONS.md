@@ -77,7 +77,9 @@ AppModule since MONEY-09): `GET`, `POST` and `PUT /money/pin` and
 (MONEY-11), which reads the caller's wallet from `FintavaWallet` (no row:
 `409 wallet_not_open`) and asks Fintava on every request; `GET /money/identity`,
 `POST /money/identity/bvn` and `PUT /money/identity/occupation` (KYC-01),
-Open your wallet's identity step (section 8). A served route and a declared one may share a
+Open your wallet's identity step (section 8); `GET /money/transactions`,
+`/money/transactions/summary` and `/money/transactions/{id}` (MONEY-15), the
+history from the ledger (section 6). A served route and a declared one may share a
 schema (the error envelope, the PIN DTOs); the emitter keeps one copy when
 the two are identical and still fails when they differ. A task that serves
 more routes adds them to `SERVED_MONEY_ROUTES` in
@@ -355,6 +357,59 @@ one retry at a time per payment.
   which is the duplication G-1 asks to stop.
 - Short lists (banks, recipients, beneficiaries) are plain arrays with a
   stated maximum and no paging.
+
+### The history (MONEY-15)
+
+`src/money/history/`. It reads the ledger (MONEY-10) and nothing else: no
+Fintava call, so no `provider_unreachable`, and a frozen wallet's history
+still reads. Every answer is `Cache-Control: no-store`.
+
+- **Whose rows:** only rows on the caller's own wallet (`walletKind` user,
+  the token's wawuUserId and that wallet's account number). No wallet:
+  `409 wallet_not_open` (`wallet_opening` while MONEY-12 opens it), as the
+  balance answers. Someone else's row, or no row: `404 not_found`.
+- **Status** is the ledger's, which only Fintava's word moves (a send's
+  answer, a signed delivery, a lookup, MONEY-08's sweep): a row the sweep
+  has not settled shows `pending`, and a row whose sightings disagree stays
+  as stored (`discrepancy`, MONEY-16).
+- **Order:** newest first by `occurredAt` (when the money moved), then id.
+  The cursor (`c1.` + base64url) holds the last row's pair; the group key
+  (`g1.` + base64url) a piece and a day. Anything the server did not write is
+  a plain 400 (`cursor is not one this history gave.`).
+- **Groups** (WALLET.md, Lead ruling 3): two or more `completed` unlock
+  earnings of one piece on one Africa/Lagos day are one row. Its id,
+  reference and `createdAt` are its latest movement's, `amountKobo`, `fee`
+  and `totalKobo` the sums, `counterparty`, `note`, `transferId` and
+  `paymentId` null. A pending or failed unlock stays its own row.
+  `group=<key>` lists the movements, one per row, and ignores `filter`,
+  `q` and `month`.
+- **Filters:** `money_in` and `money_out` by direction; `bills` is category
+  `bill` or a link of kind `bill` (a held bill payment too); `content` is a
+  link of kind `content_unlock` or `tip`. `month` is `YYYY-MM` in
+  Africa/Lagos time.
+- **Search** (`q`, 2 to 60 characters, trimmed) matches, case-insensitively,
+  a part of what the row shows: the counterparty's name or handle, the
+  description, the note and the reference. `%`, `_` and `\` are only
+  characters. A grouped row is searched by its description only.
+- **Description:** the label, then the link's title, then the bank when the
+  other side is a bank account, joined with " · " ("Transfer · GTBank",
+  "Unlock · Lighting night shoots · 3 buyers"). Labels are in
+  `history-labels.ts`; the SQL that searches and the text that is sent are
+  built from the same table.
+- **Fees:** a money-in row has none. A money-out row shows the split the
+  sending feature quoted (`providerFeeKobo`, `wawuFeeKobo`) when amount plus
+  both equals the total Fintava reported; otherwise Fintava's own charge
+  (`feeKobo`) as the provider fee and WAWU's as 0. `totalKobo` is always the
+  stored total.
+- **Counterparty:** the name the movement recorded, else the person's
+  `@handle`, else a plain word for the kind; a bank account's number only as
+  its last 4 digits; an avatar only for someone on WAWU.
+- **Reference:** ours (`customerReference`), else Fintava's reference, the
+  session id, the transaction id, the tagapay reference, else the row's id.
+- **Month summary:** the sums of that Africa/Lagos month's `completed`
+  rows by direction (`totalKobo`: out is what left, fees included; in is
+  what arrived). Pending, failed and reversed rows are not in it, and
+  grouping never changes it. It is never called, or shown as, a balance.
 
 ## 7. Everything else
 
