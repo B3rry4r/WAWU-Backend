@@ -1,6 +1,9 @@
 import { Module } from '@nestjs/common';
 import { DirectMessageController } from './direct-message.controller';
 import { DirectMessageService } from './direct-message.service';
+import { PaidDmController } from './paid-dm.controller';
+import { PaidDmService } from './paid-dm.service';
+import { DmReplyWriter } from './dm-reply-writer';
 import { DmRefundService } from './dm-refund.service';
 import { CreatorAccountGuard } from './guards/creator-account-guard';
 import { FLUTTERWAVE_CLIENT } from './flutterwave-client.interface';
@@ -34,10 +37,12 @@ import { WawuAuthModule } from '../common/auth/wawu-auth.module';
  */
 @Module({
   imports: [NotificationModule, BlockedAccountModule, WawuAuthModule],
-  controllers: [DirectMessageController],
+  controllers: [DirectMessageController, PaidDmController],
   providers: [
     DirectMessageService,
     DmRefundService,
+    PaidDmService,
+    DmReplyWriter,
     CreatorAccountGuard,
     RealFlutterwaveAdapter,
     MockFlutterwaveAdapter,

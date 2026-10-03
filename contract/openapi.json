@@ -401,6 +401,211 @@
         ]
       }
     },
+    "/api/hub/paid-dm/queue": {
+      "get": {
+        "operationId": "PaidDmController_queue",
+        "parameters": [
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "Opaque: send back the `nextCursor` of the previous page as given.",
+            "schema": {
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "1 to 100, 20 when left out.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaidDmQueuePage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The creator's waiting list: soonest deadline first, with the total waiting.",
+        "tags": [
+          "PaidDm"
+        ]
+      }
+    },
+    "/api/hub/paid-dm/threads": {
+      "get": {
+        "operationId": "PaidDmController_threads",
+        "parameters": [
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "Opaque: send back the `nextCursor` of the previous page as given.",
+            "schema": {
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "1 to 100, 20 when left out.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "as",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "fan",
+                "creator"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaidDmThreadPage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The caller's threads, one per person, latest activity first. `as=creator` reads the creator side.",
+        "tags": [
+          "PaidDm"
+        ]
+      }
+    },
+    "/api/hub/paid-dm/threads/{wawuId}": {
+      "get": {
+        "operationId": "PaidDmController_thread",
+        "parameters": [
+          {
+            "name": "wawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "Opaque: send back the `nextCursor` of the previous page as given.",
+            "schema": {
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "1 to 100, 20 when left out.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "as",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "fan",
+                "creator"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaidDmThreadDetail"
+                }
+              }
+            }
+          }
+        },
+        "summary": "One thread: every question with all its reply bubbles.",
+        "tags": [
+          "PaidDm"
+        ]
+      }
+    },
+    "/api/hub/paid-dm/questions/{messageId}/replies": {
+      "post": {
+        "operationId": "PaidDmController_reply",
+        "parameters": [
+          {
+            "name": "messageId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaidDmReplyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaidDmQuestion"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Add a reply bubble to a question, while its window is open.",
+        "tags": [
+          "PaidDm"
+        ]
+      }
+    },
     "/api/hub/settings/privacy/blocked": {
       "post": {
         "operationId": "BlockedAccountController_create",
@@ -22697,6 +22902,19 @@
           "text"
         ]
       },
+      "PaidDmReplyDto": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 2000,
+            "pattern": "\\S"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
       "CreateBlockedAccountDto": {
         "type": "object",
         "properties": {
@@ -28714,6 +28932,217 @@
           "refundReference",
           "refundedAt",
           "otherParty"
+        ]
+      },
+      "PaidDmQueueItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "sentAt": {
+            "type": "string"
+          },
+          "deadlineAt": {
+            "type": "string"
+          },
+          "sender": {
+            "$ref": "#/components/schemas/DmOtherParty"
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "amountKobo",
+          "sentAt",
+          "deadlineAt",
+          "sender"
+        ]
+      },
+      "PaidDmQueuePage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PaidDmQueueItem"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          },
+          "waitingTotal": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor",
+          "waitingTotal"
+        ]
+      },
+      "PaidDmThread": {
+        "type": "object",
+        "properties": {
+          "other": {
+            "$ref": "#/components/schemas/DmOtherParty"
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "creator",
+              "fan"
+            ]
+          },
+          "questionCount": {
+            "type": "number"
+          },
+          "waitingCount": {
+            "type": "number"
+          },
+          "nextDeadlineAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastActivityAt": {
+            "type": "string"
+          },
+          "lastText": {
+            "type": "string"
+          },
+          "lastTextMine": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "other",
+          "side",
+          "questionCount",
+          "waitingCount",
+          "nextDeadlineAt",
+          "lastActivityAt",
+          "lastText",
+          "lastTextMine"
+        ]
+      },
+      "PaidDmThreadPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PaidDmThread"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "PaidDmReply": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "createdAt"
+        ]
+      },
+      "PaidDmQuestion": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "awaiting_response",
+              "responded",
+              "refunded"
+            ]
+          },
+          "mine": {
+            "type": "boolean"
+          },
+          "sentAt": {
+            "type": "string"
+          },
+          "deadlineAt": {
+            "type": "string"
+          },
+          "respondedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "replies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PaidDmReply"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "amountKobo",
+          "status",
+          "mine",
+          "sentAt",
+          "deadlineAt",
+          "respondedAt",
+          "replies"
+        ]
+      },
+      "PaidDmThreadDetail": {
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/components/schemas/PaidDmThread"
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PaidDmQuestion"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "thread",
+          "questions",
+          "nextCursor"
         ]
       },
       "JsonObject": {
