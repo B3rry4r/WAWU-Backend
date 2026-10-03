@@ -257,14 +257,19 @@ export class WalletOpeningService {
     // Fintava may already have this person's account (an earlier answer
     // that was lost before it was recorded, or a WAWU account deleted
     // since): that one is theirs, never a second.
-    let existing: FintavaCustomer | null;
+    let existing: FintavaCustomer | null = null;
+    let answered = false;
     try {
       const lookup = await this.fintava.lookupCustomerByPhone(
         check.verifiedPhone,
       );
-      if (lookup.state === 'unknown') throw new LostClaim();
-      existing = lookup.state === 'found' ? lookup.customer : null;
+      if (lookup.state === 'found') existing = lookup.customer;
+      // `unknown` (a 2xx without a customer) is not "none": nothing is sent.
+      answered = lookup.state !== 'unknown';
     } catch {
+      answered = false;
+    }
+    if (!answered) {
       await this.fail(wawuUserId, attempt, 'lookup_unavailable');
       throw this.unavailable();
     }
