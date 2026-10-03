@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { FintavaModule } from '../../fintava/fintava.module';
 import { LedgerConsumerService } from './ledger-consumer.service';
+import { LedgerStatusService } from './ledger-status.service';
 import { LedgerService } from './ledger.service';
 
 /**
@@ -12,14 +13,19 @@ import { LedgerService } from './ledger.service';
  *
  * LedgerService is exported for the features that move money (WALLET-07,
  * WALLET-09, MONEY-17, MONEY-18) to record their own sends, and
- * LedgerConsumerService for MONEY-08's pending sweep (`reconcileEntry`).
+ * LedgerConsumerService, whose `reconcileEntry` now calls MONEY-08's check.
  * The sweep's @Cron runs only where ScheduleModule.forRoot() is loaded
  * (AppModule); without FINTAVA_* settings it reads the database and sends
  * nothing to Fintava.
+ *
+ * MONEY-08: LedgerStatusService, the pending sweep. Every minute it asks
+ * Fintava how `pending` rows older than two minutes ended, when their
+ * webhook has not said, and settles them; it never sends money. Exported
+ * for the sending features (WALLET-09) to check a send before any retry.
  */
 @Module({
   imports: [ConfigModule, FintavaModule],
-  providers: [LedgerService, LedgerConsumerService],
-  exports: [LedgerService, LedgerConsumerService],
+  providers: [LedgerService, LedgerConsumerService, LedgerStatusService],
+  exports: [LedgerService, LedgerConsumerService, LedgerStatusService],
 })
 export class LedgerModule {}

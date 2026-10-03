@@ -58,17 +58,31 @@ import {
  * the app does; the selfie's pass is the KYC-02 stand-in `SELFIE_MATCHED`,
  * since no real selfie has matched in the sandbox yet (G-25).
  *
- * The money timeout is 300 ms here, so a create the stand-in answers after
- * 700 ms is a lost answer: Fintava made the customer and the client never
- * heard. Every log line the app writes during the file is captured, and
- * every answer kept: the last tests prove no BVN, NIN, date of birth or
- * address reached a log, an answer or a column.
+ * Every Fintava timeout is 2 s here, so a create the stand-in answers
+ * 2.5 s after it arrived is a lost answer: Fintava made the customer and the
+ * client never heard. Every log line the app writes during the file is
+ * captured, and every answer kept: the last tests prove no BVN, NIN, date of
+ * birth or address reached a log, an answer or a column.
+ *
+ * Timing (FIX-02). The stand-in runs in this process, so a busy machine
+ * stalls its answers and the client's deadline together. An answer meant to
+ * arrive in time must fit the timeout with room for that stall: at 300 ms a
+ * stall of 0.5 to 0.9 s under CPU load turned the lookup before the create
+ * into a timeout, a correct `503 provider_unreachable` for a Fintava that
+ * did not answer in time, and failed the double tap. A late answer needs no
+ * room: its timer is set after the client's deadline and runs out after it
+ * (LATE_MS > TIMEOUT_MS), so the deadline always fires first, however slow
+ * the machine. The app listens on one port for the whole file (beforeAll):
+ * see FIX-02 in the mobile repo for why per-request servers reset taps.
  */
 
 const KEY = 'live_test_m12_open_0123456789FAKEKEY';
 const HASH_KEY = 'm12-test-opening-hash-key-0123456789abcdef';
-const TIMEOUT_MS = 300;
-const LATE_MS = 700;
+const TIMEOUT_MS = 2_000;
+const LATE_MS = TIMEOUT_MS + 500;
+
+// A lost answer waits out the client's timeout, then the late answer.
+jest.setTimeout(30_000);
 
 const ENV: Record<string, string> = {
   FINTAVA_BASE_URL: '',
@@ -549,6 +563,10 @@ describe('Opening the Fintava account (MONEY-12) over HTTP', () => {
     app.useGlobalFilters(new AllExceptionsFilter());
     app.useGlobalInterceptors(new ResponseInterceptor());
     await app.init();
+    // One server for the whole file. Unlistened, supertest opens a server
+    // per request and the first concurrent tap to finish closes it under
+    // the others, resetting the taps still queued (read ECONNRESET).
+    await app.listen(0, '127.0.0.1');
     prisma = moduleRef.get(PrismaService);
     opening = moduleRef.get(WalletOpeningService);
     identity = moduleRef.get(WalletIdentityService);

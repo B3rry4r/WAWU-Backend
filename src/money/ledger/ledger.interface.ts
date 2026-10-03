@@ -119,5 +119,11 @@ export interface LedgerReversalInput {
 
 export type LedgerReversalResult =
   | { state: 'applied'; entryId: string; changed: boolean }
+  /**
+   * The reversal's figures differ from the row's, or the row is not one a
+   * reversal can follow (MONEY-08 round 3): written on the row's
+   * `discrepancy`, nothing else changed.
+   */
+  | { state: 'disagrees'; entryId: string; discrepancy: string }
   | { state: 'no_match' }
   | { state: 'ambiguous'; entryIds: string[] };

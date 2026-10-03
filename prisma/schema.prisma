@@ -3129,6 +3129,94 @@ model TransactionPin {
 }
 
 /// ─────────────────────────────────────────────────────────────────────────
+/// RESETTING THE TRANSACTION PIN BY A CODE TO THE PHONE (task MONEY-14, W37)
+///
+/// One row per code texted (or about to be texted) to the phone the BVN
+/// check proved (WalletIdentity.verifiedPhone, G-11). Its id is the
+/// `resetId` the app sends back with the code. The code itself is never
+/// stored: only its argon2id hash, like the PIN. Rows are kept for the
+/// rolling 24 hours the daily text limit counts over, and go with the
+/// account (account purge, OWNED).
+///
+/// `sendState`:
+///   sending   the row is written; the text is being sent
+///   sent      Fintava accepted the text
+///   unknown   Fintava's answer was lost: the text may have gone, so the
+///             code stays usable and the row counts toward the limit; it is
+///             never sent again blindly
+///   failed    Fintava refused or nothing was sent: the code never works and
+///             the row does not count
+/// ─────────────────────────────────────────────────────────────────────────
+model TransactionPinReset {
+  id                String    @id @default(uuid())
+  wawuUserId        String
+  /// E.164, the proved phone the code went to (WalletIdentity.verifiedPhone).
+  phone             String
+  /// argon2id of the code. The code itself is never stored or logged.
+  codeHash          String
+  /// Wrong codes on this reset. Counted before the code is compared, so codes
+  /// sent at the same moment cannot get past the limit together.
+  failedTries       Int       @default(0)
+  sendState         String    @default("sending")
+  expiresAt         DateTime
+  /// When a new code may be asked for (W37's countdown).
+  resendAvailableAt DateTime
+  /// Set once the code was right and the new PIN stored: a code works once.
+  usedAt            DateTime?
+  /// Set when a newer code replaced this one: only the newest code works.
+  supersededAt      DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([wawuUserId, createdAt])
+  @@index([phone, createdAt])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// THE PHONE THAT MAY APPROVE WITH A FINGERPRINT OR A FACE (task MONEY-14)
+///
+/// W11, W35 (R-26): a biometric approval on a known phone counts as the PIN.
+/// The phone makes a P-256 key pair whose private half only its biometric
+/// unlocks, and registers the public half here with the PIN. An approval is
+/// that key's signature over a one-time challenge and the exact request
+/// (DeviceApprovalChallenge): the server checks the signature, never a
+/// client "true". One phone per person: the primary key is the person, so
+/// registering another phone replaces this one (and its `deviceId`, so the
+/// old phone's challenges stop working). Turning it off deletes the row, and
+/// so does a PIN reset by code. Holds no secret: a public key.
+/// ─────────────────────────────────────────────────────────────────────────
+model ApprovalDevice {
+  wawuUserId  String    @id
+  /// New on every registration; the app keeps it to know this phone is the one.
+  deviceId    String    @unique @default(uuid())
+  /// SubjectPublicKeyInfo (DER) of a P-256 key, base64url.
+  publicKey   String
+  /// What the phone approves with: `fingerprint` or `face` (W35's label).
+  biometric   String
+  /// The last approval that passed.
+  lastUsedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+/// One challenge for one biometric approval (task MONEY-14): random, short
+/// lived, tied to the person and the phone it was issued for, and used up by
+/// the first approval that names it, right or wrong.
+model ApprovalChallenge {
+  id          String    @id @default(uuid())
+  wawuUserId  String
+  /// ApprovalDevice.deviceId when the challenge was issued.
+  deviceId    String
+  /// 32 random bytes, base64url. Not a secret: only the phone's key can sign it.
+  challenge   String
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([wawuUserId, createdAt])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
 /// THE NAIRA WALLET AT FINTAVA (table added by task MONEY-11)
 ///
 /// WAWU's pointer to a person's account at Fintava (Loma Bank's licence,
@@ -3259,8 +3347,7 @@ model FintavaWebhookEvent {
   /// every time, so a replay still lands on the same key.
   referenceField String
   /// Fintava's own status for the transaction (`data.status`, else
-  /// `data.paymentStatus`), upper case; empty when it sent none. Part of the
-  /// key so a later delivery reporting a new status is recorded too.
+  /// `data.paymentStatus`), upper case; empty when it sent none.
   fintavaStatus  String
 
   /// `data.reference` and `data.customerReference` (or `CustomerReference`)
@@ -3280,13 +3367,22 @@ model FintavaWebhookEvent {
   /// refused would be retried and lost. `rawBody` keeps the original.
   payload Json
 
+  /// The key (MONEY-08 round 3): the SHA-256, hex, of `rawBody`, the exact
+  /// bytes Fintava signed. A retry or replay of the same delivery is the
+  /// same bytes and lands on the same row; any other body, even for the same
+  /// transaction and status (another amount, say), is a delivery of its own
+  /// and reaches its consumer. Filled for every row; nullable only because
+  /// it was added to a table that already had rows.
+  bodySha256 String? @unique
+
   processingStatus FintavaWebhookProcessing @default(pending)
   /// Set by the consuming task: what it did, or why it could not.
   note             String?
   receivedAt       DateTime                 @default(now())
   processedAt      DateTime?
 
-  @@unique([event, reference, fintavaStatus])
+  /// Was the unique key until MONEY-08 round 3; now only an index.
+  @@index([event, reference, fintavaStatus])
   @@index([processingStatus, receivedAt])
   @@index([dataReference])
   @@index([dataCustomerReference])
@@ -3576,7 +3672,9 @@ model FintavaLedgerEntry {
   /// Why a movement failed, when Fintava said so.
   failureReason String?
   /// Set when a later sighting of this movement disagreed with what is
-  /// stored (an amount): the stored figure is kept and MONEY-16 reports it.
+  /// stored (an amount, or a status Fintava gave both ways): the stored
+  /// figure is kept, the status is not moved by that sighting, the sweep
+  /// leaves the row alone, and MONEY-16 reports it (a stop: WORKFLOW 10).
   discrepancy   String?
 
   /// How the ledger first learned of it: send, webhook, lookup or history.
@@ -3590,12 +3688,29 @@ model FintavaLedgerEntry {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
+  /// MONEY-08, the pending sweep's schedule, kept on the row so that a
+  /// restart or a second server keeps it. When Fintava is next asked about
+  /// this `pending` row; null until the first check, which is due at
+  /// createdAt (or revivedAt) plus LEDGER_STATUS_CHECK_AFTER_MINUTES.
+  nextCheckAt  DateTime?
+  /// How many times the sweep has asked about it. The rest before the next
+  /// check doubles with each one, 1, 2, 4 ... minutes, at most 60.
+  statusChecks Int       @default(0)
+  /// MONEY-08: when a row failed because Fintava had no record of it
+  /// (LEDGER_ABSENT_FAILURE) was seen again and taken back to its sighting's
+  /// status, and which kind of sighting did it (send, webhook, lookup or
+  /// history). A revival is not a disagreement with Fintava, so it is never
+  /// written on `discrepancy`, and the row stays in the sweep.
+  revivedAt    DateTime?
+  revivedBy    String?
+
   references FintavaLedgerReference[]
 
   @@index([wawuUserId, occurredAt])
   @@index([accountNumber, occurredAt])
   @@index([status, occurredAt])
   @@index([customerReference])
+  @@index([status, nextCheckAt])
 }
 
 /// Every reference one ledger row is known by. The primary key is the

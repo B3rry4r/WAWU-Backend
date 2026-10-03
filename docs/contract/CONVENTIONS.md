@@ -74,10 +74,11 @@ module AppModule mounts (importing a new module into `app.module.ts` is a
 **Served so far** (`MoneyModule`, `src/money/money.module.ts`, mounted by
 AppModule since MONEY-09): `GET`, `POST` and `PUT /money/pin` and
 `POST /money/pin/verify` (MONEY-09); `GET /money/wallet/balance`
-(MONEY-11), which reads the caller's wallet from `FintavaWallet` (no row:
-`409 wallet_not_open`) and asks Fintava on every request; `GET /money/identity`,
+(MONEY-11), which reads the caller's wallet from `FintavaWallet` (through
+the wallet gate, section 7) and asks Fintava on every request; `GET /money/identity`,
 `POST /money/identity/bvn` and `PUT /money/identity/occupation` (KYC-01),
-Open your wallet's identity step (section 8). A served route and a declared one may share a
+Open your wallet's identity step (section 8); the PIN reset, biometric
+approval and `POST /money/approval/verify` (MONEY-14, section 5). A served route and a declared one may share a
 schema (the error envelope, the PIN DTOs); the emitter keeps one copy when
 the two are identical and still fails when they differ. A task that serves
 more routes adds them to `SERVED_MONEY_ROUTES` in
@@ -223,6 +224,8 @@ Every refusal is the envelope this backend already answers with
 | `selfie_required` | 409 | account opening before a selfie matched against the BVN check whose BVN and NIN were sent (MONEY-12) | |
 | `identity_has_wallet` | 409 | account opening for a BVN or phone another WAWU account opened a wallet with, or whose Fintava account another WAWU account holds; nothing is sent | |
 | `account_not_opened` | 422 | Fintava refused the details sent (a validation or identity refusal, such as a blacklisted NIN), or the account has no email; nothing was created and the person may try again | |
+| `reset_codes_exhausted` | 429 | the person or the phone has had today's PIN reset texts (MONEY-14); nothing is sent | `retryAfterSeconds` |
+| `device_approval_refused` | 403 | `X-Device-Approval` not accepted: not the registered phone, a wrong signature, a used, expired or another person's challenge, or no phone registered; never uses a PIN try (MONEY-14) | |
 | `phone_held_by_other_identity` | 409 | account opening where Fintava already has a customer for the person's phone whose record does not carry the checked BVN (or carries none): nothing is adopted or created, and the opening stops for review (MONEY-12, BACKEND_GAPS G-37) | |
 
 The same table is `MONEY_ERROR_STATUS` in `src/money/money-contract.ts`; each
@@ -326,10 +329,74 @@ one retry at a time per payment.
   whatever answers replays runs before the guard.
 - **Fintava has no wallet PIN** (only card PINs), so this PIN guards WAWU's
   API, not the account at Fintava.
-- **Face ID** (W11, W35) is MONEY-14's: a biometric approval on a registered
-  device stands in for the PIN. The header name `X-Device-Approval` is
-  reserved for it; MONEY-14 declares device registration and the approval
-  format, and a debit then carries one of the two headers.
+- **Approving with a fingerprint or a face** (W11, W35; R-26; MONEY-14): a
+  biometric approval from the registered phone stands in for the PIN. It is
+  a key the phone holds and the server checks, never a "true" from the app:
+  - **The phone's key.** The app makes a P-256 key pair whose private half
+    only the phone's biometric unlocks (kept where only the biometric
+    prompt releases it; the app side is WALLET-06's, mobile BACKEND_GAPS
+    G-43), and turns approval
+    on with `PUT /money/device` `{ publicKey, biometric }`: the public half
+    as SubjectPublicKeyInfo DER, base64url, and `fingerprint` or `face`,
+    with the current PIN in `X-Transaction-Pin` (only the PIN adds a phone).
+    One phone per person: registering another replaces it and gets a new
+    `deviceId`. `GET /money/device` says which phone is registered (the app
+    compares the `deviceId` it kept); `DELETE /money/device` turns it off.
+  - **One approval.** `POST /money/device/challenge` answers `challengeId`,
+    `challenge` (32 random bytes, base64url), `deviceId` and `expiresAt`
+    (`DEVICE_APPROVAL_SECONDS`, provisional 120). After the biometric prompt
+    the phone signs, with ECDSA P-256 and SHA-256 (signature DER), these
+    lines joined by `\n`: `wawu-device-approval-v1`, `challengeId`,
+    `challenge`, `deviceId`, the method in capitals, the path as sent with
+    its query (`/api/hub/money/...`), and the SHA-256 hex of the exact body
+    bytes (of nothing when there is no body). It sends
+    `X-Device-Approval: v1.<challengeId>.<signature base64url>` instead of
+    `X-Transaction-Pin`. A challenge works once, right or wrong, for that
+    person and that phone; the signature covers that one request, so it
+    cannot move to another payment, amount or recipient.
+  - **Which routes.** `@RequireApproval()` (`src/money/pin/`) on every route
+    that moves money from MONEY-14 on (WALLET-07, WALLET-09 and MONEY-17
+    swap `@RequireTransactionPin()` for it when they serve the debits, and
+    the MONEY-04 debit header test then expects the pair) and on
+    `POST /money/approval/verify` (check an approval without moving money).
+    It is the same `TransactionPinGuard`, which also takes an approval on
+    those routes only. Changing the PIN, checking the PIN
+    (`/money/pin/verify`) and adding a phone stay PIN only: there an
+    approval header is removed and ignored.
+  - **Refusals.** Anything not accepted is `403 device_approval_refused`;
+    the app shows "<Name> failed. Use your PIN." (R-26) and the keypad. It
+    never uses a PIN try, and a passed approval does not reset the count.
+    With `X-Device-Approval` sent, a PIN header beside it is removed unread.
+    While the PIN is locked a passed approval is `423 pin_locked` too
+    (Default (agent), owner may override; BACKEND_GAPS G-9). Both headers
+    are removed from the request once read, as the PIN header is.
+- **Both are behind the wallet gate** (MONEY-13): every `/money/device`,
+  `/money/approval/verify` and `/money/pin/reset` route answers `409
+  wallet_not_open` or `409 wallet_opening` first, and the gate drops
+  `X-Device-Approval` unread with the PIN header.
+- **Resetting the PIN by a code** (W37; MONEY-14): `POST /money/pin/reset`
+  texts a 6-digit code through Fintava's `POST /sms/send` to the phone the
+  BVN check proved (`WalletIdentity.verifiedPhone`; none: `409
+  wallet_not_open`), never to a number the caller or the token names, and
+  answers `resetId`, `sentTo` (last 4 digits), `resendAvailableAt` and
+  `expiresAt`. Asked again before Resend opens, it answers the same reset
+  and sends nothing; after, a new code, and only the newest code works.
+  `POST /money/pin/reset/confirm` takes `resetId`, `code`, `newPin`,
+  `newPinConfirmation`: a mismatch is checked first (no try of the code);
+  the code gets five wrong tries (the PIN's own five), counted before it is
+  compared (`400 reset_code_invalid` with `triesLeft`, 0 when dead,
+  expired, used, replaced or not this person's), works once, and is stored
+  only as an argon2id hash. The right code sets the new PIN, clears the
+  count and the lock, and turns biometric approval off (`DELETE
+  /money/device`'s effect). Texts: `PIN_RESET_TEXTS_PER_DAY` (provisional
+  5) in any 24 hours per person and per phone (`429
+  reset_codes_exhausted`); code life `PIN_RESET_CODE_SECONDS` (300), Resend
+  `PIN_RESET_RESEND_SECONDS` (60). So a day allows at most 25 guesses at a
+  million codes against the PIN's 240 at ten thousand. A text Fintava
+  refused was not sent (`503 provider_unreachable`, not counted, its code
+  never works); a text whose answer was lost may have arrived (`503`
+  with `retryAfterSeconds` until Resend opens; it counts, its code works,
+  and it is never sent again blindly).
 - **The app** never stores the PIN and drops it from memory once the request
   is answered.
 
@@ -364,6 +431,40 @@ one retry at a time per payment.
   `state: "not_open"` so the Wallet tab can open "Open your wallet"; every
   other money route answers `409 wallet_not_open` (`wallet_opening` while
   the account is being created, `423 wallet_frozen` when frozen).
+  - **The wallet gate** (`src/money/gate/wallet-gate.ts`) is how: a route
+    that reads or moves a person's wallet carries `@RequireOpenWallet()`
+    (`@RequireTransactionPin()` brings it, ahead of the PIN), and the gate
+    answers before the PIN, the body, the quote or Fintava. New and
+    existing users alike: a web user's Flutterwave wallet
+    (`CreatorWallet`) is not a Naira wallet here.
+  - **One body per code, on every route**: `{ statusCode: 409, message,
+    data: null, reason: { code, message } }` with `message` "You don't
+    have a wallet yet. Open your wallet to continue." for
+    `wallet_not_open` and "Your account is still being opened. Check
+    again in a moment." for `wallet_opening`. The app switches on
+    `reason.code` and leads to Open your wallet (A26) or A7's wait.
+  - **One rule** (`walletStateOf`) decides `GET /money/wallet`'s `state`
+    and the gate's code, so the two never disagree: a `FintavaWallet` row
+    is `open`; an opening `opening`, `unknown`, `open` (row not yet
+    visible) or `conflict` held for review is `opening`; nothing, a
+    `failed` opening, or one stopped because the phone's Fintava customer
+    is not this person (section 9) is `not_open`. `423 wallet_frozen` is
+    never answered from storage (nothing stores a freeze): it is Fintava's
+    own refusal on the call a route makes.
+  - **A person without a wallet never uses a PIN try**, and the PIN they
+    sent is dropped from the request unread when the gate refuses.
+  - **Not gated:** Open your wallet itself (`/money/identity/*`, `POST
+    /money/wallet/open`), `GET /money/wallet`, and the declared bank list
+    and name check (WALLET-09), which read no wallet.
+  - **Held to it by** `src/money/gate/tests/wallet-gate-coverage.spec.ts`
+    over every controller AppModule mounts: a route that documents the gate
+    codes runs the gate and the reverse, the gate runs before the PIN, and
+    every `/money` route is gated or listed there with its reason. A task
+    that serves a declared wallet route puts `@RequireOpenWallet()` on it
+    (MoneyModule exports the gate; `@CurrentWallet()` hands the route the
+    wallet the gate found). `wallet-gate.contract.spec.ts` sends every
+    gated route MoneyModule mounts, whatever it is sent, as each kind of
+    person without a wallet.
 - **Fees** come from config (R-10), never from the app or the canvas. Every
   quote, transfer, payment and history row carries a `FeeBreakdown`
   (`providerFeeKobo` + `wawuFeeKobo` = `totalFeeKobo`), and a send repeats the

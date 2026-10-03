@@ -17,7 +17,7 @@ import {
   maskFintavaText,
   readFintavaMessages,
 } from '../fintava-error';
-import { toFintavaLocalPhone } from '../fintava-client';
+import { historyPageConsistent, toFintavaLocalPhone } from '../fintava-client';
 import { decideFintavaRetry } from '../fintava-reconcile';
 import type {
   FintavaReconciliation,
@@ -723,5 +723,126 @@ describe('what may be done with a send whose answer was lost', () => {
         ),
       ).toEqual({ action: 'wait', why: 'unreachable' });
     }
+  });
+});
+
+describe('MONEY-08 round 3: a history page is trusted only when its figures agree', () => {
+  const page = (
+    o: Partial<{
+      page: number;
+      take: number;
+      itemCount: number;
+      pageCount: number;
+      hasNextPage: boolean;
+      rows: number;
+    }>,
+  ) => {
+    const take = o.take ?? 10;
+    const itemCount = o.itemCount ?? 39;
+    const pageCount = o.pageCount ?? Math.ceil(itemCount / take);
+    const p = o.page ?? 1;
+    const hasNextPage = o.hasNextPage ?? p < pageCount;
+    const rows =
+      o.rows ?? (hasNextPage ? take : Math.max(itemCount - (p - 1) * take, 0));
+    return {
+      items: Array.from({ length: rows }, (_, i) => i),
+      page: p,
+      take,
+      itemCount,
+      pageCount,
+      hasNextPage,
+    };
+  };
+
+  it("the sandbox's own pages agree (`sandbox/09-`, `10-`, and 31-money08-status.md: 39 rows at 10 a page)", () => {
+    expect(historyPageConsistent(page({ page: 1 }), 1, null)).toBe(true);
+    const first = page({ page: 1 });
+    expect(historyPageConsistent(page({ page: 2 }), 2, first)).toBe(true);
+    expect(historyPageConsistent(page({ page: 4 }), 4, first)).toBe(true);
+    // An empty history: page 1 of 0, no rows, no next page.
+    expect(
+      historyPageConsistent(
+        page({ itemCount: 0, pageCount: 0, rows: 0 }),
+        1,
+        null,
+      ),
+    ).toBe(true);
+    // The same read as page 1 of 1 hides no row either.
+    expect(
+      historyPageConsistent(
+        page({ itemCount: 0, pageCount: 1, hasNextPage: false, rows: 0 }),
+        1,
+        null,
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    ['an empty page while more follow', page({ page: 1, rows: 0 }), 1],
+    ['an empty page 3 of 4', page({ page: 3, rows: 0 }), 3],
+    ['a short page while more follow', page({ page: 1, rows: 9 }), 1],
+    [
+      'an empty last page of a history with rows',
+      page({ itemCount: 5, rows: 0 }),
+      1,
+    ],
+    ['more rows than the page holds', page({ page: 1, rows: 11 }), 1],
+    ['not the page asked for', page({ page: 1 }), 2],
+    [
+      'a page past the total',
+      page({ page: 5, itemCount: 39, hasNextPage: false, rows: 0 }),
+      5,
+    ],
+    [
+      'no next page before the last',
+      page({ page: 2, hasNextPage: false, rows: 10 }),
+      2,
+    ],
+    ['a next page on the last', page({ page: 4, hasNextPage: true }), 4],
+    [
+      'a page count that does not fit the rows',
+      page({ itemCount: 39, pageCount: 8 }),
+      1,
+    ],
+    [
+      'an empty history that says more follow',
+      page({ itemCount: 0, pageCount: 0, hasNextPage: true, rows: 0 }),
+      1,
+    ],
+    ['a page of 0 rows each', page({ take: 0, itemCount: 0, rows: 0 }), 1],
+    [
+      'page 5 of 4 whose figures leave it exactly no rows',
+      page({
+        page: 5,
+        itemCount: 40,
+        pageCount: 4,
+        hasNextPage: false,
+        rows: 0,
+      }),
+      5,
+    ],
+  ])('%s: not consistent', (_name, p, asked) => {
+    expect(historyPageConsistent(p, asked, null)).toBe(false);
+  });
+
+  it('a total that changes between pages: not consistent', () => {
+    const first = page({ page: 1 });
+    expect(
+      historyPageConsistent(page({ page: 2, itemCount: 40 }), 2, first),
+    ).toBe(false);
+    expect(
+      historyPageConsistent(
+        page({ page: 2, itemCount: 20, pageCount: 2, rows: 10 }),
+        2,
+        first,
+      ),
+    ).toBe(false);
+    expect(
+      historyPageConsistent(
+        page({ page: 2, take: 20, itemCount: 39, rows: 19 }),
+        2,
+        first,
+      ),
+    ).toBe(false);
   });
 });

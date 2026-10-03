@@ -211,6 +211,22 @@ export class TransactionPinService {
   }
 
   /**
+   * For an approval that is not the PIN (a biometric approval, MONEY-14):
+   * refuses while the PIN is locked (`423 pin_locked`) or when there is no
+   * PIN (`409 pin_not_set`). Reads only: it neither uses nor resets a try.
+   */
+  async assertNotLocked(wawuUserId: string): Promise<void> {
+    const row = await this.prisma.transactionPin.findUnique({
+      where: { wawuUserId },
+      select: { lockedUntil: true },
+    });
+    if (!row) throw new MoneyError('pin_not_set', NOT_SET_MESSAGE);
+    if (row.lockedUntil && row.lockedUntil > new Date()) {
+      throw lockedError(row.lockedUntil);
+    }
+  }
+
+  /**
    * Takes one try before the PIN is compared. Tries 1 to 4 only count; the
    * fifth also sets the lock, in the same write, so a concurrent try already
    * sees it locked. Each step is a single conditional update: whichever

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -301,6 +301,31 @@ describe('Fintava webhooks (MONEY-07) over HTTP', () => {
         'PENDING',
         'SUCCESS',
       ]);
+    });
+
+    it('MONEY-08 round 3: a second delivery with the same status and another amount is its own delivery, stored for the ledger; each keyed on the SHA-256 of its own bytes, and each again is a duplicate', async () => {
+      const reference = `FIO241106308911000370001675-${RUN}-same`;
+      const first = customerBankTransfer(`${RUN}-same`, 'SUCCESS');
+      const other = first
+        .replace('"amount": 100,', '"amount": 200,')
+        .replace('"total": 130.75', '"total": 230.75');
+      expect(other).not.toBe(first);
+      expect(ack(await send(first)).outcome).toBe('recorded');
+      expect(ack(await send(other)).outcome).toBe('recorded');
+      expect(ack(await send(first)).outcome).toBe('duplicate');
+      expect(ack(await send(other)).outcome).toBe('duplicate');
+      const rows = await rowsFor(reference);
+      expect(rows).toHaveLength(2);
+      expect(rows.map((r) => r.fintavaStatus)).toEqual(['SUCCESS', 'SUCCESS']);
+      expect(rows.map((r) => r.processingStatus)).toEqual([
+        'pending',
+        'pending',
+      ]);
+      expect(rows.map((r) => r.bodySha256).sort()).toEqual(
+        [first, other]
+          .map((t) => createHash('sha256').update(t, 'utf8').digest('hex'))
+          .sort(),
+      );
     });
 
     it('the reversal of a send is its own event, not a duplicate of the send', async () => {
