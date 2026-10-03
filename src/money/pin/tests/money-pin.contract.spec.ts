@@ -114,15 +114,28 @@ describe('Transaction PIN (MONEY-09) over HTTP', () => {
   const users: string[] = [];
   const previousLock = process.env.PIN_LOCK_MINUTES;
 
-  /** A new person, with a token, and nothing in the database yet. */
-  function newUser(): { id: string; auth: string } {
+  /**
+   * A new person, with a token and an open wallet, and no PIN yet. The PIN
+   * routes are behind the wallet gate (MONEY-13): the PIN is set once the
+   * wallet is open (A8, then A9), so the people here hold one. What a
+   * person without a wallet gets is src/money/gate/tests/.
+   */
+  async function newUser(): Promise<{ id: string; auth: string }> {
     const id = randomUUID();
     users.push(id);
+    await prisma.fintavaWallet.create({
+      data: {
+        wawuUserId: id,
+        customerId: randomUUID(),
+        walletId: randomUUID(),
+        accountNumber: `19${String(Date.now()).slice(-6)}${String(users.length % 100).padStart(2, '0')}`,
+      },
+    });
     return { id, auth: `Bearer ${mintToken(id)}` };
   }
 
   async function withPin(pin: string) {
-    const user = newUser();
+    const user = await newUser();
     await request(app.getHttpServer())
       .post(BASE)
       .set('Authorization', user.auth)
@@ -178,6 +191,9 @@ describe('Transaction PIN (MONEY-09) over HTTP', () => {
     await prisma.transactionPin.deleteMany({
       where: { wawuUserId: { in: users } },
     });
+    await prisma.fintavaWallet.deleteMany({
+      where: { wawuUserId: { in: users } },
+    });
     await app.close();
     if (previousLock === undefined) delete process.env.PIN_LOCK_MINUTES;
     else process.env.PIN_LOCK_MINUTES = previousLock;
@@ -185,7 +201,7 @@ describe('Transaction PIN (MONEY-09) over HTTP', () => {
 
   describe('GET /money/pin', () => {
     it('a person without a PIN reads not set, every try left, no lock', async () => {
-      const user = newUser();
+      const user = await newUser();
       const res = await state(user.auth).expect(200);
       expect(res.body).toEqual({
         statusCode: 200,
@@ -206,8 +222,8 @@ describe('Transaction PIN (MONEY-09) over HTTP', () => {
 
   describe('POST /money/pin (set)', () => {
     it('a user can set a PIN; it is stored only as an argon2id hash with its own salt', async () => {
-      const a = newUser();
-      const b = newUser();
+      const a = await newUser();
+      const b = await newUser();
       const before = Date.now();
       for (const user of [a, b]) {
         const res = await request(app.getHttpServer())
@@ -238,7 +254,7 @@ describe('Transaction PIN (MONEY-09) over HTTP', () => {
     });
 
     it('two different entries are 400 pin_mismatch, and nothing is stored', async () => {
-      const user = newUser();
+      const user = await newUser();
       const res = await request(app.getHttpServer())
         .post(BASE)
         .set('Authorization', user.auth)
@@ -270,7 +286,7 @@ describe('Transaction PIN (MONEY-09) over HTTP', () => {
     it.each([['123'], ['12345'], ['12a4'], [1234]])(
       'a PIN that is not four digits (%p) is a validation 400 without reason',
       async (pin) => {
-        const user = newUser();
+        const user = await newUser();
         const res = await request(app.getHttpServer())
           .post(BASE)
           .set('Authorization', user.auth)
@@ -306,7 +322,7 @@ describe('Transaction PIN (MONEY-09) over HTTP', () => {
     });
 
     it('a person without a PIN is 409 pin_not_set', async () => {
-      const user = newUser();
+      const user = await newUser();
       const res = await verify(user.auth, '1111').expect(409);
       expect(reason(res).code).toBe('pin_not_set');
     });
@@ -409,7 +425,7 @@ describe('Transaction PIN (MONEY-09) over HTTP', () => {
       const codes = [
         (await verify(user.auth)).status,
         (await verify(user.auth, '0000')).status,
-        (await verify(newUser().auth, '0000')).status,
+        (await verify((await newUser()).auth, '0000')).status,
       ];
       for (let i = 0; i < PIN_MAX_TRIES; i++) {
         codes.push((await verify(user.auth, '0000')).status);
@@ -502,7 +518,7 @@ describe('Transaction PIN (MONEY-09) over HTTP', () => {
     });
 
     it('a person without a PIN is 409 pin_not_set', async () => {
-      const user = newUser();
+      const user = await newUser();
       const res = await change(user.auth, '1029', {
         newPin: '5647',
         newPinConfirmation: '5647',
@@ -542,7 +558,7 @@ describe('Transaction PIN (MONEY-09) over HTTP', () => {
         // A positive control: the capture really sees what the app logs.
         new Logger('PinLogProbe').warn('probe line');
 
-        const user = newUser();
+        const user = await newUser();
         const responses = [
           await request(app.getHttpServer())
             .post(BASE)

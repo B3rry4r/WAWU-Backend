@@ -37,6 +37,7 @@ afterAll(() => t.stop());
 
 async function holder(pin = '2741'): Promise<Person> {
   const who = t.person();
+  await t.openWallet(who);
   await t.setPin(who, pin);
   return who;
 }
@@ -372,6 +373,25 @@ describe('the PIN lock and the PIN routes', () => {
       .expect(403);
     expect(t.body(res).reason?.code).toBe('pin_required');
     await t.http().post(VERIFY).expect(401);
+  });
+});
+
+describe('the wallet gate comes first (MONEY-13)', () => {
+  it('without a wallet every device route is 409 wallet_not_open, before any PIN or approval is looked at', async () => {
+    const who = t.person();
+    const key = phoneKey();
+    const answers = [
+      await t.http().get(DEVICE).set('Authorization', who.auth),
+      await register(who, key),
+      await t.http().delete(DEVICE).set('Authorization', who.auth),
+      await t.http().post(CHALLENGE).set('Authorization', who.auth),
+      await approve(who, 'v1.00000000-0000-4000-8000-000000000000.AAAAAAAAAA'),
+      await t.approveWithPin(who, '2741'),
+    ];
+    for (const res of answers) {
+      expect(res.status).toBe(409);
+      expect(t.body(res).reason?.code).toBe('wallet_not_open');
+    }
   });
 });
 

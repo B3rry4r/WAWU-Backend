@@ -262,6 +262,7 @@ export class Money14App {
       await this.prisma.transactionPin.deleteMany({ where });
       await this.prisma.walletIdentity.deleteMany({ where });
       await this.prisma.bvnCheckAttempt.deleteMany({ where });
+      await this.prisma.fintavaWallet.deleteMany({ where });
     }
     if (this.app) await this.app.close();
     await this.double.stop();
@@ -293,6 +294,25 @@ export class Money14App {
       nin: digits(11),
     };
   }
+
+  /**
+   * Gives `who` an open wallet as MONEY-12 records one (a FintavaWallet
+   * row): the PIN and every MONEY-14 route are behind the wallet gate
+   * (MONEY-13), and the PIN is set once the wallet is open (A9 after A8).
+   */
+  async openWallet(who: Person): Promise<void> {
+    this.walletCount += 1;
+    await this.prisma.fintavaWallet.create({
+      data: {
+        wawuUserId: who.id,
+        customerId: randomUUID(),
+        walletId: randomUUID(),
+        accountNumber: `14${digits(6)}${String(this.walletCount % 100).padStart(2, '0')}`,
+      },
+    });
+  }
+
+  private walletCount = 0;
 
   /** The same person signed in again with a token naming another phone. */
   reissue(who: Person, phone: string): Person {

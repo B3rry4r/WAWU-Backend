@@ -65,6 +65,7 @@ async function holder(pin = '1357', phone?: string): Promise<Person> {
   const who = t.person(phone);
   secrets.add(pin);
   await t.bvnChecked(who);
+  await t.openWallet(who);
   await t.setPin(who, pin);
   return who;
 }
@@ -158,8 +159,26 @@ describe('a user who forgot their PIN can reset it with a code and pay again', (
     expect(t.texts().map((x) => x.to)).toEqual([who.phone]);
   });
 
-  it('a person whose phone no BVN check proved is 409 wallet_not_open, and nothing is sent', async () => {
+  it('a person with no wallet is 409 wallet_not_open from the wallet gate, and nothing is sent', async () => {
     const who = t.person();
+    await t.bvnChecked(who);
+    for (const res of [
+      await start(who),
+      await confirm(who, {
+        resetId: '00000000-0000-4000-8000-000000000000',
+        code: '123456',
+        newPin: '1234',
+      }),
+    ]) {
+      expect(res.status).toBe(409);
+      expect(t.body(res).reason?.code).toBe('wallet_not_open');
+    }
+    expect(t.texts()).toHaveLength(0);
+  });
+
+  it('a wallet with no phone a BVN check proved (a row written outside the opening flow) gets no text', async () => {
+    const who = t.person();
+    await t.openWallet(who);
     await t.setPin(who, '4321');
     const res = await start(who).expect(409);
     expect(t.body(res).reason?.code).toBe('wallet_not_open');
@@ -169,6 +188,7 @@ describe('a user who forgot their PIN can reset it with a code and pay again', (
   it('a person without a PIN is 409 pin_not_set, and nothing is sent', async () => {
     const who = t.person();
     await t.bvnChecked(who);
+    await t.openWallet(who);
     const res = await start(who).expect(409);
     expect(t.body(res).reason?.code).toBe('pin_not_set');
     expect(t.texts()).toHaveLength(0);

@@ -13,6 +13,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
 import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
 import { RegisterApprovalDeviceDto } from '../dto/money-request.dto';
+import { RequireOpenWallet } from '../gate/wallet-gate';
 import { BuiltBy, MoneyErrors, WALLET_GATE_ERRORS } from '../money-contract';
 import type {
   ApprovalChallengeView,
@@ -31,7 +32,8 @@ import { TransactionPinService } from './transaction-pin.service';
  * W11, W35; R-26; docs/contract/CONVENTIONS.md section 5). One phone per
  * person holds a key only its biometric unlocks; the server checks that
  * key's signature, never a "true" from the app. ApprovalDeviceService holds
- * every rule.
+ * every rule. Every route is behind the wallet gate (MONEY-13);
+ * `@RequireTransactionPin()` and `@RequireApproval()` bring it themselves.
  */
 @ApiBearerAuth('wawu-id')
 @UseGuards(WawuAuthGuard)
@@ -45,6 +47,7 @@ export class MoneyDeviceController {
   /** Which phone, if any, may approve with a fingerprint or face (W35's switch). */
   @Get('device')
   @BuiltBy('MONEY-14')
+  @RequireOpenWallet()
   @MoneyErrors(...WALLET_GATE_ERRORS)
   device(@CurrentUser() user: WawuJwtClaims): Promise<ApprovalDeviceView> {
     return this.devices.view(user.sub);
@@ -74,6 +77,7 @@ export class MoneyDeviceController {
   /** Turn it off (W35). Needs no PIN: it only takes a way to approve away. */
   @Delete('device')
   @BuiltBy('MONEY-14')
+  @RequireOpenWallet()
   @MoneyErrors(...WALLET_GATE_ERRORS)
   remove(@CurrentUser() user: WawuJwtClaims): Promise<ApprovalDeviceView> {
     return this.devices.remove(user.sub);
@@ -82,6 +86,7 @@ export class MoneyDeviceController {
   /** One challenge for one approval, for the registered phone to sign with the request. */
   @Post('device/challenge')
   @BuiltBy('MONEY-14')
+  @RequireOpenWallet()
   @MoneyErrors(...WALLET_GATE_ERRORS, 'device_approval_refused')
   challenge(
     @CurrentUser() user: WawuJwtClaims,

@@ -4,6 +4,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
 import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
 import { ConfirmPinResetDto } from '../dto/money-request.dto';
+import { RequireOpenWallet } from '../gate/wallet-gate';
 import { BuiltBy, MoneyErrors, WALLET_GATE_ERRORS } from '../money-contract';
 import type { PinResetView, PinStateView } from '../money-view.type';
 import { PinResetService } from './pin-reset.service';
@@ -15,7 +16,9 @@ import { PinResetService } from './pin-reset.service';
  * come back together. PinResetService holds every rule.
  *
  * Every route reads the caller from the token and never takes a wawuUserId
- * or a phone number: the code can only go to the proved phone on file.
+ * or a phone number: the code can only go to the proved phone on file. Both
+ * are behind the wallet gate (MONEY-13): the PIN is set once the wallet is
+ * open (A9 after A8), so a reset is for a wallet holder.
  */
 @ApiBearerAuth('wawu-id')
 @UseGuards(WawuAuthGuard)
@@ -30,6 +33,7 @@ export class MoneyPinResetController {
    */
   @Post('pin/reset')
   @BuiltBy('MONEY-14')
+  @RequireOpenWallet()
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'pin_not_set',
@@ -44,6 +48,7 @@ export class MoneyPinResetController {
   @Post('pin/reset/confirm')
   @HttpCode(200)
   @BuiltBy('MONEY-14')
+  @RequireOpenWallet()
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'reset_code_invalid',
