@@ -87,6 +87,37 @@ describe('Pausing paid questions for creators who stop replying (contract, INBOX
   let pause: PaidDmPauseService;
   let mock: ChildProcess | undefined;
 
+  // The sweep looks at every creator in the database, so it can write a
+  // tracker row or a notification for an account this suite never made
+  // (the seeded creators among them). What existed before the suite is put
+  // back at the end, whichever test touched it.
+  let trackersBefore: Awaited<
+    ReturnType<typeof prisma.creatorNoResponseTracker.findMany>
+  >;
+  let notificationsBefore: string[];
+  async function restoreForeign() {
+    const kept = new Set(trackersBefore.map((t) => t.creatorWawuId));
+    await prisma.creatorNoResponseTracker.deleteMany({
+      where: { creatorWawuId: { notIn: [...kept, ...people] } },
+    });
+    for (const t of trackersBefore) {
+      await prisma.creatorNoResponseTracker.update({
+        where: { creatorWawuId: t.creatorWawuId },
+        data: {
+          noResponseRatePct: t.noResponseRatePct,
+          penaltyState: t.penaltyState,
+          dmDisabledUntil: t.dmDisabledUntil,
+        },
+      });
+    }
+    await prisma.notification.deleteMany({
+      where: {
+        id: { notIn: notificationsBefore },
+        kind: { in: ['paid_dm_warning', 'paid_dm_paused'] },
+      },
+    });
+  }
+
   let fan: Person;
   let plain: Person;
   const people: string[] = [];
@@ -210,6 +241,10 @@ describe('Pausing paid questions for creators who stop replying (contract, INBOX
     await app.init();
     prisma = moduleRef.get(PrismaService);
     pause = moduleRef.get(PaidDmPauseService);
+    trackersBefore = await prisma.creatorNoResponseTracker.findMany();
+    notificationsBefore = (
+      await prisma.notification.findMany({ select: { id: true } })
+    ).map((n) => n.id);
 
     for (const p of [fan, plain]) {
       people.push(p.sub);
@@ -226,6 +261,7 @@ describe('Pausing paid questions for creators who stop replying (contract, INBOX
 
   afterAll(async () => {
     if (prisma) {
+      await restoreForeign();
       await prisma.pendingCharge.deleteMany({
         where: { wawuUserId: { in: people } },
       });
@@ -684,42 +720,6 @@ describe('Pausing paid questions for creators who stop replying (contract, INBOX
   });
 
   describe('the sweep', () => {
-    // The sweep looks at every creator in the database, so it can write a
-    // tracker row or a notification for an account this suite never made.
-    // Whatever existed before is put back afterwards.
-    let trackersBefore: Awaited<
-      ReturnType<typeof prisma.creatorNoResponseTracker.findMany>
-    >;
-    let notificationsBefore: string[];
-    beforeAll(async () => {
-      trackersBefore = await prisma.creatorNoResponseTracker.findMany();
-      notificationsBefore = (
-        await prisma.notification.findMany({ select: { id: true } })
-      ).map((n) => n.id);
-    });
-    afterAll(async () => {
-      const kept = new Set(trackersBefore.map((t) => t.creatorWawuId));
-      await prisma.creatorNoResponseTracker.deleteMany({
-        where: { creatorWawuId: { notIn: [...kept, ...people] } },
-      });
-      for (const t of trackersBefore) {
-        await prisma.creatorNoResponseTracker.update({
-          where: { creatorWawuId: t.creatorWawuId },
-          data: {
-            noResponseRatePct: t.noResponseRatePct,
-            penaltyState: t.penaltyState,
-            dmDisabledUntil: t.dmDisabledUntil,
-          },
-        });
-      }
-      await prisma.notification.deleteMany({
-        where: {
-          id: { notIn: notificationsBefore },
-          kind: { in: ['paid_dm_warning', 'paid_dm_paused'] },
-        },
-      });
-    });
-
     it('warns and pauses without anyone looking, and writes back a pause that ended', async () => {
       const w = await creator('SweepWarn');
       await questions(w, { unanswered: 22, answered: 78 });
@@ -790,6 +790,89 @@ describe('Pausing paid questions for creators who stop replying (contract, INBOX
         expect((await tracker(c)).penaltyState).toBe('none');
       }
     });
+  });
+
+  describe('the sweep is not starved by creators who cannot change', () => {
+    const bulkIds: string[] = [];
+    afterAll(async () => {
+      for (let i = 0; i < bulkIds.length; i += 1000) {
+        const ids = bulkIds.slice(i, i + 1000);
+        await prisma.directMessage.deleteMany({
+          where: { creatorWawuId: { in: ids } },
+        });
+        await prisma.creatorNoResponseTracker.deleteMany({
+          where: { creatorWawuId: { in: ids } },
+        });
+        await prisma.notification.deleteMany({
+          where: { userWawuId: { in: ids } },
+        });
+      }
+    });
+
+    it('620 creators with a lapsed question, 520 of them already paused and written first: all 100 who are not are reached in one run', async () => {
+      const now = new Date();
+      const sentAt = new Date(now.getTime() - 2 * DAY);
+      const pausedUntil = new Date(now.getTime() + 3 * DAY);
+      const paused = Array.from({ length: 520 }, () => randomUUID());
+      const fresh = Array.from({ length: 100 }, () => randomUUID());
+      bulkIds.push(...paused, ...fresh);
+      // Paused ones go in first, so a read with no order and a cap sees
+      // them first and nobody else.
+      for (const group of [paused, fresh]) {
+        await prisma.directMessage.createMany({
+          data: group.map((creatorWawuId) => {
+            const id = randomUUID();
+            return {
+              id,
+              creatorWawuId,
+              senderWawuId: fan.sub,
+              text: 'a lapsed paid question',
+              amount: 1500,
+              status: 'refunded' as const,
+              sentAt,
+              deadlineAt: new Date(sentAt.getTime() + DAY),
+              flutterwaveTxRef: `pause-spec-${id}`,
+              responseWindowHours: 24,
+            };
+          }),
+        });
+        if (group === paused) {
+          await prisma.creatorNoResponseTracker.createMany({
+            data: group.map((creatorWawuId) => ({
+              creatorWawuId,
+              noResponseRatePct: 100,
+              penaltyState: 'disabled_7d' as const,
+              dmDisabledUntil: pausedUntil,
+            })),
+          });
+        }
+      }
+      const checked = await pause.sweep(now);
+      expect(checked).toBeGreaterThanOrEqual(100);
+      const stored = await prisma.creatorNoResponseTracker.findMany({
+        where: { creatorWawuId: { in: fresh } },
+      });
+      expect(stored).toHaveLength(100);
+      expect(stored.every((t) => t.penaltyState === 'disabled_7d')).toBe(true);
+      expect(
+        await prisma.notification.count({
+          where: { userWawuId: { in: fresh }, kind: 'paid_dm_paused' },
+        }),
+      ).toBe(100);
+      // The paused block was skipped: nothing sent to it, ends unchanged.
+      expect(
+        await prisma.notification.count({
+          where: { userWawuId: { in: paused } },
+        }),
+      ).toBe(0);
+      // A second run changes nothing.
+      await pause.sweep(now);
+      expect(
+        await prisma.notification.count({
+          where: { userWawuId: { in: fresh }, kind: 'paid_dm_paused' },
+        }),
+      ).toBe(100);
+    }, 120000);
   });
 
   describe('the numbers come from config', () => {
