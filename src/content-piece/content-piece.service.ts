@@ -8,7 +8,12 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { uploadAllowanceFor } from '../common/creator-allowance';
+import {
+  TICK_COLUMNS,
+  TICK_UPLOADS,
+  holdsTick,
+  uploadAllowanceFor,
+} from '../common/creator-allowance';
 import { RANKING, type ContentSort } from './ranking';
 import { Prisma } from '../../generated/prisma/client';
 import type { ContentPieceModel as ContentPieceRow } from '../../generated/prisma/models';
@@ -436,7 +441,17 @@ export class ContentPieceService {
     // No payment gate on uploading (build brief B1). CreatorAccountGuard on
     // POST /content has already proved this caller is a creator account, which
     // is the only thing that was ever checked here besides the subscription.
-    const allowance = uploadAllowanceFor();
+    //
+    // The cap comes from whether the creator holds a tick now (R-7): 5 without
+    // one, 25 with one. A free piece is allowed as the first upload or any
+    // other, and claims a slot exactly like a paid one (R-8).
+    const tickHeld = holdsTick(
+      await this.prisma.userProfile.findUnique({
+        where: { wawuUserId: creatorWawuId },
+        select: TICK_COLUMNS,
+      }),
+    );
+    const allowance = uploadAllowanceFor(tickHeld);
 
     // `previewAsset` is public by design — it is returned to every caller,
     // including anonymous ones on /content/public/featured. If it points at
@@ -469,8 +484,7 @@ export class ContentPieceService {
       // slot back by decrementing CreatorState.slotsUsed. `isFirstUpload`
       // derives from the count below, so without this filter a creator whose
       // only upload was rejected would get the slot back and still not count
-      // as a first-time uploader, forcing their first visible piece to be
-      // PAID in direct contradiction of the first-upload-must-be-free rule.
+      // as a first-time uploader.
       //
       // Two definitions of "used" that disagree are worse than either alone.
       const occupiesASlot = {
@@ -481,11 +495,10 @@ export class ContentPieceService {
       const used = await tx.contentPiece.count({
         where: { creatorWawuId, ...occupiesASlot },
       });
-      // Recorded, no longer enforced. The first-upload-must-be-free rule
-      // outlived brief B2 ("every listing carries a price"): the web wizard
-      // refuses ₦0, so the rule 400'd every new creator's first publish. The
-      // flag stays because the creator dashboard labels "Your first upload"
-      // from it; the column keeps its old name to avoid a migration.
+      // Recorded, never enforced. R-8 removed the first-upload-must-be-free
+      // rule: a first upload may be free or paid. The flag stays because the
+      // creator dashboard labels "Your first upload" from it; the column
+      // keeps its old name to avoid a migration.
       const isFirstUpload = used === 0;
 
       // The cap counts products, content AND services together, so it is held
@@ -510,9 +523,18 @@ export class ContentPieceService {
         data: { slotsUsed: { increment: 1 } },
       });
       if (claimed.count === 0) {
-        throw new ForbiddenException(
-          `You have used all ${allowance.total} of your upload slots. Remove an item to free one up.`,
-        );
+        // Only this NEW upload is refused. Pieces already published stay as
+        // they are, even when the account is above the cap (a tick that
+        // lapsed with more than 5 pieces live).
+        throw new ForbiddenException({
+          message: `You have used all ${allowance.total} of your upload slots. Remove an item to free one up.`,
+          reason: {
+            code: 'upload_limit_reached',
+            uploadsAllowed: allowance.total,
+            tickHeld,
+            uploadsWithTick: TICK_UPLOADS,
+          },
+        });
       }
 
       return tx.contentPiece.create({

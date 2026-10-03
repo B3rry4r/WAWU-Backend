@@ -138,11 +138,11 @@ export class CommunityService {
    * payment gate that was removed, not this one.
    *
    * NO CAP on communities hosted per creator, and this is unaffected by the
-   * teardown. Brief B2 caps LISTINGS at 5 per account (products, content and
-   * services); it says nothing about communities, and a community is not a
-   * listing. Inventing "3 per creator" here would be a product rule this
-   * backend made up and then enforced against people. If product wants one it
-   * belongs beside MAX_ITEMS_PER_ACCOUNT in src/common/creator-allowance.ts,
+   * teardown. R-7 limits UPLOADS (5, or 25 with a tick); it says nothing about
+   * communities, and a community is not an upload. Inventing "3 per creator"
+   * here would be a product rule this backend made up and then enforced
+   * against people. If product wants one it belongs beside FREE_UPLOADS and
+   * TICK_UPLOADS in src/common/creator-allowance.ts,
    * not hardcoded in this service.
    *
    * The host does NOT get a CommunityMembership row. Host-implies-member is
