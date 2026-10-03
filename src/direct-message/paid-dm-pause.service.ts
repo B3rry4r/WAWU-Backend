@@ -279,11 +279,13 @@ export class PaidDmPauseService {
           : state === 'warning'
             ? 'warned'
             : 'disabled_7d';
-      if (
-        nextPenalty !== row.penaltyState ||
-        Number(row.noResponseRatePct) !== pct ||
-        pausedUntil !== null
-      ) {
+      // A creator with nothing to report keeps the row exactly as it is:
+      // GET /dm/response-stats is a live route that reads it, and it only
+      // moves when the standing does (a move, or a creator already warned).
+      const moved = nextPenalty !== row.penaltyState || pausedUntil !== null;
+      const staleWhileFlagged =
+        row.penaltyState !== 'none' && Number(row.noResponseRatePct) !== pct;
+      if (moved || staleWhileFlagged) {
         await tx.creatorNoResponseTracker.update({
           where: { creatorWawuId },
           data: {

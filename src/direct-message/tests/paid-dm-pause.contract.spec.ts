@@ -405,6 +405,25 @@ describe('Pausing paid questions for creators who stop replying (contract, INBOX
     });
   });
 
+  describe('the stored row a live route reads', () => {
+    it('is left exactly as it was for a creator who is fine, and kept current once they are flagged', async () => {
+      const c = await creator('Row');
+      await prisma.creatorNoResponseTracker.create({
+        data: { creatorWawuId: c.sub, noResponseRatePct: 4.2 },
+      });
+      await standing(c);
+      await as(fan).post(`/dm/${c.sub}/send`, { text: 'hello' }).expect(201);
+      expect(Number((await tracker(c)).noResponseRatePct)).toBe(4.2);
+      // Flagged: the stored share follows the questions (what the live
+      // response-stats route then reads).
+      await questions(c, { unanswered: 40, answered: 60 });
+      await standing(c);
+      const row = await tracker(c);
+      expect(row.penaltyState).toBe('disabled_7d');
+      expect(Number(row.noResponseRatePct)).toBe(40);
+    });
+  });
+
   describe('the warning', () => {
     it('21% is warned once, however often and however many times at once it is looked at', async () => {
       const c = await creator('WarnOnce');
