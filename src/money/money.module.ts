@@ -12,7 +12,12 @@ import { WalletIdentityService } from './identity/wallet-identity.service';
 import { MoneyWalletController } from './opening/money-wallet-opening.controller';
 import { WalletOpeningSettings } from './opening/wallet-opening-config';
 import { WalletOpeningService } from './opening/wallet-opening.service';
+import { ApprovalDeviceService } from './pin/approval-device.service';
+import { MoneyDeviceController } from './pin/money-device.controller';
+import { MoneyPinResetController } from './pin/money-pin-reset.controller';
 import { MoneyPinController } from './pin/money-pin.controller';
+import { PinResetSettings } from './pin/pin-reset-config';
+import { PinResetService } from './pin/pin-reset.service';
 import { TransactionPinGuard } from './pin/transaction-pin.guard';
 import { TransactionPinService } from './pin/transaction-pin.service';
 
@@ -54,11 +59,19 @@ import { TransactionPinService } from './pin/transaction-pin.service';
  * wallet_not_open` (or `409 wallet_opening`), through `@RequireOpenWallet()`
  * or `@RequireTransactionPin()`, which brings it. The gate and its guard are
  * exported for the modules that add wallet routes.
+ *
+ * MONEY-14: the PIN reset by a code texted to the proved phone
+ * (`/money/pin/reset`, through the same Fintava client) and biometric
+ * approval (`/money/device`, `/money/approval/verify`). ApprovalDeviceService
+ * is exported beside the guard: `@RequireApproval()` on a debit lets the
+ * registered phone's fingerprint or face stand in for the PIN.
  */
 @Module({
   imports: [ConfigModule, FintavaModule, LedgerModule],
   controllers: [
     MoneyPinController,
+    MoneyPinResetController,
+    MoneyDeviceController,
     MoneyBalanceController,
     MoneyIdentityController,
     MoneyWalletController,
@@ -68,6 +81,9 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     WalletGateGuard,
     TransactionPinService,
     TransactionPinGuard,
+    PinResetSettings,
+    PinResetService,
+    ApprovalDeviceService,
     WalletBalanceService,
     IdentityHasher,
     WalletIdentityService,
@@ -80,6 +96,7 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     WalletGateGuard,
     TransactionPinService,
     TransactionPinGuard,
+    ApprovalDeviceService,
     WalletIdentityService,
     SelfieMatchService,
     WalletOpeningService,

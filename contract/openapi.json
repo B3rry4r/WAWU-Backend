@@ -19771,6 +19771,450 @@
         "x-wawu-built-by": "MONEY-09"
       }
     },
+    "/api/hub/money/pin/reset": {
+      "post": {
+        "operationId": "MoneyPinResetController_startReset",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PinResetView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "reason.code: reset_codes_exhausted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Forgot PIN (W37): send a code to the phone on file. Asked again before\nresendAvailableAt, it answers the same reset and sends nothing; after\nit, a new code (the old one stops working).",
+        "tags": [
+          "MoneyPinReset"
+        ],
+        "x-wawu-built-by": "MONEY-14"
+      }
+    },
+    "/api/hub/money/pin/reset/confirm": {
+      "post": {
+        "operationId": "MoneyPinResetController_confirmReset",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmPinResetDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PinStateView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: reset_code_invalid, pin_mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The code and the new PIN. Clears the lock and the wrong-try count, and turns biometric approval off.",
+        "tags": [
+          "MoneyPinReset"
+        ],
+        "x-wawu-built-by": "MONEY-14"
+      }
+    },
+    "/api/hub/money/device": {
+      "get": {
+        "operationId": "MoneyDeviceController_device",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalDeviceView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Which phone, if any, may approve with a fingerprint or face (W35's switch).",
+        "tags": [
+          "MoneyDevice"
+        ],
+        "x-wawu-built-by": "MONEY-14"
+      },
+      "put": {
+        "operationId": "MoneyDeviceController_register",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN. Only ever in this header: never in a URL, a body or a log.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterApprovalDeviceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalDeviceView"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Turn it on for this phone (W35): its public key, with the current PIN in\nX-Transaction-Pin. Replaces any other phone: one per person.",
+        "tags": [
+          "MoneyDevice"
+        ],
+        "x-wawu-built-by": "MONEY-14"
+      },
+      "delete": {
+        "operationId": "MoneyDeviceController_remove",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalDeviceView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Turn it off (W35). Needs no PIN: it only takes a way to approve away.",
+        "tags": [
+          "MoneyDevice"
+        ],
+        "x-wawu-built-by": "MONEY-14"
+      }
+    },
+    "/api/hub/money/device/challenge": {
+      "post": {
+        "operationId": "MoneyDeviceController_challenge",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalChallengeView"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: device_approval_refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One challenge for one approval, for the registered phone to sign with the request.",
+        "tags": [
+          "MoneyDevice"
+        ],
+        "x-wawu-built-by": "MONEY-14"
+      }
+    },
+    "/api/hub/money/approval/verify": {
+      "post": {
+        "operationId": "MoneyDeviceController_verify",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PinStateView"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, device_approval_refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Check an approval, the PIN or a fingerprint or face, without moving\nmoney: what every debit asks for, for a screen that must confirm the\nperson first (and for W35 to confirm the phone's key works). A PIN try\ncounts as on a debit; a refused biometric approval uses none.",
+        "tags": [
+          "MoneyDevice"
+        ],
+        "x-wawu-built-by": "MONEY-14"
+      }
+    },
     "/api/hub/money/wallet/balance": {
       "get": {
         "operationId": "MoneyBalanceController_balance",
@@ -20479,126 +20923,6 @@
         "tags": [
           "PaymentWebhook"
         ]
-      }
-    },
-    "/api/hub/money/pin/reset": {
-      "post": {
-        "operationId": "MoneyPinResetController_startReset",
-        "parameters": [],
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PinResetView"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Forgot PIN (W37): send a code to the phone on file. Answers again with a new code once resendAvailableAt has passed.",
-        "tags": [
-          "MoneyPinReset"
-        ],
-        "x-wawu-built-by": "MONEY-14",
-        "description": "Declared by MONEY-04, not served yet: MONEY-14 serves it.",
-        "x-wawu-served": false
-      }
-    },
-    "/api/hub/money/pin/reset/confirm": {
-      "post": {
-        "operationId": "MoneyPinResetController_confirmReset",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ConfirmPinResetDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PinStateView"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "reason.code: reset_code_invalid, pin_mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "The code and the new PIN. Clears the lock and the wrong-try count.",
-        "tags": [
-          "MoneyPinReset"
-        ],
-        "x-wawu-built-by": "MONEY-14",
-        "description": "Declared by MONEY-04, not served yet: MONEY-14 serves it.",
-        "x-wawu-served": false
       }
     },
     "/api/hub/money/banks": {
@@ -24794,7 +25118,9 @@
               "selfie_required",
               "identity_has_wallet",
               "account_not_opened",
-              "phone_held_by_other_identity"
+              "phone_held_by_other_identity",
+              "reset_codes_exhausted",
+              "device_approval_refused"
             ],
             "type": "string"
           },
@@ -24861,7 +25187,7 @@
           },
           "retryAfterSeconds": {
             "type": "number",
-            "description": "provider_unreachable, idempotency_in_progress, identity_checks_exhausted, selfie_checks_exhausted: seconds to wait before trying again."
+            "description": "provider_unreachable, idempotency_in_progress, identity_checks_exhausted, selfie_checks_exhausted, reset_codes_exhausted: seconds to wait before trying again."
           },
           "checksLeft": {
             "type": "number",
@@ -24934,6 +25260,57 @@
         "required": [
           "newPin",
           "newPinConfirmation"
+        ]
+      },
+      "ConfirmPinResetDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The code from the text message. Its length is set by whoever sends it (MONEY-14).",
+            "pattern": "^[0-9]{4,8}$"
+          },
+          "newPin": {
+            "type": "string",
+            "pattern": "^[0-9]{4}$"
+          },
+          "newPinConfirmation": {
+            "type": "string",
+            "pattern": "^[0-9]{4}$"
+          },
+          "resetId": {
+            "type": "string",
+            "description": "From POST /money/pin/reset.",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "code",
+          "newPin",
+          "newPinConfirmation",
+          "resetId"
+        ]
+      },
+      "RegisterApprovalDeviceDto": {
+        "type": "object",
+        "properties": {
+          "publicKey": {
+            "type": "string",
+            "description": "The public half of a P-256 key the phone made, as SubjectPublicKeyInfo\n(DER), base64url without padding. Its private half stays on the phone,\nunlocked only by the phone's biometric.",
+            "pattern": "^[A-Za-z0-9_-]{80,200}$"
+          },
+          "biometric": {
+            "description": "What the phone approves with, for W35's label.",
+            "enum": [
+              "fingerprint",
+              "face"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "publicKey",
+          "biometric"
         ]
       },
       "BvnCheckDto": {
@@ -25113,35 +25490,6 @@
         "required": [
           "contentType",
           "contentLength"
-        ]
-      },
-      "ConfirmPinResetDto": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string",
-            "description": "The code from the text message. Its length is set by whoever sends it (MONEY-14).",
-            "pattern": "^[0-9]{4,8}$"
-          },
-          "newPin": {
-            "type": "string",
-            "pattern": "^[0-9]{4}$"
-          },
-          "newPinConfirmation": {
-            "type": "string",
-            "pattern": "^[0-9]{4}$"
-          },
-          "resetId": {
-            "type": "string",
-            "description": "From POST /money/pin/reset.",
-            "format": "uuid"
-          }
-        },
-        "required": [
-          "code",
-          "newPin",
-          "newPinConfirmation",
-          "resetId"
         ]
       },
       "NameCheckDto": {
@@ -33184,6 +33532,87 @@
           "beneficiaryCount"
         ]
       },
+      "ApprovalDeviceView": {
+        "type": "object",
+        "properties": {
+          "registered": {
+            "type": "boolean"
+          },
+          "deviceId": {
+            "type": "string",
+            "nullable": true
+          },
+          "biometric": {
+            "type": "string",
+            "enum": [
+              "fingerprint",
+              "face"
+            ],
+            "nullable": true
+          },
+          "registeredAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastUsedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "registered",
+          "deviceId",
+          "biometric",
+          "registeredAt",
+          "lastUsedAt"
+        ]
+      },
+      "ApprovalChallengeView": {
+        "type": "object",
+        "properties": {
+          "challengeId": {
+            "type": "string"
+          },
+          "challenge": {
+            "type": "string"
+          },
+          "deviceId": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "challengeId",
+          "challenge",
+          "deviceId",
+          "expiresAt"
+        ]
+      },
+      "PinResetView": {
+        "type": "object",
+        "properties": {
+          "resetId": {
+            "type": "string"
+          },
+          "sentTo": {
+            "type": "string"
+          },
+          "resendAvailableAt": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "resetId",
+          "sentTo",
+          "resendAvailableAt",
+          "expiresAt"
+        ]
+      },
       "ChatPerson": {
         "type": "object",
         "properties": {
@@ -34317,29 +34746,6 @@
           "reversal",
           "createdAt",
           "completedAt"
-        ]
-      },
-      "PinResetView": {
-        "type": "object",
-        "properties": {
-          "resetId": {
-            "type": "string"
-          },
-          "sentTo": {
-            "type": "string"
-          },
-          "resendAvailableAt": {
-            "type": "string"
-          },
-          "expiresAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "resetId",
-          "sentTo",
-          "resendAvailableAt",
-          "expiresAt"
         ]
       }
     }
