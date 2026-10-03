@@ -16,9 +16,6 @@ import { MoneyTransferController } from './money-transfer.controller';
  * (MONEY-12) and the history (MONEY-15).
  */
 @Module({
-  controllers: [
-    MoneyTransferController,
-    MoneyPaymentController,
-  ],
+  controllers: [MoneyTransferController, MoneyPaymentController],
 })
 export class MoneyContractModule {}
