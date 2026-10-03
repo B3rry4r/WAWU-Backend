@@ -18,6 +18,7 @@ import {
   MAX_TICKETS_PER_ORDER,
 } from './event-ticketing.constants';
 import type { BuyTicketsDto, VerifyOrderDto } from './dto/event-ticketing.dto';
+import { ticketTotals } from './ticket-counts';
 import type { TicketTier } from '../../generated/prisma/enums';
 
 /**
@@ -537,24 +538,9 @@ export class EventTicketingService {
     };
   }
 
+  /** Counted in ticket-counts.ts, the one definition E17, E18 and E20 share. */
   private async totals(eventId: string) {
-    const [sold, checkedIn, capacity] = await Promise.all([
-      this.prisma.eventTicket.count({
-        where: { eventId, status: { in: ['valid', 'checked_in'] } },
-      }),
-      this.prisma.eventTicket.count({
-        where: { eventId, status: 'checked_in' },
-      }),
-      this.prisma.eventTicketType.aggregate({
-        where: { eventId },
-        _sum: { quantity: true },
-      }),
-    ]);
-    return {
-      sold,
-      checkedIn,
-      remaining: Math.max(0, (capacity._sum.quantity ?? 0) - sold),
-    };
+    return ticketTotals(this.prisma, eventId);
   }
 
   /* ------------------------------------------------------------------ *

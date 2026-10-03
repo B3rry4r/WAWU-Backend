@@ -11277,6 +11277,38 @@
         "tags": [
           "EventTicketing"
         ]
+      },
+      "get": {
+        "operationId": "EventRunningController_referrals",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EventReferralSalesView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "The host's shared links, each with its tickets sold (E18).",
+        "tags": [
+          "EventRunning"
+        ]
       }
     },
     "/api/hub/events/{id}/cancel": {
@@ -11333,6 +11365,211 @@
         "summary": "Call it off. Voids every ticket and refunds every buyer — a real\nFlutterwave refund per order, not a status flip.",
         "tags": [
           "EventTicketing"
+        ]
+      }
+    },
+    "/api/hub/events/mine/sold": {
+      "get": {
+        "operationId": "EventRunningController_mySold",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostSoldCounts"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Sold per event for every event the caller hosts (E17).",
+        "tags": [
+          "EventRunning"
+        ]
+      }
+    },
+    "/api/hub/events/door/mine": {
+      "get": {
+        "operationId": "EventRunningController_myDoorEvents",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoorEventList"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The events the caller works the door at.",
+        "tags": [
+          "EventRunning"
+        ]
+      }
+    },
+    "/api/hub/events/{id}/door-staff": {
+      "get": {
+        "operationId": "EventRunningController_listDoorStaff",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DoorStaffView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "Who the host lets check tickets in.",
+        "tags": [
+          "EventRunning"
+        ]
+      },
+      "post": {
+        "operationId": "EventRunningController_addDoorStaff",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddDoorStaffDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoorStaffView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Add someone to the door, by WAWU id or handle.",
+        "tags": [
+          "EventRunning"
+        ]
+      }
+    },
+    "/api/hub/events/{id}/door-staff/{staffId}": {
+      "delete": {
+        "operationId": "EventRunningController_removeDoorStaff",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "staffId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "removed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "removed"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "Take someone off the door.",
+        "tags": [
+          "EventRunning"
+        ]
+      }
+    },
+    "/api/hub/events/{id}/door/check-in": {
+      "post": {
+        "operationId": "EventRunningController_checkIn",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScanTicketDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoorCheckInResult"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Scan at the door, as the host or their door staff. Let them in (E20)\nwith the holder's name, already used (E23) with when and by whom, or\nnot valid (E24), with the live counts.",
+        "tags": [
+          "EventRunning"
         ]
       }
     },
@@ -23923,6 +24160,26 @@
           "reason"
         ]
       },
+      "AddDoorStaffDto": {
+        "type": "object",
+        "properties": {
+          "wawuUserId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "handle": {
+            "type": "string",
+            "description": "With or without the \"@\". Same characters a handle may hold.",
+            "maxLength": 31,
+            "pattern": "^@?[a-zA-Z0-9_.]+$"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 30
+          }
+        }
+      },
       "EventDecisionReasonDto": {
         "type": "object",
         "properties": {
@@ -29467,6 +29724,256 @@
         },
         "required": [
           "outcome"
+        ]
+      },
+      "HostSoldCount": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string"
+          },
+          "ticketsSold": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "eventId",
+          "ticketsSold"
+        ]
+      },
+      "HostSoldCounts": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HostSoldCount"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "DoorEventView": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string"
+          },
+          "eventName": {
+            "type": "string"
+          },
+          "startsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "location": {
+            "type": "string"
+          },
+          "venueName": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "cancelledAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "eventId",
+          "eventName",
+          "startsAt",
+          "location",
+          "venueName",
+          "status",
+          "cancelledAt",
+          "label"
+        ]
+      },
+      "DoorEventList": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DoorEventView"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "EventReferralSalesView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "ticketsSold": {
+            "type": "number"
+          },
+          "revenueNaira": {
+            "type": "number"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "label",
+          "ticketsSold",
+          "revenueNaira",
+          "createdAt"
+        ]
+      },
+      "DoorStaffView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "wawuUserId": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string",
+            "nullable": true
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "addedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "wawuUserId",
+          "label",
+          "displayName",
+          "handle",
+          "avatarUrl",
+          "addedAt"
+        ]
+      },
+      "CheckedInByView": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "host",
+              "door_staff"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "role",
+          "label"
+        ]
+      },
+      "DoorCheckInResult": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "valid",
+              "already_used",
+              "invalid"
+            ]
+          },
+          "ticket": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "tierName": {
+                "type": "string"
+              },
+              "holderName": {
+                "type": "string",
+                "nullable": true
+              },
+              "checkedInAt": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              },
+              "checkedInBy": {
+                "$ref": "#/components/schemas/CheckedInByView",
+                "nullable": true
+              }
+            },
+            "required": [
+              "code",
+              "tierName",
+              "holderName",
+              "checkedInAt",
+              "checkedInBy"
+            ],
+            "nullable": true
+          },
+          "totals": {
+            "type": "object",
+            "properties": {
+              "sold": {
+                "type": "number"
+              },
+              "checkedIn": {
+                "type": "number"
+              },
+              "stillToArrive": {
+                "type": "number"
+              },
+              "remaining": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "sold",
+              "checkedIn",
+              "stillToArrive",
+              "remaining"
+            ]
+          }
+        },
+        "required": [
+          "outcome",
+          "ticket",
+          "totals"
         ]
       },
       "DayAvailability": {

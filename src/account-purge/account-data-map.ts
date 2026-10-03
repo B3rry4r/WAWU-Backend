@@ -126,6 +126,9 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'StorageObject', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'DittoOptIn', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'EventReferral', column: 'ownerWawuId', disposition: 'OWNED' },
+  // Working someone's door (EVENTS-05) is this person's role on that event;
+  // it goes with them. A ticket they let in stays let in.
+  { model: 'EventDoorStaff', column: 'staffWawuId', disposition: 'OWNED' },
   {
     model: 'CreatorNoResponseTracker',
     column: 'creatorWawuId',
