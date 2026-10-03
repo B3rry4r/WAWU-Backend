@@ -516,12 +516,12 @@ describe('Events contract (app-facing)', () => {
       await http()
         .post('/api/hub/events')
         .set(auth(hostToken))
-        .send(validEventBody({ format: 'hybrid' }))
+        .send(validEventBody({ format: 'in_space' }))
         .expect(400);
       await http()
         .post('/api/hub/events')
         .set(auth(hostToken))
-        .send(validEventBody({ type: 'conference' }))
+        .send(validEventBody({ type: 'festival' }))
         .expect(400);
     });
 

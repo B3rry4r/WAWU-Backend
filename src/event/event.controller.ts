@@ -20,6 +20,7 @@ import { EventService } from './event.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
 import { ListEventsQueryDto } from './dto/list-events-query.dto';
+import type { EventOptionsView } from './event-options';
 
 /**
  * Events — `/api/hub/events/*` once the global prefix is applied.
@@ -28,17 +29,17 @@ import { ListEventsQueryDto } from './dto/list-events-query.dto';
  * docs/00_PLATFORM_MAP.md both listed Events under what was cut; both have been
  * amended with that date so the docs and this code agree.
  *
- * ── WHAT IS NOT HERE, AND WILL NOT BE ────────────────────────────────────────
- * No ticket endpoint, no checkout, no price, no payment verify, no refund. The
- * spec cut event TICKETS and that stays cut. `POST /events/:id/going` is an
- * interest signal and nothing else; an organiser selling entry does it on their
- * own page behind `externalUrl`.
+ * ── WHAT IS NOT HERE ─────────────────────────────────────────────────────────
+ * No checkout, no payment verify, no refund: selling and refunding tickets is
+ * EventTicketingController's. A submit may carry the event's ticket types
+ * (EVENTS-02), which are stored with it and reviewed with it.
+ * `POST /events/:id/going` is an interest signal and nothing else.
  *
  * ── ROUTE ORDER ──────────────────────────────────────────────────────────────
- * `mine` is declared before `:id` because Nest matches a controller's routes in
- * declaration order. ParseUUIDPipe on `:id` would 400 on "mine" anyway, but a
- * route protected only by someone else's 400 is not a route that is reachable
- * on purpose.
+ * `mine` and `options` are declared before `:id` because Nest matches a
+ * controller's routes in declaration order. ParseUUIDPipe on `:id` would 400
+ * on "mine" anyway, but a route protected only by someone else's 400 is not a
+ * route that is reachable on purpose.
  *
  * No collision with any existing controller: nothing else in this backend
  * declares an `events` prefix (verified against the route table on a real
@@ -65,6 +66,16 @@ export class EventController {
   @Get('mine')
   mine(@CurrentUser() user: WawuJwtClaims, @Query() query: PaginationQueryDto) {
     return this.eventService.listMine(user.sub, query);
+  }
+
+  /**
+   * The label to show for each category, format and kind, beside the value to
+   * send (EVENTS-02): "Business & Finance" is `business`. Declared before
+   * `:id` for the same reason `mine` is.
+   */
+  @Get('options')
+  options(): EventOptionsView {
+    return this.eventService.options();
   }
 
   @Get(':id')
