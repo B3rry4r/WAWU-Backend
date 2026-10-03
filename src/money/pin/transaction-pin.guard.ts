@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
+import { WalletGateGuard } from '../gate/wallet-gate';
 import { TransactionPinHeader } from '../money-contract';
 import { MoneyError } from '../money-error';
 import { TransactionPinService } from './transaction-pin.service';
@@ -81,10 +82,14 @@ export class TransactionPinGuard implements CanActivate {
  * Put on every route that moves money (and on PUT /money/pin and POST
  * /money/pin/verify): checks X-Transaction-Pin and documents the header in
  * the contract. The module that owns the route imports MoneyModule.
+ *
+ * A PIN is only ever checked for an open wallet (MONEY-13): the wallet gate
+ * runs first, so a person with no wallet, or one still being opened, gets
+ * `409 wallet_not_open` or `409 wallet_opening` and never uses up a try.
  */
 export function RequireTransactionPin(): MethodDecorator {
   return applyDecorators(
-    UseGuards(TransactionPinGuard),
+    UseGuards(WalletGateGuard, TransactionPinGuard),
     TransactionPinHeader(),
   );
 }

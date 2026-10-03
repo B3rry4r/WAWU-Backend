@@ -19,6 +19,7 @@ import {
   type CheckedIdentity,
   WalletIdentityService,
 } from '../identity/wallet-identity.service';
+import { walletStateOf } from '../gate/wallet-gate';
 import { FINTAVA_WALLET_BANK_CODE } from '../ledger/ledger-config';
 import { MoneyError } from '../money-error';
 import type { WalletState, WalletView } from '../money-view.type';
@@ -192,15 +193,9 @@ export class WalletOpeningService {
       }),
       this.pins.state(wawuUserId),
     ]);
-    let state: WalletState = 'not_open';
-    if (wallet) state = 'open';
-    else if (
-      opening &&
-      !stoppedOnIdentity(opening) &&
-      ['opening', 'unknown', 'conflict', 'open'].includes(opening.state)
-    ) {
-      state = 'opening';
-    }
+    // The wallet gate's own rule (MONEY-13), so this state and the code
+    // every other wallet route refuses with always agree.
+    const state: WalletState = walletStateOf(wallet !== null, opening);
     return {
       state,
       account: wallet
