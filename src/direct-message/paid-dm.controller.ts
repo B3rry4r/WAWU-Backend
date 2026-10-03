@@ -8,6 +8,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { ApiResponse } from '@nestjs/swagger';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
@@ -53,6 +54,10 @@ export class PaidDmController {
 
   /** The creator's own standing on unanswered paid questions: warned, paused, and when it ends (R-13). */
   @Get('standing')
+  @ApiResponse({
+    status: 403,
+    description: 'The caller is not a creator account.',
+  })
   @UseGuards(CreatorAccountGuard)
   standing(@CurrentUser() user: WawuJwtClaims): Promise<PaidDmStanding> {
     return this.pause.standing(user.sub);
@@ -60,6 +65,11 @@ export class PaidDmController {
 
   /** Whether a creator's paid messages are switched off, and until when (I8). Any signed-in user. */
   @Get('creators/:wawuId/availability')
+  @ApiResponse({ status: 400, description: 'wawuId is not a UUID.' })
+  @ApiResponse({
+    status: 404,
+    description: 'The account has no creator state.',
+  })
   availability(
     @Param('wawuId', ParseUUIDPipe) wawuId: string,
   ): Promise<PaidDmAvailability> {

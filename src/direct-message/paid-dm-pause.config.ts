@@ -24,6 +24,8 @@ export interface PaidDmPauseConfig {
   pauseDays: number;
   /** Questions needed in the window before the share counts. */
   minQuestions: number;
+  /** Creators the sweep reads per batch (an operating size, not a rule). */
+  sweepBatch: number;
 }
 
 function whole(
@@ -51,5 +53,6 @@ export function paidDmPauseConfig(): PaidDmPauseConfig {
     windowDays: whole('PAID_DM_WINDOW_DAYS', 30, 1, 365),
     pauseDays: whole('PAID_DM_PAUSE_DAYS', 7, 1, 365),
     minQuestions: whole('PAID_DM_MIN_QUESTIONS', 1, 1, 10_000),
+    sweepBatch: whole('PAID_DM_SWEEP_BATCH', 200, 1, 10_000),
   };
 }

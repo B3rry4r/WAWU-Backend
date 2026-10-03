@@ -742,6 +742,56 @@ describe('Pausing paid questions for creators who stop replying (contract, INBOX
     });
   });
 
+  describe('the sweep reaches every creator', () => {
+    it('more creators than one batch: all evaluated in one run, a second run changes nothing, and already-paused creators do not starve new ones', async () => {
+      const first: Person[] = [];
+      for (let i = 0; i < 12; i += 1) {
+        const c = await creator(`Batch${i}`);
+        await questions(c, { unanswered: 1 });
+        first.push(c);
+      }
+      await pause.sweep(new Date(), 5);
+      const ends = new Map<string, string>();
+      for (const c of first) {
+        const row = await tracker(c);
+        expect(row.penaltyState).toBe('disabled_7d');
+        ends.set(c.sub, (row.dmDisabledUntil as Date).toISOString());
+        expect(await notes(c, 'paid_dm_paused')).toBe(1);
+      }
+      // Again, and with several runs at once: nothing moves, nothing repeats.
+      await Promise.all([
+        pause.sweep(new Date(), 5),
+        pause.sweep(new Date(), 5),
+        pause.sweep(new Date(), 3),
+      ]);
+      for (const c of first) {
+        const row = await tracker(c);
+        expect((row.dmDisabledUntil as Date).toISOString()).toBe(
+          ends.get(c.sub),
+        );
+        expect(await notes(c, 'paid_dm_paused')).toBe(1);
+      }
+      // New creators with misses, behind twelve who are paused and flagged.
+      const later: Person[] = [];
+      for (let i = 0; i < 7; i += 1) {
+        const c = await creator(`Later${i}`);
+        await questions(c, { unanswered: 1 });
+        later.push(c);
+      }
+      await pause.sweep(new Date(), 5);
+      for (const c of later) {
+        expect((await tracker(c)).penaltyState).toBe('disabled_7d');
+        expect(await notes(c, 'paid_dm_paused')).toBe(1);
+      }
+      // The pauses end and a sweep with a small batch writes every one back.
+      const after = new Date(Date.now() + 8 * DAY);
+      await pause.sweep(after, 4);
+      for (const c of [...first, ...later]) {
+        expect((await tracker(c)).penaltyState).toBe('none');
+      }
+    });
+  });
+
   describe('the numbers come from config', () => {
     const keys = [
       'PAID_DM_WARN_AT_PCT',

@@ -190,6 +190,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "Refused: the creator has not enabled paid messages, a block stands between the two, or (reason.code paid_messages_paused, with reason.pausedUntil) the creator left too many paid questions unanswered and paid messages are switched off until pausedUntil (R-13)."
           }
         },
         "tags": [
@@ -459,6 +462,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The caller is not a creator account."
           }
         },
         "summary": "The creator's own standing on unanswered paid questions: warned, paused, and when it ends (R-13).",
@@ -490,6 +496,12 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "wawuId is not a UUID."
+          },
+          "404": {
+            "description": "The account has no creator state."
           }
         },
         "summary": "Whether a creator's paid messages are switched off, and until when (I8). Any signed-in user.",

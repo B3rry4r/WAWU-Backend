@@ -139,44 +139,85 @@ export class PaidDmPauseService {
    * The sweep: creators with a miss in the window, and creators already
    * warned or paused (so a pause that ended, or a warning that cleared,
    * is written back without waiting for someone to look).
+   *
+   * Every candidate is reached: each list is read in batches of
+   * `sweepBatch` by keyset (ordered by creator id, resuming after the last
+   * id seen), so no creator is starved by an earlier one. A creator whose
+   * pause has not yet ended cannot change this run, so is skipped and uses
+   * no work. Returns how many creators were evaluated.
    */
-  async sweep(now: Date = new Date()): Promise<number> {
+  async sweep(
+    now: Date = new Date(),
+    batchSize: number = paidDmPauseConfig().sweepBatch,
+  ): Promise<number> {
     const cfg = paidDmPauseConfig();
     const from = new Date(now.getTime() - cfg.windowDays * DAY_MS);
-    const [missed, flagged] = await Promise.all([
-      this.prisma.directMessage.findMany({
-        where: {
-          sentAt: { gte: from },
-          OR: [
-            { status: 'refunded' },
-            { status: 'awaiting_response', deadlineAt: { lt: now } },
-          ],
-        },
-        distinct: ['creatorWawuId'],
-        select: { creatorWawuId: true },
-        take: 500,
-      }),
-      this.prisma.creatorNoResponseTracker.findMany({
-        where: { penaltyState: { not: 'none' } },
-        select: { creatorWawuId: true },
-        take: 500,
-      }),
-    ]);
-    const ids = new Set([
-      ...missed.map((m) => m.creatorWawuId),
-      ...flagged.map((f) => f.creatorWawuId),
-    ]);
-    for (const id of ids) {
-      try {
-        await this.evaluate(id, now, cfg);
-      } catch (error) {
-        this.logger.error(
-          `Paid-question standing failed for ${id}`,
-          error instanceof Error ? error.stack : String(error),
-        );
+    const done = new Set<string>();
+
+    const evaluateBatch = async (ids: string[]): Promise<void> => {
+      const paused = new Set(
+        (
+          await this.prisma.creatorNoResponseTracker.findMany({
+            where: { creatorWawuId: { in: ids }, dmDisabledUntil: { gt: now } },
+            select: { creatorWawuId: true },
+          })
+        ).map((r) => r.creatorWawuId),
+      );
+      for (const id of ids) {
+        if (paused.has(id) || done.has(id)) continue;
+        done.add(id);
+        try {
+          await this.evaluate(id, now, cfg);
+        } catch (error) {
+          this.logger.error(
+            `Paid-question standing failed for ${id}`,
+            error instanceof Error ? error.stack : String(error),
+          );
+        }
       }
+    };
+
+    let after: string | undefined;
+    for (;;) {
+      const rows: { creatorWawuId: string }[] =
+        await this.prisma.directMessage.findMany({
+          where: {
+            sentAt: { gte: from },
+            OR: [
+              { status: 'refunded' },
+              { status: 'awaiting_response', deadlineAt: { lt: now } },
+            ],
+            ...(after === undefined ? {} : { creatorWawuId: { gt: after } }),
+          },
+          distinct: ['creatorWawuId'],
+          orderBy: { creatorWawuId: 'asc' },
+          select: { creatorWawuId: true },
+          take: batchSize,
+        });
+      if (rows.length === 0) break;
+      await evaluateBatch(rows.map((r) => r.creatorWawuId));
+      after = rows[rows.length - 1].creatorWawuId;
+      if (rows.length < batchSize) break;
     }
-    return ids.size;
+
+    after = undefined;
+    for (;;) {
+      const rows: { creatorWawuId: string }[] =
+        await this.prisma.creatorNoResponseTracker.findMany({
+          where: {
+            penaltyState: { not: 'none' },
+            ...(after === undefined ? {} : { creatorWawuId: { gt: after } }),
+          },
+          orderBy: { creatorWawuId: 'asc' },
+          select: { creatorWawuId: true },
+          take: batchSize,
+        });
+      if (rows.length === 0) break;
+      await evaluateBatch(rows.map((r) => r.creatorWawuId));
+      after = rows[rows.length - 1].creatorWawuId;
+      if (rows.length < batchSize) break;
+    }
+    return done.size;
   }
 
   // -- internals ------------------------------------------------------------
