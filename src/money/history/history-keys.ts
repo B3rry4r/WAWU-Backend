@@ -12,10 +12,11 @@ import { BadRequestException } from '@nestjs/common';
 export interface HistoryCursor {
   /**
    * When the scroll's first page was read (ISO 8601 UTC, milliseconds).
-   * Every later page groups as of then: a grouped row's members are the
-   * unlocks completed by that time, so an unlock that lands or settles
-   * mid-scroll stays its own row in this scroll and can never move a group
-   * across the cursor. Its place is the latest member's, as before.
+   * Every later page groups as of it: a grouped row's members are the
+   * unlocks completed by the snapshot less LEDGER_WRITE_MAX_MS, so an
+   * unlock that lands, settles or is still being written mid-scroll stays
+   * its own row in this scroll and does not move a group across the
+   * cursor. Its place is the latest member's, as before.
    */
   snapshot: string;
   /** The row's `occurredAt`, ISO 8601 UTC with milliseconds. */
@@ -78,11 +79,16 @@ function plainText(v: unknown, max: number): v is string {
   );
 }
 
-/** An ISO 8601 UTC time with milliseconds that names a real instant. */
+/**
+ * An ISO 8601 UTC time with milliseconds that names a real instant the
+ * database can hold. Postgres has no year 0 (JavaScript does), so a year
+ * 0000 time would reach the query and fail there: it is refused here.
+ */
 function isIso(v: unknown): v is string {
   return (
     typeof v === 'string' &&
     ISO_PATTERN.test(v) &&
+    !v.startsWith('0000') &&
     !Number.isNaN(Date.parse(v)) &&
     new Date(v).toISOString() === v
   );

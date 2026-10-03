@@ -16,6 +16,7 @@ import {
   LINK_KIND_LABELS,
 } from '../history-labels';
 import {
+  LEDGER_WRITE_MAX_MS,
   feeOf,
   koboFromText,
   likePattern,
@@ -57,6 +58,8 @@ describe('history keys', () => {
       `c2.${b64([at, id, snap, 'x'])}`,
       `c2.${b64({ at, id, snapshot: snap })}`,
       `c2.${b64([1, id, snap])}`,
+      `c2.${b64([at, id, '0000-01-01T00:00:00.000Z'])}`,
+      `c2.${b64(['0000-12-31T23:59:59.999Z', id, snap])}`,
       `c2.${Buffer.from('not json').toString('base64url')}`,
     ]) {
       expect(() => decodeCursor(raw)).toThrow(BadRequestException);
@@ -89,6 +92,7 @@ describe('history keys', () => {
       `g2.${b64(['p\u0000', '2026-09-26', sn])}`,
       `g2.${b64(['x'.repeat(201), '2026-09-26', sn])}`,
       `g2.${b64(['p'])}`,
+      `g2.${b64(['p', '2026-09-26', '0000-01-01T00:00:00.000Z'])}`,
     ]) {
       expect(() => decodeGroupKey(raw)).toThrow(BadRequestException);
     }
@@ -179,6 +183,25 @@ describe('the words a row is described with', () => {
     for (const s of all) {
       expect(s).not.toMatch(/—/);
       expect(s).not.toMatch(/fintava|flutterwave|wawu/i);
+    }
+  });
+
+  it("the ledger's writes run under Prisma's default transaction timeout, which LEDGER_WRITE_MAX_MS is", () => {
+    // If any of these starts passing its own timeout (or the client sets
+    // transactionOptions), LEDGER_WRITE_MAX_MS must follow it.
+    expect(LEDGER_WRITE_MAX_MS).toBe(5_000);
+    const root = join(__dirname, '../../..');
+    for (const f of [
+      'money/ledger/ledger.service.ts',
+      'money/ledger/ledger-consumer.service.ts',
+      'money/ledger/ledger-status.service.ts',
+      'common/prisma/prisma.service.ts',
+    ]) {
+      const src = readFileSync(join(root, f), 'utf8');
+      expect({
+        f,
+        options: /transactionOptions|\btimeout\s*:|maxWait/.test(src),
+      }).toEqual({ f, options: false });
     }
   });
 

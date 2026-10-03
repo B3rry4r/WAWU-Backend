@@ -25,7 +25,8 @@ import {
 } from '../../gate/wallet-gate';
 import type { LedgerMovementInput } from '../../ledger/ledger.interface';
 import { LedgerService } from '../../ledger/ledger.service';
-import { encodeGroupKey } from '../history-keys';
+import { decodeCursor, encodeGroupKey } from '../history-keys';
+import { LEDGER_WRITE_MAX_MS } from '../transaction-history.service';
 import { MoneyModule } from '../../money.module';
 import type {
   MonthlySummaryView,
@@ -152,6 +153,20 @@ describe('GET /money/transactions, /summary, /{id} (MONEY-15) over HTTP', () => 
       source: source ?? 'send',
     });
     return r.entryId;
+  }
+
+  /**
+   * Moves every completion on this person's wallet a minute back, as if
+   * the movements recorded so far happened a while before the next read.
+   * The history groups only unlocks completed at least LEDGER_WRITE_MAX_MS
+   * before a scroll's snapshot (a write may still be in flight that long),
+   * so a setup recorded a moment ago is aged before it is read as history.
+   */
+  async function age(p: { account: string }) {
+    await prisma.$executeRaw`
+      UPDATE "FintavaLedgerEntry"
+         SET "completedAt" = "completedAt" - interval '60 seconds'
+       WHERE "accountNumber" = ${p.account} AND "completedAt" IS NOT NULL`;
   }
 
   function get(auth: string | undefined, path: string) {
@@ -976,6 +991,7 @@ describe('GET /money/transactions, /summary, /{id} (MONEY-15) over HTTP', () => 
           occurredAt: at(`2026-09-26T0${7 + i}:02:00.000Z`),
         });
       }
+      await age(a);
       const s = body<MonthlySummaryView>(
         await get(a.auth, `${BASE}/summary?month=2026-09`).expect(200),
       ).data!;
@@ -1079,6 +1095,7 @@ describe('GET /money/transactions, /summary, /{id} (MONEY-15) over HTTP', () => 
           ),
         );
       }
+      await age(c);
       const first = page(await get(c.auth, `${BASE}?limit=3`).expect(200));
       // A third buyer unlocks the piece at 15:00, between pages.
       const u3 = await record(c, unlockOf(piece, '2026-08-10T14:00:00.000Z'));
@@ -1090,7 +1107,8 @@ describe('GET /money/transactions, /summary, /{id} (MONEY-15) over HTTP', () => 
       expect(n.get(u3)).toBeUndefined();
       const group = seen.find((r) => r.group);
       expect(group).toMatchObject({ totalKobo: 500_000, group: { count: 2 } });
-      // Refreshed, the group holds all three and leads the history.
+      // Refreshed a while later, the group holds all three and leads.
+      await age(c);
       const fresh = page(await get(c.auth, `${BASE}?limit=1`).expect(200))
         .items[0];
       expect(fresh).toMatchObject({
@@ -1123,6 +1141,7 @@ describe('GET /money/transactions, /summary, /{id} (MONEY-15) over HTTP', () => 
         c,
         unlockOf(piece, '2026-08-11T14:00:00.000Z', 'pending', ref),
       );
+      await age(c);
       const first = page(await get(c.auth, `${BASE}?limit=3`).expect(200));
       expect(first.items[0]).toMatchObject({
         id: u3,
@@ -1144,7 +1163,8 @@ describe('GET /money/transactions, /summary, /{id} (MONEY-15) over HTTP', () => 
         totalKobo: 500_000,
         group: { count: 2 },
       });
-      // Refreshed: the settled unlock has joined its group.
+      // Refreshed a while later: the settled unlock has joined its group.
+      await age(c);
       const fresh = page(await get(c.auth, `${BASE}?limit=1`).expect(200))
         .items[0];
       expect(fresh).toMatchObject({
@@ -1177,6 +1197,7 @@ describe('GET /money/transactions, /summary, /{id} (MONEY-15) over HTTP', () => 
           ),
         );
       }
+      await age(c);
       const first = page(await get(c.auth, `${BASE}?limit=2`).expect(200));
       await record(c, {
         ...unlockOf(piece, '2026-08-12T06:00:00.000Z', 'completed', ref),
@@ -1193,7 +1214,7 @@ describe('GET /money/transactions, /summary, /{id} (MONEY-15) over HTTP', () => 
       });
     });
 
-    it('a group key lists the unlocks completed by its snapshot, that instant included', async () => {
+    it('a group key lists the unlocks completed by its snapshot less the write time, that instant included', async () => {
       const c = await withWallet();
       const piece = {
         kind: 'content_unlock' as const,
@@ -1203,9 +1224,10 @@ describe('GET /money/transactions, /summary, /{id} (MONEY-15) over HTTP', () => 
       const snapshot = '2026-08-14T12:00:00.000Z';
       const ids: string[] = [];
       for (const [occurred, completed] of [
-        ['2026-08-14T08:00:00.000Z', '2026-08-14T11:59:59.999Z'],
-        ['2026-08-14T09:00:00.000Z', '2026-08-14T12:00:00.000Z'],
-        ['2026-08-14T10:00:00.000Z', '2026-08-14T12:00:00.001Z'],
+        // The snapshot is 12:00:00.000; the group bound 11:59:55.000.
+        ['2026-08-14T08:00:00.000Z', '2026-08-14T11:59:54.999Z'],
+        ['2026-08-14T09:00:00.000Z', '2026-08-14T11:59:55.000Z'],
+        ['2026-08-14T10:00:00.000Z', '2026-08-14T11:59:55.001Z'],
       ]) {
         const id = await record(c, unlockOf(piece, occurred));
         await prisma.fintavaLedgerEntry.update({
@@ -1221,10 +1243,93 @@ describe('GET /money/transactions, /summary, /{id} (MONEY-15) over HTTP', () => 
       });
       const listed = await all(c.auth, `group=${encodeURIComponent(key)}`);
       expect(listed.items.map((i) => i.id)).toEqual([ids[1], ids[0]]);
+      expect(LEDGER_WRITE_MAX_MS).toBe(5_000);
       // Read now, all three are one row.
       const now = page(await get(c.auth, BASE).expect(200)).items;
       expect(now).toHaveLength(1);
       expect(now[0].group?.count).toBe(3);
+    });
+
+    it('an unlock whose write was in flight when page 1 was read stays its own row: its group loses no member', async () => {
+      const c = await withWallet();
+      const piece = {
+        kind: 'content_unlock' as const,
+        targetId: `piece-${randomUUID()}`,
+        title: 'In flight piece',
+      };
+      const u1 = await record(c, unlockOf(piece, '2026-08-15T08:00:00.000Z'));
+      const u2 = await record(c, unlockOf(piece, '2026-08-15T08:30:00.000Z'));
+      const others: string[] = [];
+      for (let h = 9; h <= 13; h += 1) {
+        others.push(
+          await record(
+            c,
+            transferAt(`2026-08-15T${String(h).padStart(2, '0')}:00:00.000Z`),
+          ),
+        );
+      }
+      await age(c);
+      const first = page(await get(c.auth, `${BASE}?limit=3`).expect(200));
+      const { snapshot } = decodeCursor(first.nextCursor!);
+      // Stamped completed 4 s before page 1 was read, committed after it:
+      // the writer's transaction may run up to LEDGER_WRITE_MAX_MS.
+      const u3 = await record(c, unlockOf(piece, '2026-08-15T14:00:00.000Z'));
+      await prisma.fintavaLedgerEntry.update({
+        where: { id: u3 },
+        data: { completedAt: new Date(Date.parse(snapshot) - 4_000) },
+      });
+      const seen = await rest(c.auth, first, 3);
+      const n = await appearances(c.auth, seen);
+      for (const id of [u1, u2, ...others]) {
+        expect({ id, n: n.get(id) }).toEqual({ id, n: 1 });
+      }
+      expect(n.get(u3)).toBeUndefined();
+      expect(seen.find((r) => r.group)).toMatchObject({ group: { count: 2 } });
+    });
+
+    it('a cursor or group key dated year 0000 is a 400, never a query; year 0001 is read', async () => {
+      const a = await withWallet();
+      const b64 = (v: unknown) =>
+        Buffer.from(JSON.stringify(v)).toString('base64url');
+      const id = randomUUID();
+      const ok = '2026-10-02T10:00:00.000Z';
+      const zero = '0000-01-01T00:00:00.000Z';
+      for (const [param, value, message] of [
+        [
+          'cursor',
+          `c2.${b64([ok, id, zero])}`,
+          'cursor is not one this history gave.',
+        ],
+        [
+          'cursor',
+          `c2.${b64([zero, id, ok])}`,
+          'cursor is not one this history gave.',
+        ],
+        [
+          'group',
+          `g2.${b64(['piece-x', '2026-10-02', zero])}`,
+          'group is not a key this history gave.',
+        ],
+      ]) {
+        const res = await get(
+          a.auth,
+          `${BASE}?${param}=${encodeURIComponent(value)}`,
+        ).expect(400);
+        expect(body(res).message).toBe(message);
+      }
+      const one = '0001-01-01T00:00:00.000Z';
+      await get(
+        a.auth,
+        `${BASE}?cursor=${encodeURIComponent(`c2.${b64([ok, id, one])}`)}`,
+      ).expect(200);
+      await get(
+        a.auth,
+        `${BASE}?cursor=${encodeURIComponent(`c2.${b64([one, id, ok])}`)}`,
+      ).expect(200);
+      await get(
+        a.auth,
+        `${BASE}?group=${encodeURIComponent(`g2.${b64(['piece-x', '2026-10-02', one])}`)}`,
+      ).expect(200);
     });
 
     it('a last page that is exactly full carries no cursor', async () => {
@@ -1543,6 +1648,7 @@ describe('GET /money/transactions, /summary, /{id} (MONEY-15) over HTTP', () => 
         occurredAt: at('2026-09-26T07:30:00.000Z'),
       });
 
+      await age(a);
       const { items } = await all(a.auth, '', 2);
       expect(items.map((i) => i.id)).toEqual([
         pendingUnlock,

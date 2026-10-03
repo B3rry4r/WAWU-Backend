@@ -445,32 +445,56 @@ still reads. Every answer is `Cache-Control: no-store`.
 - **Order:** newest first by `occurredAt` (when the money moved), then id.
   A page ends with `nextCursor: null` only when nothing follows (a last page
   that is exactly full carries none either).
-- **The scroll's snapshot** (MONEY-15 round 2). A first page takes the
-  server's clock (milliseconds) as the scroll's snapshot; the cursor
-  (`c2.` + base64url) carries the last row's (`occurredAt`, id) and that
-  snapshot, and the group key (`g2.` + base64url) a piece, a Lagos day and
-  the snapshot of the read that showed the row. Every page of one scroll
-  groups as of its snapshot: a grouped row's members are the unlocks whose
-  `completedAt` is at or before it. So an unlock that lands, or a pending
-  one that settles, mid-scroll stays its own row in that scroll and never
-  moves a group across a cursor already handed out; every movement that
-  existed before the first page shows once, as a row or inside a group.
-  The next refresh (a new first page) groups it. Why this and not a group
-  anchored to its first member: the anchor alone leaves a settling unlock
-  shown twice (once pending on a page already read, once inside its group
-  later), and it would put a group below rows newer than its `createdAt`
-  (which stays its latest member's, Lead ruling 3). The snapshot is
-  compared with `completedAt`, which the ledger stamps with the same
-  server clock. A cursor or key the server did not write (round 1's `c1.`
-  and `g1.` included) is a plain 400 (`cursor is not one this history
-  gave.`, `group is not a key this history gave.`). What it cannot see:
-  a ledger write still in flight at the very moment the first page is
-  read (its `completedAt` is stamped before it commits), and a completed
-  unlock put back to `pending` by a disagreement (MONEY-08; `completedAt`
-  is cleared, so its group loses it mid-scroll). Both can still move one
-  group in an open scroll; a refresh shows it right.
+- **The scroll's snapshot** (MONEY-15 rounds 2 and 3).
+  - A first page takes the server's clock (milliseconds) as the scroll's
+    snapshot. The cursor (`c2.` + base64url) carries the last row's
+    (`occurredAt`, id) and that snapshot. The group key (`g2.` + base64url)
+    carries a piece, a Lagos day and the snapshot of the read that showed
+    the row.
+  - Every page of one scroll groups as of a fixed bound: the snapshot minus
+    `LEDGER_WRITE_MAX_MS` (5 s). A grouped row's members are the unlocks
+    whose `completedAt` is at or before that bound.
+  - The 5 s is how long a ledger write can run from stamping `completedAt`
+    to committing: Prisma's default interactive-transaction timeout. The
+    ledger's writers pass no timeout, and `PrismaService` sets none;
+    `history-units.spec.ts` fails if either starts to.
+  - So these unlocks stay their own row in that scroll and cannot move a
+    group across a cursor already handed out: one that lands mid-scroll,
+    one that settles mid-scroll, and one whose write was in flight when the
+    first page was read. An unlock completed in the last 5 s is its own row
+    until a refresh after that. The next refresh (a new first page) groups
+    them.
+  - Why not anchor a group to its first member: the anchor alone still
+    shows a settling unlock twice (pending on a page already read, then
+    inside its group). It would also put a group below rows newer than its
+    `createdAt`, which stays its latest member's (Lead ruling 3).
+  - The bound is compared with `completedAt`, which the ledger stamps with
+    the same server clock.
+  - A cursor or key the server did not write is a plain 400
+    (`cursor is not one this history gave.`, `group is not a key this
+    history gave.`). That includes round 1's `c1.` and `g1.`, and any time
+    dated year 0000, which Postgres cannot hold.
+  - **What one scroll can still get wrong, each corrected by a refresh:**
+    - *A row whose time moves earlier mid-scroll.* MONEY-10's merge keeps
+      the earliest `occurredAt`, and MONEY-08's sweep settles a pending
+      row with Fintava's own time. A row already shown can sort below the
+      cursor and show a second time. This is not about grouping; round 1's
+      cursor did the same. Today only a pending row is settled this way,
+      so it is a duplicate. If a completed row's time ever moved across
+      Lagos midnight into a day with a group of the same piece (only a fold
+      of two rows of one movement could do that), that group could move
+      and its members go missing from that scroll.
+    - *A completed unlock put back to `pending` by a disagreement*
+      (MONEY-08, a stop; `completedAt` is cleared). If its group was
+      already shown, its money shows twice in that scroll: the group comes
+      back lower with its other members, or the unlock comes back as its
+      own pending row, and the key of the group already shown lists one
+      member fewer than its count. If its group was still below the
+      cursor, everything shows once.
+    - Apart from these, every movement that existed before the first page
+      shows exactly once in the scroll, as a row or inside a group.
 - **Groups** (WALLET.md, Lead ruling 3): two or more unlock earnings of
-  one piece on one Africa/Lagos day, completed by the snapshot, are one
+  one piece on one Africa/Lagos day, completed by the group bound, are one
   row. Its id, reference and `createdAt` are its latest movement's,
   `amountKobo`, `fee` and `totalKobo` the sums, `counterparty`, `note`,
   `transferId` and `paymentId` null. A pending or failed unlock stays its

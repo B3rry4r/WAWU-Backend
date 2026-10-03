@@ -165,17 +165,35 @@ const text = (v: string) => Prisma.sql`${v}::text`;
 const LOCAL_DAY = Prisma.sql`to_char((e."occurredAt" AT TIME ZONE 'UTC') AT TIME ZONE 'Africa/Lagos', 'YYYY-MM-DD')`;
 
 /**
+ * The longest a ledger write can take from stamping `completedAt` to
+ * committing, in milliseconds: Prisma's default interactive-transaction
+ * `timeout` (5,000 ms; Prisma rolls back a transaction that runs longer).
+ * `LedgerService.record` and `LedgerConsumerService` write inside
+ * `prisma.$transaction(fn)` with no options, and `PrismaService` sets no
+ * `transactionOptions`, so that default is the one in force
+ * (`history-units.spec.ts` fails if either starts passing one). Change this
+ * with them.
+ */
+export const LEDGER_WRITE_MAX_MS = 5_000;
+
+/** 0001-01-01T00:00:00Z: the earliest time Postgres holds (it has no year 0). */
+const EARLIEST_TIME_MS = Date.parse('0001-01-01T00:00:00.000Z');
+
+/**
  * The rows that may group (WALLET.md, Lead ruling 3): unlock earnings of a
- * piece that were completed by the scroll's snapshot (`sn."at"`, see
- * `read`). Only `completed` ones, so a group's status and sums are always
- * money Fintava confirmed; a pending or failed unlock stays its own row.
- * Judged as of the snapshot, so an unlock that settles mid-scroll stays its
- * own row until the next refresh and the group it would join keeps its
- * members and its place. Default (agent), owner may override.
+ * piece completed by the scroll's group bound (`sn."groupBy"`: the snapshot
+ * minus LEDGER_WRITE_MAX_MS, see `read`). Only `completed` ones, so a
+ * group's status and sums are always money Fintava confirmed; a pending or
+ * failed unlock stays its own row. Judged as of that bound, so an unlock
+ * that settles mid-scroll, or whose write was still in flight when the
+ * first page was read (stamped before the snapshot, committed after), stays
+ * its own row in that scroll, and the group it would join keeps its members
+ * and its place. An unlock completed in the last 5 seconds is its own row
+ * until a later refresh. Default (agent), owner may override.
  */
 const GROUPABLE = Prisma.sql`(
   e."category" = 'earning' AND e."direction" = 'in' AND e."status" = 'completed'
-  AND e."completedAt" IS NOT NULL AND e."completedAt" <= sn."at"
+  AND e."completedAt" IS NOT NULL AND e."completedAt" <= sn."groupBy"
   AND e."linkKind" = ${text('content_unlock')} AND e."linkTargetId" IS NOT NULL
 )`;
 
@@ -239,11 +257,13 @@ function checkedMonth(month: string): string {
  * - **Order and pages.** Newest first by when the money moved
  *   (`occurredAt`), then id; the cursor is the last row's pair plus the
  *   scroll's snapshot (the first page's time). Every page groups as of the
- *   snapshot, so neither a row landing nor an unlock settling while someone
- *   scrolls shifts a page or moves a group across the cursor
- *   (CONVENTIONS.md section 6, "The scroll's snapshot").
+ *   snapshot less LEDGER_WRITE_MAX_MS, so an unlock landing, settling or
+ *   still being written while someone scrolls never moves a group across
+ *   the cursor. What a refresh still corrects (a row whose time moves
+ *   earlier, a reopened unlock) is in CONVENTIONS.md section 6, "The
+ *   scroll's snapshot".
  * - **Groups** (WALLET.md, Lead ruling 3): two or more unlock earnings of
- *   one piece on one Africa/Lagos day, completed by the snapshot, are one
+ *   one piece on one Africa/Lagos day, completed by that bound, are one
  *   row; its id, reference and createdAt are its latest movement's, its
  *   amounts the sums. `group=<key>` lists the movements, one per row.
  * - **The other side's name** is the one the movement recorded, else (for
@@ -337,6 +357,10 @@ export class TransactionHistoryService {
     const snapshot =
       cursor?.snapshot ??
       (scope.kind === 'group' ? scope.key.snapshot : new Date().toISOString());
+    // Never before year 1, which the database cannot hold.
+    const groupBy = new Date(
+      Math.max(Date.parse(snapshot) - LEDGER_WRITE_MAX_MS, EARLIEST_TIME_MS),
+    ).toISOString();
     const where: Prisma.Sql[] = [
       Prisma.sql`e."walletKind" = 'user'`,
       Prisma.sql`e."wawuUserId" = ${wallet.wawuUserId}::text`,
@@ -396,7 +420,8 @@ export class TransactionHistoryService {
     return this.prisma.$queryRaw<HistoryRow[]>(Prisma.sql`
       WITH sn AS (
         -- The scroll's snapshot, in UTC like every timestamp column here.
-        SELECT ${snapshot}::timestamptz AT TIME ZONE 'UTC' AS "at"
+        SELECT ${snapshot}::timestamptz AT TIME ZONE 'UTC' AS "at",
+               ${groupBy}::timestamptz AT TIME ZONE 'UTC' AS "groupBy"
       ),
       base AS (
         SELECT e."id",
