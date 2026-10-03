@@ -326,7 +326,10 @@ describe('Paid DM threads and the creator queue (contract, INBOX-08)', () => {
 
     it('drops a question from the list and the total once it is answered', async () => {
       const [target] = (
-        await as(chidi).get('/paid-dm/queue').expect(200).then(data<PaidDmQueuePage>)
+        await as(chidi)
+          .get('/paid-dm/queue')
+          .expect(200)
+          .then(data<PaidDmQueuePage>)
       ).items;
       await as(chidi)
         .post(`/paid-dm/questions/${target.id}/replies`, { text: 'On it.' })
@@ -387,7 +390,11 @@ describe('Paid DM threads and the creator queue (contract, INBOX-08)', () => {
       const shown = detail.questions.find((x) => x.id === q.id);
       expect(shown?.status).toBe('responded');
       expect(shown?.mine).toBe(true);
-      expect(shown?.replies.map((r) => r.text)).toEqual(['one', 'two', 'three']);
+      expect(shown?.replies.map((r) => r.text)).toEqual([
+        'one',
+        'two',
+        'three',
+      ]);
       expect(shown?.respondedAt).not.toBeNull();
       expect(detail.thread.lastText).toBe('three');
       expect(detail.thread.lastTextMine).toBe(false);
@@ -467,7 +474,9 @@ describe('Paid DM threads and the creator queue (contract, INBOX-08)', () => {
           .expect(200),
       );
       expect(second.items).toHaveLength(1);
-      expect(second.items[0].other.wawuId).not.toBe(first.items[0].other.wawuId);
+      expect(second.items[0].other.wawuId).not.toBe(
+        first.items[0].other.wawuId,
+      );
       expect(second.nextCursor).toBeNull();
     });
   });
@@ -556,7 +565,9 @@ describe('Paid DM threads and the creator queue (contract, INBOX-08)', () => {
       await as(chidi)
         .post(`/paid-dm/questions/${q.id}/replies`, { text: 'second' })
         .expect(409);
-      expect(await prisma.dmReply.count({ where: { messageId: q.id } })).toBe(1);
+      expect(await prisma.dmReply.count({ where: { messageId: q.id } })).toBe(
+        1,
+      );
     });
 
     it('parallel first replies: one flips the status, all land as bubbles, none is lost', async () => {
@@ -632,10 +643,13 @@ describe('Paid DM threads and the creator queue (contract, INBOX-08)', () => {
         text: 'legacy',
         deadlineInMs: HOUR,
       });
-      const first = await as(chidi)
-        .post(`/dm/${q.id}/respond`, { text: 'legacy reply' });
+      const first = await as(chidi).post(`/dm/${q.id}/respond`, {
+        text: 'legacy reply',
+      });
       expect([200, 201]).toContain(first.status);
-      expect(data<{ status: string; responseText: string }>(first)).toMatchObject({
+      expect(
+        data<{ status: string; responseText: string }>(first),
+      ).toMatchObject({
         status: 'responded',
         responseText: 'legacy reply',
       });
@@ -643,7 +657,9 @@ describe('Paid DM threads and the creator queue (contract, INBOX-08)', () => {
         .post(`/dm/${q.id}/respond`, { text: 'again' })
         .expect(409);
       const detail = data<PaidDmThreadDetail>(
-        await as(ada).get(`/paid-dm/threads/${chidi.sub}?limit=100`).expect(200),
+        await as(ada)
+          .get(`/paid-dm/threads/${chidi.sub}?limit=100`)
+          .expect(200),
       );
       expect(
         detail.questions.find((x: PaidDmQuestion) => x.id === q.id)?.replies,
@@ -665,7 +681,9 @@ describe('Paid DM threads and the creator queue (contract, INBOX-08)', () => {
       const ok = results.filter((r) => r.status < 300);
       expect(ok).toHaveLength(1);
       expect(results.filter((r) => r.status === 409)).toHaveLength(4);
-      expect(await prisma.dmReply.count({ where: { messageId: q.id } })).toBe(1);
+      expect(await prisma.dmReply.count({ where: { messageId: q.id } })).toBe(
+        1,
+      );
     });
   });
 });

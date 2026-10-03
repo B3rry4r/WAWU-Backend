@@ -40,6 +40,8 @@ export class PaidDmReplyDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(2000)
-  @Matches(/\S/, { message: 'text must contain at least one non-space character' })
+  @Matches(/\S/, {
+    message: 'text must contain at least one non-space character',
+  })
   text: string;
 }

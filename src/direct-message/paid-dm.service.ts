@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import type {
   DirectMessageModel as DirectMessageRow,
@@ -262,8 +266,12 @@ export class PaidDmService {
     after: { at: Date; id: string } | null,
     take: number,
   ): Promise<ThreadAggRow[]> {
-    const meCol = Prisma.raw(side === 'fan' ? '"senderWawuId"' : '"creatorWawuId"');
-    const otherCol = Prisma.raw(side === 'fan' ? '"creatorWawuId"' : '"senderWawuId"');
+    const meCol = Prisma.raw(
+      side === 'fan' ? '"senderWawuId"' : '"creatorWawuId"',
+    );
+    const otherCol = Prisma.raw(
+      side === 'fan' ? '"creatorWawuId"' : '"senderWawuId"',
+    );
     const now = new Date();
     const nowTs = Prisma.sql`(${now.toISOString()}::timestamptz AT TIME ZONE 'UTC')`;
     const waiting = Prisma.sql`d."status" = 'awaiting_response' AND d."deadlineAt" > ${nowTs}`;
@@ -313,8 +321,12 @@ export class PaidDmService {
   ): Promise<PaidDmThread[]> {
     if (aggs.length === 0) return [];
     const others = aggs.map((a) => a.other);
-    const meCol = Prisma.raw(side === 'fan' ? '"senderWawuId"' : '"creatorWawuId"');
-    const otherCol = Prisma.raw(side === 'fan' ? '"creatorWawuId"' : '"senderWawuId"');
+    const meCol = Prisma.raw(
+      side === 'fan' ? '"senderWawuId"' : '"creatorWawuId"',
+    );
+    const otherCol = Prisma.raw(
+      side === 'fan' ? '"creatorWawuId"' : '"senderWawuId"',
+    );
     const [parties, questions, replies] = await Promise.all([
       this.dms.lookupOtherParties(others),
       this.prisma.$queryRaw<LastBubbleRow[]>(Prisma.sql`
@@ -334,7 +346,8 @@ export class PaidDmService {
       const q = lastQ.get(a.other);
       const r = lastR.get(a.other);
       // A reply is always later than the question it answers; on a tie it wins.
-      const replyLast = r !== undefined && (!q || r.at.getTime() >= q.at.getTime());
+      const replyLast =
+        r !== undefined && (!q || r.at.getTime() >= q.at.getTime());
       const bubble = replyLast ? r : q;
       const fanWrote = !replyLast;
       return {
