@@ -28,9 +28,10 @@ describe('history keys', () => {
     const c = {
       at: '2026-09-26T08:02:00.123Z',
       id: '90c58e0e-ca19-43ca-96d6-a171f9e28146',
+      snapshot: '2026-09-26T09:00:00.001Z',
     };
     const raw = encodeCursor(c);
-    expect(raw).toMatch(/^c1\.[A-Za-z0-9_-]+$/);
+    expect(raw).toMatch(/^c2\.[A-Za-z0-9_-]+$/);
     expect(decodeCursor(raw)).toEqual(c);
   });
 
@@ -38,40 +39,56 @@ describe('history keys', () => {
     const b64 = (v: unknown) =>
       Buffer.from(JSON.stringify(v)).toString('base64url');
     const id = '90c58e0e-ca19-43ca-96d6-a171f9e28146';
+    const at = '2026-09-26T08:02:00.123Z';
+    const snap = '2026-09-26T09:00:00.001Z';
     for (const raw of [
       '',
-      'c1.',
-      'c1.!!',
-      `c2.${b64(['2026-09-26T08:02:00.123Z', id])}`,
-      `c1.${b64(['2026-09-26T08:02:00Z', id])}`,
-      `c1.${b64(['2026-02-30T08:02:00.000Z', id])}`,
-      `c1.${b64(['2026-09-26T08:02:00.123Z', 'not-an-id'])}`,
-      `c1.${b64(['2026-09-26T08:02:00.123Z', id, 'x'])}`,
-      `c1.${b64({ at: '2026-09-26T08:02:00.123Z', id })}`,
-      `c1.${b64([1, id])}`,
-      `c1.${Buffer.from('not json').toString('base64url')}`,
+      'c2.',
+      'c2.!!',
+      // The round-1 format, without a snapshot.
+      `c1.${b64([at, id])}`,
+      `c2.${b64([at, id])}`,
+      `c1.${b64([at, id, snap])}`,
+      `c2.${b64(['2026-09-26T08:02:00Z', id, snap])}`,
+      `c2.${b64(['2026-02-30T08:02:00.000Z', id, snap])}`,
+      `c2.${b64([at, 'not-an-id', snap])}`,
+      `c2.${b64([at, id, 'x'])}`,
+      `c2.${b64([at, id, '2026-09-26T09:00:00Z'])}`,
+      `c2.${b64([at, id, snap, 'x'])}`,
+      `c2.${b64({ at, id, snapshot: snap })}`,
+      `c2.${b64([1, id, snap])}`,
+      `c2.${Buffer.from('not json').toString('base64url')}`,
     ]) {
       expect(() => decodeCursor(raw)).toThrow(BadRequestException);
     }
   });
 
-  it('a group key goes out and comes back as the same piece and day', () => {
-    const g = { targetId: 'piece-1|odd', day: '2026-09-26' };
+  it('a group key goes out and comes back as the same piece, day and snapshot', () => {
+    const g = {
+      targetId: 'piece-1|odd',
+      day: '2026-09-26',
+      snapshot: '2026-09-26T09:00:00.001Z',
+    };
     expect(decodeGroupKey(encodeGroupKey(g))).toEqual(g);
   });
 
   it('a group key this history did not write is a 400', () => {
     const b64 = (v: unknown) =>
       Buffer.from(JSON.stringify(v)).toString('base64url');
+    const sn = '2026-09-26T09:00:00.001Z';
     for (const raw of [
-      'g1.',
-      `c1.${b64(['p', '2026-09-26'])}`,
-      `g1.${b64(['', '2026-09-26'])}`,
-      `g1.${b64(['p', '2026-9-26'])}`,
-      `g1.${b64(['p', '2026-09-32'])}`,
-      `g1.${b64(['p\u0000', '2026-09-26'])}`,
-      `g1.${b64(['x'.repeat(201), '2026-09-26'])}`,
-      `g1.${b64(['p'])}`,
+      'g2.',
+      // The round-1 format (no snapshot).
+      `g1.${b64(['p', '2026-09-26'])}`,
+      `g2.${b64(['p', '2026-09-26'])}`,
+      `c2.${b64(['p', '2026-09-26', sn])}`,
+      `g2.${b64(['', '2026-09-26', sn])}`,
+      `g2.${b64(['p', '2026-9-26', sn])}`,
+      `g2.${b64(['p', '2026-09-32', sn])}`,
+      `g2.${b64(['p', '2026-09-26', 'x'])}`,
+      `g2.${b64(['p\u0000', '2026-09-26', sn])}`,
+      `g2.${b64(['x'.repeat(201), '2026-09-26', sn])}`,
+      `g2.${b64(['p'])}`,
     ]) {
       expect(() => decodeGroupKey(raw)).toThrow(BadRequestException);
     }

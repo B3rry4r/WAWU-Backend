@@ -375,21 +375,45 @@ still reads. Every answer is `Cache-Control: no-store`.
   has not settled shows `pending`, and a row whose sightings disagree stays
   as stored (`discrepancy`, MONEY-16).
 - **Order:** newest first by `occurredAt` (when the money moved), then id.
-  The cursor (`c1.` + base64url) holds the last row's pair; the group key
-  (`g1.` + base64url) a piece and a day. Anything the server did not write is
-  a plain 400 (`cursor is not one this history gave.`).
-- **Groups** (WALLET.md, Lead ruling 3): two or more `completed` unlock
-  earnings of one piece on one Africa/Lagos day are one row. Its id,
-  reference and `createdAt` are its latest movement's, `amountKobo`, `fee`
-  and `totalKobo` the sums, `counterparty`, `note`, `transferId` and
-  `paymentId` null. A pending or failed unlock stays its own row.
-  `group=<key>` lists the movements, one per row, and ignores `filter`,
-  `q` and `month`.
+  A page ends with `nextCursor: null` only when nothing follows (a last page
+  that is exactly full carries none either).
+- **The scroll's snapshot** (MONEY-15 round 2). A first page takes the
+  server's clock (milliseconds) as the scroll's snapshot; the cursor
+  (`c2.` + base64url) carries the last row's (`occurredAt`, id) and that
+  snapshot, and the group key (`g2.` + base64url) a piece, a Lagos day and
+  the snapshot of the read that showed the row. Every page of one scroll
+  groups as of its snapshot: a grouped row's members are the unlocks whose
+  `completedAt` is at or before it. So an unlock that lands, or a pending
+  one that settles, mid-scroll stays its own row in that scroll and never
+  moves a group across a cursor already handed out; every movement that
+  existed before the first page shows once, as a row or inside a group.
+  The next refresh (a new first page) groups it. Why this and not a group
+  anchored to its first member: the anchor alone leaves a settling unlock
+  shown twice (once pending on a page already read, once inside its group
+  later), and it would put a group below rows newer than its `createdAt`
+  (which stays its latest member's, Lead ruling 3). The snapshot is
+  compared with `completedAt`, which the ledger stamps with the same
+  server clock. A cursor or key the server did not write (round 1's `c1.`
+  and `g1.` included) is a plain 400 (`cursor is not one this history
+  gave.`, `group is not a key this history gave.`). What it cannot see:
+  a ledger write still in flight at the very moment the first page is
+  read (its `completedAt` is stamped before it commits), and a completed
+  unlock put back to `pending` by a disagreement (MONEY-08; `completedAt`
+  is cleared, so its group loses it mid-scroll). Both can still move one
+  group in an open scroll; a refresh shows it right.
+- **Groups** (WALLET.md, Lead ruling 3): two or more unlock earnings of
+  one piece on one Africa/Lagos day, completed by the snapshot, are one
+  row. Its id, reference and `createdAt` are its latest movement's,
+  `amountKobo`, `fee` and `totalKobo` the sums, `counterparty`, `note`,
+  `transferId` and `paymentId` null. A pending or failed unlock stays its
+  own row. `group=<key>` lists the movements the row stood for, one per
+  row, and ignores `filter`, `q` and `month`.
 - **Filters:** `money_in` and `money_out` by direction; `bills` is category
   `bill` or a link of kind `bill` (a held bill payment too); `content` is a
   link of kind `content_unlock` or `tip`. `month` is `YYYY-MM` in
   Africa/Lagos time.
-- **Search** (`q`, 2 to 60 characters, trimmed) matches, case-insensitively,
+- **Search** (`q`) is trimmed first, then must be 2 to 60 characters
+  (`" P "` is a 400). It matches, case-insensitively,
   a part of what the row shows: the counterparty's name or handle, the
   description, the note and the reference. `%`, `_` and `\` are only
   characters. A grouped row is searched by its description only.
@@ -408,8 +432,10 @@ still reads. Every answer is `Cache-Control: no-store`.
   (`FintavaWallet.accountName`, MONEY-12), else their `@handle`, else a plain
   word for the kind (a Fintava delivery names nobody); a bank account's number only as
   its last 4 digits; an avatar only for someone on WAWU.
-- **Reference:** ours (`customerReference`), else Fintava's reference, the
-  session id, the transaction id, the tagapay reference, else the row's id.
+- **Reference:** ours (`customerReference`) first, else Fintava's
+  reference, the session id, the transaction id, the tagapay reference,
+  else the row's id. Ours first is what G-44's fix (the receiver's row
+  holding ours) relies on.
 - **Month summary:** the sums of that Africa/Lagos month's `completed`
   rows by direction (`totalKobo`: out is what left, fees included; in is
   what arrived). Pending, failed and reversed rows are not in it, and

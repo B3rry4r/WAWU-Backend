@@ -89,6 +89,8 @@ interface HistoryRow {
   groupCount: string;
   groupFirstAt: Date;
   description: string;
+  /** The scroll's snapshot: the cursor's, or this read's own time on a first page. */
+  snapshotAt: Date;
 }
 
 /** BIGINT text to a number, refusing anything a number cannot hold exactly. */
@@ -164,12 +166,16 @@ const LOCAL_DAY = Prisma.sql`to_char((e."occurredAt" AT TIME ZONE 'UTC') AT TIME
 
 /**
  * The rows that may group (WALLET.md, Lead ruling 3): unlock earnings of a
- * piece. Only `completed` ones, so a grouped row's status and sums are
- * always money Fintava confirmed; a pending or failed unlock stays its own
- * row. Default (agent), owner may override.
+ * piece that were completed by the scroll's snapshot (`sn."at"`, see
+ * `read`). Only `completed` ones, so a group's status and sums are always
+ * money Fintava confirmed; a pending or failed unlock stays its own row.
+ * Judged as of the snapshot, so an unlock that settles mid-scroll stays its
+ * own row until the next refresh and the group it would join keeps its
+ * members and its place. Default (agent), owner may override.
  */
 const GROUPABLE = Prisma.sql`(
   e."category" = 'earning' AND e."direction" = 'in' AND e."status" = 'completed'
+  AND e."completedAt" IS NOT NULL AND e."completedAt" <= sn."at"
   AND e."linkKind" = ${text('content_unlock')} AND e."linkTargetId" IS NOT NULL
 )`;
 
@@ -231,12 +237,15 @@ function checkedMonth(month: string): string {
  *   sweep). A row the sweep has not settled stays `pending`; a row whose
  *   sightings disagree stays where it was (`discrepancy`, MONEY-16).
  * - **Order and pages.** Newest first by when the money moved
- *   (`occurredAt`), then id; the cursor is the last row's pair, so a row
- *   landing while someone scrolls never shifts a page.
- * - **Groups** (WALLET.md, Lead ruling 3): two or more completed unlock
- *   earnings of one piece on one Africa/Lagos day are one row; its id,
- *   reference and createdAt are its latest movement's, its amounts the
- *   sums. `group=<key>` lists the movements, one per row.
+ *   (`occurredAt`), then id; the cursor is the last row's pair plus the
+ *   scroll's snapshot (the first page's time). Every page groups as of the
+ *   snapshot, so neither a row landing nor an unlock settling while someone
+ *   scrolls shifts a page or moves a group across the cursor
+ *   (CONVENTIONS.md section 6, "The scroll's snapshot").
+ * - **Groups** (WALLET.md, Lead ruling 3): two or more unlock earnings of
+ *   one piece on one Africa/Lagos day, completed by the snapshot, are one
+ *   row; its id, reference and createdAt are its latest movement's, its
+ *   amounts the sums. `group=<key>` lists the movements, one per row.
  * - **The other side's name** is the one the movement recorded, else (for
  *   someone on WAWU) their wallet's account name as Fintava gave it when it
  *   opened (MONEY-12), else their @handle, else a plain word for the kind:
@@ -277,6 +286,7 @@ export class TransactionHistoryService {
           ? encodeCursor({
               at: lastRow.occurredAt.toISOString(),
               id: lastRow.id,
+              snapshot: lastRow.snapshotAt.toISOString(),
             })
           : null,
     };
@@ -318,6 +328,15 @@ export class TransactionHistoryService {
     cursor: HistoryCursor | null,
     take: number,
   ): Promise<HistoryRow[]> {
+    // A later page keeps its scroll's snapshot; a group's list keeps the
+    // snapshot of the read that showed the group.
+    //
+    // A first page takes this server's clock, the clock the ledger stamps
+    // `completedAt` with (LedgerService), so the two are compared on one
+    // clock; milliseconds, as the column keeps them.
+    const snapshot =
+      cursor?.snapshot ??
+      (scope.kind === 'group' ? scope.key.snapshot : new Date().toISOString());
     const where: Prisma.Sql[] = [
       Prisma.sql`e."walletKind" = 'user'`,
       Prisma.sql`e."wawuUserId" = ${wallet.wawuUserId}::text`,
@@ -375,7 +394,11 @@ export class TransactionHistoryService {
     }
 
     return this.prisma.$queryRaw<HistoryRow[]>(Prisma.sql`
-      WITH base AS (
+      WITH sn AS (
+        -- The scroll's snapshot, in UTC like every timestamp column here.
+        SELECT ${snapshot}::timestamptz AT TIME ZONE 'UTC' AS "at"
+      ),
+      base AS (
         SELECT e."id",
                e."direction"::text AS "direction",
                e."category"::text AS "category",
@@ -402,8 +425,10 @@ export class TransactionHistoryService {
                e."transferId", e."paymentId", e."occurredAt",
                ${LOCAL_DAY} AS "day",
                ${LABEL} AS "label",
-               CASE WHEN ${GROUPABLE} THEN e."linkTargetId" || '|' || ${LOCAL_DAY} END AS "gk"
+               CASE WHEN ${GROUPABLE} THEN e."linkTargetId" || '|' || ${LOCAL_DAY} END AS "gk",
+               sn."at" AS "snapshotAt"
           FROM "FintavaLedgerEntry" e
+          CROSS JOIN sn
           LEFT JOIN "UserProfile" p
             ON e."counterpartyKind" = 'wawu_user'
            AND p."wawuUserId" = e."counterpartyWawuUserId"
@@ -448,7 +473,7 @@ export class TransactionHistoryService {
              d."linkKind", d."linkTargetId", d."linkTitle", d."note", d."reference",
              d."transferId", d."paymentId", d."occurredAt", d."day",
              d."isGroup", d."gn"::text AS "groupCount", d."gFirst" AS "groupFirstAt",
-             d."description"
+             d."description", d."snapshotAt"
         FROM described d
        ${shown.length ? Prisma.sql`WHERE ${Prisma.join(shown, ' AND ')}` : Prisma.empty}
        ORDER BY d."occurredAt" DESC, d."id" DESC
@@ -512,7 +537,11 @@ export class TransactionHistoryService {
       paymentId: r.isGroup ? null : r.paymentId,
       group: r.isGroup
         ? {
-            key: encodeGroupKey({ targetId: r.linkTargetId!, day: r.day }),
+            key: encodeGroupKey({
+              targetId: r.linkTargetId!,
+              day: r.day,
+              snapshot: r.snapshotAt.toISOString(),
+            }),
             count: Number(r.groupCount),
             firstAt: r.groupFirstAt.toISOString(),
             lastAt: r.occurredAt.toISOString(),

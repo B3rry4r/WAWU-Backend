@@ -20229,7 +20229,7 @@
             "name": "q",
             "required": false,
             "in": "query",
-            "description": "Free-text search over the counterparty's name, the description, the note and the reference.",
+            "description": "Free-text search over the counterparty's name, the description, the\nnote and the reference. Spaces around it are dropped first; what is\nleft must be 2 to 60 characters.",
             "schema": {
               "minLength": 2,
               "maxLength": 60,

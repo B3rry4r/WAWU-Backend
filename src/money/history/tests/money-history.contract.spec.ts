@@ -25,6 +25,7 @@ import {
 } from '../../gate/wallet-gate';
 import type { LedgerMovementInput } from '../../ledger/ledger.interface';
 import { LedgerService } from '../../ledger/ledger.service';
+import { encodeGroupKey } from '../history-keys';
 import { MoneyModule } from '../../money.module';
 import type {
   MonthlySummaryView,
@@ -703,6 +704,97 @@ describe('GET /money/transactions, /summary, /{id} (MONEY-15) over HTTP', () => 
       expect(detail.reference).toBe(ref);
     });
 
+    it('the reference shown is ours first, then Fintava’s, the session, the transaction id, the tagapay one, else the row id', async () => {
+      const a = await withWallet();
+      const write = (references: LedgerMovementInput['references']) =>
+        ledger
+          .record({
+            wallet: {
+              kind: 'user',
+              wawuUserId: a.id,
+              accountNumber: a.account,
+            },
+            direction: 'in',
+            status: 'completed',
+            category: 'transfer',
+            amountKobo: 1000,
+            references,
+            source: 'webhook',
+          })
+          .then((r) => r.entryId);
+      const u = () => randomUUID();
+      const cases: Array<[LedgerMovementInput['references'], string]> = [];
+      const all5 = {
+        customerReference: `OURS-${u()}`,
+        fintavaReference: `FIN-${u()}`,
+        sessionId: `SES-${u()}`,
+        fintavaTransactionId: `TXN-${u()}`,
+        tagapayTransRef: `TAG-${u()}`,
+      };
+      cases.push([all5, all5.customerReference]);
+      const four = {
+        fintavaReference: `FIN-${u()}`,
+        sessionId: `SES-${u()}`,
+        fintavaTransactionId: `TXN-${u()}`,
+        tagapayTransRef: `TAG-${u()}`,
+      };
+      cases.push([four, four.fintavaReference]);
+      const three = {
+        sessionId: `SES-${u()}`,
+        fintavaTransactionId: `TXN-${u()}`,
+        tagapayTransRef: `TAG-${u()}`,
+      };
+      cases.push([three, three.sessionId]);
+      const two = {
+        fintavaTransactionId: `TXN-${u()}`,
+        tagapayTransRef: `TAG-${u()}`,
+      };
+      cases.push([two, two.fintavaTransactionId]);
+      const one = { tagapayTransRef: `TAG-${u()}` };
+      cases.push([one, one.tagapayTransRef]);
+      for (const [refs, shown] of cases) {
+        const id = await write(refs);
+        const v = body<TransactionView>(
+          await get(a.auth, `${BASE}/${id}`).expect(200),
+        ).data!;
+        expect(v.reference).toBe(shown);
+      }
+      const onlyDelivery = await write({ delivery: [`DLV-${u()}`] });
+      const v = body<TransactionView>(
+        await get(a.auth, `${BASE}/${onlyDelivery}`).expect(200),
+      ).data!;
+      expect(v.reference).toBe(onlyDelivery);
+    });
+
+    it('spaces around a search are dropped before its length is checked', async () => {
+      const a = await withWallet();
+      const p = await record(a, {
+        direction: 'out',
+        status: 'completed',
+        category: 'transfer',
+        amountKobo: 1000,
+        counterparty: {
+          kind: 'bank_account',
+          name: 'Pe Okon',
+          accountNumber: '0123456789',
+          bankName: 'Kuda',
+        },
+      });
+      for (const q of [' P ', '   ', ' a', `  ${'x'.repeat(61)}  `]) {
+        await get(a.auth, `${BASE}?q=${encodeURIComponent(q)}`).expect(400);
+      }
+      const found = page(
+        await get(a.auth, `${BASE}?q=${encodeURIComponent(`  pe  `)}`).expect(
+          200,
+        ),
+      ).items.map((i) => i.id);
+      expect(found).toEqual([p]);
+      await get(
+        a.auth,
+        `${BASE}?q=${encodeURIComponent(` ${'x'.repeat(60)} `)}`,
+      ).expect(200);
+    });
+
     it('a search shorter than 2 or longer than 60 characters is refused', async () => {
       const a = await withWallet();
       await get(a.auth, `${BASE}?q=a`).expect(400);
@@ -911,6 +1003,253 @@ describe('GET /money/transactions, /summary, /{id} (MONEY-15) over HTTP', () => 
   });
 
   describe('pages, newest first', () => {
+    /** Every page of the history, starting from one already read. */
+    async function rest(auth: string, first: TransactionPage, limit: number) {
+      const seen = [...first.items];
+      let cursor = first.nextCursor;
+      let pages = 1;
+      while (cursor) {
+        const p = page(
+          await get(
+            auth,
+            `${BASE}?limit=${limit}&cursor=${encodeURIComponent(cursor)}`,
+          ).expect(200),
+        );
+        seen.push(...p.items);
+        cursor = p.nextCursor;
+        pages += 1;
+        expect(pages).toBeLessThan(50);
+      }
+      return seen;
+    }
+
+    /** How many times each movement appears, a group counting for each of its members. */
+    async function appearances(auth: string, seen: TransactionView[]) {
+      const n = new Map<string, number>();
+      for (const row of seen) {
+        const ids = row.group
+          ? (
+              await all(auth, `group=${encodeURIComponent(row.group.key)}`)
+            ).items.map((m) => m.id)
+          : [row.id];
+        if (row.group) expect(ids.length).toBe(row.group.count);
+        for (const id of ids) n.set(id, (n.get(id) ?? 0) + 1);
+      }
+      return n;
+    }
+
+    const unlockOf = (
+      piece: { kind: 'content_unlock'; targetId: string; title: string },
+      iso: string,
+      status: 'completed' | 'pending' = 'completed',
+      ref?: string,
+    ): Move => ({
+      direction: 'in',
+      status,
+      category: 'earning',
+      amountKobo: 250_000,
+      link: piece,
+      occurredAt: at(iso),
+      ref,
+    });
+    const transferAt = (iso: string): Move => ({
+      direction: 'in',
+      status: 'completed',
+      category: 'transfer',
+      amountKobo: 1_000,
+      occurredAt: at(iso),
+    });
+
+    it('P1: a new unlock of a grouped piece landing mid-scroll moves nothing; every earlier movement shows once', async () => {
+      const c = await withWallet();
+      const piece = {
+        kind: 'content_unlock' as const,
+        targetId: `piece-${randomUUID()}`,
+        title: 'Lighting night shoots',
+      };
+      // Lagos 10 Aug 2026: two completed unlocks at 09:00 and 09:30, then 5 transfers.
+      const u1 = await record(c, unlockOf(piece, '2026-08-10T08:00:00.000Z'));
+      const u2 = await record(c, unlockOf(piece, '2026-08-10T08:30:00.000Z'));
+      const others: string[] = [];
+      for (let h = 9; h <= 13; h += 1) {
+        others.push(
+          await record(
+            c,
+            transferAt(`2026-08-10T${String(h).padStart(2, '0')}:00:00.000Z`),
+          ),
+        );
+      }
+      const first = page(await get(c.auth, `${BASE}?limit=3`).expect(200));
+      // A third buyer unlocks the piece at 15:00, between pages.
+      const u3 = await record(c, unlockOf(piece, '2026-08-10T14:00:00.000Z'));
+      const seen = await rest(c.auth, first, 3);
+      const n = await appearances(c.auth, seen);
+      for (const id of [u1, u2, ...others])
+        expect({ id, n: n.get(id) }).toEqual({ id, n: 1 });
+      // It arrived after the scroll began: it waits for the next refresh.
+      expect(n.get(u3)).toBeUndefined();
+      const group = seen.find((r) => r.group);
+      expect(group).toMatchObject({ totalKobo: 500_000, group: { count: 2 } });
+      // Refreshed, the group holds all three and leads the history.
+      const fresh = page(await get(c.auth, `${BASE}?limit=1`).expect(200))
+        .items[0];
+      expect(fresh).toMatchObject({
+        id: u3,
+        totalKobo: 750_000,
+        group: { count: 3 },
+      });
+    });
+
+    it('P1b: a pending unlock of the piece settling mid-scroll moves nothing; every earlier movement shows once', async () => {
+      const c = await withWallet();
+      const piece = {
+        kind: 'content_unlock' as const,
+        targetId: `piece-${randomUUID()}`,
+        title: 'Probe piece b',
+      };
+      const u1 = await record(c, unlockOf(piece, '2026-08-11T08:00:00.000Z'));
+      const u2 = await record(c, unlockOf(piece, '2026-08-11T08:30:00.000Z'));
+      const others: string[] = [];
+      for (let h = 9; h <= 13; h += 1) {
+        others.push(
+          await record(
+            c,
+            transferAt(`2026-08-11T${String(h).padStart(2, '0')}:00:00.000Z`),
+          ),
+        );
+      }
+      const ref = `M15-PEND-${randomUUID()}`;
+      const u3 = await record(
+        c,
+        unlockOf(piece, '2026-08-11T14:00:00.000Z', 'pending', ref),
+      );
+      const first = page(await get(c.auth, `${BASE}?limit=3`).expect(200));
+      expect(first.items[0]).toMatchObject({
+        id: u3,
+        status: 'pending',
+        group: null,
+      });
+      // A delivery settles it between pages.
+      expect(
+        await record(c, {
+          ...unlockOf(piece, '2026-08-11T14:00:00.000Z', 'completed', ref),
+          source: 'webhook',
+        }),
+      ).toBe(u3);
+      const seen = await rest(c.auth, first, 3);
+      const n = await appearances(c.auth, seen);
+      for (const id of [u1, u2, u3, ...others])
+        expect({ id, n: n.get(id) }).toEqual({ id, n: 1 });
+      expect(seen.find((r) => r.group)).toMatchObject({
+        totalKobo: 500_000,
+        group: { count: 2 },
+      });
+      // Refreshed: the settled unlock has joined its group.
+      const fresh = page(await get(c.auth, `${BASE}?limit=1`).expect(200))
+        .items[0];
+      expect(fresh).toMatchObject({
+        id: u3,
+        status: 'completed',
+        group: { count: 3 },
+      });
+    });
+
+    it('P1c: an older pending unlock settling below the cursor shows once, as its own row, in that scroll', async () => {
+      const c = await withWallet();
+      const piece = {
+        kind: 'content_unlock' as const,
+        targetId: `piece-${randomUUID()}`,
+        title: 'Probe piece c',
+      };
+      const ref = `M15-PEND-${randomUUID()}`;
+      const u0 = await record(
+        c,
+        unlockOf(piece, '2026-08-12T06:00:00.000Z', 'pending', ref),
+      );
+      const u1 = await record(c, unlockOf(piece, '2026-08-12T08:00:00.000Z'));
+      const u2 = await record(c, unlockOf(piece, '2026-08-12T08:30:00.000Z'));
+      const others: string[] = [];
+      for (let h = 9; h <= 13; h += 1) {
+        others.push(
+          await record(
+            c,
+            transferAt(`2026-08-12T${String(h).padStart(2, '0')}:00:00.000Z`),
+          ),
+        );
+      }
+      const first = page(await get(c.auth, `${BASE}?limit=2`).expect(200));
+      await record(c, {
+        ...unlockOf(piece, '2026-08-12T06:00:00.000Z', 'completed', ref),
+        source: 'webhook',
+      });
+      const seen = await rest(c.auth, first, 2);
+      const n = await appearances(c.auth, seen);
+      for (const id of [u0, u1, u2, ...others])
+        expect({ id, n: n.get(id) }).toEqual({ id, n: 1 });
+      // Its status is the ledger's now; its place is the one it had.
+      expect(seen.find((r) => r.id === u0)).toMatchObject({
+        status: 'completed',
+        group: null,
+      });
+    });
+
+    it('a group key lists the unlocks completed by its snapshot, that instant included', async () => {
+      const c = await withWallet();
+      const piece = {
+        kind: 'content_unlock' as const,
+        targetId: `piece-${randomUUID()}`,
+        title: 'Snapshot piece',
+      };
+      const snapshot = '2026-08-14T12:00:00.000Z';
+      const ids: string[] = [];
+      for (const [occurred, completed] of [
+        ['2026-08-14T08:00:00.000Z', '2026-08-14T11:59:59.999Z'],
+        ['2026-08-14T09:00:00.000Z', '2026-08-14T12:00:00.000Z'],
+        ['2026-08-14T10:00:00.000Z', '2026-08-14T12:00:00.001Z'],
+      ]) {
+        const id = await record(c, unlockOf(piece, occurred));
+        await prisma.fintavaLedgerEntry.update({
+          where: { id },
+          data: { completedAt: at(completed) },
+        });
+        ids.push(id);
+      }
+      const key = encodeGroupKey({
+        targetId: piece.targetId,
+        day: '2026-08-14',
+        snapshot,
+      });
+      const listed = await all(c.auth, `group=${encodeURIComponent(key)}`);
+      expect(listed.items.map((i) => i.id)).toEqual([ids[1], ids[0]]);
+      // Read now, all three are one row.
+      const now = page(await get(c.auth, BASE).expect(200)).items;
+      expect(now).toHaveLength(1);
+      expect(now[0].group?.count).toBe(3);
+    });
+
+    it('a last page that is exactly full carries no cursor', async () => {
+      const a = await withWallet();
+      for (let i = 0; i < 6; i += 1) {
+        await record(a, transferAt(`2026-08-13T0${i}:00:00.000Z`));
+      }
+      const p1 = page(await get(a.auth, `${BASE}?limit=3`).expect(200));
+      expect(p1.items.length).toBe(3);
+      const p2 = page(
+        await get(
+          a.auth,
+          `${BASE}?limit=3&cursor=${encodeURIComponent(p1.nextCursor!)}`,
+        ).expect(200),
+      );
+      expect(p2.items.length).toBe(3);
+      expect(p2.nextCursor).toBeNull();
+      expect(
+        page(await get(a.auth, `${BASE}?limit=6`).expect(200)).nextCursor,
+      ).toBeNull();
+      expect(
+        page(await get(a.auth, `${BASE}?limit=5`).expect(200)).nextCursor,
+      ).toEqual(expect.any(String));
+    });
+
     it('45 rows in pages of 20: every row once, newest first, and a row landing mid-scroll shifts nothing', async () => {
       const a = await withWallet();
       const ids: string[] = [];
@@ -985,12 +1324,14 @@ describe('GET /money/transactions, /summary, /{id} (MONEY-15) over HTTP', () => 
       ).nextCursor!;
       for (const c of [
         'nonsense',
-        'c1.',
-        `c1.${Buffer.from('["x","y"]').toString('base64url')}`,
-        `c1.${Buffer.from('{}').toString('base64url')}`,
+        'c2.',
+        `c2.${Buffer.from('["x","y","z"]').toString('base64url')}`,
+        `c2.${Buffer.from('{}').toString('base64url')}`,
+        // Round 1's format (no snapshot) is not accepted.
+        `c1.${Buffer.from(`["2026-09-01T00:00:00.000Z","${randomUUID()}"]`).toString('base64url')}`,
         `g1.${valid.slice(3)}`,
         `${valid}=`,
-        `c1.${Buffer.from(`["2026-09-01T00:00:00.000Z","${randomUUID()}\\u0000"]`).toString('base64url')}`,
+        `c2.${Buffer.from(`["2026-09-01T00:00:00.000Z","${randomUUID()}\\u0000","2026-09-01T00:00:00.000Z"]`).toString('base64url')}`,
       ]) {
         const res = await get(
           a.auth,
@@ -1272,9 +1613,11 @@ describe('GET /money/transactions, /summary, /{id} (MONEY-15) over HTTP', () => 
       // A key this history did not give.
       for (const k of [
         'x',
-        'g1.',
-        `g1.${Buffer.from('["p","2026-13-01"]').toString('base64url')}`,
-        `g1.${Buffer.from('["","2026-09-26"]').toString('base64url')}`,
+        'g2.',
+        `g2.${Buffer.from('["p","2026-13-01","2026-09-26T09:00:00.001Z"]').toString('base64url')}`,
+        `g2.${Buffer.from('["","2026-09-26","2026-09-26T09:00:00.001Z"]').toString('base64url')}`,
+        // Round 1's format (no snapshot).
+        `g1.${Buffer.from('["p","2026-09-26"]').toString('base64url')}`,
       ]) {
         const res = await get(
           a.auth,

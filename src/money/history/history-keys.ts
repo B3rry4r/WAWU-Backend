@@ -10,6 +10,14 @@ import { BadRequestException } from '@nestjs/common';
 
 /** Where a page stopped: the last row's time and id (newest first). */
 export interface HistoryCursor {
+  /**
+   * When the scroll's first page was read (ISO 8601 UTC, milliseconds).
+   * Every later page groups as of then: a grouped row's members are the
+   * unlocks completed by that time, so an unlock that lands or settles
+   * mid-scroll stays its own row in this scroll and can never move a group
+   * across the cursor. Its place is the latest member's, as before.
+   */
+  snapshot: string;
   /** The row's `occurredAt`, ISO 8601 UTC with milliseconds. */
   at: string;
   id: string;
@@ -20,10 +28,15 @@ export interface HistoryGroupKey {
   targetId: string;
   /** YYYY-MM-DD in Africa/Lagos time. */
   day: string;
+  /**
+   * The snapshot of the read that showed the grouped row: its list is the
+   * movements the row stood for then, not the ones that joined since.
+   */
+  snapshot: string;
 }
 
-const CURSOR_PREFIX = 'c1.';
-const GROUP_PREFIX = 'g1.';
+const CURSOR_PREFIX = 'c2.';
+const GROUP_PREFIX = 'g2.';
 
 /** Ledger ids are Postgres/Prisma uuids. */
 const ID_PATTERN =
@@ -65,41 +78,50 @@ function plainText(v: unknown, max: number): v is string {
   );
 }
 
+/** An ISO 8601 UTC time with milliseconds that names a real instant. */
+function isIso(v: unknown): v is string {
+  return (
+    typeof v === 'string' &&
+    ISO_PATTERN.test(v) &&
+    !Number.isNaN(Date.parse(v)) &&
+    new Date(v).toISOString() === v
+  );
+}
+
 export function encodeCursor(c: HistoryCursor): string {
-  return encode(CURSOR_PREFIX, [c.at, c.id]);
+  return encode(CURSOR_PREFIX, [c.at, c.id, c.snapshot]);
 }
 
 export function decodeCursor(raw: string): HistoryCursor {
   const v = decode(CURSOR_PREFIX, raw);
   if (
     Array.isArray(v) &&
-    v.length === 2 &&
-    typeof v[0] === 'string' &&
-    ISO_PATTERN.test(v[0]) &&
-    !Number.isNaN(Date.parse(v[0])) &&
-    new Date(v[0]).toISOString() === v[0] &&
+    v.length === 3 &&
+    isIso(v[0]) &&
     typeof v[1] === 'string' &&
-    ID_PATTERN.test(v[1])
+    ID_PATTERN.test(v[1]) &&
+    isIso(v[2])
   ) {
-    return { at: v[0], id: v[1].toLowerCase() };
+    return { at: v[0], id: v[1].toLowerCase(), snapshot: v[2] };
   }
   throw new BadRequestException(BAD_CURSOR_MESSAGE);
 }
 
 export function encodeGroupKey(g: HistoryGroupKey): string {
-  return encode(GROUP_PREFIX, [g.targetId, g.day]);
+  return encode(GROUP_PREFIX, [g.targetId, g.day, g.snapshot]);
 }
 
 export function decodeGroupKey(raw: string): HistoryGroupKey {
   const v = decode(GROUP_PREFIX, raw);
   if (
     Array.isArray(v) &&
-    v.length === 2 &&
+    v.length === 3 &&
     plainText(v[0], MAX_TARGET_ID) &&
     typeof v[1] === 'string' &&
-    DAY_PATTERN.test(v[1])
+    DAY_PATTERN.test(v[1]) &&
+    isIso(v[2])
   ) {
-    return { targetId: v[0], day: v[1] };
+    return { targetId: v[0], day: v[1], snapshot: v[2] };
   }
   throw new BadRequestException(BAD_GROUP_MESSAGE);
 }
