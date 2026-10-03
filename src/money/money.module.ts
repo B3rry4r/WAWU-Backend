@@ -18,6 +18,11 @@ import { ApprovalDeviceService } from './pin/approval-device.service';
 import { MoneyDeviceController } from './pin/money-device.controller';
 import { MoneyPinResetController } from './pin/money-pin-reset.controller';
 import { MoneyPinController } from './pin/money-pin.controller';
+import { WawuAuthModule } from '../common/auth/wawu-auth.module';
+import { BankAccountCheckService } from './saved-accounts/bank-account-check.service';
+import { BeneficiaryService } from './saved-accounts/beneficiary.service';
+import { MoneySavedAccountsController } from './saved-accounts/money-saved-accounts.controller';
+import { PayoutAccountService } from './saved-accounts/payout-account.service';
 import { PinResetSettings } from './pin/pin-reset-config';
 import { PinResetService } from './pin/pin-reset.service';
 import { TransactionPinGuard } from './pin/transaction-pin.guard';
@@ -56,6 +61,11 @@ import { TransactionPinService } from './pin/transaction-pin.service';
  * ScheduleModule.forRoot() is loaded, AppModule). WalletOpeningService is
  * exported for the routes that answer `wallet_opening` (MONEY-13).
  *
+ * WALLET-14: saved beneficiaries and the payout account
+ * (`/money/beneficiaries`, `/money/payout-account`), behind the wallet gate,
+ * name-checked with the bank through the same client; WawuAuthModule
+ * supplies WawuIdClient for the names of saved WAWU users.
+ *
  * MONEY-13: the wallet gate (`src/money/gate/`). Every route that reads or
  * moves a person's wallet answers "no wallet yet" the same way, `409
  * wallet_not_open` (or `409 wallet_opening`), through `@RequireOpenWallet()`
@@ -73,7 +83,7 @@ import { TransactionPinService } from './pin/transaction-pin.service';
  * Fintava.
  */
 @Module({
-  imports: [ConfigModule, FintavaModule, LedgerModule],
+  imports: [ConfigModule, FintavaModule, LedgerModule, WawuAuthModule],
   controllers: [
     MoneyPinController,
     MoneyPinResetController,
@@ -81,6 +91,7 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     MoneyBalanceController,
     MoneyIdentityController,
     MoneyWalletController,
+    MoneySavedAccountsController,
     MoneyHistoryController,
   ],
   providers: [
@@ -97,6 +108,9 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     SelfieMatchService,
     WalletOpeningSettings,
     WalletOpeningService,
+    BankAccountCheckService,
+    BeneficiaryService,
+    PayoutAccountService,
     TransactionHistoryService,
   ],
   exports: [
