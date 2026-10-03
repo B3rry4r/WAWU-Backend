@@ -12,7 +12,12 @@ import {
 import type { FintavaBvnIdentity } from '../../fintava/fintava.interface';
 import { MoneyError } from '../money-error';
 import type { BvnCheckDto } from './dto/identity-request.dto';
-import { BVN_CHECK_WINDOW_MS, IdentityHasher } from './identity-config';
+import {
+  BVN_CHECK_WINDOW_MS,
+  type DailyAttemptLedger,
+  IdentityHasher,
+  reserveDailyAttempt,
+} from './identity-config';
 import type {
   BvnCheckView,
   BvnGender,
@@ -113,6 +118,9 @@ export function bvnPrefill(identity: FintavaBvnIdentity): BvnPrefillView {
     gender: bvnGender(identity.gender),
   };
 }
+
+/** A passed BVN check: when it passed, and the keyed hash of its BVN. */
+export type PassedBvnCheck = { verifiedAt: Date; bvnHash: string };
 
 type IdentityRow = {
   bvnLast4: string | null;
@@ -270,9 +278,10 @@ export class WalletIdentityService {
   }
 
   /**
-   * For the steps after this one (KYC-02's selfie, MONEY-12's account
-   * opening), which take the BVN and NIN again from the app: true only when
-   * both are the ones this person's passed check was run with.
+   * For account opening (MONEY-12), which takes the BVN and NIN again from
+   * the app: true only when both are the ones this person's passed check
+   * was run with. The NIN is required here; a step sent only the BVN uses
+   * checkedBvn, so no caller can skip the NIN by passing nothing.
    */
   async matchesCheckedIdentity(
     wawuUserId: string,
@@ -289,6 +298,38 @@ export class WalletIdentityService {
       row?.bvnHash === this.hasher.hash('bvn', bvn) &&
       row?.ninHash === this.hasher.hash('nin', nin)
     );
+  }
+
+  /**
+   * For KYC-02's selfie match, which Fintava runs on the BVN alone: this
+   * person's passed BVN check, read once, when `bvn` is the BVN it was run
+   * with; otherwise null. The caller ties what it does to the check it gets
+   * back (its time and keyed hash), not to whatever check is current later.
+   */
+  async checkedBvn(
+    wawuUserId: string,
+    bvn: string,
+  ): Promise<PassedBvnCheck | null> {
+    if (!this.hasher.configured) return null;
+    const check = await this.currentBvnCheck(wawuUserId);
+    return check && check.bvnHash === this.hasher.hash('bvn', bvn)
+      ? check
+      : null;
+  }
+
+  /**
+   * This person's passed BVN check as it stands now (when it passed, and the
+   * BVN's keyed hash), or null. A selfie match counts only for the check it
+   * was compared against (KYC-02).
+   */
+  async currentBvnCheck(wawuUserId: string): Promise<PassedBvnCheck | null> {
+    const row = await this.prisma.walletIdentity.findUnique({
+      where: { wawuUserId },
+      select: { bvnHash: true, bvnVerifiedAt: true },
+    });
+    return row?.bvnVerifiedAt && row.bvnHash
+      ? { verifiedAt: row.bvnVerifiedAt, bvnHash: row.bvnHash }
+      : null;
   }
 
   // -------------------------------------------------------------------------
@@ -334,42 +375,42 @@ export class WalletIdentityService {
     return Math.max(0, this.hasher.checksPerDay - used);
   }
 
-  /**
-   * Takes one of today's checks before Fintava is asked. The row is written
-   * first and counted after, so two checks sent at the same moment cannot
-   * both get past the limit: each sees the other. Over the limit, the row is
-   * removed and the answer says when the oldest check in the window expires.
-   */
-  private async reserve(
-    wawuUserId: string,
-  ): Promise<{ id: string; used: number }> {
-    const { id } = await this.prisma.bvnCheckAttempt.create({
-      data: { wawuUserId },
-      select: { id: true },
-    });
-    const since = this.since();
-    const used = await this.prisma.bvnCheckAttempt.count({
-      where: { wawuUserId, createdAt: { gt: since } },
-    });
-    if (used <= this.hasher.checksPerDay) return { id, used };
+  /** BvnCheckAttempt, as the shared daily limit counts it. */
+  private readonly bvnLedger: DailyAttemptLedger = {
+    create: async (wawuUserId) =>
+      (
+        await this.prisma.bvnCheckAttempt.create({
+          data: { wawuUserId },
+          select: { id: true },
+        })
+      ).id,
+    count: (wawuUserId, since) =>
+      this.prisma.bvnCheckAttempt.count({
+        where: { wawuUserId, createdAt: { gt: since } },
+      }),
+    remove: async (id) => {
+      await this.prisma.bvnCheckAttempt.delete({ where: { id } });
+    },
+    oldestSince: async (wawuUserId, since) =>
+      (
+        await this.prisma.bvnCheckAttempt.findFirst({
+          where: { wawuUserId, createdAt: { gt: since } },
+          orderBy: { createdAt: 'asc' },
+          select: { createdAt: true },
+        })
+      )?.createdAt ?? null,
+  };
 
-    await this.prisma.bvnCheckAttempt.delete({ where: { id } });
-    const oldest = await this.prisma.bvnCheckAttempt.findFirst({
-      where: { wawuUserId, createdAt: { gt: since } },
-      orderBy: { createdAt: 'asc' },
-      select: { createdAt: true },
-    });
-    const freesAt =
-      (oldest?.createdAt.getTime() ?? Date.now()) + BVN_CHECK_WINDOW_MS;
-    throw new MoneyError(
-      'identity_checks_exhausted',
-      CHECKS_EXHAUSTED_MESSAGE,
-      {
-        retryAfterSeconds: Math.max(
-          1,
-          Math.ceil((freesAt - Date.now()) / 1000),
-        ),
-      },
+  /** Takes one of today's BVN checks before Fintava is asked (reserveDailyAttempt). */
+  private reserve(wawuUserId: string): Promise<{ id: string; used: number }> {
+    return reserveDailyAttempt(
+      this.bvnLedger,
+      wawuUserId,
+      this.hasher.checksPerDay,
+      (retryAfterSeconds) =>
+        new MoneyError('identity_checks_exhausted', CHECKS_EXHAUSTED_MESSAGE, {
+          retryAfterSeconds,
+        }),
     );
   }
 

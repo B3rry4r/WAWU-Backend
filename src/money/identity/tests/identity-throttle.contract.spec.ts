@@ -12,6 +12,7 @@ import {
   fintavaError,
 } from '../../../../test/fintava/fintava-double';
 import type { PrismaService as PrismaServiceType } from '../../../common/prisma/prisma.service';
+import { jpegImage } from '../../../../test/fixtures/selfie/selfie-images';
 
 /**
  * POST /money/identity/bvn is limited per address by the app's OWN global
@@ -120,6 +121,9 @@ describe('BVN check throttle through the global ThrottlerGuard (KYC-01)', () => 
         where: { wawuUserId: { in: users } },
       });
       await prisma.walletIdentity.deleteMany({
+        where: { wawuUserId: { in: users } },
+      });
+      await prisma.selfieMatchAttempt.deleteMany({
         where: { wawuUserId: { in: users } },
       });
     }
@@ -239,6 +243,92 @@ describe('BVN check throttle through the global ThrottlerGuard (KYC-01)', () => 
     for (const name of Object.keys(BVN_CHECK_THROTTLE)) {
       expect(registered).toContain(name);
     }
+    expect(Reflect.getMetadata('THROTTLER:LIMITshort', handler)).toBe(3);
+    expect(Reflect.getMetadata('THROTTLER:TTLshort', handler)).toBe(60_000);
+    expect(Reflect.getMetadata('THROTTLER:LIMITmedium', handler)).toBe(20);
+    expect(Reflect.getMetadata('THROTTLER:TTLmedium', handler)).toBe(3_600_000);
+  });
+
+  // -------------------------------------------------------------------------
+  // KYC-02: the selfie match is held to the same per-address limits, on the
+  // same registered throttlers, with its own count.
+
+  /** A person whose BVN check passed (KYC-01's row, under KYC-01's keyed hash). */
+  async function bvnCheckedPerson(bvn: string): Promise<string> {
+    /* eslint-disable @typescript-eslint/no-require-imports */
+    const { IdentityHasher } =
+      require('../identity-config') as typeof import('../identity-config');
+    const { ConfigService } =
+      require('@nestjs/config') as typeof import('@nestjs/config');
+    /* eslint-enable @typescript-eslint/no-require-imports */
+    const hasher = new IdentityHasher(
+      new ConfigService({ IDENTITY_HASH_KEY: HASH_KEY }),
+    );
+    const id = randomUUID();
+    users.push(id);
+    await prisma.walletIdentity.create({
+      data: {
+        wawuUserId: id,
+        bvnHash: hasher.hash('bvn', bvn),
+        bvnLast4: bvn.slice(-4),
+        bvnVerifiedAt: new Date(Date.now() - 60_000),
+        ninHash: hasher.hash('nin', '70190000777'),
+        ninLast4: '0777',
+      },
+    });
+    return `Bearer ${mintToken(id)}`;
+  }
+
+  const selfieCalls = () =>
+    double.seen.filter((s) => s.path === '/compliance/verify/bvn/selfie')
+      .length;
+  // A real JPEG (Pillow-made, test/fixtures/selfie): the route walks it.
+  const IMAGE = jpegImage().toString('base64');
+
+  it('the fourth selfie match from one address within a minute is 429 from the guard and never reaches Fintava', async () => {
+    double.on('POST', '/compliance/verify/bvn/selfie', {
+      status: 400,
+      body: fintavaError(400, 'Request failed with status code 404'),
+    });
+    const bvn = '22290000777';
+    const before = selfieCalls();
+    // A different person each time, each with a passed BVN check, so the
+    // per-person daily limit (3) is not what stops the fourth.
+    const statuses: number[] = [];
+    for (let i = 0; i < 4; i += 1) {
+      const res = await request(app.getHttpServer())
+        .post('/api/hub/money/identity/selfie')
+        .set('Authorization', await bvnCheckedPerson(bvn))
+        .send({ bvn, image: IMAGE });
+      statuses.push(res.status);
+      if (i === 3) {
+        expect(res.body).toMatchObject({ statusCode: 429, data: null });
+        expect((res.body as { reason?: unknown }).reason).toBeUndefined();
+      }
+    }
+    expect(statuses).toEqual([422, 422, 422, 429]);
+    expect(selfieCalls() - before).toBe(3);
+    expect(
+      await prisma.selfieMatchAttempt.count({
+        where: { wawuUserId: { in: users } },
+      }),
+    ).toBe(3);
+  });
+
+  it('the selfie route names only the app’s registered throttlers, never `default`', () => {
+    /* eslint-disable @typescript-eslint/no-require-imports */
+    const { MoneyIdentityController } =
+      require('../money-identity.controller') as typeof import('../money-identity.controller');
+    /* eslint-enable @typescript-eslint/no-require-imports */
+    const handler = Object.getOwnPropertyDescriptor(
+      MoneyIdentityController.prototype,
+      'matchSelfie',
+    )!.value as object;
+    const keys = Reflect.getMetadataKeys(handler).filter(
+      (k): k is string => typeof k === 'string' && k.startsWith('THROTTLER:'),
+    );
+    expect(keys.length).toBeGreaterThan(0);
+    expect(keys.some((k) => k.endsWith('default'))).toBe(false);
     expect(Reflect.getMetadata('THROTTLER:LIMITshort', handler)).toBe(3);
     expect(Reflect.getMetadata('THROTTLER:TTLshort', handler)).toBe(60_000);
     expect(Reflect.getMetadata('THROTTLER:LIMITmedium', handler)).toBe(20);

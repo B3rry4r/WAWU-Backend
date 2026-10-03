@@ -245,7 +245,7 @@ describe('Rate limits behind nginx (OPS-11)', () => {
       );
     });
 
-    it('only the two payment webhooks skip the limits; the only other overrides are admin login and refresh, and the BVN check (KYC-01), once each', () => {
+    it('only the two payment webhooks skip the limits; the only other overrides are admin login and refresh, the BVN check (KYC-01) and the selfie match (KYC-02), once each', () => {
       const root = join(__dirname, '..');
       const files: string[] = [];
       const walk = (dir: string) => {
@@ -273,7 +273,7 @@ describe('Rate limits behind nginx (OPS-11)', () => {
       });
       expect(uses(/^\s*@Throttle\(/gm)).toEqual({
         'admin/auth/admin-auth.controller.ts': 2,
-        'money/identity/money-identity.controller.ts': 1,
+        'money/identity/money-identity.controller.ts': 2,
       });
     });
 
@@ -323,6 +323,30 @@ describe('Rate limits behind nginx (OPS-11)', () => {
         'AdminAuthController.login',
         'AdminAuthController.refresh',
         'MoneyIdentityController.checkBvn',
+        'MoneyIdentityController.matchSelfie',
+      ]);
+      // KYC-02: the selfie match is charged per attempt, like the BVN check,
+      // and sets exactly these per-address limits: 3 a minute and 20 an hour,
+      // no block of its own.
+      expect(
+        overrides
+          .filter((o) => o.on === 'MoneyIdentityController.matchSelfie')
+          .sort((a, b) => a.name.localeCompare(b.name)),
+      ).toEqual([
+        {
+          on: 'MoneyIdentityController.matchSelfie',
+          name: 'medium',
+          limit: 20,
+          ttl: 3_600_000,
+          blockDuration: undefined,
+        },
+        {
+          on: 'MoneyIdentityController.matchSelfie',
+          name: 'short',
+          limit: 3,
+          ttl: 60_000,
+          blockDuration: undefined,
+        },
       ]);
       for (const o of overrides) {
         const base = HUB_THROTTLERS.find((t) => t.name === o.name);

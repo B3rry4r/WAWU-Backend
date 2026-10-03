@@ -6,6 +6,7 @@ import { LedgerModule } from './ledger/ledger.module';
 import { WalletBalanceService } from './balance/wallet-balance.service';
 import { IdentityHasher } from './identity/identity-config';
 import { MoneyIdentityController } from './identity/money-identity.controller';
+import { SelfieMatchService } from './identity/selfie-match.service';
 import { WalletIdentityService } from './identity/wallet-identity.service';
 import { MoneyPinController } from './pin/money-pin.controller';
 import { TransactionPinGuard } from './pin/transaction-pin.guard';
@@ -33,6 +34,10 @@ import { TransactionPinService } from './pin/transaction-pin.service';
  * check through the same client. WalletIdentityService is exported for the
  * steps after it (KYC-02, MONEY-12), which check the BVN and NIN they are
  * sent against the ones that passed.
+ *
+ * KYC-02: the selfie match to the BVN photo (`/money/identity/selfie`),
+ * through the same client. SelfieMatchService is exported for account
+ * opening (MONEY-12), which needs the selfie to have matched.
  */
 @Module({
   imports: [ConfigModule, FintavaModule, LedgerModule],
@@ -47,7 +52,13 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     WalletBalanceService,
     IdentityHasher,
     WalletIdentityService,
+    SelfieMatchService,
   ],
-  exports: [TransactionPinService, TransactionPinGuard, WalletIdentityService],
+  exports: [
+    TransactionPinService,
+    TransactionPinGuard,
+    WalletIdentityService,
+    SelfieMatchService,
+  ],
 })
 export class MoneyModule {}

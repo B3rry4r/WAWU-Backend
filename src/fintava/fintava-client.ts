@@ -22,6 +22,11 @@ import {
   type FintavaErrorKind,
 } from './fintava-error';
 import { decideFintavaRetry } from './fintava-reconcile';
+import {
+  readSelfieAnswer,
+  SELFIE_ANSWER_MAX_BYTES,
+  SelfieAnswerUnreadable,
+} from './fintava-selfie-answer';
 import type {
   FintavaAirtimeInput,
   FintavaBank,
@@ -246,6 +251,52 @@ interface Op {
 interface Answer {
   status: number;
   body: unknown;
+  /** The `content-type` header, or null (the selfie reader checks it). */
+  contentType: string | null;
+  /** The body as received, before JSON.parse (the selfie reader parses it strictly). */
+  text: string;
+}
+
+/**
+ * Reads an answer's body, at most `cap` bytes of it. A declared
+ * Content-Length over the cap, or more bytes than the cap arriving, aborts
+ * the request (the connection is dropped, nothing more is read) and answers
+ * null. Otherwise the body as text, decoded as `Response.text()` decodes it
+ * (UTF-8, a leading BOM dropped); a body that fails mid-way (a timeout, a
+ * reset) is '' as `res.text()` failing was.
+ */
+async function readCapped(
+  res: Response,
+  cap: number,
+  stop: AbortController,
+): Promise<string | null> {
+  const declared = res.headers.get('content-length');
+  if (declared !== null && /^\d+$/.test(declared.trim())) {
+    if (Number(declared.trim()) > cap) {
+      stop.abort();
+      return null;
+    }
+  }
+  if (res.body === null) return '';
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > cap) {
+        stop.abort();
+        reader.cancel().catch(() => undefined);
+        return null;
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return '';
+  }
+  return new TextDecoder('utf-8').decode(Buffer.concat(chunks));
 }
 
 /**
@@ -379,6 +430,13 @@ export class FintavaClient {
       body?: unknown;
       reference?: string;
       refusalMayLeaveRecord?: boolean;
+      /**
+       * The longest answer read, of any status. Past it (or a declared
+       * Content-Length past it), reading stops, the connection is dropped
+       * and the call fails as `bad_response` (`not_confirmed` on a write)
+       * without buffering or parsing the rest.
+       */
+      maxAnswerBytes?: number;
     } = {},
   ): Promise<Answer> {
     if (this.#apiKey === '' || this.settings.environment === 'unconfigured') {
@@ -395,13 +453,17 @@ export class FintavaClient {
     if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
 
     const started = Date.now();
+    const cap = opts.maxAnswerBytes;
+    const stop = cap === undefined ? null : new AbortController();
+    const timeout = AbortSignal.timeout(this.timeoutFor(op.call));
     let res: Response;
     try {
       res = await fetch(url, {
         method: op.method,
         headers,
         body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-        signal: AbortSignal.timeout(this.timeoutFor(op.call)),
+        signal:
+          stop === null ? timeout : AbortSignal.any([timeout, stop.signal]),
         redirect: 'error',
       });
     } catch (e) {
@@ -417,11 +479,30 @@ export class FintavaClient {
     }
 
     let body: unknown = null;
-    try {
-      const text = await res.text();
-      body = text === '' ? null : (JSON.parse(text) as unknown);
-    } catch {
-      body = null;
+    let text = '';
+    if (stop !== null && cap !== undefined) {
+      const capped = await readCapped(res, cap, stop);
+      if (capped === null) {
+        throw this.fail(op, {
+          kind: op.call === 'write' ? 'not_confirmed' : 'bad_response',
+          status: res.status,
+          messages: [`the answer is over ${cap} bytes`],
+          reference: opts.reference,
+        });
+      }
+      text = capped;
+      try {
+        body = text === '' ? null : (JSON.parse(text) as unknown);
+      } catch {
+        body = null;
+      }
+    } else {
+      try {
+        text = await res.text();
+        body = text === '' ? null : (JSON.parse(text) as unknown);
+      } catch {
+        body = null;
+      }
     }
     const ms = Date.now() - started;
 
@@ -431,7 +512,12 @@ export class FintavaClient {
         (opts.reference ? ` ref ${opts.reference}` : '');
       if (op.call === 'read') this.logger.debug(line);
       else this.logger.log(line);
-      return { status: res.status, body };
+      return {
+        status: res.status,
+        body,
+        contentType: res.headers.get('content-type'),
+        text,
+      };
     }
 
     const { kind, messages } = classifyFintavaFailure({
@@ -572,11 +658,23 @@ export class FintavaClient {
     }
     const answer = await this.request(op, '/compliance/verify/bvn/selfie', {
       body: { bvn: input.bvn, image: input.imageBase64 },
+      // A readable answer is under 200 bytes; a huge or endless one is
+      // dropped once past the cap, never buffered or parsed.
+      maxAnswerBytes: SELFIE_ANSWER_MAX_BYTES,
     });
-    return this.read(op, answer, (data) => ({
-      matched: true as const,
-      details: scalars(obj(data, 'data')),
-    }));
+    // Read by allowlist, from the raw text (fintava-selfie-answer.ts): only
+    // an exact documented shape has a verdict; anything else is
+    // `bad_response`, never a match.
+    return this.read(op, answer, () => {
+      try {
+        return { ...readSelfieAnswer(answer), confidence: null };
+      } catch (e) {
+        if (e instanceof SelfieAnswerUnreadable) {
+          throw new FintavaShapeError(e.message);
+        }
+        throw e;
+      }
+    });
   }
 
   /** `GET /compliance/verify/phone-number`. Charged, even for "not found". */
