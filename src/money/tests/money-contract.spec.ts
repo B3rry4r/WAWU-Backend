@@ -44,6 +44,9 @@ const SERVED_MONEY_ROUTES: Record<string, string> = {
   'DELETE /api/hub/money/device': 'MONEY-14',
   'POST /api/hub/money/device/challenge': 'MONEY-14',
   'POST /api/hub/money/approval/verify': 'MONEY-14',
+  'GET /api/hub/money/transactions': 'MONEY-15',
+  'GET /api/hub/money/transactions/summary': 'MONEY-15',
+  'GET /api/hub/money/transactions/{id}': 'MONEY-15',
 };
 
 type ModuleRef =
