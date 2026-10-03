@@ -13,6 +13,7 @@ import type { FintavaBvnIdentity } from '../../fintava/fintava.interface';
 import { Prisma } from '../../../generated/prisma/client';
 import { MoneyError } from '../money-error';
 import { bvnNameKeys } from './bvn-name';
+import { CheckHandleSealer } from './check-handle';
 import type { BvnCheckDto } from './dto/identity-request.dto';
 import {
   BVN_CHECK_WINDOW_MS,
@@ -40,6 +41,12 @@ export const IDENTITY_UNAVAILABLE_MESSAGE =
   'We could not check your BVN right now. Try again in a moment.';
 export const BVN_NOT_CHECKED_MESSAGE = 'Confirm your BVN first.';
 export const WALLET_ALREADY_OPEN_MESSAGE = 'Your wallet is already open.';
+/**
+ * Every check handle that cannot be used (malformed, sealed for someone
+ * else, expired, changed, from a check that did not pass or is no longer
+ * the person's): one sentence, which never says which part failed.
+ */
+export const CHECK_AGAIN_MESSAGE = 'Check your BVN again to continue.';
 
 /**
  * Fintava kinds after which nothing reached the BVN provider, so nothing was
@@ -130,6 +137,15 @@ export type PassedBvnCheck = { verifiedAt: Date; bvnHash: string };
  */
 export type CheckedIdentity = PassedBvnCheck & { verifiedPhone: string };
 
+/**
+ * What a step after the BVN check sends to prove the check (KYC-03): the BVN
+ * (and the NIN) again, or the check handle the check answered in their place.
+ */
+export type CheckProof = { bvn?: string; nin?: string; checkHandle?: string };
+
+/** A passed check proven by a step, with the numbers Fintava needs for that one request (never stored). */
+export type ProvenIdentity = CheckedIdentity & { bvn: string; nin: string };
+
 type IdentityRow = {
   bvnLast4: string | null;
   bvnVerifiedAt: Date | null;
@@ -154,12 +170,16 @@ type IdentityRow = {
 @Injectable()
 export class WalletIdentityService {
   private readonly logger = new Logger(WalletIdentityService.name);
+  /** Seals and opens check handles under a key derived from the hasher's (`check-handle.ts`). */
+  private readonly sealer: CheckHandleSealer;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly fintava: FintavaClient,
     private readonly hasher: IdentityHasher,
-  ) {}
+  ) {
+    this.sealer = new CheckHandleSealer(hasher);
+  }
 
   async view(wawuUserId: string): Promise<WalletIdentityView> {
     const [row, used] = await Promise.all([
@@ -270,6 +290,13 @@ export class WalletIdentityService {
     return {
       identity: this.toView(row, this.left(attempt.used)),
       prefill: bvnPrefill(identity),
+      // KYC-03: the numbers, sealed, for the app to send back in their place.
+      checkHandle: this.sealer.seal({
+        sub: wawuUserId,
+        bvn: input.bvn,
+        nin: input.nin,
+        checkId: attempt.id,
+      }),
     };
   }
 
@@ -346,6 +373,84 @@ export class WalletIdentityService {
       bvnHash: row.bvnHash,
       verifiedPhone: row.verifiedPhone,
     };
+  }
+
+  /**
+   * For a step after the BVN check (KYC-03): the person's passed check,
+   * read once, from a check handle in place of the numbers, with the BVN and
+   * NIN it seals; otherwise null. The handle must open under this server's
+   * key, be unexpired, be sealed for this caller (`sub`), name a BVN check
+   * of this person's that passed (`checkId`, a `verified` BvnCheckAttempt),
+   * and seal the BVN and NIN the person's current check was run with. Every
+   * failure is the same null: the caller answers CHECK_AGAIN_MESSAGE and
+   * never says which part failed.
+   */
+  async checkedByHandle(
+    wawuUserId: string,
+    checkHandle: string,
+  ): Promise<ProvenIdentity | null> {
+    const claims = this.sealer.open(checkHandle);
+    if (!claims || claims.sub !== wawuUserId) return null;
+    const passed = await this.prisma.bvnCheckAttempt.findFirst({
+      where: { id: claims.checkId, wawuUserId, outcome: 'verified' },
+      select: { id: true },
+    });
+    if (!passed) return null;
+    const check = await this.checkedIdentity(
+      wawuUserId,
+      claims.bvn,
+      claims.nin,
+    );
+    return check ? { ...check, bvn: claims.bvn, nin: claims.nin } : null;
+  }
+
+  /**
+   * The passed check MONEY-12's opening proves, read once: from the check
+   * handle, or from the BVN and NIN sent again (both required). Throws
+   * `bvn_not_checked` when nothing proves a passed check of this person's:
+   * CHECK_AGAIN_MESSAGE for a handle, BVN_NOT_CHECKED_MESSAGE for the
+   * numbers, as before.
+   */
+  async proveIdentity(
+    wawuUserId: string,
+    proof: CheckProof,
+  ): Promise<ProvenIdentity> {
+    if (proof.checkHandle !== undefined) {
+      const proven = await this.checkedByHandle(wawuUserId, proof.checkHandle);
+      if (!proven) throw new MoneyError('bvn_not_checked', CHECK_AGAIN_MESSAGE);
+      return proven;
+    }
+    const bvn = proof.bvn ?? '';
+    const nin = proof.nin ?? '';
+    const check = await this.checkedIdentity(wawuUserId, bvn, nin);
+    if (!check)
+      throw new MoneyError('bvn_not_checked', BVN_NOT_CHECKED_MESSAGE);
+    return { ...check, bvn, nin };
+  }
+
+  /**
+   * The passed check KYC-02's selfie match proves, read once: from the check
+   * handle, or from the BVN sent again (compared alone, as before). Same
+   * refusals as `proveIdentity`. Answers the BVN Fintava matches against.
+   */
+  async proveBvn(
+    wawuUserId: string,
+    proof: CheckProof,
+  ): Promise<PassedBvnCheck & { bvn: string }> {
+    if (proof.checkHandle !== undefined) {
+      const proven = await this.checkedByHandle(wawuUserId, proof.checkHandle);
+      if (!proven) throw new MoneyError('bvn_not_checked', CHECK_AGAIN_MESSAGE);
+      return {
+        verifiedAt: proven.verifiedAt,
+        bvnHash: proven.bvnHash,
+        bvn: proven.bvn,
+      };
+    }
+    const bvn = proof.bvn ?? '';
+    const check = await this.checkedBvn(wawuUserId, bvn);
+    if (!check)
+      throw new MoneyError('bvn_not_checked', BVN_NOT_CHECKED_MESSAGE);
+    return { ...check, bvn };
   }
 
   /**

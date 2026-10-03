@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHmac, hkdfSync } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
@@ -17,6 +17,9 @@ export const IDENTITY_CONFIG_KEYS = {
   checksPerDay: 'BVN_CHECKS_PER_DAY',
   selfieChecksPerDay: 'SELFIE_CHECKS_PER_DAY',
 } as const;
+
+/** A key derived from IDENTITY_HASH_KEY (`deriveKey`): 32 bytes, AES-256. */
+const DERIVED_KEY_BYTES = 32;
 
 /** The shortest key accepted: 32 characters (`openssl rand -hex 32` gives 64). */
 export const IDENTITY_HASH_KEY_MIN_LENGTH = 32;
@@ -237,6 +240,25 @@ export class IdentityHasher {
     return createHmac('sha256', this.#key)
       .update(`${kind}:${value}`)
       .digest('hex');
+  }
+
+  /**
+   * A 32-byte key for one other purpose, derived from IDENTITY_HASH_KEY with
+   * HKDF-SHA256 under `label` (RFC 5869: a distinct `info` gives an
+   * independent key, so the derived key reveals nothing about the hashing
+   * key and no hash can be forged with it). Used by the check handle
+   * (`check-handle.ts`), so no new secret has to reach the server: wherever
+   * the BVN check can run, this key exists. Throws when the key is not set.
+   */
+  deriveKey(label: string): Buffer {
+    if (!this.configured) {
+      throw new IdentityConfigError(
+        `${IDENTITY_CONFIG_KEYS.hashKey} is not set.`,
+      );
+    }
+    return Buffer.from(
+      hkdfSync('sha256', this.#key, Buffer.alloc(0), label, DERIVED_KEY_BYTES),
+    );
   }
 
   toJSON(): { configured: boolean } {
