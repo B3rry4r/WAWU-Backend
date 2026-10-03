@@ -58,6 +58,10 @@ export type TransactionFilter = (typeof TRANSACTION_FILTERS)[number];
 export const HOLD_ROLES = ['payer', 'payee'] as const;
 export type HoldRole = (typeof HOLD_ROLES)[number];
 
+/** What a phone approves a payment with (R-26): whichever it has. */
+export const APPROVAL_BIOMETRICS = ['fingerprint', 'face'] as const;
+export type ApprovalBiometricKind = (typeof APPROVAL_BIOMETRICS)[number];
+
 export const BENEFICIARY_KINDS = ['wawu_user', 'bank_account'] as const;
 export type BeneficiaryKind = (typeof BENEFICIARY_KINDS)[number];
 
@@ -110,5 +114,8 @@ export const MONEY_ERROR_CODES = [
   'identity_has_wallet',
   'account_not_opened',
   'phone_held_by_other_identity',
+  // Resetting the PIN by a code, and approving with a fingerprint or face (MONEY-14).
+  'reset_codes_exhausted',
+  'device_approval_refused',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];

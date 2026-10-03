@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MoneyPaymentController } from './money-payment.controller';
 import { MoneyTransferController } from './money-transfer.controller';
-import { MoneyPinResetController } from './money-wallet.controller';
 
 /**
  * The Naira wallet contract (task MONEY-04): routes declared, not served.
@@ -18,7 +17,6 @@ import { MoneyPinResetController } from './money-wallet.controller';
  */
 @Module({
   controllers: [
-    MoneyPinResetController,
     MoneyTransferController,
     MoneyPaymentController,
   ],

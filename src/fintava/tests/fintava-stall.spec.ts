@@ -157,6 +157,8 @@ const CALLS: Array<[string, (c: FintavaClient) => Promise<unknown>]> = [
     (c) => c.verifyBvnSelfie({ bvn: '12345678901', imageBase64: IMAGE }),
   ],
   ['verifyPhone', (c) => c.verifyPhone('+2348031230101')],
+  // MONEY-14: the PIN reset code's text.
+  ['sendSms', (c) => c.sendSms('+2348031230101', 'stall check')],
   [
     'createCustomer',
     (c) =>

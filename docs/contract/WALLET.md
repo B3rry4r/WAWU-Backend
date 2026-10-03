@@ -28,8 +28,13 @@ caller from the token.
 | `POST /money/pin` | `PinStateView` | `SetPinDto` | MONEY-09 |
 | `PUT /money/pin` | `PinStateView` | `ChangePinDto`, `X-Transaction-Pin` (current) | MONEY-09 |
 | `POST /money/pin/verify` | `PinStateView` | `X-Transaction-Pin` | MONEY-09 |
-| `POST /money/pin/reset` | `PinResetView` | | MONEY-14 |
-| `POST /money/pin/reset/confirm` | `PinStateView` | `ConfirmPinResetDto` | MONEY-14 |
+| `POST /money/pin/reset` | `PinResetView` | | MONEY-14 (served; CONVENTIONS.md section 5) |
+| `POST /money/pin/reset/confirm` | `PinStateView` | `ConfirmPinResetDto` | MONEY-14 (served) |
+| `GET /money/device` | `ApprovalDeviceView` | | MONEY-14 (served) |
+| `PUT /money/device` | `ApprovalDeviceView` | `RegisterApprovalDeviceDto`, `X-Transaction-Pin` | MONEY-14 (served) |
+| `DELETE /money/device` | `ApprovalDeviceView` | | MONEY-14 (served) |
+| `POST /money/device/challenge` | `ApprovalChallengeView` | | MONEY-14 (served) |
+| `POST /money/approval/verify` | `PinStateView` | `X-Transaction-Pin` or `X-Device-Approval` | MONEY-14 (served) |
 | `GET /money/banks` | `BankView[]` | | WALLET-09 |
 | `POST /money/banks/name-check` | `AccountNameView` | `NameCheckDto` | WALLET-09 |
 | `GET /money/recipients?q=` | `RecipientView[]` (at most 20) | | WALLET-08 |
@@ -174,7 +179,7 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 | W9 Amount | live balance; recipient; note | `GET /money/wallet/balance`; `RecipientView` from W7; `WawuTransferDto.note` |
 | W10 Review | fee breakdown per transfer type; total; "They get" | `GET /money/fees/quote` → `fee` (`providerFeeKobo` + `wawuFeeKobo` = `totalFeeKobo`), `totalKobo`, `amountKobo` |
 | W11 PIN | PIN checked on the debit itself; tries left; lock | `X-Transaction-Pin` on the transfer; `403 pin_incorrect.triesLeft`, `423 pin_locked.lockedUntil`; `GET /money/pin` |
-| | Face ID instead of the PIN | MONEY-14; header `X-Device-Approval` reserved, routes not declared yet (section 5) |
+| | fingerprint or face instead of the PIN (R-26) | `X-Device-Approval` on the debit (`@RequireApproval()`): `POST /money/device/challenge`, then the registered phone's signature; a refusal is `403 device_approval_refused` and uses no PIN try (MONEY-14, CONVENTIONS.md section 5) |
 | W12 Receipt | status, fee, total paid, reference, time | the transfer response, then `GET /money/transfers/{id}` → `TransferView` |
 | | Save as beneficiary | `POST /money/beneficiaries` |
 | | Share receipt | after launch (WALLET-12) |
@@ -206,10 +211,10 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 | | PIN last changed | `WalletView.pin.changedAt` |
 | | beneficiaries count | `WalletView.beneficiaryCount` |
 | | account details | `WalletView.account` |
-| | Face ID toggle | MONEY-14 (section 5) |
+| | fingerprint or face switch | `GET /money/device` (`registered`, `deviceId`, `biometric`); on: `PUT /money/device` with the PIN; off: `DELETE /money/device` (MONEY-14) |
 | | Cards; Statements | after launch (WALLET-22, WALLET-27); W38 is hidden at launch |
 | W36 PIN create | set; confirm | `POST /money/pin` (`pin`, `pinConfirmation`); change is `PUT /money/pin` |
-| W37 PIN reset | code to the phone on file, resend timer | `POST /money/pin/reset` → `sentTo`, `resendAvailableAt`, `expiresAt` |
+| W37 PIN reset | code to the phone on file, resend timer | `POST /money/pin/reset` → `sentTo` (last 4 digits), `resendAvailableAt`, `expiresAt`; `429 reset_codes_exhausted`, `503 provider_unreachable` (MONEY-14) |
 | | code check, then W36 | `POST /money/pin/reset/confirm` (`code`, `newPin`, `newPinConfirmation`) |
 | W39 Earnings | earned, by stream, by content | WALLET-16 (`GET /content/mine/earnings` today); not a money-contract route |
 | | paid DM money still held for the creator | `GET /money/holds?role=payee` |
@@ -346,10 +351,12 @@ Listed, not resolved. Each names what the canvas draws, what Fintava does
   (`WalletView.limits`, `FeeQuoteView.withinDailyLimit`,
   `daily_limit_exceeded`), but no launch task fills them. Until one does,
   `limits` is null and the row is hidden.
-- **Face ID approval routes** are MONEY-14's to declare (device registration,
-  the `X-Device-Approval` format). Not declared here because the approval
-  scheme (a device key signature or a biometric-gated secret) is MONEY-14's
-  design.
+- **Biometric approval routes** are served by MONEY-14 (`/money/device`,
+  `/money/approval/verify`, the `X-Device-Approval` format: a device key's
+  signature, CONVENTIONS.md section 5). The declared debits still document
+  `X-Transaction-Pin` alone; the tasks that serve them (WALLET-07,
+  WALLET-09, MONEY-17) put `@RequireApproval()` on the route, which documents
+  both headers.
 - **The request that opens a wallet** is served by MONEY-12: `POST
   /money/wallet/open` (CONVENTIONS.md section 9). It carries the BVN, NIN,
   address and A5's name and date of birth from the app again, reads the
