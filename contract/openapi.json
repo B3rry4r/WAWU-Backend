@@ -18126,6 +18126,56 @@
         ]
       }
     },
+    "/api/hub/users/me/profile-fields": {
+      "get": {
+        "operationId": "UserProfileController_getMyProfileFields",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileFieldsView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "UserProfile"
+        ]
+      },
+      "patch": {
+        "operationId": "UserProfileController_updateMyProfileFields",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProfileFieldsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileFieldsView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "UserProfile"
+        ]
+      }
+    },
     "/api/hub/users/me/experience": {
       "post": {
         "operationId": "UserProfileController_addExperience",
@@ -18259,6 +18309,37 @@
           }
         },
         "summary": "Somebody else's public profile.\n\nThe caller is passed through so the visit can be counted once per viewer\nper day. Your own profile is never counted as a view of itself — see\nUserProfileService.recordProfileView.",
+        "tags": [
+          "UserProfile"
+        ]
+      }
+    },
+    "/api/hub/users/{wawuId}/profile-fields": {
+      "get": {
+        "operationId": "UserProfileController_getProfileFields",
+        "parameters": [
+          {
+            "name": "wawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileFieldsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Somebody else's profile fields: what M5 and M33 draw for a visitor.",
         "tags": [
           "UserProfile"
         ]
@@ -24850,6 +24931,56 @@
             "nullable": true,
             "maxLength": 2048,
             "format": "uri"
+          }
+        }
+      },
+      "UpdateProfileFieldsDto": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "nullable": true,
+            "description": "Where the person is, free text (\"Lagos, Nigeria\"). null or \"\" clears it.",
+            "maxLength": 120
+          },
+          "skills": {
+            "description": "Skills and expertise chips. [] clears them.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 40
+            }
+          },
+          "openTo": {
+            "description": "What the person is open to, as chips. [] clears them.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 40
+            }
+          },
+          "threadsHandle": {
+            "type": "string",
+            "nullable": true,
+            "description": "Threads handle, with or without the \"@\". null or \"\" clears it.",
+            "maxLength": 50
+          },
+          "socialOrder": {
+            "type": "array",
+            "description": "The order the social links show in, first to last, as platform keys. Each\nkey once. [] puts them back in the default order.",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "instagram",
+                "tiktok",
+                "youtube",
+                "x",
+                "threads",
+                "linkedin",
+                "facebook"
+              ]
+            }
           }
         }
       },
@@ -33372,6 +33503,53 @@
           "monthStart",
           "profileCompletenessPct",
           "profileCompletenessMissing"
+        ]
+      },
+      "ProfileFieldsView": {
+        "type": "object",
+        "properties": {
+          "wawuUserId": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string",
+            "nullable": true
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "openTo": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "threadsHandle": {
+            "type": "string",
+            "nullable": true
+          },
+          "socialOrder": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "memberSince": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "wawuUserId",
+          "location",
+          "skills",
+          "openTo",
+          "threadsHandle",
+          "socialOrder",
+          "memberSince"
         ]
       },
       "CreatorProfile": {
