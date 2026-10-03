@@ -467,6 +467,14 @@ export class LedgerConsumerService {
             note: `ledger: debit ${res.entryId} ${res.changed ? 'marked reversed' : 'was already reversed'}`,
           };
         }
+        if (res.state === 'disagrees') {
+          // A stop: the difference is on the debit's row for review
+          // (MONEY-16); the delivery itself has been read in full.
+          return {
+            status: 'processed',
+            note: `ledger: debit ${res.entryId} not reversed: the reversal disagrees with it, recorded on the row (review)`,
+          };
+        }
         if (res.state === 'ambiguous') {
           return {
             status: 'failed',

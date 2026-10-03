@@ -142,21 +142,25 @@ function reversalDelivery(o: {
   customerReference: string;
   transactionReference: string;
   reversalRef: string;
+  amount?: number;
+  charges?: number;
+  total?: number;
+  status?: string;
 }) {
   return JSON.stringify(
     {
       event: 'debit_transfer_reversal',
       data: {
-        amount: 100,
-        charges: 30.75,
+        amount: o.amount ?? 100,
+        charges: o.charges ?? 30.75,
         vat: 0,
         accountName: 'ABC Nigeria Ltd',
         accountNumber: '00126',
         customerId: o.customerId,
         customerReference: o.customerReference,
         type: 'CREDIT',
-        status: 'success',
-        total: 130.75,
+        status: o.status ?? 'success',
+        total: o.total ?? 130.75,
         transactionReference: o.transactionReference,
         description: 'Transfer reversal',
         destination: '5509704/090405',
@@ -223,8 +227,20 @@ describe('Status checks and the pending sweep (MONEY-08)', () => {
    * sends, newest first and all newer than any row here, with `ours` on
    * page `hitPage` (MONEY-06's walk reads at most 5).
    */
-  let merchantPaging: { pages: number; hitPage: number; ours: string } | null =
-    null;
+  let merchantPaging: {
+    pages: number;
+    hitPage: number;
+    ours: string;
+    /**
+     * Round 3: reshapes one page as Fintava sent it (an empty page, a total
+     * that changes, a page number that is not the one asked for).
+     */
+    shape?: (
+      page: number,
+      meta: Record<string, unknown>,
+      rows: unknown[],
+    ) => { meta: Record<string, unknown>; rows: unknown[] };
+  } | null = null;
 
   const ref = (name: string) => `${name}-${RUN}-${(seq += 1)}`;
   const found = (record: unknown) => ({
@@ -359,19 +375,20 @@ describe('Status checks and the pending sweep (MONEY-08)', () => {
               amount: '10.00',
             }),
           );
+          const meta: Record<string, unknown> = {
+            page: String(page),
+            take: String(take),
+            itemCount: take * paging.pages,
+            pageCount: paging.pages,
+            hasPreviousPage: page > 1,
+            hasNextPage: page < paging.pages,
+          };
+          const shaped = paging.shape
+            ? paging.shape(page, meta, rows)
+            : { meta, rows };
           return {
             status: 200,
-            body: {
-              data: rows,
-              meta: {
-                page: String(page),
-                take: String(take),
-                itemCount: take * paging.pages,
-                pageCount: paging.pages,
-                hasPreviousPage: page > 1,
-                hasNextPage: page < paging.pages,
-              },
-            },
+            body: { data: shaped.rows, meta: shaped.meta },
           };
         }
         return {
@@ -1208,8 +1225,11 @@ describe('Status checks and the pending sweep (MONEY-08)', () => {
       expect(asked(ours)).toBe(before);
     });
 
-    it('round 2: a revival with another amount does not revive: a ₦100 row failed as absent stays failed when a ₦200 SUCCESS delivery names it, and the disagreement is recorded', async () => {
-      // The verifier's finding 5 (A4): it used to become completed.
+    it('round 3: a sighting with another amount after an absent verdict: a ₦100 row failed as absent goes back to pending, never completed, when a ₦200 SUCCESS delivery names it, and the disagreement is recorded', async () => {
+      // The verifier's finding 5 (A4): it used to become completed. Round 2
+      // left it failed; round 3 puts it back to pending (Fintava knows the
+      // reference, so "no money moved" no longer stands), which is where
+      // the same delivery arriving before the absent verdict leaves it.
       const b = await addWallet();
       const ours = ref('OURS');
       const entry = await sent({
@@ -1231,12 +1251,18 @@ describe('Status checks and the pending sweep (MONEY-08)', () => {
         .replace('"total": 130.75', '"total": 230.75');
       expect(await consumer.consume(await deliver(text))).toBe('processed');
       expect(await row(entry)).toMatchObject({
-        status: 'failed',
-        failureReason: LEDGER_ABSENT_FAILURE,
+        status: 'pending',
+        failureReason: null,
+        completedAt: null,
         amountKobo: 10000n,
-        revivedAt: null,
+        revivedBy: 'webhook',
         discrepancy:
-          'webhook sighting: status failed (no record at Fintava) vs completed not applied, amountKobo 10000 vs 20000, totalKobo 13075 vs 23075',
+          'webhook sighting: status failed (no record at Fintava) vs completed not applied, failed (no record at Fintava) put back to pending, amountKobo 10000 vs 20000, totalKobo 13075 vs 23075',
+      });
+      // Held for review: the sweep does not ask it, a check changes nothing.
+      expect(await status.check(entry)).toMatchObject({
+        outcome: 'disagrees',
+        status: 'pending',
       });
       // The same delivery with the same figures does revive it (control).
       const ours2 = ref('OURS');
@@ -1393,21 +1419,26 @@ describe('Status checks and the pending sweep (MONEY-08)', () => {
         }),
       ).toBe(1);
 
-      // Fintava's reversal arrives (twice, under two reversal references).
+      // Fintava's reversal arrives twice: two deliveries of the same
+      // reversal (one reversalRef; the second spells its status otherwise,
+      // so MONEY-07 stores both), consumed at once.
+      const tx = ref('TX');
+      const revRef = ref('REV');
       const first = await deliver(
         reversalDelivery({
           customerId: b.customerId,
           customerReference: ours,
-          transactionReference: ref('TX'),
-          reversalRef: ref('REV'),
+          transactionReference: tx,
+          reversalRef: revRef,
         }),
       );
       const second = await deliver(
         reversalDelivery({
           customerId: b.customerId,
           customerReference: ours,
-          transactionReference: ref('TX'),
-          reversalRef: ref('REV'),
+          transactionReference: tx,
+          reversalRef: revRef,
+          status: 'SUCCESS',
         }),
       );
       const applied = await Promise.all([
@@ -1437,9 +1468,32 @@ describe('Status checks and the pending sweep (MONEY-08)', () => {
       expect(
         notes.filter((n) => /was already reversed/.test(n.note ?? '')),
       ).toHaveLength(1);
+      expect(rows[0].discrepancy).toBeNull();
       const reversedAt = rows[0].reversedAt;
 
-      // A late SUCCESS delivery, and more sweeps: still reversed, once.
+      // A second reversal under another reversalRef (money back twice?):
+      // round 3 records it on the row and changes nothing else.
+      const other = ref('REV');
+      const third = await deliver(
+        reversalDelivery({
+          customerId: b.customerId,
+          customerReference: ours,
+          transactionReference: tx,
+          reversalRef: other,
+        }),
+      );
+      expect(await consumer.consume(third)).toBe('processed');
+      r = await row(entry);
+      expect(r).toMatchObject({
+        status: 'reversed',
+        reversalReference: revRef,
+        reversalAmountKobo: 10000n,
+        discrepancy: `reversal sighting ${other}: not applied (already reversed by ${revRef})`,
+      });
+      expect(r.reversedAt).toEqual(reversedAt);
+
+      // A late SUCCESS delivery, and more sweeps: still reversed, once; the
+      // SUCCESS after Fintava's reversal is recorded too (round 3).
       const late = await deliver(
         bankTransferDelivery({
           customerId: b.customerId,
@@ -1456,6 +1510,9 @@ describe('Status checks and the pending sweep (MONEY-08)', () => {
       r = await row(entry);
       expect(r.status).toBe('reversed');
       expect(r.reversedAt).toEqual(reversedAt);
+      expect(r.discrepancy).toMatch(
+        /webhook sighting: status reversed vs completed/,
+      );
       expect(double.seen.filter((s) => s.method !== 'GET').length).toBe(posts);
     });
 
@@ -1683,6 +1740,671 @@ describe('Status checks and the pending sweep (MONEY-08)', () => {
         for (let i = 1; i <= N; i += 1) byReference.delete(`${prefix}${i}`);
       }
     }, 300_000);
+  });
+
+  describe('round 3: every disagreement stops, whatever arrives first, and only a complete walk is complete', () => {
+    /** A bank-send delivery with the figures given (Fintava's naira). */
+    function bank(o: {
+      customerId: string;
+      ours: string;
+      fin: string;
+      status: string;
+      amount: number;
+      charges: number;
+      total: number;
+    }) {
+      return JSON.stringify(
+        {
+          event: 'customer_bank_transfer',
+          data: {
+            amount: o.amount,
+            vat: 0,
+            reference: o.fin,
+            customerId: o.customerId,
+            availableBalance: 109.52,
+            bookedBalance: 109.52,
+            status: o.status,
+            total: o.total,
+            description: 'Payment',
+            destination: '81450/100004',
+            sessionID: `S-${o.fin}`,
+            customerReference: o.ours,
+            senderName: 'Bayo Sandbox',
+            senderAccountNumber: '0000037726',
+            charges: o.charges,
+          },
+        },
+        null,
+        2,
+      );
+    }
+
+    /** A ₦100 bank send, fee ₦30.75, taken to `start` the way it happens. */
+    async function bankSend(
+      start: 'pending' | 'failed' | 'completed' | 'absent',
+      feeKobo = 3075,
+    ) {
+      const b = await addWallet();
+      const ours = ref('OURS');
+      const fin = ref('FIN');
+      const entry = await sent({
+        wallet: userWallet(b),
+        ours,
+        amountKobo: 10000,
+        feeKobo,
+        counterparty: toBank,
+      });
+      if (start === 'failed' || start === 'completed') {
+        await age(entry, 3);
+        byReference.set(
+          ours,
+          found(
+            fintavaRecord({
+              id: randomUUID(),
+              fintava: fin,
+              ours,
+              amount: '100.00',
+              status: start === 'failed' ? 'FAILURE' : 'SUCCESS',
+            }),
+          ),
+        );
+        expect((await status.check(entry)).outcome).toBe('settled');
+      } else if (start === 'absent') {
+        await age(entry, 11);
+        expect((await status.check(entry)).outcome).toBe('failed_absent');
+      }
+      return { b, ours, fin, entry };
+    }
+
+    it("a reversal is applied only when it gives back the row's amount, fee and total to the kobo, to a row a reversal can follow; every other one is recorded on the row and moves nothing", async () => {
+      // The verifier's finding 1 (B4c): each of these used to end reversed
+      // with no discrepancy.
+      const cases: Array<{
+        name: string;
+        start: 'pending' | 'failed' | 'completed' | 'absent';
+        rev: { amount: number; charges?: number; total: number };
+        why: string;
+      }> = [
+        {
+          name: '₦200 back for a ₦100 send',
+          start: 'failed',
+          rev: { amount: 200, charges: 30.75, total: 230.75 },
+          why: 'amountKobo 10000 vs 20000, totalKobo 13075 vs 23075',
+        },
+        {
+          name: '₦100.01 back',
+          start: 'failed',
+          rev: { amount: 100.01, charges: 30.75, total: 130.76 },
+          why: 'amountKobo 10000 vs 10001, totalKobo 13075 vs 13076',
+        },
+        {
+          name: '₦99.99 back',
+          start: 'failed',
+          rev: { amount: 99.99, charges: 30.75, total: 130.74 },
+          why: 'amountKobo 10000 vs 9999, totalKobo 13075 vs 13074',
+        },
+        {
+          name: 'the amount back and Fintava keeps its fee (100, 0, 100)',
+          start: 'failed',
+          rev: { amount: 100, charges: 0, total: 100 },
+          why: 'feeKobo 3075 vs 0, totalKobo 13075 vs 10000',
+        },
+        {
+          name: 'no charges in the reversal',
+          start: 'failed',
+          rev: { amount: 100, total: 130.75 },
+          why: 'feeKobo 3075 vs not reported',
+        },
+        {
+          name: '₦200 back for a pending ₦100 send',
+          start: 'pending',
+          rev: { amount: 200, charges: 30.75, total: 230.75 },
+          why: 'amountKobo 10000 vs 20000, totalKobo 13075 vs 23075',
+        },
+        {
+          name: '₦200 back for a COMPLETED ₦100 send',
+          start: 'completed',
+          rev: { amount: 200, charges: 30.75, total: 230.75 },
+          why: 'amountKobo 10000 vs 20000, totalKobo 13075 vs 23075, the send is completed',
+        },
+        {
+          name: 'the same figures back for a COMPLETED send',
+          start: 'completed',
+          rev: { amount: 100, charges: 30.75, total: 130.75 },
+          why: 'the send is completed',
+        },
+        {
+          name: 'the same figures back for a send failed as absent at Fintava',
+          start: 'absent',
+          rev: { amount: 100, charges: 30.75, total: 130.75 },
+          why: 'the send was failed as absent at Fintava',
+        },
+      ];
+      for (const c of cases) {
+        const { b, ours, fin, entry } = await bankSend(c.start);
+        const before = await row(entry);
+        const revRef = ref('REV');
+        const e = await deliver(
+          reversalDelivery({
+            customerId: b.customerId,
+            customerReference: ours,
+            transactionReference: fin,
+            reversalRef: revRef,
+            ...c.rev,
+          }).replace(
+            c.rev.charges === undefined ? /\s*"charges": [^,]+,/ : /^$/,
+            '',
+          ),
+        );
+        expect(await consumer.consume(e)).toBe('processed');
+        const note = (
+          await prisma.fintavaWebhookEvent.findUniqueOrThrow({
+            where: { id: e },
+          })
+        ).note;
+        expect(note).toMatch(/not reversed: the reversal disagrees/);
+        const r = await row(entry);
+        expect({ case: c.name, ...r }).toMatchObject({
+          case: c.name,
+          status: before.status,
+          failureReason: before.failureReason,
+          reversedAt: null,
+          reversalReference: null,
+          reversalAmountKobo: null,
+          reversalTotalKobo: null,
+          discrepancy: `reversal sighting ${revRef}: not applied (${c.why})`,
+        });
+        // Held for review: a pending one is never asked again.
+        if (r.status === 'pending') {
+          const n = asked(ours);
+          expect((await status.check(entry)).outcome).toBe('disagrees');
+          await status.sweep(new Date(Date.now() + 2 * 60 * MINUTE));
+          expect(asked(ours)).toBe(n);
+        }
+        // The same reversal again changes nothing and writes no second note.
+        const again = await deliver(
+          reversalDelivery({
+            customerId: b.customerId,
+            customerReference: ours,
+            transactionReference: fin,
+            reversalRef: revRef,
+            ...c.rev,
+            status: 'SUCCESS',
+          }).replace(
+            c.rev.charges === undefined ? /\s*"charges": [^,]+,/ : /^$/,
+            '',
+          ),
+        );
+        expect(await consumer.consume(again)).toBe('processed');
+        expect((await row(entry)).discrepancy).toBe(r.discrepancy);
+      }
+    });
+
+    it('a reversal with the same figures is applied exactly once: two deliveries of it consumed at once, beside two status checks, on a send Fintava failed; and on one still pending', async () => {
+      for (const start of ['failed', 'pending'] as const) {
+        const { b, ours, fin, entry } = await bankSend(start);
+        const revRef = ref('REV');
+        const one = reversalDelivery({
+          customerId: b.customerId,
+          customerReference: ours,
+          transactionReference: fin,
+          reversalRef: revRef,
+        });
+        const first = await deliver(one);
+        // The same bytes again: MONEY-07 keeps one row.
+        expect(await deliver(one)).toBe(first);
+        const second = await deliver(
+          reversalDelivery({
+            customerId: b.customerId,
+            customerReference: ours,
+            transactionReference: fin,
+            reversalRef: revRef,
+            status: 'SUCCESS',
+          }),
+        );
+        expect(second).not.toBe(first);
+        const out = await Promise.all([
+          consumer.consume(first),
+          consumer.consume(second),
+          status.check(entry),
+          status.check(entry),
+        ]);
+        expect(out.slice(0, 2)).toEqual(['processed', 'processed']);
+        const notes = (
+          await prisma.fintavaWebhookEvent.findMany({
+            where: { id: { in: [first, second] } },
+            select: { note: true },
+          })
+        ).map((n) => n.note ?? '');
+        expect(notes.filter((n) => /marked reversed/.test(n))).toHaveLength(1);
+        expect(
+          notes.filter((n) => /was already reversed/.test(n)),
+        ).toHaveLength(1);
+        const rows = await prisma.fintavaLedgerEntry.findMany({
+          where: { wawuUserId: b.wawuUserId },
+        });
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({
+          id: entry,
+          status: 'reversed',
+          reversalReference: revRef,
+          reversalAmountKobo: 10000n,
+          reversalChargesKobo: 3075n,
+          reversalTotalKobo: 13075n,
+          discrepancy: null,
+        });
+      }
+    });
+
+    it('an empty history page while Fintava says more pages follow is not the end of the walk: the row waits, is never failed as absent and gets no resend advice; so does any page whose figures do not agree', async () => {
+      // The verifier's finding 2 (B3): page 1 `data: []` with hasNextPage
+      // true and 8 pages was failed as absent after reading 1 page.
+      type Shape = NonNullable<NonNullable<typeof merchantPaging>['shape']>;
+      const cases: Array<[string, number, Shape, number]> = [
+        [
+          'page 1 empty, hasNextPage true, 8 pages (the verifier repro)',
+          8,
+          (p, meta, rows) => ({ meta, rows: p === 1 ? [] : rows }),
+          1,
+        ],
+        [
+          'page 3 empty, hasNextPage true, 8 pages',
+          8,
+          (p, meta, rows) => ({ meta, rows: p === 3 ? [] : rows }),
+          3,
+        ],
+        [
+          'page 2 calls itself page 2 of 1, no rows and no next page (past the total)',
+          8,
+          (p, meta, rows) =>
+            p === 2
+              ? {
+                  meta: {
+                    ...meta,
+                    itemCount: Number(meta.take),
+                    pageCount: 1,
+                    hasNextPage: false,
+                  },
+                  rows: [],
+                }
+              : { meta, rows },
+          2,
+        ],
+        [
+          'the total changes between pages: page 3 says the history has 3 pages and ends there',
+          8,
+          (p, meta, rows) =>
+            p === 3
+              ? {
+                  meta: {
+                    ...meta,
+                    itemCount: Number(meta.take) * 3,
+                    pageCount: 3,
+                    hasNextPage: false,
+                  },
+                  rows,
+                }
+              : { meta, rows },
+          3,
+        ],
+        [
+          'page 2 answers as page 1 with no next page (not the page asked for)',
+          8,
+          (p, meta, rows) =>
+            p === 2
+              ? {
+                  meta: {
+                    ...meta,
+                    page: '1',
+                    itemCount: Number(meta.take),
+                    pageCount: 1,
+                    hasNextPage: false,
+                  },
+                  rows,
+                }
+              : { meta, rows },
+          2,
+        ],
+        [
+          'one page, no next page, but 5 rows promised and none sent',
+          1,
+          (_p, meta) => ({
+            meta: { ...meta, take: '100', itemCount: 5, pageCount: 1 },
+            rows: [],
+          }),
+          1,
+        ],
+      ];
+      for (const [name, pages, shape, read] of cases) {
+        const ours = ref('OURS');
+        const entry = await sent({ wallet: merchant, ours });
+        await age(entry, 11);
+        merchantPaging = { pages, hitPage: 0, ours, shape };
+        const n0 = double.seen.length;
+        let c;
+        try {
+          c = await status.check(entry);
+        } finally {
+          merchantPaging = null;
+        }
+        const pagesRead = double.seen
+          .slice(n0)
+          .filter((q) => q.path === '/txn/merchant').length;
+        expect({ name, pagesRead, ...c }).toMatchObject({
+          name,
+          pagesRead: read,
+          outcome: 'waiting',
+          fintava: 'unknown',
+          decision: { action: 'wait', why: 'history_incomplete' },
+        });
+        expect(await row(entry)).toMatchObject({
+          status: 'pending',
+          failureReason: null,
+        });
+      }
+
+      // Controls: a complete walk still shows the send is not there.
+      const controls: Array<[string, number, Shape | undefined]> = [
+        ['three consistent pages, the last with no next page', 3, undefined],
+        [
+          'an empty history as the sandbox answers it (page 1 of 0, `sandbox/10-`)',
+          1,
+          (_p, meta) => ({
+            meta: { ...meta, itemCount: 0, pageCount: 0, hasNextPage: false },
+            rows: [],
+          }),
+        ],
+      ];
+      for (const [name, pages, shape] of controls) {
+        const ours = ref('OURS');
+        const entry = await sent({ wallet: merchant, ours });
+        await age(entry, 11);
+        merchantPaging = { pages, hitPage: 0, ours, shape };
+        let c;
+        try {
+          c = await status.check(entry);
+        } finally {
+          merchantPaging = null;
+        }
+        expect({ name, ...c }).toMatchObject({
+          name,
+          outcome: 'failed_absent',
+          decision: { action: 'resend_same_reference' },
+        });
+      }
+    });
+
+    it('a fee-only difference ends the same whichever arrives first, the webhook or the sweep: pending, the difference recorded, and left for review', async () => {
+      // The verifier's finding 6 (B4b): webhook first left it pending, the
+      // sweep first completed it.
+      const ends: Record<string, unknown> = {};
+      for (const order of ['webhook first', 'sweep first'] as const) {
+        const b = await addWallet();
+        const ours = ref('OURS');
+        const fin = ref('FIN');
+        // The sender recorded ₦40; Fintava charges ₦30.75.
+        const entry = await sent({
+          wallet: userWallet(b),
+          ours,
+          amountKobo: 10000,
+          feeKobo: 4000,
+          counterparty: toBank,
+        });
+        byReference.set(
+          ours,
+          found(
+            fintavaRecord({
+              id: randomUUID(),
+              fintava: fin,
+              ours,
+              amount: '100.00',
+            }),
+          ),
+        );
+        await age(entry, 5);
+        const text = bank({
+          customerId: b.customerId,
+          ours,
+          fin,
+          status: 'SUCCESS',
+          amount: 100,
+          charges: 30.75,
+          total: 130.75,
+        });
+        if (order === 'webhook first') {
+          expect(await consumer.consume(await deliver(text))).toBe('processed');
+          expect((await status.check(entry)).outcome).toBe('disagrees');
+        } else {
+          expect((await status.check(entry)).outcome).toBe('settled');
+          expect((await row(entry)).status).toBe('completed');
+          expect(await consumer.consume(await deliver(text))).toBe('processed');
+        }
+        const r = await row(entry);
+        expect(r.discrepancy).toMatch(
+          /feeKobo 4000 vs 3075, totalKobo 14000 vs 13075/,
+        );
+        const n = asked(ours);
+        await status.sweep(new Date(Date.now() + 2 * 60 * MINUTE));
+        expect(asked(ours)).toBe(n);
+        ends[order] = {
+          status: r.status,
+          completedAt: r.completedAt,
+          held: r.discrepancy !== null,
+        };
+      }
+      expect(ends['webhook first']).toEqual({
+        status: 'pending',
+        completedAt: null,
+        held: true,
+      });
+      expect(ends['sweep first']).toEqual(ends['webhook first']);
+    });
+
+    it('two deliveries with the same status and other amounts both reach the ledger (MONEY-07 keys on the body), in either order the row ends pending with the difference; the same bytes twice stay one', async () => {
+      // The verifier's finding 3: SUCCESS ₦100 then SUCCESS ₦200 used to
+      // drop the second (same event, reference and status).
+      const ends: Record<string, unknown> = {};
+      for (const order of ['matching first', 'other amount first'] as const) {
+        const b = await addWallet();
+        const ours = ref('OURS');
+        const fin = ref('FIN');
+        const entry = await sent({
+          wallet: userWallet(b),
+          ours,
+          amountKobo: 10000,
+          feeKobo: 3075,
+          counterparty: toBank,
+        });
+        const same = bank({
+          customerId: b.customerId,
+          ours,
+          fin,
+          status: 'SUCCESS',
+          amount: 100,
+          charges: 30.75,
+          total: 130.75,
+        });
+        const other = bank({
+          customerId: b.customerId,
+          ours,
+          fin,
+          status: 'SUCCESS',
+          amount: 200,
+          charges: 30.75,
+          total: 230.75,
+        });
+        const texts =
+          order === 'matching first' ? [same, other] : [other, same];
+        const ids: string[] = [];
+        for (const t of texts) {
+          const id = await deliver(t);
+          expect(ids).not.toContain(id);
+          ids.push(id);
+          expect(await consumer.consume(id)).toBe('processed');
+        }
+        // The same bytes again: one row, nothing new for the ledger.
+        expect(await deliver(texts[0])).toBe(ids[0]);
+        expect(
+          await prisma.fintavaWebhookEvent.count({
+            where: { dataCustomerReference: ours },
+          }),
+        ).toBe(2);
+        const r = await row(entry);
+        expect(r.discrepancy).toMatch(/amountKobo 10000 vs 20000/);
+        ends[order] = { status: r.status, completedAt: r.completedAt };
+      }
+      expect(ends['matching first']).toEqual({
+        status: 'pending',
+        completedAt: null,
+      });
+      expect(ends['other amount first']).toEqual(ends['matching first']);
+    });
+
+    it('a revival starts the schedule again: a row checked six times and then failed as absent is asked two minutes after its resend, not on its old schedule', async () => {
+      // The verifier's surviving mutant: a revival that kept the old
+      // `nextCheckAt` and `statusChecks`.
+      const ours = ref('OURS');
+      const entry = await sent({ wallet: merchant, ours });
+      await age(entry, 11);
+      byReference.set(ours, { status: 200, body: {} });
+      let at = new Date();
+      for (let i = 0; i < 6; i += 1) {
+        expect((await status.check(entry, at)).outcome).toBe('waiting');
+        at = (await row(entry)).nextCheckAt as Date;
+      }
+      byReference.delete(ours);
+      expect((await status.check(entry, at)).outcome).toBe('failed_absent');
+      const failed = await row(entry);
+      expect(failed.statusChecks).toBe(6);
+      expect(failed.nextCheckAt?.getTime()).toBeGreaterThan(
+        Date.now() + 60 * MINUTE,
+      );
+      // The sending feature resends under the same reference.
+      await ledger.record({
+        wallet: merchant,
+        direction: 'out',
+        status: 'pending',
+        category: 'transfer',
+        amountKobo: 1000,
+        references: { customerReference: ours },
+        source: 'send',
+      });
+      expect(await row(entry)).toMatchObject({
+        status: 'pending',
+        revivedBy: 'send',
+        statusChecks: 0,
+        nextCheckAt: null,
+      });
+      byReference.set(
+        ours,
+        found(
+          fintavaRecord({
+            id: randomUUID(),
+            fintava: ref('FIN'),
+            ours,
+            amount: '10.00',
+          }),
+        ),
+      );
+      const before = asked(ours);
+      await status.sweep(new Date(Date.now() + 2 * MINUTE + 1000));
+      expect(asked(ours)).toBeGreaterThan(before);
+      expect((await row(entry)).status).toBe('completed');
+    });
+
+    it('two rows of one movement folded into one: a disagreement the folded row held stays on the kept row, which a matching SUCCESS then does not complete', async () => {
+      // Two sightings that shared no reference wrote two rows; one of them
+      // already holds a disagreement with Fintava.
+      const first = ref('A');
+      const second = ref('B');
+      const kept = await ledger.record({
+        wallet: merchant,
+        direction: 'out',
+        status: 'pending',
+        category: 'transfer',
+        amountKobo: 1000,
+        references: { customerReference: first },
+        source: 'send',
+      });
+      const folded = await ledger.record({
+        wallet: merchant,
+        direction: 'out',
+        status: 'pending',
+        category: 'transfer',
+        amountKobo: 1000,
+        references: { fintavaReference: second },
+        source: 'webhook',
+      });
+      expect(folded.entryId).not.toBe(kept.entryId);
+      const older = new Date(Date.now() - MINUTE);
+      await prisma.fintavaLedgerEntry.update({
+        where: { id: kept.entryId },
+        data: { createdAt: older },
+      });
+      const note = 'status check: amountKobo 1000 vs 1001';
+      await ledger.noteDiscrepancy(folded.entryId, note);
+      // A SUCCESS that names both, with the row's own figures.
+      const r = await ledger.record({
+        wallet: merchant,
+        direction: 'out',
+        status: 'completed',
+        category: 'transfer',
+        amountKobo: 1000,
+        references: { customerReference: first, fintavaReference: second },
+        source: 'lookup',
+      });
+      expect(r.entryId).toBe(kept.entryId);
+      expect(
+        await prisma.fintavaLedgerEntry.count({
+          where: { id: folded.entryId },
+        }),
+      ).toBe(0);
+      const k = await row(kept.entryId);
+      expect(k.discrepancy).toContain(note);
+      expect(k.status).toBe('pending');
+      expect(k.completedAt).toBeNull();
+    });
+
+    it('rows holding a disagreement are never claimed: 60 of them, due before everything else, take no slot of a sweep and are never asked', async () => {
+      // The verifier's surviving mutant: the claim taking them.
+      const held: string[] = [];
+      for (let i = 0; i < 60; i += 1) {
+        const id = await sent({ wallet: merchant, ours: ref('HELD') });
+        held.push(id);
+      }
+      const oldest = new Date(Date.now() - 2 * 24 * 60 * MINUTE);
+      await prisma.$executeRaw`
+        UPDATE "FintavaLedgerEntry"
+           SET "createdAt" = ${oldest}, "updatedAt" = ${oldest},
+               "occurredAt" = ${oldest},
+               "discrepancy" = 'status check: amountKobo 1000 vs 1001'
+         WHERE "id" = ANY(${held}::text[])`;
+      const ours = ref('OURS');
+      const entry = await sent({ wallet: merchant, ours });
+      const next = new Date(oldest.getTime() + MINUTE);
+      await prisma.$executeRaw`
+        UPDATE "FintavaLedgerEntry"
+           SET "createdAt" = ${next}, "updatedAt" = ${next}, "occurredAt" = ${next}
+         WHERE "id" = ${entry}`;
+      byReference.set(
+        ours,
+        found(
+          fintavaRecord({
+            id: randomUUID(),
+            fintava: ref('FIN'),
+            ours,
+            amount: '10.00',
+          }),
+        ),
+      );
+      const counts = await status.sweep();
+      expect(counts.disagrees).toBe(0);
+      expect((await row(entry)).status).toBe('completed');
+      const untouched = await prisma.fintavaLedgerEntry.count({
+        where: { id: { in: held }, statusChecks: 0, nextCheckAt: null },
+      });
+      expect(untouched).toBe(60);
+    });
   });
 
   it('never sends money: the status check holds no call that moves it', () => {

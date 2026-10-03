@@ -15,7 +15,10 @@ import {
   koboBig,
   koboNumber,
   ledgerReferences,
+  LEDGER_ABSENT_FAILURE,
+  LEDGER_FINTAVA_FAILURE,
   ledgerStatusMayMove,
+  reversalDisagreement,
 } from '../ledger.service';
 import { ledgerStatusOf, readLedgerWebhook } from '../ledger-webhook';
 
@@ -314,5 +317,102 @@ describe('ledger: references and status', () => {
     expect(ledgerConfirmWindowMs(' 2 ')).toBe(2 * 3_600_000);
     expect(() => ledgerConfirmWindowMs('0')).toThrow();
     expect(() => ledgerConfirmWindowMs('1.5')).toThrow();
+  });
+});
+
+describe("MONEY-08 round 3: a reversal applies only with the row's figures, to a row it can follow", () => {
+  const row = (
+    o: Partial<Parameters<typeof reversalDisagreement>[0]> = {},
+  ) => ({
+    status: 'failed' as const,
+    failureReason: LEDGER_FINTAVA_FAILURE,
+    amountKobo: 10000n,
+    feeKobo: 3075n,
+    totalKobo: 13075n,
+    reversalReference: null,
+    ...o,
+  });
+  const rev = (
+    o: Partial<Parameters<typeof reversalDisagreement>[1]> = {},
+  ) => ({
+    amountKobo: 10000,
+    chargesKobo: 3075,
+    totalKobo: 13075,
+    reversalReference: 'r-1',
+    ...o,
+  });
+
+  it('the same figures, on a failed or pending send, or the same reversal again: applied', () => {
+    expect(reversalDisagreement(row(), rev())).toBeNull();
+    expect(
+      reversalDisagreement(
+        row({ status: 'pending', failureReason: null }),
+        rev(),
+      ),
+    ).toBeNull();
+    expect(
+      reversalDisagreement(
+        row({ status: 'reversed', reversalReference: 'r-1' }),
+        rev(),
+      ),
+    ).toBeNull();
+  });
+
+  it.each([
+    [
+      '1 kobo more',
+      rev({ amountKobo: 10001, totalKobo: 13076 }),
+      'amountKobo 10000 vs 10001, totalKobo 13075 vs 13076',
+    ],
+    [
+      '1 kobo less',
+      rev({ amountKobo: 9999, totalKobo: 13074 }),
+      'amountKobo 10000 vs 9999, totalKobo 13075 vs 13074',
+    ],
+    [
+      'the fee kept',
+      rev({ chargesKobo: 0, totalKobo: 10000 }),
+      'feeKobo 3075 vs 0, totalKobo 13075 vs 10000',
+    ],
+    ['the total only', rev({ totalKobo: 13076 }), 'totalKobo 13075 vs 13076'],
+    [
+      'a figure not reported',
+      rev({ chargesKobo: null }),
+      'feeKobo 3075 vs not reported',
+    ],
+    [
+      'nothing reported',
+      rev({ amountKobo: null, chargesKobo: null, totalKobo: null }),
+      'amountKobo 10000 vs not reported, feeKobo 3075 vs not reported, totalKobo 13075 vs not reported',
+    ],
+  ])('%s: a difference', (_name, input, why) => {
+    expect(reversalDisagreement(row(), input)).toBe(why);
+  });
+
+  it('a completed send, a send failed as absent, or one already reversed by another reversal: not one a reversal can follow', () => {
+    expect(
+      reversalDisagreement(
+        row({ status: 'completed', failureReason: null }),
+        rev(),
+      ),
+    ).toBe('the send is completed');
+    expect(
+      reversalDisagreement(
+        row({ failureReason: LEDGER_ABSENT_FAILURE }),
+        rev(),
+      ),
+    ).toBe('the send was failed as absent at Fintava');
+    expect(
+      reversalDisagreement(
+        row({ status: 'reversed', reversalReference: 'r-0' }),
+        rev(),
+      ),
+    ).toBe('already reversed by r-0');
+    expect(
+      reversalDisagreement(
+        row({ status: 'completed', failureReason: null }),
+        rev({ amountKobo: 20000 }),
+      ),
+    ).toBe('amountKobo 10000 vs 20000, the send is completed');
   });
 });

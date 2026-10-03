@@ -127,6 +127,54 @@ export function koboNumber(n: bigint): number {
 
 type EntryRow = Prisma.FintavaLedgerEntryGetPayload<object>;
 
+/**
+ * Why a reversal cannot be applied to this row, or null when it can
+ * (LedgerService.applyReversal): its figures against the row's, to the
+ * kobo, and whether the row is one a reversal can follow.
+ */
+export function reversalDisagreement(
+  row: Pick<
+    EntryRow,
+    | 'status'
+    | 'failureReason'
+    | 'amountKobo'
+    | 'feeKobo'
+    | 'totalKobo'
+    | 'reversalReference'
+  >,
+  input: Pick<
+    LedgerReversalInput,
+    'amountKobo' | 'chargesKobo' | 'totalKobo' | 'reversalReference'
+  >,
+): string | null {
+  const why: string[] = [];
+  const pairs: Array<[string, bigint, number | null]> = [
+    ['amountKobo', row.amountKobo, input.amountKobo],
+    ['feeKobo', row.feeKobo, input.chargesKobo],
+    ['totalKobo', row.totalKobo, input.totalKobo],
+  ];
+  for (const [name, ours, theirs] of pairs) {
+    if (theirs === null) why.push(`${name} ${ours} vs not reported`);
+    else if (BigInt(theirs) !== ours) why.push(`${name} ${ours} vs ${theirs}`);
+  }
+  if (row.status === 'completed') {
+    why.push('the send is completed');
+  } else if (
+    row.status === 'failed' &&
+    row.failureReason === LEDGER_ABSENT_FAILURE
+  ) {
+    why.push('the send was failed as absent at Fintava');
+  } else if (
+    row.status === 'reversed' &&
+    row.reversalReference !== null &&
+    input.reversalReference !== null &&
+    row.reversalReference !== input.reversalReference
+  ) {
+    why.push(`already reversed by ${row.reversalReference.slice(0, 100)}`);
+  }
+  return why.length ? why.join(', ') : null;
+}
+
 /** The rows holding a sighting's references moved while it was being merged. */
 class LedgerRaceError extends Error {
   constructor() {
@@ -371,7 +419,8 @@ export class LedgerService {
         where: { id: entryId },
         select: { discrepancy: true },
       });
-      if (!row || (row.discrepancy ?? '').split('; ').includes(note)) {
+      // Notes are joined with '; '; one already there is a whole segment.
+      if (!row || `; ${row.discrepancy ?? ''}; `.includes(`; ${note}; `)) {
         return false;
       }
       await tx.fintavaLedgerEntry.update({
@@ -469,19 +518,32 @@ export class LedgerService {
 
     let row = keeper;
     const notes: string[] = [];
+    /** Disagreements the folded rows already held. */
+    const carried: string[] = [];
+    // What the kept row holds once these notes are on it: a later merge in
+    // this loop reads it as "holds a disagreement" (LedgerService.merge).
+    const heldNotes = () =>
+      notes.length + carried.length === 0
+        ? keeper.discrepancy
+        : [keeper.discrepancy, ...carried, ...notes]
+            .filter(Boolean)
+            .join('; ')
+            .slice(0, 1000);
     for (const other of extra) {
       // Two rows for one side of one movement: an earlier pair of sightings
       // shared no reference, and this one names both. One row is kept.
       this.logger.warn(
         `ledger: two rows on one side of one movement were folded into one (${keeper.id})`,
       );
+      // A disagreement the folded row held stays on the kept one.
+      if (other.discrepancy) carried.push(other.discrepancy);
       const merged = this.merge(row, sightingOfRow(other), now);
-      row = { ...row, ...merged.data };
       if (merged.discrepancy) notes.push(merged.discrepancy);
+      row = { ...row, ...merged.data, discrepancy: heldNotes() };
     }
     const merged = this.merge(row, s, now);
-    row = { ...row, ...merged.data };
     if (merged.discrepancy) notes.push(merged.discrepancy);
+    row = { ...row, ...merged.data };
 
     await tx.fintavaLedgerReference.updateMany({
       where: { entryId: { in: [id, ...extra.map((e) => e.id)] } },
@@ -491,13 +553,7 @@ export class LedgerService {
       where: { id: { in: [id, ...extra.map((e) => e.id)] } },
     });
 
-    const discrepancy =
-      notes.length === 0
-        ? keeper.discrepancy
-        : [keeper.discrepancy, ...notes]
-            .filter(Boolean)
-            .join('; ')
-            .slice(0, 1000);
+    const discrepancy = heldNotes();
     await tx.fintavaLedgerEntry.update({
       where: { id: keeper.id },
       data: {
@@ -613,9 +669,24 @@ export class LedgerService {
 
     // Fintava's figures against ours. Any difference is a stop (WORKFLOW
     // section 10: our ledger and Fintava disagree, by any amount): it is
-    // recorded on `discrepancy`, and this sighting moves no status, the same
-    // as MONEY-08's status check (MONEY-08 round 2 aligns MONEY-10's merge
-    // with that rule; it used to settle the status and note the figures).
+    // recorded on `discrepancy`, and this sighting never settles the row,
+    // the same as MONEY-08's status check (MONEY-08 round 2 aligns MONEY-10's
+    // merge with that rule; it used to settle the status and note the
+    // figures).
+    //
+    // The same final state whichever sighting arrives first (MONEY-08 round
+    // 3): a row holding a disagreement is "noted and not settled".
+    // - A difference that lands on a row already `completed` (say the status
+    //   check settled it from a lookup, which carries no fee, and the
+    //   webhook then reports another fee) puts it back to `pending`, as if
+    //   the disagreeing sighting had come first. So does one that lands on a
+    //   row failed as absent at Fintava: Fintava knows the reference, so "no
+    //   money moved" no longer stands.
+    // - A row that holds a disagreement is never completed by a later
+    //   sighting with matching figures (the sweep does not ask it either).
+    //   Fintava's failure (`failed`) and its reversal still apply: neither
+    //   says money left.
+    const held = !!row.discrepancy;
     const figures: string[] = [];
     if (s.amountKobo !== row.amountKobo) {
       figures.push(`amountKobo ${row.amountKobo} vs ${s.amountKobo}`);
@@ -638,6 +709,18 @@ export class LedgerService {
           `status ${absentFailure ? 'failed (no record at Fintava)' : row.status} vs ${s.status} not applied`,
         );
       }
+      if (row.status === 'completed' || absentFailure) {
+        differs.push(
+          `${absentFailure ? 'failed (no record at Fintava)' : 'completed'} put back to pending`,
+        );
+        data.status = 'pending';
+        data.completedAt = null;
+        if (absentFailure) {
+          data.failureReason = null;
+          data.revivedAt = now;
+          data.revivedBy = s.source;
+        }
+      }
     } else if (revives) {
       // Marked failed because Fintava had no record of it (MONEY-08), and
       // now a sighting of the same reference exists: a resend under the same
@@ -645,25 +728,32 @@ export class LedgerService {
       // record wins. This is not a disagreement with Fintava (our reading of
       // its silence was all that changed), so it goes on `revivedAt` and
       // `revivedBy`, never `discrepancy`, and the row stays in the sweep.
-      data.status = s.status;
+      // A row holding a disagreement comes back only as far as `pending`.
+      data.status = held ? 'pending' : s.status;
       data.failureReason = null;
       data.revivedAt = now;
       data.revivedBy = s.source;
-      if (s.status === 'completed' && row.completedAt === null) {
+      if (data.status === 'completed' && row.completedAt === null) {
         data.completedAt = now;
       }
-    } else if (ledgerStatusMayMove(row.status, s.status)) {
+    } else if (
+      ledgerStatusMayMove(row.status, s.status) &&
+      !(held && s.status === 'completed')
+    ) {
       data.status = s.status;
       if (s.status === 'completed' && row.completedAt === null) {
         data.completedAt = now;
       }
     } else if (
       (row.status === 'completed' && s.status === 'failed') ||
-      (row.status === 'failed' && s.status === 'completed')
+      (row.status === 'failed' && s.status === 'completed') ||
+      (row.status === 'reversed' && s.status === 'completed')
     ) {
       // Fintava said one and now says the other (U-1). Neither is applied
       // over the other: the stored status stands and the disagreement is
-      // recorded, as for an amount.
+      // recorded, as for an amount. A SUCCESS after Fintava's reversal is
+      // the mirror of a reversal of a completed send (applyReversal): noted
+      // either way round (MONEY-08 round 3).
       differs.push(`status ${row.status} vs ${s.status}`);
     }
     if (
@@ -692,12 +782,27 @@ export class LedgerService {
    * row becomes `reversed` and keeps what Fintava reported; no second row is
    * ever written for it. The row is found by any of the references on an
    * `out` side; none or more than one is reported, never guessed.
+   *
+   * Only a reversal that agrees with the row is applied (MONEY-08 round 3,
+   * WORKFLOW section 10: any disagreement with Fintava, of any amount, is a
+   * stop). It must give back the row's amount, fee and total to the kobo
+   * (Fintava's `amount`, `charges` and `total`; a figure it leaves out is
+   * not confirmed, so it counts as a difference), and the row must be one a
+   * reversal can follow: `pending` (a bank send still on its way), or
+   * `failed` by Fintava's own word. A `completed` send, a send failed as
+   * absent at Fintava (we said no money moved) or a row already reversed
+   * by another reversal is not. Otherwise the difference is written on the
+   * row's `discrepancy` (MONEY-16 reports it) and nothing else changes: the
+   * status stays where it is. The same reversal delivered again changes
+   * nothing.
    */
   async applyReversal(
     input: LedgerReversalInput,
     db?: Prisma.TransactionClient,
   ): Promise<LedgerReversalResult> {
-    const run = async (tx: Prisma.TransactionClient) => {
+    const run = async (
+      tx: Prisma.TransactionClient,
+    ): Promise<LedgerReversalResult> => {
       const refs = [
         ...new Set(input.references.map((r) => r.trim()).filter(Boolean)),
       ];
@@ -712,10 +817,19 @@ export class LedgerService {
       const row = await tx.fintavaLedgerEntry.findUniqueOrThrow({
         where: { id: entryId },
       });
+      const why = reversalDisagreement(row, input);
+      if (why) {
+        const note = `reversal sighting${input.reversalReference ? ` ${input.reversalReference.slice(0, 100)}` : ''}: not applied (${why})`;
+        await this.noteDiscrepancy(entryId, note, tx);
+        this.logger.error(
+          `ledger: a reversal disagreed with row ${entryId}; it was not applied (review)`,
+        );
+        return { state: 'disagrees', entryId, discrepancy: note } as const;
+      }
       const opt = (n: number | null) =>
         n === null ? null : koboBig('reversal amount', n);
       const data: Prisma.FintavaLedgerEntryUpdateInput = {};
-      if (ledgerStatusMayMove(row.status, 'reversed')) data.status = 'reversed';
+      if (row.status !== 'reversed') data.status = 'reversed';
       if (row.reversedAt === null) {
         data.reversedAt = input.at;
         data.reversalReference = input.reversalReference;

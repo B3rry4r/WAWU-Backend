@@ -810,7 +810,13 @@ describe('The ledger (MONEY-10) fed by stored Fintava deliveries', () => {
   });
 
   describe('reversals', () => {
-    it('a bank send settles, then comes back: the same row becomes reversed, never a second debit, and stays reversed', async () => {
+    // MONEY-08 round 3 changed this test. It used to reverse a send that had
+    // SUCCEEDED, and to treat a reversal under a new reversalRef as a copy.
+    // A reversal of a completed send, and a second reversal of a reversed
+    // one, are now disagreements with Fintava (WORKFLOW section 10): written
+    // on the row, nothing else changed. A reversal is applied to a send
+    // Fintava FAILED (or one still pending), once.
+    it('a bank send fails, then comes back: the same row becomes reversed, never a second debit, and stays reversed; a reversal of a send that settled is recorded, never applied', async () => {
       const b = await addWallet();
       const ours = ref('FIO');
       const fin = ref('BT');
@@ -829,32 +835,33 @@ describe('The ledger (MONEY-10) fed by stored Fintava deliveries', () => {
         references: { customerReference: ours },
         source: 'send',
       });
-      const settled = await deliver(
+      const failed = await deliver(
         bankTransferDelivery({
           customerId: b.customerId,
           customerReference: ours,
           reference: fin,
-          status: 'SUCCESS',
+          status: 'FAILED',
         }),
         ours,
       );
-      expect(await consumer.consume(settled)).toBe('processed');
+      expect(await consumer.consume(failed)).toBe('processed');
       let rows = await prisma.fintavaLedgerEntry.findMany({
         where: { wawuUserId: b.wawuUserId },
       });
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({
         id: own.entryId,
-        status: 'completed',
+        status: 'failed',
         totalKobo: 13075n,
         feeKobo: 3075n,
       });
 
+      const revRef = ref('REV');
       const reversal = reversalDelivery({
         customerId: b.customerId,
         customerReference: ours,
         transactionReference: ref('TXREF'),
-        reversalRef: ref('REV'),
+        reversalRef: revRef,
       });
       const r1 = await deliver(reversal, ours);
       expect(await consumer.consume(r1)).toBe('processed');
@@ -870,16 +877,18 @@ describe('The ledger (MONEY-10) fed by stored Fintava deliveries', () => {
         reversalAmountKobo: 10000n,
         reversalChargesKobo: 3075n,
         reversalTotalKobo: 13075n,
+        discrepancy: null,
       });
       expect(rows[0].reversedAt).toBeInstanceOf(Date);
 
-      // Another copy of the reversal (a new reversalRef), and a late SUCCESS for the send.
+      // Another copy of the reversal (the same reversalRef), and a late
+      // SUCCESS for the send.
       const r2 = await deliver(
         reversalDelivery({
           customerId: b.customerId,
           customerReference: ours,
           transactionReference: ref('TXREF'),
-          reversalRef: ref('REV'),
+          reversalRef: revRef,
           status: 'SUCCESS',
         }),
         ours,
@@ -902,6 +911,59 @@ describe('The ledger (MONEY-10) fed by stored Fintava deliveries', () => {
       expect(rows).toHaveLength(1);
       expect(rows[0].status).toBe('reversed');
       expect(rows[0].reversalAmountKobo).toBe(10000n);
+
+      // A send that SUCCEEDED, then a reversal names it: recorded, not applied.
+      const settledRef = ref('FIO');
+      const settledRow = await ledger.record({
+        wallet: {
+          kind: 'user',
+          wawuUserId: b.wawuUserId,
+          accountNumber: b.accountNumber,
+        },
+        direction: 'out',
+        status: 'pending',
+        category: 'transfer',
+        amountKobo: 10000,
+        feeKobo: 3075,
+        references: { customerReference: settledRef },
+        source: 'send',
+      });
+      expect(
+        await consumer.consume(
+          await deliver(
+            bankTransferDelivery({
+              customerId: b.customerId,
+              customerReference: settledRef,
+              reference: ref('BT'),
+              status: 'SUCCESS',
+            }),
+            settledRef,
+          ),
+        ),
+      ).toBe('processed');
+      const back = ref('REV');
+      const r3 = await deliver(
+        reversalDelivery({
+          customerId: b.customerId,
+          customerReference: settledRef,
+          transactionReference: ref('TXREF'),
+          reversalRef: back,
+        }),
+        settledRef,
+      );
+      expect(await consumer.consume(r3)).toBe('processed');
+      expect((await event(r3)).note).toMatch(
+        /not reversed: the reversal disagrees/,
+      );
+      const kept = await prisma.fintavaLedgerEntry.findUniqueOrThrow({
+        where: { id: settledRow.entryId },
+      });
+      expect(kept).toMatchObject({
+        status: 'completed',
+        reversedAt: null,
+        reversalAmountKobo: null,
+        discrepancy: `reversal sighting ${back}: not applied (the send is completed)`,
+      });
     });
 
     it('a reversal before its debit waits; once the debit is recorded it applies; with no debit past the window it fails and writes nothing', async () => {
@@ -932,6 +994,9 @@ describe('The ledger (MONEY-10) fed by stored Fintava deliveries', () => {
         status: 'pending',
         category: 'transfer',
         amountKobo: 10000,
+        // MONEY-08 round 3: a reversal applies only when its figures are the
+        // row's (amount 100, charges 30.75, total 130.75).
+        feeKobo: 3075,
         references: { customerReference: ours },
         source: 'send',
       });
@@ -1029,7 +1094,11 @@ describe('The ledger (MONEY-10) fed by stored Fintava deliveries', () => {
       expect(await rowsFor(r)).toHaveLength(0);
     });
 
-    it('a sighting with another amount keeps the stored figure and records the disagreement', async () => {
+    // MONEY-08 round 3 changed this test: the row was completed, and a
+    // sighting that disagrees with a completed row now puts it back to
+    // pending (noted and not settled), the state the same two sightings
+    // reach in the other order.
+    it('a sighting with another amount keeps the stored figure, records the disagreement and puts a completed row back to pending', async () => {
       const a = await addWallet();
       const fin = ref('FIN');
       await ledger.record({
@@ -1058,8 +1127,10 @@ describe('The ledger (MONEY-10) fed by stored Fintava deliveries', () => {
       const rows = await rowsFor(fin);
       expect(rows).toHaveLength(1);
       expect(rows[0].amountKobo).toBe(1000n);
+      expect(rows[0].status).toBe('pending');
+      expect(rows[0].completedAt).toBeNull();
       expect(rows[0].discrepancy).toBe(
-        'webhook sighting: amountKobo 1000 vs 1500, totalKobo 1000 vs 1500',
+        'webhook sighting: completed put back to pending, amountKobo 1000 vs 1500, totalKobo 1000 vs 1500',
       );
     });
   });
@@ -1458,6 +1529,10 @@ describe('The ledger (MONEY-10) fed by stored Fintava deliveries', () => {
       expect(held.map((h) => h.value).sort()).toEqual([r1, r2].sort());
     });
 
+    // MONEY-08 round 3 changed this test's debit: it was a completed ₦10
+    // send, which a reversal (₦100 + ₦30.75) may no longer change. It is now
+    // a failed send with the reversal's figures, so the test still shows
+    // which side a reversal reaches.
     it('a reversal names only debits: an in row holding the same reference is never reversed', async () => {
       const a = await addWallet();
       const b = await addWallet();
@@ -1469,9 +1544,10 @@ describe('The ledger (MONEY-10) fed by stored Fintava deliveries', () => {
           accountNumber: a.accountNumber,
         },
         direction: 'out',
-        status: 'completed',
+        status: 'failed',
         category: 'transfer',
-        amountKobo: 1000,
+        amountKobo: 10000,
+        feeKobo: 3075,
         references: { customerReference: ours },
         source: 'send',
       });
