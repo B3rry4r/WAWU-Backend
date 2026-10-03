@@ -49,6 +49,8 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     disposition: 'AUTHORED',
   },
   { model: 'DmReport', column: 'reporterWawuId', disposition: 'AUTHORED' },
+  // A reply bubble (INBOX-08) is the creator's writing; it goes with them.
+  { model: 'DmReply', column: 'creatorWawuId', disposition: 'AUTHORED' },
   // A free chat message (INBOX-06) is this person's writing; it goes with
   // them. The other person's messages in the same chat stay.
   { model: 'ChatMessage', column: 'senderWawuId', disposition: 'AUTHORED' },

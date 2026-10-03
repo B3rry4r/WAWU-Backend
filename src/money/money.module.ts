@@ -6,6 +6,9 @@ import { MoneyHistoryController } from './history/money-history.controller';
 import { TransactionHistoryService } from './history/transaction-history.service';
 import { LedgerModule } from './ledger/ledger.module';
 import { WalletBalanceService } from './balance/wallet-balance.service';
+import { FeeSettings } from './fees/fee-config';
+import { FeeQuoteService } from './fees/fee-quote.service';
+import { MoneyFeesController } from './fees/money-fees.controller';
 import { WalletGate, WalletGateGuard } from './gate/wallet-gate';
 import { IdentityHasher } from './identity/identity-config';
 import { MoneyIdentityController } from './identity/money-identity.controller';
@@ -86,6 +89,12 @@ import { ReceiptService } from './receipts/receipt.service';
  * row), behind the wallet gate, read from the ledger only; it never calls
  * Fintava.
  *
+ * WALLET-15: the fee quote (`GET /money/fees/quote`), behind the wallet
+ * gate, from the fee schedule in config (FeeSettings, R-10). It never calls
+ * Fintava. FeeQuoteService is exported for the routes that charge what was
+ * quoted (WALLET-07, WALLET-09, MONEY-17): they fill their fees from it and
+ * check the quote the person saw with `check()`.
+ *
  * WALLET-18: receipts. The owner's routes (`/money/transactions/{id}/receipt`,
  * its image and its PDF) sit behind the wallet gate and read the row through
  * the history's detail; the public check (`/r/{code}`, no sign-in,
@@ -102,6 +111,7 @@ import { ReceiptService } from './receipts/receipt.service';
     MoneyWalletController,
     MoneySavedAccountsController,
     MoneyHistoryController,
+    MoneyFeesController,
     MoneyReceiptController,
     PublicReceiptController,
   ],
@@ -123,6 +133,8 @@ import { ReceiptService } from './receipts/receipt.service';
     BeneficiaryService,
     PayoutAccountService,
     TransactionHistoryService,
+    FeeSettings,
+    FeeQuoteService,
     ReceiptSettings,
     ReceiptService,
   ],
@@ -135,6 +147,8 @@ import { ReceiptService } from './receipts/receipt.service';
     WalletIdentityService,
     SelfieMatchService,
     WalletOpeningService,
+    FeeSettings,
+    FeeQuoteService,
   ],
 })
 export class MoneyModule {}
