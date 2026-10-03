@@ -4,6 +4,7 @@ import { FintavaModule } from '../fintava/fintava.module';
 import { MoneyBalanceController } from './balance/money-balance.controller';
 import { LedgerModule } from './ledger/ledger.module';
 import { WalletBalanceService } from './balance/wallet-balance.service';
+import { WalletGate, WalletGateGuard } from './gate/wallet-gate';
 import { IdentityHasher } from './identity/identity-config';
 import { MoneyIdentityController } from './identity/money-identity.controller';
 import { SelfieMatchService } from './identity/selfie-match.service';
@@ -47,6 +48,12 @@ import { TransactionPinService } from './pin/transaction-pin.service';
  * reconciles a lost create answer every 30 seconds (it runs where
  * ScheduleModule.forRoot() is loaded, AppModule). WalletOpeningService is
  * exported for the routes that answer `wallet_opening` (MONEY-13).
+ *
+ * MONEY-13: the wallet gate (`src/money/gate/`). Every route that reads or
+ * moves a person's wallet answers "no wallet yet" the same way, `409
+ * wallet_not_open` (or `409 wallet_opening`), through `@RequireOpenWallet()`
+ * or `@RequireTransactionPin()`, which brings it. The gate and its guard are
+ * exported for the modules that add wallet routes.
  */
 @Module({
   imports: [ConfigModule, FintavaModule, LedgerModule],
@@ -57,6 +64,8 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     MoneyWalletController,
   ],
   providers: [
+    WalletGate,
+    WalletGateGuard,
     TransactionPinService,
     TransactionPinGuard,
     WalletBalanceService,
@@ -67,6 +76,8 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     WalletOpeningService,
   ],
   exports: [
+    WalletGate,
+    WalletGateGuard,
     TransactionPinService,
     TransactionPinGuard,
     WalletIdentityService,

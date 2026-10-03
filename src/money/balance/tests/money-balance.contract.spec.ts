@@ -435,13 +435,16 @@ describe('GET /money/wallet/balance (MONEY-11) over HTTP', () => {
     it('a user without a wallet gets 409 wallet_not_open, and Fintava is not asked', async () => {
       const user = newUser();
       const res = await get(user.auth).expect(409);
+      // The wallet gate's one sentence, the same on every wallet route
+      // (MONEY-13); it replaced this route's own "Open your wallet to see
+      // your balance."
       expect(envelope(res)).toEqual({
         statusCode: 409,
-        message: 'Open your wallet to see your balance.',
+        message: "You don't have a wallet yet. Open your wallet to continue.",
         data: null,
         reason: {
           code: 'wallet_not_open',
-          message: 'Open your wallet to see your balance.',
+          message: "You don't have a wallet yet. Open your wallet to continue.",
         },
       });
       expect(double.seen).toHaveLength(0);
