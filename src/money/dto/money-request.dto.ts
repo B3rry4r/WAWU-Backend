@@ -331,13 +331,21 @@ export class PaymentQuoteQueryDto {
   @Matches(TARGET_ID_PATTERN, { message: 'targetId is not a valid id' })
   targetId!: string;
 
-  /** Only for a tip, where the payer chooses the amount. Refused on every other kind. */
+  /**
+   * Only for a tip, where the payer chooses the amount. Refused on every
+   * other kind. Digits only, as on the fee quote: `100.00`, `1e4` or
+   * `10,000` is a 400, never read as some other number of kobo.
+   */
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' && /^[0-9]{1,16}$/.test(value)
+      ? Number(value)
+      : value,
+  )
   @ApiPropertyOptional({ type: 'integer' })
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(MAX_EXACT_KOBO)
+  @IsInt({ message: FEE_QUOTE_AMOUNT_MESSAGE })
+  @Min(1, { message: FEE_QUOTE_AMOUNT_MESSAGE })
+  @Max(MAX_EXACT_KOBO, { message: FEE_QUOTE_AMOUNT_MESSAGE })
   amountKobo?: number;
 }
 
@@ -363,7 +371,17 @@ export class PaymentDto {
   @ApiProperty({ type: 'integer' })
   @IsInt()
   @Min(1)
+  @Max(MAX_EXACT_KOBO)
   expectedTotalKobo!: number;
+
+  /**
+   * `quoteToken` from that payment quote (MONEY-17, BACKEND_GAPS G-64): the
+   * server checks it is its own, for this person and this price, and not
+   * past `expiresAt`; otherwise `409 quote_changed` with the new quote.
+   */
+  @IsString()
+  @Length(1, 1024)
+  quoteToken!: string;
 
   /** Only for a tip: the message that goes with it, 500 characters as POST /tips takes today. */
   @IsOptional()

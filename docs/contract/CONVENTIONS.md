@@ -273,7 +273,18 @@ after a send that failed (W14).
    that point is not stored and releases the key, so the same key can be sent
    again once the cause is fixed (the right PIN after a wrong one, or after a
    top-up).
-7. Keys are kept for at least 24 hours (MONEY-17 sets the purge in config).
+7. Keys are kept for at least 24 hours: `IDEMPOTENCY_KEY_HOURS`
+   (PROVISIONAL, 48 by default, 24 to 720), then purged hourly (MONEY-17).
+8. **As built (MONEY-17, `src/money/payments/idempotency.ts`):** the key is
+   taken (rule 2) by `IdempotencyGuard`, after the wallet gate and before
+   the PIN, so taps at once reach the PIN, the quote and Fintava once; the
+   others get the replay or `idempotency_in_progress`. The row is linked to
+   the payment in the transaction that creates it, before Fintava is
+   called. A refusal before that (rule 6) deletes the row
+   (`IdempotencyFilter`). A key left `in_progress` past the money timeout
+   plus a minute is answered from its payment's record as it stands, or,
+   when no payment was made, freed. A route that moves money uses
+   `@RequireIdempotentApproval(route)` (WALLET-07 and WALLET-09 too).
 
 **Fintava has no Idempotency-Key** (`naira-api.md`). Ours is enforced here.
 The reference we send Fintava as `CustomerReference` is derived from our own
@@ -918,3 +929,57 @@ still reads. Every answer is `Cache-Control: no-store`.
   quote_changed` with the new quote in `reason.feeQuote`. An unset
   `FEE_QUOTE_KEY` makes a key at boot (one warning): quotes given before a
   restart are then re-quoted, never charged wrongly.
+
+## 12. Pay from wallet (MONEY-17)
+
+- **Routes** (`src/money/payments/`): `GET /money/payments/quote?kind=&targetId=&amountKobo=`
+  (`PaymentQuoteView`, behind the wallet gate, `no-store`) and `POST
+  /money/payments` (`PaymentDto`; `Idempotency-Key`, and the PIN or a
+  biometric approval, `@RequireApproval()`). `GET /money/payments/{id}`
+  stays declared for MONEY-19, the holds for MONEY-18.
+- **What is paid for.** Each selling feature registers its kind with
+  `PayableRegistry` (MoneyModule exports it): `resolve` gives the title, the
+  price from its own record and the payee (or `404 target_not_found`, `409
+  target_not_payable`), and `onCompleted` delivers it once the debit is
+  confirmed (idempotent; the payment sweep calls it again until it
+  succeeds). A kind nobody registered answers `409 target_not_payable`
+  "This can't be paid for from your wallet yet.", so nothing is ever charged
+  for something nothing would deliver. Held kinds (paid DM, ticket, bill) are
+  refused until MONEY-18. `amountKobo` only on a tip (digits only), `note`
+  only on a tip; paying for your own item is `target_not_payable`.
+- **The money.** One `/transaction/wallet-to-wallet` of the price from the
+  buyer's wallet to WAWU's merchant wallet (R-19; its account number as
+  `GET /merchant/balance` reports it), our CustomerReference
+  `wawu-pay-<payment id>`. Fintava takes its balance-transfer charge on top
+  (R-10), so the buyer pays the price plus the charge quoted by WALLET-15
+  (`fee.providerFeeKobo`; `wawuFeeKobo` 0). The quote's `quoteToken` and
+  `totalKobo` go back as `quoteToken` and `expectedTotalKobo`; anything
+  `FeeQuoteService.check()` does not honour (expired, another person's,
+  another price, signed before a restart) is `409 quote_changed` with
+  `reason.paymentQuote`, the quote as it stands.
+- **Before money moves**, in order, none of which stores anything: the
+  wallet gate, the Idempotency-Key, the PIN, the body, the target, the
+  quote, the merchant cap (`amount_out_of_range`), Fintava's available
+  balance (`402 insufficient_funds` with `balanceKobo`, `totalKobo`,
+  `shortfallKobo`, "You need ₦523.25 more in your wallet."). The daily limit
+  is not held by any task (G-7).
+- **The split** is recorded on the payment (`WalletPayment`), of the price
+  only: the payee's 85% rounded down to the kobo, WAWU's 15% the rest (R-5;
+  ₦1,000 is ₦850 and ₦150, ₦999.99 is ₦849.99 and ₦150.00). No payee: all
+  of it is WAWU's. Landing the 85% in the payee's wallet is WALLET-16's.
+- **The ledger** gets both sides (buyer `out`, merchant `in`, category
+  `purchase`, `paymentId`, the link) as `pending` in the same transaction as
+  the payment, with the quoted charge as the expected fee, then Fintava's
+  figures from its answer. A difference (the sandbox charges ₦0) is kept on
+  the row's `discrepancy` and on the payment for MONEY-16; the payment
+  completes when Fintava moved the price, and stays `pending` for review
+  when it moved another amount.
+- **Answers** (all `201` with `PaymentView`, stored for the key):
+  `completed`; `pending` when the outcome is unknown (a timeout, a 5xx, a
+  2xx without a transaction, a repeated reference): never sent again from
+  here and never refunded; the ledger's status check (MONEY-08) settles the
+  row by our reference and the payment sweep (every minute) copies it onto
+  the payment; `failed` when Fintava refused the transfer and nothing moved.
+  Fintava's own "not enough", a frozen wallet, or Fintava being unusable
+  (no key, wrong key, merchant inactive) fail the payment, give the key
+  back, and answer `402`, `423 wallet_frozen` or `503`.

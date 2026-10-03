@@ -10445,8 +10445,8 @@
                             "enum": [
                               "pending",
                               "failed",
-                              "paid",
                               "refunded",
+                              "paid",
                               "cancelled"
                             ]
                           },
@@ -10612,8 +10612,8 @@
                       "enum": [
                         "pending",
                         "failed",
-                        "paid",
                         "refunded",
+                        "paid",
                         "cancelled"
                       ]
                     },
@@ -21320,6 +21320,254 @@
         "x-wawu-built-by": "WALLET-15"
       }
     },
+    "/api/hub/money/payments/quote": {
+      "get": {
+        "operationId": "MoneyPaymentsController_quote",
+        "parameters": [
+          {
+            "name": "kind",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "content_unlock",
+                "tip",
+                "credit_pack",
+                "verification",
+                "legal_fee",
+                "school_fee",
+                "paid_dm",
+                "event_ticket",
+                "bill"
+              ]
+            }
+          },
+          {
+            "name": "targetId",
+            "required": true,
+            "in": "query",
+            "description": "The id the owning feature returns for the thing being paid for (docs/contract/WALLET.md).",
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{1,64}$",
+              "type": "string"
+            }
+          },
+          {
+            "name": "amountKobo",
+            "required": false,
+            "in": "query",
+            "description": "Only for a tip, where the payer chooses the amount. Refused on every\nother kind. Digits only, as on the fee quote: `100.00`, `1e4` or\n`10,000` is a 400, never read as some other number of kobo.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentQuoteView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "What the pay sheet shows before the PIN (H14, H17): the price from the\nserver's own record of the item, Fintava's charge, the total, the balance\nand the shortfall, and a signed quote the payment sends back. Nothing is\nreserved. A total above MERCHANT_MAX_PER_TXN_KOBO is amount_out_of_range.\nA kind whose feature has not moved onto the wallet yet is\ntarget_not_payable.",
+        "tags": [
+          "MoneyPayments"
+        ],
+        "x-wawu-built-by": "MONEY-17"
+      }
+    },
+    "/api/hub/money/payments": {
+      "post": {
+        "operationId": "MoneyPaymentsController_pay",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, device_approval_refused, daily_limit_exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, target_not_payable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Pay from the wallet: the price from the buyer's wallet to WAWU's\nmerchant wallet (R-19), Fintava's charge on top (R-10), the 85/15 split\nof the price recorded with it (R-5). Answers 201 with the payment:\ncompleted, pending when Fintava has not confirmed the debit yet (H18,\nE10; it is never sent again blindly), or failed when Fintava refused it\nand nothing moved. The same Idempotency-Key and body answer the first\nresult again (`Idempotent-Replayed: true`) without checking the PIN.",
+        "tags": [
+          "MoneyPayments"
+        ],
+        "x-wawu-built-by": "MONEY-17"
+      }
+    },
     "/api/hub/chats": {
       "post": {
         "operationId": "ChatController_open",
@@ -22166,248 +22414,6 @@
         ],
         "x-wawu-built-by": "WALLET-07",
         "description": "Declared by MONEY-04, not served yet: WALLET-07 serves it.",
-        "x-wawu-served": false
-      }
-    },
-    "/api/hub/money/payments/quote": {
-      "get": {
-        "operationId": "MoneyPaymentController_quote",
-        "parameters": [
-          {
-            "name": "kind",
-            "required": true,
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "enum": [
-                "content_unlock",
-                "tip",
-                "credit_pack",
-                "verification",
-                "legal_fee",
-                "school_fee",
-                "paid_dm",
-                "event_ticket",
-                "bill"
-              ]
-            }
-          },
-          {
-            "name": "targetId",
-            "required": true,
-            "in": "query",
-            "description": "The id the owning feature returns for the thing being paid for (docs/contract/WALLET.md).",
-            "schema": {
-              "pattern": "^[A-Za-z0-9_-]{1,64}$",
-              "type": "string"
-            }
-          },
-          {
-            "name": "amountKobo",
-            "required": false,
-            "in": "query",
-            "description": "Only for a tip, where the payer chooses the amount. Refused on every other kind.",
-            "schema": {
-              "minimum": 1,
-              "maximum": 9007199254740991,
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PaymentQuoteView"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "reason.code: amount_out_of_range",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "reason.code: target_not_found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "What the pay sheet shows before the PIN (H14, H17): the price from the\nserver's own record of the item, Fintava's charge, the total, the balance\nand the shortfall, and whether it fits today's limit. Nothing is\nreserved. A total above MERCHANT_MAX_PER_TXN_KOBO is amount_out_of_range.",
-        "tags": [
-          "MoneyPayment"
-        ],
-        "x-wawu-built-by": "MONEY-17",
-        "description": "Declared by MONEY-04, not served yet: MONEY-17 serves it.",
-        "x-wawu-served": false
-      }
-    },
-    "/api/hub/money/payments": {
-      "post": {
-        "operationId": "MoneyPaymentController_pay",
-        "parameters": [
-          {
-            "name": "X-Transaction-Pin",
-            "in": "header",
-            "description": "The four-digit transaction PIN. Only ever in this header: never in a URL, a body or a log.",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[0-9]{4}$"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9_-]{8,128}$"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PaymentDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PaymentView"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "reason.code: idempotency_key_required, amount_out_of_range",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "402": {
-            "description": "reason.code: insufficient_funds",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "reason.code: pin_required, pin_incorrect, daily_limit_exceeded",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "reason.code: target_not_found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, target_not_payable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen, pin_locked",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "reason.code: provider_unreachable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Pay from the wallet. Answers completed, or pending when Fintava has not\nconfirmed the debit yet (H18, E10): the app polls GET /money/payments/{id}.\nA held kind answers with its hold. The money goes through WAWU's\nmerchant wallet, so a total above MERCHANT_MAX_PER_TXN_KOBO (config) is\nrefused with amount_out_of_range and maximumKobo, never split; a total\npast today's limit is daily_limit_exceeded (Lead rulings, 2 Oct 2026).",
-        "tags": [
-          "MoneyPayment"
-        ],
-        "x-wawu-built-by": "MONEY-17",
-        "description": "Declared by MONEY-04, not served yet: MONEY-17 serves it.",
         "x-wawu-served": false
       }
     },
@@ -25476,6 +25482,58 @@
           "accountNumber"
         ]
       },
+      "PaymentDto": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "content_unlock",
+              "tip",
+              "credit_pack",
+              "verification",
+              "legal_fee",
+              "school_fee",
+              "paid_dm",
+              "event_ticket",
+              "bill"
+            ],
+            "type": "string"
+          },
+          "targetId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
+          "amountKobo": {
+            "type": "integer",
+            "description": "Only for a tip. Every other price is the server's own record of the item.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "expectedTotalKobo": {
+            "type": "integer",
+            "description": "`totalKobo` from the payment quote the person saw. A different server total is `quote_changed`.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from that payment quote (MONEY-17, BACKEND_GAPS G-64): the\nserver checks it is its own, for this person and this price, and not\npast `expiresAt`; otherwise `409 quote_changed` with the new quote.",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "note": {
+            "type": "string",
+            "description": "Only for a tip: the message that goes with it, 500 characters as POST /tips takes today.",
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "kind",
+          "targetId",
+          "expectedTotalKobo",
+          "quoteToken"
+        ]
+      },
       "OpenChatDto": {
         "type": "object",
         "properties": {
@@ -25639,50 +25697,6 @@
           "bankCode",
           "accountNumber",
           "amountKobo",
-          "expectedTotalKobo"
-        ]
-      },
-      "PaymentDto": {
-        "type": "object",
-        "properties": {
-          "kind": {
-            "enum": [
-              "content_unlock",
-              "tip",
-              "credit_pack",
-              "verification",
-              "legal_fee",
-              "school_fee",
-              "paid_dm",
-              "event_ticket",
-              "bill"
-            ],
-            "type": "string"
-          },
-          "targetId": {
-            "type": "string",
-            "pattern": "^[A-Za-z0-9_-]{1,64}$"
-          },
-          "amountKobo": {
-            "type": "integer",
-            "description": "Only for a tip. Every other price is the server's own record of the item.",
-            "minimum": 1,
-            "maximum": 9007199254740991
-          },
-          "expectedTotalKobo": {
-            "type": "integer",
-            "description": "`totalKobo` from the payment quote the person saw. A different server total is `quote_changed`.",
-            "minimum": 1
-          },
-          "note": {
-            "type": "string",
-            "description": "Only for a tip: the message that goes with it, 500 characters as POST /tips takes today.",
-            "maxLength": 500
-          }
-        },
-        "required": [
-          "kind",
-          "targetId",
           "expectedTotalKobo"
         ]
       },
@@ -26553,6 +26567,250 @@
           "accountName",
           "matchesBvnName",
           "updatedAt"
+        ]
+      },
+      "PaymentQuoteView": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "bill",
+              "content_unlock",
+              "tip",
+              "credit_pack",
+              "verification",
+              "legal_fee",
+              "school_fee",
+              "paid_dm",
+              "event_ticket"
+            ]
+          },
+          "targetId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "payee": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MoneyPartyView"
+              }
+            ],
+            "nullable": true
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "fee": {
+            "$ref": "#/components/schemas/FeeBreakdown"
+          },
+          "totalKobo": {
+            "type": "integer"
+          },
+          "balanceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "shortfallKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "willBeHeld": {
+            "type": "boolean"
+          },
+          "withinDailyLimit": {
+            "type": "boolean"
+          },
+          "remainingTodayKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "quoteToken": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "targetId",
+          "title",
+          "payee",
+          "priceKobo",
+          "fee",
+          "totalKobo",
+          "balanceKobo",
+          "shortfallKobo",
+          "willBeHeld",
+          "withinDailyLimit",
+          "remainingTodayKobo",
+          "quoteToken",
+          "expiresAt"
+        ]
+      },
+      "HoldView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "paymentId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "bill",
+              "content_unlock",
+              "tip",
+              "credit_pack",
+              "verification",
+              "legal_fee",
+              "school_fee",
+              "paid_dm",
+              "event_ticket"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "held",
+              "released",
+              "refunded"
+            ]
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "releaseCondition": {
+            "type": "string",
+            "enum": [
+              "dm_answered",
+              "event_took_place",
+              "bill_delivered"
+            ]
+          },
+          "payer": {
+            "$ref": "#/components/schemas/MoneyPartyView"
+          },
+          "payee": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MoneyPartyView"
+              }
+            ],
+            "nullable": true
+          },
+          "heldAt": {
+            "type": "string"
+          },
+          "settledAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "refundedKobo": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "paymentId",
+          "kind",
+          "status",
+          "amountKobo",
+          "releaseCondition",
+          "payer",
+          "payee",
+          "heldAt",
+          "settledAt",
+          "refundedKobo"
+        ]
+      },
+      "PaymentView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "bill",
+              "content_unlock",
+              "tip",
+              "credit_pack",
+              "verification",
+              "legal_fee",
+              "school_fee",
+              "paid_dm",
+              "event_ticket"
+            ]
+          },
+          "targetId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "completed",
+              "failed",
+              "reversed"
+            ]
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "fee": {
+            "$ref": "#/components/schemas/FeeBreakdown"
+          },
+          "totalKobo": {
+            "type": "integer"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "hold": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HoldView"
+              }
+            ],
+            "nullable": true
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "completedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "targetId",
+          "title",
+          "status",
+          "priceKobo",
+          "fee",
+          "totalKobo",
+          "reference",
+          "hold",
+          "failureReason",
+          "createdAt",
+          "completedAt"
         ]
       },
       "AdminUserView": {
@@ -28633,9 +28891,9 @@
           "status": {
             "type": "string",
             "enum": [
+              "refunded",
               "awaiting_response",
-              "responded",
-              "refunded"
+              "responded"
             ]
           },
           "amount": {
@@ -29390,8 +29648,8 @@
             "enum": [
               "pending",
               "failed",
-              "paid",
               "refunded",
+              "paid",
               "cancelled"
             ]
           },
@@ -34421,242 +34679,6 @@
         "required": [
           "uploadUrl",
           "key"
-        ]
-      },
-      "PaymentQuoteView": {
-        "type": "object",
-        "properties": {
-          "kind": {
-            "type": "string",
-            "enum": [
-              "bill",
-              "content_unlock",
-              "tip",
-              "credit_pack",
-              "verification",
-              "legal_fee",
-              "school_fee",
-              "paid_dm",
-              "event_ticket"
-            ]
-          },
-          "targetId": {
-            "type": "string"
-          },
-          "title": {
-            "type": "string"
-          },
-          "payee": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/MoneyPartyView"
-              }
-            ],
-            "nullable": true
-          },
-          "priceKobo": {
-            "type": "integer"
-          },
-          "fee": {
-            "$ref": "#/components/schemas/FeeBreakdown"
-          },
-          "totalKobo": {
-            "type": "integer"
-          },
-          "balanceKobo": {
-            "type": "integer",
-            "nullable": true
-          },
-          "shortfallKobo": {
-            "type": "integer",
-            "nullable": true
-          },
-          "willBeHeld": {
-            "type": "boolean"
-          },
-          "withinDailyLimit": {
-            "type": "boolean"
-          },
-          "remainingTodayKobo": {
-            "type": "integer",
-            "nullable": true
-          }
-        },
-        "required": [
-          "kind",
-          "targetId",
-          "title",
-          "payee",
-          "priceKobo",
-          "fee",
-          "totalKobo",
-          "balanceKobo",
-          "shortfallKobo",
-          "willBeHeld",
-          "withinDailyLimit",
-          "remainingTodayKobo"
-        ]
-      },
-      "HoldView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "paymentId": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "bill",
-              "content_unlock",
-              "tip",
-              "credit_pack",
-              "verification",
-              "legal_fee",
-              "school_fee",
-              "paid_dm",
-              "event_ticket"
-            ]
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "refunded",
-              "held",
-              "released"
-            ]
-          },
-          "amountKobo": {
-            "type": "integer"
-          },
-          "releaseCondition": {
-            "type": "string",
-            "enum": [
-              "dm_answered",
-              "event_took_place",
-              "bill_delivered"
-            ]
-          },
-          "payer": {
-            "$ref": "#/components/schemas/MoneyPartyView"
-          },
-          "payee": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/MoneyPartyView"
-              }
-            ],
-            "nullable": true
-          },
-          "heldAt": {
-            "type": "string"
-          },
-          "settledAt": {
-            "type": "string",
-            "nullable": true
-          },
-          "refundedKobo": {
-            "type": "integer",
-            "nullable": true
-          }
-        },
-        "required": [
-          "id",
-          "paymentId",
-          "kind",
-          "status",
-          "amountKobo",
-          "releaseCondition",
-          "payer",
-          "payee",
-          "heldAt",
-          "settledAt",
-          "refundedKobo"
-        ]
-      },
-      "PaymentView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "bill",
-              "content_unlock",
-              "tip",
-              "credit_pack",
-              "verification",
-              "legal_fee",
-              "school_fee",
-              "paid_dm",
-              "event_ticket"
-            ]
-          },
-          "targetId": {
-            "type": "string"
-          },
-          "title": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "pending",
-              "completed",
-              "failed",
-              "reversed"
-            ]
-          },
-          "priceKobo": {
-            "type": "integer"
-          },
-          "fee": {
-            "$ref": "#/components/schemas/FeeBreakdown"
-          },
-          "totalKobo": {
-            "type": "integer"
-          },
-          "reference": {
-            "type": "string"
-          },
-          "hold": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/HoldView"
-              }
-            ],
-            "nullable": true
-          },
-          "failureReason": {
-            "type": "string",
-            "nullable": true
-          },
-          "createdAt": {
-            "type": "string"
-          },
-          "completedAt": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "id",
-          "kind",
-          "targetId",
-          "title",
-          "status",
-          "priceKobo",
-          "fee",
-          "totalKobo",
-          "reference",
-          "hold",
-          "failureReason",
-          "createdAt",
-          "completedAt"
         ]
       },
       "HoldPage": {

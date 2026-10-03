@@ -3746,6 +3746,105 @@ model FintavaLedgerReference {
 }
 
 /// ─────────────────────────────────────────────────────────────────────────
+/// IDEMPOTENCY KEYS ON MONEY-MOVING REQUESTS (task MONEY-17)
+///
+/// One row per (person, method, route, Idempotency-Key): the primary key is
+/// the lock (docs/contract/CONVENTIONS.md section 4). The row is written in
+/// the same transaction as the payment it guards, once every check made
+/// before money moves has passed (wallet, PIN, body, quote, funds), so a
+/// refusal before that point stores nothing and the key can be sent again.
+/// `fingerprint` is the SHA-256 of the request body as canonical JSON (keys
+/// sorted); headers are not part of it, so the PIN is not either.
+///
+/// `state`:
+///   in_progress  the request that wrote it is still running (or died after
+///                writing it: `resourceId` names the payment, and a later
+///                request answers from that payment's record)
+///   done         `responseStatus` and `responseBody` are the answer, sent
+///                again byte for byte to every repeat
+/// Kept at least 24 hours (IDEMPOTENCY_KEY_HOURS), then purged.
+/// ─────────────────────────────────────────────────────────────────────────
+model MoneyIdempotencyKey {
+  wawuUserId     String
+  method         String
+  route          String
+  key            String
+  fingerprint    String
+  state          String
+  /// The payment (or transfer) this request made.
+  resourceId     String?
+  responseStatus Int?
+  /// The JSON answer as sent, kept as text so a replay is the same bytes.
+  responseBody   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@id([wawuUserId, method, route, key])
+  @@index([updatedAt])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// A PAYMENT FROM A WALLET (task MONEY-17)
+///
+/// One row per payment for anything WAWU sells: the buyer's wallet pays WAWU's
+/// Fintava merchant wallet (R-19) the price, and Fintava takes its
+/// balance-transfer charge on top (R-10), as quoted. The split is recorded
+/// here with the payment, of the price only (R-10, R-5: one 85/15 split):
+/// `payeeShareKobo` is the creator's 85% (floor), `wawuShareKobo` WAWU's 15%
+/// (the rest); with no payee (WAWU itself is paid) the whole price is WAWU's.
+/// Nothing here moves the payee's share: WALLET-16 lands it in their wallet
+/// (R-11) and sets `payeeSettledAt`.
+///
+/// The ledger rows of the movement (FintavaLedgerEntry, buyer `out` and
+/// merchant `in`) carry this row's id as `paymentId` and its
+/// `customerReference`. `status` follows Fintava: `pending` until the debit is
+/// confirmed (the answer was lost: the ledger's status check settles it,
+/// never a blind resend), `completed`, `failed` (no money left the wallet),
+/// `reversed`. Every figure is integer kobo.
+/// ─────────────────────────────────────────────────────────────────────────
+model WalletPayment {
+  id                    String    @id @default(uuid())
+  payerWawuUserId       String
+  /// A PaymentKind of the wallet contract and the owning feature's id for it.
+  kind                  String
+  targetId              String
+  title                 String
+  /// Who the price is for; null when WAWU itself is paid.
+  payeeWawuUserId       String?
+  priceKobo             BigInt
+  /// Fintava's charge as quoted, WAWU's fee (0 on a purchase) and the total.
+  providerFeeKobo       BigInt
+  wawuFeeKobo           BigInt
+  totalKobo             BigInt
+  /// The 85/15 split of the price (R-5).
+  payeeShareKobo        BigInt
+  wawuShareKobo         BigInt
+  payeeSettledAt        DateTime?
+  /// OUR CustomerReference at Fintava, derived from this row's id.
+  customerReference     String    @unique
+  payerAccountNumber    String
+  merchantAccountNumber String
+  status                String
+  failureReason         String?
+  /// Fintava's record of the debit disagreed with the quote (a fee, an
+  /// amount): kept for review, as on the ledger row (MONEY-16 reports it).
+  discrepancy           String?
+  /// A tip's message.
+  note                  String?
+  /// When the debit was first sent to Fintava (the reconcile window).
+  sentAt                DateTime?
+  completedAt           DateTime?
+  /// When the owning feature delivered what was paid for.
+  fulfilledAt           DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([payerWawuUserId, createdAt])
+  @@index([status, createdAt])
+  @@index([kind, targetId])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
 /// SAVED BENEFICIARIES AND THE PAYOUT ACCOUNT (task WALLET-14)
 ///
 /// A beneficiary is a place this person sends money to again (W8, W12 "Save

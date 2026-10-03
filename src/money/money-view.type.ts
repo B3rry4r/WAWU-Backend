@@ -391,6 +391,14 @@ export interface PaymentQuoteView {
   withinDailyLimit: boolean;
   /** What is left of today's limit; null when no limit is known. */
   remainingTodayKobo: number | null;
+  /**
+   * This quote, signed by the server (MONEY-17, the fee quote's token for
+   * this price): `POST /money/payments` sends it back with `totalKobo` as
+   * `expectedTotalKobo`. Opaque to the app.
+   */
+  quoteToken: string;
+  /** After this the quote is no longer honoured; ask for a new one. */
+  expiresAt: string;
 }
 
 export type HoldStatus = 'held' | 'released' | 'refunded';

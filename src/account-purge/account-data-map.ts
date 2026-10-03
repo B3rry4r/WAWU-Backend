@@ -199,6 +199,15 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // withdrawals go to. Both go with them.
   { model: 'MoneyBeneficiary', column: 'ownerWawuId', disposition: 'OWNED' },
   { model: 'MoneyPayoutAccount', column: 'wawuUserId', disposition: 'OWNED' },
+  // Pay from wallet (MONEY-17): this person's stored answers to their own
+  // money-moving requests (kept a day or two), and the payments they made,
+  // like a Purchase they made (its buyer column above). Both go with them.
+  {
+    model: 'MoneyIdempotencyKey',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
+  { model: 'WalletPayment', column: 'payerWawuUserId', disposition: 'OWNED' },
 
   // Last: everything above may reference these.
   { model: 'CreatorState', column: 'wawuUserId', disposition: 'OWNED' },
@@ -270,6 +279,13 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'recipientWawuId',
     disposition: 'COUNTERPARTY',
   },
+  // Somebody else's payment that pays this account (MONEY-17): the payer's
+  // record, and the share it owes, survive.
+  {
+    model: 'WalletPayment',
+    column: 'payeeWawuUserId',
+    disposition: 'COUNTERPARTY',
+  },
 
   // ── admin audit trail, kept on purpose ──────────────────────────────────
   { model: 'AdminKycAudit', column: 'subjectWawuUserId', disposition: 'AUDIT' },
@@ -305,6 +321,9 @@ export const NOT_A_USER_REFERENCE: ReadonlyArray<{
   { model: 'Product', column: 'wawuVerified' },
   // WAWU's fee in kobo on a ledger row (MONEY-10), not a person.
   { model: 'FintavaLedgerEntry', column: 'wawuFeeKobo' },
+  // WAWU's fee and WAWU's 15% share in kobo on a payment (MONEY-17), not a person.
+  { model: 'WalletPayment', column: 'wawuFeeKobo' },
+  { model: 'WalletPayment', column: 'wawuShareKobo' },
 ];
 
 /** The rows a purge actually removes. */

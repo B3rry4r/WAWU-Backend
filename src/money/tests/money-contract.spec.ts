@@ -53,6 +53,8 @@ const SERVED_MONEY_ROUTES: Record<string, string> = {
   'GET /api/hub/money/transactions/summary': 'MONEY-15',
   'GET /api/hub/money/transactions/{id}': 'MONEY-15',
   'GET /api/hub/money/fees/quote': 'WALLET-15',
+  'GET /api/hub/money/payments/quote': 'MONEY-17',
+  'POST /api/hub/money/payments': 'MONEY-17',
 };
 
 type ModuleRef =
@@ -247,7 +249,7 @@ describe('money contract (MONEY-04)', () => {
       expect(offenders).toEqual([]);
     });
 
-    it('requires Idempotency-Key and X-Transaction-Pin on every route that moves money', () => {
+    it('requires Idempotency-Key and X-Transaction-Pin on every route that moves money; a served debit takes the PIN or a biometric approval (MONEY-14)', () => {
       const moving = moneyOps.filter(({ route }) =>
         [
           'POST /api/hub/money/transfers/wawu',
@@ -256,21 +258,38 @@ describe('money contract (MONEY-04)', () => {
         ].includes(route),
       );
       expect(moving).toHaveLength(3);
+      // CONVENTIONS.md section 5: a task that serves a debit swaps
+      // @RequireTransactionPin() for @RequireApproval(), and this test then
+      // expects the pair, each optional, beside the required key.
+      const approved = ['POST /api/hub/money/payments'];
       for (const { route, op } of moving) {
-        const headers = (
-          (op.parameters ?? []) as Array<{
-            in: string;
-            name: string;
-            required?: boolean;
-          }>
-        )
-          .filter((p) => p.in === 'header' && p.required)
-          .map((p) => p.name)
-          .sort();
-        expect({ route, headers }).toEqual({
+        const params = (op.parameters ?? []) as Array<{
+          in: string;
+          name: string;
+          required?: boolean;
+        }>;
+        const headers = (required: boolean) =>
+          params
+            .filter((p) => p.in === 'header' && !!p.required === required)
+            .map((p) => p.name)
+            .sort();
+        expect({
           route,
-          headers: ['Idempotency-Key', 'X-Transaction-Pin'],
-        });
+          required: headers(true),
+          optional: headers(false),
+        }).toEqual(
+          approved.includes(route)
+            ? {
+                route,
+                required: ['Idempotency-Key'],
+                optional: ['X-Device-Approval', 'X-Transaction-Pin'],
+              }
+            : {
+                route,
+                required: ['Idempotency-Key', 'X-Transaction-Pin'],
+                optional: [],
+              },
+        );
       }
     });
 
