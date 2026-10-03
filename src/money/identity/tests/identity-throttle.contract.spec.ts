@@ -12,6 +12,7 @@ import {
   fintavaError,
 } from '../../../../test/fintava/fintava-double';
 import type { PrismaService as PrismaServiceType } from '../../../common/prisma/prisma.service';
+import { jpegImage } from '../../../../test/fixtures/selfie/selfie-images';
 
 /**
  * POST /money/identity/bvn is limited per address by the app's OWN global
@@ -281,11 +282,8 @@ describe('BVN check throttle through the global ThrottlerGuard (KYC-01)', () => 
   const selfieCalls = () =>
     double.seen.filter((s) => s.path === '/compliance/verify/bvn/selfie')
       .length;
-  const IMAGE = Buffer.concat([
-    Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
-    Buffer.alloc(3000, 7),
-    Buffer.from([0xff, 0xd9]),
-  ]).toString('base64');
+  // A real JPEG (Pillow-made, test/fixtures/selfie): the route walks it.
+  const IMAGE = jpegImage().toString('base64');
 
   it('the fourth selfie match from one address within a minute is 429 from the guard and never reaches Fintava', async () => {
     double.on('POST', '/compliance/verify/bvn/selfie', {

@@ -1,6 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsString, Matches, MaxLength, ValidateBy } from 'class-validator';
+import { isJpeg, isPng } from '../selfie-image';
 
 /**
  * Request bodies of Open your wallet's identity step (task KYC-01).
@@ -41,28 +42,18 @@ export const SELFIE_IMAGE_MIN_BYTES = 1_000;
 
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 
-const PNG_SIGNATURE = Buffer.from([
-  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-]);
-/** A PNG's first chunk: length 13, then `IHDR` (bytes 8 to 15). */
-const PNG_IHDR = Buffer.from([0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52]);
-/** A PNG's last chunk, whole: length 0, `IEND`, and its fixed CRC. */
-const PNG_IEND = Buffer.from([
-  0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
-]);
-
 /**
  * True when `value` is plain base64 (no `data:` prefix, no spaces) of a
  * JPEG or PNG of at least SELFIE_IMAGE_MIN_BYTES. Checked before Fintava is
  * asked, because every selfie match is charged, a broken one too.
  *
- * Both ends of the file are checked, so a file that only starts like an
- * image (JPEG or PNG magic followed by HTML, a ZIP or random bytes, or an
- * image with a ZIP appended) is refused: a JPEG starts `FF D8 FF` and ends
- * with the end-of-image marker `FF D9`; a PNG starts with its signature and
- * the `IHDR` chunk and ends with the `IEND` chunk. Nothing may follow the
- * end, so the app sends the photo as the camera's encoder wrote it (a
- * re-encoded capture, not a file with a trailer appended).
+ * The file is walked from its first byte to its last (`selfie-image.ts`):
+ * a PNG chunk by chunk (lengths, CRCs, IHDR first, the pixel data, IEND
+ * last), a JPEG marker by marker through its scans to the EOI that ends it.
+ * A file that only starts or ends like an image (JPEG or PNG framing around
+ * HTML, a ZIP or random bytes, or an image with anything appended) is
+ * refused. Nothing may follow the end, so the app sends the photo as its
+ * encoder wrote it (a re-encoded capture, not a file with a trailer).
  */
 export function isSelfieImage(value: unknown): boolean {
   if (typeof value !== 'string') return false;
@@ -72,17 +63,7 @@ export function isSelfieImage(value: unknown): boolean {
   if (!BASE64.test(value)) return false;
   const bytes = Buffer.from(value, 'base64');
   if (bytes.length < SELFIE_IMAGE_MIN_BYTES) return false;
-  const jpeg =
-    bytes[0] === 0xff &&
-    bytes[1] === 0xd8 &&
-    bytes[2] === 0xff &&
-    bytes[bytes.length - 2] === 0xff &&
-    bytes[bytes.length - 1] === 0xd9;
-  const png =
-    bytes.subarray(0, 8).equals(PNG_SIGNATURE) &&
-    bytes.subarray(8, 16).equals(PNG_IHDR) &&
-    bytes.subarray(bytes.length - PNG_IEND.length).equals(PNG_IEND);
-  return jpeg || png;
+  return isJpeg(bytes) || isPng(bytes);
 }
 
 /**

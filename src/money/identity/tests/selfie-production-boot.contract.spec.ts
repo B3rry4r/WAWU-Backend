@@ -8,6 +8,7 @@ import * as jwt from 'jsonwebtoken';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 import type { PrismaService as PrismaServiceType } from '../../../common/prisma/prisma.service';
+import { jpegImage } from '../../../../test/fixtures/selfie/selfie-images';
 
 /**
  * The live server keeps starting with the selfie match in it before Fintava
@@ -96,11 +97,8 @@ describe('production boot without Fintava settings or the identity key: the self
   const users: string[] = [];
   const fetched: string[] = [];
   const realFetch = globalThis.fetch;
-  const IMAGE = Buffer.concat([
-    Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
-    Buffer.alloc(3000, 9),
-    Buffer.from([0xff, 0xd9]),
-  ]).toString('base64');
+  // A real JPEG (Pillow-made, test/fixtures/selfie): the route walks it.
+  const IMAGE = jpegImage().toString('base64');
 
   beforeAll(async () => {
     for (const [k, v] of Object.entries(PRODUCTION_ENV)) {

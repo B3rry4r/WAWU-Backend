@@ -31,7 +31,15 @@ import {
   selfieAnswer,
   W2W_200,
   WALLET_BALANCE,
+  type CannedAnswer,
 } from '../../../test/fintava/fintava-double';
+import {
+  extraKeyBodies,
+  SELFIE_MATCH_ANSWERS,
+  SELFIE_NO_ANSWERS,
+  SELFIE_UNREADABLE_ANSWERS,
+} from '../../../test/fintava/selfie-answers';
+
 import { FintavaClient } from '../fintava-client';
 import { FintavaError } from '../fintava-error';
 import { FintavaModule } from '../fintava.module';
@@ -234,17 +242,16 @@ describe('1. identity checks (charged; typed, never run against the sandbox here
   });
 });
 
-describe('1b. the selfie match (KYC-02): typed verdict and score, failing closed, nothing else passed on', () => {
+describe('1b. the selfie match (KYC-02): read by allowlist, never a match outside the exact shape', () => {
   const IMAGE = 'iVBORw0KGgo'.padEnd(64, 'A');
   const sent = { bvn: '12345678901', image: IMAGE };
   const selfie = () =>
     client().verifyBvnSelfie({ bvn: sent.bvn, imageBase64: IMAGE });
+  const answer = (a: CannedAnswer) =>
+    double.on('POST', '/compliance/verify/bvn/selfie', a);
 
   it('sends the BVN and the base64 image in a JSON body, with the key', async () => {
-    double.on('POST', '/compliance/verify/bvn/selfie', {
-      status: 200,
-      body: SELFIE_MATCHED,
-    });
+    answer({ status: 200, body: SELFIE_MATCHED });
     await selfie();
     expect(double.seen).toHaveLength(1);
     expect(double.seen[0].body).toEqual({ bvn: sent.bvn, image: IMAGE });
@@ -253,186 +260,65 @@ describe('1b. the selfie match (KYC-02): typed verdict and score, failing closed
     expect(double.seen[0].headers['content-type']).toBe('application/json');
   });
 
-  it('only an explicit `match: true` is a match; with no score the confidence is null', async () => {
-    double.on('POST', '/compliance/verify/bvn/selfie', {
-      status: 200,
-      body: SELFIE_MATCHED,
-    });
+  it.each(SELFIE_MATCH_ANSWERS)(
+    'a match: %s (no score is read, so the confidence is null)',
+    async (_name, a) => {
+      answer(a);
+      await expect(selfie()).resolves.toEqual({
+        matched: true,
+        confidence: null,
+      });
+    },
+  );
+
+  it.each(SELFIE_NO_ANSWERS)('an explicit "no": %s', async (_name, a) => {
+    answer(a);
     await expect(selfie()).resolves.toEqual({
-      matched: true,
+      matched: false,
       confidence: null,
     });
   });
 
-  it('Fintava’s documented 2xx (`{}` in the envelope) has no verdict: bad_response, never a match', async () => {
-    double.on('POST', '/compliance/verify/bvn/selfie', {
-      status: 200,
-      body: SELFIE_200,
-    });
-    expect((await failure(selfie())).kind).toBe('bad_response');
-  });
-
-  // Verifier round 1, defect 1: every 2xx shape that passed before and must
-  // not, plus the shapes around them. `no` is an explicit "no" (a failed
-  // match the route counts and answers A16); `none` is an answer with no
-  // verdict (bad_response: counted, 503, never a match); `yes` is a match.
-  const shapes: Array<[string, number, unknown, 'yes' | 'no' | 'none']> = [
-    ['documented {} in the envelope', 200, SELFIE_200, 'none'],
-    ['201 { data: {} }', 201, { data: {} }, 'none'],
-    [
-      'status "failed" in the envelope, data {}',
-      200,
-      { status: 'failed', message: 'Face does not match', data: {} },
-      'no',
-    ],
-    ['data.status "failed"', 200, { data: { status: 'failed' } }, 'no'],
-    ['match "false" (a string)', 200, { data: { match: 'false' } }, 'no'],
-    ['match 0', 200, { data: { match: 0 } }, 'no'],
-    ['match null', 200, { data: { match: null } }, 'none'],
-    ['faceMatch false', 200, { data: { faceMatch: false } }, 'no'],
-    ['selfie_match false', 200, { data: { selfie_match: false } }, 'no'],
-    [
-      'match false two levels down',
-      200,
-      { data: { result: { selfie_verification: { match: false } } } },
-      'no',
-    ],
-    ['confidence 0 alone', 200, { data: { confidence: 0 } }, 'none'],
-    ['a high score alone', 200, { data: { confidence: 99 } }, 'none'],
-    ['match "true" (a string)', 200, { data: { match: 'true' } }, 'none'],
-    ['match 1', 200, { data: { match: 1 } }, 'none'],
-    ['verified true only', 200, { data: { verified: true } }, 'none'],
-    [
-      'a verdict under an unknown name only',
-      200,
-      { data: { faceOk: true } },
-      'none',
-    ],
-    [
-      'match true but status pending',
-      200,
-      { data: { match: true, status: 'pending' } },
-      'none',
-    ],
-    [
-      'match true but faceMatch false',
-      200,
-      { data: { match: true, faceMatch: false } },
-      'no',
-    ],
-    [
-      'match true but the envelope says failed',
-      200,
-      { status: 'failed', data: { match: true } },
-      'no',
-    ],
-    [
-      'match true but success false',
-      200,
-      { success: false, data: { match: true } },
-      'no',
-    ],
-    [
-      'match true but a nested match false',
-      200,
-      { data: { match: true, result: { detail: { match: false } } } },
-      'no',
-    ],
-    [
-      'match true and verified "no"',
-      200,
-      { data: { match: true, verified: 'no' } },
-      'no',
-    ],
-    [
-      'match true with status true and success true',
-      200,
-      { status: true, success: true, data: { match: true } },
-      'yes',
-    ],
-    [
-      'match true with a score (control)',
-      200,
-      { data: { match: true, confidence: 99 } },
-      'yes',
-    ],
-    [
-      'match true one object below data',
-      200,
-      { data: { selfie_verification: { match: true, is_verified: true } } },
-      'yes',
-    ],
-    ['an empty object', 200, {}, 'none'],
-    ['data null', 200, { data: null }, 'none'],
-    ['data a string', 200, { data: 'matched' }, 'none'],
-    ['data an array', 200, { data: [{ match: true }] }, 'none'],
-  ];
-  it.each(shapes)(
-    'a 2xx with %s (HTTP %i) is read failing closed',
-    async (_name, status, body, expected) => {
-      double.on('POST', '/compliance/verify/bvn/selfie', {
-        status,
-        body: body as object,
-      });
-      if (expected === 'none') {
-        expect((await failure(selfie())).kind).toBe('bad_response');
-      } else {
-        const result = await selfie();
-        expect(result.matched).toBe(expected === 'yes');
-      }
+  // Verifier rounds 1 and 2 (defect 1, findings 1 and 2), and more: every
+  // answer outside the exact shape is bad_response, never a match.
+  it.each(SELFIE_UNREADABLE_ANSWERS)(
+    'no verdict, bad_response: %s',
+    async (_name, a) => {
+      answer(a);
+      const e = await failure(selfie());
+      expect(e.kind).toBe('bad_response');
+      expect(e.httpStatus).toBe(a.status);
     },
   );
 
-  it('a 204 with no body is bad_response, never a match', async () => {
-    double.on('POST', '/compliance/verify/bvn/selfie', { status: 204 });
+  it('an HTTP 300 around `match: true` is not read either', async () => {
+    answer({ status: 300, body: SELFIE_MATCHED });
+    const e = await failure(selfie());
+    expect(e.kind).not.toBe('bad_response');
+    expect(e.httpStatus).toBe(300);
+  });
+
+  it('Fintava’s documented 2xx (`{}` in the envelope) has no verdict: bad_response, never a match', async () => {
+    answer({ status: 200, body: SELFIE_200 });
     expect((await failure(selfie())).kind).toBe('bad_response');
   });
 
-  it('reads a score, and a verdict field set to false is a failed match even on a 2xx', async () => {
-    double.on('POST', '/compliance/verify/bvn/selfie', {
-      status: 200,
-      body: selfieAnswer(sent, { match: true, confidence_value: 99.5 }),
-    });
-    await expect(selfie()).resolves.toEqual({
-      matched: true,
-      confidence: 99.5,
-    });
-    double.reset();
-    double.on('POST', '/compliance/verify/bvn/selfie', {
-      status: 200,
-      body: { data: { verified: false, confidence: '12.25' } },
-    });
-    await expect(selfie()).resolves.toEqual({
-      matched: false,
-      confidence: 12.25,
-    });
-  });
-
-  it('passes on nothing else of the answer: not the BVN, the photo or the image it echoed', async () => {
-    double.on('POST', '/compliance/verify/bvn/selfie', {
+  it('a body that echoes the BVN, the photo and the image is not read, and nothing of it is passed on', async () => {
+    answer({
       status: 200,
       body: selfieAnswer(sent, { match: true, confidence: 88 }),
     });
-    const result = await selfie();
-    expect(Object.keys(result).sort()).toEqual(['confidence', 'matched']);
-    const text = JSON.stringify(result);
+    const e = await failure(selfie());
+    expect(e.kind).toBe('bad_response');
+    const text = JSON.stringify({ ...e, message: e.message });
     expect(text).not.toContain(sent.bvn);
     expect(text).not.toContain('QkFTRTY0UEhPVE8');
     expect(text).not.toContain(IMAGE);
   });
 
-  it('the sandbox’s failed match is identity_refused; a body we cannot read is bad_response', async () => {
-    double.on('POST', '/compliance/verify/bvn/selfie', {
-      status: 400,
-      body: SELFIE_400,
-    });
+  it('the sandbox’s failed match (HTTP 400) is identity_refused', async () => {
+    answer({ status: 400, body: SELFIE_400 });
     expect((await failure(selfie())).kind).toBe('identity_refused');
-    double.reset();
-    double.on('POST', '/compliance/verify/bvn/selfie', {
-      status: 200,
-      body: { status: 200, message: 'successful' },
-    });
-    expect((await failure(selfie())).kind).toBe('bad_response');
   });
 
   it('refuses a malformed BVN, an empty image or a data: URL before paying for a match', async () => {
@@ -445,6 +331,24 @@ describe('1b. the selfie match (KYC-02): typed verdict and score, failing closed
       expect((await failure(c.verifyBvnSelfie(input))).kind).toBe('validation');
     }
     expect(double.seen).toHaveLength(0);
+  });
+
+  /**
+   * The allowlist, as a property: take the one accepted body and add any
+   * single extra key, at the top or inside `data`, with any value; or name
+   * an existing key twice. It must never be a match. Over the socket for a
+   * sample here; every case through the reader itself in
+   * fintava-selfie-answer.spec.ts.
+   */
+  it('the accepted body plus any one extra key is never a match (sample over the socket)', async () => {
+    const cases = extraKeyBodies().filter((_, i) => i % 97 === 0);
+    expect(cases.length).toBeGreaterThan(40);
+    for (const raw of cases) {
+      double.reset();
+      answer({ status: 200, body: raw });
+      const e = await failure(selfie());
+      expect({ raw, kind: e.kind }).toEqual({ raw, kind: 'bad_response' });
+    }
   });
 });
 

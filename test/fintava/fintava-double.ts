@@ -27,6 +27,8 @@ export interface CannedAnswer {
   delayMs?: number;
   /** Close the socket without answering. */
   hangUp?: boolean;
+  /** The content-type header; null sends none. Default JSON, as Fintava labels it. */
+  contentType?: string | null;
 }
 
 type Handler = (req: SeenRequest) => CannedAnswer;
@@ -75,9 +77,14 @@ export class FintavaDouble {
               : answer.body === undefined
                 ? ''
                 : JSON.stringify(answer.body);
-          res.writeHead(answer.status, {
-            'content-type': 'application/json; charset=utf-8',
-          });
+          const type =
+            answer.contentType === undefined
+              ? 'application/json; charset=utf-8'
+              : answer.contentType;
+          res.writeHead(
+            answer.status,
+            type === null ? {} : { 'content-type': type },
+          );
           res.end(text);
         };
         if (answer.delayMs) setTimeout(send, answer.delayMs);
@@ -605,9 +612,9 @@ export const BVN_200 = {
 /**
  * Fintava's documented 200 for a selfie match (KYC-02): its usual envelope,
  * `{ data, status, message }` as every other check answers, around the
- * reference page's only example, `{}`. It carries no verdict, so since
- * verifier round 1 (defect 1) it is NOT a match: the client reads it as
- * `bad_response` and the route answers 503, counted.
+ * reference page's only example, `{}`. It carries no verdict, so it is NOT
+ * a match: the client reads it as `bad_response` and the route answers 503,
+ * counted.
  */
 export const SELFIE_200 = {
   data: {},
@@ -616,10 +623,12 @@ export const SELFIE_200 = {
 };
 
 /**
- * A stand-in for a selfie match that passed: the envelope around an explicit
- * `match: true`. Made up, not seen: no sandbox BVN passes (question 11) and
- * Fintava documents no verdict field (question 6). It is the narrowest
- * answer the client reads as a match, so a test passing on it proves the
+ * A stand-in for a selfie match that passed: the envelope around one
+ * verdict field, `match: true`. Made up, not seen: no sandbox BVN passes
+ * (question 11) and Fintava documents no verdict field (question 6). Since
+ * KYC-02 round 3 the client reads the answer by allowlist, and this exact
+ * shape (or the same without `message`, or another candidate verdict name)
+ * is the only one it reads as a match, so a test passing on it proves the
  * pass path, not Fintava's real body.
  */
 export const SELFIE_MATCHED = {
@@ -628,10 +637,19 @@ export const SELFIE_MATCHED = {
   message: 'successful',
 };
 
+/** The same envelope with the verdict `false`: an explicit "no". */
+export const SELFIE_NOT_MATCHED = {
+  data: { match: false },
+  status: 200,
+  message: 'successful',
+};
+
 /**
- * The same, as a richer provider answer might look: a verdict, a score, and
- * the worst case for storage and logs, the BVN, the BVN record's photo and
- * the selfie itself echoed back. Built per call, from what was sent.
+ * A richer provider answer: a verdict, a score, and the worst case for
+ * storage and logs, the BVN, the BVN record's photo and the selfie itself
+ * echoed back. Built per call, from what was sent. Not an allowlisted shape,
+ * so never a match (`bad_response`); kept to prove nothing of it is stored,
+ * logged or answered.
  */
 export function selfieAnswer(
   sent: { bvn: string; image: string },

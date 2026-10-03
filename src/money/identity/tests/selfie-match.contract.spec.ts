@@ -15,6 +15,7 @@ import request, { type Response } from 'supertest';
 import type { App } from 'supertest/types';
 import {
   BVN_200,
+  type CannedAnswer,
   FintavaDouble,
   fintavaError,
   SELFIE_200,
@@ -23,6 +24,18 @@ import {
   selfieAnswer,
   type SeenRequest,
 } from '../../../../test/fintava/fintava-double';
+import {
+  SELFIE_MATCH_ANSWERS,
+  SELFIE_NO_ANSWERS,
+  SELFIE_UNREADABLE_ANSWERS,
+} from '../../../../test/fintava/selfie-answers';
+import {
+  FIXTURES,
+  fixture,
+  jpegImage,
+  pngImage,
+  selfiePolyglots,
+} from '../../../../test/fixtures/selfie/selfie-images';
 import { WawuIdClient } from '../../../common/auth/wawu-id.client';
 import { WawuJwtStrategy } from '../../../common/auth/wawu-jwt.strategy';
 import { AllExceptionsFilter } from '../../../common/filters/all-exceptions.filter';
@@ -50,12 +63,14 @@ import { WalletIdentityService } from '../wallet-identity.service';
  * WAWU ID's JWKS (WAWU_ID_JWKS_URL), and the real MONEY-06 Fintava client
  * talking over a socket to the local double (test/fintava/fintava-double.ts).
  * The double answers with the failed match the sandbox really sent
- * (`SELFIE_400`) and, for a pass, a made-up explicit `match: true`
- * (`SELFIE_MATCHED`) or a richer answer that echoes the BVN, the BVN photo
- * and the selfie back (`selfieAnswer`): no sandbox BVN is known to pass
- * (mobile repo `docs/fintava/sandbox/README.md`, question 11). Fintava's
- * documented 2xx (`SELFIE_200`, the `{}` example) carries no verdict and is
- * never a match (verifier round 1, defect 1).
+ * (`SELFIE_400`) and, for a pass, a made-up explicit `match: true` in
+ * Fintava's envelope (`SELFIE_MATCHED`): no sandbox BVN is known to pass
+ * (mobile repo `docs/fintava/sandbox/README.md`, question 11). The client
+ * reads the answer by allowlist (round 3): every other answer, Fintava's
+ * documented `{}` (`SELFIE_200`) and one that echoes the BVN, the photo and
+ * the selfie back (`selfieAnswer`) included, carries no verdict and is never
+ * a match. The selfies are real images (test/fixtures/selfie), never random
+ * bytes between a valid start and end.
  *
  * Each person runs the BVN check (KYC-01) first, through its own route, as
  * the app does. Every log line the app writes during the whole file is
@@ -86,28 +101,16 @@ const NIN = '70290000999';
 
 /** Every selfie sent in this file, so the final scans can look for each. */
 const images: string[] = [];
-const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-/** A PNG's IHDR chunk: length 13, `IHDR`, 1 x 1, 8-bit RGB, and a CRC. */
-const PNG_IHDR = Buffer.from([
-  0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00,
-  0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xde,
-]);
-const PNG_IEND = Buffer.from([
-  0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
-]);
-const JPEG_MAGIC = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
-const JPEG_END = Buffer.from([0xff, 0xd9]);
 
-/** The bytes of a made-up image: the format's start, `body`, its end. */
-function imageBytes(kind: 'png' | 'jpeg', body: Buffer): Buffer {
-  return kind === 'png'
-    ? Buffer.concat([PNG_MAGIC, PNG_IHDR, body, PNG_IEND])
-    : Buffer.concat([JPEG_MAGIC, body, JPEG_END]);
-}
-
-/** A made-up image: the format's start, random bytes, its end (base64). */
-function selfie(kind: 'png' | 'jpeg' = 'jpeg', bytes = 4_000): string {
-  const image = imageBytes(kind, randomBytes(bytes)).toString('base64');
+/**
+ * A real image (base64): a Pillow JPEG with a random id in a comment
+ * segment (padded to `bytes` when given), or a PNG of random pixels. Each
+ * differs from its first bytes on, so a leak names it.
+ */
+function selfie(kind: 'png' | 'jpeg' = 'jpeg', bytes?: number): string {
+  const image = (kind === 'png' ? pngImage() : jpegImage(bytes)).toString(
+    'base64',
+  );
   images.push(image);
   return image;
 }
@@ -299,10 +302,10 @@ describe('Selfie match to the BVN photo (KYC-02) over HTTP', () => {
 
   // -------------------------------------------------------------------------
   describe('a matching selfie passes', () => {
-    it('answers when it matched and the matches left; stores matched, when, and the confidence', async () => {
+    it('answers when it matched and the matches left; stores matched and when (no score is read)', async () => {
       const user = person();
       await bvnChecked(user);
-      answerEcho({ match: true, confidence_value: 97.25 });
+      answerSelfie({ status: 200, body: SELFIE_MATCHED });
       const image = selfie();
       const res = await match(user, { bvn: BVN, image }).expect(200);
       const out = body<SelfieMatchView>(res);
@@ -321,7 +324,7 @@ describe('Selfie match to the BVN photo (KYC-02) over HTTP', () => {
       expect(selfieCalls()[0].headers.authorization).toBe(`Bearer ${KEY}`);
 
       const [row] = await rows(user);
-      expect(row).toMatchObject({ outcome: 'matched', confidence: 97.25 });
+      expect(row).toMatchObject({ outcome: 'matched', confidence: null });
       expect(row.settledAt).not.toBeNull();
       expect(Object.keys(row).sort()).toEqual([
         'bvnHash',
@@ -338,26 +341,41 @@ describe('Selfie match to the BVN photo (KYC-02) over HTTP', () => {
       expect(row.bvnVerifiedAt).toEqual(check!.verifiedAt);
       expect(row.bvnHash).toBe(check!.bvnHash);
 
-      // Nothing Fintava echoed is answered.
       expect(res.text).not.toContain(BVN);
       expect(res.text).not.toContain(image.slice(0, 40));
-      expect(res.text).not.toContain(ECHOED_PHOTO_PART);
 
       const view = body<SelfieMatchView>(await read(user).expect(200)).data!;
       expect(view).toEqual(out.data);
     });
 
-    it('only an explicit match passes: the narrowest stand-in, no score, no confidence stored', async () => {
-      const user = person();
-      await bvnChecked(user);
-      answerSelfie({ status: 200, body: SELFIE_MATCHED });
-      await match(user, { bvn: BVN, image: selfie('png') }).expect(200);
-      const [row] = await rows(user);
-      expect(row).toMatchObject({ outcome: 'matched', confidence: null });
-      await expect(
-        app.get(SelfieMatchService).selfieMatched(user.id),
-      ).resolves.toBe(true);
-    });
+    it.each(SELFIE_MATCH_ANSWERS)(
+      'only the exact shape passes: %s',
+      async (_name, answer) => {
+        const user = person();
+        await bvnChecked(user);
+        answerSelfie(answer);
+        await match(user, { bvn: BVN, image: selfie('png') }).expect(200);
+        const [row] = await rows(user);
+        expect(row).toMatchObject({ outcome: 'matched', confidence: null });
+        await expect(
+          app.get(SelfieMatchService).selfieMatched(user.id),
+        ).resolves.toBe(true);
+      },
+    );
+
+    it.each(FIXTURES)(
+      'a real %s (Pillow) is accepted and sent as it is',
+      async (name) => {
+        const user = person();
+        await bvnChecked(user);
+        answerSelfie({ status: 200, body: SELFIE_MATCHED });
+        const image = fixture(name).toString('base64');
+        images.push(image);
+        await match(user, { bvn: BVN, image }).expect(200);
+        expect(selfieCalls()).toHaveLength(1);
+        expect((selfieCalls()[0].body as { image: string }).image).toBe(image);
+      },
+    );
 
     it('a matched selfie is not sent again (409 selfie_already_matched, nothing charged)', async () => {
       const user = person();
@@ -576,75 +594,43 @@ describe('Selfie match to the BVN photo (KYC-02) over HTTP', () => {
       expect(view).toEqual({ matchedAt: null, checksLeft: 2 });
     });
 
-    it('a 2xx whose verdict is false is a failed match too, and its score is kept', async () => {
-      const user = person();
-      await bvnChecked(user);
-      answerEcho({ match: false, confidence: 31.5 });
-      const res = await match(user, { bvn: BVN, image: selfie() }).expect(422);
-      expect(body<null>(res).reason?.code).toBe('selfie_not_matched');
-      const [row] = await rows(user);
-      expect(row).toMatchObject({ outcome: 'not_matched', confidence: 31.5 });
-      await expect(
-        app.get(SelfieMatchService).selfieMatched(user.id),
-      ).resolves.toBe(false);
-    });
-
-    // Verifier round 1, defect 1: each of these 2xx answers made the route
-    // answer 200 and set a match. Now an explicit "no" is A16 (422, counted)
-    // and an answer with no verdict is 503 (counted: it was charged); in
-    // neither does anything count as matched.
-    const notAMatch: Array<[string, number, unknown, 422 | 503]> = [
-      ['the documented {} in the envelope', 200, SELFIE_200, 503],
-      [
-        'status "failed" in the envelope',
-        200,
-        { status: 'failed', message: 'Face does not match', data: {} },
-        422,
-      ],
-      ['data.status "failed"', 200, { data: { status: 'failed' } }, 422],
-      ['match "false"', 200, { data: { match: 'false' } }, 422],
-      ['match 0', 200, { data: { match: 0 } }, 422],
-      ['match null', 200, { data: { match: null } }, 503],
-      ['faceMatch false', 200, { data: { faceMatch: false } }, 422],
-      ['selfie_match false', 200, { data: { selfie_match: false } }, 422],
-      [
-        'match false two levels down',
-        200,
-        { data: { result: { selfie_verification: { match: false } } } },
-        422,
-      ],
-      ['confidence 0 alone', 200, { data: { confidence: 0 } }, 503],
-      ['201 { data: {} }', 201, { data: {} }, 503],
-      ['{}', 200, {}, 503],
-      ['data null', 200, { data: null }, 503],
-      ['data a string', 200, { data: 'ok' }, 503],
-      ['data an array', 200, { data: [] }, 503],
-      [
-        'match true but the envelope says failed',
-        200,
-        { status: 'failed', data: { match: true } },
-        422,
-      ],
-    ];
-    it.each(notAMatch)(
-      'a 2xx with %s (HTTP %i) sets no match: %i, counted',
-      async (_name, status, answer, expected) => {
+    it.each(SELFIE_NO_ANSWERS)(
+      'an explicit "no" in a 200 is a failed match too: %s',
+      async (_name, answer) => {
         const user = person();
         await bvnChecked(user);
-        answerSelfie({ status, body: answer as object });
+        answerSelfie(answer);
         const res = await match(user, { bvn: BVN, image: selfie() }).expect(
-          expected,
+          422,
+        );
+        expect(body<null>(res).reason?.code).toBe('selfie_not_matched');
+        const [row] = await rows(user);
+        expect(row).toMatchObject({ outcome: 'not_matched', confidence: null });
+        await expect(
+          app.get(SelfieMatchService).selfieMatched(user.id),
+        ).resolves.toBe(false);
+      },
+    );
+
+    // Verifier rounds 1 and 2 (defect 1, findings 1 and 2), and more: every
+    // 2xx outside the exact shape made the route answer 200 in round 1, and
+    // 2 dozen still did in round 2. Now each is 503, counted (it was
+    // charged), and nothing counts as matched.
+    it.each(SELFIE_UNREADABLE_ANSWERS)(
+      'no verdict, 503, counted, never a match: %s',
+      async (_name, answer: CannedAnswer) => {
+        const user = person();
+        await bvnChecked(user);
+        answerSelfie(answer);
+        const res = await match(user, { bvn: BVN, image: selfie() }).expect(
+          503,
         );
         const out = body<null>(res);
         expect(out.data).toBeNull();
-        expect(out.reason?.code).toBe(
-          expected === 422 ? 'selfie_not_matched' : 'provider_unreachable',
-        );
+        expect(out.reason?.code).toBe('provider_unreachable');
         expect(selfieCalls()).toHaveLength(1);
         const [row] = await rows(user);
-        expect(row.outcome).toBe(
-          expected === 422 ? 'not_matched' : 'unavailable',
-        );
+        expect(row.outcome).toBe('unavailable');
         await expect(
           app.get(SelfieMatchService).selfieMatched(user.id),
         ).resolves.toBe(false);
@@ -653,15 +639,17 @@ describe('Selfie match to the BVN photo (KYC-02) over HTTP', () => {
       },
     );
 
-    it('a 204 with no body sets no match: 503, counted', async () => {
+    it('an answer echoing the BVN, the photo and the selfie is no verdict, and none of it is stored or answered', async () => {
       const user = person();
       await bvnChecked(user);
-      answerSelfie({ status: 204 });
-      await match(user, { bvn: BVN, image: selfie() }).expect(503);
-      expect((await rows(user)).map((r) => r.outcome)).toEqual(['unavailable']);
-      await expect(
-        app.get(SelfieMatchService).selfieMatched(user.id),
-      ).resolves.toBe(false);
+      answerEcho({ match: true, confidence_value: 97.25 });
+      const image = selfie();
+      const res = await match(user, { bvn: BVN, image }).expect(503);
+      expect(res.text).not.toContain(BVN);
+      expect(res.text).not.toContain(image.slice(0, 40));
+      expect(res.text).not.toContain(ECHOED_PHOTO_PART);
+      const [row] = await rows(user);
+      expect(row).toMatchObject({ outcome: 'unavailable', confidence: null });
     });
 
     it('nothing on the route says or suggests a liveness check', async () => {
@@ -806,9 +794,7 @@ describe('Selfie match to the BVN photo (KYC-02) over HTTP', () => {
         Buffer.from('GIF89a'),
         randomBytes(3000),
       ]).toString('base64');
-      const tiny = Buffer.concat([JPEG_MAGIC, randomBytes(200)]).toString(
-        'base64',
-      );
+      const tiny = pngImage(8, 8).toString('base64');
       const huge = selfie('jpeg', 76_000);
       expect(huge.length).toBeGreaterThan(SELFIE_IMAGE_MAX_CHARS);
       images.push(gif, tiny);
@@ -852,76 +838,22 @@ describe('Selfie match to the BVN photo (KYC-02) over HTTP', () => {
       expect(await rows(user)).toHaveLength(0);
     });
 
-    it('the image check accepts JPEG and PNG of 1 KB up to the cap, and nothing else', () => {
-      expect(isSelfieImage(selfie('jpeg', 1_000))).toBe(true);
-      expect(isSelfieImage(selfie('png', 1_000))).toBe(true);
-      const atCap = imageBytes(
-        'jpeg',
-        randomBytes(
-          (SELFIE_IMAGE_MAX_CHARS / 4) * 3 -
-            JPEG_MAGIC.length -
-            JPEG_END.length,
-        ),
-      ).toString('base64');
+    it('the image check accepts real JPEGs and PNGs of 1 KB up to the cap, and nothing else', () => {
+      expect(isSelfieImage(selfie('jpeg'))).toBe(true);
+      expect(isSelfieImage(selfie('png'))).toBe(true);
+      const atCap = selfie('jpeg', (SELFIE_IMAGE_MAX_CHARS / 4) * 3);
       expect(atCap.length).toBe(SELFIE_IMAGE_MAX_CHARS);
       expect(isSelfieImage(atCap)).toBe(true);
       expect(isSelfieImage(`${atCap}AAAA`)).toBe(false);
-      expect(isSelfieImage(selfie('jpeg', 900))).toBe(false);
+      expect(isSelfieImage(pngImage(8, 8).toString('base64'))).toBe(false);
       expect(isSelfieImage(null)).toBe(false);
     });
 
-    it('a file that only starts like a JPEG or PNG (a polyglot) is refused: both ends are checked (defect 3)', async () => {
-      const b64 = (b: Buffer) => b.toString('base64');
-      const zip = Buffer.concat([
-        Buffer.from([0x50, 0x4b, 0x03, 0x04]),
-        randomBytes(1500),
-        Buffer.from([0x50, 0x4b, 0x05, 0x06]),
-        Buffer.alloc(18),
-      ]);
-      const html = Buffer.from(
-        `<html><body>${'<p>not a photo</p>'.repeat(100)}</body></html>`,
-      );
-      const realJpeg = imageBytes('jpeg', randomBytes(3000));
-      const realPng = imageBytes('png', randomBytes(3000));
-      expect(isSelfieImage(b64(realJpeg))).toBe(true);
-      expect(isSelfieImage(b64(realPng))).toBe(true);
-
-      const polyglots: Array<[string, Buffer]> = [
-        ['JPEG magic, then HTML', Buffer.concat([JPEG_MAGIC, html])],
-        ['JPEG magic, then a ZIP', Buffer.concat([JPEG_MAGIC, zip])],
-        [
-          'JPEG magic, then random bytes',
-          Buffer.concat([JPEG_MAGIC, randomBytes(3000)]),
-        ],
-        ['a JPEG with a ZIP appended', Buffer.concat([realJpeg, zip])],
-        [
-          'a JPEG with one byte after its end',
-          Buffer.concat([realJpeg, Buffer.from([0x00])]),
-        ],
-        [
-          'a JPEG end marker without its start',
-          Buffer.concat([randomBytes(3000), JPEG_END]),
-        ],
-        [
-          'PNG magic on a JPEG body',
-          Buffer.concat([PNG_MAGIC, realJpeg.subarray(3)]),
-        ],
-        [
-          'PNG signature and IEND, no IHDR first',
-          Buffer.concat([PNG_MAGIC, randomBytes(3000), PNG_IEND]),
-        ],
-        [
-          'PNG signature and IHDR, no IEND last',
-          Buffer.concat([PNG_MAGIC, PNG_IHDR, randomBytes(3000)]),
-        ],
-        ['a PNG with a ZIP appended', Buffer.concat([realPng, zip])],
-        [
-          'a PNG whose IEND is cut short',
-          realPng.subarray(0, realPng.length - 1),
-        ],
-      ];
+    it('a file that is not a whole JPEG or PNG (a polyglot, a framed file, a cut one) is a 400 before anything is sent (defect 3)', async () => {
+      const polyglots = selfiePolyglots();
+      expect(polyglots.length).toBeGreaterThanOrEqual(25);
       for (const [name, bytes] of polyglots) {
-        expect({ name, ok: isSelfieImage(b64(bytes)) }).toEqual({
+        expect({ name, ok: isSelfieImage(bytes.toString('base64')) }).toEqual({
           name,
           ok: false,
         });
@@ -931,11 +863,12 @@ describe('Selfie match to the BVN photo (KYC-02) over HTTP', () => {
       const user = person();
       await bvnChecked(user);
       answerSelfie({ status: 200, body: SELFIE_MATCHED });
-      for (const [, bytes] of polyglots) {
-        const image = b64(bytes);
+      for (const [name, bytes] of polyglots) {
+        const image = bytes.toString('base64');
         images.push(image);
-        const res = await match(user, { bvn: BVN, image }).expect(400);
+        const res = await match(user, { bvn: BVN, image });
         body(res);
+        expect({ name, status: res.status }).toEqual({ name, status: 400 });
       }
       expect(selfieCalls()).toHaveLength(0);
       expect(await rows(user)).toHaveLength(0);
