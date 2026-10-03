@@ -167,6 +167,10 @@ describe('Transaction PIN (MONEY-09) over HTTP', () => {
     app.useGlobalFilters(new AllExceptionsFilter());
     app.useGlobalInterceptors(new ResponseInterceptor());
     await app.init();
+    // One server for the whole file (FIX-02). Unlistened, supertest opens a
+    // server per request and the first concurrent request to finish closes
+    // it under the others, resetting any still queued (read ECONNRESET).
+    await app.listen(0, '127.0.0.1');
     prisma = moduleRef.get(PrismaService);
   });
 
