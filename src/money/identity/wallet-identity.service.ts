@@ -122,6 +122,12 @@ export function bvnPrefill(identity: FintavaBvnIdentity): BvnPrefillView {
 /** A passed BVN check: when it passed, and the keyed hash of its BVN. */
 export type PassedBvnCheck = { verifiedAt: Date; bvnHash: string };
 
+/**
+ * A passed BVN check whose BVN and NIN are the ones account opening was
+ * sent (MONEY-12), read once: the check, and the phone it proved (E.164).
+ */
+export type CheckedIdentity = PassedBvnCheck & { verifiedPhone: string };
+
 type IdentityRow = {
   bvnLast4: string | null;
   bvnVerifiedAt: Date | null;
@@ -288,16 +294,47 @@ export class WalletIdentityService {
     bvn: string,
     nin: string,
   ): Promise<boolean> {
-    if (!this.hasher.configured) return false;
+    return (await this.checkedIdentity(wawuUserId, bvn, nin)) !== null;
+  }
+
+  /**
+   * For account opening (MONEY-12): this person's passed BVN check, read
+   * ONCE, when both the BVN and the NIN are the ones it was run with, with
+   * the phone it proved; otherwise null. The caller ties everything after
+   * it (the selfie that must have matched, the opening it claims) to the
+   * check it gets back (its time and keyed hash), never to a second read of
+   * "the current check", which a check passing meanwhile could change
+   * (KYC-02 round 2, finding 3). The NIN is required.
+   */
+  async checkedIdentity(
+    wawuUserId: string,
+    bvn: string,
+    nin: string,
+  ): Promise<CheckedIdentity | null> {
+    if (!this.hasher.configured) return null;
     const row = await this.prisma.walletIdentity.findUnique({
       where: { wawuUserId },
-      select: { bvnHash: true, ninHash: true, bvnVerifiedAt: true },
+      select: {
+        bvnHash: true,
+        ninHash: true,
+        bvnVerifiedAt: true,
+        verifiedPhone: true,
+      },
     });
-    return (
-      Boolean(row?.bvnVerifiedAt) &&
-      row?.bvnHash === this.hasher.hash('bvn', bvn) &&
-      row?.ninHash === this.hasher.hash('nin', nin)
-    );
+    if (
+      !row?.bvnVerifiedAt ||
+      !row.bvnHash ||
+      !row.verifiedPhone ||
+      row.bvnHash !== this.hasher.hash('bvn', bvn) ||
+      row.ninHash !== this.hasher.hash('nin', nin)
+    ) {
+      return null;
+    }
+    return {
+      verifiedAt: row.bvnVerifiedAt,
+      bvnHash: row.bvnHash,
+      verifiedPhone: row.verifiedPhone,
+    };
   }
 
   /**

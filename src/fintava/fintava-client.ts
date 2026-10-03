@@ -40,6 +40,10 @@ import type {
   FintavaCreateCustomerInput,
   FintavaCustomer,
   FintavaCustomerHistoryQuery,
+  FintavaBvnDigest,
+  FintavaCustomerLookup,
+  FintavaCustomerMatch,
+  FintavaCustomerSighting,
   FintavaDataBundle,
   FintavaDataInput,
   FintavaDisco,
@@ -155,6 +159,18 @@ function readTransaction(v: unknown): FintavaTransaction {
   };
 }
 
+/** A list row's customer id, phone (local form) and creation time (MONEY-12). */
+function readSighting(v: unknown): FintavaCustomerSighting {
+  const o = obj(v, 'customer');
+  const user = obj(o.userInfo, 'userInfo');
+  const phone = strOrNull(user, 'phoneNumber') ?? strOrNull(o, 'phone');
+  return {
+    customerId: str(user, 'id'),
+    phone: phone === null ? null : toFintavaLocalPhone(phone),
+    createdAt: strOrNull(user, 'createdAt') ?? strOrNull(o, 'createdAt'),
+  };
+}
+
 /** `/txn/merchant` is `{ data: [rows], meta }`; `/txn` nests it in `data`. */
 function readTransactionPage(body: unknown): FintavaPage<FintavaTransaction> {
   const top = obj(body, 'body');
@@ -196,6 +212,23 @@ function readCustomer(v: unknown, fromCreate: boolean): FintavaCustomer {
     walletStatus: strOrNull(wallet, 'status') ?? '',
     tier: strOrNull(wallet, 'tier'),
   };
+}
+
+/**
+ * The BVN a customer record holds (`userInfo.bvn`, 11 digits in full on
+ * `/customers/{id}`: mobile repo `docs/fintava/sandbox/32-money12-account.md`),
+ * or null when it is absent, masked or any other shape. Read only to be
+ * digested by the caller (MONEY-12); never returned, stored or logged.
+ */
+function bvnOf(user: Obj): string | null {
+  const v = user.bvn;
+  const s =
+    typeof v === 'string'
+      ? v.trim()
+      : typeof v === 'number' && Number.isSafeInteger(v)
+        ? String(v)
+        : '';
+  return /^\d{11}$/.test(s) ? s : null;
 }
 
 function readBalance(o: Obj): FintavaWalletBalance {
@@ -848,6 +881,29 @@ export class FintavaClient {
   }
 
   /**
+   * `GET /customers/{customerId}`, read for account opening (MONEY-12),
+   * which may take an existing customer as a person's account only when
+   * Fintava's record carries that person's BVN. The BVN on the record is
+   * handed to `digest` (the keyed hash) inside the read and only the
+   * digest comes back: null when the record has no readable BVN.
+   */
+  async getCustomerMatch(
+    customerId: string,
+    digest: FintavaBvnDigest,
+  ): Promise<FintavaCustomerMatch> {
+    const op: Op = { name: 'get customer', method: 'GET', call: 'read' };
+    const answer = await this.request(
+      op,
+      `/customers/${encodeURIComponent(customerId)}`,
+    );
+    return this.read(op, answer, (data) => {
+      const customer = readCustomer(data, false);
+      const bvn = bvnOf(obj(obj(data, 'customer').userInfo, 'userInfo'));
+      return { customer, bvnDigest: bvn === null ? null : digest(bvn) };
+    });
+  }
+
+  /**
    * `GET /customers/details?phone=`, then the customer by id (the details
    * answer has no wallet). Null when Fintava has no such customer.
    */
@@ -883,6 +939,79 @@ export class FintavaClient {
       const meta = obj(body.meta, 'meta');
       return {
         items: data.map((row) => readCustomer(row, false)),
+        page: count(meta.page),
+        take: count(meta.take),
+        itemCount: count(meta.itemCount),
+        pageCount: count(meta.pageCount),
+        hasNextPage: meta.hasNextPage === true,
+      };
+    });
+  }
+
+  /**
+   * `GET /customers/details?phone=`, read for account opening (MONEY-12),
+   * which may send a lost create again only when Fintava has no customer
+   * for the phone. So `absent` is only Fintava's own answer for that: HTTP
+   * 404 whose one message is "Customer not found" (the sandbox, 3 Oct 2026,
+   * mobile repo `docs/fintava/sandbox/32-money12-account.md`). A 2xx without
+   * a customer in it is `unknown` (Fintava's lookups have answered `{}` for
+   * records that exist). Any other failure, another 404 included, throws.
+   * A customer found is read by id with `getCustomerMatch`: its BVN comes
+   * back only as `digest` made it.
+   */
+  async lookupCustomerByPhone(
+    phone: string,
+    digest: FintavaBvnDigest,
+  ): Promise<FintavaCustomerLookup> {
+    const op: Op = { name: 'look up customer', method: 'GET', call: 'read' };
+    const local = this.phone(op, phone);
+    let answer: Answer;
+    try {
+      answer = await this.request(op, '/customers/details', {
+        query: { phone: local },
+      });
+    } catch (e) {
+      if (
+        e instanceof FintavaError &&
+        e.kind === 'not_found' &&
+        e.httpStatus === 404 &&
+        e.messages.length === 1 &&
+        /^customer not found$/i.test(e.messages[0].trim())
+      ) {
+        return { state: 'absent' };
+      }
+      throw e;
+    }
+    const customerId = this.read(op, answer, (data) =>
+      isObj(data) && isObj(data.userInfo)
+        ? strOrNull(data.userInfo, 'id')
+        : null,
+    );
+    if (customerId === null) return { state: 'unknown', why: 'empty_answer' };
+    return {
+      state: 'found',
+      ...(await this.getCustomerMatch(customerId, digest)),
+    };
+  }
+
+  /**
+   * `GET /customers/list` read as who and when (MONEY-12): each row's
+   * customer id, phone and creation time. A row without a customer id makes
+   * the page unreadable (`bad_response`). Fintava has served it newest first
+   * (`sandbox/07-`), but nothing promises that: the caller checks the order.
+   */
+  async listCustomerSightings(
+    q: { page?: number; take?: number } = {},
+  ): Promise<FintavaPage<FintavaCustomerSighting>> {
+    const op: Op = { name: 'list customers', method: 'GET', call: 'read' };
+    const answer = await this.request(op, '/customers/list', {
+      query: this.page(q),
+    });
+    return this.read(op, answer, (data, body) => {
+      if (!Array.isArray(data)) throw new FintavaShapeError('rows missing');
+      const meta = obj(body.meta, 'meta');
+      return {
+        items: data.map(readSighting),
         page: count(meta.page),
         take: count(meta.take),
         itemCount: count(meta.itemCount),
