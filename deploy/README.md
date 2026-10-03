@@ -133,6 +133,11 @@ SELFIE_CHECKS_PER_DAY=
 WALLET_BANK_NAME=
 WALLET_LICENCE_LINE=
 WALLET_DEPOSIT_INSURANCE_LINE=
+# Receipts (WALLET-18): the address a receipt's code opens, without the
+# code: https://<the API's public host>/api/hub/r. Empty: receipts print
+# wawu/r/<code> with no link. Receipts print WALLET_BANK_NAME and
+# WALLET_LICENCE_LINE as above.
+RECEIPT_VERIFY_BASE_URL=
 
 GEMINI_API_KEY=
 

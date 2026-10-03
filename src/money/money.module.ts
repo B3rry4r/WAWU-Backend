@@ -27,6 +27,10 @@ import { PinResetSettings } from './pin/pin-reset-config';
 import { PinResetService } from './pin/pin-reset.service';
 import { TransactionPinGuard } from './pin/transaction-pin.guard';
 import { TransactionPinService } from './pin/transaction-pin.service';
+import { MoneyReceiptController } from './receipts/money-receipt.controller';
+import { PublicReceiptController } from './receipts/public-receipt.controller';
+import { ReceiptSettings } from './receipts/receipt-config';
+import { ReceiptService } from './receipts/receipt.service';
 
 /**
  * The served half of the Naira wallet contract. Routes move here from
@@ -81,6 +85,11 @@ import { TransactionPinService } from './pin/transaction-pin.service';
  * MONEY-15: the history (`/money/transactions`, its month summary and one
  * row), behind the wallet gate, read from the ledger only; it never calls
  * Fintava.
+ *
+ * WALLET-18: receipts. The owner's routes (`/money/transactions/{id}/receipt`,
+ * its image and its PDF) sit behind the wallet gate and read the row through
+ * the history's detail; the public check (`/r/{code}`, no sign-in,
+ * throttled) shows only what proves the movement. Neither calls Fintava.
  */
 @Module({
   imports: [ConfigModule, FintavaModule, LedgerModule, WawuAuthModule],
@@ -93,6 +102,8 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     MoneyWalletController,
     MoneySavedAccountsController,
     MoneyHistoryController,
+    MoneyReceiptController,
+    PublicReceiptController,
   ],
   providers: [
     WalletGate,
@@ -112,6 +123,8 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     BeneficiaryService,
     PayoutAccountService,
     TransactionHistoryService,
+    ReceiptSettings,
+    ReceiptService,
   ],
   exports: [
     WalletGate,
