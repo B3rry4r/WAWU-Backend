@@ -194,6 +194,11 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'wawuUserId',
     disposition: 'OWNED',
   },
+  // This person's saved beneficiaries and payout account (WALLET-14): their
+  // own list of where they send money, and the bank account their
+  // withdrawals go to. Both go with them.
+  { model: 'MoneyBeneficiary', column: 'ownerWawuId', disposition: 'OWNED' },
+  { model: 'MoneyPayoutAccount', column: 'wawuUserId', disposition: 'OWNED' },
 
   // Last: everything above may reference these.
   { model: 'CreatorState', column: 'wawuUserId', disposition: 'OWNED' },
@@ -254,6 +259,15 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   {
     model: 'FintavaLedgerEntry',
     column: 'counterpartyWawuUserId',
+    disposition: 'COUNTERPARTY',
+  },
+  // Somebody else's saved beneficiary that names this account (WALLET-14):
+  // their list, not this person's. It stays; once this account is gone the
+  // list no longer shows it (the list shows only people with a wallet, and
+  // this account's FintavaWallet row went with it above).
+  {
+    model: 'MoneyBeneficiary',
+    column: 'recipientWawuId',
     disposition: 'COUNTERPARTY',
   },
 
