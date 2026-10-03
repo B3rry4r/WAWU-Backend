@@ -9,6 +9,7 @@ import {
 import {
   parseStrictJson,
   readSelfieAnswer,
+  SELFIE_ANSWER_MAX_BYTES,
   SELFIE_VERDICT_KEYS,
   SelfieAnswerUnreadable,
 } from '../fintava-selfie-answer';
@@ -89,6 +90,59 @@ describe('the selfie answer, read by allowlist', () => {
     // And none is read as anything: an extra key makes it unreadable.
     const read = bodies.filter((b) => verdict(b) !== 'none');
     expect(read).toEqual([]);
+  });
+
+  /**
+   * Verifier round 3: removing the failure envelope's key list survived.
+   * The failure envelope is an explicit "no" only with its own four keys
+   * (`status`, `timestamp`, `message`, `path`); any other key beside them
+   * leaves it unreadable (a 503), however harmless the key looks.
+   */
+  it('the failure envelope plus any key of its own list is a "no"; plus any other key, unreadable', () => {
+    const failure = {
+      status: 400,
+      timestamp: '2026-10-02T09:43:35.262Z',
+      message: ['Request failed with status code 404'],
+      path: '/api/dev/compliance/verify/bvn/selfie',
+    };
+    expect(verdict(JSON.stringify(failure))).toBe('no');
+    expect(verdict(JSON.stringify({ status: 400 }))).toBe('no');
+    for (const [key, value] of [
+      ['match', true],
+      ['matched', true],
+      ['success', true],
+      ['error', 'Bad Request'],
+      ['statusCode', 400],
+      ['code', 'E400'],
+      ['details', {}],
+      ['x', 1],
+    ] as Array<[string, unknown]>) {
+      const text = JSON.stringify({ ...failure, [key]: value });
+      expect({ key, verdict: verdict(text) }).toEqual({ key, verdict: 'none' });
+    }
+  });
+
+  /** Verifier round 3, defect 2: the reader refuses a text over the cap before parsing it. */
+  it('a text over SELFIE_ANSWER_MAX_BYTES is unreadable, even the accepted shape padded with JSON whitespace', () => {
+    const padded = (n: number) =>
+      ACCEPTED_SELFIE_BODY.replace(
+        '{',
+        `{${' '.repeat(n - ACCEPTED_SELFIE_BODY.length)}`,
+      );
+    expect(padded(SELFIE_ANSWER_MAX_BYTES).length).toBe(
+      SELFIE_ANSWER_MAX_BYTES,
+    );
+    expect(verdict(padded(SELFIE_ANSWER_MAX_BYTES))).toBe('yes');
+    expect(verdict(padded(SELFIE_ANSWER_MAX_BYTES + 1))).toBe('none');
+    // Counted in UTF-8 bytes, not characters: 2 bytes each.
+    const wide = `{"data":{"match":true},"status":200,"message":"${'é'.repeat(SELFIE_ANSWER_MAX_BYTES / 2)}"}`;
+    expect(wide.length).toBeLessThan(SELFIE_ANSWER_MAX_BYTES * 2);
+    expect(() => read(wide)).toThrow(/over 4096 bytes/);
+    // 50 MB is refused at once, without parsing.
+    const huge = padded(50_000_000);
+    const started = process.hrtime.bigint();
+    expect(verdict(huge)).toBe('none');
+    expect(Number(process.hrtime.bigint() - started) / 1e6).toBeLessThan(200);
   });
 
   it('a "no" plus any one extra key is unreadable too (a 503, not a 422)', () => {

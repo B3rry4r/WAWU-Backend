@@ -1,3 +1,4 @@
+import { deflateSync } from 'node:zlib';
 import {
   FIXTURES,
   fixture,
@@ -15,7 +16,7 @@ import {
   SELFIE_IMAGE_MAX_CHARS,
   SELFIE_IMAGE_MIN_BYTES,
 } from '../dto/identity-request.dto';
-import { crc32, isJpeg, isPng } from '../selfie-image';
+import { crc32, isJpeg, isPng, SELFIE_MAX_SIDE_PX } from '../selfie-image';
 
 /**
  * The selfie's image check (task KYC-02, verifier rounds 1 and 2, defect 3):
@@ -243,5 +244,107 @@ describe('the JPEG walk', () => {
       JPEG.subarray(2),
     ]);
     expect(isJpeg(withHtml)).toBe(true);
+  });
+});
+
+/**
+ * A PNG of zero pixels: `width` x `height`, colour type and bit depth as
+ * given, its rows deflated (zeros compress about 1000 to 1, so a large
+ * image stays a small file), with `extra` bytes added to (or, negative,
+ * taken off) the rows before deflating.
+ */
+function zeroPng(
+  width: number,
+  height: number,
+  opts: { colourType?: number; bitDepth?: number; extra?: number } = {},
+): Buffer {
+  const colourType = opts.colourType ?? 2;
+  const bitDepth = opts.bitDepth ?? 8;
+  const channels = { 0: 1, 2: 3, 4: 2, 6: 4 }[colourType as 0 | 2 | 4 | 6];
+  const rowBytes = 1 + Math.ceil((width * channels * bitDepth) / 8);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = bitDepth;
+  ihdr[9] = colourType;
+  return Buffer.concat([
+    PNG_SIGNATURE,
+    pngChunk('IHDR', ihdr),
+    pngChunk(
+      'IDAT',
+      deflateSync(Buffer.alloc(rowBytes * height + (opts.extra ?? 0))),
+    ),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+describe('pixel data must inflate to exactly the rows IHDR describes (verifier round 3, finding 3)', () => {
+  it('the exact rows pass; one byte more or one byte fewer is refused', () => {
+    expect(isPng(zeroPng(40, 30))).toBe(true);
+    expect(isPng(zeroPng(40, 30, { extra: 1 }))).toBe(false);
+    expect(isPng(zeroPng(40, 30, { extra: 1000 }))).toBe(false);
+    expect(isPng(zeroPng(40, 30, { extra: -1 }))).toBe(false);
+  });
+
+  it('pixel data that would inflate to 256 MB under a 100 x 100 header is refused without inflating it', () => {
+    const bomb = zeroPng(100, 100, { extra: 256 * 1024 * 1024 });
+    // A small file: zeros deflate about 1000 to 1.
+    expect(bomb.length).toBeLessThan(300_000);
+    const started = process.hrtime.bigint();
+    expect(isPng(bomb)).toBe(false);
+    const ms = Number(process.hrtime.bigint() - started) / 1e6;
+    // Stopping at the rows' size takes about a millisecond; inflating all
+    // 256 MB takes hundreds.
+    expect(ms).toBeLessThan(50);
+  });
+});
+
+describe('a selfie is at most SELFIE_MAX_SIDE_PX on each side (verifier round 3, finding 2)', () => {
+  it('the cap is 2,048 pixels', () => {
+    expect(SELFIE_MAX_SIDE_PX).toBe(2048);
+  });
+
+  it('a PNG up to the cap passes; one pixel wider or taller is refused before its pixels are inflated', () => {
+    expect(isPng(zeroPng(SELFIE_MAX_SIDE_PX, 2))).toBe(true);
+    expect(isPng(zeroPng(2, SELFIE_MAX_SIDE_PX))).toBe(true);
+    expect(isPng(zeroPng(SELFIE_MAX_SIDE_PX + 1, 2))).toBe(false);
+    expect(isPng(zeroPng(2, SELFIE_MAX_SIDE_PX + 1))).toBe(false);
+    // The worst a selfie can now declare: 2,048 x 2,048 16-bit RGBA (33.5
+    // MB of rows) still passes, and stays under the base64 cap as a file.
+    const worst = zeroPng(SELFIE_MAX_SIDE_PX, SELFIE_MAX_SIDE_PX, {
+      colourType: 6,
+      bitDepth: 16,
+    });
+    expect(isPng(worst)).toBe(true);
+    expect(ok(worst)).toBe(true);
+  });
+
+  it('the 65 KB PNG declaring 4,000 x 4,190 RGBA (67 MB of rows) is refused, and fast', () => {
+    const big = zeroPng(4000, 4190, { colourType: 6 });
+    expect(big.length).toBeLessThan((SELFIE_IMAGE_MAX_CHARS / 4) * 3);
+    const started = process.hrtime.bigint();
+    expect(isPng(big)).toBe(false);
+    expect(ok(big)).toBe(false);
+    const ms = Number(process.hrtime.bigint() - started) / 1e6;
+    expect(ms).toBeLessThan(20);
+  });
+
+  it('a JPEG up to the cap passes; one pixel wider or taller is refused', () => {
+    // The frame header's height and width, rewritten in the fixture (the
+    // walk reads them; it does not decode the pixels).
+    let sof = 2;
+    while (!(JPEG[sof + 1] >= 0xc0 && JPEG[sof + 1] <= 0xc2)) {
+      sof += 2 + JPEG.readUInt16BE(sof + 2);
+    }
+    const sized = (height: number, width: number) => {
+      const out = Buffer.from(JPEG);
+      out.writeUInt16BE(height, sof + 5);
+      out.writeUInt16BE(width, sof + 7);
+      return out;
+    };
+    expect(isJpeg(sized(SELFIE_MAX_SIDE_PX, SELFIE_MAX_SIDE_PX))).toBe(true);
+    expect(isJpeg(sized(SELFIE_MAX_SIDE_PX + 1, 100))).toBe(false);
+    expect(isJpeg(sized(100, SELFIE_MAX_SIDE_PX + 1))).toBe(false);
+    expect(isJpeg(sized(65535, 65535))).toBe(false);
   });
 });

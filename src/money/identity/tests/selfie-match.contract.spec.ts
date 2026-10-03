@@ -43,6 +43,7 @@ import { ResponseInterceptor } from '../../../common/interceptors/response.inter
 import { PrismaModule } from '../../../common/prisma/prisma.module';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { FintavaClient } from '../../../fintava/fintava-client';
+import { SELFIE_ANSWER_MAX_BYTES } from '../../../fintava/fintava-selfie-answer';
 import type { MoneyErrorReason } from '../../dto/money-error.dto';
 import { MoneyModule } from '../../money.module';
 import {
@@ -903,6 +904,39 @@ describe('Selfie match to the BVN photo (KYC-02) over HTTP', () => {
       expect(view).toEqual({ matchedAt: null, checksLeft: 1 });
     });
 
+    it('an answer over the cap (5 MB around the accepted match, or a 401 over it) is 503, counted, never a match, and ends at once (verifier round 3, defect 2)', async () => {
+      const user = person();
+      await bvnChecked(user);
+      // The accepted match with 5 MB of JSON whitespace inside: JSON.parse
+      // reads it as the match, so only the cap stops it.
+      const padded = `{${' '.repeat(5_000_000)}"data":{"match":true},"status":200}`;
+      expect(JSON.parse(padded)).toEqual({
+        data: { match: true },
+        status: 200,
+      });
+      answerSelfie({ status: 200, body: padded });
+      const started = Date.now();
+      const res = await match(user, { bvn: BVN, image: selfie() }).expect(503);
+      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(body<null>(res).reason?.code).toBe('provider_unreachable');
+      // A refused key over the cap is not read either, so it counts.
+      double.reset();
+      answerSelfie({
+        status: 401,
+        body: fintavaError(401, `Invalid API key ${'x'.repeat(5_000)}`),
+      });
+      await match(user, { bvn: BVN, image: selfie() }).expect(503);
+      expect((await rows(user)).map((r) => r.outcome)).toEqual([
+        'unavailable',
+        'unavailable',
+      ]);
+      await expect(
+        app.get(SelfieMatchService).selfieMatched(user.id),
+      ).resolves.toBe(false);
+      const view = body<SelfieMatchView>(await read(user).expect(200)).data!;
+      expect(view).toEqual({ matchedAt: null, checksLeft: 1 });
+    });
+
     it('a key Fintava refuses is 503 and gives the match back (nothing reached the provider)', async () => {
       const user = person();
       await bvnChecked(user);
@@ -1002,10 +1036,30 @@ describe('Selfie match to the BVN photo (KYC-02) over HTTP', () => {
   // -------------------------------------------------------------------------
   // These run last: everything above has gone through every path.
   describe('no selfie, BVN photo or full BVN is stored or logged', () => {
-    it('a refusal that echoes the selfie, the BVN and the photo back is logged masked', async () => {
+    it('a refusal that echoes the selfie (as much as fits under the answer cap), the BVN and the photo back is logged masked', async () => {
       const user = person();
       await bvnChecked(user);
       const image = selfie();
+      const refusal = fintavaError(
+        400,
+        `Face mismatch for BVN ${BVN} image ${image.slice(0, 2000)} photo ${ECHOED_PHOTO_PART.repeat(4)}`,
+      );
+      // Under the answer cap, so it is read (and masked), not dropped.
+      expect(JSON.stringify(refusal).length).toBeLessThan(
+        SELFIE_ANSWER_MAX_BYTES,
+      );
+      answerSelfie({ status: 400, body: refusal });
+      await match(user, { bvn: BVN, image }).expect(422);
+      expect(captured.join('\n')).toMatch(
+        /verify BVN selfie: identity_refused/,
+      );
+    });
+
+    it('a refusal that echoes the whole selfie (over the answer cap) is not read: 503, counted, and only its size is logged', async () => {
+      const user = person();
+      await bvnChecked(user);
+      const image = selfie();
+      const before = captured.length;
       answerSelfie({
         status: 400,
         body: fintavaError(
@@ -1013,10 +1067,15 @@ describe('Selfie match to the BVN photo (KYC-02) over HTTP', () => {
           `Face mismatch for BVN ${BVN} image ${image} photo ${ECHOED_PHOTO_PART.repeat(4)}`,
         ),
       });
-      await match(user, { bvn: BVN, image }).expect(422);
-      expect(captured.join('\n')).toMatch(
-        /verify BVN selfie: identity_refused/,
+      const res = await match(user, { bvn: BVN, image }).expect(503);
+      expect(body<null>(res).reason?.code).toBe('provider_unreachable');
+      const [row] = await rows(user);
+      expect(row.outcome).toBe('unavailable');
+      const logged = captured.slice(before).join('\n');
+      expect(logged).toMatch(
+        /verify BVN selfie: bad_response HTTP 400 "the answer is over 4096 bytes"/,
       );
+      expect(logged).not.toContain('Face mismatch');
     });
 
     it('no column of any table holds a selfie, the BVN photo or a full BVN', async () => {

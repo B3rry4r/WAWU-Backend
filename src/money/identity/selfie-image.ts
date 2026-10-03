@@ -19,6 +19,18 @@ const PNG_SIGNATURE = Buffer.from([
 const PNG_MAX_RAW_BYTES = 64 * 1024 * 1024;
 
 /**
+ * The most pixels on either side of a selfie, JPEG or PNG (KYC-02 verifier
+ * round 3, finding 2). A face match needs far fewer, and the app downscales
+ * its capture before sending it (it must anyway, to fit 100,000 base64
+ * characters). Without it a 65 KB PNG declaring 4,000 x 4,190 inflated to
+ * 67 MB of rows, about 117 MB of transient memory per request; at 2,048 a
+ * side the worst PNG (16-bit RGBA) is 33.5 MB of rows. Read from the PNG's
+ * IHDR or the JPEG's frame header, before any pixel data is inflated.
+ * Default (agent), owner may override.
+ */
+export const SELFIE_MAX_SIDE_PX = 2048;
+
+/**
  * A PNG, chunk by chunk: the signature; IHDR first (13 bytes, sane values);
  * every chunk's length inside the file and its CRC correct; PLTE before the
  * pixels when the colour type needs one; one run of IDAT chunks whose data
@@ -109,7 +121,8 @@ function readPngHeader(data: Buffer): PngHeader | null {
     interlace: data[12],
   };
   if (header.width === 0 || header.height === 0) return null;
-  if (header.width > 0x7fffffff || header.height > 0x7fffffff) return null;
+  if (header.width > SELFIE_MAX_SIDE_PX || header.height > SELFIE_MAX_SIDE_PX)
+    return null;
   if (!PNG_DEPTHS[header.colourType]?.includes(header.bitDepth)) return null;
   if (data[10] !== 0 || data[11] !== 0) return null;
   if (header.interlace !== 0 && header.interlace !== 1) return null;
@@ -241,14 +254,18 @@ export function isJpeg(bytes: Buffer): boolean {
   }
 }
 
-/** SOF: precision, a height and width above 0, 1 to 4 components. */
+/**
+ * SOF: precision, a height and width above 0 and at most SELFIE_MAX_SIDE_PX,
+ * 1 to 4 components.
+ */
 function sofIsSane(s: Buffer): boolean {
   if (s.length < 6) return false;
   const components = s[5];
+  const side = (n: number) => n > 0 && n <= SELFIE_MAX_SIDE_PX;
   return (
     (s[0] === 8 || s[0] === 12 || s[0] === 16) &&
-    s.readUInt16BE(1) > 0 &&
-    s.readUInt16BE(3) > 0 &&
+    side(s.readUInt16BE(1)) &&
+    side(s.readUInt16BE(3)) &&
     components >= 1 &&
     components <= 4 &&
     s.length === 6 + 3 * components

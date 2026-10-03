@@ -421,8 +421,11 @@ one retry at a time per payment.
   a face match against the BVN record's photo, not a liveness check:
   Fintava offers none, and no answer, message or screen may claim one.
 - **Input.** `image` is plain base64 (no `data:` prefix) of a JPEG or PNG,
-  1 KB to about 75 KB (at most 100,000 base64 characters): the app sends a
-  downscaled, compressed selfie. The file is walked from its first byte to
+  1 KB to about 75 KB (at most 100,000 base64 characters), at most 2,048
+  pixels on each side (`SELFIE_MAX_SIDE_PX`, read from the PNG's IHDR or the
+  JPEG's frame header before any pixels are inflated; Default (agent), owner
+  may override): the app (KYC-03) downscales and compresses its capture to
+  fit both before sending it. The file is walked from its first byte to
   its last (`src/money/identity/selfie-image.ts`): a PNG chunk by chunk
   (each length inside the file and each CRC correct, IHDR first, PLTE when
   needed, one run of IDAT whose data inflates to exactly the rows IHDR
@@ -466,7 +469,13 @@ one retry at a time per payment.
   provider_unreachable`, counted (it was charged), never a match. So until
   Fintava shows its real success body, no selfie passes; the verdict names
   are narrowed (and a score field added, if it has one) when it does. No
-  score is read today, so `confidence` is null. A failed match is the
+  score is read today, so `confidence` is null. The answer is read with a
+  cap of 4,096 bytes (`SELFIE_ANSWER_MAX_BYTES`; every readable answer is
+  under 200), of any status: a declared Content-Length over it, or more
+  bytes than it arriving, drops the connection at once and is `503
+  provider_unreachable`, counted, never a match, never buffered or parsed
+  (a 400 or 401 over the cap included). Default (agent), owner may
+  override. A failed match is the
   sandbox's `400 ["Request failed with status code 404"]`, charged ₦10
   there.
 - **Result.** A match counts only for the BVN check it was compared

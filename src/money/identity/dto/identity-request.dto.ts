@@ -79,8 +79,8 @@ export class SelfieMatchDto {
 
   /**
    * The selfie: plain base64 (no `data:` prefix) of a JPEG or PNG, 1 KB to
-   * about 75 KB (at most 100,000 base64 characters). A face match against
-   * the BVN photo, not a liveness check.
+   * about 75 KB (at most 100,000 base64 characters), at most 2,048 pixels
+   * on each side. A face match against the BVN photo, not a liveness check.
    */
   @ApiProperty({
     type: 'string',
@@ -95,7 +95,7 @@ export class SelfieMatchDto {
     },
     {
       message:
-        'image must be a base64 JPEG or PNG of 1 KB to 75 KB, without a data: prefix',
+        'image must be a base64 JPEG or PNG of 1 KB to 75 KB and at most 2048 pixels a side, without a data: prefix',
     },
   )
   image!: string;

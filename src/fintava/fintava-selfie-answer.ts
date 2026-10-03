@@ -61,6 +61,17 @@ const FAILURE_KEYS: readonly string[] = [
 ];
 const FAILURE_STATUS = 400;
 /**
+ * The longest selfie answer read, in bytes (verifier round 3, defect 2).
+ * Every readable answer is far shorter: the accepted match is about 60
+ * bytes, the sandbox's failed match 150 (`sandbox/05-`). The client stops
+ * reading an answer, of any status, as soon as it passes this (or declares
+ * a longer Content-Length) and calls it `bad_response`, so a huge or
+ * endless answer is never buffered or parsed; the reader refuses a longer
+ * text too. Default (agent), owner may override.
+ */
+export const SELFIE_ANSWER_MAX_BYTES = 4096;
+
+/**
  * The deepest the readable shapes go: the body, then `data` (or the failure
  * envelope's `message` list). Anything deeper is refused while it is read,
  * so a deeply nested answer costs nothing.
@@ -83,6 +94,16 @@ export function readSelfieAnswer(answer: SelfieAnswer): { matched: boolean } {
   }
   if (!isJsonContentType(answer.contentType)) {
     throw new SelfieAnswerUnreadable('the answer is not labelled JSON');
+  }
+  // A character is at least one byte: a long text is refused without
+  // measuring it.
+  if (
+    answer.text.length > SELFIE_ANSWER_MAX_BYTES ||
+    Buffer.byteLength(answer.text, 'utf8') > SELFIE_ANSWER_MAX_BYTES
+  ) {
+    throw new SelfieAnswerUnreadable(
+      `the answer is over ${SELFIE_ANSWER_MAX_BYTES} bytes`,
+    );
   }
   const body = parseStrictJson(answer.text, MAX_DEPTH);
   if (!isRecord(body)) {
