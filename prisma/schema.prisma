@@ -3521,7 +3521,9 @@ model FintavaLedgerEntry {
   /// Why a movement failed, when Fintava said so.
   failureReason String?
   /// Set when a later sighting of this movement disagreed with what is
-  /// stored (an amount): the stored figure is kept and MONEY-16 reports it.
+  /// stored (an amount, or a status Fintava gave both ways): the stored
+  /// figure is kept, the status is not moved by that sighting, the sweep
+  /// leaves the row alone, and MONEY-16 reports it (a stop: WORKFLOW 10).
   discrepancy   String?
 
   /// How the ledger first learned of it: send, webhook, lookup or history.
@@ -3535,12 +3537,29 @@ model FintavaLedgerEntry {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
+  /// MONEY-08, the pending sweep's schedule, kept on the row so that a
+  /// restart or a second server keeps it. When Fintava is next asked about
+  /// this `pending` row; null until the first check, which is due at
+  /// createdAt (or revivedAt) plus LEDGER_STATUS_CHECK_AFTER_MINUTES.
+  nextCheckAt  DateTime?
+  /// How many times the sweep has asked about it. The rest before the next
+  /// check doubles with each one, 1, 2, 4 ... minutes, at most 60.
+  statusChecks Int       @default(0)
+  /// MONEY-08: when a row failed because Fintava had no record of it
+  /// (LEDGER_ABSENT_FAILURE) was seen again and taken back to its sighting's
+  /// status, and which kind of sighting did it (send, webhook, lookup or
+  /// history). A revival is not a disagreement with Fintava, so it is never
+  /// written on `discrepancy`, and the row stays in the sweep.
+  revivedAt    DateTime?
+  revivedBy    String?
+
   references FintavaLedgerReference[]
 
   @@index([wawuUserId, occurredAt])
   @@index([accountNumber, occurredAt])
   @@index([status, occurredAt])
   @@index([customerReference])
+  @@index([status, nextCheckAt])
 }
 
 /// Every reference one ledger row is known by. The primary key is the

@@ -38,10 +38,27 @@ describe('ledger status: settings and an unconfigured server', () => {
       occurredAt: now,
     };
     const writes: string[] = [];
+    // Round 2: the sweep's schedule lives on the row, so the sweep claims
+    // due rows (one raw UPDATE that moves their nextCheckAt on), a check
+    // reads the row's version (xmin), and a direct check that leaves a row
+    // pending schedules its next check (one raw UPDATE). Those are the only
+    // statements; they are recorded so the test still shows that nothing
+    // but the schedule is written.
+    const statements: string[] = [];
+    const sql = (parts: TemplateStringsArray) => parts.join('?');
     const prisma = {
       fintavaLedgerEntry: {
         findUnique: () => Promise.resolve(row),
-        findMany: () => Promise.resolve([{ id: 'e1' }]),
+      },
+      $queryRaw: (parts: TemplateStringsArray) => {
+        const text = sql(parts);
+        statements.push(text);
+        if (/xmin/.test(text)) return Promise.resolve([{ v: '1' }]);
+        return Promise.resolve([{ id: 'e1', fresh: true, dueAt: now }]);
+      },
+      $executeRaw: (parts: TemplateStringsArray) => {
+        statements.push(sql(parts));
+        return Promise.resolve(1);
       },
     } as unknown as PrismaService;
     const fintava = new Proxy(
@@ -78,5 +95,13 @@ describe('ledger status: settings and an unconfigured server', () => {
     const counts = await service.sweep(new Date(now.getTime() + 600_000));
     expect(counts.waiting).toBe(1);
     expect(writes).toEqual([]);
+    const updates = statements.filter((t) => /UPDATE/.test(t));
+    expect(updates).toHaveLength(2);
+    for (const t of updates) {
+      expect(t).toMatch(/SET "statusChecks" = (e\.)?"statusChecks" \+ 1,/);
+      expect(t).not.toMatch(
+        /"status" =\s*'(completed|failed|reversed)'|"updatedAt"|"discrepancy" =/,
+      );
+    }
   });
 });

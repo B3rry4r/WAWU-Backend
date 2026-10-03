@@ -19,6 +19,9 @@
  * (`docs/fintava/sandbox/30-money10-ledger.md`), plus one reference that
  * never existed, withholds every webhook (there is no tunnel, R-25, and
  * none is posted), and runs the real sweep (LedgerStatusService) once.
+ *
+ * STATUS_SANDBOX_CASES=3 (a comma list of case numbers) runs only those
+ * cases, to keep a re-run to a few GETs; empty runs all four.
  */
 import 'reflect-metadata';
 import { randomUUID } from 'node:crypto';
@@ -173,6 +176,15 @@ async function main() {
       expect: 'disagrees pending',
     },
   ];
+  const only = (process.env.STATUS_SANDBOX_CASES ?? '')
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
+  if (only.length > 0) {
+    for (let i = cases.length - 1; i >= 0; i -= 1) {
+      if (!only.includes(cases[i].name.split(' ')[0])) cases.splice(i, 1);
+    }
+  }
   const ids: string[] = [];
   for (const c of cases) {
     const r = await ledger.record({

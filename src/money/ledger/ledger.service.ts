@@ -56,10 +56,11 @@ export function ledgerStatusMayMove(
 /**
  * The failure reason MONEY-08's status check writes when Fintava has no
  * record of one of our sends (its own `404 "Transaction not found!"` and no
- * row in the sender's history, past the resend window). It is the only
- * `failed` that is our inference rather than Fintava's word, so it is the
- * only one a later sighting may undo (LedgerService.merge): Fintava's own
- * record of the reference outranks our reading of its silence.
+ * row in a complete walk of the sender's history, past the resend window).
+ * It is the only `failed` that is our inference rather than Fintava's word,
+ * so it is the only one a later sighting may undo (LedgerService.merge):
+ * Fintava's own record of the reference outranks our reading of its
+ * silence. The undoing is a revival (`revivedAt`), not a disagreement.
  */
 export const LEDGER_ABSENT_FAILURE =
   'Fintava has no record of this transfer, so no money moved.';
@@ -305,17 +306,47 @@ export class LedgerService {
 
   /**
    * MONEY-08: a `pending` row whose send Fintava has no record of becomes
-   * `failed` with LEDGER_ABSENT_FAILURE. Locked and re-checked: a row that
-   * is no longer pending, or carries a disagreement, is left alone (false).
+   * `failed` with LEDGER_ABSENT_FAILURE. A compare-and-set, in one
+   * transaction, on everything that would show Fintava does know it:
+   * - the row is still the version the check read when it started
+   *   (`version` is its Postgres `xmin`, which every write to the row
+   *   changes: a delivery, a lookup or a send merged into it meanwhile);
+   * - it is still `pending` with no disagreement recorded;
+   * - nothing from Fintava was ever merged into it (no Fintava reference,
+   *   transaction id or tagapay reference, no delivery that made it);
+   * - no stored delivery, consumed or not, names any of its references.
+   * Otherwise it is left alone (false) and the check asks again later.
    */
-  async markAbsentFailed(entryId: string): Promise<boolean> {
+  async markAbsentFailed(entryId: string, version: string): Promise<boolean> {
     return this.prisma.$transaction(async (tx) => {
       const held = await tx.$queryRaw<Array<{ id: string }>>`
         SELECT "id" FROM "FintavaLedgerEntry"
          WHERE "id" = ${entryId} AND "status" = 'pending'
            AND "discrepancy" IS NULL
+           AND xmin::text = ${version}
+           AND "fintavaReference" IS NULL
+           AND "fintavaTransactionId" IS NULL
+           AND "tagapayTransRef" IS NULL
+           AND "sourceEventId" IS NULL
          FOR UPDATE`;
       if (held.length === 0) return false;
+      const refs = await tx.fintavaLedgerReference.findMany({
+        where: { entryId },
+        select: { value: true },
+      });
+      const values = refs.map((r) => r.value);
+      if (values.length > 0) {
+        const sighted = await tx.fintavaWebhookEvent.findFirst({
+          where: {
+            OR: [
+              { dataReference: { in: values } },
+              { dataCustomerReference: { in: values } },
+            ],
+          },
+          select: { id: true },
+        });
+        if (sighted) return false;
+      }
       await tx.fintavaLedgerEntry.update({
         where: { id: entryId },
         data: { status: 'failed', failureReason: LEDGER_ABSENT_FAILURE },
@@ -329,8 +360,12 @@ export class LedgerService {
    * anything else (the stored figures and status stand; MONEY-16 reports
    * it). A note already on the row is not written twice.
    */
-  async noteDiscrepancy(entryId: string, note: string): Promise<boolean> {
-    return this.prisma.$transaction(async (tx) => {
+  async noteDiscrepancy(
+    entryId: string,
+    note: string,
+    db?: Prisma.TransactionClient,
+  ): Promise<boolean> {
+    const run = async (tx: Prisma.TransactionClient) => {
       await tx.$queryRaw`SELECT "id" FROM "FintavaLedgerEntry" WHERE "id" = ${entryId} FOR UPDATE`;
       const row = await tx.fintavaLedgerEntry.findUnique({
         where: { id: entryId },
@@ -349,7 +384,9 @@ export class LedgerService {
         },
       });
       return true;
-    });
+    };
+    if (db) return run(db);
+    return this.prisma.$transaction(run);
   }
 
   private async recordIn(
@@ -491,6 +528,16 @@ export class LedgerService {
         occurredAt: row.occurredAt,
         completedAt: row.completedAt,
         discrepancy,
+        // A revival (MONEY-08): when, by what, and the sweep's schedule
+        // starts again from it. Written only when this merge revived it.
+        ...(row.revivedAt !== keeper.revivedAt
+          ? {
+              revivedAt: row.revivedAt,
+              revivedBy: row.revivedBy,
+              nextCheckAt: null,
+              statusChecks: 0,
+            }
+          : {}),
       },
     });
     if (notes.length > 0) {
@@ -508,10 +555,12 @@ export class LedgerService {
   /**
    * What a second sighting adds to a row. Amounts are never changed: a
    * sighting with other figures is a disagreement, kept on `discrepancy` for
-   * MONEY-16 to report. References and missing details are filled in. The
-   * feature that moved the money (`send`) decides what the row is for
-   * (category, counterparty, link, note); a webhook or a lookup only fills
-   * what is empty. The status only moves forward (ledgerStatusMayMove).
+   * MONEY-16 to report, and it moves no status (a stop, WORKFLOW section
+   * 10). References and missing details are filled in. The feature that
+   * moved the money (`send`) decides what the row is for (category,
+   * counterparty, link, note); a webhook or a lookup only fills what is
+   * empty. The status only moves forward (ledgerStatusMayMove), except that
+   * a row failed as absent at Fintava is revived by a sighting of it.
    */
   private merge(
     row: EntryRow,
@@ -562,20 +611,47 @@ export class LedgerService {
     }
     if (owns) data.category = s.category;
 
+    // Fintava's figures against ours. Any difference is a stop (WORKFLOW
+    // section 10: our ledger and Fintava disagree, by any amount): it is
+    // recorded on `discrepancy`, and this sighting moves no status, the same
+    // as MONEY-08's status check (MONEY-08 round 2 aligns MONEY-10's merge
+    // with that rule; it used to settle the status and note the figures).
+    const figures: string[] = [];
+    if (s.amountKobo !== row.amountKobo) {
+      figures.push(`amountKobo ${row.amountKobo} vs ${s.amountKobo}`);
+    }
+    if (s.feeKobo !== row.feeKobo) {
+      figures.push(`feeKobo ${row.feeKobo} vs ${s.feeKobo}`);
+    }
+    if (s.totalKobo !== row.totalKobo) {
+      figures.push(`totalKobo ${row.totalKobo} vs ${s.totalKobo}`);
+    }
+
     const differs: string[] = [];
     const absentFailure =
       row.status === 'failed' && row.failureReason === LEDGER_ABSENT_FAILURE;
-    if (absentFailure && (s.status === 'pending' || s.status === 'completed')) {
+    const revives =
+      absentFailure && (s.status === 'pending' || s.status === 'completed');
+    if (figures.length > 0) {
+      if (s.status !== row.status) {
+        differs.push(
+          `status ${absentFailure ? 'failed (no record at Fintava)' : row.status} vs ${s.status} not applied`,
+        );
+      }
+    } else if (revives) {
       // Marked failed because Fintava had no record of it (MONEY-08), and
       // now a sighting of the same reference exists: a resend under the same
       // reference, or a record Fintava did not serve before. Fintava's
-      // record wins; the earlier reading is kept on `discrepancy` for review.
+      // record wins. This is not a disagreement with Fintava (our reading of
+      // its silence was all that changed), so it goes on `revivedAt` and
+      // `revivedBy`, never `discrepancy`, and the row stays in the sweep.
       data.status = s.status;
       data.failureReason = null;
+      data.revivedAt = now;
+      data.revivedBy = s.source;
       if (s.status === 'completed' && row.completedAt === null) {
         data.completedAt = now;
       }
-      differs.push(`status failed (no record at Fintava) vs ${s.status}`);
     } else if (ledgerStatusMayMove(row.status, s.status)) {
       data.status = s.status;
       if (s.status === 'completed' && row.completedAt === null) {
@@ -590,22 +666,19 @@ export class LedgerService {
       // recorded, as for an amount.
       differs.push(`status ${row.status} vs ${s.status}`);
     }
-    if (absentFailure && s.status === 'failed' && s.failureReason) {
+    if (
+      absentFailure &&
+      figures.length === 0 &&
+      s.status === 'failed' &&
+      s.failureReason
+    ) {
       data.failureReason = s.failureReason;
     }
     if (s.occurredAt.getTime() < row.occurredAt.getTime()) {
       data.occurredAt = s.occurredAt;
     }
 
-    if (s.amountKobo !== row.amountKobo) {
-      differs.push(`amountKobo ${row.amountKobo} vs ${s.amountKobo}`);
-    }
-    if (s.feeKobo !== row.feeKobo) {
-      differs.push(`feeKobo ${row.feeKobo} vs ${s.feeKobo}`);
-    }
-    if (s.totalKobo !== row.totalKobo) {
-      differs.push(`totalKobo ${row.totalKobo} vs ${s.totalKobo}`);
-    }
+    differs.push(...figures);
     return {
       data,
       discrepancy: differs.length

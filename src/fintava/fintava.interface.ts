@@ -258,7 +258,17 @@ export type FintavaReconciliation =
   | { state: 'absent' }
   | {
       state: 'unknown';
-      why: 'empty_lookup' | 'unreachable' | 'unrecognised' | 'too_soon';
+      /**
+       * `history_incomplete`: the lookup answered Fintava's own 404, but the
+       * history walk stopped (page limit) before it reached the send's
+       * time, so no row there proves nothing (MONEY-08 round 2).
+       */
+      why:
+        | 'empty_lookup'
+        | 'unreachable'
+        | 'unrecognised'
+        | 'too_soon'
+        | 'history_incomplete';
     };
 
 /**
@@ -283,7 +293,8 @@ export type FintavaRetryDecision =
         | 'empty_lookup'
         | 'unreachable'
         | 'unrecognised'
-        | 'too_soon';
+        | 'too_soon'
+        | 'history_incomplete';
     }
   | { action: 'resend_same_reference' }
   | {

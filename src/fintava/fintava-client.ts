@@ -1273,13 +1273,21 @@ export class FintavaClient {
   /**
    * The sender's history (the merchant's for WAWU's sends, the customer's for
    * a customer's), newest first, back to `since`: the row for `reference`,
-   * or null. Errors propagate.
+   * `null` when the walk was complete and found none, or `'incomplete'` when
+   * it stopped at RECONCILE_MAX_PAGES while Fintava still had older pages
+   * and none of them had reached `since` (or no `since` was given). An
+   * unfinished walk has not shown that the row is missing (MONEY-08 round 2):
+   * the send may sit on a page it did not read. Errors propagate.
+   *
+   * Complete means one of: the last page (`hasNextPage` false), an empty
+   * page, or a page whose oldest row is older than `since` less the clock
+   * skew.
    */
   private async findInHistory(
     reference: string,
     sender: FintavaSender,
     since?: Date,
-  ): Promise<FintavaTransaction | null> {
+  ): Promise<FintavaTransaction | null | 'incomplete'> {
     const oldest = since ? since.getTime() - RECONCILE_SKEW_MS : null;
     const take = historyTake();
     for (let page = 1; page <= RECONCILE_MAX_PAGES; page += 1) {
@@ -1298,9 +1306,11 @@ export class FintavaClient {
         oldest !== null &&
         last !== undefined &&
         Date.parse(last.createdAt) < oldest;
-      if (!rows.hasNextPage || pastSince || rows.items.length === 0) break;
+      if (!rows.hasNextPage || pastSince || rows.items.length === 0) {
+        return null;
+      }
     }
-    return null;
+    return 'incomplete';
   }
 
   /**
@@ -1309,7 +1319,9 @@ export class FintavaClient {
    * `absent` needs both: Fintava's own `404 "Transaction not found!"` AND no
    * row in history. A lookup that answers `{}` with no row in history is
    * `unknown` (a missing row is not proof: the merchant list is cached for
-   * about 5 minutes); so is any answer we cannot read or reach.
+   * about 5 minutes); so is any answer we cannot read or reach, and so is a
+   * 404 whose history walk stopped before it reached `since`
+   * (`history_incomplete`): only a complete walk shows there is no row.
    */
   async reconcile(
     reference: string,
@@ -1339,12 +1351,18 @@ export class FintavaClient {
         transaction: lookup.transaction,
       };
     }
-    let row: FintavaTransaction | null;
+    let row: FintavaTransaction | null | 'incomplete';
     try {
       row = await this.findInHistory(reference, sender, since);
     } catch (e) {
       if (passThrough(e)) throw e;
       return { state: 'unknown', why: 'unreachable' };
+    }
+    if (row === 'incomplete') {
+      return {
+        state: 'unknown',
+        why: lookup.state === 'absent' ? 'history_incomplete' : 'empty_lookup',
+      };
     }
     if (row) return { state: 'found', source: 'history', transaction: row };
     return lookup.state === 'absent'

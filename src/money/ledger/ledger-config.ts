@@ -54,12 +54,25 @@ export function ledgerConfirmWindowMs(raw: string | undefined): number {
  * The pending sweep (task MONEY-08): how old a `pending` ledger row must be
  * before the sweep asks Fintava about it. Younger rows are left to their
  * webhook. A row it cannot settle yet is asked again after 1, 2, 4 ...
- * minutes, at most an hour apart.
+ * minutes, at most an hour apart; that schedule is kept on the row
+ * (`nextCheckAt`, `statusChecks`), so it survives a restart.
  */
 export const LEDGER_STATUS_DEFAULTS = {
   checkAfterMinutes: 2,
-  /** Rows checked per sweep, oldest first. */
+  /**
+   * Rows checked per sweep, per server: what bounds the load on Fintava
+   * (each check is a lookup, and for our own sends at most 5 history pages).
+   */
   batch: 50,
+  /** The longest rest between two checks of a row Fintava cannot settle yet. */
+  maxRestMinutes: 60,
+  /**
+   * Rows recorded (or revived) this recently go ahead of older ones in a
+   * sweep, so a backlog Fintava never settles cannot delay a fresh transfer.
+   * The same hour as the longest rest: a row gets ahead of the queue for its
+   * first six checks (2, 3, 5, 9, 17 and 33 minutes after it was recorded).
+   */
+  freshMinutes: 60,
   /** References of a row tried with the lookup when it has none of ours. */
   lookups: 4,
 } as const;

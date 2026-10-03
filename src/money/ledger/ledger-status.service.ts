@@ -80,14 +80,18 @@ const MINUTE = 60_000;
  * - Found SUCCESS: the row is completed. Found FAILURE or CANCELLED: the row
  *   is failed. Both merge through LedgerService.record, so a webhook that
  *   arrives too, before or after, lands on the same row (exactly once).
- * - Found PENDING or ONGOING, a lookup answering `{}`, or Fintava out of
- *   reach: nothing changes; it is asked again later, backing off. An
+ * - Found PENDING or ONGOING, a lookup answering `{}`, a history walk cut
+ *   off by its page limit, or Fintava out of reach: nothing changes; it is
+ *   asked again later, backing off on a schedule kept on the row. An
  *   unknown outcome stays pending; it is never guessed.
  * - Fintava's own `404 "Transaction not found!"` for OUR reference and no
- *   row in the sender's history, once the resend window has passed (the
- *   only `absent` MONEY-06 accepts): the send never happened, so the row is
- *   failed with LEDGER_ABSENT_FAILURE (no money moved). A later sighting of
- *   that reference undoes it (LedgerService.merge).
+ *   row in a complete walk of the sender's history, once the resend window
+ *   has passed (the only `absent` MONEY-06 accepts): the send never
+ *   happened, so the row is failed with LEDGER_ABSENT_FAILURE (no money
+ *   moved). Only if nothing about it changed while it was being checked
+ *   and Fintava never told us about it (LedgerService.markAbsentFailed). A
+ *   later sighting of that reference with the same figures undoes it, as a
+ *   revival (`revivedAt`, `revivedBy`), and the sweep goes on asking.
  * - Fintava's record has another amount than the row: a stop. The
  *   disagreement is written on the row's `discrepancy`, the status is not
  *   moved, and the sweep leaves the row for review (MONEY-16).
@@ -102,8 +106,6 @@ export class LedgerStatusService {
   private readonly logger = new Logger(LedgerStatusService.name);
   private readonly checkAfterMs: number;
   private sweeping = false;
-  /** Rows left pending, and when each may be asked about again (per process). */
-  private readonly retryAt = new Map<string, { at: number; delayMs: number }>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -117,10 +119,24 @@ export class LedgerStatusService {
   }
 
   /**
-   * The pending sweep: every `pending` row older than the check-after time,
-   * oldest first, except rows resting after an unclear answer and rows
-   * already holding a disagreement. One pass at a time per process; a
-   * second process checking the same row lands on the same row.
+   * The pending sweep. Each pass claims up to LEDGER_STATUS_DEFAULTS.batch
+   * `pending` rows that are due (their `nextCheckAt` has come; a row never
+   * checked is due two minutes after it was recorded or revived) and holds
+   * no disagreement, and asks Fintava about each.
+   *
+   * The schedule lives on the row (`nextCheckAt`, `statusChecks`), so a
+   * restart, a deploy or a second server keeps it: claiming a row moves its
+   * `nextCheckAt` on by the next rest (1, 2, 4 ... minutes, at most 60) in
+   * the same statement, under `FOR UPDATE SKIP LOCKED`, so two servers never
+   * claim the same row in the same minute and Fintava is asked about at most
+   * `batch` rows per pass per server. A row that settles leaves the sweep;
+   * one that does not is already scheduled.
+   *
+   * Order: rows recorded (or revived) within the last hour first, then the
+   * rest; within each, the earliest due first. A backlog that Fintava never
+   * settles (the orphan PENDING record of a refused bank send, money in that
+   * no history lists) is asked about at most hourly and never delays a fresh
+   * transfer (MONEY-08 round 2, the verifier's backlog finding).
    */
   @Cron(CronExpression.EVERY_MINUTE, { name: 'ledger-status-sweep' })
   async sweep(now = new Date()): Promise<Record<LedgerStatusOutcome, number>> {
@@ -134,30 +150,17 @@ export class LedgerStatusService {
     if (this.sweeping) return counts;
     this.sweeping = true;
     try {
-      const resting = [...this.retryAt.entries()]
-        .filter(([, r]) => r.at > now.getTime())
-        .map(([id]) => id);
-      const due = await this.prisma.fintavaLedgerEntry.findMany({
-        where: {
-          status: 'pending',
-          discrepancy: null,
-          createdAt: { lte: new Date(now.getTime() - this.checkAfterMs) },
-          ...(resting.length ? { id: { notIn: resting } } : {}),
-        },
-        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-        take: LEDGER_STATUS_DEFAULTS.batch,
-        select: { id: true },
-      });
-      for (const { id } of due) {
+      const due = await this.claimDue(now);
+      for (const id of due) {
         try {
-          const c = await this.check(id, now);
+          const c = await this.checkOnce(id, now);
           counts[c.outcome] += 1;
         } catch (e) {
-          // The name only: a message can quote what Fintava sent.
+          // The name only: a message can quote what Fintava sent. The row is
+          // already scheduled by its claim.
           this.logger.error(
             `ledger status: a pending row could not be checked (${(e as Error).name ?? 'Error'}); it stays pending`,
           );
-          this.backOff(id, now);
         }
       }
       if (counts.settled + counts.failed_absent + counts.disagrees > 0) {
@@ -172,25 +175,93 @@ export class LedgerStatusService {
   }
 
   /**
+   * Claims the rows due at `now`, in the sweep's order, and moves each one's
+   * `nextCheckAt` on by its next rest in the same statement. Never touches
+   * `updatedAt`: the resend window reads it as "last attempted".
+   */
+  private async claimDue(now: Date): Promise<string[]> {
+    const afterMs = this.checkAfterMs;
+    const fresh = new Date(
+      now.getTime() - LEDGER_STATUS_DEFAULTS.freshMinutes * MINUTE,
+    );
+    const rows = await this.prisma.$queryRaw<
+      Array<{ id: string; fresh: boolean; dueAt: Date }>
+    >`
+      WITH due AS (
+        SELECT "id",
+               GREATEST("createdAt", COALESCE("revivedAt", "createdAt"))
+                 > ${fresh}::timestamp(3) AS "fresh",
+               COALESCE("nextCheckAt",
+                        GREATEST("createdAt", COALESCE("revivedAt", "createdAt"))
+                          + ${afterMs}::float8 * interval '1 millisecond') AS "dueAt"
+          FROM "FintavaLedgerEntry"
+         WHERE "status" = 'pending'
+           AND "discrepancy" IS NULL
+           AND COALESCE("nextCheckAt",
+                        GREATEST("createdAt", COALESCE("revivedAt", "createdAt"))
+                          + ${afterMs}::float8 * interval '1 millisecond')
+                 <= ${now}::timestamp(3)
+         ORDER BY 2 DESC, 3 ASC, "id" ASC
+         LIMIT ${LEDGER_STATUS_DEFAULTS.batch}
+         FOR UPDATE SKIP LOCKED
+      )
+      UPDATE "FintavaLedgerEntry" AS e
+         SET "statusChecks" = e."statusChecks" + 1,
+             "nextCheckAt" = ${now}::timestamp(3)
+               + LEAST(${LEDGER_STATUS_DEFAULTS.maxRestMinutes}::int,
+                       power(2, LEAST(e."statusChecks", 12))::int)
+                 * interval '1 minute'
+        FROM due
+       WHERE e."id" = due."id"
+      RETURNING due."id", due."fresh", due."dueAt"`;
+    return rows
+      .sort(
+        (a, b) =>
+          Number(b.fresh) - Number(a.fresh) ||
+          a.dueAt.getTime() - b.dueAt.getTime() ||
+          (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+      )
+      .map((r) => r.id);
+  }
+
+  /**
    * Asks Fintava how one `pending` ledger row ended and settles it if
    * Fintava knows. The sweep calls it; so may a sending feature before it
-   * decides to retry (WALLET-09), using the returned decision.
+   * decides to retry (WALLET-09), using the returned decision. When it
+   * cannot settle the row, the row's next check is scheduled as a sweep's
+   * would be, so a direct check also counts towards the rest.
    */
   async check(entryId: string, now = new Date()): Promise<LedgerStatusCheck> {
     const result = await this.checkOnce(entryId, now);
-    if (result.outcome === 'waiting') this.backOff(entryId, now);
-    else this.retryAt.delete(entryId);
+    if (result.outcome === 'waiting') await this.reschedule(entryId, now);
     return result;
+  }
+
+  /** The next rest for a row left pending, as a claim sets it. */
+  private async reschedule(entryId: string, now: Date): Promise<void> {
+    await this.prisma.$executeRaw`
+      UPDATE "FintavaLedgerEntry"
+         SET "statusChecks" = "statusChecks" + 1,
+             "nextCheckAt" = ${now}::timestamp(3)
+               + LEAST(${LEDGER_STATUS_DEFAULTS.maxRestMinutes}::int,
+                       power(2, LEAST("statusChecks", 12))::int)
+                 * interval '1 minute'
+       WHERE "id" = ${entryId} AND "status" = 'pending'`;
   }
 
   private async checkOnce(
     entryId: string,
     now: Date,
   ): Promise<LedgerStatusCheck> {
+    // The row's version as this check starts (Postgres `xmin`, which every
+    // write to the row changes): an absent verdict is only written if the
+    // row is still this version (LedgerService.markAbsentFailed).
+    const version = await this.prisma.$queryRaw<Array<{ v: string }>>`
+      SELECT xmin::text AS "v" FROM "FintavaLedgerEntry" WHERE "id" = ${entryId}`;
     const e = await this.prisma.fintavaLedgerEntry.findUnique({
       where: { id: entryId },
     });
-    if (!e) {
+    if (!e || version.length === 0) {
       return {
         outcome: 'skipped',
         status: null,
@@ -261,10 +332,18 @@ export class LedgerStatusService {
         (decision.action === 'resend_new_reference' &&
           decision.why === 'absent')
       ) {
-        const changed = await this.ledger.markAbsentFailed(e.id);
+        const changed = await this.ledger.markAbsentFailed(e.id, version[0].v);
         if (!changed) {
+          // Something happened to the row, or a delivery for one of its
+          // references exists: Fintava has told us about it, so it is not
+          // absent. It stays as it is now and is asked about again; MONEY-06's
+          // resend advice no longer stands.
           return {
-            ...(await this.reread(e.id, decision, 'changed meanwhile')),
+            ...(await this.reread(
+              e.id,
+              { action: 'wait', why: 'pending' },
+              'seen meanwhile, so not absent',
+            )),
             fintava: answered,
           };
         }
@@ -532,12 +611,5 @@ export class LedgerStatusService {
       if (err instanceof FintavaError) return null;
       throw err;
     }
-  }
-
-  /** 1, 2, 4 ... minutes, at most an hour, between checks of a row left pending. */
-  private backOff(entryId: string, now: Date): void {
-    const prev = this.retryAt.get(entryId);
-    const delayMs = Math.min(prev ? prev.delayMs * 2 : MINUTE, 60 * MINUTE);
-    this.retryAt.set(entryId, { at: now.getTime() + delayMs, delayMs });
   }
 }

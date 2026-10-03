@@ -282,6 +282,12 @@ export class LedgerConsumerService {
       fintavaTransactionId: null,
     };
     let occurredAt: Date | null = null;
+    // Fintava's own record of the movement has another amount than the
+    // delivery: a stop (WORKFLOW section 10). The rows are written with the
+    // delivery's figures, left `pending`, and the difference goes on their
+    // `discrepancy` (MONEY-08 round 2; it used to settle them and say so
+    // only in the delivery's note).
+    let disagreement: string | null = null;
 
     const held = await Promise.all(
       sides.map((s) =>
@@ -328,9 +334,8 @@ export class LedgerConsumerService {
           : new Date(t.createdAt);
         notes.push('confirmed with Fintava');
         if (t.amountKobo !== m.amountKobo) {
-          notes.push(
-            `Fintava's record says ${t.amountKobo} kobo, the delivery ${m.amountKobo}`,
-          );
+          disagreement = `Fintava's record says ${t.amountKobo} kobo, the delivery ${m.amountKobo}`;
+          notes.push(disagreement, 'left pending for review');
         }
       } else if (c.state === 'unknown' && age < this.confirmWindowMs) {
         return this.wait(
@@ -347,9 +352,10 @@ export class LedgerConsumerService {
     }
     // A wallet-to-wallet delivery reports no status but the balances after
     // the move; a bank send without a status is still on its way.
-    const final: TransferStatus =
-      status ??
-      (m.event === 'customer_bank_transfer' ? 'pending' : 'completed');
+    const final: TransferStatus = disagreement
+      ? 'pending'
+      : (status ??
+        (m.event === 'customer_bank_transfer' ? 'pending' : 'completed'));
 
     return this.finish(event.id, async (tx) => {
       const written: string[] = [];
@@ -382,6 +388,13 @@ export class LedgerConsumerService {
           },
           tx,
         );
+        if (disagreement) {
+          await this.ledger.noteDiscrepancy(
+            r.entryId,
+            `webhook sighting: ${disagreement}`,
+            tx,
+          );
+        }
         written.push(
           `${side.direction} ${r.created ? 'recorded' : 'already held'}`,
         );
