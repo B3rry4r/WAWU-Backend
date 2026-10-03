@@ -866,3 +866,55 @@ still reads. Every answer is `Cache-Control: no-store`.
   removes nothing and answers the same 200. A saved WAWU user whose wallet
   is gone (a deleted account) leaves the list, and `WalletView.beneficiaryCount`
   (W35) counts exactly the rows the list shows.
+
+## 11. The fee quote (WALLET-15)
+
+- **Route** (`src/money/fees/`): `GET /money/fees/quote?kind=&amountKobo=`
+  (and `&billCategory=` on a bill), behind the wallet gate, `no-store`.
+  Answers `FeeQuoteView`. It never calls Fintava and reads no balance: a
+  quote is the fee schedule applied to the amount. `amountKobo` is digits
+  only (`100.00`, `1e4`, `10,000` are a 400, never read as another amount).
+- **What each kind costs** (R-10, R-31; rates in the mobile repo's
+  `docs/fintava/fees.md`, final), each charge one entry in `parts`
+  (`code`, `source` `provider` or `wawu`, `amountKobo`), in this order:
+  - `wawu_transfer`: `balance_transfer` (Fintava, by band on the amount),
+    `wawu_fee` (₦10).
+  - `bank_transfer` (a send or a withdrawal): `bank_transfer` (Fintava,
+    ₦40), `wawu_fee` (₦25).
+  - `purchase` (unlock, tip, tick, ticket, paid DM, credits, course, legal
+    service): `balance_transfer` only; no WAWU fee, WAWU's share is the
+    85/15 split. The pay sheet itself is `GET /money/payments/quote`
+    (MONEY-17), which fills its `fee` from the same service.
+  - `bill` (`billCategory` electricity, cable, airtime or data, required):
+    `bill_charge` (Fintava, ₦100 electricity or cable, ₦0 airtime or data),
+    `wawu_fee` (WAWU's bill fee, ₦0), `balance_transfer` (Fintava's charge
+    on the payer's move into WAWU's merchant wallet, R-31). The payer moves
+    the bill's amount, its charge and WAWU's bill fee into WAWU's wallet in
+    one transfer, so that sum is what the band is read on. Default (agent),
+    owner may override.
+- **Bands** of the balance-transfer charge: below ₦5,000 ₦23.25, from
+  ₦5,000 ₦15.75 (₦4,999 pays ₦23.25, ₦5,000 pays ₦15.75).
+- **Config**: every figure is a setting with the ruled figure as its
+  default (`.env.example`, `src/money/fees/fee-config.ts`): a fee changed
+  by Fintava or the owner is changed there and in the dashboard's merchant
+  charges (OPS-09) together; MONEY-16 reports a difference. A setting that
+  is not a whole number of kobo stops the app at boot.
+- **Merchant cap**: a `purchase` or `bill` whose `totalKobo` is above
+  `MERCHANT_MAX_PER_TXN_KOBO` is `400 amount_out_of_range` with
+  `maximumKobo`, the largest `amountKobo` that fits. A send is not bound by
+  it; a total a JSON number cannot carry exactly is refused the same way.
+- **Daily limit**: no task holds it (mobile repo BACKEND_GAPS G-7), so
+  `withinDailyLimit` is `true` and `remainingTodayKobo` `null`.
+- **Short-lived and checkable**: `quoteToken` is the quote signed by the
+  server (HMAC-SHA256 under `FEE_QUOTE_KEY`: the person, kind, category,
+  amount, total and `expiresAt`, `FEE_QUOTE_SECONDS` after it was given,
+  300 by default, PROVISIONAL). Nothing is stored or reserved.
+  `FeeQuoteService.check(wawuUserId, input, expectedTotalKobo, quoteToken)`
+  is what a paying request calls (WALLET-07, WALLET-09, MONEY-17; their
+  request bodies add `quoteToken` beside `expectedTotalKobo`, mobile repo
+  BACKEND_GAPS G-64): it answers the quote as it stands now when the token
+  is this server's, for this person and this input, not expired, and both
+  its total and `expectedTotalKobo` equal today's total; otherwise `409
+  quote_changed` with the new quote in `reason.feeQuote`. An unset
+  `FEE_QUOTE_KEY` makes a key at boot (one warning): quotes given before a
+  restart are then re-quoted, never charged wrongly.

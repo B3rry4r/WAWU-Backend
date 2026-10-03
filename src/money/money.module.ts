@@ -6,6 +6,9 @@ import { MoneyHistoryController } from './history/money-history.controller';
 import { TransactionHistoryService } from './history/transaction-history.service';
 import { LedgerModule } from './ledger/ledger.module';
 import { WalletBalanceService } from './balance/wallet-balance.service';
+import { FeeSettings } from './fees/fee-config';
+import { FeeQuoteService } from './fees/fee-quote.service';
+import { MoneyFeesController } from './fees/money-fees.controller';
 import { WalletGate, WalletGateGuard } from './gate/wallet-gate';
 import { IdentityHasher } from './identity/identity-config';
 import { MoneyIdentityController } from './identity/money-identity.controller';
@@ -81,6 +84,12 @@ import { TransactionPinService } from './pin/transaction-pin.service';
  * MONEY-15: the history (`/money/transactions`, its month summary and one
  * row), behind the wallet gate, read from the ledger only; it never calls
  * Fintava.
+ *
+ * WALLET-15: the fee quote (`GET /money/fees/quote`), behind the wallet
+ * gate, from the fee schedule in config (FeeSettings, R-10). It never calls
+ * Fintava. FeeQuoteService is exported for the routes that charge what was
+ * quoted (WALLET-07, WALLET-09, MONEY-17): they fill their fees from it and
+ * check the quote the person saw with `check()`.
  */
 @Module({
   imports: [ConfigModule, FintavaModule, LedgerModule, WawuAuthModule],
@@ -93,6 +102,7 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     MoneyWalletController,
     MoneySavedAccountsController,
     MoneyHistoryController,
+    MoneyFeesController,
   ],
   providers: [
     WalletGate,
@@ -112,6 +122,8 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     BeneficiaryService,
     PayoutAccountService,
     TransactionHistoryService,
+    FeeSettings,
+    FeeQuoteService,
   ],
   exports: [
     WalletGate,
@@ -122,6 +134,8 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     WalletIdentityService,
     SelfieMatchService,
     WalletOpeningService,
+    FeeSettings,
+    FeeQuoteService,
   ],
 })
 export class MoneyModule {}
