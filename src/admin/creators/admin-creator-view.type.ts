@@ -112,9 +112,9 @@ export interface AdminCreatorVerificationView {
 export interface AdminCreatorUploadsView {
   slotsUsed: number | null;
   /**
-   * The flat per-account cap, from the shared `uploadAllowanceFor()` helper,
-   * exactly as CreatorStateService derives it. There is no longer a free/paid
-   * sub-split, so the two sub-cap fields that used to sit here are gone.
+   * The per-account cap, from the shared `uploadAllowanceFor()` helper and
+   * the creator's tick (R-7: 5, or 25 with a tick), exactly as
+   * CreatorStateService derives it. There is no free/paid sub-split.
    */
   slotsTotal: number | null;
   /** Pieces currently waiting on a moderator — the other reason "I cannot see my upload". */

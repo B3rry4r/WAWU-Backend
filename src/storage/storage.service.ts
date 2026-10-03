@@ -21,7 +21,16 @@ import {
   HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { storageAllowanceFor } from '../common/creator-allowance';
+import {
+  FREE_STORAGE_BYTES,
+  FREE_UPLOADS,
+  TICK_COLUMNS,
+  TICK_STORAGE_BYTES,
+  TICK_UPLOADS,
+  holdsTick,
+  storageAllowanceFor,
+  uploadAllowanceFor,
+} from '../common/creator-allowance';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 /**
@@ -48,6 +57,35 @@ export interface StorageUsage {
   usedBytes: number;
   limitBytes: number;
   remainingBytes: number;
+}
+
+/** One level of allowance: how many pieces, and how many bytes. */
+export interface AllowanceLevelView {
+  uploads: number;
+  storageBytes: number;
+}
+
+/**
+ * GET /uploads/allowance: what this account may upload and store, what it
+ * has used, and both levels R-7 sets, so a screen can say "Free accounts get
+ * 5" and "Up to 25 uploads" without a number of its own.
+ */
+export interface UploadAllowanceView {
+  /** True when the account holds either tick now. */
+  tickHeld: boolean;
+  uploads: {
+    /** Pieces counted against the cap (CreatorState.slotsUsed; 0 with no row). */
+    used: number;
+    /** The cap that applies now: `free.uploads` or `withTick.uploads`. */
+    allowed: number;
+    /** `allowed - used`, never below 0. */
+    remaining: number;
+  };
+  storage: StorageUsage;
+  /** R-7's allowance without a tick. */
+  free: AllowanceLevelView;
+  /** R-7's allowance with a tick. */
+  withTick: AllowanceLevelView;
 }
 
 /**
@@ -188,13 +226,29 @@ export class StorageService {
     // written before it is handed out. Signing first and recording after
     // would leave a signed URL for space the account does not have every time
     // the write failed.
-    const usage = await this.usageFor(wawuId);
+    //
+    // Only this NEW file is refused. Files already stored stay, even when the
+    // account is above its allowance (R-7 lowered free accounts from 2 GB to
+    // 1 GB, and a tick can lapse).
+    const { usage, tickHeld } = await this.usageAndTick(wawuId);
     if (usage.usedBytes + contentLength > usage.limitBytes) {
-      throw new PayloadTooLargeException(
-        `This file needs ${formatBytes(contentLength)}, but only ${formatBytes(
+      throw new PayloadTooLargeException({
+        message: `This file needs ${formatBytes(contentLength)}, but only ${formatBytes(
           Math.max(0, usage.remainingBytes),
-        )} of your ${formatBytes(usage.limitBytes)} storage is free. Delete something, or move up a plan for more space.`,
-      );
+        )} of your ${formatBytes(usage.limitBytes)} storage is free. ${
+          tickHeld
+            ? 'Delete something to make room.'
+            : 'Delete something, or get a verification tick for more space.'
+        }`,
+        reason: {
+          code: 'storage_limit_reached',
+          neededBytes: contentLength,
+          usedBytes: usage.usedBytes,
+          limitBytes: usage.limitBytes,
+          tickHeld,
+          storageBytesWithTick: TICK_STORAGE_BYTES,
+        },
+      });
     }
 
     await this.prisma.storageObject.create({
@@ -317,8 +371,10 @@ export class StorageService {
    * What this account is using, and what it is allowed.
    *
    * Every figure here has a writer: `usedBytes` is a SUM over rows created at
-   * presign time, and `limitBytes` derives from the creator tier. Neither is a
-   * stored counter, so neither can drift away from the objects it describes.
+   * presign time (the `contentLength` the upload was signed for, which the
+   * bucket itself enforces), and `limitBytes` derives from whether the
+   * account holds a tick (R-7). Neither is a stored counter, so neither can
+   * drift away from the objects it describes.
    *
    * `pending` counts toward usage alongside `confirmed`. A pending row is
    * space that has been signed for and may land at any moment; excluding it
@@ -326,28 +382,60 @@ export class StorageService {
    * seconds before the first upload finishes.
    */
   async usageFor(wawuId: string): Promise<StorageUsage> {
+    return (await this.usageAndTick(wawuId)).usage;
+  }
+
+  private async usageAndTick(
+    wawuId: string,
+  ): Promise<{ usage: StorageUsage; tickHeld: boolean }> {
     await this.reconcileStale(wawuId);
 
-    const [agg, state] = await Promise.all([
+    const [agg, profile] = await Promise.all([
       this.prisma.storageObject.aggregate({
         _sum: { bytes: true },
         where: { wawuUserId: wawuId, status: { in: ['pending', 'confirmed'] } },
       }),
-      this.prisma.creatorState.findUnique({
+      this.prisma.userProfile.findUnique({
         where: { wawuUserId: wawuId },
-        select: { wawuUserId: true },
+        select: TICK_COLUMNS,
       }),
     ]);
 
     const usedBytes = agg._sum.bytes ?? 0;
-    // Flat now. The only thing still asked of CreatorState is whether a row
-    // exists at all, which separates a creator's quota from the one a plain
-    // account gets for an avatar or a KYC document.
-    const limitBytes = storageAllowanceFor(state !== null);
+    const tickHeld = holdsTick(profile);
+    const limitBytes = storageAllowanceFor(tickHeld);
     return {
-      usedBytes,
-      limitBytes,
-      remainingBytes: Math.max(0, limitBytes - usedBytes),
+      usage: {
+        usedBytes,
+        limitBytes,
+        remainingBytes: Math.max(0, limitBytes - usedBytes),
+      },
+      tickHeld,
+    };
+  }
+
+  /**
+   * Both allowances in one answer, for the screens that show them (M11, M24,
+   * M27). Read from the same places the refusals read: the upload count from
+   * CreatorState.slotsUsed (what POST /content claims against), the bytes
+   * from usageFor, the tick from holdsTick.
+   */
+  async allowanceFor(wawuId: string): Promise<UploadAllowanceView> {
+    const [{ usage, tickHeld }, state] = await Promise.all([
+      this.usageAndTick(wawuId),
+      this.prisma.creatorState.findUnique({
+        where: { wawuUserId: wawuId },
+        select: { slotsUsed: true },
+      }),
+    ]);
+    const used = state?.slotsUsed ?? 0;
+    const allowed = uploadAllowanceFor(tickHeld).total;
+    return {
+      tickHeld,
+      uploads: { used, allowed, remaining: Math.max(0, allowed - used) },
+      storage: usage,
+      free: { uploads: FREE_UPLOADS, storageBytes: FREE_STORAGE_BYTES },
+      withTick: { uploads: TICK_UPLOADS, storageBytes: TICK_STORAGE_BYTES },
     };
   }
 

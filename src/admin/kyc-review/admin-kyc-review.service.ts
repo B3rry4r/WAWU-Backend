@@ -2,7 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StorageService } from '../../storage/storage.service';
 import { KycSubmissionService } from '../../kyc-submission/kyc-submission.service';
-import { uploadAllowanceFor } from '../../common/creator-allowance';
+import { holdsTick, uploadAllowanceFor } from '../../common/creator-allowance';
 import type { Paginated } from '../../common/interceptors/response.interceptor';
 import type { AdminKycAuditModel, KycSubmissionModel } from '../../../generated/prisma/models';
 import type { AdminUserView } from '../auth/admin-user-view.type';
@@ -395,7 +395,7 @@ export class AdminKycReviewService {
           : state.kycStatus
         : null,
       slotsUsed: state?.slotsUsed ?? null,
-      slotsTotal: state ? uploadAllowanceFor().total : null,
+      slotsTotal: state ? uploadAllowanceFor(holdsTick(profile)).total : null,
     };
   }
 
