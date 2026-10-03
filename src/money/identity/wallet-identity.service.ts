@@ -235,7 +235,7 @@ export class WalletIdentityService {
     const verifiedAt = new Date();
     // The BVN name as keyed hashes of its words, for the payout account's
     // "matches your BVN" (WALLET-14). Replaced with every passed check, so
-    // it always belongs to the check beside it; never the name itself.
+    // it always goes with the check beside it; never the name itself.
     const nameKeys = bvnNameKeys(identity, (word) =>
       this.hasher.hash('name', word),
     );

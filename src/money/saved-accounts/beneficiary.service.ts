@@ -55,7 +55,7 @@ const ROW_SELECT = {
 
 /**
  * Saved beneficiaries (task WALLET-14): W8's saved list, W12's "Save as
- * beneficiary", W35's count. Each belongs to the caller's token; no route
+ * beneficiary", W35's count. Each is the token holder's own; no route
  * names whose list it is.
  *
  * - A WAWU user is saved only when they have an open wallet (a send to
