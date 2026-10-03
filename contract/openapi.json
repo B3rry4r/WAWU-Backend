@@ -32543,6 +32543,9 @@
       "ProfessionalDirectoryEntry": {
         "type": "object",
         "properties": {
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          },
           "name": {
             "type": "string"
           },
@@ -32557,9 +32560,6 @@
           },
           "dmResponseHours": {
             "type": "number"
-          },
-          "verification": {
-            "$ref": "#/components/schemas/VerificationState"
           },
           "handle": {
             "type": "string",
@@ -32612,12 +32612,12 @@
           }
         },
         "required": [
+          "verification",
           "name",
           "id",
           "category",
           "dmEnabled",
           "dmResponseHours",
-          "verification",
           "handle",
           "avatarUrl",
           "headline",
@@ -32672,6 +32672,9 @@
           "credentialKind": {
             "type": "string"
           },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          },
           "name": {
             "type": "string"
           },
@@ -32686,9 +32689,6 @@
           },
           "dmResponseHours": {
             "type": "number"
-          },
-          "verification": {
-            "$ref": "#/components/schemas/VerificationState"
           },
           "handle": {
             "type": "string",
@@ -32744,12 +32744,12 @@
           "about",
           "issuingBody",
           "credentialKind",
+          "verification",
           "name",
           "id",
           "category",
           "dmEnabled",
           "dmResponseHours",
-          "verification",
           "handle",
           "avatarUrl",
           "headline",
