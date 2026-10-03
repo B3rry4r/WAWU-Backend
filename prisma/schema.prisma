@@ -3395,3 +3395,169 @@ model ChatMessage {
   @@unique([conversationId, senderWawuId, clientMessageId])
   @@index([conversationId, createdAt, id])
 }
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// THE LEDGER (task MONEY-10)
+///
+/// WAWU's own record of every movement of money on a Fintava wallet it
+/// knows (a person's FintavaWallet, or WAWU's merchant wallet), mirrored
+/// from Fintava in integer kobo. One row per wallet side of a movement: a
+/// send from A to B is A's `out` row and B's `in` row.
+///
+/// It is NEVER a balance. The balance is Fintava's, read on every request
+/// (MONEY-11); nothing adds these rows up and shows the result as money a
+/// person has. MONEY-15 serves these rows as the history (W26 to W28) and
+/// MONEY-16 checks them against Fintava every night.
+///
+/// Exactly once: a movement is known by several references, and which one a
+/// webhook carries is unconfirmed (BACKEND_GAPS G-19). Every reference a
+/// row is known by is a FintavaLedgerReference row whose primary key is
+/// (accountNumber, direction, value). A second sighting of the same
+/// movement on the same side collides on that key and is merged into the
+/// first row; there is no read before the write.
+/// ─────────────────────────────────────────────────────────────────────────
+enum FintavaLedgerWallet {
+  /// A person's wallet (FintavaWallet); wawuUserId is set.
+  user
+  /// WAWU's merchant wallet (R-19); wawuUserId is null.
+  merchant
+}
+
+enum FintavaLedgerDirection {
+  in
+  out
+}
+
+/// Same values as TransferStatus in the wallet contract (src/money).
+enum FintavaLedgerStatus {
+  pending
+  completed
+  failed
+  reversed
+}
+
+/// Same values as TransactionCategory in the wallet contract (src/money).
+enum FintavaLedgerCategory {
+  transfer
+  top_up
+  earning
+  purchase
+  bill
+  hold
+  refund
+  reversal
+}
+
+/// Same values as TransactionCounterpartyView.kind in the wallet contract.
+enum FintavaLedgerCounterpartyKind {
+  wawu_user
+  bank_account
+  biller
+  wawu
+}
+
+model FintavaLedgerEntry {
+  id String @id @default(uuid())
+
+  walletKind    FintavaLedgerWallet
+  /// The person whose wallet this is; null on WAWU's merchant wallet.
+  wawuUserId    String?
+  /// The Fintava wallet (NUBAN) this row is on.
+  accountNumber String
+  direction     FintavaLedgerDirection
+  status        FintavaLedgerStatus
+  category      FintavaLedgerCategory
+
+  /// What moved, before fees, in kobo. BIGINT: never a float, never naira.
+  amountKobo      BigInt
+  /// What Fintava reported it took on top of the amount (out rows; 0 on in rows).
+  feeKobo         BigInt  @default(0)
+  /// Fintava's charge and WAWU's fee as quoted to the person (R-10), set by
+  /// the task that made the movement; null when only Fintava's total is known.
+  providerFeeKobo BigInt?
+  wawuFeeKobo     BigInt?
+  /// Out: what left the wallet (amount + fees). In: what arrived.
+  totalKobo       BigInt
+
+  counterpartyKind          FintavaLedgerCounterpartyKind?
+  counterpartyName          String?
+  counterpartyWawuUserId    String?
+  counterpartyAccountNumber String?
+  counterpartyBankCode      String?
+  counterpartyBankName      String?
+
+  /// What the movement paid for (W27 "On"), set by the paying feature:
+  /// a PaymentKind from the wallet contract, its target and its title.
+  linkKind     String?
+  linkTargetId String?
+  linkTitle    String?
+  /// The person's own note on a send.
+  note         String?
+  /// Fintava's narration or description, as sent.
+  narration    String?
+
+  /// OUR CustomerReference: shown on the receipt, and the one a lookup finds.
+  customerReference    String?
+  /// Fintava's `reference` (findable by lookup).
+  fintavaReference     String?
+  /// The transfer response's `reference` (not findable by lookup).
+  tagapayTransRef      String?
+  fintavaTransactionId String?
+  sessionId            String?
+
+  /// The feature's own records, when a transfer or payment made this row.
+  transferId String?
+  paymentId  String?
+
+  /// A debit that came back (`debit_transfer_reversal`): the row's status
+  /// becomes `reversed` and these hold what Fintava reported. Never a
+  /// second row.
+  reversalReference   String?
+  reversalAmountKobo  BigInt?
+  reversalChargesKobo BigInt?
+  reversalTotalKobo   BigInt?
+  reversedAt          DateTime?
+
+  /// Why a movement failed, when Fintava said so.
+  failureReason String?
+  /// Set when a later sighting of this movement disagreed with what is
+  /// stored (an amount): the stored figure is kept and MONEY-16 reports it.
+  discrepancy   String?
+
+  /// How the ledger first learned of it: send, webhook, lookup or history.
+  source        String
+  /// The webhook event that created the row, when one did.
+  sourceEventId String?
+
+  /// When the money moved: Fintava's time when it gave one, else first seen.
+  occurredAt  DateTime
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  references FintavaLedgerReference[]
+
+  @@index([wawuUserId, occurredAt])
+  @@index([accountNumber, occurredAt])
+  @@index([status, occurredAt])
+  @@index([customerReference])
+}
+
+/// Every reference one ledger row is known by. The primary key is the
+/// exactly-once rule: one movement, one side, one row.
+model FintavaLedgerReference {
+  /// The side: the row's wallet and direction.
+  accountNumber String
+  direction     FintavaLedgerDirection
+  /// The reference text, exactly as Fintava or WAWU wrote it.
+  value         String
+  /// ours, fintava, tagapay, transaction_id, session, delivery
+  kind          String
+  entryId       String
+  entry         FintavaLedgerEntry     @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  createdAt     DateTime               @default(now())
+
+  @@id([accountNumber, direction, value])
+  @@index([entryId])
+  @@index([value])
+}

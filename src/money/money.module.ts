@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { FintavaModule } from '../fintava/fintava.module';
 import { MoneyBalanceController } from './balance/money-balance.controller';
+import { LedgerModule } from './ledger/ledger.module';
 import { WalletBalanceService } from './balance/wallet-balance.service';
 import { IdentityHasher } from './identity/identity-config';
 import { MoneyIdentityController } from './identity/money-identity.controller';
@@ -26,6 +27,9 @@ import { TransactionPinService } from './pin/transaction-pin.service';
  * unconfigured and the balance answers 503); the settings are needed for the
  * wallet to work (deploy/README.md step 4).
  *
+ * MONEY-10: the ledger (LedgerModule), fed from the stored Fintava
+ * deliveries by a sweep. It adds no route.
+ *
  * KYC-01: Open your wallet's identity step (`/money/identity`), the BVN
  * check through the same client. WalletIdentityService is exported for the
  * steps after it (KYC-02, MONEY-12), which check the BVN and NIN they are
@@ -36,7 +40,7 @@ import { TransactionPinService } from './pin/transaction-pin.service';
  * opening (MONEY-12), which needs the selfie to have matched.
  */
 @Module({
-  imports: [ConfigModule, FintavaModule],
+  imports: [ConfigModule, FintavaModule, LedgerModule],
   controllers: [
     MoneyPinController,
     MoneyBalanceController,
