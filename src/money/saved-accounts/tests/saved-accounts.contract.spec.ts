@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { inspect } from 'node:util';
@@ -37,6 +37,7 @@ import type {
   WalletView,
 } from '../../money-view.type';
 import {
+  BANK_LIST_TTL_MS,
   BANK_UNREACHABLE_MESSAGE,
   BankAccountCheckService,
   NAME_CHECK_FAILED_MESSAGE,
@@ -387,9 +388,16 @@ describe('Saved beneficiaries and the payout account (WALLET-14) over HTTP', () 
       const row = await prisma.walletIdentity.findUniqueOrThrow({
         where: { wawuUserId: who.id },
       });
+      // Each word bound to this person and this check (round 2, defect 1).
+      const scope = `${who.id}:${row.bvnVerifiedAt!.toISOString()}`;
       expect(row.bvnNameKeys).toEqual({
-        first: [hasher.hash('name', 'CHIDINMA'), hasher.hash('name', 'ADAEZE')],
-        last: [hasher.hash('name', 'OKOROWAWU')],
+        v: 2,
+        check: hasher.hash('name', `check:${scope}`),
+        first: [
+          hasher.hash('name', `${scope}:CHIDINMA`),
+          hasher.hash('name', `${scope}:ADAEZE`),
+        ],
+        last: [hasher.hash('name', `${scope}:OKOROWAWU`)],
       });
       // Every text column of every table: the name words are nowhere.
       const columns = await prisma.$queryRawUnsafe<
@@ -410,6 +418,110 @@ describe('Saved beneficiaries and the payout account (WALLET-14) over HTTP', () 
         if (Number(n) > 0) hits.push(`${table_name}.${column_name}`);
       }
       expect(hits).toEqual([]);
+    });
+
+    it('two people with the same name get different keys, so the tables alone cannot link a key to a name (defect 1)', async () => {
+      // Three people named Ada: two save payout accounts in their own
+      // name, one (Ada Bello) never saves anything. A reader of the
+      // database without IDENTITY_HASH_KEY joins every key to the plain
+      // names stored beside it, as the verifier's probe did.
+      const people = [
+        await verified({ first_name: 'Ada', last_name: 'Bello' }),
+        await verified({ first_name: 'Ada', last_name: 'Sandbox' }),
+        await verified({ first_name: 'Ada', last_name: 'Okorowawu' }),
+      ];
+      for (const [who, name] of [
+        [people[1], 'SANDBOX ADA'],
+        [people[2], 'ADA OKOROWAWU'],
+      ] as const) {
+        bank({ status: 200, body: nameAnswer(name) });
+        const res = body<PayoutAccountView>(
+          await putPayout(who, {
+            bankCode: GTB,
+            accountNumber: STUB_ACCOUNT,
+          }).expect(200),
+        );
+        expect(res.data?.matchesBvnName).toBe(true);
+      }
+      const rows = await prisma.walletIdentity.findMany({
+        where: { wawuUserId: { in: people.map((p) => p.id) } },
+      });
+      const keysOf = (id: string) => {
+        const k = rows.find((r) => r.wawuUserId === id)!.bvnNameKeys as {
+          first: string[];
+          last: string[];
+        };
+        return [...k.first, ...k.last];
+      };
+      // The first name "Ada" is a different key for each of them.
+      const adaKeys = people.map((p) => keysOf(p.id)[0]);
+      expect(new Set(adaKeys).size).toBe(3);
+      // No key appears in two people's rows, so co-occurrence across
+      // people (the probe's join) has nothing to count.
+      const all = people.flatMap((p) => keysOf(p.id));
+      expect(new Set(all).size).toBe(all.length);
+      // And no key is what a name word hashes to on its own, or bound to
+      // anyone else: one key is only ever comparable within its own row.
+      for (const word of ['ADA', 'BELLO', 'SANDBOX', 'OKOROWAWU']) {
+        expect(all).not.toContain(hasher.hash('name', word));
+      }
+      // The keyless join itself: for every stored key, the people whose
+      // row holds it. Each key is held by exactly one person, so a key can
+      // never be matched to the plain names of others.
+      const holders = await prisma.$queryRawUnsafe<
+        Array<{ key: string; n: bigint }>
+      >(
+        `SELECT k.key, count(DISTINCT w."wawuUserId") AS n
+           FROM "WalletIdentity" w,
+                jsonb_array_elements_text((w."bvnNameKeys"->'first') || (w."bvnNameKeys"->'last')) AS k(key)
+          WHERE w."wawuUserId" = ANY($1::text[])
+          GROUP BY k.key`,
+        people.map((p) => p.id),
+      );
+      expect(holders.length).toBe(all.length);
+      expect(holders.every((h) => Number(h.n) === 1)).toBe(true);
+    });
+
+    it('keys of the first scheme, or written under another IDENTITY_HASH_KEY, read as null, never as a mismatch', async () => {
+      const who = await verified();
+      bank({ status: 200, body: nameAnswer('SANDBOX ADA') });
+      await putPayout(who, {
+        bankCode: GTB,
+        accountNumber: STUB_ACCOUNT,
+      }).expect(200);
+      const read = async () =>
+        body<PayoutAccountView>(await getPayout(who).expect(200)).data!
+          .matchesBvnName;
+      expect(await read()).toBe(true);
+
+      const row = await prisma.walletIdentity.findUniqueOrThrow({
+        where: { wawuUserId: who.id },
+      });
+      const scope = `${who.id}:${row.bvnVerifiedAt!.toISOString()}`;
+      const otherKey = (value: string) =>
+        createHmac('sha256', `${HASH_KEY}-rotated`)
+          .update(`name:${value}`)
+          .digest('hex');
+      for (const stored of [
+        // Round 1's scheme: the word alone, nothing bound.
+        {
+          first: [hasher.hash('name', 'ADA')],
+          last: [hasher.hash('name', 'SANDBOX')],
+        },
+        // The right shape under a key that has since changed.
+        {
+          v: 2,
+          check: otherKey(`check:${scope}`),
+          first: [otherKey(`${scope}:ADA`)],
+          last: [otherKey(`${scope}:SANDBOX`)],
+        },
+      ]) {
+        await prisma.walletIdentity.update({
+          where: { wawuUserId: who.id },
+          data: { bvnNameKeys: stored },
+        });
+        expect(await read()).toBeNull();
+      }
     });
 
     it('a record without a first or last name keeps no keys', async () => {
@@ -697,6 +809,51 @@ describe('Saved beneficiaries and the payout account (WALLET-14) over HTTP', () 
       expect(nameChecks()).toHaveLength(2);
     });
 
+    it('the bank list is asked for once for saves sent at the same moment, then kept for an hour', async () => {
+      const people = await Promise.all(
+        Array.from({ length: 10 }, () => withWallet()),
+      );
+      const state = checker as unknown as {
+        banks: { at: number } | null;
+      };
+      state.banks = null;
+      double.on('GET', '/banks', {
+        status: 200,
+        body: BANK_LIST,
+        delayMs: 100,
+      });
+      double.on('GET', '/name/enquiry', {
+        status: 200,
+        body: nameAnswer('SIMI MICHELLE'),
+      });
+      const results = await Promise.all(
+        people.map((who) =>
+          putPayout(who, { bankCode: GTB, accountNumber: STUB_ACCOUNT }),
+        ),
+      );
+      expect(results.map((r) => r.status)).toEqual(people.map(() => 200));
+      expect(bankLists()).toHaveLength(1);
+
+      // Just inside the hour: still kept.
+      state.banks!.at = Date.now() - BANK_LIST_TTL_MS + 60_000;
+      await putPayout(people[0], {
+        bankCode: GTB,
+        accountNumber: STUB_ACCOUNT,
+      }).expect(200);
+      expect(bankLists()).toHaveLength(1);
+      // Past the hour: asked again, once.
+      state.banks!.at = Date.now() - BANK_LIST_TTL_MS - 1;
+      await putPayout(people[0], {
+        bankCode: GTB,
+        accountNumber: STUB_ACCOUNT,
+      }).expect(200);
+      await putPayout(people[1], {
+        bankCode: GTB,
+        accountNumber: STUB_ACCOUNT,
+      }).expect(200);
+      expect(bankLists()).toHaveLength(2);
+    });
+
     it('refuses a bank code or account number in any other form (400, nothing sent)', async () => {
       const who = await withWallet();
       bank();
@@ -953,6 +1110,69 @@ describe('Saved beneficiaries and the payout account (WALLET-14) over HTTP', () 
       expect((await wallet()).beneficiaryCount).toBe(1);
       const left = body<BeneficiaryView[]>(await list(who)).data!;
       expect(left.map((x) => x.kind)).toEqual(['bank_account']);
+    });
+
+    it('a saved person whose account is gone holds no place: the cap counts what the list shows (defect 2)', async () => {
+      const who = await withWallet();
+      await prisma.moneyBeneficiary.createMany({
+        data: Array.from({ length: BENEFICIARIES_MAX - 1 }, (_, i) => ({
+          ownerWawuId: who.id,
+          kind: 'bank_account',
+          bankCode: GTB,
+          bankName: 'GTBANK PLC',
+          accountNumber: `77${String(i).padStart(8, '0')}`,
+          accountName: 'SIMI MICHELLE',
+        })),
+      });
+      const them = await recipient('Soon', 'Deleted');
+      await save(who, { kind: 'wawu_user', wawuUserId: them.id }).expect(201);
+      expect(body<BeneficiaryView[]>(await list(who)).data).toHaveLength(
+        BENEFICIARIES_MAX,
+      );
+      bank((req) => ({
+        status: 200,
+        body: nameAnswer('SIMI MICHELLE', {
+          accountNumber: req.query.accountNumber,
+        }),
+      }));
+      // Full: the next save is refused.
+      expectRefusal(
+        await save(who, {
+          kind: 'bank_account',
+          bankCode: GTB,
+          accountNumber: '8800000001',
+        }),
+        409,
+        'beneficiary_limit_reached',
+      );
+
+      // Their account is deleted: the purge takes their wallet row and
+      // keeps the saver's row (COUNTERPARTY). The list shows 49 ...
+      await prisma.fintavaWallet.delete({ where: { wawuUserId: them.id } });
+      expect(body<BeneficiaryView[]>(await list(who)).data).toHaveLength(
+        BENEFICIARIES_MAX - 1,
+      );
+      // ... and the 50th place is free again, under the same lock: two
+      // saves at once, one gets it.
+      const results = await Promise.all(
+        ['8800000002', '8800000003'].map((accountNumber) =>
+          save(who, { kind: 'bank_account', bankCode: GTB, accountNumber }),
+        ),
+      );
+      expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
+      const shown = body<BeneficiaryView[]>(await list(who)).data!;
+      expect(shown).toHaveLength(BENEFICIARIES_MAX);
+      const wallet = body<WalletView>(
+        await authed(http().get('/api/hub/money/wallet'), who).expect(200),
+      ).data!;
+      expect(wallet.beneficiaryCount).toBe(BENEFICIARIES_MAX);
+      // Every visible place can be removed, and removing one frees one.
+      await remove(who, shown[0].id).expect(200);
+      await save(who, {
+        kind: 'bank_account',
+        bankCode: GTB,
+        accountNumber: '8800000004',
+      }).expect(201);
     });
 
     it('two saves of the same place at the same moment keep one row', async () => {

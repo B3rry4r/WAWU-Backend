@@ -3427,11 +3427,15 @@ model WalletIdentity {
   /// Typed on A5.
   occupation    String?
   /// The BVN record's first and last name as keyed hashes, one per word
-  /// (WALLET-14): `{ "first": [hex...], "last": [hex...] }`, each word
-  /// HMAC-SHA256 under IDENTITY_HASH_KEY. Written with every passed check,
-  /// null when Fintava gave no first or last name in a form we read. Never
-  /// the name itself. Read only to compare a payout account's name with the
-  /// BVN name (A21, `PayoutAccountView.matchesBvnName`).
+  /// (WALLET-14): `{ "v": 2, "check": hex, "first": [hex...], "last":
+  /// [hex...] }`, each word HMAC-SHA256 under IDENTITY_HASH_KEY over
+  /// `name:<wawuUserId>:<bvnVerifiedAt>:<WORD>`, so the same word differs
+  /// across people and checks and no hash can be matched to a name stored
+  /// elsewhere without the key. Written with every passed check, null when
+  /// Fintava gave no first or last name in a form we read. Never the name
+  /// itself. Read only to compare a payout account's name with the BVN name
+  /// (A21, `PayoutAccountView.matchesBvnName`); any other shape, or a
+  /// `check` that does not recompute, reads as no BVN name.
   bvnNameKeys   Json?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt

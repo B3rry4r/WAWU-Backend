@@ -195,9 +195,9 @@ export class BeneficiaryService {
     try {
       const row = await this.prisma.$transaction(async (tx) => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`beneficiaries:${owner}`}, 0))`;
-        const held = await tx.moneyBeneficiary.count({
-          where: { ownerWawuId: owner },
-        });
+        // The places the list shows, counted under the lock: a saved person
+        // whose account is gone holds none (round 2, defect 2).
+        const held = await countVisible(tx, owner);
         if (held >= BENEFICIARIES_MAX) {
           throw new MoneyError(
             'beneficiary_limit_reached',
@@ -230,9 +230,7 @@ export class BeneficiaryService {
   }
 
   private async assertRoom(owner: string): Promise<void> {
-    const held = await this.prisma.moneyBeneficiary.count({
-      where: { ownerWawuId: owner },
-    });
+    const held = await countVisible(this.prisma, owner);
     if (held >= BENEFICIARIES_MAX) {
       throw new MoneyError(
         'beneficiary_limit_reached',
@@ -339,33 +337,55 @@ export class BeneficiaryService {
   }
 }
 
+/** What the visibility rule reads: the service's client, or one inside a transaction. */
+type BeneficiaryReader = Pick<
+  PrismaService,
+  'moneyBeneficiary' | 'fintavaWallet'
+>;
+
 /**
- * The rows the list shows, newest first: every bank account, and a WAWU
- * user only while they have a wallet. `WalletView.beneficiaryCount` (W35)
- * counts these same rows, so the count and the list always agree.
+ * The rows the list shows, newest first, at most BENEFICIARIES_MAX: every
+ * bank account, and a WAWU user only while they have a wallet (a deleted
+ * account keeps none). `WalletView.beneficiaryCount` (W35) and the cap
+ * count these same rows, so the count, the cap and the list always agree,
+ * and nobody holds a place they cannot see or remove (round 2, defect 2).
+ * The rows hidden this way are few (one per saved person whose account was
+ * deleted), so all of the person's rows are read and filtered here.
  */
 export async function visibleBeneficiaries(
-  prisma: PrismaService,
+  prisma: BeneficiaryReader,
   owner: string,
 ): Promise<BeneficiaryRow[]> {
   const rows = await prisma.moneyBeneficiary.findMany({
     where: { ownerWawuId: owner },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-    take: BENEFICIARIES_MAX,
     select: ROW_SELECT,
   });
   const people = rows
     .map((r) => r.recipientWawuId)
     .filter((id): id is string => id !== null);
-  if (people.length === 0) return rows;
-  const wallets = await prisma.fintavaWallet.findMany({
-    where: { wawuUserId: { in: people } },
-    select: { wawuUserId: true },
-  });
-  const held = new Set(wallets.map((w) => w.wawuUserId));
-  return rows.filter(
-    (r) => r.kind !== 'wawu_user' || held.has(r.recipientWawuId ?? ''),
-  );
+  const held =
+    people.length === 0
+      ? new Set<string>()
+      : new Set(
+          (
+            await prisma.fintavaWallet.findMany({
+              where: { wawuUserId: { in: people } },
+              select: { wawuUserId: true },
+            })
+          ).map((w) => w.wawuUserId),
+        );
+  return rows
+    .filter((r) => r.kind !== 'wawu_user' || held.has(r.recipientWawuId ?? ''))
+    .slice(0, BENEFICIARIES_MAX);
+}
+
+/** How many places the person holds: the rows the list shows. */
+async function countVisible(
+  prisma: BeneficiaryReader,
+  owner: string,
+): Promise<number> {
+  return (await visibleBeneficiaries(prisma, owner)).length;
 }
 
 function isUniqueViolation(e: unknown): boolean {

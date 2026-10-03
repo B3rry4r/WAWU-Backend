@@ -35,7 +35,9 @@ const PAYOUT_SELECT = {
  * the withdrawal does with a flagged account is WALLET-05's and WALLET-09's
  * (mobile repo BACKEND_GAPS G-46). `null` means there is no BVN name to
  * compare with: no passed check kept one, the check behind the wallet is
- * not the one that kept it, or IDENTITY_HASH_KEY is not set.
+ * not the one that kept it, IDENTITY_HASH_KEY is not set or has changed
+ * since, or the keys are of the first scheme (round 1, not bound to the
+ * person).
  */
 @Injectable()
 export class PayoutAccountService {
@@ -105,10 +107,12 @@ export class PayoutAccountService {
     ]);
     if (!identity?.bvnVerifiedAt || !identity.bvnHash) return null;
     if (opening && opening.bvnHash !== identity.bvnHash) return null;
-    const keys = readBvnNameKeys(identity.bvnNameKeys);
+    const hash = (value: string) => this.hasher.hash('name', value);
+    const binding = { wawuUserId, verifiedAt: identity.bvnVerifiedAt };
+    // Keys of another scheme, another check or another IDENTITY_HASH_KEY
+    // read as null: they cannot be compared, which is not a mismatch.
+    const keys = readBvnNameKeys(identity.bvnNameKeys, hash, binding);
     if (!keys) return null;
-    return accountNameMatches(keys, accountName, (word) =>
-      this.hasher.hash('name', word),
-    );
+    return accountNameMatches(keys, accountName, hash, binding);
   }
 }

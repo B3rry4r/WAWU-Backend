@@ -709,7 +709,8 @@ one retry at a time per payment.
   gate's own rule). Every answer is `no-store`.
 - **A bank account is the bank's word, never the app's.** Before a bank
   account is saved (as a beneficiary or the payout account), its bank code
-  must be in Fintava's bank list (`GET /banks`, kept in memory for an hour)
+  must be in Fintava's bank list (`GET /banks`, kept in memory for an hour,
+  fetched once however many saves arrive while it is being fetched)
   and Fintava's name check (`GET /name/enquiry`, free) must confirm it:
   `data.status` true, `responseCode` `"00"`, a non-empty name and the same
   account number. The name saved is the one the bank returned. A body that
@@ -718,11 +719,18 @@ one retry at a time per payment.
   name_check_failed` and nothing is saved; Fintava not answering (or the
   key refused) is `503 provider_unreachable` with `retryAfterSeconds`.
 - **The BVN name.** The BVN check (KYC-01) keeps, with every passed check,
-  the keyed hash (HMAC-SHA256 under `IDENTITY_HASH_KEY`, `name:<WORD>`) of
-  each word of the BVN record's first and last name
-  (`WalletIdentity.bvnNameKeys`, `{ first: [...], last: [...] }`); a record
-  without a readable first or last name keeps null. A word is the name in
-  capitals A to Z, accents taken off, split on anything else.
+  the keyed hash of each word of the BVN record's first and last name,
+  bound to the person and the check: HMAC-SHA256 under `IDENTITY_HASH_KEY`
+  over `name:<wawuUserId>:<bvnVerifiedAt>:<WORD>`
+  (`WalletIdentity.bvnNameKeys`, `{ v: 2, check, first: [...], last: [...]
+  }`; `check` is the same HMAC over `name:check:<wawuUserId>:<bvnVerifiedAt>`).
+  Only one person's keys are ever compared, with that person's own payout
+  account, so the same word hashes differently for every person and every
+  check: a reader of the database without the key cannot match a hash to a
+  name stored in plain text elsewhere (a payout account, a beneficiary, a
+  wallet's account name). A record without a readable first or last name
+  keeps null. A word is the name in capitals A to Z, accents taken off,
+  split on anything else.
 - **`matchesBvnName`** is worked out on every read of the payout account:
   true when every word of the BVN's first name and of its last name is a
   word of the bank's account name, in any order (the middle name is not
@@ -730,17 +738,20 @@ one retry at a time per payment.
   owner may override. `false` is A21's flag: the account is saved and
   shown as not matching, not refused (mobile repo BACKEND_GAPS G-46 for
   what a withdrawal does with it). `null` when there is nothing to compare
-  with: no passed check, no name kept, `IDENTITY_HASH_KEY` unset, or the
+  with: no passed check, no name kept, `IDENTITY_HASH_KEY` unset, the
   wallet opened under a different BVN check (`FintavaWalletOpening.bvnHash`)
-  than the one that kept the name.
+  than the one that kept the name, or keys that cannot be compared (the
+  first scheme's unbound `{ first, last }`, or a `check` that does not
+  recompute because the key changed): never `false` for those.
 - **Beneficiaries.** A WAWU user is saved only with an open wallet (`409
   recipient_has_no_wallet`; no such person `404 recipient_not_found`;
   yourself `400 self_transfer`), and shows their name from WAWU ID and
   handle, avatar and tick from the profile, read on every list. Saving a
   place already saved answers the row already there (unique per person and
   place, also under parallel saves). At most `BENEFICIARIES_MAX` (50,
-  PROVISIONAL) per person, counted under a per-person lock, so parallel
-  saves cannot pass it: `409 beneficiary_limit_reached`. Removing is by id
+  PROVISIONAL) per person, counting the rows the list shows (a saved
+  person whose account is gone holds no place), under a per-person lock,
+  so parallel saves cannot pass it: `409 beneficiary_limit_reached`. Removing is by id
   among the caller's own rows: someone else's id, or one already gone,
   removes nothing and answers the same 200. A saved WAWU user whose wallet
   is gone (a deleted account) leaves the list, and `WalletView.beneficiaryCount`
