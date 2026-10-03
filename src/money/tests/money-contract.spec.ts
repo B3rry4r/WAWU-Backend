@@ -42,6 +42,13 @@ const SERVED_MONEY_ROUTES: Record<string, string> = {
   'DELETE /api/hub/money/beneficiaries/{id}': 'WALLET-14',
   'GET /api/hub/money/payout-account': 'WALLET-14',
   'PUT /api/hub/money/payout-account': 'WALLET-14',
+  'POST /api/hub/money/pin/reset': 'MONEY-14',
+  'POST /api/hub/money/pin/reset/confirm': 'MONEY-14',
+  'GET /api/hub/money/device': 'MONEY-14',
+  'PUT /api/hub/money/device': 'MONEY-14',
+  'DELETE /api/hub/money/device': 'MONEY-14',
+  'POST /api/hub/money/device/challenge': 'MONEY-14',
+  'POST /api/hub/money/approval/verify': 'MONEY-14',
 };
 
 type ModuleRef =

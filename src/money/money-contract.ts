@@ -62,6 +62,10 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   account_not_opened: 422,
   // Default (agent), owner may override: 409, as identity_has_wallet.
   phone_held_by_other_identity: 409,
+  reset_codes_exhausted: 429,
+  // Never 401 (that signs the person out) and never a PIN code: a refused
+  // biometric approval uses up no PIN try (R-26).
+  device_approval_refused: 403,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */
@@ -138,6 +142,40 @@ export function TransactionPinHeader(): MethodDecorator {
     description:
       'The four-digit transaction PIN. Only ever in this header: never in a URL, a body or a log.',
     schema: { type: 'string', pattern: '^[0-9]{4}$' },
+  });
+}
+
+/**
+ * The two ways to approve, documented together on a route that takes either
+ * (MONEY-14; CONVENTIONS.md section 5, "Approving with a fingerprint or a
+ * face"): the PIN, or a biometric approval from the registered phone. Each
+ * is optional on its own; the route refuses a request with neither
+ * (`403 pin_required`).
+ */
+export function ApprovalHeaders(): MethodDecorator {
+  return applyDecorators(
+    ApiHeader({
+      name: 'X-Transaction-Pin',
+      required: false,
+      description:
+        'The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.',
+      schema: { type: 'string', pattern: '^[0-9]{4}$' },
+    }),
+    DeviceApprovalHeader(),
+  );
+}
+
+/** A biometric approval from the registered phone, in place of the PIN (MONEY-14). */
+function DeviceApprovalHeader(): MethodDecorator {
+  return ApiHeader({
+    name: 'X-Device-Approval',
+    required: false,
+    description:
+      "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+    schema: {
+      type: 'string',
+      pattern: '^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$',
+    },
   });
 }
 

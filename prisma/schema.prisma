@@ -3129,6 +3129,94 @@ model TransactionPin {
 }
 
 /// ─────────────────────────────────────────────────────────────────────────
+/// RESETTING THE TRANSACTION PIN BY A CODE TO THE PHONE (task MONEY-14, W37)
+///
+/// One row per code texted (or about to be texted) to the phone the BVN
+/// check proved (WalletIdentity.verifiedPhone, G-11). Its id is the
+/// `resetId` the app sends back with the code. The code itself is never
+/// stored: only its argon2id hash, like the PIN. Rows are kept for the
+/// rolling 24 hours the daily text limit counts over, and go with the
+/// account (account purge, OWNED).
+///
+/// `sendState`:
+///   sending   the row is written; the text is being sent
+///   sent      Fintava accepted the text
+///   unknown   Fintava's answer was lost: the text may have gone, so the
+///             code stays usable and the row counts toward the limit; it is
+///             never sent again blindly
+///   failed    Fintava refused or nothing was sent: the code never works and
+///             the row does not count
+/// ─────────────────────────────────────────────────────────────────────────
+model TransactionPinReset {
+  id                String    @id @default(uuid())
+  wawuUserId        String
+  /// E.164, the proved phone the code went to (WalletIdentity.verifiedPhone).
+  phone             String
+  /// argon2id of the code. The code itself is never stored or logged.
+  codeHash          String
+  /// Wrong codes on this reset. Counted before the code is compared, so codes
+  /// sent at the same moment cannot get past the limit together.
+  failedTries       Int       @default(0)
+  sendState         String    @default("sending")
+  expiresAt         DateTime
+  /// When a new code may be asked for (W37's countdown).
+  resendAvailableAt DateTime
+  /// Set once the code was right and the new PIN stored: a code works once.
+  usedAt            DateTime?
+  /// Set when a newer code replaced this one: only the newest code works.
+  supersededAt      DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([wawuUserId, createdAt])
+  @@index([phone, createdAt])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// THE PHONE THAT MAY APPROVE WITH A FINGERPRINT OR A FACE (task MONEY-14)
+///
+/// W11, W35 (R-26): a biometric approval on a known phone counts as the PIN.
+/// The phone makes a P-256 key pair whose private half only its biometric
+/// unlocks, and registers the public half here with the PIN. An approval is
+/// that key's signature over a one-time challenge and the exact request
+/// (DeviceApprovalChallenge): the server checks the signature, never a
+/// client "true". One phone per person: the primary key is the person, so
+/// registering another phone replaces this one (and its `deviceId`, so the
+/// old phone's challenges stop working). Turning it off deletes the row, and
+/// so does a PIN reset by code. Holds no secret: a public key.
+/// ─────────────────────────────────────────────────────────────────────────
+model ApprovalDevice {
+  wawuUserId  String    @id
+  /// New on every registration; the app keeps it to know this phone is the one.
+  deviceId    String    @unique @default(uuid())
+  /// SubjectPublicKeyInfo (DER) of a P-256 key, base64url.
+  publicKey   String
+  /// What the phone approves with: `fingerprint` or `face` (W35's label).
+  biometric   String
+  /// The last approval that passed.
+  lastUsedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+/// One challenge for one biometric approval (task MONEY-14): random, short
+/// lived, tied to the person and the phone it was issued for, and used up by
+/// the first approval that names it, right or wrong.
+model ApprovalChallenge {
+  id          String    @id @default(uuid())
+  wawuUserId  String
+  /// ApprovalDevice.deviceId when the challenge was issued.
+  deviceId    String
+  /// 32 random bytes, base64url. Not a secret: only the phone's key can sign it.
+  challenge   String
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([wawuUserId, createdAt])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
 /// THE NAIRA WALLET AT FINTAVA (table added by task MONEY-11)
 ///
 /// WAWU's pointer to a person's account at Fintava (Loma Bank's licence,

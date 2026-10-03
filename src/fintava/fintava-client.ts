@@ -622,6 +622,11 @@ export class FintavaClient {
        * without buffering or parsing the rest.
        */
       maxAnswerBytes?: number;
+      /**
+       * Strings masked out of anything Fintava's answer puts in an error or
+       * a log, beside the key: a text message's code (MONEY-14).
+       */
+      mask?: string[];
     } = {},
   ): Promise<Answer> {
     if (this.#apiKey === '' || this.settings.environment === 'unconfigured') {
@@ -712,7 +717,7 @@ export class FintavaClient {
       httpStatus: res.status,
       body,
       call: op.call,
-      secrets: [this.#apiKey],
+      secrets: [this.#apiKey, ...(opts.mask ?? [])],
     });
     const quiet: FintavaErrorKind[] = [
       'auth',
@@ -1883,5 +1888,40 @@ export class FintavaClient {
       },
     });
     return this.readBill(op, answer);
+  }
+
+  // -------------------------------------------------------------------------
+  // 10. Text messages (MONEY-14: the PIN reset code)
+  // -------------------------------------------------------------------------
+
+  /**
+   * `POST /sms/send` (`{ to, sms }`, the number with its country code; mobile
+   * repo `docs/fintava/reference/send-sms.md`). Charged per text
+   * (`docs/fintava/fees.md`). Resolves once Fintava accepted the text.
+   *
+   * A write: the text may have gone out although the answer was lost, so a
+   * timeout, a 5xx or a dropped connection is `outcome_unknown` and the
+   * caller never sends again blindly. A refusal (4xx), a missing key or a
+   * 2xx whose body carries an error status is a text that was not sent.
+   * `text` never reaches a log or an error: it is masked out of anything
+   * Fintava's answer says, and only the operation and status are logged.
+   */
+  async sendSms(phone: string, text: string): Promise<void> {
+    const op: Op = { name: 'send SMS', method: 'POST', call: 'write' };
+    const local = this.phone(op, phone);
+    if (text.trim() === '') throw this.refuse(op, 'the text is empty');
+    const answer = await this.request(op, '/sms/send', {
+      body: { to: `+234${local.slice(1)}`, sms: text },
+      mask: [text, ...(text.match(/\d{4,}/g) ?? [])],
+    });
+    // Fintava answers some refusals with a 2xx and the real status in the
+    // body (`sandbox/21-bills-cable.md`): not a text that went out.
+    const body = isObj(answer.body) ? answer.body : {};
+    const said = [body.status, body.statusCode].find(
+      (v) => typeof v === 'number',
+    );
+    if (typeof said === 'number' && said >= 400) {
+      throw this.fail(op, { kind: 'refused', status: answer.status });
+    }
   }
 }

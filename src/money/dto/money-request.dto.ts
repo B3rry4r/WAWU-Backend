@@ -15,6 +15,8 @@ import {
   ValidateIf,
 } from 'class-validator';
 import {
+  APPROVAL_BIOMETRICS,
+  type ApprovalBiometricKind,
   BENEFICIARY_KINDS,
   type BeneficiaryKind,
   FEE_QUOTE_KINDS,
@@ -111,6 +113,28 @@ export class ConfirmPinResetDto {
   @ApiProperty({ pattern: PIN_PATTERN.source })
   @Matches(PIN_PATTERN, { message: PIN_MESSAGE })
   newPinConfirmation!: string;
+}
+
+/**
+ * PUT /money/device: register this phone's key for biometric approval (W35,
+ * MONEY-14). The current PIN goes in X-Transaction-Pin.
+ */
+export class RegisterApprovalDeviceDto {
+  /**
+   * The public half of a P-256 key the phone made, as SubjectPublicKeyInfo
+   * (DER), base64url without padding. Its private half stays on the phone,
+   * unlocked only by the phone's biometric.
+   */
+  @ApiProperty({ pattern: '^[A-Za-z0-9_-]{80,200}$' })
+  @Matches(/^[A-Za-z0-9_-]{80,200}$/, {
+    message: 'publicKey is a P-256 public key (SPKI DER, base64url).',
+  })
+  publicKey!: string;
+
+  /** What the phone approves with, for W35's label. */
+  @ApiProperty({ enum: APPROVAL_BIOMETRICS })
+  @IsIn(APPROVAL_BIOMETRICS, { message: 'biometric is fingerprint or face.' })
+  biometric!: ApprovalBiometricKind;
 }
 
 /* ------------------------------------------------------------------ */
