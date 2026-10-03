@@ -564,14 +564,20 @@ describe('nothing secret leaves the server', () => {
         },
       }),
     );
-    // Ids and times are not secrets, and their digit groups could look like a PIN.
+    // Ids, times, durations, ports and process ids are not secrets, and
+    // their digits could look like a PIN (a busy run once logged a duration
+    // that matched one).
     const plain = (text: string) =>
       text
         .replace(
           /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
           'ID',
         )
-        .replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g, 'TIME');
+        .replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g, 'TIME')
+        .replace(/\d{1,2}\/\d{1,2}\/\d{4}, \d{1,2}:\d{2}:\d{2}/g, 'TIME')
+        .replace(/\b\d+ ?ms\b/g, 'DURATION')
+        .replace(/(127\.0\.0\.1|localhost):\d+/g, 'HOST')
+        .replace(/\[Nest\] \d+/g, '[Nest] PID');
     const leaks = [...secrets].filter(
       (s) =>
         new RegExp(`(^|\\D)${s}(\\D|$)`).test(plain(logs)) ||
