@@ -20627,6 +20627,252 @@
         "x-wawu-built-by": "MONEY-12"
       }
     },
+    "/api/hub/money/transactions": {
+      "get": {
+        "operationId": "MoneyHistoryController_list",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Rows per page, 1 to 100.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "filter",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": "all",
+              "type": "string",
+              "enum": [
+                "all",
+                "money_in",
+                "money_out",
+                "bills",
+                "content"
+              ]
+            }
+          },
+          {
+            "name": "month",
+            "required": false,
+            "in": "query",
+            "description": "Only rows from this month, YYYY-MM in Africa/Lagos time (W28 \"Bills in September\").",
+            "schema": {
+              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "required": false,
+            "in": "query",
+            "description": "Free-text search over the counterparty's name, the description, the\nnote and the reference. Spaces around it are dropped first; what is\nleft must be 2 to 60 characters.",
+            "schema": {
+              "minLength": 2,
+              "maxLength": 60,
+              "type": "string"
+            }
+          },
+          {
+            "name": "group",
+            "required": false,
+            "in": "query",
+            "description": "A grouped row's `group.key`: lists the movements it stands for, one per\nrow, instead of the history. Opaque: send it back as given.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "`nextCursor` from the previous page. Opaque: send it back as given. Absent for the first page.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionPage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "W26, W28: search, filter chips, an optional month. W1's recent rows are the first page with limit=3.",
+        "tags": [
+          "MoneyHistory"
+        ],
+        "x-wawu-built-by": "MONEY-15"
+      }
+    },
+    "/api/hub/money/transactions/summary": {
+      "get": {
+        "operationId": "MoneyHistoryController_summary",
+        "parameters": [
+          {
+            "name": "month",
+            "required": true,
+            "in": "query",
+            "description": "YYYY-MM in Africa/Lagos time.",
+            "schema": {
+              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MonthlySummaryView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "W26's In and Out for one month. Declared before transactions/{id} so the literal path wins.",
+        "tags": [
+          "MoneyHistory"
+        ],
+        "x-wawu-built-by": "MONEY-15"
+      }
+    },
+    "/api/hub/money/transactions/{id}": {
+      "get": {
+        "operationId": "MoneyHistoryController_detail",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One row as a receipt (W27). Only the wallet's owner can read it.",
+        "tags": [
+          "MoneyHistory"
+        ],
+        "x-wawu-built-by": "MONEY-15"
+      }
+    },
     "/api/hub/chats": {
       "post": {
         "operationId": "ChatController_open",
@@ -22360,258 +22606,6 @@
         ],
         "x-wawu-built-by": "MONEY-18",
         "description": "Declared by MONEY-04, not served yet: MONEY-18 serves it.",
-        "x-wawu-served": false
-      }
-    },
-    "/api/hub/money/transactions": {
-      "get": {
-        "operationId": "MoneyHistoryController_list",
-        "parameters": [
-          {
-            "name": "limit",
-            "required": false,
-            "in": "query",
-            "description": "Rows per page, 1 to 100.",
-            "schema": {
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20,
-              "type": "integer"
-            }
-          },
-          {
-            "name": "filter",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "default": "all",
-              "type": "string",
-              "enum": [
-                "all",
-                "money_in",
-                "money_out",
-                "bills",
-                "content"
-              ]
-            }
-          },
-          {
-            "name": "month",
-            "required": false,
-            "in": "query",
-            "description": "Only rows from this month, YYYY-MM in Africa/Lagos time (W28 \"Bills in September\").",
-            "schema": {
-              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
-              "type": "string"
-            }
-          },
-          {
-            "name": "q",
-            "required": false,
-            "in": "query",
-            "description": "Free-text search over the counterparty's name, the description, the note and the reference.",
-            "schema": {
-              "minLength": 2,
-              "maxLength": 60,
-              "type": "string"
-            }
-          },
-          {
-            "name": "group",
-            "required": false,
-            "in": "query",
-            "description": "A grouped row's `group.key`: lists the movements it stands for, one per\nrow, instead of the history. Opaque: send it back as given.",
-            "schema": {
-              "minLength": 1,
-              "maxLength": 200,
-              "type": "string"
-            }
-          },
-          {
-            "name": "cursor",
-            "required": false,
-            "in": "query",
-            "description": "`nextCursor` from the previous page. Opaque: send it back as given. Absent for the first page.",
-            "schema": {
-              "minLength": 1,
-              "maxLength": 200,
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TransactionPage"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "W26, W28: search, filter chips, an optional month. W1's recent rows are the first page with limit=3.",
-        "tags": [
-          "MoneyHistory"
-        ],
-        "x-wawu-built-by": "MONEY-15",
-        "description": "Declared by MONEY-04, not served yet: MONEY-15 serves it.",
-        "x-wawu-served": false
-      }
-    },
-    "/api/hub/money/transactions/summary": {
-      "get": {
-        "operationId": "MoneyHistoryController_summary",
-        "parameters": [
-          {
-            "name": "month",
-            "required": true,
-            "in": "query",
-            "description": "YYYY-MM in Africa/Lagos time.",
-            "schema": {
-              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MonthlySummaryView"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "W26's In and Out for one month. Declared before transactions/{id} so the literal path wins.",
-        "tags": [
-          "MoneyHistory"
-        ],
-        "x-wawu-built-by": "MONEY-15",
-        "description": "Declared by MONEY-04, not served yet: MONEY-15 serves it.",
-        "x-wawu-served": false
-      }
-    },
-    "/api/hub/money/transactions/{id}": {
-      "get": {
-        "operationId": "MoneyHistoryController_detail",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TransactionView"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "reason.code: not_found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "One row as a receipt (W27). Only the wallet's owner can read it.",
-        "tags": [
-          "MoneyHistory"
-        ],
-        "x-wawu-built-by": "MONEY-15",
-        "description": "Declared by MONEY-04, not served yet: MONEY-15 serves it.",
         "x-wawu-served": false
       }
     }
@@ -33262,6 +33256,266 @@
           "asOf"
         ]
       },
+      "FeeBreakdown": {
+        "type": "object",
+        "properties": {
+          "providerFeeKobo": {
+            "type": "integer"
+          },
+          "wawuFeeKobo": {
+            "type": "integer"
+          },
+          "totalFeeKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "providerFeeKobo",
+          "wawuFeeKobo",
+          "totalFeeKobo"
+        ]
+      },
+      "TransactionCounterpartyView": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "wawu_user",
+              "bank_account",
+              "biller",
+              "wawu"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "wawuUserId": {
+            "type": "string",
+            "nullable": true
+          },
+          "bankName": {
+            "type": "string",
+            "nullable": true
+          },
+          "accountNumberLast4": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "kind",
+          "name",
+          "avatarUrl",
+          "wawuUserId",
+          "bankName",
+          "accountNumberLast4"
+        ]
+      },
+      "TransactionLinkView": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "tip",
+              "verification",
+              "bill",
+              "content_unlock",
+              "credit_pack",
+              "legal_fee",
+              "school_fee",
+              "paid_dm",
+              "event_ticket"
+            ]
+          },
+          "targetId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "targetId",
+          "title"
+        ]
+      },
+      "TransactionGroupView": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "count": {
+            "type": "number"
+          },
+          "firstAt": {
+            "type": "string"
+          },
+          "lastAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "count",
+          "firstAt",
+          "lastAt"
+        ]
+      },
+      "TransactionView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "in",
+              "out"
+            ]
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "purchase",
+              "earning",
+              "reversal",
+              "transfer",
+              "top_up",
+              "bill",
+              "hold",
+              "refund"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "failed",
+              "completed",
+              "reversed"
+            ]
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "fee": {
+            "$ref": "#/components/schemas/FeeBreakdown"
+          },
+          "totalKobo": {
+            "type": "integer"
+          },
+          "description": {
+            "type": "string"
+          },
+          "counterparty": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TransactionCounterpartyView"
+              }
+            ],
+            "nullable": true
+          },
+          "link": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TransactionLinkView"
+              }
+            ],
+            "nullable": true
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "reference": {
+            "type": "string"
+          },
+          "transferId": {
+            "type": "string",
+            "nullable": true
+          },
+          "paymentId": {
+            "type": "string",
+            "nullable": true
+          },
+          "group": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TransactionGroupView"
+              }
+            ],
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "direction",
+          "category",
+          "status",
+          "amountKobo",
+          "fee",
+          "totalKobo",
+          "description",
+          "counterparty",
+          "link",
+          "note",
+          "reference",
+          "transferId",
+          "paymentId",
+          "group",
+          "createdAt"
+        ]
+      },
+      "TransactionPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransactionView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "MonthlySummaryView": {
+        "type": "object",
+        "properties": {
+          "month": {
+            "type": "string"
+          },
+          "inKobo": {
+            "type": "integer"
+          },
+          "outKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "month",
+          "inKobo",
+          "outKobo"
+        ]
+      },
       "CheckedBvnView": {
         "type": "object",
         "properties": {
@@ -33858,266 +34112,6 @@
         "required": [
           "uploadUrl",
           "key"
-        ]
-      },
-      "FeeBreakdown": {
-        "type": "object",
-        "properties": {
-          "providerFeeKobo": {
-            "type": "integer"
-          },
-          "wawuFeeKobo": {
-            "type": "integer"
-          },
-          "totalFeeKobo": {
-            "type": "integer"
-          }
-        },
-        "required": [
-          "providerFeeKobo",
-          "wawuFeeKobo",
-          "totalFeeKobo"
-        ]
-      },
-      "TransactionCounterpartyView": {
-        "type": "object",
-        "properties": {
-          "kind": {
-            "type": "string",
-            "enum": [
-              "wawu_user",
-              "bank_account",
-              "biller",
-              "wawu"
-            ]
-          },
-          "name": {
-            "type": "string"
-          },
-          "avatarUrl": {
-            "type": "string",
-            "nullable": true
-          },
-          "wawuUserId": {
-            "type": "string",
-            "nullable": true
-          },
-          "bankName": {
-            "type": "string",
-            "nullable": true
-          },
-          "accountNumberLast4": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "kind",
-          "name",
-          "avatarUrl",
-          "wawuUserId",
-          "bankName",
-          "accountNumberLast4"
-        ]
-      },
-      "TransactionLinkView": {
-        "type": "object",
-        "properties": {
-          "kind": {
-            "type": "string",
-            "enum": [
-              "tip",
-              "verification",
-              "bill",
-              "content_unlock",
-              "credit_pack",
-              "legal_fee",
-              "school_fee",
-              "paid_dm",
-              "event_ticket"
-            ]
-          },
-          "targetId": {
-            "type": "string"
-          },
-          "title": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "kind",
-          "targetId",
-          "title"
-        ]
-      },
-      "TransactionGroupView": {
-        "type": "object",
-        "properties": {
-          "key": {
-            "type": "string"
-          },
-          "count": {
-            "type": "number"
-          },
-          "firstAt": {
-            "type": "string"
-          },
-          "lastAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "key",
-          "count",
-          "firstAt",
-          "lastAt"
-        ]
-      },
-      "TransactionView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "direction": {
-            "type": "string",
-            "enum": [
-              "in",
-              "out"
-            ]
-          },
-          "category": {
-            "type": "string",
-            "enum": [
-              "purchase",
-              "earning",
-              "reversal",
-              "transfer",
-              "top_up",
-              "bill",
-              "hold",
-              "refund"
-            ]
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "pending",
-              "failed",
-              "completed",
-              "reversed"
-            ]
-          },
-          "amountKobo": {
-            "type": "integer"
-          },
-          "fee": {
-            "$ref": "#/components/schemas/FeeBreakdown"
-          },
-          "totalKobo": {
-            "type": "integer"
-          },
-          "description": {
-            "type": "string"
-          },
-          "counterparty": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/TransactionCounterpartyView"
-              }
-            ],
-            "nullable": true
-          },
-          "link": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/TransactionLinkView"
-              }
-            ],
-            "nullable": true
-          },
-          "note": {
-            "type": "string",
-            "nullable": true
-          },
-          "reference": {
-            "type": "string"
-          },
-          "transferId": {
-            "type": "string",
-            "nullable": true
-          },
-          "paymentId": {
-            "type": "string",
-            "nullable": true
-          },
-          "group": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/TransactionGroupView"
-              }
-            ],
-            "nullable": true
-          },
-          "createdAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "direction",
-          "category",
-          "status",
-          "amountKobo",
-          "fee",
-          "totalKobo",
-          "description",
-          "counterparty",
-          "link",
-          "note",
-          "reference",
-          "transferId",
-          "paymentId",
-          "group",
-          "createdAt"
-        ]
-      },
-      "TransactionPage": {
-        "type": "object",
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/TransactionView"
-            }
-          },
-          "nextCursor": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "items",
-          "nextCursor"
-        ]
-      },
-      "MonthlySummaryView": {
-        "type": "object",
-        "properties": {
-          "month": {
-            "type": "string"
-          },
-          "inKobo": {
-            "type": "integer"
-          },
-          "outKobo": {
-            "type": "integer"
-          }
-        },
-        "required": [
-          "month",
-          "inKobo",
-          "outKobo"
         ]
       },
       "MoneyPartyView": {

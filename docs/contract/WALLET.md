@@ -53,9 +53,9 @@ caller from the token.
 | `GET /money/payments/{id}` | `PaymentView` | | MONEY-19 |
 | `GET /money/holds?role=&cursor=&limit=` | `HoldPage` | | MONEY-18 |
 | `GET /money/holds/{id}` | `HoldView` | | MONEY-18 |
-| `GET /money/transactions?filter=&q=&month=&group=&cursor=&limit=` | `TransactionPage` | | MONEY-15 |
-| `GET /money/transactions/summary?month=` | `MonthlySummaryView` | | MONEY-15 |
-| `GET /money/transactions/{id}` | `TransactionView` | | MONEY-15 |
+| `GET /money/transactions?filter=&q=&month=&group=&cursor=&limit=` | `TransactionPage` | | MONEY-15 (served; CONVENTIONS.md section 6) |
+| `GET /money/transactions/summary?month=` | `MonthlySummaryView` | | MONEY-15 (served) |
+| `GET /money/transactions/{id}` | `TransactionView` | | MONEY-15 (served) |
 
 A withdrawal (W17) is `POST /money/transfers/bank` to the payout account; it
 has no route of its own. Releasing or refunding a hold is never a client

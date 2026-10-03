@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { FintavaModule } from '../fintava/fintava.module';
 import { MoneyBalanceController } from './balance/money-balance.controller';
+import { MoneyHistoryController } from './history/money-history.controller';
+import { TransactionHistoryService } from './history/transaction-history.service';
 import { LedgerModule } from './ledger/ledger.module';
 import { WalletBalanceService } from './balance/wallet-balance.service';
 import { WalletGate, WalletGateGuard } from './gate/wallet-gate';
@@ -65,6 +67,10 @@ import { TransactionPinService } from './pin/transaction-pin.service';
  * approval (`/money/device`, `/money/approval/verify`). ApprovalDeviceService
  * is exported beside the guard: `@RequireApproval()` on a debit lets the
  * registered phone's fingerprint or face stand in for the PIN.
+ *
+ * MONEY-15: the history (`/money/transactions`, its month summary and one
+ * row), behind the wallet gate, read from the ledger only; it never calls
+ * Fintava.
  */
 @Module({
   imports: [ConfigModule, FintavaModule, LedgerModule],
@@ -75,6 +81,7 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     MoneyBalanceController,
     MoneyIdentityController,
     MoneyWalletController,
+    MoneyHistoryController,
   ],
   providers: [
     WalletGate,
@@ -90,6 +97,7 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     SelfieMatchService,
     WalletOpeningSettings,
     WalletOpeningService,
+    TransactionHistoryService,
   ],
   exports: [
     WalletGate,
