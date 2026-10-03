@@ -74,8 +74,8 @@ module AppModule mounts (importing a new module into `app.module.ts` is a
 **Served so far** (`MoneyModule`, `src/money/money.module.ts`, mounted by
 AppModule since MONEY-09): `GET`, `POST` and `PUT /money/pin` and
 `POST /money/pin/verify` (MONEY-09); `GET /money/wallet/balance`
-(MONEY-11), which reads the caller's wallet from `FintavaWallet` (no row:
-`409 wallet_not_open`) and asks Fintava on every request; `GET /money/identity`,
+(MONEY-11), which reads the caller's wallet from `FintavaWallet` (through
+the wallet gate, section 7) and asks Fintava on every request; `GET /money/identity`,
 `POST /money/identity/bvn` and `PUT /money/identity/occupation` (KYC-01),
 Open your wallet's identity step (section 8); `GET`, `POST
 /money/beneficiaries`, `DELETE /money/beneficiaries/{id}`, `GET` and `PUT
@@ -367,6 +367,40 @@ one retry at a time per payment.
   `state: "not_open"` so the Wallet tab can open "Open your wallet"; every
   other money route answers `409 wallet_not_open` (`wallet_opening` while
   the account is being created, `423 wallet_frozen` when frozen).
+  - **The wallet gate** (`src/money/gate/wallet-gate.ts`) is how: a route
+    that reads or moves a person's wallet carries `@RequireOpenWallet()`
+    (`@RequireTransactionPin()` brings it, ahead of the PIN), and the gate
+    answers before the PIN, the body, the quote or Fintava. New and
+    existing users alike: a web user's Flutterwave wallet
+    (`CreatorWallet`) is not a Naira wallet here.
+  - **One body per code, on every route**: `{ statusCode: 409, message,
+    data: null, reason: { code, message } }` with `message` "You don't
+    have a wallet yet. Open your wallet to continue." for
+    `wallet_not_open` and "Your account is still being opened. Check
+    again in a moment." for `wallet_opening`. The app switches on
+    `reason.code` and leads to Open your wallet (A26) or A7's wait.
+  - **One rule** (`walletStateOf`) decides `GET /money/wallet`'s `state`
+    and the gate's code, so the two never disagree: a `FintavaWallet` row
+    is `open`; an opening `opening`, `unknown`, `open` (row not yet
+    visible) or `conflict` held for review is `opening`; nothing, a
+    `failed` opening, or one stopped because the phone's Fintava customer
+    is not this person (section 9) is `not_open`. `423 wallet_frozen` is
+    never answered from storage (nothing stores a freeze): it is Fintava's
+    own refusal on the call a route makes.
+  - **A person without a wallet never uses a PIN try**, and the PIN they
+    sent is dropped from the request unread when the gate refuses.
+  - **Not gated:** Open your wallet itself (`/money/identity/*`, `POST
+    /money/wallet/open`), `GET /money/wallet`, and the declared bank list
+    and name check (WALLET-09), which read no wallet.
+  - **Held to it by** `src/money/gate/tests/wallet-gate-coverage.spec.ts`
+    over every controller AppModule mounts: a route that documents the gate
+    codes runs the gate and the reverse, the gate runs before the PIN, and
+    every `/money` route is gated or listed there with its reason. A task
+    that serves a declared wallet route puts `@RequireOpenWallet()` on it
+    (MoneyModule exports the gate; `@CurrentWallet()` hands the route the
+    wallet the gate found). `wallet-gate.contract.spec.ts` sends every
+    gated route MoneyModule mounts, whatever it is sent, as each kind of
+    person without a wallet.
 - **Fees** come from config (R-10), never from the app or the canvas. Every
   quote, transfer, payment and history row carries a `FeeBreakdown`
   (`providerFeeKobo` + `wawuFeeKobo` = `totalFeeKobo`), and a send repeats the
