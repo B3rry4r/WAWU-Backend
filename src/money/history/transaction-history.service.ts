@@ -244,6 +244,10 @@ function checkedMonth(month: string): string {
  *   earnings of one piece on one Africa/Lagos day are one row; its id,
  *   reference and createdAt are its latest movement's, its amounts the
  *   sums. `group=<key>` lists the movements, one per row.
+ * - **The other side's name** is the one the movement recorded, else (for
+ *   someone on WAWU) their wallet's account name as Fintava gave it when it
+ *   opened (MONEY-12), else their @handle, else a plain word for the kind:
+ *   a Fintava delivery names nobody, so a row it wrote has only the id.
  * - **Search** (`q`) looks at what the row shows: the counterparty's name
  *   (and handle), the description, the note and the reference. A grouped
  *   row is searched by its description only (it has no single counterparty,
@@ -413,6 +417,7 @@ export class TransactionHistoryService {
                e."counterpartyKind"::text AS "cpKind",
                CASE WHEN e."counterpartyKind" IS NOT NULL THEN COALESCE(
                  NULLIF(btrim(e."counterpartyName"), ''),
+                 NULLIF(btrim(cw."accountName"), ''),
                  CASE WHEN p."handle" IS NOT NULL THEN '@' || p."handle" END,
                  ${FALLBACK_NAME}
                ) END AS "cpName",
@@ -434,6 +439,9 @@ export class TransactionHistoryService {
           LEFT JOIN "UserProfile" p
             ON e."counterpartyKind" = 'wawu_user'
            AND p."wawuUserId" = e."counterpartyWawuUserId"
+          LEFT JOIN "FintavaWallet" cw
+            ON e."counterpartyKind" = 'wawu_user'
+           AND cw."wawuUserId" = e."counterpartyWawuUserId"
          WHERE ${Prisma.join(where, ' AND ')}
       ),
       sized AS (

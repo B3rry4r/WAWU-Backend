@@ -114,7 +114,9 @@ describe('GET /money/transactions, /summary, /{id} (MONEY-15) over HTTP', () => 
     return { id, auth: `Bearer ${mintToken(id)}`, account: null };
   }
 
-  async function withWallet(): Promise<Person & { account: string }> {
+  async function withWallet(
+    accountName: string | null = null,
+  ): Promise<Person & { account: string }> {
     const user = newUser();
     const account = nuban();
     accounts.push(account);
@@ -124,6 +126,7 @@ describe('GET /money/transactions, /summary, /{id} (MONEY-15) over HTTP', () => 
         customerId: randomUUID(),
         walletId: randomUUID(),
         accountNumber: account,
+        accountName,
       },
     });
     return { ...user, account };
@@ -489,6 +492,85 @@ describe('GET /money/transactions, /summary, /{id} (MONEY-15) over HTTP', () => 
         bankName: null,
         accountNumberLast4: null,
       });
+    });
+
+    it('a row a Fintava delivery wrote names the other person by their wallet’s account name, so search finds it', async () => {
+      const a = await withWallet();
+      const bayo = await withWallet('Bayo Sandbox');
+      const handleOnly = newUser();
+      await prisma.userProfile.create({
+        data: {
+          wawuUserId: handleOnly.id,
+          accountType: 'user',
+          handle: `tolu${String(Date.now()).slice(-6)}`,
+        },
+      });
+      const nobody = randomUUID();
+      // As the ledger's consumer writes a wallet-to-wallet delivery: the
+      // other side by id and account number, no name.
+      const fromBayo = await record(a, {
+        direction: 'in',
+        status: 'completed',
+        category: 'transfer',
+        amountKobo: 1000,
+        counterparty: {
+          kind: 'wawu_user',
+          name: null,
+          wawuUserId: bayo.id,
+          accountNumber: bayo.account,
+        },
+        source: 'webhook',
+      });
+      const fromTolu = await record(a, {
+        direction: 'in',
+        status: 'completed',
+        category: 'transfer',
+        amountKobo: 1000,
+        counterparty: {
+          kind: 'wawu_user',
+          name: null,
+          wawuUserId: handleOnly.id,
+        },
+        source: 'webhook',
+      });
+      const fromNobody = await record(a, {
+        direction: 'in',
+        status: 'completed',
+        category: 'transfer',
+        amountKobo: 1000,
+        counterparty: { kind: 'wawu_user', name: null, wawuUserId: nobody },
+        source: 'webhook',
+      });
+      const rows = new Map(
+        (await all(a.auth, '')).items.map((i) => [i.id, i.counterparty?.name]),
+      );
+      const handle = (
+        await prisma.userProfile.findUniqueOrThrow({
+          where: { wawuUserId: handleOnly.id },
+        })
+      ).handle;
+      expect(rows.get(fromBayo)).toBe('Bayo Sandbox');
+      expect(rows.get(fromTolu)).toBe(`@${handle}`);
+      expect(rows.get(fromNobody)).toBe('Someone on Who Made This');
+      expect((await all(a.auth, 'q=bayo')).items.map((i) => i.id)).toEqual([
+        fromBayo,
+      ]);
+      // The name the movement recorded wins over the wallet's.
+      const named = await record(a, {
+        direction: 'out',
+        status: 'completed',
+        category: 'transfer',
+        amountKobo: 1000,
+        counterparty: {
+          kind: 'wawu_user',
+          name: 'Bayo S.',
+          wawuUserId: bayo.id,
+        },
+      });
+      const v = body<TransactionView>(
+        await get(a.auth, `${BASE}/${named}`).expect(200),
+      ).data!;
+      expect(v.counterparty?.name).toBe('Bayo S.');
     });
 
     it('a name that is nobody’s finds nothing, and search characters are only characters', async () => {

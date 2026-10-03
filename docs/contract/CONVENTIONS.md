@@ -401,8 +401,10 @@ still reads. Every answer is `Cache-Control: no-store`.
   both equals the total Fintava reported; otherwise Fintava's own charge
   (`feeKobo`) as the provider fee and WAWU's as 0. `totalKobo` is always the
   stored total.
-- **Counterparty:** the name the movement recorded, else the person's
-  `@handle`, else a plain word for the kind; a bank account's number only as
+- **Counterparty:** the name the movement recorded, else (someone on WAWU)
+  their wallet's account name as Fintava gave it at opening
+  (`FintavaWallet.accountName`, MONEY-12), else their `@handle`, else a plain
+  word for the kind (a Fintava delivery names nobody); a bank account's number only as
   its last 4 digits; an avatar only for someone on WAWU.
 - **Reference:** ours (`customerReference`), else Fintava's reference, the
   session id, the transaction id, the tagapay reference, else the row's id.
