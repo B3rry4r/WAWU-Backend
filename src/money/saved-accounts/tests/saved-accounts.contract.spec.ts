@@ -1237,6 +1237,42 @@ describe('Saved beneficiaries and the payout account (WALLET-14) over HTTP', () 
       );
     });
 
+    it('two people saving the same person and the same bank account each get their own row', async () => {
+      const a = await withWallet();
+      const b = await withWallet();
+      const them = await recipient('Shared', 'Person');
+      bank();
+      const saveBoth = async (who: typeof a) => {
+        const person = body<BeneficiaryView>(
+          await save(who, { kind: 'wawu_user', wawuUserId: them.id }).expect(
+            201,
+          ),
+        ).data!;
+        const account = body<BeneficiaryView>(
+          await save(who, {
+            kind: 'bank_account',
+            bankCode: GTB,
+            accountNumber: STUB_ACCOUNT,
+          }).expect(201),
+        ).data!;
+        return [person, account];
+      };
+      const [aPerson, aAccount] = await saveBoth(a);
+      const [bPerson, bAccount] = await saveBoth(b);
+      // B's saves are B's rows, not answers of A's.
+      expect(bPerson.id).not.toBe(aPerson.id);
+      expect(bAccount.id).not.toBe(aAccount.id);
+      const ids = async (who: typeof a) =>
+        body<BeneficiaryView[]>(await list(who).expect(200))
+          .data!.map((x) => x.id)
+          .sort();
+      expect(await ids(a)).toEqual([aPerson.id, aAccount.id].sort());
+      expect(await ids(b)).toEqual([bPerson.id, bAccount.id].sort());
+      // A removing theirs leaves B's.
+      await remove(a, aPerson.id).expect(200);
+      expect(await ids(b)).toEqual([bPerson.id, bAccount.id].sort());
+    });
+
     it('two saves of the same place at the same moment keep one row', async () => {
       const who = await withWallet();
       bank({ status: 200, body: nameAnswer('SIMI MICHELLE'), delayMs: 100 });
