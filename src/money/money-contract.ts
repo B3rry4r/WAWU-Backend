@@ -42,6 +42,8 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   recipient_has_no_wallet: 409,
   recipient_blocked: 403,
   self_transfer: 400,
+  // Default (agent), owner may override: 409, the list is full until one goes.
+  beneficiary_limit_reached: 409,
   bank_transfers_blocked: 403,
   target_not_found: 404,
   target_not_payable: 409,
