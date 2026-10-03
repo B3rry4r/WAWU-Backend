@@ -866,3 +866,50 @@ still reads. Every answer is `Cache-Control: no-store`.
   removes nothing and answers the same 200. A saved WAWU user whose wallet
   is gone (a deleted account) leaves the list, and `WalletView.beneficiaryCount`
   (W35) counts exactly the rows the list shows.
+
+## 11. Statements (WALLET-27)
+
+- **Route** (`src/money/statements/`): `GET /money/statements?from=&to=&format=csv`
+  answers `StatementView` in the usual envelope, with the file as text in
+  `content` and the name and type to save it under (`fileName`,
+  `contentType`). It runs MONEY-13's gate (`@RequireOpenWallet()`): no
+  wallet is `409 wallet_not_open` or `409 wallet_opening` before the query
+  is read. It takes no wallet id and no person: the statement is always the
+  caller's own, and a query that names anyone (`wawuUserId=`,
+  `accountNumber=`) is refused by validation. `no-store`. It reads the
+  ledger only and never calls Fintava.
+- **The period is two calendar days in Africa/Lagos time, both included.**
+  `from=2026-09-01&to=2026-09-30` is 00:00 on 1 September to 23:59:59.999
+  on 30 September, Lagos time (UTC+1): a movement at 23:30 UTC on 31 August
+  is in it (1 September in Lagos) and one at 23:30 UTC on 30 September is
+  not (1 October in Lagos). `from` equal to `to` is that one whole day. Each
+  line's date and time are Lagos time too.
+- **Refused with a plain 400:** a day not written `YYYY-MM-DD`, a day not on
+  the calendar (`2026-02-30`, year `0000`), `from` after `to`, `to` after
+  today in Lagos, a period longer than `STATEMENT_MAX_DAYS` (366, both days
+  counted; PROVISIONAL), and any `format` but `csv`.
+- **What is listed:** every `completed` movement on the caller's own wallet
+  (the history's three keys: a person's wallet, the token's wawuUserId,
+  the wallet's account number) whose `occurredAt` is in the period, oldest
+  first, one line each (unlock earnings are never grouped). Pending, failed
+  and reversed movements are not listed: they are the rows the month
+  summary (section 6) leaves out, so a month's statement adds up to W26's
+  In and Out for that month. Default (agent), owner may override.
+- **No balance and no totals.** The only balance is Fintava's live one, and
+  Fintava gives none at a past moment, so a statement has no opening or
+  closing balance. It does not add its lines up either.
+- **The file** (RFC 4180): a byte-order mark, then the header `Date, Time,
+  Description, Counterparty, Reference, Note, Money in (₦), Money out (₦),
+  Of which fees (₦)`, one line per movement, lines ending CRLF. Money in is
+  what arrived; money out is what left, fees included, with the fee part
+  beside it (the receipt's `fee.totalFeeKobo`). Amounts are naira with two
+  decimals written from integer kobo (`25065.00`). The description, the
+  other side's name and the reference are the history's own (section 6,
+  `history-labels.ts`), so every line can be found on W26 and W27. A text
+  cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return is
+  written with a `'` first, so a spreadsheet never runs it (an `@handle`
+  shows as `'@handle`). Only the last four digits of a bank account ever
+  reach the history; the statement shows none.
+- **Not served:** a stamped PDF (Fintava issues no statement; mobile repo
+  BACKEND_GAPS G-68) and sending it by email (the backend has no email
+  sender; G-69).

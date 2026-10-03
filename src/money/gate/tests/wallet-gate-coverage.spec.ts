@@ -188,7 +188,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
     expect(half).toEqual([]);
   });
 
-  it('the gated routes today: the PIN, the balance, the PIN reset and biometric approval (MONEY-14), the history (MONEY-15), beneficiaries and the payout account (WALLET-14)', () => {
+  it('the gated routes today: the PIN, the balance, the PIN reset and biometric approval (MONEY-14), the history (MONEY-15), statements (WALLET-27), beneficiaries and the payout account (WALLET-14)', () => {
     expect(
       mounted
         .filter((r) => r.guards.includes(WalletGateGuard))
@@ -201,6 +201,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'GET money/device',
       'GET money/payout-account',
       'GET money/pin',
+      'GET money/statements',
       'GET money/transactions',
       'GET money/transactions/:id',
       'GET money/transactions/summary',

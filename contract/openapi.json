@@ -21221,6 +21221,89 @@
         "x-wawu-built-by": "MONEY-15"
       }
     },
+    "/api/hub/money/statements": {
+      "get": {
+        "operationId": "MoneyStatementController_statement",
+        "parameters": [
+          {
+            "name": "from",
+            "required": true,
+            "in": "query",
+            "description": "The first day of the statement, YYYY-MM-DD in Africa/Lagos time, included.",
+            "schema": {
+              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$",
+              "example": "2026-09-01",
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": true,
+            "in": "query",
+            "description": "The last day of the statement, YYYY-MM-DD in Africa/Lagos time,\nincluded. On or after `from`, not after today in Lagos, and at most\n366 days from `from`, both days counted (STATEMENT_MAX_DAYS).",
+            "schema": {
+              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$",
+              "example": "2026-09-30",
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "required": true,
+            "in": "query",
+            "description": "The file. Only `csv` today: Fintava issues no stamped statement\n(WALLET-27, BACKEND_GAPS G-68), so there is no `pdf`.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "csv"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatementView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One statement. `from` and `to` are calendar days in Africa/Lagos time\nand BOTH are included: from 00:00 on `from` to 23:59:59.999 on `to`,\nLagos time. A day that does not exist, `from` after `to`, `to` after\ntoday in Lagos, or more than 366 days is a 400.",
+        "tags": [
+          "MoneyStatement"
+        ],
+        "x-wawu-built-by": "WALLET-27"
+      }
+    },
     "/api/hub/chats": {
       "post": {
         "operationId": "ChatController_open",
@@ -25964,6 +26047,52 @@
           "month",
           "inKobo",
           "outKobo"
+        ]
+      },
+      "StatementView": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "timeZone": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv"
+            ]
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "rowCount": {
+            "type": "number"
+          },
+          "content": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "timeZone",
+          "format",
+          "fileName",
+          "contentType",
+          "rowCount",
+          "content",
+          "generatedAt"
         ]
       },
       "CheckedBvnView": {

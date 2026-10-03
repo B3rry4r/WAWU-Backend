@@ -4,6 +4,8 @@ import { FintavaModule } from '../fintava/fintava.module';
 import { MoneyBalanceController } from './balance/money-balance.controller';
 import { MoneyHistoryController } from './history/money-history.controller';
 import { TransactionHistoryService } from './history/transaction-history.service';
+import { MoneyStatementController } from './statements/money-statement.controller';
+import { StatementService } from './statements/statement.service';
 import { LedgerModule } from './ledger/ledger.module';
 import { WalletBalanceService } from './balance/wallet-balance.service';
 import { WalletGate, WalletGateGuard } from './gate/wallet-gate';
@@ -81,6 +83,10 @@ import { TransactionPinService } from './pin/transaction-pin.service';
  * MONEY-15: the history (`/money/transactions`, its month summary and one
  * row), behind the wallet gate, read from the ledger only; it never calls
  * Fintava.
+ *
+ * WALLET-27: statements (`/money/statements`), the caller's completed
+ * movements over a period of Lagos days as a CSV file, behind the wallet
+ * gate, read from the ledger only; it never calls Fintava.
  */
 @Module({
   imports: [ConfigModule, FintavaModule, LedgerModule, WawuAuthModule],
@@ -93,6 +99,7 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     MoneyWalletController,
     MoneySavedAccountsController,
     MoneyHistoryController,
+    MoneyStatementController,
   ],
   providers: [
     WalletGate,
@@ -112,6 +119,7 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     BeneficiaryService,
     PayoutAccountService,
     TransactionHistoryService,
+    StatementService,
   ],
   exports: [
     WalletGate,
