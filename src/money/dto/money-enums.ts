@@ -5,9 +5,51 @@
  * array, so the two cannot drift.
  */
 
-/** What a fee quote is for (GET /money/fees/quote). Purchases are quoted by GET /money/payments/quote. */
-export const FEE_QUOTE_KINDS = ['wawu_transfer', 'bank_transfer'] as const;
+/**
+ * What a fee quote is for (GET /money/fees/quote, WALLET-15):
+ *
+ *   wawu_transfer  a send to another WAWU user (W10)
+ *   bank_transfer  a send to a bank, or a withdrawal to the payout account (W10, W17)
+ *   purchase       anything WAWU sells, paid from the wallet: an unlock, tip,
+ *                  tick, ticket, paid DM, credits, a course, a legal service.
+ *                  The pay sheet itself is GET /money/payments/quote (MONEY-17),
+ *                  which takes its fee from the same schedule.
+ *   bill           electricity, cable, airtime or data (`billCategory`)
+ *
+ * Card top-up and card order are added by WALLET-25 and WALLET-31.
+ */
+export const FEE_QUOTE_KINDS = [
+  'wawu_transfer',
+  'bank_transfer',
+  'purchase',
+  'bill',
+] as const;
 export type FeeQuoteKind = (typeof FEE_QUOTE_KINDS)[number];
+
+/** What a bill pays for; Fintava charges by category (docs/fintava/fees.md in the mobile repo). */
+export const BILL_CATEGORIES = [
+  'electricity',
+  'cable',
+  'airtime',
+  'data',
+] as const;
+export type BillCategory = (typeof BILL_CATEGORIES)[number];
+
+/**
+ * One line of a fee quote (FeeQuotePartView.code):
+ *
+ *   balance_transfer  Fintava's wallet to wallet charge, by amount band
+ *   bank_transfer     Fintava's charge on a send to a bank
+ *   bill_charge       Fintava's charge on a bill, by category
+ *   wawu_fee          WAWU's own fee on top (R-10)
+ */
+export const FEE_PART_CODES = [
+  'balance_transfer',
+  'bank_transfer',
+  'bill_charge',
+  'wawu_fee',
+] as const;
+export type FeePartCode = (typeof FEE_PART_CODES)[number];
 
 /**
  * What a wallet payment is for, and the task that makes each one pay from

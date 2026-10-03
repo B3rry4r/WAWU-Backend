@@ -8,6 +8,9 @@ import { MoneyStatementController } from './statements/money-statement.controlle
 import { StatementService } from './statements/statement.service';
 import { LedgerModule } from './ledger/ledger.module';
 import { WalletBalanceService } from './balance/wallet-balance.service';
+import { FeeSettings } from './fees/fee-config';
+import { FeeQuoteService } from './fees/fee-quote.service';
+import { MoneyFeesController } from './fees/money-fees.controller';
 import { WalletGate, WalletGateGuard } from './gate/wallet-gate';
 import { IdentityHasher } from './identity/identity-config';
 import { MoneyIdentityController } from './identity/money-identity.controller';
@@ -84,6 +87,12 @@ import { TransactionPinService } from './pin/transaction-pin.service';
  * row), behind the wallet gate, read from the ledger only; it never calls
  * Fintava.
  *
+ * WALLET-15: the fee quote (`GET /money/fees/quote`), behind the wallet
+ * gate, from the fee schedule in config (FeeSettings, R-10). It never calls
+ * Fintava. FeeQuoteService is exported for the routes that charge what was
+ * quoted (WALLET-07, WALLET-09, MONEY-17): they fill their fees from it and
+ * check the quote the person saw with `check()`.
+ *
  * WALLET-27: statements (`/money/statements`), the caller's completed
  * movements over a period of Lagos days as a CSV file, behind the wallet
  * gate, read from the ledger only; it never calls Fintava.
@@ -100,6 +109,7 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     MoneySavedAccountsController,
     MoneyHistoryController,
     MoneyStatementController,
+    MoneyFeesController,
   ],
   providers: [
     WalletGate,
@@ -120,6 +130,8 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     PayoutAccountService,
     TransactionHistoryService,
     StatementService,
+    FeeSettings,
+    FeeQuoteService,
   ],
   exports: [
     WalletGate,
@@ -130,6 +142,8 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     WalletIdentityService,
     SelfieMatchService,
     WalletOpeningService,
+    FeeSettings,
+    FeeQuoteService,
   ],
 })
 export class MoneyModule {}
