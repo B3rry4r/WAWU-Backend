@@ -72,7 +72,7 @@ export class MoneyReceiptController {
     @Res() res: Response,
   ): Promise<void> {
     const { doc, code } = await this.receipts.document(wallet, id);
-    send(res, receiptPng(doc), 'image/png', `Receipt-${code}.png`);
+    send(res, await receiptPng(doc), 'image/png', `Receipt-${code}.png`);
   }
 
   /** W43: the receipt as a one-page A4 PDF. */
@@ -95,7 +95,7 @@ export class MoneyReceiptController {
     const { doc, code, issuedAt } = await this.receipts.document(wallet, id);
     send(
       res,
-      receiptPdf(doc, issuedAt),
+      await receiptPdf(doc, issuedAt),
       'application/pdf',
       `Receipt-${code}.pdf`,
     );

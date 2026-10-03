@@ -574,6 +574,66 @@ describe('Receipts (WALLET-18) over HTTP', () => {
       expect(r.text).toBe(RECEIPT_NOT_FOUND_PAGE);
     });
 
+    it('a biller name with a spaced or +234 phone number shows only its last 4 digits (round 2)', async () => {
+      const p = await withWallet('Ada Obi');
+      const forms = [
+        'MTN Airtime 0803 123 4567',
+        'Glo +234 805-123-4567',
+        'IKEDC 4501.2345.6789',
+      ];
+      for (const name of forms) {
+        const id = await record(p, {
+          direction: 'out',
+          status: 'completed',
+          category: 'bill',
+          amountKobo: 100000,
+          totalKobo: 100000,
+          counterparty: { kind: 'biller', name },
+        });
+        const { code } = body<ReceiptView>(
+          await issue(p, id).expect(200),
+        ).data!;
+        const html = (await page(code).expect(200)).text;
+        const digits = name.replace(/\D/g, '');
+        expect(html).toContain(`•••• ${digits.slice(-4)}`);
+        for (let i = 0; i + 5 <= digits.length; i += 1) {
+          const window = digits.slice(i, i + 5);
+          expect({
+            name,
+            window,
+            shown: html.replace(/\D/g, ' ').includes(window),
+          }).toEqual({ name, window, shown: false });
+        }
+        expect(html).not.toContain(name.split(' ').slice(1).join(' '));
+      }
+    });
+
+    it('a name with characters XML forbids still draws as an image and a PDF, never a 500 (round 2)', async () => {
+      const p = await withWallet('Ada Obi');
+      const id = await record(p, {
+        direction: 'in',
+        status: 'completed',
+        category: 'transfer',
+        amountKobo: 1000,
+        totalKobo: 1000,
+        counterparty: {
+          kind: 'bank_account',
+          name: 'Bad\u0001Name\u0008X \uFFFE & <Sons>',
+          accountNumber: '1234567890',
+          bankName: 'Opay\u0002',
+        },
+      });
+      const png = await drawn(p, id, 'image').expect(200);
+      expect((png.body as Buffer).subarray(1, 4).toString()).toBe('PNG');
+      const pdf = await drawn(p, id, 'pdf').expect(200);
+      expect((pdf.body as Buffer).subarray(0, 5).toString()).toBe('%PDF-');
+      const { code } = body<ReceiptView>(await issue(p, id).expect(200)).data!;
+      const html = (await page(code).expect(200)).text;
+      expect(html).toContain('BadNameX');
+      // eslint-disable-next-line no-control-regex
+      expect(html).not.toMatch(/[\u0000-\u0008\uFFFE]/);
+    });
+
     it('is throttled per address: 10 a minute, the 11th is 429, and another address is unaffected', async () => {
       const ip = address();
       const codes = Array.from({ length: 11 }, () => newReceiptCode());

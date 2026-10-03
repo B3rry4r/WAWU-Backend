@@ -10,6 +10,7 @@ import {
 import { verifyBase } from '../receipt-config';
 import {
   headlineOf,
+  maskDigits,
   maskedName,
   naira,
   partiesOf,
@@ -20,11 +21,19 @@ import {
 } from '../receipt-document';
 import {
   A4,
+  clip,
+  escapeXml,
+  fit,
   IMAGE_SCALE,
+  MAX_PRINTED,
+  printable,
   RECEIPT_WIDTH,
   receiptPdf,
   receiptPng,
+  textWidth,
+  wrap,
 } from '../receipt-render';
+import type { ReceiptDocument } from '../receipt-document';
 import type { ReceiptView } from '../receipt-view.type';
 
 /** Receipts (WALLET-18) without a server: the code, the words, the drawing. */
@@ -237,13 +246,78 @@ describe('receipt words', () => {
   });
 });
 
+describe('numbers in names (round 2)', () => {
+  it('a phone, meter or account number keeps only its last 4 digits however it is written', () => {
+    for (const [given, shown] of [
+      ['MTN Airtime 08031234567', 'MTN Airtime •••• 4567'],
+      ['MTN Airtime 0803 123 4567', 'MTN Airtime •••• 4567'],
+      ['MTN Airtime 0803-123-4567', 'MTN Airtime •••• 4567'],
+      ['MTN Airtime 0803.123.4567', 'MTN Airtime •••• 4567'],
+      ['MTN Airtime +234 803 123 4567', 'MTN Airtime •••• 4567'],
+      ['MTN Airtime +2348031234567', 'MTN Airtime •••• 4567'],
+      ['MTN Airtime (0803) 123 4567', 'MTN Airtime •••• 4567'],
+      ['Meter 4501-2345-678/9', 'Meter •••• 6789'],
+      ['IKEDC 12345', 'IKEDC •••• 2345'],
+      ['Shop 1234', 'Shop 1234'],
+      ['Ikeja Electric', 'Ikeja Electric'],
+    ])
+      expect(maskDigits(given)).toBe(shown);
+  });
+
+  it('the public receipt never shows more than 4 digits of a number in any name or bank name', () => {
+    const p = publicReceipt(
+      tx({
+        counterparty: {
+          kind: 'biller',
+          name: 'MTN Airtime +234 803-123-4567',
+          avatarUrl: null,
+          wawuUserId: null,
+          bankName: 'Bank 0123 456 789',
+          accountNumberLast4: '6789',
+        },
+      }),
+      { accountNumber: '8123456789', accountName: 'Ada 0803 123 4567 Obi' },
+      'Loma 12345 Bank',
+      null,
+      'wawu/r/T1P97ZQAK3MP',
+    );
+    expect(p.from!.name).toBe('MTN Airtime •••• 4567');
+    expect(p.to!.name).toBe('Ada O.');
+    const shown = [p.from, p.to, p.bankName]
+      .map((x) => JSON.stringify(x))
+      .join(' ');
+    for (const run of shown.match(/\d(?:[\s.-]*\d)*/g) ?? [])
+      expect({ run, digits: run.replace(/\D/g, '').length <= 4 }).toEqual({
+        run,
+        digits: true,
+      });
+  });
+});
+
+describe('text for the drawing (round 2)', () => {
+  it('escapes &, <, >, and both quotes, & first', () => {
+    expect(escapeXml(`A & B <c> "d" 'e' &amp;`)).toBe(
+      'A &#38; B &#60;c&#62; &#34;d&#34; &#39;e&#39; &#38;amp;',
+    );
+  });
+
+  it('drops what XML 1.0 forbids, and turns tabs and line breaks into spaces', () => {
+    expect(printable('Bad\u0001Name\u0008X \uFFFE\uFFFF\uD800')).toBe(
+      'BadNameX ',
+    );
+    expect(printable('a\tb\nc\rd')).toBe('a b c d');
+    expect(printable('\u007fx\u0085y')).toBe('xy');
+    expect(printable('emoji 😀 stays')).toBe('emoji 😀 stays');
+  });
+});
+
 describe('receipt drawing', () => {
   const doc = receiptDocument(
     view(tx(), 'https://hub.example.test/api/hub/r/T1P97ZQAK3MP'),
   );
 
-  it("the image is a PNG, 3 pixels a point, the receipt's width", () => {
-    const png = receiptPng(doc);
+  it("the image is a PNG, 3 pixels a point, the receipt's width", async () => {
+    const png = await receiptPng(doc);
     expect(png.subarray(0, 8)).toEqual(
       Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     );
@@ -251,9 +325,9 @@ describe('receipt drawing', () => {
     expect(png.readUInt32BE(20)).toBeGreaterThan(900);
   });
 
-  it('the PDF is one A4 page, every object where the cross-reference table says, and a link only with an address', () => {
+  it('the PDF is one A4 page, every object where the cross-reference table says, and a link only with an address', async () => {
     for (const d of [doc, { ...doc, url: null }]) {
-      const pdf = receiptPdf(d, new Date('2026-09-26T09:30:00.000Z'));
+      const pdf = await receiptPdf(d, new Date('2026-09-26T09:30:00.000Z'));
       const latin = pdf.toString('latin1');
       expect(latin.startsWith('%PDF-1.4\n')).toBe(true);
       expect(latin.trimEnd().endsWith('%%EOF')).toBe(true);
@@ -283,6 +357,105 @@ describe('receipt drawing', () => {
         );
       else expect(latin).not.toContain('/Annots');
     }
+  });
+
+  /** The longest the ledger keeps (ledger.service.ts `clean`): names 500, references 200. */
+  const longest = (): ReceiptDocument => {
+    const word = (n: number, seed: number) =>
+      Array.from({ length: n }, (_, i) =>
+        String.fromCharCode(97 + ((i * 11 + seed) % 26)),
+      ).join('');
+    return {
+      ...doc,
+      headline: `Transfer from ${word(500, 1)}`,
+      lines: [
+        { label: 'Type', value: 'Transfer' },
+        { label: 'From', value: `${word(500, 2)} · ${word(500, 3)} •••• 6789` },
+        { label: 'To', value: 'Lennox Emmanuel · 812 345 6789' },
+        { label: 'Bank', value: word(500, 4) },
+        { label: 'Reference', value: `R${'7'.repeat(199)}` },
+      ],
+      footer: `Check it at wawu/r/T1P97ZQAK3MP · ${word(500, 5)}`,
+    };
+  };
+
+  const median = (xs: number[]) =>
+    [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+
+  it("drawing is bounded: at the ledger's longest name and reference, each of the image and the PDF takes under 300 ms", async () => {
+    const big = longest();
+    await receiptPng(big); // the fonts' first load
+    await receiptPdf(big, new Date());
+    for (const draw of [
+      () => receiptPng(big),
+      () => receiptPdf(big, new Date()),
+    ]) {
+      const times: number[] = [];
+      for (let i = 0; i < 3; i += 1) {
+        const t0 = performance.now();
+        await draw();
+        times.push(performance.now() - t0);
+      }
+      expect(median(times)).toBeLessThan(300);
+    }
+  });
+
+  it('while a long receipt is drawn the server keeps answering: the event loop never stalls 100 ms', async () => {
+    const big = longest();
+    let worst = 0;
+    let last = performance.now();
+    const tick = setInterval(() => {
+      const now = performance.now();
+      worst = Math.max(worst, now - last);
+      last = now;
+    }, 5);
+    try {
+      await Promise.all([
+        receiptPdf(big, new Date()),
+        receiptPng(big),
+        receiptPdf(big, new Date()),
+      ]);
+    } finally {
+      clearInterval(tick);
+    }
+    expect(worst).toBeLessThan(100);
+  });
+
+  it('measuring is linear: wrapping 500 characters takes under 20 ms, and every line fits', () => {
+    const t0 = performance.now();
+    const lines = wrap('x'.repeat(500), 13, 200, 600, 1000);
+    expect(performance.now() - t0).toBeLessThan(20);
+    expect(lines.join('')).toBe('x'.repeat(500));
+    for (const l of lines)
+      expect(textWidth(l, 13, 600)).toBeLessThanOrEqual(200);
+    expect(fit('y'.repeat(500), 13, 100)).toMatch(/^y+…$/);
+    expect(textWidth(fit('y'.repeat(500), 13, 100), 13)).toBeLessThanOrEqual(
+      100,
+    );
+  });
+
+  it('every printed string is cut to MAX_PRINTED characters before it is drawn', () => {
+    expect([...clip('z'.repeat(5000))]).toHaveLength(MAX_PRINTED);
+    expect(clip('z'.repeat(5000)).endsWith('…')).toBe(true);
+    expect(clip('Loma Bank')).toBe('Loma Bank');
+  });
+
+  it('a name with characters XML forbids, and with &, <, >, quotes, still draws as an image and a PDF', async () => {
+    const odd: ReceiptDocument = {
+      ...doc,
+      headline: 'Transfer from Bad\u0001Name\u0008X \uFFFE',
+      lines: [
+        {
+          label: 'From',
+          value: 'Bad\u0001Name\u0008X \uFFFE\uD800 & Sons <Ltd> "A" \'B\'',
+        },
+        { label: 'To', value: 'Tab\there\nnewline\u007f\u0085' },
+      ],
+    };
+    const png = await receiptPng(odd);
+    expect(png.subarray(1, 4).toString()).toBe('PNG');
+    const pdf = await receiptPdf(odd, new Date());
+    expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
   });
 });
 

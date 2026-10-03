@@ -221,9 +221,22 @@ const FALLBACK_NAMES = new Set<string>(
   Object.values(COUNTERPARTY_FALLBACK_NAMES),
 );
 
-/** Any run of five or more digits keeps its last 4: a meter or phone number in a name never shows whole. */
-function maskDigits(text: string): string {
-  return text.replace(/\d{5,}/g, (run) => `•••• ${run.slice(-4)}`);
+/**
+ * A run of five or more digits, written whole or in groups joined by
+ * spaces, hyphens, dots, slashes or brackets, with or without a leading
+ * `+`: "08031234567", "0803 123 4567", "+234 803-123-4567", "(0803) 123.4567".
+ */
+const DIGIT_RUN = /\+?\(?\d(?:[\s.\-/()]*\d){4,}\)?/g;
+
+/**
+ * Any phone-, meter- or account-like number in a name keeps only its last
+ * 4 digits, however it is spaced: a public page never shows more.
+ */
+export function maskDigits(text: string): string {
+  return text.replace(
+    DIGIT_RUN,
+    (run) => `•••• ${run.replace(/\D/g, '').slice(-4)}`,
+  );
 }
 
 /**
@@ -282,7 +295,7 @@ export function publicReceipt(
   const own: PublicReceiptParty = {
     name: maskedName(wallet.accountName ?? OWN_WALLET_FALLBACK_NAME, 'owner'),
     account: lastFour(wallet.accountNumber)
-      ? `${bankName} •••• ${lastFour(wallet.accountNumber)}`
+      ? `${maskDigits(bankName)} •••• ${lastFour(wallet.accountNumber)}`
       : null,
   };
   const cp = tx.counterparty;
@@ -290,7 +303,10 @@ export function publicReceipt(
     ? {
         name: maskedName(cp.name, cp.kind),
         account: cp.accountNumberLast4
-          ? [cp.bankName, `•••• ${cp.accountNumberLast4}`]
+          ? [
+              cp.bankName && maskDigits(cp.bankName),
+              `•••• ${cp.accountNumberLast4}`,
+            ]
               .filter(Boolean)
               .join(' ')
           : null,
@@ -307,7 +323,7 @@ export function publicReceipt(
     reference: tx.reference,
     from: tx.direction === 'in' ? other : own,
     to: tx.direction === 'in' ? own : other,
-    bankName,
+    bankName: maskDigits(bankName),
     licenceLine,
     link,
   };

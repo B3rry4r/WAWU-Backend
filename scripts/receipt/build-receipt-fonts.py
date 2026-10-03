@@ -44,7 +44,9 @@ def signed_area(points: list[tuple[float, float]]) -> float:
 
 
 def build(src: Path, style: str) -> None:
-    font = TTFont(src)
+    # recalcTimestamp=False keeps the source's head.modified, so a rebuild
+    # from the same source is byte for byte the same file.
+    font = TTFont(src, recalcTimestamp=False)
     glyphs = font.getGlyphSet()
     stem = BoundsPen(glyphs)
     glyphs["I"].draw(stem)

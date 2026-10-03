@@ -1,9 +1,13 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { deflateSync } from 'node:zlib';
-import { Resvg, type ResvgRenderOptions } from '@resvg/resvg-js';
+import { promisify } from 'node:util';
+import { crc32, deflate } from 'node:zlib';
+import { renderAsync, type ResvgRenderOptions } from '@resvg/resvg-js';
 import { RECEIPT_TOKENS, type ReceiptTone } from '../../styles/tokens-receipt';
 import type { ReceiptDocument } from './receipt-document';
+import { FontMetrics } from './receipt-font-metrics';
+
+const deflateAsync = promisify(deflate);
 
 /**
  * Drawing a receipt (task WALLET-18, W42 and W43). One layout, drawn as SVG
@@ -16,6 +20,13 @@ import type { ReceiptDocument } from './receipt-document';
  *   page, one image and, when the public host is set, a link over the
  *   "Check it at" line). Text in the PDF is part of the picture, so it is
  *   not selectable.
+ *
+ * Round 2: a draw is bounded. Every printed string is cleaned of what XML
+ * cannot carry and cut to MAX_PRINTED characters first; lines are measured
+ * from the fonts' own width tables (receipt-font-metrics.ts), never by the
+ * renderer; and the picture is drawn and compressed on libuv's thread pool
+ * (`renderAsync`, `zlib.deflate`), so the server keeps answering while it
+ * draws.
  *
  * The fonts are Alan Sans with a naira sign added (`assets/receipt/fonts`,
  * scripts/receipt/build-receipt-fonts.py); system fonts are never loaded, so
@@ -60,9 +71,22 @@ function repoRoot(): string {
 }
 
 const ASSETS = join(repoRoot(), 'assets', 'receipt');
-const FONT_FILES = ['Regular', 'SemiBold', 'Bold'].map((w) =>
+const WEIGHTS = { 400: 'Regular', 600: 'SemiBold', 700: 'Bold' } as const;
+type Weight = keyof typeof WEIGHTS;
+const FONT_FILES = Object.values(WEIGHTS).map((w) =>
   join(ASSETS, 'fonts', `WMTReceiptSans-${w}.ttf`),
 );
+const METRICS = Object.fromEntries(
+  Object.entries(WEIGHTS).map(([weight, name]) => [
+    weight,
+    new FontMetrics(
+      readFileSync(join(ASSETS, 'fonts', `WMTReceiptSans-${name}.ttf`)),
+    ),
+  ]),
+) as unknown as Record<Weight, FontMetrics>;
+
+/** No printed string is longer than this: the ledger keeps names up to 500 characters. */
+export const MAX_PRINTED = 160;
 const MARK = `data:image/svg+xml;base64,${readFileSync(join(ASSETS, 'submark.svg')).toString('base64')}`;
 /** The submark's own proportions (1170.16 x 1276.39). */
 const MARK_W = 24;
@@ -75,91 +99,103 @@ const TONE: Record<ReceiptTone, string> = {
   ink: RECEIPT_TOKENS.ink,
 };
 
-export function escapeXml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-}
-
-const widths = new Map<string, number>();
-
 /**
- * How wide `value` is drawn, in points: measured by the renderer itself in
- * the receipt's own fonts (the drawn ink's width), and remembered.
+ * Everything XML 1.0 cannot carry is dropped (C0 controls, lone surrogates,
+ * U+FFFE and U+FFFF), and the other control characters too; a tab or a line
+ * break becomes a space, as a receipt line is one line.
  */
-export function textWidth(value: string, size: number, weight = 400): number {
-  if (value.trim() === '') return 0;
-  const key = `${size}|${weight}|${value}`;
-  const known = widths.get(key);
-  if (known !== undefined) return known;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="4000" height="200"><text x="0" y="100" font-family="${FAMILY}" font-size="${size}" font-weight="${weight}">${escapeXml(value)}</text></svg>`;
-  const box = new Resvg(svg, {
-    font: {
-      fontFiles: FONT_FILES,
-      loadSystemFonts: false,
-      defaultFontFamily: FAMILY,
-    },
-  }).getBBox();
-  const width = box ? box.width : 0;
-  if (widths.size > 5_000) widths.clear();
-  widths.set(key, width);
-  return width;
+export function printable(s: string): string {
+  return s.replace(/[\t\n\r]/g, ' ').replace(
+    // eslint-disable-next-line no-control-regex
+    /[\u0000-\u001f\u007f-\u009f\ufffe\uffff]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g,
+    '',
+  );
 }
 
-/** The text cut to fit `width`, with an ellipsis when cut. */
+/** Text for SVG or HTML: printable, with &, <, >, " and ' escaped. */
+export function escapeXml(s: string): string {
+  return printable(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+}
+
+/** A string as it is printed: printable, and at most MAX_PRINTED characters. */
+export function clip(s: string): string {
+  const chars = [...printable(s)];
+  return chars.length > MAX_PRINTED
+    ? `${chars
+        .slice(0, MAX_PRINTED - 1)
+        .join('')
+        .trimEnd()}…`
+    : chars.join('');
+}
+
+/** How wide `value` is drawn, in points, from the font's width table. */
+export function textWidth(
+  value: string,
+  size: number,
+  weight: Weight = 400,
+): number {
+  return METRICS[weight].width(value, size);
+}
+
+/** The text cut to fit `width`, with an ellipsis when cut. One pass over it. */
 export function fit(
   value: string,
   size: number,
   width: number,
-  weight = 400,
+  weight: Weight = 400,
 ): string {
   if (textWidth(value, size, weight) <= width) return value;
-  let out = value;
-  while (out.length > 1 && textWidth(`${out}…`, size, weight) > width)
-    out = out.slice(0, -1);
+  const room = width - textWidth('…', size, weight);
+  let out = '';
+  for (const ch of value) {
+    if (textWidth(out + ch, size, weight) > room) break;
+    out += ch;
+  }
   return `${out.trimEnd()}…`;
 }
 
 /**
  * The text on lines no wider than `width`: broken between words, and a
  * word too long for one line (a reference) broken between characters. At
- * most `max` lines; only text beyond them is cut, with an ellipsis.
+ * most `max` lines; only text beyond them is cut, with an ellipsis. Each
+ * character is measured once.
  */
 export function wrap(
   value: string,
   size: number,
   width: number,
-  weight = 400,
+  weight: Weight = 400,
   max = 3,
 ): string[] {
   const lines: string[] = [];
   let line = '';
-  const push = (word: string) => {
-    const next = line ? `${line} ${word}` : word;
-    if (textWidth(next, size, weight) <= width) {
-      line = next;
-      return;
+  let used = 0;
+  const space = textWidth(' ', size, weight);
+  for (const word of value.split(' ')) {
+    const w = textWidth(word, size, weight);
+    if (line && used + space + w <= width) {
+      line += ` ${word}`;
+      used += space + w;
+      continue;
     }
     if (line) lines.push(line);
     line = '';
-    let rest = word;
-    while (textWidth(rest, size, weight) > width) {
-      let cut = rest.length - 1;
-      while (cut > 1 && textWidth(rest.slice(0, cut), size, weight) > width)
-        cut -= 1;
-      lines.push(rest.slice(0, cut));
-      rest = rest.slice(cut);
+    used = 0;
+    for (const ch of word) {
+      const cw = textWidth(ch, size, weight);
+      if (line && used + cw > width) {
+        lines.push(line);
+        line = '';
+        used = 0;
+      }
+      line += ch;
+      used += cw;
     }
-    line = rest;
-  };
-  for (const word of value.split(' ')) push(word);
+  }
   if (line) lines.push(line);
   if (lines.length <= max) return lines;
   const kept = lines.slice(0, max);
-  kept[max - 1] = fit(
-    `${kept[max - 1]} ${lines.slice(max).join(' ')}`,
-    size,
-    width,
-    weight,
-  );
+  kept[max - 1] = fit(`${kept[max - 1]} ${lines[max]}`, size, width, weight);
   return kept;
 }
 
@@ -169,7 +205,7 @@ function text(
   value: string,
   o: {
     size: number;
-    weight?: number;
+    weight?: Weight;
     fill: string;
     anchor?: 'start' | 'middle' | 'end';
     spacing?: number;
@@ -179,11 +215,25 @@ function text(
 }
 
 /** The receipt as SVG content at RECEIPT_WIDTH, with its height and where the footer's link sits. */
-export function receiptCard(doc: ReceiptDocument): {
+export function receiptCard(raw: ReceiptDocument): {
   svg: string;
   height: number;
   footer: { top: number; bottom: number };
 } {
+  // Every string printable and of bounded length before anything is measured.
+  const doc: ReceiptDocument = {
+    ...raw,
+    title: clip(raw.title),
+    dateText: clip(raw.dateText),
+    headline: clip(raw.headline),
+    amountText: clip(raw.amountText),
+    statusText: clip(raw.statusText),
+    lines: raw.lines.map((l) => ({
+      label: clip(l.label),
+      value: clip(l.value),
+    })),
+    footer: clip(raw.footer),
+  };
   const W = RECEIPT_WIDTH;
   const inner = W - 2 * PAD_X;
   const parts: string[] = [];
@@ -281,38 +331,73 @@ export function receiptCard(doc: ReceiptDocument): {
   return { svg: parts.join(''), height, footer: { top: footerTop, bottom: y } };
 }
 
-function render(
-  svg: string,
-  widthPx: number,
-): { rgb: Buffer; png: Buffer; width: number; height: number } {
-  const options: ResvgRenderOptions = {
-    background: RECEIPT_TOKENS.paper,
-    fitTo: { mode: 'width', value: widthPx },
-    font: {
-      fontFiles: FONT_FILES,
-      loadSystemFonts: false,
-      defaultFontFamily: FAMILY,
-    },
-    imageRendering: 0,
-    shapeRendering: 2,
-    textRendering: 1,
-  };
-  const image = new Resvg(svg, options).render();
-  const rgba = image.pixels;
-  const rgb = Buffer.alloc((rgba.length / 4) * 3);
-  for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) {
-    rgb[j] = rgba[i];
-    rgb[j + 1] = rgba[i + 1];
-    rgb[j + 2] = rgba[i + 2];
-  }
-  return { rgb, png: image.asPng(), width: image.width, height: image.height };
-}
+const RENDER_OPTIONS = (widthPx: number): ResvgRenderOptions => ({
+  background: RECEIPT_TOKENS.paper,
+  fitTo: { mode: 'width', value: widthPx },
+  font: {
+    fontFiles: FONT_FILES,
+    loadSystemFonts: false,
+    defaultFontFamily: FAMILY,
+  },
+  imageRendering: 0,
+  shapeRendering: 2,
+  textRendering: 1,
+});
 
 /** W42: the receipt as a PNG, white, IMAGE_SCALE pixels per point. */
-export function receiptPng(doc: ReceiptDocument): Buffer {
+export async function receiptPng(doc: ReceiptDocument): Promise<Buffer> {
   const card = receiptCard(doc);
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${RECEIPT_WIDTH}" height="${card.height}" viewBox="0 0 ${RECEIPT_WIDTH} ${card.height}"><rect width="100%" height="100%" fill="${RECEIPT_TOKENS.paper}"/>${card.svg}</svg>`;
-  return render(svg, RECEIPT_WIDTH * IMAGE_SCALE).png;
+  const image = await renderAsync(
+    svg,
+    RENDER_OPTIONS(RECEIPT_WIDTH * IMAGE_SCALE),
+  );
+  return pngOf(image.pixels, image.width, image.height);
+}
+
+/** Rows of a picture handed over this many at a time, so no slice holds the event loop more than a few ms. */
+const ROWS_PER_SLICE = 128;
+const nextTick = () => new Promise<void>((r) => setImmediate(r));
+
+function pngChunk(type: string, data: Buffer): Buffer {
+  const head = Buffer.alloc(8);
+  head.writeUInt32BE(data.length, 0);
+  head.write(type, 4, 'latin1');
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(data, crc32(Buffer.from(type, 'latin1'))) >>> 0, 0);
+  return Buffer.concat([head, data, crc]);
+}
+
+/**
+ * RGBA pixels as a PNG, compressed on the thread pool. resvg's own
+ * `asPng()` encodes on the calling thread (about 60 ms for a receipt), so
+ * the PNG is put together here instead: each row with filter byte 0, then
+ * one zlib stream.
+ */
+export async function pngOf(
+  rgba: Buffer,
+  width: number,
+  height: number,
+): Promise<Buffer> {
+  const stride = width * 4;
+  const raw = Buffer.allocUnsafe((stride + 1) * height);
+  for (let y = 0; y < height; y += 1) {
+    if (y > 0 && y % ROWS_PER_SLICE === 0) await nextTick();
+    const at = y * (stride + 1);
+    raw[at] = 0;
+    rgba.copy(raw, at + 1, y * stride, (y + 1) * stride);
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; // bits per channel
+  ihdr[9] = 6; // RGBA
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', await deflateAsync(raw, { level: 6 })),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
 }
 
 /** A string for a PDF literal: only printable ASCII, with \, ( and ) escaped. */
@@ -323,13 +408,33 @@ export function pdfString(s: string): string {
 }
 
 /** W43: one A4 page with the receipt on it, as a PDF. */
-export function receiptPdf(doc: ReceiptDocument, createdAt: Date): Buffer {
+export async function receiptPdf(
+  doc: ReceiptDocument,
+  createdAt: Date,
+): Promise<Buffer> {
   const card = receiptCard(doc);
   const cardW = RECEIPT_WIDTH * PDF_CARD_SCALE;
   const left = (A4.width - cardW) / 2;
   const edge = `<rect x="${left - 0.5}" y="${PDF_TOP - 0.5}" width="${cardW + 1}" height="${card.height * PDF_CARD_SCALE + 1}" rx="6" fill="none" stroke="${RECEIPT_TOKENS.hairline}" stroke-width="1"/>`;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${A4.width}" height="${A4.height}" viewBox="0 0 ${A4.width} ${A4.height}"><rect width="100%" height="100%" fill="${RECEIPT_TOKENS.paper}"/>${edge}<g transform="translate(${left} ${PDF_TOP}) scale(${PDF_CARD_SCALE})">${card.svg}</g></svg>`;
-  const page = render(svg, Math.round((A4.width * PDF_DPI) / 72));
+  const page = await renderAsync(
+    svg,
+    RENDER_OPTIONS(Math.round((A4.width * PDF_DPI) / 72)),
+  );
+  // RGBA to RGB: the page is opaque white, so the alpha byte carries nothing.
+  // Converted a slice of rows at a time, so the server keeps answering.
+  const rgba = page.pixels;
+  const rgb = Buffer.allocUnsafe((rgba.length / 4) * 3);
+  const slice = page.width * 4 * ROWS_PER_SLICE;
+  for (let from = 0; from < rgba.length; from += slice) {
+    if (from > 0) await nextTick();
+    const to = Math.min(from + slice, rgba.length);
+    for (let i = from, j = (from / 4) * 3; i < to; i += 4, j += 3) {
+      rgb[j] = rgba[i];
+      rgb[j + 1] = rgba[i + 1];
+      rgb[j + 2] = rgba[i + 2];
+    }
+  }
 
   // The link over the footer, in PDF space (origin bottom left).
   const link = doc.url
@@ -341,20 +446,20 @@ export function receiptPdf(doc: ReceiptDocument, createdAt: Date): Buffer {
         uri: doc.url,
       }
     : null;
-  return pdfWithImage(page.rgb, page.width, page.height, link, createdAt);
+  const image = await deflateAsync(rgb, { level: 6 });
+  return pdfWithImage(image, page.width, page.height, link, createdAt);
 }
 
 const n2 = (n: number) => n.toFixed(2);
 
-/** A one-page A4 PDF whose page is one RGB picture, with an optional link. */
+/** A one-page A4 PDF whose page is one deflated RGB picture, with an optional link. */
 export function pdfWithImage(
-  rgb: Buffer,
+  image: Buffer,
   width: number,
   height: number,
   link: { x0: number; y0: number; x1: number; y1: number; uri: string } | null,
   createdAt: Date,
 ): Buffer {
-  const image = deflateSync(rgb, { level: 9 });
   const content = Buffer.from(
     `q ${n2(A4.width)} 0 0 ${n2(A4.height)} 0 0 cm /Im1 Do Q\n`,
     'latin1',
