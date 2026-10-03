@@ -186,6 +186,10 @@ async function burstInOneWindow(
     everyBurst(results);
     spans.push(span);
     if (span < SHORT.ttl - ARRIVAL_MARGIN_MS) return { results, span, tag };
+    // Said out loud, so a run that needed another burst is visible in CI.
+    console.warn(
+      `${label}: burst ${attempt} of ${MAX_ATTEMPTS} set aside, its arrivals spanned ${span} ms (needs under ${SHORT.ttl - ARRIVAL_MARGIN_MS} ms); sending a fresh one`,
+    );
   }
   throw new Error(
     `None of ${MAX_ATTEMPTS} bursts of ${count} deliveries reached the app within one ${SHORT.ttl} ms window with ${ARRIVAL_MARGIN_MS} ms to spare (arrival spans ${spans.join(', ')} ms), so the throttle was never put to the test.`,
