@@ -195,6 +195,14 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     disposition: 'OWNED',
   },
 
+  // The city on this person's professional card (PROS-02). Theirs, and
+  // public only beside a listing that goes with them.
+  {
+    model: 'ProfessionalLocation',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
+
   // Last: everything above may reference these.
   { model: 'CreatorState', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'UserProfile', column: 'wawuUserId', disposition: 'OWNED' },
