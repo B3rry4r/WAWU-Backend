@@ -26,6 +26,8 @@ interface Row {
   bytes: number;
   status: 'pending' | 'confirmed' | 'abandoned';
   createdAt: Date;
+  /** Rows written by a test without one are creator content. */
+  folder?: string;
 }
 
 /** The four stored tick columns on UserProfile (verification-state.ts). */
@@ -65,14 +67,19 @@ function buildService(
       aggregate: async ({
         where,
       }: {
-        where: { wawuUserId: string; status: { in: string[] } };
+        where: {
+          wawuUserId: string;
+          status: { in: string[] };
+          folder: { in: string[] };
+        };
       }) => ({
         _sum: {
           bytes: rows
             .filter(
               (r) =>
                 r.wawuUserId === where.wawuUserId &&
-                where.status.in.includes(r.status),
+                where.status.in.includes(r.status) &&
+                where.folder.in.includes(r.folder ?? 'content/full'),
             )
             .reduce((n, r) => n + r.bytes, 0),
         },
@@ -237,7 +244,7 @@ describe('storage quota', () => {
     expect(refusal).toBeInstanceOf(PayloadTooLargeException);
     expect((refusal as PayloadTooLargeException).getResponse()).toEqual({
       message:
-        'This file needs 1000 bytes, but only 0 bytes of your 1GB storage is free. Delete something, or get a verification tick for more space.',
+        'This file needs 1000 bytes, but only 0 bytes of your 1GB storage is free. A verification tick raises the limit to 10GB.',
       reason: {
         code: 'storage_limit_reached',
         neededBytes: 1000,
@@ -313,7 +320,7 @@ describe('storage quota', () => {
       ],
     });
     await expect(presign(service, 0.5 * GB)).rejects.toThrow(
-      'This file needs 512MB, but only 102MB of your 10GB storage is free. Delete something to make room.',
+      'This file needs 512MB, but only 102MB of your 10GB storage is free.',
     );
   });
 
@@ -358,6 +365,129 @@ describe('storage quota', () => {
     await expect(presign(service, 0.5 * GB)).rejects.toThrow(
       /needs 512MB, but only 102MB of your 1GB storage is free/,
     );
+  });
+
+  it('the 413 text never promises that deleting frees storage, and a ticked account is not told to get a tick', async () => {
+    const free = buildService({
+      rows: [
+        {
+          id: 'a',
+          wawuUserId: 'creator-1',
+          key: 'k',
+          bytes: 1 * GB,
+          status: 'confirmed',
+          createdAt: new Date(),
+        },
+      ],
+    });
+    const ticked = buildService({
+      tick: true,
+      rows: [
+        {
+          id: 'a',
+          wawuUserId: 'creator-1',
+          key: 'k',
+          bytes: 10 * GB,
+          status: 'confirmed',
+          createdAt: new Date(),
+        },
+      ],
+    });
+    const messages: string[] = [];
+    for (const { service } of [free, ticked]) {
+      const e = (await presign(service, 1000).catch(
+        (x: unknown) => x,
+      )) as PayloadTooLargeException;
+      messages.push((e.getResponse() as { message: string }).message);
+    }
+    expect(messages[0]).toBe(
+      'This file needs 1000 bytes, but only 0 bytes of your 1GB storage is free. A verification tick raises the limit to 10GB.',
+    );
+    expect(messages[1]).toBe(
+      'This file needs 1000 bytes, but only 0 bytes of your 10GB storage is free.',
+    );
+    for (const m of messages) {
+      expect(m).not.toMatch(/delete|remove/i);
+      expect(m).not.toContain('\u2014');
+    }
+  });
+
+  it.each([
+    ['kyc/id-document', 'application/pdf', 'pdf'],
+    ['avatars', 'image/jpeg', 'jpeg'],
+    ['profile/cover', 'image/jpeg', 'jpeg'],
+    ['legal/document', 'application/pdf', 'pdf'],
+    ['service-application/document', 'application/pdf', 'pdf'],
+    ['professional/document', 'application/pdf', 'pdf'],
+    ['community/image', 'image/jpeg', 'jpeg'],
+    ['community/message', 'image/jpeg', 'jpeg'],
+    ['event/speaker', 'image/jpeg', 'jpeg'],
+  ] as const)(
+    'an account over its content storage can still upload to %s, and it does not count against content',
+    async (folder, contentType, ext) => {
+      for (const tick of [false, true]) {
+        const { service } = buildService({
+          tick,
+          rows: [
+            {
+              id: 'a',
+              wawuUserId: 'creator-1',
+              key: 'k',
+              bytes: (tick ? 10 : 1) * GB,
+              status: 'confirmed',
+              createdAt: new Date(),
+            },
+          ],
+        });
+        await expect(
+          service.presignUpload('creator-1', folder, contentType, ext, 1000),
+        ).resolves.toHaveProperty('uploadUrl');
+        const usage = await service.usageFor('creator-1');
+        expect(usage.usedBytes).toBe((tick ? 10 : 1) * GB);
+        // New content is still refused for the same account.
+        await expect(
+          service.presignUpload(
+            'creator-1',
+            'content/full',
+            'video/mp4',
+            'mp4',
+            1000,
+          ),
+        ).rejects.toBeInstanceOf(PayloadTooLargeException);
+      }
+    },
+  );
+
+  it('an exempt folder keeps its own type allowlist', async () => {
+    const { service } = buildService();
+    await expect(
+      service.presignUpload('creator-1', 'avatars', 'video/mp4', 'mp4', 1000),
+    ).rejects.toThrow(/not allowed in avatars/);
+  });
+
+  it('files in exempt folders do not count toward the content allowance', async () => {
+    const { service } = buildService({
+      rows: [
+        {
+          id: 'a',
+          wawuUserId: 'creator-1',
+          key: 'k',
+          bytes: 0.9 * GB,
+          status: 'confirmed',
+          createdAt: new Date(),
+          folder: 'kyc/id-document',
+        },
+      ],
+    });
+    await expect(
+      service.presignUpload(
+        'creator-1',
+        'content/full',
+        'video/mp4',
+        'mp4',
+        0.9 * GB,
+      ),
+    ).resolves.toHaveProperty('uploadUrl');
   });
 
   it('formats sizes the way a person reads them', () => {

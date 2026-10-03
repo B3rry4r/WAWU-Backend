@@ -40,8 +40,9 @@ export class StorageController {
   }
 
   /**
-   * GET /uploads/usage — how much space this account has used of its
-   * allowance.
+   * GET /uploads/usage — how much creator-content space (content/preview and
+   * content/full) this account has used of its allowance. Identity documents,
+   * avatars and the other folders are not counted.
    *
    * Its own endpoint rather than a field on creator state, because storage is
    * not a creator-only concern: an account that has never subscribed still

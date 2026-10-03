@@ -40,7 +40,8 @@ import type {
  *
  * There were two gates. A paid subscription unlocked UPLOADING and manual KYC
  * unlocks EARNING; the first went with subscriptions, and uploading is now
- * bounded only by the flat per-account cap. KYC is untouched. There is still
+ * bounded only by the per-account cap (5 uploads, 25 with a tick, R-7). KYC
+ * is untouched. There is still
  * no `verified` boolean on this shape and there never will be one — collapsing
  * a KYC status into a single word is how a creator who cannot be paid gets
  * told everything is fine.

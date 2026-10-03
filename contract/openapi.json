@@ -834,7 +834,7 @@
             }
           }
         },
-        "summary": "GET /uploads/usage — how much space this account has used of its\nallowance.\n\nIts own endpoint rather than a field on creator state, because storage is\nnot a creator-only concern: an account that has never subscribed still\nuploads a KYC document and an avatar, and still has a ceiling. Hanging\nit off creator state would leave every non-creator unable to see a limit\nthat applies to them.",
+        "summary": "GET /uploads/usage — how much creator-content space (content/preview and\ncontent/full) this account has used of its allowance. Identity documents,\navatars and the other folders are not counted.\n\nIts own endpoint rather than a field on creator state, because storage is\nnot a creator-only concern: an account that has never subscribed still\nuploads a KYC document and an avatar, and still has a ceiling. Hanging\nit off creator state would leave every non-creator unable to see a limit\nthat applies to them.",
         "tags": [
           "Storage"
         ]

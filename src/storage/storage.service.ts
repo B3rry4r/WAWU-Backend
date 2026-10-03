@@ -53,6 +53,21 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
  */
 const RECONCILE_GRACE_MS = 15 * 60 * 1000;
 
+/**
+ * The folders that hold creator content, the only ones R-7's storage
+ * allowance counts and limits. Every other folder (KYC and other documents,
+ * avatars, covers, community and chat images, speaker photos) is exempt.
+ */
+export const CONTENT_FOLDERS: readonly string[] = [
+  'content/preview',
+  'content/full',
+];
+
+/**
+ * Creator-content storage only: `usedBytes` sums `content/preview` and
+ * `content/full` files (CONTENT_FOLDERS), so identity documents, avatars and
+ * the other folders are not in it and not limited by it.
+ */
 export interface StorageUsage {
   usedBytes: number;
   limitBytes: number;
@@ -67,7 +82,8 @@ export interface AllowanceLevelView {
 
 /**
  * GET /uploads/allowance: what this account may upload and store, what it
- * has used, and both levels R-7 sets, so a screen can say "Free accounts get
+ * has used (creator content only: `content/preview` and `content/full`; KYC
+ * documents, avatars and the other folders are not counted), and both levels R-7 sets, so a screen can say "Free accounts get
  * 5" and "Up to 25 uploads" without a number of its own.
  */
 export interface UploadAllowanceView {
@@ -230,15 +246,26 @@ export class StorageService {
     // Only this NEW file is refused. Files already stored stay, even when the
     // account is above its allowance (R-7 lowered free accounts from 2 GB to
     // 1 GB, and a tick can lapse).
+    //
+    // The allowance is for creator content (CONTENT_FOLDERS). Identity
+    // documents, avatars, covers, chat media and the other folders are
+    // neither counted against it nor refused by it: R-7 sets the limit on
+    // uploads, and a person over it must still be able to prove who they are.
+    // Those folders keep their own per-file limit and type allowlist.
     const { usage, tickHeld } = await this.usageAndTick(wawuId);
-    if (usage.usedBytes + contentLength > usage.limitBytes) {
+    if (
+      CONTENT_FOLDERS.includes(folder) &&
+      usage.usedBytes + contentLength > usage.limitBytes
+    ) {
+      // Says only what is true: deleting a piece frees its upload slot, never
+      // storage, so no line here promises that deleting makes room.
       throw new PayloadTooLargeException({
         message: `This file needs ${formatBytes(contentLength)}, but only ${formatBytes(
           Math.max(0, usage.remainingBytes),
-        )} of your ${formatBytes(usage.limitBytes)} storage is free. ${
+        )} of your ${formatBytes(usage.limitBytes)} storage is free.${
           tickHeld
-            ? 'Delete something to make room.'
-            : 'Delete something, or get a verification tick for more space.'
+            ? ''
+            : ` A verification tick raises the limit to ${formatBytes(TICK_STORAGE_BYTES)}.`
         }`,
         reason: {
           code: 'storage_limit_reached',
@@ -393,7 +420,11 @@ export class StorageService {
     const [agg, profile] = await Promise.all([
       this.prisma.storageObject.aggregate({
         _sum: { bytes: true },
-        where: { wawuUserId: wawuId, status: { in: ['pending', 'confirmed'] } },
+        where: {
+          wawuUserId: wawuId,
+          status: { in: ['pending', 'confirmed'] },
+          folder: { in: [...CONTENT_FOLDERS] },
+        },
       }),
       this.prisma.userProfile.findUnique({
         where: { wawuUserId: wawuId },

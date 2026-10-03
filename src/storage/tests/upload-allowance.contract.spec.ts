@@ -346,7 +346,7 @@ describe('Upload allowance (ME-17, contract)', () => {
       expect(res.body).toEqual({
         statusCode: 413,
         message:
-          'This file needs 1000 bytes, but only 0 bytes of your 1GB storage is free. Delete something, or get a verification tick for more space.',
+          'This file needs 1000 bytes, but only 0 bytes of your 1GB storage is free. A verification tick raises the limit to 10GB.',
         data: null,
         reason: {
           code: 'storage_limit_reached',
@@ -356,6 +356,28 @@ describe('Upload allowance (ME-17, contract)', () => {
           tickHeld: false,
           storageBytesWithTick: 10 * GB,
         },
+      });
+    });
+
+    it('a creator above 1 GB of content can still upload a KYC document and an avatar, but not new content', async () => {
+      const presign = (folder: string, contentType: string) =>
+        request(server())
+          .post('/uploads/presign')
+          .set('Authorization', bearer(OVER_FREE))
+          .send({ folder, contentType, extension: 'x', contentLength: 1000 });
+      await presign('kyc/id-document', 'application/pdf').expect(200);
+      await presign('avatars', 'image/jpeg').expect(200);
+      await presign('content/preview', 'image/jpeg').expect(413);
+      // The identity document and the avatar are not content: the numbers the
+      // screens read are unchanged by them.
+      const usage = await request(server())
+        .get('/uploads/usage')
+        .set('Authorization', bearer(OVER_FREE))
+        .expect(200);
+      expect(dataOf(usage)).toEqual({
+        usedBytes: 1.5 * GB,
+        limitBytes: 1 * GB,
+        remainingBytes: 0,
       });
     });
 
@@ -400,7 +422,13 @@ describe('Upload allowance (ME-17, contract)', () => {
       where: { wawuUserId: OVER_FREE },
       select: { bytes: true, status: true },
     });
-    expect(files).toEqual([{ bytes: 1.5 * GB, status: 'confirmed' }]);
+    // The 1.5 GB content file is untouched; the only other rows are the KYC
+    // document and avatar reservations made above.
+    expect(files).toContainEqual({ bytes: 1.5 * GB, status: 'confirmed' });
+    expect(files.filter((f) => f.bytes !== 1.5 * GB)).toEqual([
+      { bytes: 1000, status: 'pending' },
+      { bytes: 1000, status: 'pending' },
+    ]);
     const state = await prisma.creatorState.findUnique({
       where: { wawuUserId: OVER_FREE },
     });
