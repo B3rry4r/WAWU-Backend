@@ -101,6 +101,23 @@ export interface FintavaCustomer extends FintavaCustomerIds {
 }
 
 /**
+ * Turns the BVN on a Fintava customer record into a keyed digest (MONEY-12
+ * passes `IdentityHasher.hash('bvn', ...)`). The client hands the BVN only
+ * to this function and never returns, stores or logs it.
+ */
+export type FintavaBvnDigest = (bvn: string) => string;
+
+/**
+ * A customer record read for account opening (MONEY-12): the customer, and
+ * the digest of the BVN Fintava holds for it (`userInfo.bvn`), or null when
+ * the record carries no readable BVN (absent, masked, another shape).
+ */
+export interface FintavaCustomerMatch {
+  customer: FintavaCustomer;
+  bvnDigest: string | null;
+}
+
+/**
  * A customer looked up by phone for account opening (MONEY-12), which may
  * send a lost create again only when Fintava has none: three answers, as a
  * transaction lookup has (`FintavaLookup`). `absent` is only Fintava's own
@@ -109,14 +126,15 @@ export interface FintavaCustomer extends FintavaCustomerIds {
  * `unknown`, never absent.
  */
 export type FintavaCustomerLookup =
-  | { state: 'found'; customer: FintavaCustomer }
+  | ({ state: 'found' } & FintavaCustomerMatch)
   | { state: 'absent' }
   | { state: 'unknown'; why: 'empty_answer' };
 
 /**
  * One row of `GET /customers/list` as account opening reads it: whose phone,
- * and when the customer was made. The list is newest first
- * (`sandbox/07-`), so a lost create is looked for back to when it was sent.
+ * and when the customer was made. The sandbox serves the list newest first
+ * (`sandbox/07-`), so a lost create is looked for back to when it was sent;
+ * account opening checks that order on every page it reads.
  */
 export interface FintavaCustomerSighting {
   customerId: string;

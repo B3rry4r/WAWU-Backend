@@ -31,11 +31,17 @@ import { ResponseInterceptor } from '../../../common/interceptors/response.inter
 import { PrismaModule } from '../../../common/prisma/prisma.module';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { FintavaClient } from '../../../fintava/fintava-client';
+import type { FintavaBvnDigest } from '../../../fintava/fintava.interface';
 import type { MoneyErrorReason } from '../../dto/money-error.dto';
 import { WalletIdentityService } from '../../identity/wallet-identity.service';
 import { MoneyModule } from '../../money.module';
 import type { WalletView } from '../../money-view.type';
-import { WalletOpeningService } from '../wallet-opening.service';
+import { AccountPurgeService } from '../../../account-purge/account-purge.service';
+import type { OpenNairaWalletDto } from '../dto/open-wallet.dto';
+import {
+  PHONE_HELD_MESSAGE,
+  WalletOpeningService,
+} from '../wallet-opening.service';
 
 /**
  * Opening the account at Fintava (task MONEY-12) over HTTP: the real
@@ -45,7 +51,9 @@ import { WalletOpeningService } from '../wallet-opening.service';
  * routes built on the local double: a create adds a customer (with the
  * sandbox's 201 shape, `sandbox/07-`), the details, by-id and list reads find
  * it, and an unknown phone is the sandbox's own `404 ["Customer not
- * found"]` (`sandbox/32-money12-account.md`). Each person passes the BVN
+ * found"]` (`sandbox/32-money12-account.md`). Every read carries the
+ * customer's full `userInfo.bvn` and `dateOfBirth`, as the sandbox's do
+ * (round 2: the first stand-in left them out, which hid D1). Each person passes the BVN
  * check (KYC-01) and the selfie (KYC-02) through their own routes first, as
  * the app does; the selfie's pass is the KYC-02 stand-in `SELFIE_MATCHED`,
  * since no real selfie has matched in the sandbox yet (G-25).
@@ -131,6 +139,18 @@ type OpenBody = {
 /** Every identity value sent in this file, for the final scans. */
 const secrets: string[] = [];
 
+/** A date of birth no other person or customer in this file has. */
+const datesUsed = new Set<string>();
+function uniqueDate(): string {
+  for (;;) {
+    const d = `19${randomInt(40, 99)}-${String(randomInt(1, 13)).padStart(2, '0')}-${String(randomInt(10, 29))}`;
+    if (!datesUsed.has(d)) {
+      datesUsed.add(d);
+      return d;
+    }
+  }
+}
+
 function mintToken(
   sub: string,
   phone: string,
@@ -180,6 +200,9 @@ type Made = {
   /** Local `0...` form. */
   phone: string;
   createdAt: string;
+  /** As Fintava's reads carry it, in full (`sandbox/32-`, call 4 of round 2). */
+  bvn: string;
+  dateOfBirth: string;
 };
 
 describe('Opening the Fintava account (MONEY-12) over HTTP', () => {
@@ -192,8 +215,8 @@ describe('Opening the Fintava account (MONEY-12) over HTTP', () => {
   let identity: WalletIdentityService;
   let client: FintavaClient;
   const fintavaClient = () => client;
-  const realLookup = (phone: string) =>
-    FintavaClient.prototype.lookupCustomerByPhone.call(client, phone);
+  const realLookup = (phone: string, digest: FintavaBvnDigest) =>
+    FintavaClient.prototype.lookupCustomerByPhone.call(client, phone, digest);
   const double = new FintavaDouble();
   const users: string[] = [];
   const previous: Record<string, string | undefined> = {};
@@ -213,7 +236,13 @@ describe('Opening the Fintava account (MONEY-12) over HTTP', () => {
   /** How the list answers, when not by the customers held. */
   let listOverride: ((req: SeenRequest) => CannedAnswer) | null = null;
 
-  function makeCustomer(phone: string, first: string, last: string): Made {
+  function makeCustomer(
+    phone: string,
+    first: string,
+    last: string,
+    bvn: string,
+    opts: { dateOfBirth?: string; createdAt?: string } = {},
+  ): Made {
     const m: Made = {
       customerId: randomUUID(),
       recordId: randomUUID(),
@@ -221,10 +250,22 @@ describe('Opening the Fintava account (MONEY-12) over HTTP', () => {
       accountNumber: digits(10),
       accountName: `${first} ${last}`,
       phone,
-      createdAt: new Date().toISOString(),
+      createdAt: opts.createdAt ?? new Date().toISOString(),
+      bvn,
+      dateOfBirth: opts.dateOfBirth ?? '1970-01-01',
     };
     customers.unshift(m);
     return m;
+  }
+  /** A customer someone else made at Fintava for this phone: their BVN, name, date of birth. */
+  function stranger(phone: string, createdAt?: string): Made {
+    const bvn = digits(11);
+    const dateOfBirth = uniqueDate();
+    secrets.push(bvn, dateOfBirth);
+    return makeCustomer(phone, 'Chidi', 'Stranger', bvn, {
+      dateOfBirth,
+      createdAt,
+    });
   }
   const userInfo = (m: Made) => ({
     id: m.customerId,
@@ -233,6 +274,8 @@ describe('Opening the Fintava account (MONEY-12) over HTTP', () => {
     firstName: m.accountName.split(' ')[0],
     lastName: m.accountName.split(' ')[1],
     phoneNumber: m.phone,
+    bvn: m.bvn,
+    dateOfBirth: m.dateOfBirth,
     roles: ['USER'],
     userType: 'CUSTOMER',
     nin: null,
@@ -339,6 +382,8 @@ describe('Opening the Fintava account (MONEY-12) over HTTP', () => {
         phoneNumber: string;
         firstName: string;
         lastName: string;
+        bvn: string;
+        dateOfBirth: string;
       };
       const mode = createMode;
       switch (mode.kind) {
@@ -347,7 +392,15 @@ describe('Opening the Fintava account (MONEY-12) over HTTP', () => {
         case 'nothing_then_500':
           return { status: 500, body: fintavaError(500, 'read ECONNRESET') };
         default: {
-          const m = makeCustomer(b.phoneNumber, b.firstName, b.lastName);
+          const m = makeCustomer(
+            b.phoneNumber,
+            b.firstName,
+            b.lastName,
+            b.bvn,
+            {
+              dateOfBirth: b.dateOfBirth,
+            },
+          );
           if (mode.kind === 'late') {
             return { status: 201, body: created201(m), delayMs: LATE_MS };
           }
@@ -393,10 +446,10 @@ describe('Opening the Fintava account (MONEY-12) over HTTP', () => {
       nin,
       firstName: 'Amaka',
       lastName: 'Opener',
-      dateOfBirth: '1991-07-0' + String(randomInt(1, 10)),
+      dateOfBirth: uniqueDate(),
       address: `${randomInt(10, 999)} Opening Close, Yaba, Lagos`,
     };
-    secrets.push(bvn, nin, details.address);
+    secrets.push(bvn, nin, details.address, details.dateOfBirth);
     const token =
       email === undefined ? mintToken(id, phone) : mintToken(id, phone, email);
     return { id, auth: `Bearer ${token}`, phone, local, bvn, nin, details };
@@ -622,7 +675,11 @@ describe('Opening the Fintava account (MONEY-12) over HTTP', () => {
       await ready(user);
       // Fintava holds the customer only once it answers, 200 ms later.
       double.on('POST', '/create/customer', (req) => {
-        const b = req.body as { phoneNumber: string };
+        const b = req.body as {
+          phoneNumber: string;
+          bvn: string;
+          dateOfBirth: string;
+        };
         const m: Made = {
           customerId: randomUUID(),
           recordId: randomUUID(),
@@ -631,6 +688,8 @@ describe('Opening the Fintava account (MONEY-12) over HTTP', () => {
           accountName: 'Amaka Opener',
           phone: b.phoneNumber,
           createdAt: new Date().toISOString(),
+          bvn: b.bvn,
+          dateOfBirth: b.dateOfBirth,
         };
         setTimeout(() => customers.unshift(m), 200);
         return { status: 201, body: created201(m), delayMs: 200 };
@@ -656,13 +715,13 @@ describe('Opening the Fintava account (MONEY-12) over HTTP', () => {
       const user = person();
       await ready(user);
       const lookup = jest.spyOn(fintavaClient(), 'lookupCustomerByPhone');
-      lookup.mockImplementationOnce(async (phone) => {
+      lookup.mockImplementationOnce(async (phone, digest) => {
         // As if the sweep had taken this opening over meanwhile.
         await prisma.fintavaWalletOpening.update({
           where: { wawuUserId: user.id },
           data: { state: 'unknown' },
         });
-        return realLookup(phone);
+        return realLookup(phone, digest);
       });
       const view = body<WalletView>(await open(user).expect(200)).data!;
       expect(view.state).toBe('opening');
@@ -672,10 +731,10 @@ describe('Opening the Fintava account (MONEY-12) over HTTP', () => {
     it('an account found for an attempt that has since moved on is not recorded for it', async () => {
       const user = person();
       await ready(user);
-      makeCustomer(user.local, 'Amaka', 'Opener');
+      makeCustomer(user.local, 'Amaka', 'Opener', user.bvn);
       const lookup = jest.spyOn(fintavaClient(), 'lookupCustomerByPhone');
-      lookup.mockImplementationOnce(async (phone) => {
-        const out = await realLookup(phone);
+      lookup.mockImplementationOnce(async (phone, digest) => {
+        const out = await realLookup(phone, digest);
         // Another attempt took the opening meanwhile.
         await prisma.fintavaWalletOpening.update({
           where: { wawuUserId: user.id },
@@ -932,7 +991,7 @@ describe('Opening the Fintava account (MONEY-12) over HTTP', () => {
         where: { wawuUserId: user.id },
       });
       // As if the create was sent and the server died before writing back.
-      const m = makeCustomer(user.local, 'Amaka', 'Opener');
+      const m = makeCustomer(user.local, 'Amaka', 'Opener', user.bvn);
       await prisma.fintavaWalletOpening.create({
         data: {
           wawuUserId: user.id,
@@ -1017,7 +1076,7 @@ describe('Opening the Fintava account (MONEY-12) over HTTP', () => {
     it('Fintava already has an account for the phone that nobody holds: it is recorded, not made again', async () => {
       const user = person();
       await ready(user);
-      const m = makeCustomer(user.local, 'Amaka', 'Opener');
+      const m = makeCustomer(user.local, 'Amaka', 'Opener', user.bvn);
       const view = body<WalletView>(await open(user).expect(200)).data!;
       expect(view.account?.accountNumber).toBe(m.accountNumber);
       expect(creates()).toHaveLength(0);
@@ -1026,7 +1085,8 @@ describe('Opening the Fintava account (MONEY-12) over HTTP', () => {
     it('Fintava has an account for the phone that another WAWU account holds: 409 identity_has_wallet, nothing made', async () => {
       const user = person();
       await ready(user);
-      const m = makeCustomer(user.local, 'Someone', 'Else');
+      // Carries this person's BVN (a wallet row written outside the flow).
+      const m = makeCustomer(user.local, 'Someone', 'Else', user.bvn);
       const other = person();
       await prisma.fintavaWallet.create({
         data: {
@@ -1272,6 +1332,664 @@ describe('Opening the Fintava account (MONEY-12) over HTTP', () => {
         expect(await row(user)).toBeNull();
       },
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // Round 2, D1: a customer is adopted only when Fintava's record carries
+  // the checked BVN (keyed hash of userInfo.bvn = the opening's bvnHash).
+  // A1 to A4 are the verifier's reproductions, now refused.
+  // -------------------------------------------------------------------------
+  describe("Fintava's customer for the phone is this person's only if it carries their BVN (D1)", () => {
+    const stops = () =>
+      captured.filter((l) => l.includes('is not shown to be this person'))
+        .length;
+    const balance = (who: Person) =>
+      http()
+        .get('/api/hub/money/wallet/balance')
+        .set('Authorization', who.auth);
+
+    /** The answer, the row, GET /money/wallet and the balance once stopped. */
+    async function expectStopped(
+      who: Person,
+      res: Response,
+      failure: string,
+    ): Promise<void> {
+      expect(res.status).toBe(409);
+      const out = body<null>(res);
+      expect(out.reason?.code).toBe('phone_held_by_other_identity');
+      expect(out.message).toBe(PHONE_HELD_MESSAGE);
+      expect(out.message).not.toMatch(/—|fintava|stranger|chidi/i);
+      expect(await walletRow(who)).toBeNull();
+      expect(await row(who)).toMatchObject({ state: 'conflict', failure });
+      const seen = double.seen.length;
+      const view = body<WalletView>(await wallet(who).expect(200)).data!;
+      expect(view).toMatchObject({ state: 'not_open', account: null });
+      expect(body<null>(await balance(who).expect(409)).reason?.code).toBe(
+        'wallet_not_open',
+      );
+      // Every later open answers the same and asks Fintava nothing.
+      const again = await open(who).expect(409);
+      expect(body<null>(again).reason?.code).toBe(
+        'phone_held_by_other_identity',
+      );
+      expect(double.seen).toHaveLength(seen);
+    }
+
+    it('A1: a customer made elsewhere for the phone, with another BVN, name and date of birth, is refused: nothing adopted, nothing created', async () => {
+      const user = person();
+      await ready(user);
+      const other = stranger(user.local, '2024-01-01T00:00:00.000Z');
+      expect(other.bvn).not.toBe(user.bvn);
+      const before = stops();
+      const res = await open(user);
+      await expectStopped(user, res, 'phone_held_by_other_identity');
+      expect(res.text).not.toContain(other.accountNumber);
+      expect(creates()).toHaveLength(0);
+      expect(stops()).toBe(before + 1);
+      // Fintava was read, never written: details, then the record by id.
+      expect(double.seen.map((s) => `${s.method} ${s.path}`)).toEqual([
+        'GET /customers/details',
+        `GET /customers/${other.customerId}`,
+      ]);
+    });
+
+    it("a record whose BVN is masked or absent is not this person's either", async () => {
+      for (const bvn of [`*******${digits(4)}`, '']) {
+        double.seen.length = 0;
+        const user = person();
+        await ready(user);
+        makeCustomer(user.local, 'Amaka', 'Opener', bvn);
+        const res = await open(user);
+        await expectStopped(user, res, 'phone_holder_bvn_unreadable');
+        expect(creates()).toHaveLength(0);
+      }
+    });
+
+    it('a customer for the phone that carries the checked BVN is adopted, however old (the same person coming back)', async () => {
+      const user = person();
+      await ready(user);
+      const mine = makeCustomer(user.local, 'Amaka', 'Opener', user.bvn, {
+        createdAt: '2024-06-01T00:00:00.000Z',
+      });
+      const view = body<WalletView>(await open(user).expect(200)).data!;
+      expect(view.state).toBe('open');
+      expect(view.account?.accountNumber).toBe(mine.accountNumber);
+      expect((await walletRow(user))!.customerId).toBe(mine.customerId);
+      expect(creates()).toHaveLength(0);
+    });
+
+    it('A2: a number reissued after its first holder deleted their account is refused for the new holder; the first holder gets theirs back', async () => {
+      const first = person();
+      await ready(first);
+      expect(body<WalletView>(await open(first).expect(200)).data!.state).toBe(
+        'open',
+      );
+      const firstCustomer = customers[0];
+      await new AccountPurgeService(prisma).purge(first.id);
+      expect(await row(first)).toBeNull();
+
+      const second = person(undefined, { phone: first.phone });
+      await ready(second);
+      expect(second.bvn).not.toBe(first.bvn);
+      const res = await open(second);
+      await expectStopped(second, res, 'phone_held_by_other_identity');
+      expect(res.text).not.toContain(firstCustomer.accountNumber);
+      expect(creates()).toHaveLength(0);
+      expect(customers).toHaveLength(1);
+
+      // The first holder, signing up again with the same BVN and phone
+      // (G-36's case), gets their own account back once the stopped
+      // opening is cleared by review.
+      await prisma.fintavaWalletOpening.delete({
+        where: { wawuUserId: second.id },
+      });
+      const back = person(undefined, {
+        phone: first.phone,
+        bvn: first.bvn,
+        nin: first.nin,
+      });
+      await ready(back);
+      const view = body<WalletView>(await open(back).expect(200)).data!;
+      expect(view.account?.accountNumber).toBe(firstCustomer.accountNumber);
+      expect(creates()).toHaveLength(0);
+    });
+
+    it('A3: "already exists" is a lost answer, and the list row it then finds by phone (a 2-year-old stranger) is refused, not adopted', async () => {
+      const user = person();
+      await ready(user);
+      const other = stranger(user.local, '2024-10-01T00:00:00.000Z');
+      detailsOverride = () => ({
+        status: 404,
+        body: fintavaError(404, 'Customer not found'),
+      });
+      createMode = {
+        kind: 'refuse',
+        answer: {
+          status: 400,
+          body: fintavaError(400, 'phoneNumber already exists'),
+        },
+      };
+      const first = body<WalletView>(await open(user).expect(200)).data!;
+      expect(first.state).toBe('opening');
+      expect((await row(user))!.state).toBe('unknown');
+      const res = await open(user);
+      await expectStopped(user, res, 'phone_held_by_other_identity');
+      expect(res.text).not.toContain(other.accountNumber);
+      expect(creates()).toHaveLength(1);
+      expect(
+        double.seen.some((s) => s.path === `/customers/${other.customerId}`),
+      ).toBe(true);
+    });
+
+    it('a lost answer whose list row by phone carries the checked BVN, of any age, is adopted', async () => {
+      const user = person();
+      await ready(user);
+      const mine = makeCustomer(user.local, 'Amaka', 'Opener', user.bvn, {
+        createdAt: '2024-10-01T00:00:00.000Z',
+      });
+      detailsOverride = () => ({
+        status: 404,
+        body: fintavaError(404, 'Customer not found'),
+      });
+      createMode = {
+        kind: 'refuse',
+        answer: {
+          status: 400,
+          body: fintavaError(400, 'phoneNumber already exists'),
+        },
+      };
+      // The lookup before the create misses it too (details 404).
+      expect(body<WalletView>(await open(user).expect(200)).data!.state).toBe(
+        'opening',
+      );
+      const view = body<WalletView>(await open(user).expect(200)).data!;
+      expect(view.account?.accountNumber).toBe(mine.accountNumber);
+      expect(creates()).toHaveLength(1);
+    });
+
+    it("a lost answer whose details lookup finds a stranger's customer is refused", async () => {
+      const user = person();
+      await ready(user);
+      createMode = { kind: 'nothing_then_500' };
+      await open(user).expect(200);
+      expect((await row(user))!.state).toBe('unknown');
+      stranger(user.local);
+      const res = await open(user);
+      await expectStopped(user, res, 'phone_held_by_other_identity');
+      expect(creates()).toHaveLength(1);
+    });
+
+    it('A4: the sweep alone refuses a stranger for a stuck opening, and the person is then told', async () => {
+      const user = person();
+      await ready(user);
+      const id = await prisma.walletIdentity.findUnique({
+        where: { wawuUserId: user.id },
+      });
+      stranger(user.local, '2023-01-01T00:00:00.000Z');
+      await prisma.fintavaWalletOpening.create({
+        data: {
+          wawuUserId: user.id,
+          state: 'unknown',
+          bvnHash: id!.bvnHash!,
+          bvnVerifiedAt: id!.bvnVerifiedAt!,
+          phone: user.phone,
+          attemptStartedAt: new Date(Date.now() - 60_000),
+        },
+      });
+      const counts = await opening.sweep();
+      expect(counts.conflict).toBeGreaterThanOrEqual(1);
+      expect(counts.open).toBe(0);
+      const res = await open(user);
+      await expectStopped(user, res, 'phone_held_by_other_identity');
+      expect(creates()).toHaveLength(0);
+    });
+
+    it('a stopped opening stays stopped through further sweeps', async () => {
+      const user = person();
+      await ready(user);
+      stranger(user.local);
+      await open(user).expect(409);
+      await opening.sweep();
+      await opening.sweep();
+      expect(await row(user)).toMatchObject({
+        state: 'conflict',
+        failure: 'phone_held_by_other_identity',
+      });
+      expect(creates()).toHaveLength(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Round 2, N1: the list's newest-first order is checked, not assumed.
+  // -------------------------------------------------------------------------
+  describe('the customer list is only trusted newest first (N1)', () => {
+    const listRows = (
+      rows: Made[],
+      page: number,
+      take: number,
+      total: number,
+    ) => ({
+      status: 200,
+      body: {
+        data: rows.map((m) => ({
+          id: m.recordId,
+          createdAt: m.createdAt,
+          phone: m.phone,
+          userInfo: { ...userInfo(m), wallet: walletRead(m) },
+        })),
+        meta: {
+          page: String(page),
+          take: String(take),
+          itemCount: total,
+          pageCount: Math.ceil(total / take),
+          hasPreviousPage: page > 1,
+          hasNextPage: page * take < total,
+        },
+      },
+    });
+
+    /** A lost create Fintava made, which its details lookup then misses. */
+    async function lostAndMissedByDetails(user: Person): Promise<void> {
+      createMode = { kind: 'made_then_500' };
+      await open(user).expect(200);
+      detailsOverride = () => ({
+        status: 404,
+        body: fintavaError(404, 'Customer not found'),
+      });
+      await age(user, RESEND_AFTER_MS + 1_000);
+      createMode = { kind: 'ok' };
+    }
+    const oldRow = (ms: number): Made => ({
+      customerId: randomUUID(),
+      recordId: randomUUID(),
+      walletId: randomUUID(),
+      accountNumber: digits(10),
+      accountName: 'Old Row',
+      phone: `080${digits(8)}`,
+      createdAt: new Date(ms).toISOString(),
+      bvn: digits(11),
+      dateOfBirth: '1970-01-01',
+    });
+
+    it('served oldest first, with details missing the new customer: the list is read to its end and finds it, one create', async () => {
+      const user = person();
+      await ready(user);
+      // 150 older customers, made oldest first, so `customers` is truly
+      // newest first and its reverse truly oldest first.
+      for (let k = 0; k < 150; k += 1) {
+        makeCustomer(`080${digits(8)}`, 'Old', 'Row', digits(11), {
+          createdAt: new Date(
+            Date.now() - 3_600_000 - (150 - k) * 1000,
+          ).toISOString(),
+        });
+      }
+      await lostAndMissedByDetails(user);
+      listOverride = (req) => {
+        const take = Number(req.query.take);
+        const page = Number(req.query.page);
+        const asc = [...customers].reverse();
+        return listRows(
+          asc.slice((page - 1) * take, page * take),
+          page,
+          take,
+          asc.length,
+        );
+      };
+      const view = body<WalletView>(await open(user).expect(200)).data!;
+      expect(view.state).toBe('open');
+      expect(view.account?.accountNumber).toBe(customers[0].accountNumber);
+      expect(creates()).toHaveLength(1);
+      expect(customers.filter((c) => c.phone === user.local)).toHaveLength(1);
+      expect(
+        double.seen.filter((x) => x.path === '/customers/list').length,
+      ).toBe(2);
+    });
+
+    it("the verifier's C3 order (older rows first page, the new customer last): found, never a second create", async () => {
+      const user = person();
+      await ready(user);
+      for (let i = 0; i < 150; i += 1) {
+        makeCustomer(`080${digits(8)}`, 'Old', 'Row', digits(11), {
+          createdAt: new Date(Date.now() - 3_600_000 - i * 1000).toISOString(),
+        });
+      }
+      await lostAndMissedByDetails(user);
+      listOverride = (req) => {
+        const take = Number(req.query.take);
+        const page = Number(req.query.page);
+        const asc = [...customers].reverse();
+        return listRows(
+          asc.slice((page - 1) * take, page * take),
+          page,
+          take,
+          asc.length,
+        );
+      };
+      expect(body<WalletView>(await open(user).expect(200)).data!.state).toBe(
+        'open',
+      );
+      expect(creates()).toHaveLength(1);
+      expect(customers.filter((c) => c.phone === user.local)).toHaveLength(1);
+    });
+
+    it('a list longer than we read, not newest first: waits, never a second create', async () => {
+      const user = person();
+      await ready(user);
+      await lostAndMissedByDetails(user);
+      const now = Date.now();
+      // Each page newest first on its own, but page 2 starts newer than page
+      // 1 ended; all of it long before the attempt; pages never run out.
+      listOverride = (req) => {
+        const page = Number(req.query.page);
+        const top = now - 3_600_000 - (page % 2 === 0 ? 0 : 200_000);
+        const rows = Array.from({ length: 100 }, (_, i) =>
+          oldRow(top - i * 1000),
+        );
+        return listRows(rows, page, 100, 99_999);
+      };
+      expect(body<WalletView>(await open(user).expect(200)).data!.state).toBe(
+        'opening',
+      );
+      await age(user, RESEND_AFTER_MS * 3);
+      await opening.sweep();
+      expect((await row(user))!.state).toBe('unknown');
+      expect(creates()).toHaveLength(1);
+      expect(
+        captured.some((l) =>
+          l.includes(
+            'customer list is longer than we read and not newest first',
+          ),
+        ),
+      ).toBe(true);
+    });
+
+    it('a list longer than we read, newest first and back past the attempt, without the phone: proved absent as before', async () => {
+      const user = person();
+      await ready(user);
+      createMode = { kind: 'nothing_then_500' };
+      await open(user).expect(200);
+      await age(user, RESEND_AFTER_MS + 1_000);
+      const now = Date.now();
+      listOverride = (req) => {
+        const page = Number(req.query.page);
+        const rows = Array.from({ length: 100 }, (_, i) =>
+          oldRow(now - ((page - 1) * 100 + i) * 60_000),
+        );
+        return listRows(rows, page, 100, 99_999);
+      };
+      createMode = { kind: 'ok' };
+      expect(body<WalletView>(await open(user).expect(200)).data!.state).toBe(
+        'open',
+      );
+      expect(creates()).toHaveLength(2);
+      expect(
+        double.seen.filter((x) => x.path === '/customers/list').length,
+      ).toBe(10);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Round 2, N2: one clock, the database's, for every opening time.
+  // -------------------------------------------------------------------------
+  describe("the resend window is measured on the database's clock (N2)", () => {
+    const RealDate = Date;
+    /** This process's clock, moved by `offsetMs` (as a server whose clock is off). */
+    function skewClock(offsetMs: number): () => void {
+      class Skewed extends RealDate {
+        constructor(...args: unknown[]) {
+          if (args.length === 0) super(RealDate.now() + offsetMs);
+          else super(...(args as [number]));
+        }
+        static now(): number {
+          return RealDate.now() + offsetMs;
+        }
+      }
+      global.Date = Skewed as DateConstructor;
+      return () => {
+        global.Date = RealDate;
+      };
+    }
+    const SKEW_MS = RESEND_AFTER_MS + 2 * 60_000;
+
+    /** Starts an open whose create is held in flight until `release`. */
+    async function inFlight(user: Person) {
+      let release!: () => void;
+      const held = new Promise<void>((r) => {
+        release = r;
+      });
+      const real = client.createCustomer.bind(client);
+      const spy = jest
+        .spyOn(client, 'createCustomer')
+        .mockImplementationOnce(async (input) => {
+          await held;
+          return real(input);
+        });
+      const pending = open(user).then((r) => r);
+      // The claim is stamped and the create is on its way once it is called.
+      for (let i = 0; i < 300 && spy.mock.calls.length === 0; i += 1) {
+        await sleep(10);
+      }
+      expect(spy).toHaveBeenCalledTimes(1);
+      return { pending, release };
+    }
+
+    afterEach(() => {
+      global.Date = RealDate;
+    });
+
+    it("a sweep on a server whose clock runs 12 minutes fast leaves a create in flight alone, and a tap sends nothing (the verifier's C4)", async () => {
+      const user = person();
+      await ready(user);
+      createMode = { kind: 'nothing_then_500' };
+      const { pending, release } = await inFlight(user);
+      expect((await row(user))!.state).toBe('opening');
+      const restore = skewClock(SKEW_MS);
+      try {
+        await opening.sweep();
+        await opening.sweep();
+        expect((await row(user))!.state).toBe('opening');
+        createMode = { kind: 'ok' };
+        const tap = await open(user).expect(200);
+        expect(body<WalletView>(tap).data!.state).toBe('opening');
+      } finally {
+        restore();
+      }
+      release();
+      await pending;
+      // The held create was the only one sent.
+      expect(creates()).toHaveLength(1);
+    });
+
+    it('a create stamped by a server whose clock runs 12 minutes slow is not called absent by a server on time', async () => {
+      const user = person();
+      await ready(user);
+      createMode = { kind: 'nothing_then_500' };
+      const restore = skewClock(-SKEW_MS);
+      let flight: Awaited<ReturnType<typeof inFlight>>;
+      try {
+        flight = await inFlight(user);
+      } finally {
+        restore();
+      }
+      const stamped = (await row(user))!.attemptStartedAt.getTime();
+      expect(Math.abs(stamped - Date.now())).toBeLessThan(60_000);
+      await opening.sweep();
+      expect((await row(user))!.state).toBe('opening');
+      createMode = { kind: 'ok' };
+      expect(body<WalletView>(await open(user).expect(200)).data!.state).toBe(
+        'opening',
+      );
+      flight.release();
+      await flight.pending;
+      expect(creates()).toHaveLength(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // The verifier's other attack cases (round 1), kept.
+  // -------------------------------------------------------------------------
+  describe("the verifier's races and lost-answer cases", () => {
+    it('3 WAWU accounts with the same BVN and phone, 8 taps each at once: one create, one wallet', async () => {
+      const a = person();
+      const b = person(undefined, { phone: a.phone, bvn: a.bvn, nin: a.nin });
+      const c = person(undefined, { phone: a.phone, bvn: a.bvn, nin: a.nin });
+      for (const p of [a, b, c]) {
+        await bvnChecked(p);
+        await selfieMatched(p);
+      }
+      double.reset();
+      installFintava();
+      createMode = { kind: 'late' };
+      const all: Response[] = [];
+      await Promise.all(
+        [a, b, c].flatMap((p) =>
+          Array.from({ length: 8 }, async () => {
+            all.push(await open(p));
+          }),
+        ),
+      );
+      await sleep(LATE_MS + 200);
+      createMode = { kind: 'ok' };
+      for (const p of [a, b, c]) await open(p);
+      for (const r of all) {
+        const e = r.body as Envelope<WalletView>;
+        expect([
+          '200:opening',
+          '200:open',
+          '409:identity_has_wallet',
+        ]).toContain(`${r.status}:${e.reason?.code ?? e.data?.state}`);
+      }
+      expect(creates()).toHaveLength(1);
+      expect(customers).toHaveLength(1);
+      expect(
+        await prisma.fintavaWallet.count({
+          where: { wawuUserId: { in: [a.id, b.id, c.id] } },
+        }),
+      ).toBe(1);
+    });
+
+    it('same BVN on two accounts with different phones, at once: one create, the other 409', async () => {
+      const a = person();
+      const b = person(undefined, { bvn: a.bvn, nin: a.nin });
+      await bvnChecked(a);
+      await selfieMatched(a);
+      await bvnChecked(b);
+      await selfieMatched(b);
+      double.reset();
+      installFintava();
+      const res = await Promise.all([open(a), open(b), open(a), open(b)]);
+      expect(creates()).toHaveLength(1);
+      expect(
+        res.filter(
+          (r) =>
+            (r.body as Envelope<null>).reason?.code === 'identity_has_wallet',
+        ).length,
+      ).toBeGreaterThanOrEqual(1);
+    });
+
+    it('a second service instance on the same database, both sweeps racing the routes, create late: one create', async () => {
+      const user = person();
+      await ready(user);
+      createMode = { kind: 'late' };
+      const parts = opening as unknown as Record<string, never>;
+      const other = new WalletOpeningService(
+        prisma,
+        client,
+        parts.hasher,
+        identity,
+        parts.selfie,
+        parts.pins,
+        parts.settings,
+      );
+      const email = `open-${user.id}@example.com`;
+      const details: OpenNairaWalletDto = user.details;
+      const jobs: Array<Promise<unknown>> = [];
+      for (let i = 0; i < 6; i += 1) {
+        jobs.push(open(user));
+        jobs.push(other.open(user.id, email, details).catch((e: Error) => e));
+      }
+      jobs.push(opening.sweep(), other.sweep());
+      await Promise.all(jobs);
+      await sleep(LATE_MS + 200);
+      createMode = { kind: 'ok' };
+      await Promise.all([
+        open(user),
+        other.open(user.id, email, details),
+        opening.sweep(),
+        other.sweep(),
+      ]);
+      expect(creates()).toHaveLength(1);
+      expect((await row(user))!.state).toBe('open');
+    });
+
+    it('the window boundary: 50 ms before it waits, 50 ms after it is proved absent', async () => {
+      const user = person();
+      await ready(user);
+      createMode = { kind: 'nothing_then_500' };
+      await open(user).expect(200);
+      await age(user, RESEND_AFTER_MS - 2_000);
+      expect(await opening.reconcile((await row(user))!)).toBe('wait');
+      await age(user, RESEND_AFTER_MS + 50);
+      expect(await opening.reconcile((await row(user))!)).toBe('absent');
+      expect(creates()).toHaveLength(1);
+    });
+
+    it("Fintava's clock 6 minutes behind ours and details missing the new customer: the list still finds it, nothing resent", async () => {
+      const user = person();
+      await ready(user);
+      for (let i = 0; i < 30; i += 1) {
+        makeCustomer(`080${digits(8)}`, 'Old', 'Row', digits(11), {
+          createdAt: new Date(Date.now() - 3_600_000 - i).toISOString(),
+        });
+      }
+      createMode = { kind: 'made_then_500' };
+      await open(user).expect(200);
+      customers[0].createdAt = new Date(Date.now() - 6 * 60_000).toISOString();
+      detailsOverride = () => ({
+        status: 404,
+        body: fintavaError(404, 'Customer not found'),
+      });
+      await age(user, RESEND_AFTER_MS + 1_000);
+      expect(body<WalletView>(await open(user).expect(200)).data!.state).toBe(
+        'open',
+      );
+      expect(creates()).toHaveLength(1);
+    });
+
+    it('a new BVN check while a lost create is reconciled: once proved absent, the old BVN is refused and the new one needs its own selfie', async () => {
+      const user = person();
+      await ready(user);
+      createMode = { kind: 'nothing_then_500' };
+      await open(user).expect(200);
+      const otherBvn = digits(11);
+      secrets.push(otherBvn);
+      await bvnChecked(user, otherBvn);
+      installFintava();
+      await age(user, RESEND_AFTER_MS + 1_000);
+      createMode = { kind: 'ok' };
+      const r = await open(user).expect(409);
+      expect(body<null>(r).reason?.code).toBe('bvn_not_checked');
+      expect(creates()).toHaveLength(1);
+      const r2 = await open(user, { ...user.details, bvn: otherBvn }).expect(
+        409,
+      );
+      expect(body<null>(r2).reason?.code).toBe('selfie_required');
+      expect(creates()).toHaveLength(1);
+    });
+
+    it('G-36 as filed (the owner decides): after a purge, the same BVN with a NEW phone makes a second Fintava customer', async () => {
+      const first = person();
+      await ready(first);
+      await open(first).expect(200);
+      await new AccountPurgeService(prisma).purge(first.id);
+      const again = person(undefined, { bvn: first.bvn, nin: first.nin });
+      await ready(again);
+      expect(body<WalletView>(await open(again).expect(200)).data!.state).toBe(
+        'open',
+      );
+      expect(creates()).toHaveLength(1);
+      expect(customers.filter((c) => c.bvn === first.bvn)).toHaveLength(2);
+    });
   });
 
   // -------------------------------------------------------------------------

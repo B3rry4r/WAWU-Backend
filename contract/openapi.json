@@ -20141,7 +20141,7 @@
             }
           },
           "409": {
-            "description": "reason.code: bvn_not_checked, selfie_required, identity_has_wallet",
+            "description": "reason.code: bvn_not_checked, selfie_required, identity_has_wallet, phone_held_by_other_identity",
             "content": {
               "application/json": {
                 "schema": {
@@ -24793,7 +24793,8 @@
               "selfie_already_matched",
               "selfie_required",
               "identity_has_wallet",
-              "account_not_opened"
+              "account_not_opened",
+              "phone_held_by_other_identity"
             ],
             "type": "string"
           },

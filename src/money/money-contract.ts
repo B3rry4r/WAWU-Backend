@@ -58,6 +58,8 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   selfie_required: 409,
   identity_has_wallet: 409,
   account_not_opened: 422,
+  // Default (agent), owner may override: 409, as identity_has_wallet.
+  phone_held_by_other_identity: 409,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */

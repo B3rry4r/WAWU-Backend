@@ -109,5 +109,6 @@ export const MONEY_ERROR_CODES = [
   'selfie_required',
   'identity_has_wallet',
   'account_not_opened',
+  'phone_held_by_other_identity',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];

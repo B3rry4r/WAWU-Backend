@@ -5,6 +5,7 @@ import { FINTAVA_DEFAULTS } from '../../fintava/fintava-config';
 import { FintavaError } from '../../fintava/fintava-error';
 import { MoneyError } from '../money-error';
 import type { WalletBalanceView } from '../money-view.type';
+import { stoppedOnIdentity } from '../opening/opening-stops';
 
 /** W6's refusal: the bank did not answer, so there is no figure to show. */
 export const BALANCE_UNREACHABLE_MESSAGE =
@@ -49,9 +50,13 @@ export class WalletBalanceService {
       // rather than sending the person back to Open your wallet.
       const opening = await this.prisma.fintavaWalletOpening.findUnique({
         where: { wawuUserId },
-        select: { state: true },
+        select: { state: true, failure: true },
       });
-      if (opening && opening.state !== 'failed') {
+      if (
+        opening &&
+        opening.state !== 'failed' &&
+        !stoppedOnIdentity(opening)
+      ) {
         throw new MoneyError('wallet_opening', BALANCE_OPENING_MESSAGE);
       }
       throw new MoneyError('wallet_not_open', BALANCE_NOT_OPEN_MESSAGE);

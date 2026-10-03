@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto';
 import {
   CUSTOMER_A,
   CUSTOMER_BY_ID,
@@ -21,6 +22,27 @@ import { FintavaError } from '../fintava-error';
 const KEY = 'live_test_m12_lookup_0123456789FAKEKEY';
 const double = new FintavaDouble();
 
+/** A made-up BVN and date of birth, as `/customers/{id}` carries them in full. */
+const FULL_BVN = [
+  1 + randomInt(9),
+  ...Array.from({ length: 10 }, () => randomInt(10)),
+].join('');
+const DIGESTED = `digest-of-11-digits-${FULL_BVN.slice(-2)}`;
+const DOB = '1987-11-23';
+/** Stands in for the keyed hash: only what it returns may come back. */
+const digested: string[] = [];
+const digest = (bvn: string): string => {
+  digested.push(bvn);
+  return `digest-of-${bvn.length}-digits-${bvn.slice(-2)}`;
+};
+const byIdWithBvn = (bvn: unknown) => ({
+  ...CUSTOMER_BY_ID,
+  data: {
+    ...CUSTOMER_BY_ID.data,
+    userInfo: { ...CUSTOMER_BY_ID.data.userInfo, bvn, dateOfBirth: DOB },
+  },
+});
+
 function client(): FintavaClient {
   return new FintavaClient(
     fintavaConfig({ FINTAVA_BASE_URL: double.baseUrl, FINTAVA_API_KEY: KEY }),
@@ -39,7 +61,10 @@ async function failure(p: Promise<unknown>): Promise<FintavaError> {
 
 beforeAll(() => double.start());
 afterAll(() => double.stop());
-beforeEach(() => double.reset());
+beforeEach(() => {
+  double.reset();
+  digested.length = 0;
+});
 
 describe('lookupCustomerByPhone', () => {
   it('found: details (no wallet) then the customer by id, phone sent in local form', async () => {
@@ -51,7 +76,7 @@ describe('lookupCustomerByPhone', () => {
       status: 200,
       body: CUSTOMER_BY_ID,
     });
-    const out = await client().lookupCustomerByPhone('+2348031230101');
+    const out = await client().lookupCustomerByPhone('+2348031230101', digest);
     expect(double.seen[0].query).toEqual({ phone: '08031230101' });
     expect(out.state).toBe('found');
     expect(out.state === 'found' && out.customer).toMatchObject({
@@ -61,12 +86,69 @@ describe('lookupCustomerByPhone', () => {
     });
   });
 
+  it("found: Fintava's full BVN goes to the digest only; the answer carries the digest, never the BVN or date of birth", async () => {
+    double.on('GET', '/customers/details', {
+      status: 200,
+      body: CUSTOMER_DETAILS,
+    });
+    double.on('GET', `/customers/${CUSTOMER_A.customerId}`, {
+      status: 200,
+      body: byIdWithBvn(FULL_BVN),
+    });
+    const out = await client().lookupCustomerByPhone('+2348031230101', digest);
+    expect(digested).toEqual([FULL_BVN]);
+    expect(out).toMatchObject({
+      state: 'found',
+      bvnDigest: DIGESTED,
+    });
+    const text = JSON.stringify(out);
+    expect(text).not.toContain(FULL_BVN);
+    expect(text).not.toContain(DOB);
+  });
+
+  it.each<[string, unknown]>([
+    ['masked, as the double and some reads write it', '*******8901'],
+    ['absent', undefined],
+    ['null', null],
+    ['10 digits', FULL_BVN.slice(0, 10)],
+    ['12 digits', `${FULL_BVN}1`],
+    ['with a space', `${FULL_BVN.slice(0, 5)} ${FULL_BVN.slice(5)}`],
+    ['an object', { value: FULL_BVN }],
+  ])(
+    'a record whose BVN is %s has no digest, and the digest is never called',
+    async (_name, bvn) => {
+      double.on('GET', `/customers/${CUSTOMER_A.customerId}`, {
+        status: 200,
+        body: byIdWithBvn(bvn),
+      });
+      const out = await client().getCustomerMatch(
+        CUSTOMER_A.customerId,
+        digest,
+      );
+      expect(out.bvnDigest).toBeNull();
+      expect(out.customer.customerId).toBe(CUSTOMER_A.customerId);
+      expect(digested).toEqual([]);
+    },
+  );
+
+  it('a BVN written as a JSON number is read as its 11 digits', async () => {
+    double.on('GET', `/customers/${CUSTOMER_A.customerId}`, {
+      status: 200,
+      body: byIdWithBvn(Number(FULL_BVN)),
+    });
+    const out = await client().getCustomerMatch(CUSTOMER_A.customerId, digest);
+    expect(digested).toEqual([FULL_BVN]);
+    expect(out.bvnDigest).toBe(DIGESTED);
+  });
+
   it('absent only for Fintava\'s own 404 ["Customer not found"] (the sandbox\'s body)', async () => {
     double.on('GET', '/customers/details', {
       status: 404,
       body: fintavaError(404, 'Customer not found'),
     });
-    expect(await client().lookupCustomerByPhone('08031230101')).toEqual({
+    expect(
+      await client().lookupCustomerByPhone('+2348031230101', digest),
+    ).toEqual({
       state: 'absent',
     });
     expect(double.seen).toHaveLength(1);
@@ -98,7 +180,9 @@ describe('lookupCustomerByPhone', () => {
     ['a key refused as 404', 404, fintavaError(404, 'Invalid API Key')],
   ])('%s is never absent: it throws', async (_name, status, body) => {
     double.on('GET', '/customers/details', { status, body });
-    const e = await failure(client().lookupCustomerByPhone('08031230101'));
+    const e = await failure(
+      client().lookupCustomerByPhone('+2348031230101', digest),
+    );
     expect(e).toBeInstanceOf(FintavaError);
   });
 
@@ -111,7 +195,9 @@ describe('lookupCustomerByPhone', () => {
     'a 2xx without a customer (%s) is unknown, never absent',
     async (_n, body) => {
       double.on('GET', '/customers/details', { status: 200, body });
-      expect(await client().lookupCustomerByPhone('08031230101')).toEqual({
+      expect(
+        await client().lookupCustomerByPhone('+2348031230101', digest),
+      ).toEqual({
         state: 'unknown',
         why: 'empty_answer',
       });
@@ -119,7 +205,9 @@ describe('lookupCustomerByPhone', () => {
   );
 
   it('a phone that is not a Nigerian mobile is refused before anything is sent', async () => {
-    const e = await failure(client().lookupCustomerByPhone('+441234567890'));
+    const e = await failure(
+      client().lookupCustomerByPhone('+441234567890', digest),
+    );
     expect(e.kind).toBe('validation');
     expect(double.seen).toHaveLength(0);
   });

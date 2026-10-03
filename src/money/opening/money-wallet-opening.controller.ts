@@ -65,6 +65,7 @@ export class MoneyWalletController {
     'selfie_required',
     'identity_has_wallet',
     'account_not_opened',
+    'phone_held_by_other_identity',
     'provider_unreachable',
   )
   open(

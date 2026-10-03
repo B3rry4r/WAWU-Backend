@@ -223,6 +223,7 @@ Every refusal is the envelope this backend already answers with
 | `selfie_required` | 409 | account opening before a selfie matched against the BVN check whose BVN and NIN were sent (MONEY-12) | |
 | `identity_has_wallet` | 409 | account opening for a BVN or phone another WAWU account opened a wallet with, or whose Fintava account another WAWU account holds; nothing is sent | |
 | `account_not_opened` | 422 | Fintava refused the details sent (a validation or identity refusal, such as a blacklisted NIN), or the account has no email; nothing was created and the person may try again | |
+| `phone_held_by_other_identity` | 409 | account opening where Fintava already has a customer for the person's phone whose record does not carry the checked BVN (or carries none): nothing is adopted or created, and the opening stops for review (MONEY-12, BACKEND_GAPS G-37) | |
 
 The same table is `MONEY_ERROR_STATUS` in `src/money/money-contract.ts`; each
 operation in the contract lists the codes it can answer with, grouped by
@@ -539,25 +540,44 @@ one retry at a time per payment.
   it taken answers `opening` and sends nothing. Its BVN hash and phone are
   unique: a second WAWU account with the same BVN or phone gets `409
   identity_has_wallet` and nothing is sent. Before a create, Fintava is
-  asked for a customer with the phone (`/customers/details`): one nobody
-  holds is recorded as the person's account instead of making a second; one
-  another WAWU account holds is `409 identity_has_wallet`; an answer that
+  asked for a customer with the phone (`/customers/details`, then
+  `/customers/{id}`). It is the person's account only when Fintava's record
+  carries the checked BVN: the keyed hash (`IDENTITY_HASH_KEY`, KYC-01's
+  `bvn:<digits>` scheme) of its `userInfo.bvn` equals the opening's
+  `bvnHash`. Fintava's BVN and date of birth are never stored, logged or
+  answered; the client hands the BVN only to the hash. One that carries it
+  and nobody holds is recorded instead of making a second; one another WAWU
+  account holds is `409 identity_has_wallet`. One whose BVN differs, or
+  whose record has no readable BVN, is never adopted and nothing is
+  created: the opening stops as `conflict` (`failure`
+  `phone_held_by_other_identity` or `phone_holder_bvn_unreadable`), one
+  error line is logged, and the person is answered `409
+  phone_held_by_other_identity` now and on every later open, while `GET
+  /money/wallet` reads `not_open` (G-37: an owner's review). An answer that
   cannot be read is `503 provider_unreachable` with nothing created.
 - **A lost answer** (timeout, 5xx, a 2xx without the customer, or a refusal
   saying the customer exists) leaves the opening `unknown`, answered as
   `opening`. It is reconciled with Fintava on the next open request and by
   a sweep every 30 seconds (also for an `opening` row whose request never
   finished): a customer found for the phone, by `/customers/details` or in
-  the newest-first `/customers/list` back to a little before the attempt,
-  is recorded as the person's account. It counts as not created only when
+  `/customers/list` back to a little before the attempt, is recorded as the
+  person's account only if it carries the checked BVN (as above; a list row
+  of any age, matched by phone, is read by id and compared the same way),
+  and otherwise stops the opening for review. Its order is not assumed:
+  the list is read to its end (up to 10 pages of 100), and a list read to
+  its end without the phone counts as "no row" whatever its order; a longer
+  list counts only when every row read was newest first and reached back
+  past the attempt, and otherwise the opening waits. Every time stamped on
+  an opening or compared with one is the database's `now()`, not the
+  server's clock. It counts as not created only when
   the details lookup gives Fintava's own `404 ["Customer not found"]`
   (`sandbox/32-money12-account.md`) AND the list has no row for the phone
   AND the money timeout plus `FINTAVA_RESEND_SAFETY_MS` has passed since the
   create was sent; then the opening is `failed` and the person's next open
   request sends a new create. Anything else waits: `{}`, `data: null`, any
-  other 404, a failed or unreadable list. A found account another WAWU
-  account holds leaves the opening `conflict` (shown as `opening`), logged
-  for review.
+  other 404, a failed, unreadable or out-of-order list. A found account
+  another WAWU account holds leaves the opening `conflict` (shown as
+  `opening`), logged for review.
 - **Refusals.** A validation refusal or an identity refusal (a blacklisted
   NIN) is `422 account_not_opened`; the merchant gate, a refused key or any
   other refusal is `503 provider_unreachable`. Both leave the opening
