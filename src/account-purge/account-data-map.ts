@@ -175,6 +175,14 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // The record of this person's selfie matches (KYC-02): outcome, time and
   // confidence only, never the image.
   { model: 'SelfieMatchAttempt', column: 'wawuUserId', disposition: 'OWNED' },
+  // The record of opening this person's Fintava account (MONEY-12): its
+  // state, the keyed BVN hash and the proved phone. Like FintavaWallet, it
+  // is WAWU's record, not the account at Fintava, which stays there.
+  {
+    model: 'FintavaWalletOpening',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
 
   // Last: everything above may reference these.
   { model: 'CreatorState', column: 'wawuUserId', disposition: 'OWNED' },

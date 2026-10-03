@@ -127,6 +127,12 @@ FINTAVA_RESEND_SAFETY_MS=
 IDENTITY_HASH_KEY=
 BVN_CHECKS_PER_DAY=
 SELFIE_CHECKS_PER_DAY=
+# Opening the account (MONEY-12) needs IDENTITY_HASH_KEY and the FINTAVA_*
+# settings above. The wallet's bank name (empty: "Loma Bank", provisional)
+# and the owner's licence and deposit-insurance lines (empty: hidden).
+WALLET_BANK_NAME=
+WALLET_LICENCE_LINE=
+WALLET_DEPOSIT_INSURANCE_LINE=
 
 GEMINI_API_KEY=
 

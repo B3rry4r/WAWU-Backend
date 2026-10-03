@@ -55,6 +55,9 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   selfie_not_matched: 422,
   selfie_checks_exhausted: 429,
   selfie_already_matched: 409,
+  selfie_required: 409,
+  identity_has_wallet: 409,
+  account_not_opened: 422,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */

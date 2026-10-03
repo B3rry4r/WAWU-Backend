@@ -2,10 +2,7 @@ import { Module } from '@nestjs/common';
 import { MoneyHistoryController } from './money-history.controller';
 import { MoneyPaymentController } from './money-payment.controller';
 import { MoneyTransferController } from './money-transfer.controller';
-import {
-  MoneyPinResetController,
-  MoneyWalletController,
-} from './money-wallet.controller';
+import { MoneyPinResetController } from './money-wallet.controller';
 
 /**
  * The Naira wallet contract (task MONEY-04): routes declared, not served.
@@ -17,11 +14,11 @@ import {
  * these routes moves that handler into a controller a mounted module owns
  * and deletes it here in the same change; the emitter refuses a route that
  * is declared here and served as well. Served so far: the transaction PIN
- * (MONEY-09, MoneyModule).
+ * (MONEY-09, MoneyModule), the balance (MONEY-11) and the wallet itself
+ * (MONEY-12).
  */
 @Module({
   controllers: [
-    MoneyWalletController,
     MoneyPinResetController,
     MoneyTransferController,
     MoneyPaymentController,

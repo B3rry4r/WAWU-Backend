@@ -174,6 +174,12 @@ const CALLS: Array<[string, (c: FintavaClient) => Promise<unknown>]> = [
   ['getCustomer', (c) => c.getCustomer(CUSTOMER_A.customerId)],
   ['findCustomerByPhone', (c) => c.findCustomerByPhone('08031230101')],
   ['listCustomers', (c) => c.listCustomers({ page: 1, take: 10 })],
+  // MONEY-12: the lookups account opening reconciles with.
+  ['lookupCustomerByPhone', (c) => c.lookupCustomerByPhone('08031230101')],
+  [
+    'listCustomerSightings',
+    (c) => c.listCustomerSightings({ page: 1, take: 10 }),
+  ],
   ['getWalletBalance', (c) => c.getWalletBalance(CUSTOMER_A.walletId)],
   ['getMerchantBalance', (c) => c.getMerchantBalance()],
   [

@@ -8,6 +8,9 @@ import { IdentityHasher } from './identity/identity-config';
 import { MoneyIdentityController } from './identity/money-identity.controller';
 import { SelfieMatchService } from './identity/selfie-match.service';
 import { WalletIdentityService } from './identity/wallet-identity.service';
+import { MoneyWalletController } from './opening/money-wallet-opening.controller';
+import { WalletOpeningSettings } from './opening/wallet-opening-config';
+import { WalletOpeningService } from './opening/wallet-opening.service';
 import { MoneyPinController } from './pin/money-pin.controller';
 import { TransactionPinGuard } from './pin/transaction-pin.guard';
 import { TransactionPinService } from './pin/transaction-pin.service';
@@ -38,6 +41,12 @@ import { TransactionPinService } from './pin/transaction-pin.service';
  * KYC-02: the selfie match to the BVN photo (`/money/identity/selfie`),
  * through the same client. SelfieMatchService is exported for account
  * opening (MONEY-12), which needs the selfie to have matched.
+ *
+ * MONEY-12: opening the account at Fintava (`POST /money/wallet/open`) and
+ * the wallet as WAWU records it (`GET /money/wallet`), with a sweep that
+ * reconciles a lost create answer every 30 seconds (it runs where
+ * ScheduleModule.forRoot() is loaded, AppModule). WalletOpeningService is
+ * exported for the routes that answer `wallet_opening` (MONEY-13).
  */
 @Module({
   imports: [ConfigModule, FintavaModule, LedgerModule],
@@ -45,6 +54,7 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     MoneyPinController,
     MoneyBalanceController,
     MoneyIdentityController,
+    MoneyWalletController,
   ],
   providers: [
     TransactionPinService,
@@ -53,12 +63,15 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     IdentityHasher,
     WalletIdentityService,
     SelfieMatchService,
+    WalletOpeningSettings,
+    WalletOpeningService,
   ],
   exports: [
     TransactionPinService,
     TransactionPinGuard,
     WalletIdentityService,
     SelfieMatchService,
+    WalletOpeningService,
   ],
 })
 export class MoneyModule {}

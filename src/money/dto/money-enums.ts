@@ -105,5 +105,9 @@ export const MONEY_ERROR_CODES = [
   'selfie_not_matched',
   'selfie_checks_exhausted',
   'selfie_already_matched',
+  // Opening the account at Fintava (MONEY-12).
+  'selfie_required',
+  'identity_has_wallet',
+  'account_not_opened',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];

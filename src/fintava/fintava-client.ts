@@ -40,6 +40,8 @@ import type {
   FintavaCreateCustomerInput,
   FintavaCustomer,
   FintavaCustomerHistoryQuery,
+  FintavaCustomerLookup,
+  FintavaCustomerSighting,
   FintavaDataBundle,
   FintavaDataInput,
   FintavaDisco,
@@ -152,6 +154,18 @@ function readTransaction(v: unknown): FintavaTransaction {
     meterToken: strOrNull(o, 'metertoken'),
     meterNumber: strOrNull(o, 'meternumber'),
     discoRef: strOrNull(o, 'discoRef'),
+  };
+}
+
+/** A list row's customer id, phone (local form) and creation time (MONEY-12). */
+function readSighting(v: unknown): FintavaCustomerSighting {
+  const o = obj(v, 'customer');
+  const user = obj(o.userInfo, 'userInfo');
+  const phone = strOrNull(user, 'phoneNumber') ?? strOrNull(o, 'phone');
+  return {
+    customerId: str(user, 'id'),
+    phone: phone === null ? null : toFintavaLocalPhone(phone),
+    createdAt: strOrNull(user, 'createdAt') ?? strOrNull(o, 'createdAt'),
   };
 }
 
@@ -883,6 +897,70 @@ export class FintavaClient {
       const meta = obj(body.meta, 'meta');
       return {
         items: data.map((row) => readCustomer(row, false)),
+        page: count(meta.page),
+        take: count(meta.take),
+        itemCount: count(meta.itemCount),
+        pageCount: count(meta.pageCount),
+        hasNextPage: meta.hasNextPage === true,
+      };
+    });
+  }
+
+  /**
+   * `GET /customers/details?phone=`, read for account opening (MONEY-12),
+   * which may send a lost create again only when Fintava has no customer
+   * for the phone. So `absent` is only Fintava's own answer for that: HTTP
+   * 404 whose one message is "Customer not found" (the sandbox, 3 Oct 2026,
+   * mobile repo `docs/fintava/sandbox/32-money12-account.md`). A 2xx without
+   * a customer in it is `unknown` (Fintava's lookups have answered `{}` for
+   * records that exist). Any other failure, another 404 included, throws.
+   */
+  async lookupCustomerByPhone(phone: string): Promise<FintavaCustomerLookup> {
+    const op: Op = { name: 'look up customer', method: 'GET', call: 'read' };
+    const local = this.phone(op, phone);
+    let answer: Answer;
+    try {
+      answer = await this.request(op, '/customers/details', {
+        query: { phone: local },
+      });
+    } catch (e) {
+      if (
+        e instanceof FintavaError &&
+        e.kind === 'not_found' &&
+        e.httpStatus === 404 &&
+        e.messages.length === 1 &&
+        /^customer not found$/i.test(e.messages[0].trim())
+      ) {
+        return { state: 'absent' };
+      }
+      throw e;
+    }
+    const customerId = this.read(op, answer, (data) =>
+      isObj(data) && isObj(data.userInfo)
+        ? strOrNull(data.userInfo, 'id')
+        : null,
+    );
+    if (customerId === null) return { state: 'unknown', why: 'empty_answer' };
+    return { state: 'found', customer: await this.getCustomer(customerId) };
+  }
+
+  /**
+   * `GET /customers/list`, newest first, read as who and when (MONEY-12):
+   * each row's customer id, phone and creation time. A row without a
+   * customer id makes the page unreadable (`bad_response`).
+   */
+  async listCustomerSightings(
+    q: { page?: number; take?: number } = {},
+  ): Promise<FintavaPage<FintavaCustomerSighting>> {
+    const op: Op = { name: 'list customers', method: 'GET', call: 'read' };
+    const answer = await this.request(op, '/customers/list', {
+      query: this.page(q),
+    });
+    return this.read(op, answer, (data, body) => {
+      if (!Array.isArray(data)) throw new FintavaShapeError('rows missing');
+      const meta = obj(body.meta, 'meta');
+      return {
+        items: data.map(readSighting),
         page: count(meta.page),
         take: count(meta.take),
         itemCount: count(meta.itemCount),

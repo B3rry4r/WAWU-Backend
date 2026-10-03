@@ -100,6 +100,32 @@ export interface FintavaCustomer extends FintavaCustomerIds {
   tier: string | null;
 }
 
+/**
+ * A customer looked up by phone for account opening (MONEY-12), which may
+ * send a lost create again only when Fintava has none: three answers, as a
+ * transaction lookup has (`FintavaLookup`). `absent` is only Fintava's own
+ * `404 ["Customer not found"]` (mobile repo
+ * `docs/fintava/sandbox/32-money12-account.md`); a 2xx without a customer is
+ * `unknown`, never absent.
+ */
+export type FintavaCustomerLookup =
+  | { state: 'found'; customer: FintavaCustomer }
+  | { state: 'absent' }
+  | { state: 'unknown'; why: 'empty_answer' };
+
+/**
+ * One row of `GET /customers/list` as account opening reads it: whose phone,
+ * and when the customer was made. The list is newest first
+ * (`sandbox/07-`), so a lost create is looked for back to when it was sent.
+ */
+export interface FintavaCustomerSighting {
+  customerId: string;
+  /** Local `0...` form, or null when the row has no Nigerian mobile. */
+  phone: string | null;
+  /** ISO 8601 as Fintava wrote it, or null when the row has none. */
+  createdAt: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Balances (plan item 3)
 // ---------------------------------------------------------------------------
