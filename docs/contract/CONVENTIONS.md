@@ -78,9 +78,12 @@ AppModule since MONEY-09): `GET`, `POST` and `PUT /money/pin` and
 the wallet gate, section 7) and asks Fintava on every request; `GET /money/identity`,
 `POST /money/identity/bvn` and `PUT /money/identity/occupation` (KYC-01),
 Open your wallet's identity step (section 8); the PIN reset, biometric
-approval and `POST /money/approval/verify` (MONEY-14, section 5); `GET`, `POST
-/money/beneficiaries`, `DELETE /money/beneficiaries/{id}`, `GET` and `PUT
-/money/payout-account` (WALLET-14, section 10). A served route and a declared one may share a
+approval and `POST /money/approval/verify` (MONEY-14, section 5);
+`GET /money/transactions`, `/money/transactions/summary` and
+`/money/transactions/{id}` (MONEY-15), the history from the ledger
+(section 6); `GET`, `POST /money/beneficiaries`, `DELETE
+/money/beneficiaries/{id}`, `GET` and `PUT /money/payout-account`
+(WALLET-14, section 10). A served route and a declared one may share a
 schema (the error envelope, the PIN DTOs); the emitter keeps one copy when
 the two are identical and still fails when they differ. A task that serves
 more routes adds them to `SERVED_MONEY_ROUTES` in
@@ -425,6 +428,113 @@ one retry at a time per payment.
   which is the duplication G-1 asks to stop.
 - Short lists (banks, recipients, beneficiaries) are plain arrays with a
   stated maximum and no paging.
+
+### The history (MONEY-15)
+
+`src/money/history/`. It reads the ledger (MONEY-10) and nothing else: no
+Fintava call, so no `provider_unreachable`, and a frozen wallet's history
+still reads. Every answer is `Cache-Control: no-store`.
+
+- **Whose rows:** only rows on the caller's own wallet (`walletKind` user,
+  the token's wawuUserId and the account number of the wallet the gate
+  found). All three routes carry `@RequireOpenWallet()` (section 7, the
+  wallet gate): no wallet is `409 wallet_not_open` (`wallet_opening` while
+  MONEY-12 opens it) in the gate's words. Someone else's row, or no row:
+  `404 not_found`.
+- **Status** is the ledger's, which only Fintava's word moves (a send's
+  answer, a signed delivery, a lookup, MONEY-08's sweep): a row the sweep
+  has not settled shows `pending`, and a row whose sightings disagree stays
+  as stored (`discrepancy`, MONEY-16).
+- **Order:** newest first by `occurredAt` (when the money moved), then id.
+  A page ends with `nextCursor: null` only when nothing follows (a last page
+  that is exactly full carries none either).
+- **The scroll's snapshot** (MONEY-15 rounds 2 and 3).
+  - A first page takes the server's clock (milliseconds) as the scroll's
+    snapshot. The cursor (`c2.` + base64url) carries the last row's
+    (`occurredAt`, id) and that snapshot. The group key (`g2.` + base64url)
+    carries a piece, a Lagos day and the snapshot of the read that showed
+    the row.
+  - Every page of one scroll groups as of a fixed bound: the snapshot minus
+    `LEDGER_WRITE_MAX_MS` (5 s). A grouped row's members are the unlocks
+    whose `completedAt` is at or before that bound.
+  - The 5 s is how long a ledger write can run from stamping `completedAt`
+    to committing: Prisma's default interactive-transaction timeout. The
+    ledger's writers pass no timeout, and `PrismaService` sets none;
+    `history-units.spec.ts` fails if either starts to.
+  - So these unlocks stay their own row in that scroll and cannot move a
+    group across a cursor already handed out: one that lands mid-scroll,
+    one that settles mid-scroll, and one whose write was in flight when the
+    first page was read. An unlock completed in the last 5 s is its own row
+    until a refresh after that. The next refresh (a new first page) groups
+    them.
+  - Why not anchor a group to its first member: the anchor alone still
+    shows a settling unlock twice (pending on a page already read, then
+    inside its group). It would also put a group below rows newer than its
+    `createdAt`, which stays its latest member's (Lead ruling 3).
+  - The bound is compared with `completedAt`, which the ledger stamps with
+    the same server clock.
+  - A cursor or key the server did not write is a plain 400
+    (`cursor is not one this history gave.`, `group is not a key this
+    history gave.`). That includes round 1's `c1.` and `g1.`, and any time
+    dated year 0000, which Postgres cannot hold.
+  - **What one scroll can still get wrong, each corrected by a refresh:**
+    - *A row whose time moves earlier mid-scroll.* MONEY-10's merge keeps
+      the earliest `occurredAt`, and MONEY-08's sweep settles a pending
+      row with Fintava's own time. A row already shown can sort below the
+      cursor and show a second time. This is not about grouping; round 1's
+      cursor did the same. Today only a pending row is settled this way,
+      so it is a duplicate. If a completed row's time ever moved across
+      Lagos midnight into a day with a group of the same piece (only a fold
+      of two rows of one movement could do that), that group could move
+      and its members go missing from that scroll.
+    - *A completed unlock put back to `pending` by a disagreement*
+      (MONEY-08, a stop; `completedAt` is cleared). If its group was
+      already shown, its money shows twice in that scroll: the group comes
+      back lower with its other members, or the unlock comes back as its
+      own pending row, and the key of the group already shown lists one
+      member fewer than its count. If its group was still below the
+      cursor, everything shows once.
+    - Apart from these, every movement that existed before the first page
+      shows exactly once in the scroll, as a row or inside a group.
+- **Groups** (WALLET.md, Lead ruling 3): two or more unlock earnings of
+  one piece on one Africa/Lagos day, completed by the group bound, are one
+  row. Its id, reference and `createdAt` are its latest movement's,
+  `amountKobo`, `fee` and `totalKobo` the sums, `counterparty`, `note`,
+  `transferId` and `paymentId` null. A pending or failed unlock stays its
+  own row. `group=<key>` lists the movements the row stood for, one per
+  row, and ignores `filter`, `q` and `month`.
+- **Filters:** `money_in` and `money_out` by direction; `bills` is category
+  `bill` or a link of kind `bill` (a held bill payment too); `content` is a
+  link of kind `content_unlock` or `tip`. `month` is `YYYY-MM` in
+  Africa/Lagos time.
+- **Search** (`q`) is trimmed first, then must be 2 to 60 characters
+  (`" P "` is a 400). It matches, case-insensitively,
+  a part of what the row shows: the counterparty's name or handle, the
+  description, the note and the reference. `%`, `_` and `\` are only
+  characters. A grouped row is searched by its description only.
+- **Description:** the label, then the link's title, then the bank when the
+  other side is a bank account, joined with " · " ("Transfer · GTBank",
+  "Unlock · Lighting night shoots · 3 buyers"). Labels are in
+  `history-labels.ts`; the SQL that searches and the text that is sent are
+  built from the same table.
+- **Fees:** a money-in row has none. A money-out row shows the split the
+  sending feature quoted (`providerFeeKobo`, `wawuFeeKobo`) when amount plus
+  both equals the total Fintava reported; otherwise Fintava's own charge
+  (`feeKobo`) as the provider fee and WAWU's as 0. `totalKobo` is always the
+  stored total.
+- **Counterparty:** the name the movement recorded, else (someone on WAWU)
+  their wallet's account name as Fintava gave it at opening
+  (`FintavaWallet.accountName`, MONEY-12), else their `@handle`, else a plain
+  word for the kind (a Fintava delivery names nobody); a bank account's number only as
+  its last 4 digits; an avatar only for someone on WAWU.
+- **Reference:** ours (`customerReference`) first, else Fintava's
+  reference, the session id, the transaction id, the tagapay reference,
+  else the row's id. Ours first is what G-44's fix (the receiver's row
+  holding ours) relies on.
+- **Month summary:** the sums of that Africa/Lagos month's `completed`
+  rows by direction (`totalKobo`: out is what left, fees included; in is
+  what arrived). Pending, failed and reversed rows are not in it, and
+  grouping never changes it. It is never called, or shown as, a balance.
 
 ## 7. Everything else
 

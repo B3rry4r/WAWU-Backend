@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsIn,
   IsInt,
@@ -384,8 +384,15 @@ export class TransactionListQueryDto extends CursorQueryDto {
   @IsIn(TRANSACTION_FILTERS)
   filter?: TransactionFilter = 'all';
 
-  /** Free-text search over the counterparty's name, the description, the note and the reference. */
+  /**
+   * Free-text search over the counterparty's name, the description, the
+   * note and the reference. Spaces around it are dropped first; what is
+   * left must be 2 to 60 characters.
+   */
   @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
   @IsString()
   @MinLength(2)
   @MaxLength(60)
