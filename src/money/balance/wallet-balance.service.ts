@@ -5,6 +5,7 @@ import { FINTAVA_DEFAULTS } from '../../fintava/fintava-config';
 import { FintavaError } from '../../fintava/fintava-error';
 import { MoneyError } from '../money-error';
 import type { WalletBalanceView } from '../money-view.type';
+import { stoppedOnIdentity } from '../opening/opening-stops';
 
 /** W6's refusal: the bank did not answer, so there is no figure to show. */
 export const BALANCE_UNREACHABLE_MESSAGE =
@@ -12,6 +13,10 @@ export const BALANCE_UNREACHABLE_MESSAGE =
 
 /** No wallet yet (R-6): the app leads to Open your wallet (MONEY-12, MONEY-13). */
 export const BALANCE_NOT_OPEN_MESSAGE = 'Open your wallet to see your balance.';
+
+/** The account is still being opened (MONEY-12, A7). */
+export const BALANCE_OPENING_MESSAGE =
+  'Your account is still being opened. Check again in a moment.';
 
 /**
  * The caller's Naira balance (task MONEY-11): Fintava's `availableBalance`,
@@ -41,6 +46,19 @@ export class WalletBalanceService {
       select: { walletId: true },
     });
     if (!wallet) {
+      // A7: the account is being opened (MONEY-12), so the app waits
+      // rather than sending the person back to Open your wallet.
+      const opening = await this.prisma.fintavaWalletOpening.findUnique({
+        where: { wawuUserId },
+        select: { state: true, failure: true },
+      });
+      if (
+        opening &&
+        opening.state !== 'failed' &&
+        !stoppedOnIdentity(opening)
+      ) {
+        throw new MoneyError('wallet_opening', BALANCE_OPENING_MESSAGE);
+      }
       throw new MoneyError('wallet_not_open', BALANCE_NOT_OPEN_MESSAGE);
     }
 

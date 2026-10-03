@@ -220,6 +220,10 @@ Every refusal is the envelope this backend already answers with
 | `selfie_not_matched` | 422 | Fintava did not match the selfie to the BVN photo (A16) (KYC-02) | `checksLeft` |
 | `selfie_checks_exhausted` | 429 | the person has used today's selfie matches (A16 and the retry rule); Fintava is not asked | `retryAfterSeconds` |
 | `selfie_already_matched` | 409 | a selfie match from someone whose selfie already matched against their current BVN check | |
+| `selfie_required` | 409 | account opening before a selfie matched against the BVN check whose BVN and NIN were sent (MONEY-12) | |
+| `identity_has_wallet` | 409 | account opening for a BVN or phone another WAWU account opened a wallet with, or whose Fintava account another WAWU account holds; nothing is sent | |
+| `account_not_opened` | 422 | Fintava refused the details sent (a validation or identity refusal, such as a blacklisted NIN), or the account has no email; nothing was created and the person may try again | |
+| `phone_held_by_other_identity` | 409 | account opening where Fintava already has a customer for the person's phone whose record does not carry the checked BVN (or carries none): nothing is adopted or created, and the opening stops for review (MONEY-12, BACKEND_GAPS G-37) | |
 
 The same table is `MONEY_ERROR_STATUS` in `src/money/money-contract.ts`; each
 operation in the contract lists the codes it can answer with, grouped by
@@ -485,10 +489,11 @@ one retry at a time per payment.
   while a selfie is being matched does not inherit it (the match answers
   `409 bvn_not_checked`). Once matched, a further match is `409
   selfie_already_matched` and is not sent. Account opening (MONEY-12) reads
-  `SelfieMatchService.selfieMatched`, and should read the passed check once
-  and require the matched row tied to that exact check (its `bvnVerifiedAt`
-  and `bvnHash`), in the same read as the BVN and NIN comparison: two
-  separate reads of "the current check" can race as KYC-02's defect 2 did.
+  the passed check once (`WalletIdentityService.checkedIdentity`, the BVN and
+  the NIN compared in that read) and requires the matched row tied to that
+  exact check (`SelfieMatchService.matchedFor`, its `bvnVerifiedAt` and
+  `bvnHash`): two separate reads of "the current check" could race as
+  KYC-02's defect 2 did (section 9).
 - **Limits** (each match is charged, a failed one too). Per person: 3 in
   any 24 hours (`SELFIE_CHECKS_PER_DAY`, PROVISIONAL), counted in
   `SelfieMatchAttempt` with the BVN check's limiter (`reserveDailyAttempt`:
@@ -502,3 +507,81 @@ one retry at a time per payment.
 - **Without settings.** No `FINTAVA_*` or no `IDENTITY_HASH_KEY`: the server
   starts, the match answers `503 provider_unreachable` without calling out
   or counting, and the read still answers.
+
+## 9. Opening the account at Fintava (MONEY-12)
+
+- **Routes** (`src/money/opening/`): `POST /money/wallet/open` with
+  `OpenNairaWalletDto` (`bvn`, `nin`, `firstName`, `lastName`, `dateOfBirth` as
+  `YYYY-MM-DD`, `address` in one line) ends Open your wallet (A7) and answers
+  `WalletView`; `GET /money/wallet` answers the same, never calls Fintava,
+  and is `no-store` like the open. `state` is `not_open` (no wallet, or the
+  last attempt failed), `opening` (being created, or a lost answer being
+  confirmed: A7's wait) or `open` (with `account`: Fintava's account number
+  and account name, the bank name from `WALLET_BANK_NAME`, default "Loma
+  Bank", provisional, bank code `090620`, and the owner's licence and
+  deposit-insurance lines, null until set). `limits` is null (G-7),
+  `bankTransfers` is allowed for an open wallet (W18 is not built, R-28) and
+  `beneficiaryCount` is 0 until WALLET-14 serves beneficiaries. While an
+  opening is in flight the balance answers `409 wallet_opening`.
+- **Identity, read once.** The BVN and NIN must be the ones the passed check
+  was run with (`checkedIdentity`: keyed hashes, one read, the NIN required;
+  `409 bvn_not_checked` otherwise) and the selfie must have matched against
+  exactly that check (`matchedFor`; `409 selfie_required` otherwise). The
+  opening records the check it was claimed under. The phone sent is the one
+  the BVN check proved (`WalletIdentity.verifiedPhone`), the email the
+  token's (`422 account_not_opened` when there is none). The name, date of
+  birth and address are the app's (G-25's default: A5's prefill as shown);
+  none of them, nor the BVN or NIN, is stored or logged.
+- **One person, one account.** Fintava refuses neither a repeated create
+  nor a repeated BVN (`sandbox/07-create-customer.md`), so:
+  `FintavaWalletOpening` (one row per person) is claimed before anything is
+  sent (a new row, or a `failed` one by a conditional update on its attempt
+  number), and checked again just before the create; a request that finds
+  it taken answers `opening` and sends nothing. Its BVN hash and phone are
+  unique: a second WAWU account with the same BVN or phone gets `409
+  identity_has_wallet` and nothing is sent. Before a create, Fintava is
+  asked for a customer with the phone (`/customers/details`, then
+  `/customers/{id}`). It is the person's account only when Fintava's record
+  carries the checked BVN: the keyed hash (`IDENTITY_HASH_KEY`, KYC-01's
+  `bvn:<digits>` scheme) of its `userInfo.bvn` equals the opening's
+  `bvnHash`. Fintava's BVN and date of birth are never stored, logged or
+  answered; the client hands the BVN only to the hash. One that carries it
+  and nobody holds is recorded instead of making a second; one another WAWU
+  account holds is `409 identity_has_wallet`. One whose BVN differs, or
+  whose record has no readable BVN, is never adopted and nothing is
+  created: the opening stops as `conflict` (`failure`
+  `phone_held_by_other_identity` or `phone_holder_bvn_unreadable`), one
+  error line is logged, and the person is answered `409
+  phone_held_by_other_identity` now and on every later open, while `GET
+  /money/wallet` reads `not_open` (G-37: an owner's review). An answer that
+  cannot be read is `503 provider_unreachable` with nothing created.
+- **A lost answer** (timeout, 5xx, a 2xx without the customer, or a refusal
+  saying the customer exists) leaves the opening `unknown`, answered as
+  `opening`. It is reconciled with Fintava on the next open request and by
+  a sweep every 30 seconds (also for an `opening` row whose request never
+  finished): a customer found for the phone, by `/customers/details` or in
+  `/customers/list` back to a little before the attempt, is recorded as the
+  person's account only if it carries the checked BVN (as above; a list row
+  of any age, matched by phone, is read by id and compared the same way),
+  and otherwise stops the opening for review. Its order is not assumed:
+  the list is read to its end (up to 10 pages of 100), and a list read to
+  its end without the phone counts as "no row" whatever its order; a longer
+  list counts only when every row read was newest first and reached back
+  past the attempt, and otherwise the opening waits. Every time stamped on
+  an opening or compared with one is the database's `now()`, not the
+  server's clock. It counts as not created only when
+  the details lookup gives Fintava's own `404 ["Customer not found"]`
+  (`sandbox/32-money12-account.md`) AND the list has no row for the phone
+  AND the money timeout plus `FINTAVA_RESEND_SAFETY_MS` has passed since the
+  create was sent; then the opening is `failed` and the person's next open
+  request sends a new create. Anything else waits: `{}`, `data: null`, any
+  other 404, a failed, unreadable or out-of-order list. A found account
+  another WAWU account holds leaves the opening `conflict` (shown as
+  `opening`), logged for review.
+- **Refusals.** A validation refusal or an identity refusal (a blacklisted
+  NIN) is `422 account_not_opened`; the merchant gate, a refused key or any
+  other refusal is `503 provider_unreachable`. Both leave the opening
+  `failed`, and the next request is a new attempt.
+- **Without settings.** No `FINTAVA_*` or no `IDENTITY_HASH_KEY`: the open
+  answers `503 provider_unreachable` and sends nothing; `GET /money/wallet`
+  still answers; the sweep does nothing.

@@ -15,10 +15,9 @@ import { WalletBalanceService } from './wallet-balance.service';
  * `no-store` because the figure is Fintava's at the moment it answered;
  * nothing between the app and here may keep it and answer with it later.
  *
- * Of the wallet gate codes it answers `wallet_not_open` (no wallet yet) and
- * `wallet_frozen` (Fintava's own frozen refusal). `wallet_opening` is
- * answered once MONEY-12 records an account that is still being created:
- * nothing records one yet.
+ * Of the wallet gate codes it answers `wallet_not_open` (no wallet yet),
+ * `wallet_opening` (MONEY-12 is still opening the account) and
+ * `wallet_frozen` (Fintava's own frozen refusal).
  */
 @ApiBearerAuth('wawu-id')
 @UseGuards(WawuAuthGuard)

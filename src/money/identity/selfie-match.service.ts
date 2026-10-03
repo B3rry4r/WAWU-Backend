@@ -97,10 +97,20 @@ export class SelfieMatchService {
 
   /**
    * True when this person's selfie matched the BVN photo of their current
-   * passed BVN check. For account opening (MONEY-12).
+   * passed BVN check.
    */
   async selfieMatched(wawuUserId: string): Promise<boolean> {
     return (await this.currentMatchedAt(wawuUserId)) !== null;
+  }
+
+  /**
+   * For account opening (MONEY-12): when this person's selfie matched
+   * against exactly this BVN check (the same time and keyed hash, as
+   * WalletIdentityService.checkedIdentity read it once), or null. Never a
+   * second read of the current check.
+   */
+  matchedFor(wawuUserId: string, check: PassedBvnCheck): Promise<Date | null> {
+    return this.matchedAt(wawuUserId, check);
   }
 
   async match(
