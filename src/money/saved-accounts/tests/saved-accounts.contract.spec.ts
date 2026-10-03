@@ -21,6 +21,7 @@ import {
   NAME_ENQUIRY,
   type SeenRequest,
 } from '../../../../test/fintava/fintava-double';
+import { AccountPurgeService } from '../../../account-purge/account-purge.service';
 import { WawuIdClient } from '../../../common/auth/wawu-id.client';
 import { WawuJwtStrategy } from '../../../common/auth/wawu-jwt.strategy';
 import { AllExceptionsFilter } from '../../../common/filters/all-exceptions.filter';
@@ -1135,6 +1136,22 @@ describe('Saved beneficiaries and the payout account (WALLET-14) over HTTP', () 
           accountNumber: req.query.accountNumber,
         }),
       }));
+      // Full, but saving a place already saved still answers its row: the
+      // person, and one of the bank accounts (no new place is taken).
+      const person = body<BeneficiaryView[]>(await list(who)).data!.find(
+        (x) => x.kind === 'wawu_user',
+      )!;
+      const resaved = body<BeneficiaryView>(
+        await save(who, { kind: 'wawu_user', wawuUserId: them.id }).expect(201),
+      ).data!;
+      expect(resaved.id).toBe(person.id);
+      const asked = nameChecks().length;
+      await save(who, {
+        kind: 'bank_account',
+        bankCode: GTB,
+        accountNumber: '7700000000',
+      }).expect(201);
+      expect(nameChecks()).toHaveLength(asked);
       // Full: the next save is refused.
       expectRefusal(
         await save(who, {
@@ -1173,6 +1190,51 @@ describe('Saved beneficiaries and the payout account (WALLET-14) over HTTP', () 
         bankCode: GTB,
         accountNumber: '8800000004',
       }).expect(201);
+    });
+
+    it('re-saving a saved person whose account was deleted answers as for anyone else, never a row the list hides (defect 3)', async () => {
+      const a = await withWallet();
+      const b = await withWallet();
+      const them = await recipient('Gone', 'Person');
+      const first = body<BeneficiaryView>(
+        await save(a, { kind: 'wawu_user', wawuUserId: them.id }).expect(201),
+      ).data!;
+      // Saved again while they have a wallet: the same row.
+      const again = body<BeneficiaryView>(
+        await save(a, { kind: 'wawu_user', wawuUserId: them.id }).expect(201),
+      ).data!;
+      expect(again.id).toBe(first.id);
+
+      // Their account is deleted through the real purge.
+      await new AccountPurgeService(prisma).purge(them.id);
+      expect(body<BeneficiaryView[]>(await list(a)).data).toEqual([]);
+
+      // A, who saved them, gets exactly what B, who never did, gets.
+      const byA = await save(a, { kind: 'wawu_user', wawuUserId: them.id });
+      const byB = await save(b, { kind: 'wawu_user', wawuUserId: them.id });
+      expectRefusal(byA, 404, 'recipient_not_found');
+      expectRefusal(byB, 404, 'recipient_not_found');
+      expect(byA.body).toEqual(byB.body);
+      expect(body<BeneficiaryView[]>(await list(a)).data).toEqual([]);
+      const wallet = body<WalletView>(
+        await authed(http().get('/api/hub/money/wallet'), a).expect(200),
+      ).data!;
+      expect(wallet.beneficiaryCount).toBe(0);
+
+      // A person who closed only their wallet (profile kept) is 409 to both.
+      const noWallet = await recipient('Wallet', 'Gone');
+      await save(a, { kind: 'wawu_user', wawuUserId: noWallet.id }).expect(201);
+      await prisma.fintavaWallet.delete({ where: { wawuUserId: noWallet.id } });
+      expectRefusal(
+        await save(a, { kind: 'wawu_user', wawuUserId: noWallet.id }),
+        409,
+        'recipient_has_no_wallet',
+      );
+      expectRefusal(
+        await save(b, { kind: 'wawu_user', wawuUserId: noWallet.id }),
+        409,
+        'recipient_has_no_wallet',
+      );
     });
 
     it('two saves of the same place at the same moment keep one row', async () => {

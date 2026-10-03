@@ -117,17 +117,6 @@ export class BeneficiaryService {
     if (recipient === owner) {
       throw new MoneyError('self_transfer', SELF_BENEFICIARY_MESSAGE);
     }
-    const existing = await this.prisma.moneyBeneficiary.findUnique({
-      where: {
-        ownerWawuId_recipientWawuId: {
-          ownerWawuId: owner,
-          recipientWawuId: recipient,
-        },
-      },
-      select: ROW_SELECT,
-    });
-    if (existing) return this.one(existing);
-
     const [wallet, profile] = await Promise.all([
       this.prisma.fintavaWallet.findUnique({
         where: { wawuUserId: recipient },
@@ -150,6 +139,20 @@ export class BeneficiaryService {
         RECIPIENT_NO_WALLET_MESSAGE,
       );
     }
+    // Only now the row already saved, if any: a person whose wallet is gone
+    // (a deleted account) is answered as for anyone else above, never with
+    // a row the list does not show (round 3, verifier defect 3).
+    const existing = await this.prisma.moneyBeneficiary.findUnique({
+      where: {
+        ownerWawuId_recipientWawuId: {
+          ownerWawuId: owner,
+          recipientWawuId: recipient,
+        },
+      },
+      select: ROW_SELECT,
+    });
+    if (existing) return this.one(existing);
+
     return this.insert(owner, {
       kind: 'wawu_user',
       recipientWawuId: recipient,
