@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   Injectable,
   Logger,
@@ -24,10 +25,17 @@ import type { FintavaWebhookAck } from './fintava-webhook-view.type';
  * stored `unrecognised`.
  *
  * Exactly once: the insert is `ON CONFLICT DO NOTHING` against the unique
- * key (event, reference, fintavaStatus). A retry, a replayed capture or two
- * copies arriving together all race for the same key; one row is written
- * and every other copy answers `duplicate`. There is no read before the
- * write, so there is no window between a check and an insert.
+ * key, the SHA-256 of the raw body (`bodySha256`). A retry, a replayed
+ * capture or two copies arriving together are the same bytes and race for
+ * the same key; one row is written and every other copy answers
+ * `duplicate`. There is no read before the write, so there is no window
+ * between a check and an insert.
+ *
+ * Every other body is a delivery of its own (MONEY-08 round 3), even for the
+ * same event, reference and status: a second SUCCESS with another amount is
+ * Fintava contradicting itself, and it must reach the ledger to be recorded
+ * as a disagreement. The key used to be (event, reference, fintavaStatus),
+ * which answered such a delivery `duplicate` and dropped it.
  */
 @Injectable()
 export class FintavaWebhookService {
@@ -53,6 +61,7 @@ export class FintavaWebhookService {
             fintavaStatus: delivery.fintavaStatus,
             dataReference: delivery.dataReference,
             dataCustomerReference: delivery.dataCustomerReference,
+            bodySha256: createHash('sha256').update(rawBody).digest('hex'),
             // The exact bytes, NUL and all (bytea); the parsed copy with
             // NUL replaced, since json cannot hold one.
             rawBody: new Uint8Array(rawBody),

@@ -21,7 +21,8 @@ import type {
   LedgerDirection,
   LedgerWallet,
 } from './ledger.interface';
-import { koboNumber, LedgerService } from './ledger.service';
+import { LedgerStatusService } from './ledger-status.service';
+import { LedgerService } from './ledger.service';
 import {
   LEDGER_WEBHOOK_EVENTS,
   ledgerStatusOf,
@@ -104,6 +105,7 @@ export class LedgerConsumerService {
     private readonly fintava: FintavaClient,
     private readonly ledger: LedgerService,
     config: ConfigService,
+    private readonly status: LedgerStatusService,
   ) {
     this.confirmWindowMs = ledgerConfirmWindowMs(
       config.get<string>(LEDGER_CONFIG_KEYS.confirmWindowHours),
@@ -280,6 +282,12 @@ export class LedgerConsumerService {
       fintavaTransactionId: null,
     };
     let occurredAt: Date | null = null;
+    // Fintava's own record of the movement has another amount than the
+    // delivery: a stop (WORKFLOW section 10). The rows are written with the
+    // delivery's figures, left `pending`, and the difference goes on their
+    // `discrepancy` (MONEY-08 round 2; it used to settle them and say so
+    // only in the delivery's note).
+    let disagreement: string | null = null;
 
     const held = await Promise.all(
       sides.map((s) =>
@@ -326,9 +334,8 @@ export class LedgerConsumerService {
           : new Date(t.createdAt);
         notes.push('confirmed with Fintava');
         if (t.amountKobo !== m.amountKobo) {
-          notes.push(
-            `Fintava's record says ${t.amountKobo} kobo, the delivery ${m.amountKobo}`,
-          );
+          disagreement = `Fintava's record says ${t.amountKobo} kobo, the delivery ${m.amountKobo}`;
+          notes.push(disagreement, 'left pending for review');
         }
       } else if (c.state === 'unknown' && age < this.confirmWindowMs) {
         return this.wait(
@@ -345,9 +352,10 @@ export class LedgerConsumerService {
     }
     // A wallet-to-wallet delivery reports no status but the balances after
     // the move; a bank send without a status is still on its way.
-    const final: TransferStatus =
-      status ??
-      (m.event === 'customer_bank_transfer' ? 'pending' : 'completed');
+    const final: TransferStatus = disagreement
+      ? 'pending'
+      : (status ??
+        (m.event === 'customer_bank_transfer' ? 'pending' : 'completed'));
 
     return this.finish(event.id, async (tx) => {
       const written: string[] = [];
@@ -380,6 +388,13 @@ export class LedgerConsumerService {
           },
           tx,
         );
+        if (disagreement) {
+          await this.ledger.noteDiscrepancy(
+            r.entryId,
+            `webhook sighting: ${disagreement}`,
+            tx,
+          );
+        }
         written.push(
           `${side.direction} ${r.created ? 'recorded' : 'already held'}`,
         );
@@ -452,6 +467,14 @@ export class LedgerConsumerService {
             note: `ledger: debit ${res.entryId} ${res.changed ? 'marked reversed' : 'was already reversed'}`,
           };
         }
+        if (res.state === 'disagrees') {
+          // A stop: the difference is on the debit's row for review
+          // (MONEY-16); the delivery itself has been read in full.
+          return {
+            status: 'processed',
+            note: `ledger: debit ${res.entryId} not reversed: the reversal disagrees with it, recorded on the row (review)`,
+          };
+        }
         if (res.state === 'ambiguous') {
           return {
             status: 'failed',
@@ -469,83 +492,30 @@ export class LedgerConsumerService {
   }
 
   // -------------------------------------------------------------------------
-  // Reconciling one pending row of ours with Fintava (history and lookup)
+  // Reconciling one pending row with Fintava (history and lookup)
   // -------------------------------------------------------------------------
 
   /**
-   * Asks Fintava about one `out` row WAWU sent (it holds our
-   * CustomerReference): the MONEY-06 client's reconcile, the lookup by our
-   * reference then the sender's history. What Fintava found is merged into
-   * the row (status forward only, references filled, amounts compared). An
-   * absent or unknown answer changes nothing: deciding that a send failed is
-   * MONEY-08's, with its resend rules.
+   * Asks Fintava about one `pending` row: MONEY-08's status check
+   * (LedgerStatusService.check), which this used to duplicate. What Fintava
+   * found settles the row (status forward only, references filled), unless
+   * its amount differs, which is recorded on the row and settles nothing.
+   * Fintava having no record of one of our sends, past the resend window,
+   * fails the row with no money moved; anything unclear changes nothing.
    */
   async reconcileEntry(entryId: string): Promise<{
     state: 'found' | 'absent' | 'unknown' | 'skipped';
     status: TransferStatus | null;
   }> {
-    const e = await this.prisma.fintavaLedgerEntry.findUnique({
-      where: { id: entryId },
-    });
-    if (!e || e.direction !== 'out' || !e.customerReference) {
-      return { state: 'skipped', status: null };
-    }
-    let sender: FintavaSender;
-    let wallet: LedgerWallet;
-    if (e.walletKind === 'merchant') {
-      sender = { kind: 'merchant' };
-      wallet = { kind: 'merchant', accountNumber: e.accountNumber };
-    } else {
-      const w = await this.prisma.fintavaWallet.findUnique({
-        where: { wawuUserId: e.wawuUserId ?? '' },
-        select: { customerId: true, wawuUserId: true },
-      });
-      if (!w) return { state: 'skipped', status: null };
-      sender = { kind: 'customer', customerId: w.customerId };
-      wallet = {
-        kind: 'user',
-        wawuUserId: w.wawuUserId,
-        accountNumber: e.accountNumber,
-      };
-    }
-    let r;
-    try {
-      r = await this.fintava.reconcile(
-        e.customerReference,
-        sender,
-        e.occurredAt,
-      );
-    } catch (err) {
-      if (err instanceof FintavaError)
-        return { state: 'unknown', status: null };
-      throw err;
-    }
-    if (r.state !== 'found') return { state: r.state, status: null };
-    const t = r.transaction;
-    const status = ledgerStatusOf(t.status) ?? 'pending';
-    await this.ledger.record({
-      wallet,
-      direction: 'out',
-      status,
-      category: e.category,
-      amountKobo: t.amountKobo,
-      // Lookups and history carry no fee for a wallet-to-wallet send: the
-      // row's own fee and total stand, and only the amount is compared.
-      feeKobo: koboNumber(e.feeKobo),
-      totalKobo: koboNumber(e.totalKobo),
-      references: {
-        customerReference: t.customerReference,
-        fintavaReference: t.fintavaReference,
-        tagapayTransRef: t.tagapayTransRef ?? (await this.tagapayOf(t)),
-        fintavaTransactionId: t.id,
-        sessionId: t.sessionId,
-      },
-      source: r.source,
-      occurredAt: Number.isNaN(Date.parse(t.createdAt))
-        ? null
-        : new Date(t.createdAt),
-    });
-    return { state: 'found', status };
+    const c = await this.status.check(entryId);
+    if (c.fintava === null) return { state: 'skipped', status: null };
+    return {
+      state: c.fintava,
+      status:
+        c.fintava === 'found' || c.outcome === 'failed_absent'
+          ? c.status
+          : null,
+    };
   }
 
   // -------------------------------------------------------------------------
