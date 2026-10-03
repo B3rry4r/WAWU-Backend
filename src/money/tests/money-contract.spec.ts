@@ -37,6 +37,11 @@ const SERVED_MONEY_ROUTES: Record<string, string> = {
   'POST /api/hub/money/identity/selfie': 'KYC-02',
   'GET /api/hub/money/wallet': 'MONEY-12',
   'POST /api/hub/money/wallet/open': 'MONEY-12',
+  'GET /api/hub/money/beneficiaries': 'WALLET-14',
+  'POST /api/hub/money/beneficiaries': 'WALLET-14',
+  'DELETE /api/hub/money/beneficiaries/{id}': 'WALLET-14',
+  'GET /api/hub/money/payout-account': 'WALLET-14',
+  'PUT /api/hub/money/payout-account': 'WALLET-14',
   'POST /api/hub/money/pin/reset': 'MONEY-14',
   'POST /api/hub/money/pin/reset/confirm': 'MONEY-14',
   'GET /api/hub/money/device': 'MONEY-14',
@@ -44,6 +49,9 @@ const SERVED_MONEY_ROUTES: Record<string, string> = {
   'DELETE /api/hub/money/device': 'MONEY-14',
   'POST /api/hub/money/device/challenge': 'MONEY-14',
   'POST /api/hub/money/approval/verify': 'MONEY-14',
+  'GET /api/hub/money/transactions': 'MONEY-15',
+  'GET /api/hub/money/transactions/summary': 'MONEY-15',
+  'GET /api/hub/money/transactions/{id}': 'MONEY-15',
 };
 
 type ModuleRef =

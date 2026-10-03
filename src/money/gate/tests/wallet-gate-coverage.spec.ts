@@ -168,7 +168,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       ]),
     );
     expect(declared.map((r) => r.key)).toEqual(
-      expect.arrayContaining(['POST money/payments', 'GET money/transactions']),
+      expect.arrayContaining(['POST money/payments', 'GET money/holds']),
     );
   });
 
@@ -188,24 +188,32 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
     expect(half).toEqual([]);
   });
 
-  it('the gated routes today: the PIN, the balance, the PIN reset and biometric approval (MONEY-14)', () => {
+  it('the gated routes today: the PIN, the balance, the PIN reset and biometric approval (MONEY-14), the history (MONEY-15), beneficiaries and the payout account (WALLET-14)', () => {
     expect(
       mounted
         .filter((r) => r.guards.includes(WalletGateGuard))
         .map((r) => r.key)
         .sort(),
     ).toEqual([
+      'DELETE money/beneficiaries/:id',
       'DELETE money/device',
+      'GET money/beneficiaries',
       'GET money/device',
+      'GET money/payout-account',
       'GET money/pin',
+      'GET money/transactions',
+      'GET money/transactions/:id',
+      'GET money/transactions/summary',
       'GET money/wallet/balance',
       'POST money/approval/verify',
+      'POST money/beneficiaries',
       'POST money/device/challenge',
       'POST money/pin',
       'POST money/pin/reset',
       'POST money/pin/reset/confirm',
       'POST money/pin/verify',
       'PUT money/device',
+      'PUT money/payout-account',
       'PUT money/pin',
     ]);
   });

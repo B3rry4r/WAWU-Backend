@@ -21,7 +21,7 @@ caller from the token.
 
 | Method and path | Response (`data`) | Request | Served by |
 |---|---|---|---|
-| `GET /money/wallet` | `WalletView` | | MONEY-12 (served; `pin` from MONEY-09, `beneficiaryCount` 0 until WALLET-14) |
+| `GET /money/wallet` | `WalletView` | | MONEY-12 (served; `pin` from MONEY-09, `beneficiaryCount` from WALLET-14) |
 | `POST /money/wallet/open` | `WalletView` | `OpenNairaWalletDto` | MONEY-12 (served; CONVENTIONS.md section 9) |
 | `GET /money/wallet/balance` | `WalletBalanceView` | | MONEY-11 (served) |
 | `GET /money/pin` | `PinStateView` | | MONEY-09 |
@@ -39,11 +39,11 @@ caller from the token.
 | `POST /money/banks/name-check` | `AccountNameView` | `NameCheckDto` | WALLET-09 |
 | `GET /money/recipients?q=` | `RecipientView[]` (at most 20) | | WALLET-08 |
 | `GET /money/recipients/recent` | `RecipientView[]` (at most 10) | | WALLET-08 |
-| `GET /money/beneficiaries` | `BeneficiaryView[]` | | WALLET-14 |
-| `POST /money/beneficiaries` | `BeneficiaryView` | `CreateBeneficiaryDto` | WALLET-14 |
-| `DELETE /money/beneficiaries/{id}` | `null` | | WALLET-14 |
-| `GET /money/payout-account` | `PayoutAccountView` or `null` | | WALLET-14 |
-| `PUT /money/payout-account` | `PayoutAccountView` | `PayoutAccountDto` | WALLET-14 |
+| `GET /money/beneficiaries` | `BeneficiaryView[]` | | WALLET-14 (served; CONVENTIONS.md section 10) |
+| `POST /money/beneficiaries` | `BeneficiaryView` | `CreateBeneficiaryDto` | WALLET-14 (served; CONVENTIONS.md section 10) |
+| `DELETE /money/beneficiaries/{id}` | `null` | | WALLET-14 (served; CONVENTIONS.md section 10) |
+| `GET /money/payout-account` | `PayoutAccountView` or `null` | | WALLET-14 (served; CONVENTIONS.md section 10) |
+| `PUT /money/payout-account` | `PayoutAccountView` | `PayoutAccountDto` | WALLET-14 (served; CONVENTIONS.md section 10) |
 | `GET /money/fees/quote?kind=&amountKobo=` | `FeeQuoteView` | | WALLET-15 |
 | `POST /money/transfers/wawu` | `TransferView` | `WawuTransferDto`, `Idempotency-Key`, `X-Transaction-Pin` | WALLET-07 |
 | `POST /money/transfers/bank` | `TransferView` | `BankTransferDto`, `Idempotency-Key`, `X-Transaction-Pin` | WALLET-09 |
@@ -53,9 +53,9 @@ caller from the token.
 | `GET /money/payments/{id}` | `PaymentView` | | MONEY-19 |
 | `GET /money/holds?role=&cursor=&limit=` | `HoldPage` | | MONEY-18 |
 | `GET /money/holds/{id}` | `HoldView` | | MONEY-18 |
-| `GET /money/transactions?filter=&q=&month=&group=&cursor=&limit=` | `TransactionPage` | | MONEY-15 |
-| `GET /money/transactions/summary?month=` | `MonthlySummaryView` | | MONEY-15 |
-| `GET /money/transactions/{id}` | `TransactionView` | | MONEY-15 |
+| `GET /money/transactions?filter=&q=&month=&group=&cursor=&limit=` | `TransactionPage` | | MONEY-15 (served; CONVENTIONS.md section 6) |
+| `GET /money/transactions/summary?month=` | `MonthlySummaryView` | | MONEY-15 (served) |
+| `GET /money/transactions/{id}` | `TransactionView` | | MONEY-15 (served) |
 
 A withdrawal (W17) is `POST /money/transfers/bank` to the payout account; it
 has no route of its own. Releasing or refunding a hold is never a client
