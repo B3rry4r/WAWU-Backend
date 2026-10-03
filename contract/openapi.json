@@ -21271,6 +21271,16 @@
               }
             }
           },
+          "400": {
+            "description": "reason.code: statement_too_large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
           "409": {
             "description": "reason.code: wallet_not_open, wallet_opening",
             "content": {
@@ -21297,7 +21307,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "One statement. `from` and `to` are calendar days in Africa/Lagos time\nand BOTH are included: from 00:00 on `from` to 23:59:59.999 on `to`,\nLagos time. A day that does not exist, `from` after `to`, `to` after\ntoday in Lagos, or more than 366 days is a 400.",
+        "summary": "One statement. `from` and `to` are calendar days in Africa/Lagos time\nand BOTH are included: from 00:00 on `from` to 23:59:59.999 on `to`,\nLagos time. A day that does not exist, `from` after `to`, `to` after\ntoday in Lagos, or more than 366 days is a 400; a period with more than\n50,000 movements is `400 statement_too_large`. At most 5 a minute and 30\nan hour per person per address (429 beyond).",
         "tags": [
           "MoneyStatement"
         ],
@@ -25210,7 +25220,8 @@
               "account_not_opened",
               "phone_held_by_other_identity",
               "reset_codes_exhausted",
-              "device_approval_refused"
+              "device_approval_refused",
+              "statement_too_large"
             ],
             "type": "string"
           },

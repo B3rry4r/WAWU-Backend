@@ -66,6 +66,9 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   // Never 401 (that signs the person out) and never a PIN code: a refused
   // biometric approval uses up no PIN try (R-26).
   device_approval_refused: 403,
+  // Default (agent/lead), owner may override: a period with too many rows
+  // for one file is the caller's to shorten, so a 400 (WALLET-27).
+  statement_too_large: 400,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */

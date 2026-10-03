@@ -119,5 +119,7 @@ export const MONEY_ERROR_CODES = [
   // Resetting the PIN by a code, and approving with a fingerprint or face (MONEY-14).
   'reset_codes_exhausted',
   'device_approval_refused',
+  // Statements (WALLET-27).
+  'statement_too_large',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];

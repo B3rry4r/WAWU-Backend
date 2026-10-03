@@ -7,8 +7,10 @@ import {
   ValidationPipe,
 } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
 import { PassportModule } from '@nestjs/passport';
 import { Test } from '@nestjs/testing';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import * as jwt from 'jsonwebtoken';
 import request, { type Response } from 'supertest';
 import type { App } from 'supertest/types';
@@ -25,6 +27,7 @@ import {
 } from '../../gate/wallet-gate';
 import type { LedgerMovementInput } from '../../ledger/ledger.interface';
 import { LedgerService } from '../../ledger/ledger.service';
+import { HUB_THROTTLERS } from '../../../hub-throttlers';
 import { MoneyModule } from '../../money.module';
 import type {
   MonthlySummaryView,
@@ -33,7 +36,9 @@ import type {
 } from '../../money-view.type';
 import { lagosToday } from '../statement-csv';
 import type { StatementView } from '../statement-view.type';
+import { STATEMENT_MAX_ROWS, statementTracker } from '../statement-config';
 import {
+  STATEMENT_TOO_LARGE_MESSAGE,
   STATEMENT_FUTURE_MESSAGE,
   STATEMENT_NOT_A_DAY_MESSAGE,
   STATEMENT_ORDER_MESSAGE,
@@ -870,6 +875,114 @@ describe('GET /money/statements (WALLET-27) over HTTP', () => {
     });
   });
 
+  describe('the reference is ours whenever the row has it (as W27)', () => {
+    it('a row carrying our reference and every one of Fintava’s shows ours; without ours, Fintava’s reference comes next', async () => {
+      const a = await withWallet();
+      const ours = `W27-OURS-${randomUUID()}`;
+      const fintavas = `FTV-${randomUUID()}`;
+      const when = at('2026-09-12T10:00:00.000Z');
+      for (const references of [
+        {
+          customerReference: ours,
+          fintavaReference: `FTV-${randomUUID()}`,
+          sessionId: `SES-${randomUUID()}`,
+          fintavaTransactionId: randomUUID(),
+          tagapayTransRef: `TGP-${randomUUID()}`,
+        },
+        {
+          fintavaReference: fintavas,
+          sessionId: `SES-${randomUUID()}`,
+          fintavaTransactionId: randomUUID(),
+          tagapayTransRef: `TGP-${randomUUID()}`,
+        },
+      ]) {
+        await ledger.record({
+          wallet: { kind: 'user', wawuUserId: a.id, accountNumber: a.account },
+          direction: 'out',
+          status: 'completed',
+          category: 'transfer',
+          amountKobo: 1000,
+          references,
+          source: 'send',
+          occurredAt: when,
+        });
+      }
+      const lines = linesOf(await statement(a, '2026-09-12', '2026-09-12'));
+      expect(lines.map((l) => l.reference).sort()).toEqual(
+        [ours, fintavas].sort(),
+      );
+      // And each equals its receipt's.
+      const hist = body<TransactionPage>(
+        await get(a.auth, `${HISTORY}?month=2026-09`).expect(200),
+      ).data!.items;
+      expect(hist.map((i) => i.reference).sort()).toEqual(
+        lines.map((l) => l.reference).sort(),
+      );
+    });
+  });
+
+  describe('a period with more rows than one statement lists', () => {
+    /** `count` completed movements on this wallet in September, written in one statement. */
+    async function bulk(p: Holder, count: number) {
+      await prisma.$executeRaw`
+        INSERT INTO "FintavaLedgerEntry"
+          ("id", "walletKind", "wawuUserId", "accountNumber", "direction",
+           "status", "category", "amountKobo", "feeKobo", "totalKobo",
+           "customerReference", "source", "occurredAt", "completedAt", "updatedAt")
+        SELECT gen_random_uuid()::text, 'user', ${p.id}, ${p.account}, 'in',
+               'completed', 'transfer', 100, 0, 100,
+               'W27-BULK-' || ${p.id} || '-' || g, 'send',
+               timestamp '2026-09-01 00:00:00' + (g * interval '30 seconds'),
+               now(), now()
+          FROM generate_series(1, ${count}::int) g`;
+    }
+
+    it(`50,001 rows: 400 statement_too_large after one count, before any row is read; 50,000 rows: the file`, async () => {
+      expect(STATEMENT_MAX_ROWS).toBe(50_000);
+      const over = await withWallet();
+      await bulk(over, STATEMENT_MAX_ROWS + 1);
+      const spy = jest.spyOn(prisma, '$queryRaw');
+      try {
+        const res = await get(
+          over.auth,
+          `${BASE}?from=2026-09-01&to=2026-09-30&format=csv`,
+        ).expect(400);
+        expect(body(res)).toEqual({
+          statusCode: 400,
+          message: STATEMENT_TOO_LARGE_MESSAGE,
+          data: null,
+          reason: {
+            code: 'statement_too_large',
+            message: STATEMENT_TOO_LARGE_MESSAGE,
+          },
+        });
+        // Only the gate's reads and the count ran: no row was selected.
+        const sql = spy.mock.calls.map((c) =>
+          JSON.stringify((c[0] as { strings?: string[] }).strings ?? c[0]),
+        );
+        expect(sql.filter((q) => q.includes('COUNT(*)'))).toHaveLength(1);
+        expect(sql.filter((q) => q.includes('"cpRecordedName"'))).toHaveLength(
+          0,
+        );
+      } finally {
+        spy.mockRestore();
+      }
+      expect(STATEMENT_TOO_LARGE_MESSAGE).toBe(
+        'This period has more than 50,000 movements, more than one statement lists. Pick a shorter range.',
+      );
+      // A shorter range of the same wallet is served.
+      const day = await statement(over, '2026-09-01', '2026-09-01');
+      // 00:00:30 to 22:59:30 UTC on 1 Sep, every 30 s: 2,759 rows that day in Lagos.
+      expect(day.rowCount).toBe(2_759);
+
+      const full = await withWallet();
+      await bulk(full, STATEMENT_MAX_ROWS);
+      const v = await statement(full, '2026-09-01', '2026-09-30');
+      expect(v.rowCount).toBe(STATEMENT_MAX_ROWS);
+      expect(v.content.split('\r\n')).toHaveLength(STATEMENT_MAX_ROWS + 2);
+    }, 60_000);
+  });
+
   it('is never cached: Cache-Control no-store', async () => {
     const a = await withWallet();
     const res = await get(
@@ -880,5 +993,92 @@ describe('GET /money/statements (WALLET-27) over HTTP', () => {
     const v = body<StatementView>(res).data!;
     expect(Date.parse(v.generatedAt)).not.toBeNaN();
     expect(v.content).not.toMatch(/\$|USD/);
+  });
+});
+
+/**
+ * The statement route's own rate limit (WALLET-27 round 2) behind the
+ * app's real throttlers (HUB_THROTTLERS) and the global ThrottlerGuard, as
+ * AppModule registers them. People without a wallet are used: the
+ * throttle runs before the wallet gate, so each allowed call is the gate's
+ * 409 and the next one is the throttle's 429, with nothing to read.
+ */
+describe('GET /money/statements is rate-limited per person per address (WALLET-27)', () => {
+  let app: INestApplication<App>;
+
+  beforeAll(async () => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [
+        ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
+        PassportModule.register({ defaultStrategy: 'wawu-jwt' }),
+        ThrottlerModule.forRoot([...HUB_THROTTLERS]),
+        PrismaModule,
+        MoneyModule,
+      ],
+      providers: [
+        WawuJwtStrategy,
+        WawuIdClient,
+        { provide: APP_GUARD, useClass: ThrottlerGuard },
+      ],
+    }).compile();
+    app = moduleRef.createNestApplication({ logger: new QuietLogger() });
+    app.setGlobalPrefix('api/hub');
+    app.useGlobalPipes(
+      new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
+    );
+    app.useGlobalFilters(new AllExceptionsFilter());
+    app.useGlobalInterceptors(new ResponseInterceptor());
+    await app.init();
+    await app.listen(0, '127.0.0.1');
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  const SEPT = `${BASE}?from=2026-09-01&to=2026-09-30&format=csv`;
+  const as = (sub: string, path = SEPT) =>
+    request(app.getHttpServer())
+      .get(path)
+      .set('Authorization', `Bearer ${mintToken(sub)}`);
+
+  it('5 a minute for one person: the 6th is 429; someone else at the same address, and the person’s other wallet routes, are not held back', async () => {
+    const a = randomUUID();
+    const b = randomUUID();
+    const first = await as(a).expect(409);
+    expect(first.headers['x-ratelimit-limit-short']).toBe('5');
+    expect(first.headers['x-ratelimit-limit-medium']).toBe('30');
+    for (let i = 1; i < 5; i += 1) await as(a).expect(409);
+    await as(a).expect(429);
+    // Another person from the same address has a bucket of their own.
+    await as(b).expect(409);
+    // The history is not the statement: its own limits are untouched.
+    await as(a, HISTORY).expect(409);
+  });
+
+  it('the bucket is the person at the address: a token’s id, never another person’s', () => {
+    const req = (sub: string | null, ip: string) => ({
+      ip,
+      headers: sub ? { authorization: `Bearer ${mintToken(sub)}` } : {},
+    });
+    const a = randomUUID();
+    expect(statementTracker(req(a, '198.51.100.7'))).toBe(`198.51.100.7|${a}`);
+    expect(statementTracker(req(a, '198.51.100.8'))).not.toBe(
+      statementTracker(req(a, '198.51.100.7')),
+    );
+    expect(statementTracker(req(randomUUID(), '198.51.100.7'))).not.toBe(
+      statementTracker(req(a, '198.51.100.7')),
+    );
+    expect(statementTracker(req(null, '198.51.100.7'))).toBe('198.51.100.7|');
+    expect(
+      statementTracker({
+        ip: '198.51.100.7',
+        headers: { authorization: 'Bearer not.a-token' },
+      }),
+    ).toBe('198.51.100.7|');
   });
 });

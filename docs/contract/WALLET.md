@@ -214,7 +214,7 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 | | account details | `WalletView.account` |
 | | fingerprint or face switch | `GET /money/device` (`registered`, `deviceId`, `biometric`); on: `PUT /money/device` with the PIN; off: `DELETE /money/device` (MONEY-14) |
 | | Cards; Statements | after launch (WALLET-22; statements WALLET-27 serves, WALLET-35 builds the row); W38 is hidden at launch |
-| W38 Statements (after launch) | period: presets or a custom range | `GET /money/statements?from=&to=` (Lagos days, both included; at most 366) |
+| W38 Statements (after launch) | period: presets or a custom range | `GET /money/statements?from=&to=` (Lagos days, both included; at most 366 days and 50,000 movements, `400 statement_too_large`; 5 a minute, 30 an hour) |
 | | format: CSV | `format=csv` → `StatementView.content`, `fileName`, `contentType` |
 | | format: Stamped PDF | not served: Fintava issues no statement (BACKEND_GAPS G-68) |
 | | Send to (email) | not served: the backend has no email sender (G-69); the app saves or shares the file |

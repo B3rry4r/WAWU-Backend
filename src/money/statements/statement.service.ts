@@ -11,6 +11,7 @@ import {
   LINK_LABEL_CATEGORIES,
 } from '../history/history-labels';
 import { feeOf, koboFromText } from '../history/transaction-history.service';
+import { MoneyError } from '../money-error';
 import type { TransactionCategory } from '../money-view.type';
 import {
   calendarDay,
@@ -20,6 +21,7 @@ import {
   movementLine,
   type StatementLine,
 } from './statement-csv';
+import { STATEMENT_MAX_ROWS } from './statement-config';
 import type { StatementQueryDto } from './statement-query.dto';
 import { STATEMENT_TIME_ZONE, type StatementView } from './statement-view.type';
 
@@ -27,8 +29,11 @@ import { STATEMENT_TIME_ZONE, type StatementView } from './statement-view.type';
  * PROVISIONAL(STATEMENT-MAX-DAYS, owner=YOU, why=no ruling or design names how long a period one statement may cover; W38 draws presets up to 3 months and a custom range)
  *
  * The longest period one statement covers, both days counted: a year,
- * leap day included. A longer period is refused with a 400, so one request
- * never reads an unbounded slice of the ledger.
+ * leap day included. A longer period is refused with a 400. This bounds
+ * days, not rows: a busy wallet can hold any number of movements in a year,
+ * so the rows are capped on their own (STATEMENT_MAX_ROWS, counted before
+ * the file is built) and the route is rate-limited (STATEMENT_THROTTLE),
+ * both in statement-config.ts.
  */
 export const STATEMENT_MAX_DAYS = 366;
 
@@ -38,6 +43,8 @@ export const STATEMENT_ORDER_MESSAGE = 'from must be on or before to';
 export const STATEMENT_FUTURE_MESSAGE =
   'to cannot be after today in Lagos time';
 export const STATEMENT_TOO_LONG_MESSAGE = `A statement covers at most ${STATEMENT_MAX_DAYS} days`;
+
+export const STATEMENT_TOO_LARGE_MESSAGE = `This period has more than ${String(STATEMENT_MAX_ROWS).replace(/\B(?=(\d{3})+(?!\d))/g, ',')} movements, more than one statement lists. Pick a shorter range.`;
 
 export const STATEMENT_CONTENT_TYPE = 'text/csv; charset=utf-8';
 
@@ -102,6 +109,25 @@ export class StatementService {
     now: Date = new Date(),
   ): Promise<StatementView> {
     const { from, to } = checkedPeriod(query.from, query.to, now);
+    // The rows a statement lists: the caller's own completed movements in
+    // the period (the history's three keys, MONEY-15).
+    const listed = Prisma.sql`e."walletKind" = 'user'
+         AND e."wawuUserId" = ${wallet.wawuUserId}::text
+         AND e."accountNumber" = ${wallet.accountNumber}::text
+         AND e."status" = 'completed'
+         AND e."occurredAt" >= ((${from}::date::timestamp AT TIME ZONE ${STATEMENT_TIME_ZONE}::text) AT TIME ZONE 'UTC')
+         AND e."occurredAt" < ((((${to}::date + 1)::timestamp) AT TIME ZONE ${STATEMENT_TIME_ZONE}::text) AT TIME ZONE 'UTC')`;
+    // Counted first, and no further than one past the cap: a period with
+    // too many rows is refused before any row is read into a file.
+    const [{ n }] = await this.prisma.$queryRaw<Array<{ n: number }>>(
+      Prisma.sql`SELECT COUNT(*)::int AS "n" FROM (
+        SELECT 1 FROM "FintavaLedgerEntry" e WHERE ${listed}
+         LIMIT ${STATEMENT_MAX_ROWS + 1}
+      ) capped`,
+    );
+    if (n > STATEMENT_MAX_ROWS) {
+      throw new MoneyError('statement_too_large', STATEMENT_TOO_LARGE_MESSAGE);
+    }
     const rows = await this.prisma.$queryRaw<StatementRow[]>(Prisma.sql`
       SELECT e."id",
              e."direction"::text AS "direction",
@@ -130,12 +156,7 @@ export class StatementService {
         LEFT JOIN "FintavaWallet" cw
           ON e."counterpartyKind" = 'wawu_user'
          AND cw."wawuUserId" = e."counterpartyWawuUserId"
-       WHERE e."walletKind" = 'user'
-         AND e."wawuUserId" = ${wallet.wawuUserId}::text
-         AND e."accountNumber" = ${wallet.accountNumber}::text
-         AND e."status" = 'completed'
-         AND e."occurredAt" >= ((${from}::date::timestamp AT TIME ZONE ${STATEMENT_TIME_ZONE}::text) AT TIME ZONE 'UTC')
-         AND e."occurredAt" < ((((${to}::date + 1)::timestamp) AT TIME ZONE ${STATEMENT_TIME_ZONE}::text) AT TIME ZONE 'UTC')
+       WHERE ${listed}
        ORDER BY e."occurredAt" ASC, e."id" ASC
     `);
     const lines = rows.map((r) => movementLine(lineOf(r)));

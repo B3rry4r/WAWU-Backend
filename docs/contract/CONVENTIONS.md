@@ -232,6 +232,7 @@ Every refusal is the envelope this backend already answers with
 | `account_not_opened` | 422 | Fintava refused the details sent (a validation or identity refusal, such as a blacklisted NIN), or the account has no email; nothing was created and the person may try again | |
 | `reset_codes_exhausted` | 429 | the person or the phone has had today's PIN reset texts (MONEY-14); nothing is sent | `retryAfterSeconds` |
 | `device_approval_refused` | 403 | `X-Device-Approval` not accepted: not the registered phone, a wrong signature, a used, expired or another person's challenge, or no phone registered; never uses a PIN try (MONEY-14) | |
+| `statement_too_large` | 400 | the period holds more movements than one statement lists (`STATEMENT_MAX_ROWS`, 50,000); counted before anything is written, and the person picks a shorter range (WALLET-27) | |
 | `phone_held_by_other_identity` | 409 | account opening where Fintava already has a customer for the person's phone whose record does not carry the checked BVN (or carries none): nothing is adopted or created, and the opening stops for review (MONEY-12, BACKEND_GAPS G-37) | |
 
 The same table is `MONEY_ERROR_STATUS` in `src/money/money-contract.ts`; each
@@ -888,6 +889,17 @@ still reads. Every answer is `Cache-Control: no-store`.
   the calendar (`2026-02-30`, year `0000`), `from` after `to`, `to` after
   today in Lagos, a period longer than `STATEMENT_MAX_DAYS` (366, both days
   counted; PROVISIONAL), and any `format` but `csv`.
+- **Rows are capped, and the route is rate-limited** (round 2, lead's
+  ruling after the verifier's load run; Default (agent/lead), owner may
+  override). The day cap bounds days, not rows, so the rows in the period
+  are counted first (no further than one past the cap) and a period with
+  more than `STATEMENT_MAX_ROWS` (50,000) is `400 statement_too_large`,
+  "pick a shorter range", before any row is read into a file. The route has
+  its own `@Throttle` (`STATEMENT_THROTTLE`, `statement-config.ts`;
+  PROVISIONAL): at most 5 a minute and 30 an hour per person per address
+  (the bucket is the caller's address as the BVN check reads it, plus the
+  token's `sub`), on the app's `short` and `medium` throttlers; beyond is
+  `429`.
 - **What is listed:** every `completed` movement on the caller's own wallet
   (the history's three keys: a person's wallet, the token's wawuUserId,
   the wallet's account number) whose `occurredAt` is in the period, oldest

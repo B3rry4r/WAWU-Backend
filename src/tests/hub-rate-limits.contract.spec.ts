@@ -24,6 +24,7 @@ import {
 } from '../hub-app-options';
 import { HUB_THROTTLERS } from '../hub-throttlers';
 import { MoneyIdentityController } from '../money/identity/money-identity.controller';
+import { MoneyStatementController } from '../money/statements/money-statement.controller';
 
 /**
  * OPS-11: behind nginx, every caller gets its own rate-limit bucket, and no
@@ -245,7 +246,7 @@ describe('Rate limits behind nginx (OPS-11)', () => {
       );
     });
 
-    it('only the two payment webhooks skip the limits; the only other overrides are admin login and refresh, the BVN check (KYC-01) and the selfie match (KYC-02), once each', () => {
+    it('only the two payment webhooks skip the limits; the only other overrides are admin login and refresh, the BVN check (KYC-01), the selfie match (KYC-02) and statements (WALLET-27), once each', () => {
       const root = join(__dirname, '..');
       const files: string[] = [];
       const walk = (dir: string) => {
@@ -274,6 +275,7 @@ describe('Rate limits behind nginx (OPS-11)', () => {
       expect(uses(/^\s*@Throttle\(/gm)).toEqual({
         'admin/auth/admin-auth.controller.ts': 2,
         'money/identity/money-identity.controller.ts': 2,
+        'money/statements/money-statement.controller.ts': 1,
       });
     });
 
@@ -287,7 +289,11 @@ describe('Rate limits behind nginx (OPS-11)', () => {
         ttl?: number;
         blockDuration?: number;
       }[] = [];
-      for (const controller of [AdminAuthController, MoneyIdentityController]) {
+      for (const controller of [
+        AdminAuthController,
+        MoneyIdentityController,
+        MoneyStatementController,
+      ]) {
         const proto = controller.prototype as unknown as Record<
           string,
           unknown
@@ -324,6 +330,31 @@ describe('Rate limits behind nginx (OPS-11)', () => {
         'AdminAuthController.refresh',
         'MoneyIdentityController.checkBvn',
         'MoneyIdentityController.matchSelfie',
+        'MoneyStatementController.statement',
+      ]);
+      // WALLET-27 round 2: a statement's cost grows with its rows, so it
+      // sets exactly these limits per person per address:
+      // 5 a minute and 30 an hour (STATEMENT-RATE-LIMITS, provisional), no
+      // block of its own.
+      expect(
+        overrides
+          .filter((o) => o.on === 'MoneyStatementController.statement')
+          .sort((a, b) => a.name.localeCompare(b.name)),
+      ).toEqual([
+        {
+          on: 'MoneyStatementController.statement',
+          name: 'medium',
+          limit: 30,
+          ttl: 3_600_000,
+          blockDuration: undefined,
+        },
+        {
+          on: 'MoneyStatementController.statement',
+          name: 'short',
+          limit: 5,
+          ttl: 60_000,
+          blockDuration: undefined,
+        },
       ]);
       // KYC-02: the selfie match is charged per attempt, like the BVN check,
       // and sets exactly these per-address limits: 3 a minute and 20 an hour,
