@@ -54,16 +54,21 @@ export const BVN_CHECK_THROTTLE = {
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 
 /**
- * Whose address a BVN check counts against. The app sets no `trust proxy`
- * (BACKEND_GAPS G-20 in the mobile repo), so behind the droplet's nginx
- * `req.ip` is nginx's own 127.0.0.1 for everyone, and a per-address limit of
- * 3 a minute would be one bucket for the whole country. nginx proxies from
- * the same machine and appends the caller's address as the LAST entry of
+ * Whose address a BVN check counts against. nginx proxies from the same
+ * machine and appends the caller's address as the LAST entry of
  * X-Forwarded-For (`$proxy_add_x_forwarded_for`, deploy/install-services.sh),
  * so: from a loopback peer, that last entry; from anyone else, their own
  * address. Entries a caller writes themselves sit to the left of nginx's,
  * so they do not count, and a caller who reaches the app directly cannot use
  * the header at all.
+ *
+ * Since OPS-11 the app sets `trust proxy` to `hubTrustProxy`
+ * (src/hub-app-options.ts): one hop, only from a loopback peer. `req.ip` is
+ * then already that last entry for a loopback peer and the peer's own
+ * address otherwise, so this returns `req.ip` in every case. It is kept so
+ * the BVN limit stays per caller even if that setting is ever removed
+ * (before it, `req.ip` was nginx's 127.0.0.1 for everyone: one bucket of 3 a
+ * minute for the whole country).
  */
 type TrackedRequest = {
   ip?: unknown;
