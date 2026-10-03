@@ -20,8 +20,8 @@ import { TransactionPinService } from './transaction-pin.service';
 /**
  * The transaction PIN, served (task MONEY-09). Declared by MONEY-04; the
  * request and response types are the contract's own, unchanged. Reset by a
- * code to the phone (POST /money/pin/reset and /reset/confirm) is MONEY-14's
- * and stays declared in money-wallet.controller.ts.
+ * code to the phone (POST /money/pin/reset and /reset/confirm) is MONEY-14's,
+ * in money-pin-reset.controller.ts.
  *
  * Every route reads the caller from the token and never takes a wawuUserId.
  * The refusals each route documents are the contract's; the wallet gate

@@ -15,6 +15,7 @@
  */
 
 import type {
+  ApprovalBiometricKind,
   BeneficiaryKind,
   FeeQuoteKind,
   PaymentKind,
@@ -158,10 +159,34 @@ export interface WalletBalanceView {
 /** POST /money/pin/reset: a code was sent to the phone on file (W37). */
 export interface PinResetView {
   resetId: string;
-  /** The phone the code went to, masked: `+234 803 *** 4412`. */
+  /** The phone the code went to, masked to its last 4 digits: `+234 *** *** 4412`. */
   sentTo: string;
   /** When Resend becomes available (W37's countdown). */
   resendAvailableAt: string;
+  expiresAt: string;
+}
+
+/**
+ * GET, PUT and DELETE /money/device: the one phone that may approve with a
+ * fingerprint or a face instead of the PIN (W11, W35; MONEY-14). Not
+ * registered: every field but `registered` is null.
+ */
+export interface ApprovalDeviceView {
+  registered: boolean;
+  /** The app keeps this to know whether this phone is the registered one. */
+  deviceId: string | null;
+  biometric: ApprovalBiometricKind | null;
+  registeredAt: string | null;
+  lastUsedAt: string | null;
+}
+
+/** POST /money/device/challenge: one challenge for one biometric approval. */
+export interface ApprovalChallengeView {
+  challengeId: string;
+  /** 32 random bytes, base64url: signed with the request (CONVENTIONS.md section 5). */
+  challenge: string;
+  /** The registered phone it is for. A phone whose own deviceId differs is not it. */
+  deviceId: string;
   expiresAt: string;
 }
 

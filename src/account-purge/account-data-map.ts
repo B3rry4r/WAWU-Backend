@@ -153,6 +153,17 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // The transaction PIN (MONEY-09): a hash of this person's own secret and
   // their wrong-try count. Nothing else references it, so it goes with them.
   { model: 'TransactionPin', column: 'wawuUserId', disposition: 'OWNED' },
+  // Resetting that PIN by a code to the phone (MONEY-14): the code's hash,
+  // its tries and the phone it went to. The phone that may approve with a
+  // fingerprint or face (a public key) and its one-time challenges. All of
+  // it is this person's and goes with them.
+  {
+    model: 'TransactionPinReset',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
+  { model: 'ApprovalDevice', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'ApprovalChallenge', column: 'wawuUserId', disposition: 'OWNED' },
   // The pointer to this person's Fintava wallet (MONEY-11). Like
   // CreatorWallet above, removing it removes WAWU's pointer, not the account
   // at Fintava, which is why deletion needs an empty wallet first (R-17).
