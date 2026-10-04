@@ -40,7 +40,7 @@ import {
   settle,
   waitForHealth,
   type Person,
-} from './live-test-kit';
+} from './live-test-kit.test';
 import type { ChatSummary } from '../../chat/chat-view.type';
 
 const bearer = (p: Person) => ({ Authorization: `Bearer ${p.token}` });

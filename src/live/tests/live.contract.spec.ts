@@ -45,7 +45,7 @@ import {
   shortLivedToken,
   waitForHealth,
   type Person,
-} from './live-test-kit';
+} from './live-test-kit.test';
 
 describe('Live updates (contract, INBOX-02)', () => {
   let app: INestApplication<App>;
