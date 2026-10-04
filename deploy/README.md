@@ -145,6 +145,9 @@ RECEIPT_VERIFY_BASE_URL=
 # PROVISIONAL(RECEIPT-RENDER-CONCURRENCY)). A PDF in flight holds about
 # 45 MB; a request waits up to 10 s for a turn, then gets 503 with Retry-After.
 RECEIPT_RENDER_CONCURRENCY=
+# About: where "Contact support" sends mail (SETTINGS-02). The owner's fact, no default
+# (empty: the row says "Not available yet").
+SUPPORT_EMAIL=
 
 GEMINI_API_KEY=
 
