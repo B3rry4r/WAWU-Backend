@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { ProfessionalController } from './professional.controller';
 import { ProfessionalService } from './professional.service';
+import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 
 /**
  * Professional profiles. WawuAuthModule supplies WawuIdClient (display names
@@ -12,7 +13,7 @@ import { ProfessionalService } from './professional.service';
  * service rather than writing the table itself.
  */
 @Module({
-  imports: [WawuAuthModule],
+  imports: [WawuAuthModule, BlockedAccountModule],
   controllers: [ProfessionalController],
   providers: [ProfessionalService],
   exports: [ProfessionalService],

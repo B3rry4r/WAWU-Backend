@@ -161,8 +161,11 @@ export class UserProfileController {
 
   /** Somebody else's profile fields: what M5 and M33 draw for a visitor. */
   @Get(':wawuId/profile-fields')
-  getProfileFields(@Param('wawuId') wawuId: string) {
-    return this.profileDetailsService.getPublic(wawuId);
+  getProfileFields(
+    @Param('wawuId') wawuId: string,
+    @CurrentUser() user: WawuJwtClaims,
+  ) {
+    return this.profileDetailsService.getPublic(wawuId, user.sub);
   }
 
   @Get(':wawuId/content')

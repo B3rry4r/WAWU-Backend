@@ -37,6 +37,15 @@ import {
 } from '../hub-throttler-storage';
 import { HUB_THROTTLERS, SKIP_EVERY_HUB_THROTTLER } from '../hub-throttlers';
 import { MoneyIdentityController } from '../money/identity/money-identity.controller';
+import { MoneyReceiptController } from '../money/receipts/money-receipt.controller';
+import { PublicReceiptController } from '../money/receipts/public-receipt.controller';
+import { MoneyStatementController } from '../money/statements/money-statement.controller';
+import {
+  STATEMENT_CONCURRENCY,
+  STATEMENT_RATE_LIMITS,
+  STATEMENT_WAIT_MS,
+  StatementSlots,
+} from '../money/statements/statement-config';
 
 /**
  * OPS-11: behind nginx, every caller gets its own rate-limit bucket, and no
@@ -258,7 +267,7 @@ describe('Rate limits behind nginx (OPS-11)', () => {
       );
     });
 
-    it('only the two payment webhooks skip the limits; the only other overrides are admin login and refresh, the BVN check (KYC-01) and the selfie match (KYC-02), once each', () => {
+    it('only the two payment webhooks skip the limits; the only other overrides are admin login and refresh, the BVN check (KYC-01), the selfie match (KYC-02), the public receipt check and the receipt image and PDF (WALLET-18), once each', () => {
       const root = join(__dirname, '..');
       const files: string[] = [];
       const walk = (dir: string) => {
@@ -287,7 +296,32 @@ describe('Rate limits behind nginx (OPS-11)', () => {
       expect(uses(/^\s*@Throttle\(/gm)).toEqual({
         'admin/auth/admin-auth.controller.ts': 2,
         'money/identity/money-identity.controller.ts': 2,
+        'money/receipts/money-receipt.controller.ts': 2,
+        'money/receipts/public-receipt.controller.ts': 1,
       });
+    });
+
+    it('statements (WALLET-27) set no throttler of their own: the global per-address limits apply; the per-person limit (5 a minute, 30 an hour) and two at once are counted after the token is verified', () => {
+      const proto = MoneyStatementController.prototype as unknown as Record<
+        string,
+        object
+      >;
+      for (const target of [MoneyStatementController, proto.statement]) {
+        const keys = (Reflect.getOwnMetadataKeys(target) as unknown[]).filter(
+          // Any of the throttler's keys: limit, ttl, tracker, block, skip.
+          (k) => typeof k === 'string' && k.startsWith('THROTTLER:'),
+        );
+        expect(keys).toEqual([]);
+      }
+      // The provisional figures in statement-config.ts (STATEMENT-RATE-LIMITS,
+      // STATEMENT-CONCURRENCY): these exact ones.
+      expect(STATEMENT_RATE_LIMITS).toEqual([
+        { name: 'minute', limit: 5, windowMs: 60_000 },
+        { name: 'hour', limit: 30, windowMs: 3_600_000 },
+      ]);
+      expect([STATEMENT_CONCURRENCY, STATEMENT_WAIT_MS]).toEqual([2, 5_000]);
+      const slots = new StatementSlots();
+      expect([slots.max, slots.waitMs]).toEqual([2, 5_000]);
     });
 
     it('each of those overrides only tightens the limits: per throttler, no more requests in no shorter a window, and no shorter a block', () => {
@@ -300,7 +334,12 @@ describe('Rate limits behind nginx (OPS-11)', () => {
         ttl?: number;
         blockDuration?: number;
       }[] = [];
-      for (const controller of [AdminAuthController, MoneyIdentityController]) {
+      for (const controller of [
+        AdminAuthController,
+        MoneyIdentityController,
+        MoneyReceiptController,
+        PublicReceiptController,
+      ]) {
         const proto = controller.prototype as unknown as Record<
           string,
           unknown
@@ -337,7 +376,39 @@ describe('Rate limits behind nginx (OPS-11)', () => {
         'AdminAuthController.refresh',
         'MoneyIdentityController.checkBvn',
         'MoneyIdentityController.matchSelfie',
+        'MoneyReceiptController.image',
+        'MoneyReceiptController.pdf',
+        'PublicReceiptController.page',
       ]);
+      // WALLET-18: the public receipt check, and drawing a receipt as an
+      // image or a PDF, each set exactly these per-address limits: 10 a
+      // minute and 60 an hour, no block of their own.
+      for (const on of [
+        'MoneyReceiptController.image',
+        'MoneyReceiptController.pdf',
+        'PublicReceiptController.page',
+      ]) {
+        expect(
+          overrides
+            .filter((o) => o.on === on)
+            .sort((a, b) => a.name.localeCompare(b.name)),
+        ).toEqual([
+          {
+            on,
+            name: 'medium',
+            limit: 60,
+            ttl: 3_600_000,
+            blockDuration: undefined,
+          },
+          {
+            on,
+            name: 'short',
+            limit: 10,
+            ttl: 60_000,
+            blockDuration: undefined,
+          },
+        ]);
+      }
       // KYC-02: the selfie match is charged per attempt, like the BVN check,
       // and sets exactly these per-address limits: 3 a minute and 20 an hour,
       // no block of its own.

@@ -136,6 +136,15 @@ SELFIE_CHECKS_PER_DAY=
 WALLET_BANK_NAME=
 WALLET_LICENCE_LINE=
 WALLET_DEPOSIT_INSURANCE_LINE=
+# Receipts (WALLET-18): the address a receipt's code opens, without the
+# code: https://<the API's public host>/api/hub/r. Empty: receipts print
+# wawu/r/<code> with no link. Receipts print WALLET_BANK_NAME and
+# WALLET_LICENCE_LINE as above.
+RECEIPT_VERIFY_BASE_URL=
+# Receipt images and PDFs drawn at once (WALLET-18; 1 to 8, empty: 2,
+# PROVISIONAL(RECEIPT-RENDER-CONCURRENCY)). A PDF in flight holds about
+# 45 MB; a request waits up to 10 s for a turn, then gets 503 with Retry-After.
+RECEIPT_RENDER_CONCURRENCY=
 # About: where "Contact support" sends mail (SETTINGS-02). The owner's fact, no default
 # (empty: the row says "Not available yet").
 SUPPORT_EMAIL=
