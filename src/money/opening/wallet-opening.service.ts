@@ -15,7 +15,6 @@ import type {
 import { IdentityHasher } from '../identity/identity-config';
 import { SelfieMatchService } from '../identity/selfie-match.service';
 import {
-  BVN_NOT_CHECKED_MESSAGE,
   type CheckedIdentity,
   WalletIdentityService,
 } from '../identity/wallet-identity.service';
@@ -259,14 +258,14 @@ export class WalletOpeningService {
 
     // Identity, read once: the passed check whose BVN and NIN these are,
     // and the selfie that matched against exactly that check.
-    const check = await this.identity.checkedIdentity(
-      wawuUserId,
-      input.bvn,
-      input.nin,
-    );
-    if (!check) {
-      throw new MoneyError('bvn_not_checked', BVN_NOT_CHECKED_MESSAGE);
-    }
+    // With a check handle (KYC-03) the BVN and NIN are the ones it seals,
+    // for this caller and this passed check; otherwise the ones sent.
+    const proven = await this.identity.proveIdentity(wawuUserId, input);
+    const check = {
+      verifiedAt: proven.verifiedAt,
+      bvnHash: proven.bvnHash,
+      verifiedPhone: proven.verifiedPhone,
+    };
     if ((await this.selfie.matchedFor(wawuUserId, check)) === null) {
       throw new MoneyError('selfie_required', SELFIE_REQUIRED_MESSAGE);
     }
@@ -337,8 +336,8 @@ export class WalletOpeningService {
         email: mail,
         address: input.address,
         dateOfBirth: input.dateOfBirth,
-        bvn: input.bvn,
-        nin: input.nin,
+        bvn: proven.bvn,
+        nin: proven.nin,
       });
     } catch (e) {
       if (!(e instanceof FintavaError) || this.mayHaveOpened(e)) {

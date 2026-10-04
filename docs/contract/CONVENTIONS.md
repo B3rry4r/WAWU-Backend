@@ -611,10 +611,35 @@ still reads. Every answer is `Cache-Control: no-store`.
   of the BVN record's first and last name are kept as keyed hashes only
   (`bvnNameKeys`, section 10), so a payout account's name can be compared
   with the BVN name; the name itself is still never stored. The prefill is answered
-  once and not kept. The steps after this one take them from the app again:
-  MONEY-12's account opening checks the BVN and the NIN with
-  `WalletIdentityService.matchesCheckedIdentity` (the NIN is required);
-  KYC-02's selfie, sent the BVN only, uses `checkedBvn`.
+  once and not kept. The steps after this one need the numbers again
+  (Fintava takes them in full), and get them one of two ways: from the app
+  again (MONEY-12's opening checks the BVN and the NIN with
+  `checkedIdentity`, the NIN required; KYC-02's selfie, sent the BVN only,
+  uses `checkedBvn`), or from the check handle below (KYC-03), which the app
+  sends in their place so that nothing on the phone keeps the numbers.
+- **The check handle (KYC-03, mobile BACKEND_GAPS G-72).** A check that
+  passes also answers `checkHandle`: `v1.` and base64url of a 12-byte
+  nonce, the AES-256-GCM sealed JSON `{ sub, bvn, nin, checkId, iat, exp }`
+  and its 16-byte tag, with the label `wawu/kyc-check-handle/v1` as
+  associated data, under a key derived from `IDENTITY_HASH_KEY` with
+  HKDF-SHA256 and that label (`IdentityHasher.deriveKey`; no new setting:
+  wherever the check can run, the key exists). `checkId` is the
+  `BvnCheckAttempt` that passed; `exp` is 30 minutes after `iat`
+  (`CHECK_HANDLE_TTL_SECONDS`, Default (lead), owner may override). The
+  selfie match takes `checkHandle` in place of `bvn`, the opening in place
+  of `bvn` and `nin`; sending both is a 400. The server opens it and
+  requires all of: the seal (a changed byte, another key or another
+  version fails), `exp` not passed, `sub` the caller, `checkId` a
+  `verified` check of the caller's, and the sealed BVN and NIN the ones the
+  caller's current check was run with (`checkedByHandle`, then the same
+  one-read rules as the numbers). Any failure is one answer, `409
+  bvn_not_checked` "Check your BVN again to continue.", never a 500 and
+  never which part failed; a handle that is not a string or is over 1,024
+  characters is a 400 with one fixed sentence. The handle is never stored,
+  logged or echoed (`src/money/identity/tests/check-handle.contract.spec.ts`
+  scans logs, rows and answers). The app holds it in memory with the passed
+  check and drops it on every session end. The numbers sent again keep
+  working as before (additive).
 - **A14.** The BVN record's phone must be the account's phone (the token's
   `phone`, compared after both are normalised as in section 2). If it is
   not, or the record has none: `422 bvn_phone_mismatch` with A14's own
