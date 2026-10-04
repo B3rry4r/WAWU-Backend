@@ -17,6 +17,7 @@ import type {
   PaidDmStanding,
   PaidDmStandingState,
 } from './paid-dm-view.type';
+import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -63,6 +64,7 @@ export class PaidDmPauseService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationService,
+    private readonly blockedAccounts: BlockedAccountService,
   ) {}
 
   /** The creator's own standing, evaluated now. */
@@ -90,12 +92,20 @@ export class PaidDmPauseService {
   async availability(
     creatorWawuId: string,
     now: Date = new Date(),
+    viewerWawuId?: string,
   ): Promise<PaidDmAvailability> {
     const creator = await this.prisma.creatorState.findUnique({
       where: { wawuUserId: creatorWawuId },
       select: { wawuUserId: true },
     });
     if (!creator) throw new NotFoundException('Creator not found');
+    // SETTINGS-04: a hidden creator is as absent as a missing one. Their
+    // profile is not reachable either, so no screen asks this about them.
+    await this.blockedAccounts.assertVisible(
+      viewerWawuId,
+      creatorWawuId,
+      'Creator not found',
+    );
     const { result } = await this.evaluate(
       creatorWawuId,
       now,

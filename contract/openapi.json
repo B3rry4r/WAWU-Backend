@@ -14133,10 +14133,10 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
+                    "userWawuId": {
                       "type": "string"
                     },
-                    "userWawuId": {
+                    "status": {
                       "type": "string"
                     },
                     "requestedAt": {
@@ -14146,8 +14146,8 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "userWawuId",
+                    "status",
                     "requestedAt"
                   ]
                 }
@@ -14157,6 +14157,71 @@
         },
         "tags": [
           "DataExportRequest"
+        ]
+      },
+      "get": {
+        "operationId": "DataExportRequestController_listMine",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "userWawuId": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      },
+                      "requestedAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "userWawuId",
+                      "status",
+                      "requestedAt"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "The caller's own export requests and where each one is (pending, sent, failed).",
+        "tags": [
+          "DataExportRequest"
+        ]
+      }
+    },
+    "/api/hub/settings/privacy/export/download": {
+      "get": {
+        "operationId": "DataExportDownloadController_download",
+        "parameters": [
+          {
+            "name": "token",
+            "required": false,
+            "in": "query",
+            "schema": {}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "DataExportDownload"
         ]
       }
     },
@@ -19721,15 +19786,15 @@
                     "id": {
                       "type": "string"
                     },
+                    "userWawuId": {
+                      "type": "string"
+                    },
                     "status": {
                       "type": "string",
                       "enum": [
                         "pending",
                         "joined"
                       ]
-                    },
-                    "userWawuId": {
-                      "type": "string"
                     },
                     "requestedAt": {
                       "type": "string",
@@ -19746,8 +19811,8 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "userWawuId",
+                    "status",
                     "requestedAt",
                     "communityId",
                     "joinedAt"
@@ -19823,15 +19888,15 @@
                     "id": {
                       "type": "string"
                     },
+                    "userWawuId": {
+                      "type": "string"
+                    },
                     "status": {
                       "type": "string",
                       "enum": [
                         "pending",
                         "joined"
                       ]
-                    },
-                    "userWawuId": {
-                      "type": "string"
                     },
                     "requestedAt": {
                       "type": "string",
@@ -19848,8 +19913,8 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "userWawuId",
+                    "status",
                     "requestedAt",
                     "communityId",
                     "joinedAt"
@@ -19952,15 +20017,15 @@
                     "id": {
                       "type": "string"
                     },
+                    "userWawuId": {
+                      "type": "string"
+                    },
                     "status": {
                       "type": "string",
                       "enum": [
                         "pending",
                         "joined"
                       ]
-                    },
-                    "userWawuId": {
-                      "type": "string"
                     },
                     "requestedAt": {
                       "type": "string",
@@ -19977,8 +20042,8 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "userWawuId",
+                    "status",
                     "requestedAt",
                     "communityId",
                     "joinedAt"
@@ -22326,6 +22391,119 @@
           "MoneyHistory"
         ],
         "x-wawu-built-by": "MONEY-15"
+      }
+    },
+    "/api/hub/money/statements": {
+      "get": {
+        "operationId": "MoneyStatementController_statement",
+        "parameters": [
+          {
+            "name": "from",
+            "required": true,
+            "in": "query",
+            "description": "The first day of the statement, YYYY-MM-DD in Africa/Lagos time, included.",
+            "schema": {
+              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$",
+              "example": "2026-09-01",
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": true,
+            "in": "query",
+            "description": "The last day of the statement, YYYY-MM-DD in Africa/Lagos time,\nincluded. On or after `from`, not after today in Lagos, and at most\n366 days from `from`, both days counted (STATEMENT_MAX_DAYS).",
+            "schema": {
+              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$",
+              "example": "2026-09-30",
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "required": true,
+            "in": "query",
+            "description": "The file. Only `csv` today: Fintava issues no stamped statement\n(WALLET-27, BACKEND_GAPS G-68), so there is no `pdf`.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "csv"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatementView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: statement_too_large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "reason.code: statement_rate_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: statement_busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One statement. `from` and `to` are calendar days in Africa/Lagos time\nand BOTH are included: from 00:00 on `from` to 23:59:59.999 on `to`,\nLagos time. A day that does not exist, `from` after `to`, `to` after\ntoday in Lagos, or more than 366 days is a 400; a period with more than\n50,000 movements is `400 statement_too_large`. The app's global\nper-address limits apply as on every route; on top, one person may ask\nfor 5 a minute and 30 an hour (`429 statement_rate_limited`, counted\nhere, after the token is verified), and two statements are built at\nonce in the process (`503 statement_busy` after 5 s of waiting).\nThe route's own 400s never count: the period is checked before the\nperson is counted, and `statement_too_large` gives the place back.",
+        "tags": [
+          "MoneyStatement"
+        ],
+        "x-wawu-built-by": "WALLET-27"
       }
     },
     "/api/hub/money/fees/quote": {
@@ -26437,7 +26615,10 @@
               "account_not_opened",
               "phone_held_by_other_identity",
               "reset_codes_exhausted",
-              "device_approval_refused"
+              "device_approval_refused",
+              "statement_too_large",
+              "statement_rate_limited",
+              "statement_busy"
             ],
             "type": "string"
           },
@@ -27283,6 +27464,52 @@
           "outKobo"
         ]
       },
+      "StatementView": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "timeZone": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv"
+            ]
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "rowCount": {
+            "type": "number"
+          },
+          "content": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "timeZone",
+          "format",
+          "fileName",
+          "contentType",
+          "rowCount",
+          "content",
+          "generatedAt"
+        ]
+      },
       "FeeQuotePartView": {
         "type": "object",
         "properties": {
@@ -27731,6 +27958,94 @@
           "expiresAt"
         ]
       },
+      "TickState": {
+        "type": "object",
+        "properties": {
+          "verified": {
+            "type": "boolean"
+          },
+          "expiresAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "verified",
+          "expiresAt"
+        ]
+      },
+      "VerificationState": {
+        "type": "object",
+        "properties": {
+          "creator": {
+            "$ref": "#/components/schemas/TickState"
+          },
+          "professional": {
+            "$ref": "#/components/schemas/TickState"
+          }
+        },
+        "required": [
+          "creator",
+          "professional"
+        ]
+      },
+      "BlockedAccountUser": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          }
+        },
+        "required": [
+          "wawuId",
+          "name",
+          "handle",
+          "avatarUrl",
+          "verification"
+        ]
+      },
+      "BlockedAccount": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "userWawuId": {
+            "type": "string"
+          },
+          "blockedWawuId": {
+            "type": "string"
+          },
+          "blockedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "blockedUser": {
+            "$ref": "#/components/schemas/BlockedAccountUser",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "userWawuId",
+          "blockedWawuId",
+          "blockedAt"
+        ]
+      },
       "MoneyPartyView": {
         "type": "object",
         "properties": {
@@ -27982,12 +28297,12 @@
                     "id": {
                       "type": "string"
                     },
+                    "userWawuId": {
+                      "type": "string"
+                    },
                     "createdAt": {
                       "type": "string",
                       "format": "date-time"
-                    },
-                    "userWawuId": {
-                      "type": "string"
                     },
                     "kind": {
                       "type": "string"
@@ -28031,8 +28346,8 @@
                   },
                   "required": [
                     "id",
-                    "createdAt",
                     "userWawuId",
+                    "createdAt",
                     "kind",
                     "title",
                     "body",
@@ -29629,94 +29944,6 @@
         },
         "required": [
           "flutterwaveConfig"
-        ]
-      },
-      "TickState": {
-        "type": "object",
-        "properties": {
-          "verified": {
-            "type": "boolean"
-          },
-          "expiresAt": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "verified",
-          "expiresAt"
-        ]
-      },
-      "VerificationState": {
-        "type": "object",
-        "properties": {
-          "creator": {
-            "$ref": "#/components/schemas/TickState"
-          },
-          "professional": {
-            "$ref": "#/components/schemas/TickState"
-          }
-        },
-        "required": [
-          "creator",
-          "professional"
-        ]
-      },
-      "BlockedAccountUser": {
-        "type": "object",
-        "properties": {
-          "wawuId": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "handle": {
-            "type": "string",
-            "nullable": true
-          },
-          "avatarUrl": {
-            "type": "string",
-            "nullable": true
-          },
-          "verification": {
-            "$ref": "#/components/schemas/VerificationState"
-          }
-        },
-        "required": [
-          "wawuId",
-          "name",
-          "handle",
-          "avatarUrl",
-          "verification"
-        ]
-      },
-      "BlockedAccount": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "userWawuId": {
-            "type": "string"
-          },
-          "blockedWawuId": {
-            "type": "string"
-          },
-          "blockedAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "blockedUser": {
-            "$ref": "#/components/schemas/BlockedAccountUser",
-            "nullable": true
-          }
-        },
-        "required": [
-          "id",
-          "userWawuId",
-          "blockedWawuId",
-          "blockedAt"
         ]
       },
       "ContentPieceResponse": {
@@ -35718,15 +35945,15 @@
           "id": {
             "type": "string"
           },
+          "userWawuId": {
+            "type": "string"
+          },
           "status": {
             "type": "string",
             "enum": [
               "pending",
               "joined"
             ]
-          },
-          "userWawuId": {
-            "type": "string"
           },
           "requestedAt": {
             "type": "string",
@@ -35751,8 +35978,8 @@
         },
         "required": [
           "id",
-          "status",
           "userWawuId",
+          "status",
           "requestedAt",
           "communityId",
           "joinedAt",

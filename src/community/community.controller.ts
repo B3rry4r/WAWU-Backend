@@ -48,9 +48,10 @@ export class CommunityController {
 
   @Get()
   list(
+    @CurrentUser() user: WawuJwtClaims,
     @Query() { page, perPage }: PaginationQueryDto,
   ): Promise<Paginated<CommunityResponse>> {
-    return this.communityService.list(page, perPage);
+    return this.communityService.list(page, perPage, user.sub);
   }
 
   /**
@@ -80,8 +81,9 @@ export class CommunityController {
   @Get(':id')
   findOne(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @CurrentUser() user: WawuJwtClaims,
   ): Promise<CommunityResponse> {
-    return this.communityService.findOne(id);
+    return this.communityService.findOne(id, user.sub);
   }
 
   @Get(':id/membership')

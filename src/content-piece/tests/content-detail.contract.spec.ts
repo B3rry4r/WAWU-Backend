@@ -472,7 +472,10 @@ describe('Content detail: previews, fair ratings, counts (contract)', () => {
     const blend = (old: number | null, stars: number) =>
       old === null ? stars * 20 : Math.round((old + stars * 20) / 2);
 
-    it('a non-buyer, a pending-payment buyer, the creator and a blocked person all still get 201 and the blend', async () => {
+    // SETTINGS-04 (merged before this task) hides a blocked person on this
+    // route too: they get the same 404 as a missing piece and the rating does
+    // not move. Everyone else still gets 201 and the blend, as on main.
+    it('a non-buyer, a pending-payment buyer and the creator still get 201 and the blend; a blocked person gets 404 and changes nothing', async () => {
       const paid = await piece();
       await buy(buyer2, paid, 'pending');
       await prisma.blockedAccount.upsert({
@@ -493,7 +496,6 @@ describe('Content detail: previews, fair ratings, counts (contract)', () => {
         [stranger, 5],
         [buyer2, 1],
         [creator, 3],
-        [blockedByCreator, 4],
         [stranger, 2],
       ] as Array<[Who, number]>) {
         const res = await legacyRate(who, paid, stars).expect(201);
@@ -502,6 +504,7 @@ describe('Content detail: previews, fair ratings, counts (contract)', () => {
         expect(data.ratingPct).toBe(expected);
         expect(Object.keys(data).sort()).toEqual([...LIVE_PIECE_KEYS].sort());
       }
+      await legacyRate(blockedByCreator, paid, 4).expect(404);
       expect((await stored(paid)).ratingPct).toBe(expected);
       // The legacy route writes no rating row.
       expect(await ratingRows(paid)).toHaveLength(0);

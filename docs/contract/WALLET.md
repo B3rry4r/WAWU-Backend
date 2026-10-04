@@ -56,6 +56,7 @@ caller from the token.
 | `GET /money/transactions?filter=&q=&month=&group=&cursor=&limit=` | `TransactionPage` | | MONEY-15 (served; CONVENTIONS.md section 6) |
 | `GET /money/transactions/summary?month=` | `MonthlySummaryView` | | MONEY-15 (served) |
 | `GET /money/transactions/{id}` | `TransactionView` | | MONEY-15 (served) |
+| `GET /money/statements?from=&to=&format=` | `StatementView` (the CSV file as text) | | WALLET-27 (served; CONVENTIONS.md section 12) |
 
 A withdrawal (W17) is `POST /money/transfers/bank` to the payout account; it
 has no route of its own. Releasing or refunding a hold is never a client
@@ -213,7 +214,11 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 | | beneficiaries count | `WalletView.beneficiaryCount` |
 | | account details | `WalletView.account` |
 | | fingerprint or face switch | `GET /money/device` (`registered`, `deviceId`, `biometric`); on: `PUT /money/device` with the PIN; off: `DELETE /money/device` (MONEY-14) |
-| | Cards; Statements | after launch (WALLET-22, WALLET-27); W38 is hidden at launch |
+| | Cards; Statements | after launch (WALLET-22; statements WALLET-27 serves, WALLET-35 builds the row); W38 is hidden at launch |
+| W38 Statements (after launch) | period: presets or a custom range | `GET /money/statements?from=&to=` (Lagos days, both included; at most 366 days and 50,000 movements, `400 statement_too_large`; 5 a minute, 30 an hour) |
+| | format: CSV | `format=csv` → `StatementView.content`, `fileName`, `contentType` |
+| | format: Stamped PDF | not served: Fintava issues no statement (BACKEND_GAPS G-68) |
+| | Send to (email) | not served: the backend has no email sender (G-69); the app saves or shares the file |
 | W36 PIN create | set; confirm | `POST /money/pin` (`pin`, `pinConfirmation`); change is `PUT /money/pin` |
 | W37 PIN reset | code to the phone on file, resend timer | `POST /money/pin/reset` → `sentTo` (last 4 digits), `resendAvailableAt`, `expiresAt`; `429 reset_codes_exhausted`, `503 provider_unreachable` (MONEY-14) |
 | | code check, then W36 | `POST /money/pin/reset/confirm` (`code`, `newPin`, `newPinConfirmation`) |
@@ -241,7 +246,7 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 
 W2, W3, W20 to W23 (Dollar, crypto, swap: WALLET-21, WALLET-32, WALLET-33),
 W16 (card top-up: WALLET-25), W24, W25 (QR: WALLET-20, WALLET-28), W29 to W34
-(cards: WALLET-22, WALLET-31), W38 (statements: WALLET-27), W41 to W43
+(cards: WALLET-22, WALLET-31), W38 (statements: WALLET-27 serves the CSV route above, WALLET-35 builds the screen), W41 to W43
 (receipt sharing: WALLET-12), A17 to A20 (limits and tiers: WALLET-19, held
 for the owner by the designer brief). W40 is not built (R-11).
 
