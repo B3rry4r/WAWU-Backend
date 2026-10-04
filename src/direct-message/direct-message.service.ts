@@ -18,6 +18,7 @@ import {
 import { NotificationService } from '../notification/notification.service';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { DmReplyWriter } from './dm-reply-writer';
+import { PaidDmPauseService } from './paid-dm-pause.service';
 import type { SendDmDto } from './dto/send-dm.dto';
 import type { VerifyDmDto } from './dto/verify-dm.dto';
 import type { RespondDmDto } from './dto/respond-dm.dto';
@@ -137,6 +138,7 @@ export class DirectMessageService {
     private readonly blockedAccounts: BlockedAccountService,
     private readonly wawuId: WawuIdClient,
     private readonly replyWriter: DmReplyWriter,
+    private readonly pause: PaidDmPauseService,
   ) {}
 
   /**
@@ -250,6 +252,12 @@ export class DirectMessageService {
         'This creator has not enabled paid direct messages.',
       );
     }
+
+    // R-13: a creator whose paid questions went unanswered is paused for a
+    // while. Refused here, before the charge, for the same reason as the
+    // block above: by verify time the fan has already paid. A creator who is
+    // not paused takes exactly the path this route always took.
+    await this.pause.assertAccepting(creatorWawuId);
 
     const amount = creatorState.dmPrice;
     const responseWindowHours =
