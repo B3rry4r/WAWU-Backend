@@ -3,10 +3,17 @@ import { request as httpRequest, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { networkInterfaces } from 'node:os';
 import { join, relative } from 'node:path';
-import type { INestApplication } from '@nestjs/common';
+import { Controller, Get, type INestApplication } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import {
+  SkipThrottle,
+  Throttle,
+  ThrottlerGuard,
+  ThrottlerModule,
+  ThrottlerStorage,
+  ThrottlerStorageService,
+} from '@nestjs/throttler';
 import {
   THROTTLER_BLOCK_DURATION,
   THROTTLER_LIMIT,
@@ -22,7 +29,13 @@ import {
   hubTrustProxy,
   isLoopbackAddress,
 } from '../hub-app-options';
-import { HUB_THROTTLERS } from '../hub-throttlers';
+import {
+  HUB_THROTTLER_STORAGE,
+  HUB_THROTTLER_SWEEP_CHUNK,
+  HUB_THROTTLER_SWEEP_MS,
+  HubThrottlerStorage,
+} from '../hub-throttler-storage';
+import { HUB_THROTTLERS, SKIP_EVERY_HUB_THROTTLER } from '../hub-throttlers';
 import { MoneyIdentityController } from '../money/identity/money-identity.controller';
 
 /**
@@ -415,5 +428,459 @@ describe('Rate limits behind nginx (OPS-11)', () => {
       /NestFactory\.create\(\s*AppModule,\s*HUB_APP_OPTIONS\s*\)/,
     );
     expect(main).toMatch(/applyHubHttpSettings\(app\)/);
+  });
+});
+
+/**
+ * FIX-05 (G-95): @nestjs/throttler 6.5's default in-memory store kept every
+ * caller's hit timers in one list per throttler name, and when ANY caller's
+ * block ended it cleared that whole list: everyone else's hits stopped
+ * expiring and callers who never reached the limit got 429. AppModule now
+ * gives the global guard src/hub-throttler-storage.ts instead, one bucket per
+ * caller. The app below is built as the one above, plus that provider, as
+ * AppModule registers it.
+ */
+@Controller('fix05')
+class Fix05Controller {
+  // Test-only routes, to show a route's own limits and a skip still work
+  // through the new store. Not app routes: the scan above reads no spec file.
+  @Get('tight')
+  @Throttle({ short: { limit: 3, ttl: 60_000 } })
+  tight() {
+    return { ok: true };
+  }
+
+  @Get('skipped')
+  @SkipThrottle(SKIP_EVERY_HUB_THROTTLER)
+  skipped() {
+    return { ok: true };
+  }
+}
+
+describe('One address never changes another address’s throttling (FIX-05)', () => {
+  let app: INestApplication;
+  let port: number;
+  let ours: HubThrottlerStorage;
+  let library: ThrottlerStorageService;
+
+  /** A request as nginx forwards it from `client`. */
+  function from(client: string, path = PATH): Promise<Hit> {
+    return new Promise((resolve, reject) => {
+      const req = httpRequest(
+        {
+          host: '127.0.0.1',
+          port,
+          path,
+          method: 'GET',
+          localAddress: '127.0.0.1',
+          agent: false,
+          headers: { 'X-Forwarded-For': client },
+        },
+        (res) => {
+          res.resume();
+          res.on('end', () =>
+            resolve({ status: res.statusCode ?? 0, headers: res.headers }),
+          );
+        },
+      );
+      req.on('error', reject);
+      req.end();
+    });
+  }
+  const burst = (client: string, n: number, path = PATH) =>
+    Promise.all(Array.from({ length: n }, () => from(client, path)));
+  const tally = (hits: Hit[]) => {
+    const out: Record<number, number> = {};
+    for (const h of hits) out[h.status] = (out[h.status] ?? 0) + 1;
+    return out;
+  };
+
+  beforeAll(async () => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [ThrottlerModule.forRoot([...HUB_THROTTLERS])],
+      controllers: [AppController, Fix05Controller],
+      providers: [
+        { provide: APP_GUARD, useClass: ThrottlerGuard },
+        HUB_THROTTLER_STORAGE,
+      ],
+    }).compile();
+    const stores = moduleRef.get<unknown>(ThrottlerStorage, { each: true });
+    ours = stores.find((s) => s instanceof HubThrottlerStorage)!;
+    library = stores.find((s) => s instanceof ThrottlerStorageService)!;
+    app = moduleRef.createNestApplication(HUB_APP_OPTIONS);
+    applyHubHttpSettings(app);
+    app.setGlobalPrefix('api/hub');
+    app.useGlobalFilters(new AllExceptionsFilter());
+    app.useGlobalInterceptors(new ResponseInterceptor());
+    await app.listen(0, '127.0.0.1');
+    port = ((app.getHttpServer() as Server).address() as AddressInfo).port;
+  });
+
+  afterAll(async () => {
+    await app?.close();
+  });
+
+  it('AppModule gives its global guard the per-caller store, and the guard counts there, never in the library’s', async () => {
+    const appModule = readFileSync(join(__dirname, '../app.module.ts'), 'utf8');
+    expect(appModule).toMatch(
+      /import \{ HUB_THROTTLER_STORAGE \} from '\.\/hub-throttler-storage';/,
+    );
+    expect(appModule).toMatch(
+      /providers:\s*\[\s*\{\s*provide:\s*APP_GUARD,\s*useClass:\s*ThrottlerGuard\s*\},(?:\s*\/\/[^\n]*)*\s*HUB_THROTTLER_STORAGE,\s*\]/,
+    );
+    expect(ours).toBeInstanceOf(HubThrottlerStorage);
+    const before = ours.size;
+    expect((await from('198.51.100.61')).status).toBe(200);
+    // One bucket for each of `short` and `medium`.
+    expect(ours.size).toBe(before + 2);
+    expect(library.storage.size).toBe(0);
+  });
+
+  it('G-95: when one address’s block ends, another address’s hits still expire (15, then 6 more after its window, is 21 times 200)', async () => {
+    const attacker = '198.51.100.71';
+    const victim = '198.51.100.72';
+    const t0 = Date.now();
+    const at = (ms: number) => sleep(Math.max(0, t0 + ms - Date.now()));
+    // The attacker goes over and is blocked for one `short` window.
+    expect(tally(await burst(attacker, SHORT.limit + 1))).toEqual({
+      200: SHORT.limit,
+      429: 1,
+    });
+    // Half a window later the victim sends 15, under the limit.
+    await at(500);
+    const victimStart = Date.now();
+    expect(tally(await burst(victim, 15))).toEqual({ 200: 15 });
+    // The attacker's block has ended; its next request starts a fresh count.
+    // On the library's store this is what froze the victim's 15.
+    await at(1_250);
+    expect(Date.now()).toBeLessThan(victimStart + SHORT.ttl);
+    const again = await from(attacker);
+    expect(again.status).toBe(200);
+    expect(remaining(again)).toBe(SHORT.limit - 1);
+    // A window after the victim's 15, all of them have expired: 6 more are
+    // 6 more of 20, not the 21st.
+    await sleep(Math.max(0, victimStart + SHORT.ttl + 400 - Date.now()));
+    const later = await burst(victim, 6);
+    expect(tally(later)).toEqual({ 200: 6 });
+    expect(Math.min(...later.map(remaining))).toBe(SHORT.limit - 6);
+  }, 10000);
+
+  it('the reproduction: a caller at 2 a second gets no 429 while another address sends 25 every 1.5 s', async () => {
+    const victim = '198.51.100.81';
+    const flooder = '198.51.100.82';
+    const victimHits: Hit[] = [];
+    const bursts: Record<number, number>[] = [];
+    let done = false;
+    const victimLoop = (async () => {
+      while (!done) {
+        victimHits.push(await from(victim));
+        await sleep(500);
+      }
+    })();
+    for (let i = 0; i < 5; i++) {
+      bursts.push(tally(await burst(flooder, SHORT.limit + 5)));
+      await sleep(1_500);
+    }
+    done = true;
+    await victimLoop;
+    expect(victimHits.length).toBeGreaterThanOrEqual(10);
+    expect(tally(victimHits)).toEqual({ 200: victimHits.length });
+    // ...and the flooder is refused at today's limit in every burst.
+    for (const b of bursts) expect(b).toEqual({ 200: SHORT.limit, 429: 5 });
+  }, 20000);
+
+  it('the flooding address is refused exactly as before: 20 a second, the 21st is 429 with Retry-After, refused while blocked, then a fresh count', async () => {
+    const client = '198.51.100.91';
+    const hits = await burst(client, SHORT.limit + 5);
+    expect(tally(hits)).toEqual({ 200: SHORT.limit, 429: 5 });
+    const refused = hits.filter((h) => h.status === 429);
+    for (const h of refused) {
+      expect(h.headers['retry-after-short']).toBe('1');
+      expect(h.headers['retry-after-medium']).toBeUndefined();
+    }
+    const ok = hits.filter((h) => h.status === 200);
+    expect(ok.map(remaining).sort((a, b) => a - b)).toEqual(
+      Array.from({ length: SHORT.limit }, (_, i) => i),
+    );
+    for (const h of ok) {
+      expect(h.headers['x-ratelimit-limit-short']).toBe(String(SHORT.limit));
+      expect(h.headers['x-ratelimit-limit-medium']).toBe(String(MEDIUM.limit));
+      expect(h.headers['x-ratelimit-reset-short']).toBe('1');
+    }
+    expect((await from(client)).status).toBe(429);
+    await sleep(SHORT.ttl + 100);
+    const fresh = await from(client);
+    expect(fresh.status).toBe(200);
+    expect(remaining(fresh)).toBe(SHORT.limit - 1);
+  });
+
+  it('a route’s own @Throttle still applies per address (3 a minute), and @SkipThrottle still skips, through the new store', async () => {
+    const a = '198.51.100.101';
+    const b = '198.51.100.102';
+    expect(tally(await burst(a, 5, '/api/hub/fix05/tight'))).toEqual({
+      200: 3,
+      429: 2,
+    });
+    const refused = await from(a, '/api/hub/fix05/tight');
+    expect(refused.status).toBe(429);
+    expect(refused.headers['retry-after-short']).toBe('60');
+    // Another address on the same tight route is untouched.
+    const other = await from(b, '/api/hub/fix05/tight');
+    expect(other.status).toBe(200);
+    expect(remaining(other)).toBe(2);
+    // A skipped route answers every request and keeps no count at all.
+    const before = ours.size;
+    expect(
+      tally(await burst(a, SHORT.limit + 10, '/api/hub/fix05/skipped')),
+    ).toEqual({
+      200: SHORT.limit + 10,
+    });
+    expect(ours.size).toBe(before);
+  });
+});
+
+function remaining(h: Hit): number {
+  return Number(h.headers['x-ratelimit-remaining-short']);
+}
+
+describe('HubThrottlerStorage (FIX-05)', () => {
+  type Rec = Awaited<ReturnType<HubThrottlerStorage['increment']>>;
+  /** Deterministic pseudo-random numbers, so a failure replays. */
+  const random = (seed: number) => () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  /** What the guard reads; how long a block has left only matters while blocked. */
+  const seen = (r: Rec) => ({
+    totalHits: r.totalHits,
+    timeToExpire: r.timeToExpire,
+    isBlocked: r.isBlocked,
+    timeToBlockExpire: r.isBlocked ? r.timeToBlockExpire : null,
+  });
+  const LIMITS = [
+    { ttl: SHORT.ttl, limit: SHORT.limit, blockDuration: SHORT.ttl },
+    { ttl: MEDIUM.ttl, limit: MEDIUM.limit, blockDuration: MEDIUM.ttl },
+    // The BVN check and selfie match's own `short` and `medium`.
+    { ttl: 60_000, limit: 3, blockDuration: 60_000 },
+    { ttl: 3_600_000, limit: 20, blockDuration: 3_600_000 },
+    // A block longer than the window.
+    { ttl: 1_000, limit: 5, blockDuration: 5_000 },
+  ];
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('for one caller, every answer is the library store’s, hit for hit, on every limit the app uses', async () => {
+    jest.useFakeTimers({ now: 1_700_000_000_000 });
+    for (const [n, { ttl, limit, blockDuration }] of LIMITS.entries()) {
+      const ours = new HubThrottlerStorage();
+      const library = new ThrottlerStorageService();
+      const next = random(n + 1);
+      // Bursts, small gaps, gaps of about a window, and exact boundaries.
+      const gaps = [
+        0,
+        0,
+        0,
+        1,
+        () => Math.floor(next() * (ttl / 20)),
+        () => Math.floor(next() * ttl),
+        ttl,
+        ttl - 1,
+        blockDuration,
+        () => Math.floor(next() * 2 * blockDuration),
+      ];
+      for (let step = 0; step < 3_000; step++) {
+        const g = gaps[Math.floor(next() * gaps.length)];
+        jest.advanceTimersByTime(typeof g === 'function' ? g() : g);
+        const mine = await ours.increment(
+          'k',
+          ttl,
+          limit,
+          blockDuration,
+          'short',
+        );
+        const theirs = await library.increment(
+          'k',
+          ttl,
+          limit,
+          blockDuration,
+          'short',
+        );
+        if (JSON.stringify(seen(mine)) !== JSON.stringify(seen(theirs)))
+          expect({ limits: n, step, mine: seen(mine) }).toEqual({
+            limits: n,
+            step,
+            mine: seen(theirs),
+          });
+      }
+      ours.onApplicationShutdown();
+      library.onApplicationShutdown();
+    }
+  });
+
+  it('with many callers interleaved, each caller’s answers are what the library gives that caller ALONE', async () => {
+    jest.useFakeTimers({ now: 1_700_000_000_000 });
+    const { ttl, limit, blockDuration } = LIMITS[0];
+    const ours = new HubThrottlerStorage();
+    // One library store per caller: alone, it has no one else to disturb.
+    const alone = Array.from(
+      { length: 6 },
+      () => new ThrottlerStorageService(),
+    );
+    const next = random(42);
+    let blocks = 0;
+    for (let step = 0; step < 6_000; step++) {
+      jest.advanceTimersByTime(next() < 0.7 ? 0 : Math.floor(next() * 400));
+      // Caller 0 floods; the others send a little.
+      const who = next() < 0.5 ? 0 : 1 + Math.floor(next() * 5);
+      for (const name of ['short', 'medium']) {
+        // As the guard makes them: one key per caller AND throttler name.
+        const key = `caller-${who}-${name}`;
+        const mine = await ours.increment(key, ttl, limit, blockDuration, name);
+        const theirs = await alone[who].increment(
+          key,
+          ttl,
+          limit,
+          blockDuration,
+          name,
+        );
+        if (mine.isBlocked && name === 'short') blocks++;
+        if (JSON.stringify(seen(mine)) !== JSON.stringify(seen(theirs)))
+          expect({ step, who, name, mine: seen(mine) }).toEqual({
+            step,
+            who,
+            name,
+            mine: seen(theirs),
+          });
+      }
+    }
+    // The flooder really was blocked, again and again.
+    expect(blocks).toBeGreaterThan(50);
+    ours.onApplicationShutdown();
+    for (const s of alone) s.onApplicationShutdown();
+  });
+
+  it('G-95 at the store: a caller under the limit is never blocked by another caller’s block ending', async () => {
+    jest.useFakeTimers({ now: 1_700_000_000_000 });
+    const { ttl, limit, blockDuration } = LIMITS[0];
+    const ours = new HubThrottlerStorage();
+    let victimBlocked = 0;
+    let attackerBlocked = 0;
+    // 30 s: the victim sends 2 every 100 ms (20 a second, exactly the
+    // limit, never over), the attacker 25 at once every 1.5 s.
+    for (let t = 0; t < 30_000; t += 100) {
+      for (let i = 0; i < 2; i++) {
+        if (
+          (await ours.increment('victim', ttl, limit, blockDuration, 'short'))
+            .isBlocked
+        )
+          victimBlocked++;
+      }
+      if (t % 1_500 === 0) {
+        for (let i = 0; i < 25; i++) {
+          if (
+            (
+              await ours.increment(
+                'attacker',
+                ttl,
+                limit,
+                blockDuration,
+                'short',
+              )
+            ).isBlocked
+          )
+            attackerBlocked++;
+        }
+      }
+      jest.advanceTimersByTime(100);
+    }
+    expect(victimBlocked).toBe(0);
+    expect(attackerBlocked).toBe(20 * 5);
+    ours.onApplicationShutdown();
+  });
+
+  it('100,000 callers start no timer per hit, and the periodic sweep removes every one of them after their window', async () => {
+    jest.useFakeTimers({
+      now: 1_700_000_000_000,
+      doNotFake: ['setImmediate'],
+    });
+    const ours = new HubThrottlerStorage();
+    expect(jest.getTimerCount()).toBe(0);
+    for (let i = 0; i < 100_000; i++) {
+      for (const { name, ttl, limit } of HUB_THROTTLERS)
+        await ours.increment(`caller-${i}`, ttl, limit, ttl, name);
+    }
+    // The sweeper, and nothing else.
+    expect(jest.getTimerCount()).toBe(1);
+    expect(ours.size).toBe(200_000);
+    // 10 s on, the interval's sweep (which yields between chunks) has
+    // removed every `short` bucket (a 1 s window) and kept every `medium`
+    // one (60 s). Enough turns of the loop for a whole sweep to finish.
+    const turns = async (n: number) => {
+      for (let i = 0; i < n; i++)
+        await new Promise<void>((resolve) => setImmediate(resolve));
+    };
+    jest.advanceTimersByTime(HUB_THROTTLER_SWEEP_MS);
+    await turns((2 * 200_000) / HUB_THROTTLER_SWEEP_CHUNK);
+    expect(ours.size).toBe(100_000);
+    // ...and once the longest window (medium, 60 s) has passed, the sweep
+    // started by the interval removes the rest.
+    for (let t = 0; t < MEDIUM.ttl; t += HUB_THROTTLER_SWEEP_MS) {
+      jest.advanceTimersByTime(HUB_THROTTLER_SWEEP_MS);
+      await turns((2 * 100_000) / HUB_THROTTLER_SWEEP_CHUNK);
+    }
+    expect(ours.size).toBe(0);
+    expect(jest.getTimerCount()).toBe(1);
+    ours.onApplicationShutdown();
+    expect(jest.getTimerCount()).toBe(0);
+  }, 60000);
+
+  it('a sweep yields the event loop between chunks instead of holding it', async () => {
+    const ours = new HubThrottlerStorage();
+    const n = HUB_THROTTLER_SWEEP_CHUNK * 4;
+    for (let i = 0; i < n; i++)
+      await ours.increment(`c${i}`, 1, 20, 1, 'short');
+    await sleep(5);
+    let finished = false;
+    let yielded = 0;
+    const sweeping = ours.sweep().then((removed) => {
+      finished = true;
+      return removed;
+    });
+    // Each of these runs only if the sweep has handed the loop back.
+    const tick = (): void => {
+      if (finished) return;
+      yielded++;
+      setImmediate(tick);
+    };
+    setImmediate(tick);
+    expect(await sweeping).toBe(n);
+    expect(yielded).toBeGreaterThanOrEqual(3);
+    expect(ours.size).toBe(0);
+    ours.onApplicationShutdown();
+  });
+
+  it('an idle caller’s bucket is dropped when it is next touched, and answers as a new one would', async () => {
+    jest.useFakeTimers({ now: 1_700_000_000_000 });
+    const ours = new HubThrottlerStorage();
+    for (let i = 0; i < SHORT.limit + 3; i++)
+      await ours.increment('k', SHORT.ttl, SHORT.limit, SHORT.ttl, 'short');
+    expect(ours.size).toBe(1);
+    jest.advanceTimersByTime(SHORT.ttl);
+    expect(
+      seen(
+        await ours.increment('k', SHORT.ttl, SHORT.limit, SHORT.ttl, 'short'),
+      ),
+    ).toEqual({
+      totalHits: 1,
+      timeToExpire: 1,
+      isBlocked: false,
+      timeToBlockExpire: null,
+    });
+    expect(ours.size).toBe(1);
+    ours.onApplicationShutdown();
   });
 });
