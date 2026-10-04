@@ -69,6 +69,7 @@ import { AccountPurgeModule } from './account-purge/account-purge.module';
 import { WalletModule } from './wallet/wallet.module';
 import { MoneyModule } from './money/money.module';
 import { ChatModule } from './chat/chat.module';
+import { LiveModule } from './live/live.module';
 import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
 import { PaymentWebhookModule } from './payment-webhook/payment-webhook.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
@@ -334,6 +335,9 @@ import { APP_GUARD } from '@nestjs/core';
     // Free chat between two users (task INBOX-06). `@Controller('chats')` is a
     // first segment nothing else declares, so it cannot shadow or be shadowed.
     ChatModule,
+    // Live updates for chat (task INBOX-02): the WebSocket at `/api/hub/live`
+    // and `GET /live/catch-up`. `live` is a first segment nothing else declares.
+    LiveModule,
     // Fintava's webhooks (task MONEY-07): POST /webhooks/fintava, recorded
     // once, no money moved. `webhooks/fintava` is a fixed path no other
     // controller declares, beside the unchanged `webhooks/flutterwave`.

@@ -21801,6 +21801,50 @@
         ]
       }
     },
+    "/api/hub/live/catch-up": {
+      "get": {
+        "operationId": "LiveController_catchUp",
+        "parameters": [
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "The newest `cursor` the app holds: from an event, from the socket's\n`ready` frame, or from the last catch-up. Left out, nothing is returned\nand the cursor in the answer is where \"now\" is.",
+            "schema": {
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "1 to 100, 50 when left out.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveCatchUp"
+                }
+              }
+            }
+          }
+        },
+        "summary": "What the caller missed since a cursor: messages and read marks, oldest first.",
+        "tags": [
+          "Live"
+        ]
+      }
+    },
     "/api/hub/webhooks/fintava": {
       "post": {
         "operationId": "FintavaWebhookController_receive",
@@ -34850,6 +34894,126 @@
         "required": [
           "uploadUrl",
           "key"
+        ]
+      },
+      "LiveChatMessageEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "chat.message"
+            ]
+          },
+          "message": {
+            "$ref": "#/components/schemas/ChatMessage"
+          },
+          "cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "message",
+          "cursor"
+        ]
+      },
+      "LiveChatReadEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "chat.read"
+            ]
+          },
+          "chatId": {
+            "type": "string"
+          },
+          "readerWawuId": {
+            "type": "string"
+          },
+          "mine": {
+            "type": "boolean"
+          },
+          "lastReadAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastReadMessageId": {
+            "type": "string",
+            "nullable": true
+          },
+          "cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "chatId",
+          "readerWawuId",
+          "mine",
+          "lastReadAt",
+          "lastReadMessageId",
+          "cursor"
+        ]
+      },
+      "LiveCommunityMessageEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "community.message"
+            ]
+          },
+          "communityId": {
+            "type": "string"
+          },
+          "message": {
+            "$ref": "#/components/schemas/CommunityMessage"
+          },
+          "cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "communityId",
+          "message",
+          "cursor"
+        ]
+      },
+      "LiveCatchUp": {
+        "type": "object",
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/LiveChatMessageEvent"
+                },
+                {
+                  "$ref": "#/components/schemas/LiveChatReadEvent"
+                },
+                {
+                  "$ref": "#/components/schemas/LiveCommunityMessageEvent"
+                }
+              ]
+            }
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "hasMore": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "events",
+          "cursor",
+          "hasMore"
         ]
       },
       "PaymentQuoteView": {

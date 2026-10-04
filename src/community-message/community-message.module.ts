@@ -4,6 +4,7 @@ import { CommunityMessageController } from './community-message.controller';
 import { CommunityMessageService } from './community-message.service';
 import { NotificationModule } from '../notification/notification.module';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
+import { LivePublisherModule } from '../live/live-publisher.module';
 
 /**
  * CommunityMessage resource module. PrismaService comes from the globally
@@ -18,7 +19,12 @@ import { WawuAuthModule } from '../common/auth/wawu-auth.module';
  * sender identity (same source CreatorDiscoveryService already uses).
  */
 @Module({
-  imports: [NotificationModule, CreditSpendModule, WawuAuthModule],
+  imports: [
+    NotificationModule,
+    CreditSpendModule,
+    WawuAuthModule,
+    LivePublisherModule,
+  ],
   controllers: [CommunityMessageController],
   providers: [CommunityMessageService],
   // CommunityModule's "my communities" (INBOX-01) reuses lookupSenders.

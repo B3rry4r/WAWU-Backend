@@ -3547,6 +3547,10 @@ model ChatParticipant {
   lastReadAt        DateTime?
   /// The message that mark points at.
   lastReadMessageId String?
+  /// When the mark last moved (INBOX-02). The live catch-up reads it to tell
+  /// which read marks changed since a cursor. Null on a row that has never
+  /// moved, and on every row from before this column.
+  readAt            DateTime?
   conversation      ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@id([conversationId, wawuUserId])
