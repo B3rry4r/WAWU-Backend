@@ -44,7 +44,11 @@ import type {
   PaymentView,
   PinStateView,
 } from '../../money-view.type';
-import { IDEMPOTENT_REPLAYED_HEADER } from '../idempotency';
+import {
+  IDEMPOTENT_REPLAYED_HEADER,
+  IdempotencyService,
+  type IdempotencyScope,
+} from '../idempotency';
 import {
   type CompletedPayment,
   type PayableKindHandler,
@@ -924,6 +928,40 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
   // -------------------------------------------------------------------------
   // Checks before money moves
   // -------------------------------------------------------------------------
+
+  it("a request that dies holding a key, once a retry has taken it, can neither give back nor claim the retry's key (verifier finding 12)", async () => {
+    const keys = app.get(IdempotencyService);
+    const p = await buyer(0);
+    const base: IdempotencyScope = {
+      wawuUserId: p.id,
+      method: 'POST',
+      route: PAY_ROUTE,
+      key: randomUUID(),
+      fingerprint: 'same body',
+    };
+    const stuck: IdempotencyScope = { ...base };
+    stuck.claimId = await keys.claim(stuck);
+    await prisma.$executeRaw`
+      UPDATE "MoneyIdempotencyKey" SET "updatedAt" = now() - interval '10 minutes'
+       WHERE "wawuUserId" = ${p.id} AND "key" = ${base.key}`;
+    const retry: IdempotencyScope = { ...base };
+    retry.claimId = await keys.claim(retry);
+    expect(retry.claimId).not.toBe(stuck.claimId);
+    // The stuck request now refuses before its payment: it gives back only
+    // its own claim, which is gone, and cannot attach a payment to the key.
+    await keys.release(stuck, true);
+    await expect(
+      prisma.$transaction((tx) => keys.attach(tx, stuck, randomUUID())),
+    ).rejects.toMatchObject({ code: 'idempotency_in_progress' });
+    const row = await prisma.moneyIdempotencyKey.findFirstOrThrow({
+      where: { wawuUserId: p.id, key: base.key },
+    });
+    expect({ claimId: row.claimId, resourceId: row.resourceId }).toEqual({
+      claimId: retry.claimId,
+      resourceId: null,
+    });
+    await keys.release(retry, true);
+  });
 
   it('not enough money: 402 with the shortfall including the charge, nothing sent, and the key can be used after a top-up', async () => {
     const p = await buyer(50_000);
