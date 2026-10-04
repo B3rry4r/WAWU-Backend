@@ -73,6 +73,7 @@ import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
 import { PaymentWebhookModule } from './payment-webhook/payment-webhook.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { HUB_THROTTLERS } from './hub-throttlers';
+import { HUB_THROTTLER_STORAGE } from './hub-throttler-storage';
 import { APP_GUARD } from '@nestjs/core';
 // Phase 5 build (waves 0-3, all 39 registry resources) is now complete.
 // The deferred Flutterwave webhook has now shipped as PaymentWebhookModule
@@ -346,6 +347,12 @@ import { APP_GUARD } from '@nestjs/core';
     PaymentWebhookModule,
   ],
   controllers: [AppController],
-  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
+  providers: [
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // FIX-05: the guard above counts in our own store, one bucket per caller
+    // (src/hub-throttler-storage.ts), not the library's default one, whose
+    // ending of one caller's block stopped every other caller's hits expiring.
+    HUB_THROTTLER_STORAGE,
+  ],
 })
 export class AppModule {}
