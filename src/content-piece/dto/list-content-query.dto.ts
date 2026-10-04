@@ -5,8 +5,8 @@ import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 /** Query for GET /content per registry.json ContentPiece contract. */
 export class ListContentQueryDto {
   @IsOptional()
-  @IsIn(['feed', 'mine'])
-  scope?: 'feed' | 'mine';
+  @IsIn(['feed', 'mine', 'following'])
+  scope?: 'feed' | 'mine' | 'following';
 
   @IsOptional()
   @IsString()
