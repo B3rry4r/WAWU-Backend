@@ -79,6 +79,9 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // on those rows are free text, not other accounts, so there is no
   // counterparty here to preserve.
   { model: 'ProfileExperience', column: 'wawuUserId', disposition: 'OWNED' },
+  // Location, skills, open-to chips, Threads handle and social-link order (ME-05).
+  // Part of this person's profile and nothing else references it.
+  { model: 'ProfileDetails', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'CourseEnrollment', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CommunityMembership', column: 'userWawuId', disposition: 'OWNED' },
   // How far this person has read in each community (INBOX-01).
