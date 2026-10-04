@@ -4115,3 +4115,18 @@ model LegalDocument {
   sections      Json
   updatedAt     DateTime @updatedAt
 }
+
+/// EXPLORE-03: a creator an admin has chosen to show in Explore's "Featured
+/// creators" rail. One row per featured creator; no row means not featured.
+/// `position` orders the rail (lowest first). Set only by the superadmin
+/// route PUT /admin/featured-creators/:wawuId and removed by DELETE.
+model FeaturedCreator {
+  wawuUserId        String   @id
+  position          Int      @default(0)
+  /// The admin who featured them (an audit record, kept when a creator goes).
+  featuredByAdminId String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([position])
+}

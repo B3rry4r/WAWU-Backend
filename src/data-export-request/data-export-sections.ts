@@ -666,6 +666,12 @@ export const EXPORT_SECTIONS: ExportSection[] = [
  */
 export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
   [
+    // Editorial placement, not the person's own content (EXPLORE-03).
+    {
+      model: 'FeaturedCreator',
+      reason:
+        'An admin choice to show the creator in Explore, with the admin id; the person wrote none of it.',
+    },
     // Secrets and identity records: never in an email.
     { model: 'TransactionPin', reason: 'A PIN hash is a secret.' },
     { model: 'TransactionPinReset', reason: 'A reset code hash is a secret.' },

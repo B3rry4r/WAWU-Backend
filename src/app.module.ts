@@ -12,6 +12,8 @@ import { AdminCreatorsModule } from './admin/creators/admin-creators.module';
 import { AdminFinanceModule } from './admin/finance/admin-finance.module';
 import { AdminEventsModule } from './admin/events/admin-events.module';
 import { AdminNotificationsModule } from './admin/notifications/admin-notifications.module';
+import { AdminFeaturedCreatorsModule } from './admin/featured-creators/admin-featured-creators.module';
+import { ExploreModule } from './explore/explore.module';
 import { AdminLegalDocumentsModule } from './admin/legal-documents/admin-legal-documents.module';
 import { AboutModule } from './about/about.module';
 import { PrismaModule } from './common/prisma/prisma.module';
@@ -290,6 +292,9 @@ import { APP_GUARD } from '@nestjs/core';
     VerificationStateModule,
     VerificationSubmissionModule,
     CreatorDiscoveryModule,
+    // Explore's categories and featured creators (task EXPLORE-03): `explore`
+    // is a first segment nothing else declares.
+    ExploreModule,
     ProfessionalModule,
     FollowRelationshipModule,
     BlockedAccountModule,
@@ -339,6 +344,9 @@ import { APP_GUARD } from '@nestjs/core';
     // under `admin/policies`.
     AboutModule,
     AdminLegalDocumentsModule,
+    // EXPLORE-03: the superadmin write that features a creator, under
+    // `admin/featured-creators`.
+    AdminFeaturedCreatorsModule,
     // Free chat between two users (task INBOX-06). `@Controller('chats')` is a
     // first segment nothing else declares, so it cannot shadow or be shadowed.
     ChatModule,

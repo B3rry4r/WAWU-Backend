@@ -222,6 +222,10 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'MoneyReceipt', column: 'wawuUserId', disposition: 'OWNED' },
 
   // Last: everything above may reference these.
+  // An admin's choice to feature this creator in Explore (EXPLORE-03): a
+  // placement about the account, gone with it. The row's admin id is not a
+  // user reference and stays out of the map.
+  { model: 'FeaturedCreator', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'CreatorState', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'UserProfile', column: 'wawuUserId', disposition: 'OWNED' },
 
