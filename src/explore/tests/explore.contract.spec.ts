@@ -17,6 +17,19 @@ import { ResponseInterceptor } from '../../common/interceptors/response.intercep
 import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ExploreModule } from '../explore.module';
+import { StorageService } from '../../storage/storage.service';
+
+/** Stands in for storage: records what it was asked to sign. */
+const signed: string[] = [];
+const storageStub = {
+  freshUrlFor: (stored: string | null) => {
+    if (!stored) return Promise.resolve(stored);
+    signed.push(stored);
+    return Promise.resolve(
+      `https://fresh.example/${stored.split('/avatars/')[1].split('?')[0]}?sig=new`,
+    );
+  },
+};
 
 const PLAIN = '00000000-0000-4000-8000-000000000001'; // the viewer
 const CHIDI = '00000000-0000-4000-8000-000000000002'; // creator, 1 live piece
@@ -63,6 +76,7 @@ describe('Explore categories and featured creators (contract)', () => {
   let superToken: string;
   let reviewerToken: string;
   const saved: Record<string, string[]> = {};
+  const avatars: Record<string, string | null> = {};
   const savedEnv: Record<string, string | undefined> = {};
   const http = () => request(app.getHttpServer());
   const bearer = (t: string) => ({ Authorization: `Bearer ${t}` });
@@ -118,7 +132,10 @@ describe('Explore categories and featured creators (contract)', () => {
         ExploreModule,
         AdminFeaturedCreatorsModule,
       ],
-    }).compile();
+    })
+      .overrideProvider(StorageService)
+      .useValue(storageStub)
+      .compile();
     app = moduleRef.createNestApplication();
     app.setGlobalPrefix('api/hub');
     app.useGlobalPipes(
@@ -136,9 +153,10 @@ describe('Explore categories and featured creators (contract)', () => {
     for (const id of [CHIDI, ZAINAB]) {
       const p = await prisma.userProfile.findUniqueOrThrow({
         where: { wawuUserId: id },
-        select: { interests: true },
+        select: { interests: true, avatarUrl: true },
       });
       saved[id] = p.interests;
+      avatars[id] = p.avatarUrl;
     }
     await prisma.userProfile.update({
       where: { wawuUserId: CHIDI },
@@ -196,7 +214,7 @@ describe('Explore categories and featured creators (contract)', () => {
     for (const [id, interests] of Object.entries(saved)) {
       await prisma.userProfile.update({
         where: { wawuUserId: id },
-        data: { interests },
+        data: { interests, avatarUrl: avatars[id] },
       });
     }
     await prisma.adminUser.deleteMany({
@@ -391,5 +409,97 @@ describe('Explore categories and featured creators (contract)', () => {
     expect(
       await prisma.featuredCreator.count({ where: { wawuUserId: CHIDI } }),
     ).toBe(1);
+  });
+
+  it('a user sees a spelling of Film & Video however it was typed', async () => {
+    for (const spelling of [
+      'Film & video',
+      'Film_Video',
+      'film-video',
+      ' FILM  video ',
+    ]) {
+      await prisma.userProfile.update({
+        where: { wawuUserId: CHIDI },
+        data: { interests: [spelling] },
+      });
+      expect([
+        spelling,
+        await ids('/api/hub/explore/creators?category=film_video'),
+      ]).toEqual([spelling, [CHIDI]]);
+    }
+    await prisma.userProfile.update({
+      where: { wawuUserId: CHIDI },
+      data: { interests: ['Film Vide0'] },
+    });
+    expect(await ids('/api/hub/explore/creators?category=film_video')).toEqual(
+      [],
+    );
+    await prisma.userProfile.update({
+      where: { wawuUserId: CHIDI },
+      data: { interests: ['Film & Video', 'makeup'] },
+    });
+  });
+
+  it("a user gets a fresh avatar link for an old signed one, and never a signed link for a key that is not the creator's", async () => {
+    const old = `https://bucket.example/avatars/${CHIDI}/1111.png?X-Amz-Expires=604800&X-Amz-Date=20200101T000000Z`;
+    const foreign = `https://bucket.example/avatars/${PLAIN}/2222.png?X-Amz-Expires=604800`;
+    const wrongFolder = `https://bucket.example/kyc/id-document/${CHIDI}/3333.png`;
+    const nested = `https://bucket.example/avatars/${ZAINAB}/x/4444.png`;
+    const external = 'https://cdn.example/me.png';
+    const avatarOf = async (id: string, value: string | null) => {
+      await prisma.userProfile.update({
+        where: { wawuUserId: id },
+        data: { avatarUrl: value },
+      });
+      const res = await http().get('/api/hub/explore/creators').expect(200);
+      const items = (
+        res.body as {
+          data: Array<{ wawuId: string; avatarUrl: string | null }>;
+        }
+      ).data;
+      return items.find((i) => i.wawuId === id)?.avatarUrl;
+    };
+    signed.length = 0;
+    expect(await avatarOf(CHIDI, old)).toBe(
+      'https://fresh.example/' + CHIDI + '/1111.png?sig=new',
+    );
+    expect(signed).toEqual([old]);
+    signed.length = 0;
+    expect(await avatarOf(CHIDI, foreign)).toBeNull();
+    expect(await avatarOf(CHIDI, wrongFolder)).toBeNull();
+    expect(await avatarOf(ZAINAB, nested)).toBeNull();
+    expect(await avatarOf(CHIDI, 'avatars/not-a-key')).toBeNull();
+    expect(await avatarOf(CHIDI, external)).toBe(external);
+    expect(await avatarOf(CHIDI, null)).toBeNull();
+    expect(signed).toEqual([]);
+  });
+
+  it('an admin is told why a creator nobody can see cannot be featured', async () => {
+    await prisma.contentPiece.updateMany({
+      where: { creatorWawuId: ZAINAB, status: 'live' },
+      data: { status: 'pending' },
+    });
+    try {
+      const r = await feature(ZAINAB).expect(400);
+      expect(JSON.stringify(r.body)).toContain('nothing published');
+    } finally {
+      await prisma.contentPiece.updateMany({
+        where: { creatorWawuId: ZAINAB, status: 'pending' },
+        data: { status: 'live' },
+      });
+    }
+    await prisma.privacySettings.upsert({
+      where: { userWawuId: ZAINAB },
+      create: { userWawuId: ZAINAB, showInMemberLists: false },
+      update: { showInMemberLists: false },
+    });
+    const r = await feature(ZAINAB).expect(400);
+    expect(JSON.stringify(r.body)).toContain('member lists');
+    await prisma.privacySettings.deleteMany({ where: { userWawuId: ZAINAB } });
+    await feature(ZAINAB).expect(200);
+    await http()
+      .delete(`/api/hub/admin/featured-creators/${ZAINAB}`)
+      .set(bearer(superToken))
+      .expect(200);
   });
 });

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -9,7 +10,7 @@ import {
   Put,
   UseGuards,
 } from '@nestjs/common';
-import { AccountType } from '../../../generated/prisma/enums';
+import { AccountType, ContentStatus } from '../../../generated/prisma/enums';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AdminRoles } from '../auth/decorators/admin-roles.decorator';
 import { CurrentAdmin } from '../auth/decorators/current-admin.decorator';
@@ -49,6 +50,27 @@ export class AdminFeaturedCreatorsController {
       : null;
     if (!profile || profile.accountType !== AccountType.creator) {
       throw new NotFoundException('Creator not found');
+    }
+    // Featuring someone nobody can be shown is refused, so the admin is told
+    // why the rail would stay short instead of getting a silent 200.
+    const [live, privacy] = await Promise.all([
+      this.prisma.contentPiece.count({
+        where: { creatorWawuId: wawuId, status: ContentStatus.live },
+      }),
+      this.prisma.privacySettings.findUnique({
+        where: { userWawuId: wawuId },
+        select: { showInMemberLists: true },
+      }),
+    ]);
+    if (live === 0) {
+      throw new BadRequestException(
+        'This creator has nothing published yet, so Explore cannot show them',
+      );
+    }
+    if (privacy && !privacy.showInMemberLists) {
+      throw new BadRequestException(
+        'This creator has turned off being shown in member lists',
+      );
     }
     const position = dto.position ?? 0;
     const row = await this.prisma.featuredCreator.upsert({

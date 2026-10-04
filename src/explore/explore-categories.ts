@@ -9,8 +9,9 @@
  * app sends; `label` is what the chip says.
  *
  * A creator is "in" a category when one of their profile interests equals the
- * id or the label exactly (ignoring case), because profiles hold both
- * spellings today (see ListCreatorsQueryDto). Nothing is inferred beyond that.
+ * id or the label after normaliseInterest (case, spaces and punctuation do not
+ * matter), because profiles hold several spellings today (see
+ * ListCreatorsQueryDto). Nothing is inferred beyond that.
  */
 export interface ExploreCategory {
   id: string;
@@ -36,15 +37,12 @@ export const EXPLORE_CATEGORY_IDS: string[] = EXPLORE_CATEGORIES.map(
   (c) => c.id,
 );
 
-/** Every spelling of a category a profile may hold: id and label, any case. */
-export function interestSpellings(id: string): string[] {
-  const c = EXPLORE_CATEGORIES.find((x) => x.id === id);
-  if (!c) return [];
-  const out = new Set<string>();
-  for (const base of [c.id, c.label]) {
-    out.add(base);
-    out.add(base.toLowerCase());
-    out.add(base.toUpperCase());
-  }
-  return [...out];
+/**
+ * The comparison key for a category or an interest: lower case, letters and
+ * digits only. "Film & video", "Film_Video" and "film-video" all become
+ * `filmvideo`. The same rule runs in SQL (explore.service.ts), so the two
+ * must change together.
+ */
+export function normaliseInterest(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, '');
 }

@@ -3,9 +3,11 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
 import { deriveVerificationState } from '../common/verification/verification-state';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
-import { AccountType, ContentStatus } from '../../generated/prisma/enums';
+import { ContentStatus } from '../../generated/prisma/enums';
+import { Prisma } from '../../generated/prisma/client';
+import { StorageService, objectKeyFrom } from '../storage/storage.service';
 import type { VerificationState } from '../common/verification/verification-state';
-import { EXPLORE_CATEGORIES, interestSpellings } from './explore-categories';
+import { EXPLORE_CATEGORIES, normaliseInterest } from './explore-categories';
 import type {
   ExploreCreatorsQueryDto,
   FeaturedCreatorsQueryDto,
@@ -42,35 +44,80 @@ export class ExploreService {
     private readonly prisma: PrismaService,
     private readonly wawuId: WawuIdClient,
     private readonly blockedAccounts: BlockedAccountService,
+    private readonly storage: StorageService,
   ) {}
 
   categories() {
     return { items: EXPLORE_CATEGORIES.map((c) => ({ ...c })) };
   }
 
-  /** Creators this viewer may be shown, with their live piece counts. */
-  private async eligible(viewer: string | null): Promise<Map<string, number>> {
-    const live = await this.prisma.contentPiece.groupBy({
-      by: ['creatorWawuId'],
-      where: { status: ContentStatus.live },
-      _count: { _all: true },
-    });
-    const hidden = new Set(await this.blockedAccounts.hiddenFrom(viewer));
-    const counts = new Map<string, number>();
-    for (const l of live) {
-      if (!hidden.has(l.creatorWawuId))
-        counts.set(l.creatorWawuId, l._count._all);
+  /**
+   * Who this viewer may be shown, as one SQL fragment: a creator profile with
+   * something live, not blocked either way, not off member lists, and (when
+   * given) in the category. Decided in the database and paged there, so no
+   * list of ids ever travels as bind parameters (the only array is the
+   * viewer's own blocks, bound as one value).
+   */
+  private async eligibleFrom(viewer: string | null, category?: string) {
+    const hidden = await this.blockedAccounts.hiddenFrom(viewer);
+    const inCategory = category
+      ? Prisma.sql`AND EXISTS (SELECT 1 FROM unnest(p."interests") AS i
+          WHERE regexp_replace(lower(i), '[^a-z0-9]', '', 'g') = ${normaliseInterest(category)}::text)`
+      : Prisma.empty;
+    return Prisma.sql`
+      FROM "UserProfile" p
+      WHERE p."accountType" = 'creator'::"AccountType"
+        AND EXISTS (SELECT 1 FROM "ContentPiece" c
+          WHERE c."creatorWawuId" = p."wawuUserId" AND c."status" = 'live'::"ContentStatus")
+        AND NOT EXISTS (SELECT 1 FROM "PrivacySettings" s
+          WHERE s."userWawuId" = p."wawuUserId" AND s."showInMemberLists" = false)
+        AND p."wawuUserId" <> ALL(${hidden}::text[])
+        ${inCategory}`;
+  }
+
+  private async cardsFor(ids: string[], viewer: string | null) {
+    if (ids.length === 0) return [];
+    const [profiles, live] = await Promise.all([
+      this.prisma.userProfile.findMany({
+        where: { wawuUserId: { in: ids } },
+        select: ExploreService.PROFILE_SELECT,
+      }),
+      this.prisma.contentPiece.groupBy({
+        by: ['creatorWawuId'],
+        where: { status: ContentStatus.live, creatorWawuId: { in: ids } },
+        _count: { _all: true },
+      }),
+    ]);
+    const byId = new Map(profiles.map((p) => [p.wawuUserId, p]));
+    const counts = new Map(live.map((l) => [l.creatorWawuId, l._count._all]));
+    const ordered = ids
+      .map((id) => byId.get(id))
+      .filter((p): p is NonNullable<typeof p> => !!p);
+    return this.cards(ordered, counts, viewer);
+  }
+
+  /**
+   * A stored image, made readable again. Stored values are often 7-day signed
+   * URLs. Only a key shaped `<folder>/<this creator>/<file>` in the one folder that kind of image lives in is signed; a key
+   * of another account, or one that cannot be read as a key, is never signed
+   * (a link from our own storage that is not theirs is dropped, a link to
+   * somewhere else passes through untouched).
+   */
+  private async freshOwnImage(
+    stored: string | null,
+    folder: string,
+    ownerId: string,
+  ): Promise<string | null> {
+    if (!stored) return null;
+    const key = objectKeyFrom(stored);
+    if (key === stored) {
+      return /^https?:\/\//i.test(stored) ? stored : null;
     }
-    if (counts.size === 0) return counts;
-    const private_ = await this.prisma.privacySettings.findMany({
-      where: {
-        userWawuId: { in: [...counts.keys()] },
-        showInMemberLists: false,
-      },
-      select: { userWawuId: true },
-    });
-    for (const p of private_) counts.delete(p.userWawuId);
-    return counts;
+    const prefix = `${folder}/${ownerId}/`;
+    if (!key.startsWith(prefix) || key.slice(prefix.length).includes('/')) {
+      return null;
+    }
+    return this.storage.freshUrlFor(stored);
   }
 
   private async cards(
@@ -99,8 +146,13 @@ export class ExploreService {
         : Promise.resolve([]),
     ]);
     const followingSet = new Set(following.map((f) => f.followingWawuId));
+    const avatars = await Promise.all(
+      profiles.map((p) =>
+        this.freshOwnImage(p.avatarUrl, 'avatars', p.wawuUserId),
+      ),
+    );
     return profiles
-      .map((p) => {
+      .map((p, idx) => {
         const identity = identities.get(p.wawuUserId);
         const fullName = [identity?.firstName, identity?.lastName]
           .filter(Boolean)
@@ -110,7 +162,7 @@ export class ExploreService {
           wawuId: p.wawuUserId,
           name: fullName || p.handle || '',
           handle: p.handle,
-          avatarUrl: p.avatarUrl,
+          avatarUrl: avatars[idx],
           field: p.interests[0] ?? null,
           pieceCount: counts.get(p.wawuUserId) ?? 0,
           verification: deriveVerificationState(p),
@@ -134,60 +186,49 @@ export class ExploreService {
   async creators(query: ExploreCreatorsQueryDto, viewer: string | null) {
     const page = query.page ?? 1;
     const perPage = query.perPage ?? DEFAULT_PER_PAGE;
-    const counts = await this.eligible(viewer);
-    if (counts.size === 0) {
-      return { items: [], currentPage: page, perPage, total: 0 };
-    }
-    const where = {
-      accountType: AccountType.creator,
-      wawuUserId: { in: [...counts.keys()] },
-      ...(query.category
-        ? { interests: { hasSome: interestSpellings(query.category) } }
-        : {}),
-    };
-    const [profiles, total] = await Promise.all([
-      this.prisma.userProfile.findMany({
-        where,
-        select: ExploreService.PROFILE_SELECT,
-        orderBy: [{ handle: 'asc' }, { wawuUserId: 'asc' }],
-        skip: (page - 1) * perPage,
-        take: perPage,
-      }),
-      this.prisma.userProfile.count({ where }),
+    const from = await this.eligibleFrom(viewer, query.category);
+    const [rows, total] = await Promise.all([
+      this.prisma.$queryRaw<Array<{ id: string }>>`
+        SELECT p."wawuUserId" AS id ${from}
+        ORDER BY p."handle" ASC, p."wawuUserId" ASC
+        LIMIT ${perPage} OFFSET ${(page - 1) * perPage}`,
+      this.prisma.$queryRaw<Array<{ n: bigint }>>`
+        SELECT count(*) AS n ${from}`,
     ]);
     return {
-      items: await this.cards(profiles, counts, viewer),
+      items: await this.cardsFor(
+        rows.map((r) => r.id),
+        viewer,
+      ),
       currentPage: page,
       perPage,
-      total,
+      total: Number(total[0]?.n ?? 0),
     };
   }
 
   async featured(query: FeaturedCreatorsQueryDto, viewer: string | null) {
     const limit = query.limit ?? DEFAULT_FEATURED;
-    const counts = await this.eligible(viewer);
-    const rows = await this.prisma.featuredCreator.findMany({
-      where: { wawuUserId: { in: [...counts.keys()] } },
-      orderBy: [
-        { position: 'asc' },
-        { createdAt: 'asc' },
-        { wawuUserId: 'asc' },
-      ],
-    });
-    if (rows.length === 0) return { items: [] };
-    const profiles = await this.prisma.userProfile.findMany({
-      where: {
-        accountType: AccountType.creator,
-        wawuUserId: { in: rows.map((r) => r.wawuUserId) },
-      },
-      select: ExploreService.PROFILE_SELECT,
-    });
-    const byId = new Map(profiles.map((p) => [p.wawuUserId, p]));
-    const ordered = rows
-      .map((r) => byId.get(r.wawuUserId))
-      .filter((p): p is NonNullable<typeof p> => !!p);
-    // Names are known only after the lookup, so take the limit afterwards.
-    const items = await this.cards(ordered, counts, viewer);
+    const from = await this.eligibleFrom(viewer);
+    const items: ExploreCreatorCard[] = [];
+    // Names are known only after the lookup, so read the rail in small
+    // batches until it holds `limit` named creators or runs out.
+    for (let offset = 0; items.length < limit && offset < 200; offset += 50) {
+      const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
+        SELECT p."wawuUserId" AS id ${from}
+          AND EXISTS (SELECT 1 FROM "FeaturedCreator" f WHERE f."wawuUserId" = p."wawuUserId")
+        ORDER BY (SELECT f."position" FROM "FeaturedCreator" f WHERE f."wawuUserId" = p."wawuUserId") ASC,
+                 (SELECT f."createdAt" FROM "FeaturedCreator" f WHERE f."wawuUserId" = p."wawuUserId") ASC,
+                 p."wawuUserId" ASC
+        LIMIT 50 OFFSET ${offset}`;
+      if (rows.length === 0) break;
+      items.push(
+        ...(await this.cardsFor(
+          rows.map((r) => r.id),
+          viewer,
+        )),
+      );
+      if (rows.length < 50) break;
+    }
     return { items: items.slice(0, limit) };
   }
 }
