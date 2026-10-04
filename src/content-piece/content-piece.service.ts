@@ -26,7 +26,6 @@ import {
   type FlutterwaveClient,
 } from './flutterwave-client.interface';
 import type { CreateContentDto } from './dto/create-content.dto';
-import type { RateContentDto } from './dto/rate-content.dto';
 import { netOfCommission } from '../common/money';
 import { NotificationService } from '../notification/notification.service';
 import { StorageService } from '../storage/storage.service';
@@ -781,7 +780,21 @@ export class ContentPieceService {
         'This piece was reviewed a moment ago. Open it again to see where it stands.',
       );
     }
+    await this.stampUpdated(this.prisma, id);
     return this.getMyPiece(id, creatorWawuId);
+  }
+
+  /** Records that the creator changed the piece now (HOME-06: "Updated Sep 2026"). */
+  private async stampUpdated(
+    db: Pick<Prisma.TransactionClient, 'contentDetail'>,
+    contentId: string,
+  ): Promise<void> {
+    const now = new Date();
+    await db.contentDetail.upsert({
+      where: { contentId },
+      create: { contentId, contentUpdatedAt: now },
+      update: { contentUpdatedAt: now },
+    });
   }
 
   /**
@@ -818,6 +831,7 @@ export class ContentPieceService {
       });
       // Lost a race with a second tap: the winner already claimed the slot.
       if (flipped.count === 0) return;
+      await this.stampUpdated(tx, id);
 
       await tx.creatorState.upsert({
         where: { wawuUserId: creatorWawuId },
@@ -1038,45 +1052,5 @@ export class ContentPieceService {
     await this.prisma.savedItem.deleteMany({
       where: { userWawuId, contentId },
     });
-  }
-
-  /**
-   * Recomputes `ratingPct` (registry note: "designed-state task ... New
-   * endpoint recomputes the aggregate"). The frozen schema stores only a
-   * single mutable `ratingPct` scalar with no per-rating history/count
-   * column (confirmed: no Rating model, no ratingCount field) — a true
-   * running average across N raters is not representable without a schema
-   * change, which is out of scope (schema is frozen per task brief). This
-   * is therefore an honest, documented two-point blend (previous aggregate
-   * folded 50/50 with the new submission's own percentage), not a
-   * fabricated N-weighted average.
-   */
-  async rate(
-    contentId: string,
-    raterWawuId: string,
-    dto: RateContentDto,
-  ): Promise<ContentPieceResponse> {
-    const content = await this.prisma.contentPiece.findUnique({
-      where: { id: contentId },
-    });
-    if (!content) {
-      throw new NotFoundException('Content not found');
-    }
-
-    const submittedPct = dto.rating * 20;
-    const newRatingPct =
-      content.ratingPct === null
-        ? submittedPct
-        : Math.round((content.ratingPct + submittedPct) / 2);
-
-    const updated = await this.prisma.contentPiece.update({
-      where: { id: contentId },
-      data: { ratingPct: newRatingPct },
-    });
-
-    const unlockedSet = await this.resolveUnlockedSet(raterWawuId, [
-      updated.id,
-    ]);
-    return this.toResponse(updated, unlockedSet.has(updated.id));
   }
 }

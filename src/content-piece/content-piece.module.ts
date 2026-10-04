@@ -6,12 +6,15 @@ import {
   FeedController,
 } from './content-engagement.controller';
 import { ContentEngagementService } from './content-engagement.service';
+import { ContentDetailController } from './content-detail.controller';
+import { ContentDetailService } from './content-detail.service';
 import { ContentPieceService } from './content-piece.service';
 import { CreatorAccountGuard } from './guards/creator-account-guard';
 import { FLUTTERWAVE_CLIENT } from './flutterwave-client.interface';
 import { RealFlutterwaveAdapter } from './real-flutterwave.adapter';
 import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';
 import { shouldUseMockFlutterwave } from '../common/flutterwave/require-payment-config';
+import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 import { NotificationModule } from '../notification/notification.module';
 import { StorageModule } from '../storage/storage.module';
 
@@ -25,16 +28,18 @@ import { StorageModule } from '../storage/storage.module';
  * ContentPiece's own unlock/verify flow).
  */
 @Module({
-  imports: [NotificationModule, StorageModule],
+  imports: [NotificationModule, StorageModule, BlockedAccountModule],
   controllers: [
     ContentPieceController,
     PublicContentController,
     ContentEngagementController,
+    ContentDetailController,
     FeedController,
   ],
   providers: [
     ContentPieceService,
     ContentEngagementService,
+    ContentDetailService,
     CreatorAccountGuard,
     RealFlutterwaveAdapter,
     MockFlutterwaveAdapter,

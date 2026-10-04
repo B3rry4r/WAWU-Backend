@@ -17,6 +17,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { PaginationQueryDto } from '../common/dto/pagination.dto';
 import { ContentPieceService } from './content-piece.service';
+import { ContentDetailService } from './content-detail.service';
 import { CreatorAccountGuard } from './guards/creator-account-guard';
 import { ListContentQueryDto } from './dto/list-content-query.dto';
 import { CreateContentDto } from './dto/create-content.dto';
@@ -36,7 +37,10 @@ import { MyContentQueryDto } from './dto/my-content-query.dto';
 @UseGuards(WawuAuthGuard)
 @Controller('content')
 export class ContentPieceController {
-  constructor(private readonly contentPieceService: ContentPieceService) {}
+  constructor(
+    private readonly contentPieceService: ContentPieceService,
+    private readonly contentDetail: ContentDetailService,
+  ) {}
 
   @Get()
   list(
@@ -185,12 +189,19 @@ export class ContentPieceController {
     return this.contentPieceService.unsave(id, user.sub);
   }
 
+  /**
+   * The web's rating call, now behind the same rules as PUT
+   * /content/:id/rating (HOME-06): buyers only for paid pieces, nobody rates
+   * their own, one rating per person, edits replace. The answer is the piece,
+   * as before, with `ratingPct` recomputed from the rating rows.
+   */
   @Post(':id/rate')
-  rate(
+  async rate(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: WawuJwtClaims,
     @Body() dto: RateContentDto,
   ) {
-    return this.contentPieceService.rate(id, user.sub, dto);
+    await this.contentDetail.rate(id, user.sub, dto.rating);
+    return this.contentPieceService.findOne(id, user.sub);
   }
 }
