@@ -8,6 +8,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { ApiResponse } from '@nestjs/swagger';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
@@ -37,6 +38,11 @@ export class DirectMessageController {
   constructor(private readonly directMessageService: DirectMessageService) {}
 
   @Post(':creatorWawuId/send')
+  @ApiResponse({
+    status: 403,
+    description:
+      'Refused: the creator has not enabled paid messages, a block stands between the two, or (reason.code paid_messages_paused, with reason.pausedUntil) the creator left too many paid questions unanswered and paid messages are switched off until pausedUntil (R-13).',
+  })
   sendInit(
     @CurrentUser() user: WawuJwtClaims,
     @Param('creatorWawuId', ParseUUIDPipe) creatorWawuId: string,
