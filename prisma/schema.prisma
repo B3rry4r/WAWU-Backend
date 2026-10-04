@@ -3913,6 +3913,37 @@ model FintavaLedgerReference {
 }
 
 /// ─────────────────────────────────────────────────────────────────────────
+/// RECEIPTS (task WALLET-18)
+///
+/// A receipt is one ledger row (FintavaLedgerEntry) its owner chose to
+/// share, under a short code anyone can check at wawu/r/<code> (W41 to W43,
+/// W12, W27). One code per row, made the first time the owner asks and the
+/// same every time after. The code is 12 characters drawn at random
+/// (60 bits, never sequential and never derived from an id), so the public
+/// page cannot be walked by guessing.
+///
+/// Nothing about the movement is copied here: the public page and the image
+/// and PDF read the ledger row when they are asked, so a status Fintava
+/// moves (pending to completed, a reversal) shows on the receipt as it
+/// stands. A row that is gone, or no longer on its owner's wallet, makes
+/// its code a plain miss.
+/// ─────────────────────────────────────────────────────────────────────────
+model MoneyReceipt {
+  id            String   @id @default(uuid())
+  /// The public code: 12 characters of Crockford base 32, upper case.
+  code          String   @unique
+  /// The ledger row this receipt shows (FintavaLedgerEntry.id).
+  entryId       String   @unique
+  /// Whose row it is: the wallet's owner, who made the code.
+  wawuUserId    String
+  /// The wallet (NUBAN) the row is on, as the row says.
+  accountNumber String
+  createdAt     DateTime @default(now())
+
+  @@index([wawuUserId])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
 /// SAVED BENEFICIARIES AND THE PAYOUT ACCOUNT (task WALLET-14)
 ///
 /// A beneficiary is a place this person sends money to again (W8, W12 "Save

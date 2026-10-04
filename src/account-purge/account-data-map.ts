@@ -217,6 +217,9 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // withdrawals go to. Both go with them.
   { model: 'MoneyBeneficiary', column: 'ownerWawuId', disposition: 'OWNED' },
   { model: 'MoneyPayoutAccount', column: 'wawuUserId', disposition: 'OWNED' },
+  // The codes this person made to share their receipts (WALLET-18). They go
+  // with them, and each code then opens the plain "not found" page.
+  { model: 'MoneyReceipt', column: 'wawuUserId', disposition: 'OWNED' },
 
   // Last: everything above may reference these.
   { model: 'CreatorState', column: 'wawuUserId', disposition: 'OWNED' },

@@ -37,6 +37,10 @@ import { PinResetSettings } from './pin/pin-reset-config';
 import { PinResetService } from './pin/pin-reset.service';
 import { TransactionPinGuard } from './pin/transaction-pin.guard';
 import { TransactionPinService } from './pin/transaction-pin.service';
+import { MoneyReceiptController } from './receipts/money-receipt.controller';
+import { PublicReceiptController } from './receipts/public-receipt.controller';
+import { ReceiptSettings } from './receipts/receipt-config';
+import { ReceiptService } from './receipts/receipt.service';
 
 /**
  * The served half of the Naira wallet contract. Routes move here from
@@ -98,6 +102,11 @@ import { TransactionPinService } from './pin/transaction-pin.service';
  * quoted (WALLET-07, WALLET-09, MONEY-17): they fill their fees from it and
  * check the quote the person saw with `check()`.
  *
+ * WALLET-18: receipts. The owner's routes (`/money/transactions/{id}/receipt`,
+ * its image and its PDF) sit behind the wallet gate and read the row through
+ * the history's detail; the public check (`/r/{code}`, no sign-in,
+ * throttled) shows only what proves the movement. Neither calls Fintava.
+ *
  * WALLET-27: statements (`/money/statements`), the caller's completed
  * movements over a period of Lagos days as a CSV file, behind the wallet
  * gate, read from the ledger only; it never calls Fintava.
@@ -121,6 +130,8 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     MoneyHistoryController,
     MoneyStatementController,
     MoneyFeesController,
+    MoneyReceiptController,
+    PublicReceiptController,
   ],
   providers: [
     WalletGate,
@@ -145,6 +156,8 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     StatementSlots,
     FeeSettings,
     FeeQuoteService,
+    ReceiptSettings,
+    ReceiptService,
   ],
   exports: [
     WalletGate,
