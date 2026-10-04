@@ -133,10 +133,10 @@ export class SelfieMatchService {
     }
     // The BVN must be the one whose check passed (compared as a keyed hash).
     // That check is read once, here, and everything below is tied to it.
-    const check = await this.identity.checkedBvn(wawuUserId, input.bvn);
-    if (!check) {
-      throw new MoneyError('bvn_not_checked', BVN_NOT_CHECKED_MESSAGE);
-    }
+    // With a check handle (KYC-03), the BVN is the one it seals, for this
+    // caller and this passed check; otherwise the one sent, as before.
+    const proven = await this.identity.proveBvn(wawuUserId, input);
+    const check = { verifiedAt: proven.verifiedAt, bvnHash: proven.bvnHash };
     if ((await this.matchedAt(wawuUserId, check)) !== null) {
       throw new MoneyError(
         'selfie_already_matched',
@@ -159,7 +159,7 @@ export class SelfieMatchService {
     let result: FintavaSelfieResult;
     try {
       result = await this.fintava.verifyBvnSelfie({
-        bvn: input.bvn,
+        bvn: proven.bvn,
         imageBase64: input.image,
       });
     } catch (e) {

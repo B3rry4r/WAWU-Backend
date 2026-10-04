@@ -26517,21 +26517,25 @@
       "SelfieMatchDto": {
         "type": "object",
         "properties": {
+          "bvn": {
+            "type": "string",
+            "description": "The BVN whose check passed: 11 digits, no spaces. Leave it out and send\n`checkHandle` instead (KYC-03); one of the two, never both.",
+            "pattern": "^[0-9]{11}$"
+          },
+          "checkHandle": {
+            "type": "string",
+            "description": "The `checkHandle` the passed BVN check answered, in place of `bvn`\n(KYC-03): the server takes the BVN from it. One of the two, never both.",
+            "maxLength": 1024
+          },
           "image": {
             "type": "string",
             "description": "The selfie: plain base64 (no `data:` prefix) of a JPEG or PNG, 1 KB to\nabout 75 KB (at most 100,000 base64 characters), at most 2,048 pixels\non each side. A face match against the BVN photo, not a liveness check.",
             "format": "byte",
             "maxLength": 100000
-          },
-          "bvn": {
-            "type": "string",
-            "description": "The BVN whose check passed: 11 digits, no spaces.",
-            "pattern": "^[0-9]{11}$"
           }
         },
         "required": [
-          "image",
-          "bvn"
+          "image"
         ]
       },
       "IdentityOccupationDto": {
@@ -26553,13 +26557,18 @@
         "properties": {
           "bvn": {
             "type": "string",
-            "description": "The BVN whose check passed: 11 digits, no spaces.",
+            "description": "The BVN whose check passed: 11 digits, no spaces. Leave it and `nin` out\nand send `checkHandle` instead (KYC-03); never both.",
             "pattern": "^[0-9]{11}$"
           },
           "nin": {
             "type": "string",
-            "description": "The NIN given with that check: 11 digits, no spaces.",
+            "description": "The NIN given with that check: 11 digits, no spaces. Left out with `checkHandle`.",
             "pattern": "^[0-9]{11}$"
+          },
+          "checkHandle": {
+            "type": "string",
+            "description": "The `checkHandle` the passed BVN check answered, in place of `bvn` and\n`nin` (KYC-03): the server takes both from it. Never with them.",
+            "maxLength": 1024
           },
           "firstName": {
             "type": "string",
@@ -26581,8 +26590,6 @@
           }
         },
         "required": [
-          "bvn",
-          "nin",
           "firstName",
           "lastName",
           "dateOfBirth",
@@ -27323,11 +27330,15 @@
           },
           "prefill": {
             "$ref": "#/components/schemas/BvnPrefillView"
+          },
+          "checkHandle": {
+            "type": "string"
           }
         },
         "required": [
           "identity",
-          "prefill"
+          "prefill",
+          "checkHandle"
         ]
       },
       "SelfieMatchView": {
