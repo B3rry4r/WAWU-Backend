@@ -23223,6 +23223,86 @@
         ]
       }
     },
+    "/api/hub/inbox": {
+      "get": {
+        "operationId": "InboxController_list",
+        "parameters": [
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "Opaque: send back the `nextCursor` of the previous page as given.",
+            "schema": {
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "1 to 100, 20 when left out.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "kind",
+            "required": false,
+            "in": "query",
+            "description": "Only rows of this kind (the Paid DMs and Communities chips). All kinds when left out.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "chat",
+                "paid_dm",
+                "community"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxPage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Chats, paid questions and communities in one list, latest activity first.",
+        "tags": [
+          "Inbox"
+        ]
+      }
+    },
+    "/api/hub/inbox/unread": {
+      "get": {
+        "operationId": "InboxController_unread",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxUnread"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The Inbox tab's badge: the sum of every row's unread count.",
+        "tags": [
+          "Inbox"
+        ]
+      }
+    },
     "/api/hub/webhooks/fintava": {
       "post": {
         "operationId": "FintavaWebhookController_receive",
@@ -37711,6 +37791,264 @@
         "required": [
           "uploadUrl",
           "key"
+        ]
+      },
+      "InboxPreview": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "nullable": true
+          },
+          "attachment": {
+            "type": "string",
+            "enum": [
+              "video",
+              "image",
+              "file"
+            ],
+            "nullable": true
+          },
+          "mine": {
+            "type": "boolean"
+          },
+          "senderName": {
+            "type": "string",
+            "nullable": true
+          },
+          "sentAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "attachment",
+          "mine",
+          "senderName",
+          "sentAt"
+        ]
+      },
+      "InboxPerson": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          }
+        },
+        "required": [
+          "wawuId",
+          "name",
+          "handle",
+          "avatarUrl",
+          "verification"
+        ]
+      },
+      "InboxChat": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string"
+          },
+          "other": {
+            "$ref": "#/components/schemas/InboxPerson"
+          },
+          "canMessage": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "chatId",
+          "other",
+          "canMessage"
+        ]
+      },
+      "InboxPaidDm": {
+        "type": "object",
+        "properties": {
+          "side": {
+            "type": "string",
+            "enum": [
+              "creator",
+              "fan"
+            ]
+          },
+          "other": {
+            "$ref": "#/components/schemas/InboxPerson"
+          },
+          "questionCount": {
+            "type": "number"
+          },
+          "waitingCount": {
+            "type": "number"
+          },
+          "nextDeadlineAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "side",
+          "other",
+          "questionCount",
+          "waitingCount",
+          "nextDeadlineAt"
+        ]
+      },
+      "InboxCommunity": {
+        "type": "object",
+        "properties": {
+          "communityId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "imageUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "open",
+              "private"
+            ]
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "host",
+              "member"
+            ]
+          }
+        },
+        "required": [
+          "communityId",
+          "name",
+          "imageUrl",
+          "kind",
+          "role"
+        ]
+      },
+      "InboxItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "paid_dm",
+              "community",
+              "chat"
+            ]
+          },
+          "lastActivityAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "unreadCount": {
+            "type": "number"
+          },
+          "preview": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/InboxPreview"
+              }
+            ],
+            "nullable": true
+          },
+          "chat": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/InboxChat"
+              }
+            ],
+            "nullable": true
+          },
+          "paidDm": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/InboxPaidDm"
+              }
+            ],
+            "nullable": true
+          },
+          "community": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/InboxCommunity"
+              }
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "lastActivityAt",
+          "unreadCount",
+          "preview",
+          "chat",
+          "paidDm",
+          "community"
+        ]
+      },
+      "InboxPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InboxItem"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "InboxUnread": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number"
+          },
+          "chats": {
+            "type": "number"
+          },
+          "paidDms": {
+            "type": "number"
+          },
+          "communities": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "total",
+          "chats",
+          "paidDms",
+          "communities"
         ]
       },
       "PaymentQuoteView": {

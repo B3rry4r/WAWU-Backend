@@ -990,6 +990,10 @@ model CommunityMessage {
 
   @@index([communityId])
   @@index([senderWawuId])
+  /// INBOX-07. The inbox ranks every room a person is in by its newest
+  /// message and counts the messages after a read mark: both walk one room's
+  /// messages in time order, and this index serves them without a sort.
+  @@index([communityId, sentAt])
 }
 
 model CreditsState {
