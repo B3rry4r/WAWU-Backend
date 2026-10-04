@@ -1,9 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as argon2 from 'argon2';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { ChangePinDto, SetPinDto } from '../dto/money-request.dto';
 import { MoneyError } from '../money-error';
+import { isUniqueViolation } from '../prisma-unique';
 import type { PinStateView } from '../money-view.type';
 
 /**
@@ -48,8 +49,19 @@ type PinRow = {
   setAt: Date;
 };
 
+/** What a PIN state is read from (a full row passes; the view never carries the hash). */
+type PinStateRow = Pick<PinRow, 'failedTries' | 'lockedUntil' | 'setAt'> &
+  Partial<Pick<PinRow, 'pinHash'>>;
+
+/** A reserved check older than this belongs to a check that died: its slot is free. */
+export const PIN_SLOT_STALE_MS = 30_000;
+/** How long a check waits for a slot before it looks again (a woken one looks at once). */
+const SLOT_POLL_MS = 150;
+/** The longest a check waits for a slot: past a dead one's staleness, with margin. */
+const SLOT_WAIT_LIMIT_MS = PIN_SLOT_STALE_MS + 10_000;
+
 /** What GET /money/pin answers. A lock that has ended reads as no lock. */
-export function pinStateView(row: PinRow | null, now: Date): PinStateView {
+export function pinStateView(row: PinStateRow | null, now: Date): PinStateView {
   if (!row) {
     return {
       isSet: false,
@@ -79,15 +91,6 @@ function isNoMatch(err: unknown): boolean {
   );
 }
 
-/** Prisma's unique-constraint refusal (P2002). */
-function isDuplicate(err: unknown): boolean {
-  return (
-    typeof err === 'object' &&
-    err !== null &&
-    (err as { code?: unknown }).code === 'P2002'
-  );
-}
-
 const NOT_SET_MESSAGE = 'Create your transaction PIN first.';
 const ALREADY_SET_MESSAGE = 'You already have a transaction PIN.';
 const MISMATCH_MESSAGE = 'The two PINs do not match. Enter the same PIN twice.';
@@ -105,11 +108,19 @@ function incorrectMessage(triesLeft: number): string {
  *   and `argon2.verify` compares with `crypto.timingSafeEqual`.
  * - Five wrong tries in a row lock it for PIN_LOCK_MINUTES. A right PIN, a
  *   new PIN, or the end of a lock puts the count back to 0.
- * - Tries are checked one at a time per person, under a lock on the PIN
- *   row held for the whole check (MONEY-17 round 2): tries sent at the same
- *   moment cannot get past the limit together, and a right PIN never uses
- *   up a try, however many arrive at once. The fifth wrong try sets the
- *   lock in the same write. A right PIN clears the count.
+ * - A check RESERVES a slot before the hash is compared, in one conditional
+ *   update (`failedTries + pendingTries` below the limit), compares with no
+ *   transaction and no row lock open, and then records the result in one
+ *   more update that also gives the slot back (MONEY-17 round 3). So: wrong
+ *   PINs sent at the same moment can never be compared past the limit (only
+ *   as many as there are slots are compared at all); a right PIN never uses
+ *   up a try, however many arrive together (it clears the count when it is
+ *   recorded); the fifth wrong result sets the lock in the same write; and
+ *   while argon2 runs nothing in the database is held, so one person's
+ *   checks cannot hold up anyone else's requests. A check that finds every
+ *   slot taken waits for one (in memory, holding no connection) and then
+ *   looks again; it answers the lock as soon as there is one.
+ * - A slot left by a check that died is free again after PIN_SLOT_STALE_MS.
  * - Nothing here logs, and no message carries what the caller sent.
  *
  * The routes and the X-Transaction-Pin guard are thin: every rule is here.
@@ -117,6 +128,7 @@ function incorrectMessage(triesLeft: number): string {
 @Injectable()
 export class TransactionPinService {
   private readonly lockMs: number;
+  private readonly slots = new SlotQueue();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -151,7 +163,7 @@ export class TransactionPinService {
       return pinStateView(row, new Date());
     } catch (err) {
       // Two first PINs at the same moment: the primary key lets one in.
-      if (isDuplicate(err)) {
+      if (isUniqueViolation(err)) {
         throw new MoneyError('pin_already_set', ALREADY_SET_MESSAGE);
       }
       throw err;
@@ -186,73 +198,133 @@ export class TransactionPinService {
    * screen shows the lock at once instead of "0 tries left".
    */
   async verify(wawuUserId: string, pin: string): Promise<PinStateView> {
-    // One check at a time per person (MONEY-17 round 2): the PIN row is
-    // locked for the whole check, so tries sent at the same moment are
-    // counted one after another. A right PIN never uses up a try, however
-    // many arrive together (8 payments at once with the right PIN used to
-    // lock it), and wrong ones still cannot get past the limit together.
-    const outcome = await this.prisma.$transaction(
-      async (
-        tx,
-      ): Promise<
-        | { kind: 'ok'; row: PinRow }
-        | { kind: 'not_set' }
-        | { kind: 'locked'; until: Date }
-        | { kind: 'wrong'; triesLeft: number }
-      > => {
-        const now = new Date();
-        await tx.$queryRaw`
-          SELECT 1 FROM "TransactionPin" WHERE "wawuUserId" = ${wawuUserId} FOR UPDATE`;
-        const row = await tx.transactionPin.findUnique({
-          where: { wawuUserId },
-        });
-        if (!row) return { kind: 'not_set' };
-        if (row.lockedUntil && row.lockedUntil > now) {
-          return { kind: 'locked', until: row.lockedUntil };
-        }
-        // A lock that has ended starts the count again.
-        const before = row.lockedUntil ? 0 : row.failedTries;
-        if (await argon2.verify(row.pinHash, pin)) {
-          const fresh =
-            before === 0 && !row.lockedUntil
-              ? row
-              : await tx.transactionPin.update({
-                  where: { wawuUserId },
-                  data: { failedTries: 0, lockedUntil: null },
-                });
-          return { kind: 'ok', row: fresh };
-        }
-        const failedTries = before + 1;
-        if (failedTries >= PIN_MAX_TRIES) {
-          const until = new Date(now.getTime() + this.lockMs);
-          await tx.transactionPin.update({
-            where: { wawuUserId },
-            data: { failedTries: PIN_MAX_TRIES, lockedUntil: until },
-          });
-          return { kind: 'locked', until };
-        }
-        await tx.transactionPin.update({
-          where: { wawuUserId },
-          data: { failedTries, lockedUntil: null },
-        });
-        return { kind: 'wrong', triesLeft: PIN_MAX_TRIES - failedTries };
-      },
-      { maxWait: 30_000, timeout: 30_000 },
-    );
-    switch (outcome.kind) {
-      case 'ok':
-        return pinStateView(outcome.row, new Date());
-      case 'not_set':
-        throw new MoneyError('pin_not_set', NOT_SET_MESSAGE);
-      case 'locked':
-        throw lockedError(outcome.until);
-      case 'wrong':
-        throw new MoneyError(
-          'pin_incorrect',
-          incorrectMessage(outcome.triesLeft),
-          { triesLeft: outcome.triesLeft },
-        );
+    const slot = await this.reserve(wawuUserId);
+    let right: boolean;
+    try {
+      // No transaction, no row lock and no connection are held here.
+      right = await argon2.verify(slot.pinHash, pin);
+    } catch (err) {
+      // The compare itself failed (a damaged hash): the slot is given back
+      // and no try is counted either way.
+      await this.finish(wawuUserId, slot.pinHash, 'release');
+      throw err;
     }
+    const done = await this.finish(
+      wawuUserId,
+      slot.pinHash,
+      right ? 'right' : 'wrong',
+    );
+    if (right) return pinStateView(done.row, new Date());
+    const now = new Date();
+    if (done.row.lockedUntil && done.row.lockedUntil > now) {
+      throw lockedError(done.row.lockedUntil);
+    }
+    const triesLeft = Math.max(0, PIN_MAX_TRIES - done.row.failedTries);
+    throw new MoneyError('pin_incorrect', incorrectMessage(triesLeft), {
+      triesLeft,
+    });
+  }
+
+  /**
+   * Takes a slot for one check: a single conditional update that only
+   * matches while the PIN is not locked and `failedTries + pendingTries` is
+   * below the limit, and answers the hash to compare. A lock that has ended
+   * starts the count again in the same write; a slot older than
+   * PIN_SLOT_STALE_MS counts as free. Refuses with `409 pin_not_set` and
+   * `423 pin_locked`; when every slot is taken by checks still running, waits
+   * for one without holding a connection.
+   */
+  private async reserve(wawuUserId: string): Promise<{ pinHash: string }> {
+    const giveUpAt = Date.now() + SLOT_WAIT_LIMIT_MS;
+    for (;;) {
+      const now = new Date();
+      const staleBefore = new Date(now.getTime() - PIN_SLOT_STALE_MS);
+      const taken = await this.prisma.$queryRaw<Array<{ pinHash: string }>>`
+        UPDATE "TransactionPin" SET
+          "failedTries" = CASE WHEN "lockedUntil" IS NOT NULL THEN 0 ELSE "failedTries" END,
+          "lockedUntil" = NULL,
+          "pendingTries" = (CASE WHEN "pendingSince" IS NULL OR "pendingSince" < ${staleBefore} THEN 0 ELSE "pendingTries" END) + 1,
+          "pendingSince" = ${now},
+          "updatedAt" = ${now}
+        WHERE "wawuUserId" = ${wawuUserId}
+          AND ("lockedUntil" IS NULL OR "lockedUntil" <= ${now})
+          AND (CASE WHEN "lockedUntil" IS NOT NULL THEN 0 ELSE "failedTries" END)
+            + (CASE WHEN "pendingSince" IS NULL OR "pendingSince" < ${staleBefore} THEN 0 ELSE "pendingTries" END)
+            < ${PIN_MAX_TRIES}
+        RETURNING "pinHash"`;
+      if (taken.length === 1) return taken[0];
+      const row = await this.prisma.transactionPin.findUnique({
+        where: { wawuUserId },
+        select: { lockedUntil: true },
+      });
+      if (!row) throw new MoneyError('pin_not_set', NOT_SET_MESSAGE);
+      if (row.lockedUntil && row.lockedUntil > now) {
+        throw lockedError(row.lockedUntil);
+      }
+      // Every try this person may have is being compared right now. Whether
+      // the PIN locks depends on those results, so this check waits for one.
+      if (Date.now() >= giveUpAt) {
+        throw new ServiceUnavailableException(
+          'Too many PIN checks at once. Try again in a moment.',
+        );
+      }
+      await this.slots.wait(wawuUserId, SLOT_POLL_MS);
+    }
+  }
+
+  /**
+   * Records a finished check and gives its slot back, in one update. A wrong
+   * PIN counts as a failed try (the fifth sets the lock in the same write); a
+   * right one clears the count. The count only changes while the stored hash
+   * is still the one compared (a PIN changed meanwhile keeps its own count);
+   * the slot is given back either way. Wakes the checks waiting for a slot.
+   */
+  private async finish(
+    wawuUserId: string,
+    comparedHash: string,
+    result: 'right' | 'wrong' | 'release',
+  ): Promise<{ row: PinStateRow }> {
+    const now = new Date();
+    const lockedUntil = new Date(now.getTime() + this.lockMs);
+    const wrong = result === 'wrong';
+    const right = result === 'right';
+    const rows = await this.prisma.$queryRaw<
+      Array<PinStateRow & { pendingTries: number }>
+    >`
+      UPDATE "TransactionPin" SET
+        "pendingTries" = GREATEST("pendingTries" - 1, 0),
+        "pendingSince" = CASE WHEN "pendingTries" <= 1 THEN NULL ELSE "pendingSince" END,
+        "failedTries" = CASE
+          WHEN "pinHash" <> ${comparedHash} THEN "failedTries"
+          WHEN ${wrong} THEN LEAST("failedTries" + 1, ${PIN_MAX_TRIES})
+          WHEN ${right} AND ("lockedUntil" IS NULL OR "lockedUntil" <= ${now}) THEN 0
+          ELSE "failedTries" END,
+        "lockedUntil" = CASE
+          WHEN "pinHash" <> ${comparedHash} THEN "lockedUntil"
+          WHEN ${wrong} AND "failedTries" + 1 >= ${PIN_MAX_TRIES} THEN ${lockedUntil}
+          WHEN ${right} AND "lockedUntil" <= ${now} THEN NULL
+          ELSE "lockedUntil" END,
+        "updatedAt" = ${now}
+      WHERE "wawuUserId" = ${wawuUserId}
+      RETURNING "failedTries", "lockedUntil", "setAt", "pendingTries"`;
+    const row =
+      rows[0] ??
+      (await this.prisma.transactionPin.findUnique({
+        where: { wawuUserId },
+        select: { failedTries: true, lockedUntil: true, setAt: true },
+      }));
+    if (!row) throw new MoneyError('pin_not_set', NOT_SET_MESSAGE);
+    const pending = 'pendingTries' in row ? row.pendingTries : 0;
+    const locked = row.lockedUntil !== null && row.lockedUntil > now;
+    // A lock wakes everyone (each will answer it); otherwise one waiter per
+    // slot that is free now.
+    this.slots.release(
+      wawuUserId,
+      locked
+        ? Infinity
+        : Math.max(0, PIN_MAX_TRIES - row.failedTries - pending),
+    );
+    return { row };
   }
 
   /**
@@ -280,4 +352,39 @@ function lockedError(lockedUntil: Date): MoneyError {
 
 function hashPin(pin: string): Promise<string> {
   return argon2.hash(pin, { type: argon2.argon2id });
+}
+
+/**
+ * The checks of one process waiting for a slot, per person, first come first
+ * served. Nothing here touches the database: a waiter holds no connection. A
+ * waiter that is not woken looks again after `ms` (another server may have
+ * freed the slot).
+ */
+class SlotQueue {
+  private readonly queues = new Map<string, Array<() => void>>();
+
+  wait(id: string, ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      const queue = this.queues.get(id) ?? [];
+      this.queues.set(id, queue);
+      const wake = () => {
+        clearTimeout(timer);
+        const at = queue.indexOf(wake);
+        if (at >= 0) queue.splice(at, 1);
+        if (queue.length === 0 && this.queues.get(id) === queue) {
+          this.queues.delete(id);
+        }
+        resolve();
+      };
+      const timer = setTimeout(wake, ms);
+      queue.push(wake);
+    });
+  }
+
+  /** Wakes up to `n` waiters of this person, oldest first. */
+  release(id: string, n: number): void {
+    const queue = this.queues.get(id);
+    if (!queue) return;
+    for (const wake of queue.slice(0, n)) wake();
+  }
 }

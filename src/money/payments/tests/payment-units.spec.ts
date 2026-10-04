@@ -8,7 +8,11 @@ import {
   PaymentSettings,
   splitPrice,
 } from '../payment-config';
-import { nairaText, successBody } from '../wallet-payment.service';
+import {
+  nairaText,
+  nextCheckDelayMs,
+  successBody,
+} from '../wallet-payment.service';
 
 /** Pay from wallet's pure parts (task MONEY-17). */
 describe('MONEY-17 units', () => {
@@ -47,6 +51,24 @@ describe('MONEY-17 units', () => {
     it('refuses a price that is not a positive whole kobo', () => {
       for (const bad of [0, -1, 1.5, Number.NaN, 2 ** 53]) {
         expect(() => splitPrice(bad, true)).toThrow(RangeError);
+      }
+    });
+  });
+
+  describe('nextCheckDelayMs (the backoff of a payment still unknown, R7)', () => {
+    const MIN = 60_000;
+
+    it('doubles from a minute and stops at an hour: 1, 2, 4, 8, 16, 32, 60, 60 ...', () => {
+      expect(
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 20, 1000].map((n) => nextCheckDelayMs(n)),
+      ).toEqual([1, 2, 4, 8, 16, 32, 60, 60, 60, 60, 60].map((m) => m * MIN));
+    });
+
+    it('never asks again sooner than a minute or later than an hour, for any count', () => {
+      for (let n = 0; n <= 200; n += 1) {
+        const d = nextCheckDelayMs(n);
+        expect(d).toBeGreaterThanOrEqual(MIN);
+        expect(d).toBeLessThanOrEqual(60 * MIN);
       }
     });
   });

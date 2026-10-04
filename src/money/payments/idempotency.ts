@@ -23,6 +23,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { WalletGateGuard } from '../gate/wallet-gate';
 import { IdempotencyKeyHeader } from '../money-contract';
 import { MoneyError } from '../money-error';
+import { isUniqueViolation } from '../prisma-unique';
 import { RequireApproval } from '../pin/transaction-pin.guard';
 import { PaymentSettings } from './payment-config';
 
@@ -128,9 +129,6 @@ type KeyRow = Prisma.MoneyIdempotencyKeyGetPayload<object>;
 export type StaleKeyResolver = (
   row: KeyRow,
 ) => Promise<{ status: number; body: string } | null>;
-
-const isUniqueViolation = (e: unknown) =>
-  (e as { code?: unknown } | null)?.code === 'P2002';
 
 @Injectable()
 export class IdempotencyService {

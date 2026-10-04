@@ -337,8 +337,15 @@ one retry at a time per payment.
   `triesLeft` (4, 3, 2, 1). The fifth wrong try in a row answers
   `423 pin_locked` with `lockedUntil` (not "0 tries left"), and so does every
   try until then, the right PIN included. The lock lasts `PIN_LOCK_MINUTES`
-  (config, provisional 30). A try is counted before the hash is compared, so
-  tries sent at the same moment cannot get past five together. A right PIN
+  (config, provisional 30). A check reserves a slot before the hash is
+  compared (one conditional update: wrong tries plus checks still running
+  stay below five), compares with no transaction, row lock or database
+  connection held, and records its result in one more update. So tries sent
+  at the same moment can never be compared past five together, a right PIN
+  never uses up a try however many arrive at once, and one person's checks
+  cannot hold up anyone else's requests; a check that finds every slot taken
+  waits for one (in memory) and answers the lock as soon as there is one. A
+  slot left by a check that died frees itself after 30 seconds. A right PIN
   resets the count; so does the end of a lock; a reset by code
   (`/money/pin/reset/confirm`, MONEY-14) clears the lock.
 - **The guard removes the header** from the request once read (`headers` and
@@ -996,7 +1003,12 @@ As built in round 2 (4 Oct 2026, lead rulings D1 to D4, each "Default
   `pending` (under review included), another for the same person, kind and
   target, under any Idempotency-Key and at any moment, is `409
   payment_in_progress` with `reason.paymentId`. Held by a unique column
-  (`WalletPayment.openKey`), cleared when the payment settles.
+  (`WalletPayment.openKey`) from the claim until the payment is completely
+  finished: cleared when it fails, is reversed, or, once paid, when what was
+  paid for is delivered (the feature's record that the buyer owns it is then
+  in place), never at the moment Fintava confirms. The claim is taken before
+  the feature's "already owned" rule is read for the last time, and given
+  back (nothing sent, failed, the key freed) when that now refuses.
 - **Before money moves**, in order, none of which stores anything: the
   wallet gate, the Idempotency-Key, the PIN, the body, the target, the
   quote, the merchant cap (`amount_out_of_range`), an open payment for the

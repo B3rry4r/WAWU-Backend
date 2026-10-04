@@ -55,8 +55,10 @@ import {
   PayableRegistry,
 } from '../payable-registry';
 import {
+  FINISHING_MESSAGE,
   PAY_ROUTE,
   PAYMENT_FAILED_REASON,
+  STILL_CONFIRMING_MESSAGE,
   WalletPaymentService,
 } from '../wallet-payment.service';
 
@@ -217,6 +219,19 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
   const delivered: CompletedPayment[] = [];
   /** How many of the next deliveries fail (the feature down). */
   let failDeliveries = 0;
+  /**
+   * What each buyer owns, as a feature that sells an item once records it on
+   * delivery (HOME-15 will): `once-*` items are refused to someone who owns
+   * them. Written by onCompleted, before the payment's claim is given up.
+   */
+  const owned = new Set<string>();
+  /** Held inside the next delivery (a slow feature), until released. */
+  let beforeDelivery: Promise<void> | null = null;
+  /**
+   * Held inside the next read of an item AFTER the feature answered it (so
+   * the answer is stale when the request goes on), until released. One shot.
+   */
+  let staleRead: { arrived: () => void; release: Promise<void> } | null = null;
   const previous: Record<string, string | undefined> = {};
   let accountSeq = 0;
 
@@ -521,11 +536,15 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
     const registry = moduleRef.get(PayableRegistry);
     const unlock: PayableKindHandler = {
       kind: 'content_unlock',
-      resolve: ({ targetId }) => {
+      resolve: async ({ targetId, payerWawuUserId }) => {
         if (targetId === 'gone') {
           throw new MoneyError('target_not_found', 'That piece is gone.');
         }
         if (targetId === 'owned') {
+          throw new MoneyError('target_not_payable', 'You already own this.');
+        }
+        const once = targetId.startsWith('once-');
+        if (once && owned.has(`${payerWawuUserId}:${targetId}`)) {
           throw new MoneyError('target_not_payable', 'You already own this.');
         }
         const prices: Record<string, number> = {
@@ -541,23 +560,31 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
           'piece-1000g': 100_000,
           'piece-1000h': 100_000,
         };
-        const priceKobo = prices[targetId];
+        const priceKobo = once ? 100_000 : prices[targetId];
         if (!priceKobo) {
           throw new MoneyError('target_not_found', 'That piece is gone.');
         }
-        return Promise.resolve({
+        const answer = {
           title: `Piece ${targetId}`,
           priceKobo,
           payee: creator,
-        });
+        };
+        if (staleRead) {
+          const hold = staleRead;
+          staleRead = null;
+          hold.arrived();
+          await hold.release;
+        }
+        return answer;
       },
-      onCompleted: (p) => {
+      onCompleted: async (p) => {
+        if (beforeDelivery) await beforeDelivery;
         if (failDeliveries > 0) {
           failDeliveries -= 1;
-          return Promise.reject(new Error('feature down'));
+          throw new Error('feature down');
         }
+        owned.add(`${p.payerWawuUserId}:${p.targetId}`);
         delivered.push(p);
-        return Promise.resolve();
       },
     };
     registry.register(unlock);
@@ -622,6 +649,9 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
   beforeEach(() => {
     wallets.mode = 'live';
     failDeliveries = 0;
+    beforeDelivery = null;
+    staleRead = null;
+    wallets.balanceGate = null;
   });
 
   // -------------------------------------------------------------------------
@@ -1504,6 +1534,228 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
       expect(r.status).toBe('completed');
       expect(r.discrepancy).toMatch(/paid twice for one item.*MONEY-18/);
     }
+  });
+
+  // -------------------------------------------------------------------------
+  // Round 3: the claim holds until the payment is completely finished (R2-1),
+  // and the loser of a race is told so with a code (R2-2)
+  // -------------------------------------------------------------------------
+
+  const settled = (r: Response) => r.status === 201 || r.status === 409;
+  const codeOf = (r: Response) =>
+    r.status === 201
+      ? body<PaymentView>(r).data!.status
+      : (body(r).reason?.code ?? `NO CODE: ${JSON.stringify(r.body)}`);
+
+  it('R2-1: once paid, the item stays claimed until the delivery is recorded: another key is payment_in_progress (not a second debit), then the feature refuses it as owned', async () => {
+    const p = await buyer(1_000_000);
+    const q = await quoted(p, 'content_unlock', 'once-a');
+    let letDeliver!: () => void;
+    beforeDelivery = new Promise<void>((r) => (letDeliver = r));
+    const first = pay(p, payBody(q)).then((r) => r);
+    await until(async () => {
+      const row = await prisma.walletPayment.findFirst({
+        where: { payerWawuUserId: p.id },
+      });
+      return row?.status === 'completed';
+    });
+    // Fintava has the money; the feature has not recorded the purchase.
+    const row = await prisma.walletPayment.findFirstOrThrow({
+      where: { payerWawuUserId: p.id },
+    });
+    expect(row.fulfilledAt).toBeNull();
+    expect(row.openKey).not.toBeNull();
+
+    const second = await pay(p, payBody(q));
+    expect(second.status).toBe(409);
+    expect(body(second).reason).toEqual({
+      code: 'payment_in_progress',
+      message: FINISHING_MESSAGE,
+      paymentId: row.id,
+    });
+    expect(sendsFrom(p)).toHaveLength(1);
+
+    letDeliver();
+    const done = body<PaymentView>(await first).data!;
+    expect(done).toMatchObject({ id: row.id, status: 'completed' });
+    const after = await prisma.walletPayment.findUniqueOrThrow({
+      where: { id: row.id },
+    });
+    expect(after.fulfilledAt).not.toBeNull();
+    expect(after.openKey).toBeNull();
+
+    // Delivered: the feature now refuses the item itself.
+    const third = await pay(p, payBody(q));
+    expect(third.status).toBe(409);
+    expect(body(third).reason?.code).toBe('target_not_payable');
+    expect(sendsFrom(p)).toHaveLength(1);
+    expect(wallets.kobo.get(p.accountNumber)).toBe(1_000_000 - 102_325);
+  });
+
+  it('R2-1: a delivery that fails keeps the item claimed (the buyer paid), and the sweep frees it once the delivery is recorded', async () => {
+    const p = await buyer(1_000_000);
+    const q = await quoted(p, 'content_unlock', 'once-b');
+    failDeliveries = 1;
+    const paid = body<PaymentView>(await pay(p, payBody(q))).data!;
+    expect(paid.status).toBe('completed');
+    const again = await pay(p, payBody(q));
+    expect(again.status).toBe(409);
+    expect(body(again).reason).toMatchObject({
+      code: 'payment_in_progress',
+      paymentId: paid.id,
+    });
+    await payments.sweep(new Date(Date.now() + 2 * 60_000));
+    const row = await prisma.walletPayment.findUniqueOrThrow({
+      where: { id: paid.id },
+    });
+    expect(row.fulfilledAt).not.toBeNull();
+    expect(row.openKey).toBeNull();
+    const owned409 = await pay(p, payBody(q));
+    expect(body(owned409).reason?.code).toBe('target_not_payable');
+    expect(sendsFrom(p)).toHaveLength(1);
+  });
+
+  it("R2-1 (the verifier's interleaving): a tap that read the item before the first payment was delivered and checks for an open payment after it is refused by the read inside its claim, with no debit", async () => {
+    const p = await buyer(1_000_000);
+    const q = await quoted(p, 'content_unlock', 'once-c');
+
+    // Tap B reads the item (not owned yet) and is held there.
+    let arrived!: () => void;
+    const reachedRead = new Promise<void>((r) => (arrived = r));
+    let letGo!: () => void;
+    staleRead = {
+      arrived,
+      release: new Promise<void>((r) => (letGo = r)),
+    };
+    const tapB = pay(p, payBody(q)).then((r) => r);
+    await reachedRead;
+
+    // Meanwhile the first payment runs to the end, delivery included.
+    const a = await pay(p, payBody(q));
+    expect(a.status).toBe(201);
+    expect(body<PaymentView>(a).data!.status).toBe('completed');
+    expect(owned.has(`${p.id}:once-c`)).toBe(true);
+
+    // B goes on: nothing is open any more, so the claim is taken; the second
+    // read says the buyer owns it; the claim is given back and nothing moves.
+    letGo();
+    const b = await tapB;
+    expect(b.status).toBe(409);
+    expect(body(b).reason?.code).toBe('target_not_payable');
+    expect(sendsFrom(p)).toHaveLength(1);
+    expect(wallets.kobo.get(p.accountNumber)).toBe(1_000_000 - 102_325);
+    expect(
+      w2wSeen().filter(
+        (r) =>
+          (r.body as { senderAccount: string }).senderAccount ===
+          p.accountNumber,
+      ),
+    ).toHaveLength(1);
+    const rows = await prisma.walletPayment.findMany({
+      where: { payerWawuUserId: p.id },
+      orderBy: { createdAt: 'asc' },
+    });
+    expect(rows.map((r) => r.status)).toEqual(['completed', 'failed']);
+    expect(rows.map((r) => r.openKey)).toEqual([null, null]);
+    const ledger = await ledgerRows(rows[1].customerReference);
+    expect(ledger.map((r) => r.status)).toEqual(['failed', 'failed']);
+    // B's key was given back: nothing moved, it may be sent again.
+    expect(
+      await prisma.moneyIdempotencyKey.count({ where: { wawuUserId: p.id } }),
+    ).toBe(1);
+  });
+
+  it.each([
+    ['an item the feature sells once', 'once'],
+    ['a repeatable item', 'piece-1000'],
+  ])(
+    'R2-1: 20 different keys at once on %s, five rounds: one debit per open window, every answer coded',
+    async (_label, base) => {
+      for (let round = 0; round < 5; round += 1) {
+        const p = await buyer(10_000_000);
+        const target = base === 'once' ? `once-r${round}` : base;
+        const q = await quoted(p, 'content_unlock', target);
+        wallets.mode = 'slow';
+        const answers = await Promise.all(
+          Array.from({ length: 20 }, () => pay(p, payBody(q))),
+        );
+        wallets.mode = 'live';
+        // Every answer is the payment or a coded refusal: never a bare
+        // "That record already exists.", never a 5xx.
+        for (const r of answers) {
+          expect(settled(r)).toBe(true);
+          if (r.status === 409) {
+            expect(['payment_in_progress', 'target_not_payable']).toContain(
+              codeOf(r),
+            );
+          }
+        }
+        const rows = await prisma.walletPayment.findMany({
+          where: { payerWawuUserId: p.id, status: 'completed' },
+          orderBy: { createdAt: 'asc' },
+        });
+        expect(sendsFrom(p)).toHaveLength(rows.length);
+        if (base === 'once') expect(rows).toHaveLength(1);
+        // Never a payment claimed while an earlier one for the item was open.
+        for (let i = 1; i < rows.length; i += 1) {
+          expect(rows[i].createdAt.getTime()).toBeGreaterThanOrEqual(
+            rows[i - 1].fulfilledAt!.getTime(),
+          );
+        }
+      }
+    },
+  );
+
+  it('R2-2: taps that all pass the open check before any claim is written: one wins, every other is 409 payment_in_progress with the winner\'s id (never "That record already exists.")', async () => {
+    const p = await buyer(10_000_000);
+    const q = await quoted(p, 'content_unlock', 'piece-1000');
+    // Every tap has checked "is one open?" (no) and is held at the balance
+    // read, so all six go for the claim together.
+    const gate = barrier(6);
+    wallets.balanceGate = (account) =>
+      account === p.accountNumber ? gate() : Promise.resolve();
+    wallets.mode = 'slow';
+    const answers = await Promise.all(
+      Array.from({ length: 6 }, () => pay(p, payBody(q))),
+    );
+    wallets.mode = 'live';
+    wallets.balanceGate = null;
+    const winners = answers.filter((r) => r.status === 201);
+    const losers = answers.filter((r) => r.status !== 201);
+    expect(winners).toHaveLength(1);
+    expect(losers).toHaveLength(5);
+    const winnerId = body<PaymentView>(winners[0]).data!.id;
+    for (const r of losers) {
+      expect(r.status).toBe(409);
+      expect(body(r).message).not.toMatch(/already exists/i);
+      const reason = body(r).reason!;
+      expect(reason.code).toBe('payment_in_progress');
+      expect([STILL_CONFIRMING_MESSAGE, FINISHING_MESSAGE]).toContain(
+        reason.message,
+      );
+      expect(reason.paymentId).toBe(winnerId);
+    }
+    expect(sendsFrom(p)).toHaveLength(1);
+  });
+
+  it('R7: a payment still unknown after many checks is asked again an hour later, never sooner and never later', async () => {
+    const p = await buyer(1_000_000);
+    const q = await quoted(p, 'content_unlock', 'piece-1000');
+    wallets.mode = 'timeout';
+    const paid = body<PaymentView>(await pay(p, payBody(q))).data!;
+    wallets.mode = 'live';
+    wallets.hidden.add(paid.reference);
+    await prisma.walletPayment.update({
+      where: { id: paid.id },
+      data: { checks: 20 },
+    });
+    const now = new Date(Date.now() + 2 * 60_000);
+    await payments.sweep(now);
+    const row = await prisma.walletPayment.findUniqueOrThrow({
+      where: { id: paid.id },
+    });
+    expect(row.checks).toBe(21);
+    expect(row.nextCheckAt!.getTime() - now.getTime()).toBe(60 * 60_000);
   });
 
   it('D2: a paid payment never waits behind 60 payments held for review', async () => {

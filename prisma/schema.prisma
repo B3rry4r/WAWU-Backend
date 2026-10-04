@@ -3235,22 +3235,31 @@ model WalletWithdrawal {
 /// one. docs/contract/CONVENTIONS.md section 5 is the contract.
 /// ─────────────────────────────────────────────────────────────────────────
 model TransactionPin {
-  wawuUserId  String    @id
+  wawuUserId   String    @id
   /// argon2id, encoded with its own random salt (a fresh one on every set or
   /// change, so no two people share one). The PIN itself is never stored,
   /// logged or returned.
-  pinHash     String
-  /// Wrong tries in a row. A try is counted before the hash is compared, so
-  /// tries sent at the same moment cannot get past the limit together. Back
-  /// to 0 on a right PIN, a new PIN, or once a lock has ended.
-  failedTries Int       @default(0)
+  pinHash      String
+  /// Wrong tries in a row, counted when the comparison is over. Back to 0 on
+  /// a right PIN, a new PIN, or once a lock has ended.
+  failedTries  Int       @default(0)
   /// Set when the last allowed try was wrong; null when not locked. A lock
   /// that has passed is treated as no lock (and cleared on the next try).
-  lockedUntil DateTime?
+  lockedUntil  DateTime?
+  /// Checks reserved and not yet finished (MONEY-17 round 3). A check takes a
+  /// slot in one conditional update (`failedTries + pendingTries` below the
+  /// limit) BEFORE the hash is compared, compares with no transaction and no
+  /// row lock open, and gives the slot back in one more update. So wrong PINs
+  /// sent at the same moment cannot be compared past the limit, a right PIN
+  /// never uses up a try, and no database connection waits on argon2.
+  pendingTries Int       @default(0)
+  /// When the newest slot was taken. A slot older than 30 seconds belongs to a
+  /// check that died (a restart mid-compare) and counts as free.
+  pendingSince DateTime?
   /// When the PIN was set or last changed (W35 "last changed").
-  setAt       DateTime  @default(now())
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  setAt        DateTime  @default(now())
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 }
 
 /// ─────────────────────────────────────────────────────────────────────────

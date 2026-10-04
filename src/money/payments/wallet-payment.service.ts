@@ -56,6 +56,7 @@ import {
   PayableRegistry,
   type PayableTarget,
 } from './payable-registry';
+import { isUniqueViolationOn } from '../prisma-unique';
 import { PaymentSettings, splitPrice } from './payment-config';
 
 /** The route a payment's Idempotency-Key is scoped to. */
@@ -74,6 +75,13 @@ export const PAYMENT_FAILED_REASON =
  */
 export const STILL_CONFIRMING_MESSAGE =
   "We're still confirming this payment. Don't pay again; we'll let you know.";
+/**
+ * On `payment_in_progress` when the open payment is already paid (Fintava
+ * moved the money) and what was paid for is still being delivered: the
+ * item stays blocked until the delivery is recorded (lead ruling R2-1).
+ */
+export const FINISHING_MESSAGE =
+  "Your payment went through and we're finishing it. Don't pay again.";
 /** Fintava refused for funds although a fresh balance read covers the total (lead ruling D3). */
 export const BALANCE_CHANGED_MESSAGE =
   'Your balance changed. Check it and try again.';
@@ -125,13 +133,8 @@ const RELEASED: readonly FintavaErrorKind[] = [
   'unavailable',
 ];
 
-const isOpenKeyClash = (e: unknown) => {
-  const err = e as { code?: unknown; meta?: { target?: unknown } } | null;
-  return (
-    err?.code === 'P2002' &&
-    JSON.stringify(err.meta?.target ?? '').includes('openKey')
-  );
-};
+/** A lost race on `WalletPayment.openKey`: another payment holds the item (R2-2: read through prisma-unique). */
+export const isOpenKeyClash = (e: unknown) => isUniqueViolationOn(e, 'openKey');
 
 /**
  * Pay from wallet (task MONEY-17): one way to take a payment from a
@@ -150,10 +153,14 @@ const isOpenKeyClash = (e: unknown) => {
  * - **Once per key.** The Idempotency-Key is taken before the PIN; the
  *   payment, its pending ledger rows and the key's link to it are written in
  *   one transaction before Fintava is called (idempotency.ts).
- * - **One open payment per buyer and item** (lead ruling D1.2): `openKey` is
- *   unique while the payment is `pending`, under review included; a second
- *   one, under any key, at any moment, is `409 payment_in_progress` with the
- *   open payment's id.
+ * - **One open payment per buyer and item** (lead ruling D1.2, R2-1):
+ *   `openKey` is unique from the claim until the payment is completely
+ *   finished: `pending` (under review included), and, once paid, until what
+ *   was paid for is delivered (the feature's record that the buyer owns it).
+ *   A second request for the item, under any key, at any moment before that
+ *   is `409 payment_in_progress` with the open payment's id. The claim is
+ *   taken BEFORE the feature's "already owned" rule is read for the last
+ *   time, and given back (nothing sent) when that says no.
  * - **Before money moves**, in order: the wallet (gate), the key, the PIN
  *   (guards), the body, the target and its price (the owning feature,
  *   PayableRegistry), the quote, the merchant cap, an open payment for the
@@ -266,34 +273,8 @@ export class WalletPaymentService implements OnModuleInit {
       dto.amountKobo,
     );
     const price = target.priceKobo;
-    const input = { kind: 'purchase' as const, amountKobo: price };
-    const subject = subjectOf(dto.kind, dto.targetId);
 
-    let fee: FeeQuoteView;
-    try {
-      fee = this.fees.check(
-        payer,
-        input,
-        dto.expectedTotalKobo,
-        dto.quoteToken,
-        new Date(),
-        subject,
-      );
-    } catch (e) {
-      if (e instanceof MoneyError && e.code === 'quote_changed') {
-        const fresh = this.fees.quote(payer, input, new Date(), subject);
-        throw new MoneyError('quote_changed', QUOTE_CHANGED_MESSAGE, {
-          paymentQuote: this.quoteView(
-            dto.kind,
-            dto.targetId,
-            target,
-            fresh,
-            await this.balanceOrNull(wallet),
-          ),
-        });
-      }
-      throw e;
-    }
+    const fee = await this.checkQuote(wallet, dto, target);
 
     const openKey = openKeyOf(payer, dto.kind, dto.targetId);
     await this.refuseIfOpen(openKey);
@@ -339,23 +320,38 @@ export class WalletPaymentService implements OnModuleInit {
       sentAt: now,
     };
 
-    // The payment, its pending ledger rows and the key's link to it, in one
-    // transaction, before Fintava is called: a crash after the send still
-    // leaves a payment the sweep settles, and a repeat of the key is
-    // answered from this payment.
-    let payment: PaymentRow;
+    // The CLAIM: the payment, its pending ledger rows and the key's link to
+    // it, in one transaction, before Fintava is called (a crash after the
+    // send still leaves a payment the sweep settles, and a repeat of the key
+    // is answered from this payment). Its unique `openKey` is what makes one
+    // buyer and one item one open payment, under any key.
+    const payment = await this.claim(scope, id, data, openKey);
+
+    // The claim is held, and the claim is never given up before what was paid
+    // for is delivered (complete / fulfil below), so anything the feature
+    // records on delivery (that the buyer now owns the item) is visible to
+    // this read, and nothing can be delivered to this buyer for this item
+    // until this payment is done. The feature's own rules are asked again
+    // NOW, inside the claim: the first read above ran before the claim and
+    // can be stale (lead ruling R2-1). Still payable, same price and payee,
+    // or the claim is given back and nothing is sent.
     try {
-      payment = await this.prisma.$transaction(async (tx) => {
-        await this.keys.attach(tx, scope, id);
-        const row = await tx.walletPayment.create({ data });
-        await this.ledger.record(this.movement(row, 'out', 'pending'), tx);
-        await this.ledger.record(this.movement(row, 'in', 'pending'), tx);
-        return row;
-      });
+      const again = await this.target(
+        payer,
+        dto.kind,
+        dto.targetId,
+        dto.amountKobo,
+      );
+      if (
+        again.target.priceKobo !== price ||
+        (again.target.payee?.wawuUserId ?? null) !==
+          (target.payee?.wawuUserId ?? null)
+      ) {
+        throw await this.quoteChanged(wallet, dto, again.target);
+      }
+      await this.checkQuote(wallet, dto, again.target);
     } catch (e) {
-      // Another payment for this item got there first (taps at once under
-      // different keys): it is the open one.
-      if (isOpenKeyClash(e)) await this.refuseIfOpen(openKey);
+      await this.abandon(payment, scope);
       throw e;
     }
 
@@ -374,17 +370,118 @@ export class WalletPaymentService implements OnModuleInit {
     return this.afterReceipt(payment, scope, receipt, handler);
   }
 
+  /**
+   * Writes the payment that takes the buyer's open slot for this item. Another
+   * payment holding it (found first, or lost to at the unique key) is `409
+   * payment_in_progress` with that payment's id; a holder that finished in
+   * between is simply asked about again.
+   */
+  private async claim(
+    scope: IdempotencyScope,
+    id: string,
+    data: Prisma.WalletPaymentCreateInput,
+    openKey: string,
+  ): Promise<PaymentRow> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(async (tx) => {
+          await this.keys.attach(tx, scope, id);
+          const row = await tx.walletPayment.create({ data });
+          await this.ledger.record(this.movement(row, 'out', 'pending'), tx);
+          await this.ledger.record(this.movement(row, 'in', 'pending'), tx);
+          return row;
+        });
+      } catch (e) {
+        // Another payment for this item got there first (taps at once under
+        // different keys): it is the open one.
+        if (!isOpenKeyClash(e)) throw e;
+        await this.refuseIfOpen(openKey);
+      }
+    }
+    throw new MoneyError('payment_in_progress', STILL_CONFIRMING_MESSAGE);
+  }
+
   /** `409 payment_in_progress` when this buyer has an open payment for this item. */
   private async refuseIfOpen(openKey: string): Promise<void> {
     const open = await this.prisma.walletPayment.findUnique({
       where: { openKey },
-      select: { id: true },
+      select: { id: true, status: true },
     });
     if (open) {
-      throw new MoneyError('payment_in_progress', STILL_CONFIRMING_MESSAGE, {
-        paymentId: open.id,
-      });
+      throw new MoneyError(
+        'payment_in_progress',
+        open.status === 'completed'
+          ? FINISHING_MESSAGE
+          : STILL_CONFIRMING_MESSAGE,
+        { paymentId: open.id },
+      );
     }
+  }
+
+  /**
+   * The payment was claimed but must not be sent (the second read of the item
+   * says it is no longer payable): nothing moved. The claim and the key are
+   * given back.
+   */
+  private async abandon(
+    payment: PaymentRow,
+    scope: IdempotencyScope,
+  ): Promise<void> {
+    try {
+      await this.markFailed(payment, PAYMENT_FAILED_REASON);
+      await this.keys.release(scope);
+    } catch (e) {
+      this.logger.error(
+        `payment ${payment.id}: the claim of an unsent payment was not given back (${e instanceof Error ? e.name : 'error'}); the sweep settles it`,
+      );
+    }
+  }
+
+  /** The quote the buyer saw, checked against the item as it stands now (G-64). */
+  private async checkQuote(
+    wallet: OpenWallet,
+    dto: PaymentDto,
+    target: PayableTarget,
+  ): Promise<FeeQuoteView> {
+    const payer = wallet.wawuUserId;
+    try {
+      return this.fees.check(
+        payer,
+        { kind: 'purchase', amountKobo: target.priceKobo },
+        dto.expectedTotalKobo,
+        dto.quoteToken,
+        new Date(),
+        subjectOf(dto.kind, dto.targetId),
+      );
+    } catch (e) {
+      if (e instanceof MoneyError && e.code === 'quote_changed') {
+        throw await this.quoteChanged(wallet, dto, target);
+      }
+      throw e;
+    }
+  }
+
+  /** `409 quote_changed` with the payment quote as it stands. */
+  private async quoteChanged(
+    wallet: OpenWallet,
+    dto: PaymentDto,
+    target: PayableTarget,
+  ): Promise<MoneyError> {
+    const fresh = this.fees.quote(
+      wallet.wawuUserId,
+      { kind: 'purchase', amountKobo: target.priceKobo },
+      new Date(),
+      subjectOf(dto.kind, dto.targetId),
+    );
+    return new MoneyError('quote_changed', QUOTE_CHANGED_MESSAGE, {
+      paymentQuote: this.quoteView(
+        dto.kind,
+        dto.targetId,
+        target,
+        fresh,
+        await this.balanceOrNull(wallet),
+      ),
+    });
   }
 
   /** Fintava did not take the payment, or we do not know whether it did. */
@@ -972,10 +1069,10 @@ export class WalletPaymentService implements OnModuleInit {
   }
 
   /**
-   * Completes it (once: only from `pending`), frees the item for another
-   * payment, flags a second completed payment for the same item made while
+   * Completes it (once: only from `pending`), delivers (the item stays
+   * claimed until the delivery is recorded: see `fulfil`), flags a second completed payment for the same item made while
    * this one was open (lead ruling D1.4: MONEY-16 reports it, MONEY-18 owns
-   * the refund), and delivers.
+   * the refund).
    */
   private async complete(
     p: PaymentRow,
@@ -983,12 +1080,18 @@ export class WalletPaymentService implements OnModuleInit {
     handler?: PayableKindHandler,
   ): Promise<PaymentRow> {
     const now = new Date();
+    // The open claim is kept until what was paid for is delivered (R2-1):
+    // a buyer who has paid and not yet been given the item cannot pay for it
+    // again. Nothing to deliver (no handler, no delivery, a purged payer):
+    // the claim goes now.
+    const owner = handler ?? this.registry.get(p.kind as PaymentKind);
+    const delivers = !!owner?.onCompleted && !!p.payerWawuUserId;
     const { count } = await this.prisma.walletPayment.updateMany({
       where: { id: p.id, status: 'pending' },
       data: {
         status: 'completed',
         completedAt: now,
-        openKey: null,
+        ...(delivers ? {} : { openKey: null }),
         reviewSince: null,
         nextCheckAt: null,
         ...(discrepancy ? { discrepancy } : {}),
@@ -1093,9 +1196,12 @@ export class WalletPaymentService implements OnModuleInit {
         payeeWawuUserId: p.payeeWawuUserId,
         note: p.note,
       });
+      // Delivered: only now is the buyer's claim on the item given up, so
+      // the feature's record of ownership is in place before another
+      // payment for the item can be claimed (R2-1).
       await this.prisma.walletPayment.updateMany({
         where: { id: p.id, fulfilledAt: null },
-        data: { fulfilledAt: new Date() },
+        data: { fulfilledAt: new Date(), openKey: null },
       });
       return true;
     } catch (e) {
