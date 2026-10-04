@@ -1,6 +1,5 @@
 import { Controller, Get, Header, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
-import { Throttle } from '@nestjs/throttler';
 import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
 import {
   CurrentWallet,
@@ -8,7 +7,7 @@ import {
   RequireOpenWallet,
 } from '../gate/wallet-gate';
 import { BuiltBy, MoneyErrors, WALLET_GATE_ERRORS } from '../money-contract';
-import { STATEMENT_THROTTLE } from './statement-config';
+import { StatementRateLimiter } from './statement-config';
 import { StatementQueryDto } from './statement-query.dto';
 import type { StatementView } from './statement-view.type';
 import { StatementService } from './statement.service';
@@ -32,26 +31,39 @@ import { StatementService } from './statement.service';
 @UseGuards(WawuAuthGuard)
 @Controller('money')
 export class MoneyStatementController {
-  constructor(private readonly statements: StatementService) {}
+  constructor(
+    private readonly statements: StatementService,
+    private readonly limiter: StatementRateLimiter,
+  ) {}
 
   /**
    * One statement. `from` and `to` are calendar days in Africa/Lagos time
    * and BOTH are included: from 00:00 on `from` to 23:59:59.999 on `to`,
    * Lagos time. A day that does not exist, `from` after `to`, `to` after
    * today in Lagos, or more than 366 days is a 400; a period with more than
-   * 50,000 movements is `400 statement_too_large`. At most 5 a minute and 30
-   * an hour per person per address (429 beyond).
+   * 50,000 movements is `400 statement_too_large`. The app's global
+   * per-address limits apply as on every route; on top, one person may ask
+   * for 5 a minute and 30 an hour (`429 statement_rate_limited`, counted
+   * here, after the token is verified), and two statements are built at
+   * once in the process (`503 statement_busy` after 5 s of waiting).
    */
   @Get('statements')
-  @Throttle(STATEMENT_THROTTLE)
   @Header('Cache-Control', 'no-store')
   @BuiltBy('WALLET-27')
   @RequireOpenWallet()
-  @MoneyErrors(...WALLET_GATE_ERRORS, 'statement_too_large')
+  @MoneyErrors(
+    ...WALLET_GATE_ERRORS,
+    'statement_too_large',
+    'statement_rate_limited',
+    'statement_busy',
+  )
   statement(
     @CurrentWallet() wallet: OpenWallet,
     @Query() query: StatementQueryDto,
   ): Promise<StatementView> {
+    // The guards have run: the token is verified and the wallet found, so
+    // this key is a real person's and a forged token never reaches here.
+    this.limiter.take(wallet.wawuUserId);
     return this.statements.statement(wallet, query);
   }
 }

@@ -5,6 +5,10 @@ import { MoneyBalanceController } from './balance/money-balance.controller';
 import { MoneyHistoryController } from './history/money-history.controller';
 import { TransactionHistoryService } from './history/transaction-history.service';
 import { MoneyStatementController } from './statements/money-statement.controller';
+import {
+  StatementRateLimiter,
+  StatementSlots,
+} from './statements/statement-config';
 import { StatementService } from './statements/statement.service';
 import { LedgerModule } from './ledger/ledger.module';
 import { WalletBalanceService } from './balance/wallet-balance.service';
@@ -130,6 +134,8 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     PayoutAccountService,
     TransactionHistoryService,
     StatementService,
+    StatementRateLimiter,
+    StatementSlots,
     FeeSettings,
     FeeQuoteService,
   ],

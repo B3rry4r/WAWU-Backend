@@ -163,5 +163,7 @@ export const MONEY_ERROR_CODES = [
   'device_approval_refused',
   // Statements (WALLET-27).
   'statement_too_large',
+  'statement_rate_limited',
+  'statement_busy',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];

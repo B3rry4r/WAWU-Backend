@@ -232,6 +232,8 @@ Every refusal is the envelope this backend already answers with
 | `account_not_opened` | 422 | Fintava refused the details sent (a validation or identity refusal, such as a blacklisted NIN), or the account has no email; nothing was created and the person may try again | |
 | `reset_codes_exhausted` | 429 | the person or the phone has had today's PIN reset texts (MONEY-14); nothing is sent | `retryAfterSeconds` |
 | `device_approval_refused` | 403 | `X-Device-Approval` not accepted: not the registered phone, a wrong signature, a used, expired or another person's challenge, or no phone registered; never uses a PIN try (MONEY-14) | |
+| `statement_rate_limited` | 429 | the person has asked for 5 statements in the last minute or 30 in the last hour (`STATEMENT_RATE_LIMITS`, PROVISIONAL), counted after the token is verified (WALLET-27) | `retryAfterSeconds` |
+| `statement_busy` | 503 | two statements are already being built and no place came free within 5 s (`STATEMENT_CONCURRENCY`, PROVISIONAL) (WALLET-27) | `retryAfterSeconds` |
 | `statement_too_large` | 400 | the period holds more movements than one statement lists (`STATEMENT_MAX_ROWS`, 50,000); counted before anything is written, and the person picks a shorter range (WALLET-27) | |
 | `phone_held_by_other_identity` | 409 | account opening where Fintava already has a customer for the person's phone whose record does not carry the checked BVN (or carries none): nothing is adopted or created, and the opening stops for review (MONEY-12, BACKEND_GAPS G-37) | |
 

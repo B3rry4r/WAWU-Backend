@@ -21,7 +21,7 @@ import {
   movementLine,
   type StatementLine,
 } from './statement-csv';
-import { STATEMENT_MAX_ROWS } from './statement-config';
+import { STATEMENT_MAX_ROWS, StatementSlots } from './statement-config';
 import type { StatementQueryDto } from './statement-query.dto';
 import { STATEMENT_TIME_ZONE, type StatementView } from './statement-view.type';
 
@@ -32,8 +32,8 @@ import { STATEMENT_TIME_ZONE, type StatementView } from './statement-view.type';
  * leap day included. A longer period is refused with a 400. This bounds
  * days, not rows: a busy wallet can hold any number of movements in a year,
  * so the rows are capped on their own (STATEMENT_MAX_ROWS, counted before
- * the file is built) and the route is rate-limited (STATEMENT_THROTTLE),
- * both in statement-config.ts.
+ * the file is built), each person is limited (STATEMENT_RATE_LIMITS) and
+ * two are built at once (STATEMENT_CONCURRENCY), all in statement-config.ts.
  */
 export const STATEMENT_MAX_DAYS = 366;
 
@@ -101,7 +101,10 @@ interface StatementRow {
  */
 @Injectable()
 export class StatementService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly slots: StatementSlots,
+  ) {}
 
   async statement(
     wallet: Pick<OpenWallet, 'wawuUserId' | 'accountNumber'>,
@@ -109,6 +112,17 @@ export class StatementService {
     now: Date = new Date(),
   ): Promise<StatementView> {
     const { from, to } = checkedPeriod(query.from, query.to, now);
+    // Two at once in the process; the rest wait their turn or are busy.
+    return this.slots.run(() => this.build(wallet, query, from, to, now));
+  }
+
+  private async build(
+    wallet: Pick<OpenWallet, 'wawuUserId' | 'accountNumber'>,
+    query: StatementQueryDto,
+    from: string,
+    to: string,
+    now: Date,
+  ): Promise<StatementView> {
     // The rows a statement lists: the caller's own completed movements in
     // the period (the history's three keys, MONEY-15).
     const listed = Prisma.sql`e."walletKind" = 'user'
@@ -158,7 +172,13 @@ export class StatementService {
          AND cw."wawuUserId" = e."counterpartyWawuUserId"
        WHERE ${listed}
        ORDER BY e."occurredAt" ASC, e."id" ASC
+       LIMIT ${STATEMENT_MAX_ROWS + 1}
     `);
+    // Movements that landed between the count and this read can only be
+    // real ones; the cap still holds.
+    if (rows.length > STATEMENT_MAX_ROWS) {
+      throw new MoneyError('statement_too_large', STATEMENT_TOO_LARGE_MESSAGE);
+    }
     const lines = rows.map((r) => movementLine(lineOf(r)));
     return {
       from,

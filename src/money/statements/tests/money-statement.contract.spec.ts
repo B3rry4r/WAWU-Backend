@@ -34,9 +34,16 @@ import type {
   TransactionPage,
   TransactionView,
 } from '../../money-view.type';
+import { MoneyStatementController } from '../money-statement.controller';
 import { lagosToday } from '../statement-csv';
 import type { StatementView } from '../statement-view.type';
-import { STATEMENT_MAX_ROWS, statementTracker } from '../statement-config';
+import {
+  STATEMENT_BUSY_MESSAGE,
+  STATEMENT_MAX_ROWS,
+  STATEMENT_RATE_LIMITED_MESSAGE,
+  StatementRateLimiter,
+  StatementSlots,
+} from '../statement-config';
 import {
   STATEMENT_TOO_LARGE_MESSAGE,
   STATEMENT_FUTURE_MESSAGE,
@@ -306,6 +313,11 @@ describe('GET /money/statements (WALLET-27) over HTTP', () => {
     await app.listen(0, '127.0.0.1');
     prisma = moduleRef.get(PrismaService);
     ledger = moduleRef.get(LedgerService);
+    // These tests read many statements per person: the per-person limit is
+    // proved on its own below, with its own app.
+    jest
+      .spyOn(moduleRef.get(StatementRateLimiter), 'take')
+      .mockImplementation(() => undefined);
   });
 
   afterAll(async () => {
@@ -970,6 +982,27 @@ describe('GET /money/statements (WALLET-27) over HTTP', () => {
       expect(STATEMENT_TOO_LARGE_MESSAGE).toBe(
         'This period has more than 50,000 movements, more than one statement lists. Pick a shorter range.',
       );
+      // Rows that land between the count and the read (verifier finding 4):
+      // the count is made to answer 50,000, the read still stops past the
+      // cap and the answer is the same 400.
+      const realQuery = prisma.$queryRaw.bind(prisma);
+      const late = jest
+        .spyOn(prisma, '$queryRaw')
+        .mockImplementation(((
+          ...args: Parameters<PrismaService['$queryRaw']>
+        ) =>
+          JSON.stringify(args[0]).includes('COUNT(*)')
+            ? Promise.resolve([{ n: STATEMENT_MAX_ROWS }])
+            : realQuery(...args)) as PrismaService['$queryRaw']);
+      try {
+        const raced = await get(
+          over.auth,
+          `${BASE}?from=2026-09-01&to=2026-09-30&format=csv`,
+        ).expect(400);
+        expect(body(raced).reason?.code).toBe('statement_too_large');
+      } finally {
+        late.mockRestore();
+      }
       // A shorter range of the same wallet is served.
       const day = await statement(over, '2026-09-01', '2026-09-01');
       // 00:00:30 to 22:59:30 UTC on 1 Sep, every 30 s: 2,759 rows that day in Lagos.
@@ -996,89 +1029,379 @@ describe('GET /money/statements (WALLET-27) over HTTP', () => {
   });
 });
 
+/** The app as the specs above build it; `throttled` adds AppModule's real global throttlers. */
+async function buildApp(throttled: boolean) {
+  const moduleRef = await Test.createTestingModule({
+    imports: [
+      ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
+      PassportModule.register({ defaultStrategy: 'wawu-jwt' }),
+      ...(throttled ? [ThrottlerModule.forRoot([...HUB_THROTTLERS])] : []),
+      PrismaModule,
+      MoneyModule,
+    ],
+    providers: [
+      WawuJwtStrategy,
+      WawuIdClient,
+      ...(throttled ? [{ provide: APP_GUARD, useClass: ThrottlerGuard }] : []),
+    ],
+  }).compile();
+  const app = moduleRef.createNestApplication<INestApplication<App>>({
+    logger: new QuietLogger(),
+  });
+  app.setGlobalPrefix('api/hub');
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    }),
+  );
+  app.useGlobalFilters(new AllExceptionsFilter());
+  app.useGlobalInterceptors(new ResponseInterceptor());
+  await app.init();
+  await app.listen(0, '127.0.0.1');
+  return { app, moduleRef, prisma: moduleRef.get(PrismaService) };
+}
+
+const SEPT = `${BASE}?from=2026-09-01&to=2026-09-30&format=csv`;
+const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
+/** A token the stand-in WAWU ID never signed: a known key id, any `sub`. */
+const forged = (sub: string) =>
+  `Bearer ${b64({ alg: 'RS256', typ: 'JWT', kid: 'mock-wawu-id-key-1' })}.${b64({ sub, exp: 9_999_999_999 })}.${Buffer.from('nope').toString('base64url')}`;
+
+/** People with an open wallet and no rows, for the limit tests. */
+function walletMaker(prismaOf: () => PrismaService) {
+  const users: string[] = [];
+  return {
+    users,
+    async make() {
+      const id = randomUUID();
+      users.push(id);
+      await prismaOf().fintavaWallet.create({
+        data: {
+          wawuUserId: id,
+          customerId: randomUUID(),
+          walletId: randomUUID(),
+          accountNumber: nuban(),
+        },
+      });
+      return { id, auth: `Bearer ${mintToken(id)}` };
+    },
+    async clean() {
+      await prismaOf().fintavaWallet.deleteMany({
+        where: { wawuUserId: { in: users } },
+      });
+    },
+  };
+}
+
 /**
- * The statement route's own rate limit (WALLET-27 round 2) behind the
- * app's real throttlers (HUB_THROTTLERS) and the global ThrottlerGuard, as
- * AppModule registers them. People without a wallet are used: the
- * throttle runs before the wallet gate, so each allowed call is the gate's
- * 409 and the next one is the throttle's 429, with nothing to read.
+ * WALLET-27 round 3 (verifier round 2, defect 1): the app's global
+ * per-address throttlers apply to this route exactly as to every other;
+ * the per-person limit is counted only after the token is verified.
  */
-describe('GET /money/statements is rate-limited per person per address (WALLET-27)', () => {
+describe('statement limits behind the real global throttlers (WALLET-27)', () => {
   let app: INestApplication<App>;
+  let prisma: PrismaService;
+  let limiter: StatementRateLimiter;
+  const people = walletMaker(() => prisma);
 
   beforeAll(async () => {
-    const moduleRef = await Test.createTestingModule({
-      imports: [
-        ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
-        PassportModule.register({ defaultStrategy: 'wawu-jwt' }),
-        ThrottlerModule.forRoot([...HUB_THROTTLERS]),
-        PrismaModule,
-        MoneyModule,
-      ],
-      providers: [
-        WawuJwtStrategy,
-        WawuIdClient,
-        { provide: APP_GUARD, useClass: ThrottlerGuard },
-      ],
-    }).compile();
-    app = moduleRef.createNestApplication({ logger: new QuietLogger() });
-    app.setGlobalPrefix('api/hub');
-    app.useGlobalPipes(
-      new ValidationPipe({
-        whitelist: true,
-        forbidNonWhitelisted: true,
-        transform: true,
-      }),
-    );
-    app.useGlobalFilters(new AllExceptionsFilter());
-    app.useGlobalInterceptors(new ResponseInterceptor());
-    await app.init();
-    await app.listen(0, '127.0.0.1');
+    const built = await buildApp(true);
+    app = built.app;
+    prisma = built.prisma;
+    limiter = built.moduleRef.get(StatementRateLimiter);
   });
 
   afterAll(async () => {
+    await people.clean();
     await app.close();
   });
 
-  const SEPT = `${BASE}?from=2026-09-01&to=2026-09-30&format=csv`;
-  const as = (sub: string, path = SEPT) =>
-    request(app.getHttpServer())
-      .get(path)
-      .set('Authorization', `Bearer ${mintToken(sub)}`);
+  const call = (auth: string, path = SEPT) =>
+    request(app.getHttpServer()).get(path).set('Authorization', auth);
 
-  it('5 a minute for one person: the 6th is 429; someone else at the same address, and the person’s other wallet routes, are not held back', async () => {
-    const a = randomUUID();
-    const b = randomUUID();
-    const first = await as(a).expect(409);
-    expect(first.headers['x-ratelimit-limit-short']).toBe('5');
-    expect(first.headers['x-ratelimit-limit-medium']).toBe('30');
-    for (let i = 1; i < 5; i += 1) await as(a).expect(409);
-    await as(a).expect(429);
-    // Another person from the same address has a bucket of their own.
-    await as(b).expect(409);
-    // The history is not the statement: its own limits are untouched.
-    await as(a, HISTORY).expect(409);
+  it('forged tokens with a new sub each, from one address: 401 until the per-address limit, then 429, as on any route; the limiter makes no entry', async () => {
+    const before = limiter.size;
+    const statuses = await Promise.all(
+      Array.from({ length: 30 }, () =>
+        call(forged(randomUUID())).then((r) => r.status),
+      ),
+    );
+    const count = (s: number) => statuses.filter((x) => x === s).length;
+    expect({ unauthorised: count(401), limited: count(429) }).toEqual({
+      unauthorised: 20,
+      limited: 10,
+    });
+    expect(limiter.size).toBe(before);
+    // The route sets no throttler of its own: the global headers are the app's.
+    await new Promise((r) => setTimeout(r, 1_100));
+    const one = await call(forged(randomUUID()));
+    expect(one.status).toBe(401);
+    expect(one.headers['x-ratelimit-limit-short']).toBe('20');
+    expect(one.headers['x-ratelimit-limit-medium']).toBe('200');
   });
 
-  it('the bucket is the person at the address: a token’s id, never another person’s', () => {
-    const req = (sub: string | null, ip: string) => ({
-      ip,
-      headers: sub ? { authorization: `Bearer ${mintToken(sub)}` } : {},
+  it('a verified person gets 5, then 429 statement_rate_limited; another verified person at the same address is not held back; a minute later the first may ask again', async () => {
+    await new Promise((r) => setTimeout(r, 1_100));
+    const a = await people.make();
+    const b = await people.make();
+    for (let i = 0; i < 5; i += 1) await call(a.auth).expect(200);
+    const sixth = await call(a.auth).expect(429);
+    expect(body(sixth)).toEqual({
+      statusCode: 429,
+      message: STATEMENT_RATE_LIMITED_MESSAGE,
+      data: null,
+      reason: {
+        code: 'statement_rate_limited',
+        message: STATEMENT_RATE_LIMITED_MESSAGE,
+        retryAfterSeconds: expect.any(Number) as number,
+      },
     });
-    const a = randomUUID();
-    expect(statementTracker(req(a, '198.51.100.7'))).toBe(`198.51.100.7|${a}`);
-    expect(statementTracker(req(a, '198.51.100.8'))).not.toBe(
-      statementTracker(req(a, '198.51.100.7')),
-    );
-    expect(statementTracker(req(randomUUID(), '198.51.100.7'))).not.toBe(
-      statementTracker(req(a, '198.51.100.7')),
-    );
-    expect(statementTracker(req(null, '198.51.100.7'))).toBe('198.51.100.7|');
+    const retry = body(sixth).reason!.retryAfterSeconds!;
+    expect(retry).toBeGreaterThanOrEqual(1);
+    expect(retry).toBeLessThanOrEqual(60);
+    await call(b.auth).expect(200);
+    const real = limiter.now;
+    try {
+      limiter.now = () => real() + 61_000;
+      await call(a.auth).expect(200);
+    } finally {
+      limiter.now = real;
+    }
+  });
+});
+
+describe('the statement limiter, on its own (WALLET-27)', () => {
+  it('5 a minute and 30 an hour, fixed windows from the first request', () => {
+    const l = new StatementRateLimiter();
+    let t = 1_000_000;
+    l.now = () => t;
+    const takes = (n: number) => {
+      for (let i = 0; i < n; i += 1) l.take('p');
+    };
+    takes(5);
+    expect(() => l.take('p')).toThrow(STATEMENT_RATE_LIMITED_MESSAGE);
+    for (let m = 1; m < 6; m += 1) {
+      t += 60_000;
+      takes(5);
+    }
+    // 30 in the hour: the next minute's window is open, the hour's is not.
+    t += 60_000;
+    let err: unknown;
+    try {
+      l.take('p');
+    } catch (e) {
+      err = e;
+    }
     expect(
-      statementTracker({
-        ip: '198.51.100.7',
-        headers: { authorization: 'Bearer not.a-token' },
+      (
+        err as {
+          getResponse(): {
+            reason: { code: string; retryAfterSeconds: number };
+          };
+        }
+      ).getResponse().reason,
+    ).toMatchObject({
+      code: 'statement_rate_limited',
+      retryAfterSeconds: 3_240,
+    });
+    t = 1_000_000 + 3_600_000;
+    takes(5);
+    // Someone else is untouched throughout.
+    l.take('q');
+  });
+
+  it('stays bounded: 10,000 people in an hour, then one more an hour later, leaves one entry', () => {
+    const l = new StatementRateLimiter();
+    let t = 5_000_000;
+    l.now = () => t;
+    for (let i = 0; i < 10_000; i += 1) l.take(`p${i}`);
+    expect(l.size).toBe(10_000);
+    t += 3_600_000;
+    l.take('late');
+    expect(l.size).toBe(1);
+  });
+
+  it('two places: the third waits its turn and gets the place freed; past the wait it is statement_busy', async () => {
+    const slots = new StatementSlots();
+    expect([slots.max, slots.waitMs]).toEqual([2, 5_000]);
+    slots.waitMs = 200;
+    let inside = 0;
+    let most = 0;
+    const work = (ms: number) =>
+      slots.run(async () => {
+        inside += 1;
+        most = Math.max(most, inside);
+        await new Promise((r) => setTimeout(r, ms));
+        inside -= 1;
+        return ms;
+      });
+    // 50 ms each: the third and fourth wait less than 200 ms and run.
+    expect(await Promise.all([work(50), work(50), work(50), work(50)])).toEqual(
+      [50, 50, 50, 50],
+    );
+    expect(most).toBe(2);
+    // 500 ms each: the third waits 200 ms and is refused, the place is not lost.
+    const results = await Promise.allSettled([work(500), work(500), work(500)]);
+    expect(results.map((r) => r.status)).toEqual([
+      'fulfilled',
+      'fulfilled',
+      'rejected',
+    ]);
+    const reason = (results[2] as PromiseRejectedResult).reason as {
+      getResponse(): { reason: unknown };
+      getStatus(): number;
+    };
+    expect(reason.getStatus()).toBe(503);
+    expect(reason.getResponse().reason).toEqual({
+      code: 'statement_busy',
+      message: STATEMENT_BUSY_MESSAGE,
+      retryAfterSeconds: 1,
+    });
+    expect(await work(10)).toBe(10);
+    expect(slots.peak).toBe(2);
+  });
+});
+
+describe('statements over HTTP: forged floods and two at once (WALLET-27)', () => {
+  let app: INestApplication<App>;
+  let prisma: PrismaService;
+  let limiter: StatementRateLimiter;
+  let slots: StatementSlots;
+  const people = walletMaker(() => prisma);
+
+  beforeAll(async () => {
+    const built = await buildApp(false);
+    app = built.app;
+    prisma = built.prisma;
+    limiter = built.moduleRef.get(StatementRateLimiter);
+    slots = built.moduleRef.get(StatementSlots);
+  });
+
+  afterAll(async () => {
+    await people.clean();
+    await app.close();
+  });
+
+  it('10,000 forged tokens, each a different sub: every one 401, and the limiter holds no more entries than before', async () => {
+    const before = limiter.size;
+    const server = app.getHttpServer();
+    const counts: Record<number, number> = {};
+    let next = 0;
+    await Promise.all(
+      Array.from({ length: 50 }, async () => {
+        while (next < 10_000) {
+          next += 1;
+          const r = await request(server)
+            .get(SEPT)
+            .set('Authorization', forged(randomUUID()));
+          counts[r.status] = (counts[r.status] ?? 0) + 1;
+        }
       }),
-    ).toBe('198.51.100.7|');
+    );
+    expect(counts).toEqual({ 401: 10_000 });
+    expect(limiter.size).toBe(before);
+  }, 180_000);
+
+  it('5 people at once while each statement takes a while: at most 2 build; with a short wait the others are 503 statement_busy, with the normal wait all 5 are served', async () => {
+    const five = await Promise.all(
+      Array.from({ length: 5 }, () => people.make()),
+    );
+    const realQuery = prisma.$queryRaw.bind(prisma);
+    const slow = (ms: number) =>
+      jest.spyOn(prisma, '$queryRaw').mockImplementation(((
+        ...args: Parameters<PrismaService['$queryRaw']>
+      ) => {
+        const q = JSON.stringify(args[0]);
+        const run = () => realQuery(...args);
+        return q.includes('COUNT(*)')
+          ? new Promise((r) => setTimeout(r, ms)).then(run)
+          : run();
+      }) as PrismaService['$queryRaw']);
+
+    const spy1 = slow(600);
+    slots.waitMs = 200;
+    slots.peak = 0;
+    try {
+      const res = await Promise.all(
+        five.map((p) =>
+          request(app.getHttpServer()).get(SEPT).set('Authorization', p.auth),
+        ),
+      );
+      const statuses = res.map((r) => r.status).sort();
+      expect(statuses).toEqual([200, 200, 503, 503, 503]);
+      for (const r of res.filter((x) => x.status === 503)) {
+        expect(body(r).reason).toEqual({
+          code: 'statement_busy',
+          message: STATEMENT_BUSY_MESSAGE,
+          retryAfterSeconds: 1,
+        });
+      }
+      expect(slots.peak).toBe(2);
+    } finally {
+      spy1.mockRestore();
+    }
+
+    const spy2 = slow(300);
+    slots.waitMs = 5_000;
+    slots.peak = 0;
+    try {
+      const res = await Promise.all(
+        five.map((p) =>
+          request(app.getHttpServer()).get(SEPT).set('Authorization', p.auth),
+        ),
+      );
+      expect(res.map((r) => r.status)).toEqual([200, 200, 200, 200, 200]);
+      expect(slots.peak).toBe(2);
+    } finally {
+      spy2.mockRestore();
+    }
+  }, 60_000);
+
+  it('the generated contract documents every refusal the route gives (N4)', () => {
+    const spec = JSON.parse(
+      readFileSync(
+        join(__dirname, '../../../../contract/openapi.json'),
+        'utf8',
+      ),
+    ) as {
+      paths: Record<
+        string,
+        { get: { responses: Record<string, { description: string }> } }
+      >;
+    };
+    const responses = spec.paths['/api/hub/money/statements'].get.responses;
+    expect({
+      400: responses['400']?.description,
+      409: responses['409']?.description,
+      423: responses['423']?.description,
+      429: responses['429']?.description,
+      503: responses['503']?.description,
+    }).toEqual({
+      400: 'reason.code: statement_too_large',
+      409: 'reason.code: wallet_not_open, wallet_opening',
+      423: 'reason.code: wallet_frozen',
+      429: 'reason.code: statement_rate_limited',
+      503: 'reason.code: statement_busy',
+    });
+    // And the code that writes it: the route's own declared responses, as
+    // `contract:build` reads them (so a change here fails before a rebuild).
+    const declared = Reflect.getMetadata(
+      'swagger/apiResponse',
+      (MoneyStatementController.prototype as unknown as Record<string, object>)
+        .statement,
+    ) as Record<string, { description: string }>;
+    expect(
+      Object.fromEntries(
+        Object.entries(declared).map(([k, v]) => [k, v.description]),
+      ),
+    ).toEqual({
+      400: 'reason.code: statement_too_large',
+      409: 'reason.code: wallet_not_open, wallet_opening',
+      423: 'reason.code: wallet_frozen',
+      429: 'reason.code: statement_rate_limited',
+      503: 'reason.code: statement_busy',
+    });
   });
 });

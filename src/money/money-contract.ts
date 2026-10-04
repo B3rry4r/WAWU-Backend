@@ -69,6 +69,9 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   // Default (agent/lead), owner may override: a period with too many rows
   // for one file is the caller's to shorten, so a 400 (WALLET-27).
   statement_too_large: 400,
+  // The per-person statement limit and the two-at-once cap (WALLET-27 round 3).
+  statement_rate_limited: 429,
+  statement_busy: 503,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */

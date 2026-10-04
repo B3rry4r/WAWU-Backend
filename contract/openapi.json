@@ -21570,6 +21570,26 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "reason.code: statement_rate_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: statement_busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -21577,7 +21597,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "One statement. `from` and `to` are calendar days in Africa/Lagos time\nand BOTH are included: from 00:00 on `from` to 23:59:59.999 on `to`,\nLagos time. A day that does not exist, `from` after `to`, `to` after\ntoday in Lagos, or more than 366 days is a 400; a period with more than\n50,000 movements is `400 statement_too_large`. At most 5 a minute and 30\nan hour per person per address (429 beyond).",
+        "summary": "One statement. `from` and `to` are calendar days in Africa/Lagos time\nand BOTH are included: from 00:00 on `from` to 23:59:59.999 on `to`,\nLagos time. A day that does not exist, `from` after `to`, `to` after\ntoday in Lagos, or more than 366 days is a 400; a period with more than\n50,000 movements is `400 statement_too_large`. The app's global\nper-address limits apply as on every route; on top, one person may ask\nfor 5 a minute and 30 an hour (`429 statement_rate_limited`, counted\nhere, after the token is verified), and two statements are built at\nonce in the process (`503 statement_busy` after 5 s of waiting).",
         "tags": [
           "MoneyStatement"
         ],
@@ -25519,7 +25539,9 @@
               "phone_held_by_other_identity",
               "reset_codes_exhausted",
               "device_approval_refused",
-              "statement_too_large"
+              "statement_too_large",
+              "statement_rate_limited",
+              "statement_busy"
             ],
             "type": "string"
           },
