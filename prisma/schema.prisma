@@ -280,6 +280,39 @@ model UserProfile {
   @@index([accountType])
 }
 
+/// The profile fields the Me screens show beyond UserProfile's own (ME-05):
+/// where the person is, their skills and what they are open to, their Threads
+/// handle and the order of their social links.
+///
+/// ITS OWN TABLE, NOT MORE COLUMNS ON UserProfile. GET /users/me and
+/// PATCH /users/me return the whole UserProfile row, so a column added there
+/// would widen two live responses the web reads. A table of its own widens
+/// nothing: these fields are served by their own routes
+/// (`/users/me/profile-fields`, `/users/:wawuId/profile-fields`), and an
+/// account that never sets one has no row here at all.
+///
+/// No relation to UserProfile on purpose: it is keyed by the same id and
+/// read together, but a row here must not depend on, or be created by, a
+/// profile row. Everything on it is public, as M33 draws it for a visitor.
+model ProfileDetails {
+  wawuUserId    String   @id
+  /// Where this person is, written the way they write it ("Lagos, Nigeria").
+  /// FREE TEXT: the product keeps no list of places.
+  location      String?
+  /// Skills and expertise chips, separate from UserProfile.interests (which
+  /// decide where somebody appears in Explore).
+  skills        String[] @default([])
+  /// What this person is open to ("Brand films", "Workshops"), as chips.
+  openTo        String[] @default([])
+  /// Threads handle, stored bare (no "@") like the other handles.
+  threadsHandle String?
+  /// The order the person wants their social links shown above the follower
+  /// count: platform keys, first to last. Empty means the default order.
+  socialOrder   String[] @default([])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
 /// One role on somebody's profile: what they did, where, and when.
 ///
 /// WHY A TABLE AND NOT A JSON COLUMN. Each row is independently editable and
@@ -664,7 +697,7 @@ model ContentFrame {
 
 /// One person shared one piece on one day (HOME-04). A share count is the
 /// number of rows; no counter column on ContentPiece, because a new column
-/// there would widen every live content response (protected-registry H-1).
+/// there would widen every live content response (protected route registry, entry H-1).
 model ContentShare {
   id            String       @id @default(uuid())
   contentId     String

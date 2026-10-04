@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Inject,
   Injectable,
@@ -30,6 +31,9 @@ import { netOfCommission } from '../common/money';
 import { NotificationService } from '../notification/notification.service';
 import { StorageService } from '../storage/storage.service';
 import type { VerifyUnlockDto } from './dto/verify-unlock.dto';
+import type { UpdateContentDto } from './dto/update-content.dto';
+import type { MyContentFilter } from './dto/my-content-query.dto';
+import type { MyContentCounts, MyContentItem } from './dto/my-content.view';
 
 /**
  * The commission rate, for every creator (conventions.md § Identity & format
@@ -579,6 +583,268 @@ export class ContentPieceService {
     });
 
     return this.toResponse(created, true);
+  }
+
+  // ── My content (ME-09): library, edit, send again ──────────────────────────
+
+  /**
+   * Sales and the latest rejection for a batch of the creator's own pieces,
+   * in two grouped reads. A rejection is reported only for a piece that is
+   * `rejected` right now: after a resubmit the stored decision is history.
+   */
+  private async toMyContentItems(
+    rows: ContentPieceRow[],
+  ): Promise<MyContentItem[]> {
+    if (rows.length === 0) return [];
+    const ids = rows.map((r) => r.id);
+    const rejectedIds = rows
+      .filter((r) => r.status === 'rejected')
+      .map((r) => r.id);
+
+    const [sales, rejections] = await Promise.all([
+      this.prisma.purchase.groupBy({
+        by: ['contentId'],
+        where: { contentId: { in: ids }, type: 'content', status: 'completed' },
+        _count: { _all: true },
+      }),
+      rejectedIds.length === 0
+        ? Promise.resolve([])
+        : this.prisma.adminContentReview.findMany({
+            where: { contentId: { in: rejectedIds }, decision: 'rejected' },
+            orderBy: { reviewedAt: 'desc' },
+            select: { contentId: true, reason: true, reviewedAt: true },
+          }),
+    ]);
+
+    const salesById = new Map<string, number>();
+    for (const row of sales) {
+      if (row.contentId) salesById.set(row.contentId, row._count._all);
+    }
+    // Newest first, so the first row seen per piece is the latest decision.
+    const latest = new Map<
+      string,
+      { reason: string | null; reviewedAt: Date }
+    >();
+    for (const row of rejections) {
+      if (!latest.has(row.contentId)) {
+        latest.set(row.contentId, {
+          reason: row.reason,
+          reviewedAt: row.reviewedAt,
+        });
+      }
+    }
+
+    // The owner always has the full file (resolveUnlockedSet counts the creator).
+    return Promise.all(
+      rows.map(async (row) => {
+        const rejection = latest.get(row.id);
+        return {
+          ...(await this.toResponse(row, true)),
+          salesCount: salesById.get(row.id) ?? 0,
+          rejectionReason: rejection?.reason ?? null,
+          rejectedAt: rejection?.reviewedAt ?? null,
+        };
+      }),
+    );
+  }
+
+  /** GET /content/mine/library: the creator's pieces, newest first, with sales and the reason. */
+  async listMyLibrary(
+    creatorWawuId: string,
+    status: MyContentFilter | undefined,
+    page: number,
+    perPage: number,
+  ): Promise<Paginated<MyContentItem>> {
+    const where = {
+      creatorWawuId,
+      status: status ? status : { not: 'removed' as const },
+    };
+    const [rows, total] = await this.prisma.$transaction([
+      this.prisma.contentPiece.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * perPage,
+        take: perPage,
+      }),
+      this.prisma.contentPiece.count({ where }),
+    ]);
+    return {
+      items: await this.toMyContentItems(rows),
+      currentPage: page,
+      perPage,
+      total,
+    };
+  }
+
+  /** GET /content/mine/library/counts: the numbers on the filter tabs. */
+  async myLibraryCounts(creatorWawuId: string): Promise<MyContentCounts> {
+    const grouped = await this.prisma.contentPiece.groupBy({
+      by: ['status'],
+      where: { creatorWawuId, status: { in: ['live', 'pending', 'rejected'] } },
+      _count: { _all: true },
+    });
+    const count = (s: string) =>
+      grouped.find((g) => g.status === s)?._count._all ?? 0;
+    const live = count('live');
+    const pending = count('pending');
+    const rejected = count('rejected');
+    return { all: live + pending + rejected, live, pending, rejected };
+  }
+
+  /** GET /content/mine/library/:id: one of the creator's own pieces (M26). */
+  async getMyPiece(id: string, creatorWawuId: string): Promise<MyContentItem> {
+    const row = await this.ownPieceOrThrow(id, creatorWawuId);
+    return (await this.toMyContentItems([row]))[0];
+  }
+
+  private async ownPieceOrThrow(
+    id: string,
+    creatorWawuId: string,
+  ): Promise<ContentPieceRow> {
+    const row = await this.prisma.contentPiece.findUnique({ where: { id } });
+    if (!row || row.status === 'removed') {
+      throw new NotFoundException('Content not found');
+    }
+    if (row.creatorWawuId !== creatorWawuId) {
+      throw new ForbiddenException('You can only change your own content.');
+    }
+    return row;
+  }
+
+  /**
+   * PATCH /content/:id: edit details or replace the file while the piece is
+   * `pending` (waiting for review) or `rejected` (to fix what the reviewer
+   * named). A live piece is not editable: the review approved those files and
+   * that text, and an edit would skip the review.
+   *
+   * Editing never changes `status`: a rejected piece stays rejected until the
+   * creator sends it again (`resubmit`), so a half-finished fix is never
+   * queued. The same price rules as `create` apply to the result of the edit,
+   * not only to the fields sent.
+   */
+  async updateMine(
+    id: string,
+    creatorWawuId: string,
+    dto: UpdateContentDto,
+  ): Promise<MyContentItem> {
+    const existing = await this.ownPieceOrThrow(id, creatorWawuId);
+    if (existing.status === 'live') {
+      throw new ConflictException(
+        'A live piece cannot be edited. Take it down to change it.',
+      );
+    }
+
+    const changes: Prisma.ContentPieceUpdateManyMutationInput = {};
+    if (dto.title !== undefined) changes.title = dto.title;
+    if (dto.description !== undefined) changes.description = dto.description;
+    if (dto.category !== undefined) changes.category = dto.category;
+    if (dto.specializations !== undefined)
+      changes.specializations = dto.specializations;
+    if (dto.tags !== undefined) changes.tags = dto.tags;
+    if (dto.accessType !== undefined) changes.accessType = dto.accessType;
+    if (dto.previewAsset !== undefined)
+      changes.previewAssetUrl = dto.previewAsset;
+    if (dto.fullAsset !== undefined) changes.fullAssetUrl = dto.fullAsset;
+
+    const accessType = dto.accessType ?? existing.accessType;
+    // Switching to free needs no price from the creator: free is ₦0.
+    const price = dto.price ?? (dto.accessType === 'free' ? 0 : existing.price);
+    changes.price = price;
+
+    if (Object.keys(changes).length === 1 && dto.price === undefined) {
+      throw new BadRequestException('Send at least one field to change.');
+    }
+    if (accessType === 'free' && price !== 0) {
+      throw new BadRequestException('Free content must be priced at ₦0.');
+    }
+    if (accessType === 'paid' && price <= 0) {
+      throw new BadRequestException(
+        'Paid content must have a price greater than ₦0.',
+      );
+    }
+    const previewAsset = dto.previewAsset ?? existing.previewAssetUrl;
+    const fullAsset = dto.fullAsset ?? existing.fullAssetUrl;
+    if (accessType === 'paid' && previewAsset === fullAsset) {
+      throw new BadRequestException(
+        'Paid content needs a separate free preview. previewAsset must not be the same file as fullAsset.',
+      );
+    }
+
+    // Conditional on the status read above: a reviewer approving the piece
+    // at this instant must win, and the edit must not land on a live piece.
+    const written = await this.prisma.contentPiece.updateMany({
+      where: { id, creatorWawuId, status: { in: ['pending', 'rejected'] } },
+      data: changes,
+    });
+    if (written.count === 0) {
+      throw new ConflictException(
+        'This piece was reviewed a moment ago. Open it again to see where it stands.',
+      );
+    }
+    return this.getMyPiece(id, creatorWawuId);
+  }
+
+  /**
+   * POST /content/:id/resubmit: send a rejected piece for review again.
+   *
+   * A rejection handed the slot back (admin reject), so sending it again
+   * claims one, conditionally and in the same transaction as the status flip,
+   * against the same allowance as an upload. At the cap it is refused with
+   * the same `upload_limit_reached` reason as POST /content. Pressing it
+   * twice is safe: a piece already `pending` is returned unchanged and no
+   * second slot is claimed.
+   */
+  async resubmit(id: string, creatorWawuId: string): Promise<MyContentItem> {
+    const existing = await this.ownPieceOrThrow(id, creatorWawuId);
+    if (existing.status === 'pending') {
+      return this.getMyPiece(id, creatorWawuId);
+    }
+    if (existing.status !== 'rejected') {
+      throw new ConflictException('Only a rejected piece can be sent again.');
+    }
+
+    const tickHeld = holdsTick(
+      await this.prisma.userProfile.findUnique({
+        where: { wawuUserId: creatorWawuId },
+        select: TICK_COLUMNS,
+      }),
+    );
+    const allowance = uploadAllowanceFor(tickHeld);
+
+    await this.prisma.$transaction(async (tx) => {
+      const flipped = await tx.contentPiece.updateMany({
+        where: { id, creatorWawuId, status: 'rejected' },
+        data: { status: 'pending' },
+      });
+      // Lost a race with a second tap: the winner already claimed the slot.
+      if (flipped.count === 0) return;
+
+      await tx.creatorState.upsert({
+        where: { wawuUserId: creatorWawuId },
+        create: { wawuUserId: creatorWawuId },
+        update: {},
+      });
+      const claimed = await tx.creatorState.updateMany({
+        where: {
+          wawuUserId: creatorWawuId,
+          slotsUsed: { lt: allowance.total },
+        },
+        data: { slotsUsed: { increment: 1 } },
+      });
+      if (claimed.count === 0) {
+        // Throwing rolls the status flip back with it.
+        throw new ForbiddenException({
+          message: `You have used all ${allowance.total} of your upload slots. Remove an item to free one up.`,
+          reason: {
+            code: 'upload_limit_reached',
+            uploadsAllowed: allowance.total,
+            tickHeld,
+            uploadsWithTick: TICK_UPLOADS,
+          },
+        });
+      }
+    });
+    return this.getMyPiece(id, creatorWawuId);
   }
 
   async listPurchases(
