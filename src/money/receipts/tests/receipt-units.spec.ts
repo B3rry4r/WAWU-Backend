@@ -30,6 +30,7 @@ import {
   IMAGE_SCALE,
   MAX_PRINTED,
   printable,
+  pdfPlacement,
   receiptCard,
   RECEIPT_WIDTH,
   receiptPdf,
@@ -42,6 +43,7 @@ import type { ReceiptView } from '../receipt-view.type';
 import { drawnWidth } from './drawn-width';
 import { D3_FORMS, visibleDigits } from './d3-forms';
 import { PNG } from './png-rows';
+import { OTHER_DIGITS } from '../unicode-digits.generated';
 
 /** Receipts (WALLET-18) without a server: the code, the words, the drawing. */
 
@@ -652,6 +654,136 @@ describe('drawing slots (round 3)', () => {
     expect(settings('4').renderConcurrency).toBe(4);
     expect(() => settings('0')).toThrow();
     expect(() => settings('9')).toThrow();
+  });
+});
+
+describe('every Unicode digit (round 4, lead ruling)', () => {
+  it('every character with a single-digit numeric value folds to that digit, and five of them are masked as a number', () => {
+    // The decimal digits (\p{Nd}) of the runtime's Unicode, by value...
+    let decimals = 0;
+    for (let cp = 0; cp <= 0x10ffff; cp += 1) {
+      if (cp >= 0xd800 && cp <= 0xdfff) continue;
+      const ch = String.fromCodePoint(cp);
+      if (!/\p{Nd}/u.test(ch)) continue;
+      decimals += 1;
+      let start = cp;
+      while (/\p{Nd}/u.test(String.fromCodePoint(start - 1))) start -= 1;
+      const v = String((cp - start) % 10);
+      expect({ cp, folded: foldDigits(ch) }).toEqual({ cp, folded: v });
+      expect({ cp, masked: maskDigits(`MTN ${ch.repeat(6)}`) }).toEqual({
+        cp,
+        masked: `MTN •••• ${v.repeat(4)}`,
+      });
+    }
+    expect(decimals).toBeGreaterThan(600);
+    // ...and every other number character with such a value, from the UCD.
+    expect(OTHER_DIGITS.length).toBeGreaterThan(450);
+    for (const [cp, value] of OTHER_DIGITS) {
+      const ch = String.fromCodePoint(cp);
+      expect({ cp, number: /\p{N}/u.test(ch) }).toEqual({ cp, number: true });
+      expect({ cp, folded: foldDigits(ch) }).toEqual({
+        cp,
+        folded: String(value),
+      });
+      expect({ cp, masked: maskDigits(`MTN ${ch.repeat(6)}`) }).toEqual({
+        cp,
+        masked: `MTN •••• ${String(value).repeat(4)}`,
+      });
+    }
+  });
+
+  it('a fraction or a number of 10 or more is not a digit', () => {
+    expect(foldDigits('⑩')).toBe('10');
+    expect(OTHER_DIGITS.some(([cp]) => cp === 0x2469)).toBe(false); // ⑩
+    expect(OTHER_DIGITS.some(([cp]) => cp === 0xbd)).toBe(false); // ½
+  });
+});
+
+describe('the PDF page (round 4, D5)', () => {
+  const W500 = 'W'.repeat(500);
+  /** The verifier's refWide row: an out row, both names 500 wide letters, a 200-W reference. */
+  const refWide = (): ReceiptDocument =>
+    receiptDocument(
+      view(
+        tx({
+          direction: 'out',
+          category: 'transfer',
+          amountKobo: 2500000,
+          fee: { providerFeeKobo: 4000, wawuFeeKobo: 2500, totalFeeKobo: 6500 },
+          totalKobo: 2506500,
+          description: 'Transfer',
+          reference: 'W'.repeat(200),
+          counterparty: {
+            kind: 'bank_account',
+            name: W500,
+            avatarUrl: null,
+            wawuUserId: null,
+            bankName: 'M'.repeat(500),
+            accountNumberLast4: '6789',
+          },
+        }),
+        'https://hub.example.test/api/hub/r/T1P97ZQAK3MP',
+      ),
+    );
+
+  it("the verifier's refWide receipt fits the one A4 page, footer and link included", async () => {
+    const doc = refWide();
+    const card = receiptCard(doc);
+    const at = pdfPlacement(card.height);
+    expect(at.scale).toBeLessThan(1.25);
+    expect(at.y).toBeGreaterThanOrEqual(36);
+    expect(at.y + at.h).toBeLessThanOrEqual(A4.height);
+    const pdf = (await receiptPdf(doc, new Date())).toString('latin1');
+    // Where the picture is drawn, from the page's own content stream.
+    const m = /q ([\d.]+) 0 0 ([\d.]+) ([\d.]+) ([\d.]+) cm \/Im1 Do Q/.exec(
+      pdf,
+    )!;
+    const [w, h, x, y] = m.slice(1).map(Number);
+    expect(x).toBeGreaterThanOrEqual(0);
+    expect(y).toBeGreaterThanOrEqual(0);
+    expect(x + w).toBeLessThanOrEqual(A4.width);
+    expect(y + h).toBeLessThanOrEqual(A4.height);
+    // The footer's link sits on the page too.
+    const r = /\/Rect \[([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+)\]/
+      .exec(pdf)!
+      .slice(1)
+      .map(Number);
+    expect(r[1]).toBeGreaterThanOrEqual(0);
+    expect(r[3]).toBeLessThanOrEqual(A4.height);
+    expect(r[1]).toBeGreaterThanOrEqual(y);
+  });
+
+  it('an ordinary receipt keeps its full size, 72 pt from the top', () => {
+    const at = pdfPlacement(receiptCard(receiptDocument(view(tx()))).height);
+    expect(at.scale).toBe(1.25);
+    expect(A4.height - (at.y + at.h)).toBe(72);
+  });
+});
+
+describe('each line in its own box (round 4, R3)', () => {
+  it('a line of characters the font lacks (emoji) leaves both side margins of the image blank', async () => {
+    const png = await receiptPng({
+      ...receiptDocument(view(tx())),
+      lines: [
+        { label: 'From', value: '👩‍👩‍👧‍👦'.repeat(60) + ' 🇳🇬'.repeat(30) },
+        { label: 'Bank', value: '🏦'.repeat(200) },
+      ],
+    });
+    const img = PNG(png);
+    const stride = img.width * 4 + 1;
+    const raw = img.rows(0, img.height);
+    const margin = 20 * IMAGE_SCALE - 2; // PAD_X, less the antialiasing pixel
+    let inked = 0;
+    for (let y = 0; y < img.height; y += 1) {
+      for (const x of [
+        ...Array(margin).keys(),
+        ...Array.from({ length: margin }, (_, i) => img.width - 1 - i),
+      ]) {
+        const at = y * stride + 1 + x * 4;
+        if (raw[at] < 250 || raw[at + 1] < 250 || raw[at + 2] < 250) inked += 1;
+      }
+    }
+    expect(inked).toBe(0);
   });
 });
 

@@ -54,7 +54,32 @@ export const IMAGE_SCALE = 3;
 export const A4 = { width: 595.28, height: 841.89 } as const;
 const PDF_CARD_SCALE = 1.25;
 const PDF_TOP = 72;
+/** The least room left under the receipt on the page. */
+const PDF_BOTTOM = 36;
 const PDF_DPI = 200;
+
+/**
+ * Where the receipt goes on the A4 page, in PDF points (origin bottom
+ * left): 1.25 times its drawn size, 72 pt from the top, unless that would
+ * run past PDF_BOTTOM; then it is scaled down to fit, so the whole receipt,
+ * the reference's last line and the footer included, is always on the one
+ * page (round 4, D5).
+ */
+export function pdfPlacement(cardHeight: number): {
+  scale: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+} {
+  const scale = Math.min(
+    PDF_CARD_SCALE,
+    (A4.height - PDF_TOP - PDF_BOTTOM) / cardHeight,
+  );
+  const w = RECEIPT_WIDTH * scale;
+  const h = cardHeight * scale;
+  return { scale, x: (A4.width - w) / 2, y: A4.height - PDF_TOP - h, w, h };
+}
 
 /** The repo's root: the folder above this file that holds package.json (src/ in tests, dist/src/ when built). */
 function repoRoot(): string {
@@ -447,8 +472,8 @@ export async function receiptPdf(
   createdAt: Date,
 ): Promise<Buffer> {
   const card = receiptCard(doc);
-  const cardW = RECEIPT_WIDTH * PDF_CARD_SCALE;
-  const cardH = card.height * PDF_CARD_SCALE;
+  const at = pdfPlacement(card.height);
+  const cardW = at.w;
   const left = (A4.width - cardW) / 2;
   // Only the receipt is a picture; the page around it is the PDF's own
   // white, and its edge a drawn line. Half the pixels of drawing the page.
@@ -477,8 +502,8 @@ export async function receiptPdf(
     ? {
         x0: left,
         x1: left + cardW,
-        y0: A4.height - (PDF_TOP + card.footer.bottom * PDF_CARD_SCALE),
-        y1: A4.height - (PDF_TOP + card.footer.top * PDF_CARD_SCALE),
+        y0: A4.height - (PDF_TOP + card.footer.bottom * at.scale),
+        y1: A4.height - (PDF_TOP + card.footer.top * at.scale),
         uri: doc.url,
       }
     : null;
@@ -487,7 +512,7 @@ export async function receiptPdf(
     image,
     page.width,
     page.height,
-    { x: left, y: A4.height - PDF_TOP - cardH, w: cardW, h: cardH },
+    { x: at.x, y: at.y, w: at.w, h: at.h },
     link,
     createdAt,
   );

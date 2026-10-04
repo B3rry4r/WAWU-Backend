@@ -33,6 +33,7 @@ import { LedgerService } from '../../ledger/ledger.service';
 import { MoneyModule } from '../../money.module';
 import { newReceiptCode } from '../receipt-code';
 import { ReceiptService } from '../receipt.service';
+import { DrawLimiter, RECEIPT_BUSY_MESSAGE } from '../receipt-draw-limiter';
 import { D3_FORMS, visibleDigits } from './d3-forms';
 import { RECEIPT_NOT_FOUND_PAGE } from '../receipt-page';
 import type { ReceiptView } from '../receipt-view.type';
@@ -745,6 +746,47 @@ describe('Receipts (WALLET-18) over HTTP', () => {
       expect(receipts.drawing.slots).toBe(2);
       expect(receipts.drawing.peak).toBe(2);
       expect(receipts.drawing.inFlight).toBe(0);
+    });
+
+    it('when no drawing slot comes free in time the answer is 503 with Retry-After and a sentence, and the slot is not lost (round 4)', async () => {
+      const p = await withWallet('Ada Obi');
+      const id = await record(p, {
+        direction: 'in',
+        status: 'completed',
+        category: 'transfer',
+        amountKobo: 1000,
+        totalKobo: 1000,
+        counterparty: {
+          kind: 'bank_account',
+          name: 'Bayo Ade',
+          accountNumber: '1234567890',
+          bankName: 'Opay',
+        },
+      });
+      const held = receipts as unknown as { drawing: DrawLimiter };
+      const real = held.drawing;
+      held.drawing = new DrawLimiter(1, 100);
+      let release!: () => void;
+      const busy = held.drawing.run(
+        () => new Promise<void>((r) => (release = r)),
+      );
+      try {
+        for (const kind of ['image', 'pdf'] as const) {
+          const res = await drawn(p, id, kind).expect(503);
+          expect(res.headers['retry-after']).toBe('5');
+          const env = JSON.parse(
+            (res.body as Buffer).toString(),
+          ) as Envelope<null>;
+          expect(env.message).toBe(RECEIPT_BUSY_MESSAGE);
+          expect(env.data).toBeNull();
+        }
+      } finally {
+        release();
+        await busy;
+        held.drawing = real;
+      }
+      const ok = await drawn(p, id, 'image').expect(200);
+      expect(ok.headers['retry-after']).toBeUndefined();
     });
 
     it('is throttled per address: 10 a minute, the 11th is 429, and another address is unaffected', async () => {

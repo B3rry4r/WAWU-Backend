@@ -8,6 +8,7 @@ import type {
   TransactionView,
   TransferStatus,
 } from '../money-view.type';
+import { OTHER_DIGITS } from './unicode-digits.generated';
 import type {
   ReceiptLineView,
   ReceiptPartyView,
@@ -241,13 +242,25 @@ function digitValue(ch: string): number {
   return (cp - start) % 10;
 }
 
+/** Every other character with a single-digit numeric value (No, Nl), from the UCD. */
+const OTHER_DIGIT_VALUES = new Map<number, number>(OTHER_DIGITS);
+
 /**
- * Text with every digit written 0 to 9: NFKC first (full-width,
- * superscript, circled and mathematical digits become ordinary ones), then
- * every other decimal digit by its value.
+ * Text with every digit written 0 to 9. A "digit" is any character whose
+ * Unicode numeric value is a whole number from 0 to 9 (lead ruling, round
+ * 4): every decimal digit (`\p{Nd}`, any script, by its value) and every
+ * other number character with such a value (circled, negative circled,
+ * double circled, dingbat, Ethiopic, Roman numerals and the rest, from the
+ * Unicode Character Database: unicode-digits.generated.ts). Those are
+ * folded first, then NFKC (full-width, superscript and mathematical digits
+ * become ordinary ones), then every decimal digit by its value.
  */
 export function foldDigits(text: string): string {
   return text
+    .replace(/\p{N}/gu, (ch) => {
+      const v = OTHER_DIGIT_VALUES.get(ch.codePointAt(0)!);
+      return v === undefined ? ch : String(v);
+    })
     .normalize('NFKC')
     .replace(/\p{Nd}/gu, (d) =>
       d >= '0' && d <= '9' ? d : String(digitValue(d)),
@@ -255,13 +268,15 @@ export function foldDigits(text: string): string {
 }
 
 /**
- * One number, however it is written: digits joined by anything that is not
- * a letter (spaces, punctuation, dashes, dots, underscores, commas,
- * symbols, zero-width and other format characters), or by a single x or X
- * between two digits ("0803x123x4567"). A leading + or ( belongs to it.
- * Digits split by other letters are separate numbers.
+ * One number, however it is written: digit groups joined by any run of
+ * characters that are not letters (spaces, punctuation, dashes, dots,
+ * underscores, commas, symbols, zero-width and other format characters),
+ * which may also hold the letter x or X, once or more ("0803x123x4567",
+ * "0803 x 123 x 4567", "0803xx123xx4567", "0803 X 123-4567"; lead ruling,
+ * round 4). A leading + or ( belongs to it. Digits split by any other
+ * letter are separate numbers.
  */
-const NUMBER = /[+(]?\d(?:(?:[^\p{L}\d]|(?<=\d)[xX](?=\d))*\d)*/gu;
+const NUMBER = /[+(]?\d(?:(?:[^\p{L}\d]|[xX])*\d)*/gu;
 
 /**
  * Any phone-, meter- or account-like number keeps only its last 4 digits:

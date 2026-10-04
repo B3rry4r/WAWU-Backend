@@ -25,6 +25,30 @@ export const D3_FORMS: [string, string][] = [
   ['GTBank 012 345 6789', 'GTBank •••• 6789'],
   ['GTBank ０１２３４５６７８９', 'GTBank •••• 6789'],
   ['GTBank acct0123x456x789', 'GTBank acct•••• 6789'],
+  // Round 3's verifier (vw18r3/probe/seed3.js, rows d3b_*):
+  ['MTN ⓿❽⓿❸❶❷❸❹❺❻❼', 'MTN •••• 4567'],
+  ['MTN ➇➂➀➁➂➃➄➅➆', 'MTN •••• 4567'],
+  ['MTN ⓼⓷⓵⓶⓷⓸⓹⓺⓻', 'MTN •••• 4567'],
+  ['MTN ፰፫፩፪፫፬፭፮፯', 'MTN •••• 4567'],
+  ['MTN 0803 x 123 x 4567', 'MTN •••• 4567'],
+  ['MTN 0803x 1234567', 'MTN •••• 4567'],
+  ['MTN 0803X123X4567', 'MTN •••• 4567'],
+  ['MTN 0803xx123xx4567', 'MTN •••• 4567'],
+  ['MTN 0803 X 123-4567', 'MTN •••• 4567'],
+  ['MTN 0\u03018\u03010\u03013\u0301 1\u03012\u03013 4567', 'MTN •••• 4567'],
+  ['MTN 0803\u200f123\u200f4567', 'MTN •••• 4567'],
+  [
+    'MTN \u20660803\u2069\u2067123\u2069\u20684567\u2069',
+    'MTN \u2066•••• 4567\u2069',
+  ],
+  ['MTN ٠٨٠3 １２３ ४५६७', 'MTN •••• 4567'],
+  ['MTN 0٨0۳-१２3–4⁵67', 'MTN •••• 4567'],
+  ['MTN + 234 803 123 4567', 'MTN + •••• 4567'],
+  ['MTN 0803½1234567', 'MTN •••• 4567'],
+  ['MTN 0803…123…4567', 'MTN •••• 4567'],
+  ['GTBank ⓿❶❷❸❹❺❻❼❽❾', 'GTBank •••• 6789'],
+  // Out of scope by ruling: digits split by a letter other than x stay separate numbers.
+  ['MTN 0803 Ada 1234567', 'MTN 0803 Ada •••• 4567'],
   ['Shop 12 Lekki Phase 1', 'Shop 12 Lekki Phase 1'],
 ];
 
