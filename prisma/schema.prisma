@@ -581,6 +581,8 @@ model ContentPiece {
   frames    ContentFrame[]
   viewedBy  ContentView[]
   sharedBy  ContentShare[]
+  ratings   ContentRating[]
+  detail    ContentDetail?
 
   @@index([creatorWawuId])
   @@index([status])
@@ -758,6 +760,48 @@ model ContentShare {
 
   @@unique([contentId, sharerWawuId, sharedOn])
   @@index([sharerWawuId])
+}
+
+/// One person's star rating of one piece (HOME-06). The unique (user, piece)
+/// key is what makes a rating fair: a second rating from the same person
+/// replaces the first instead of adding to it, and two taps at once cannot
+/// write two rows. The average and the count are always computed from these
+/// rows; `ContentPiece.ratingPct` is only a cache of that average (kept
+/// because the ranking and every existing response already read it), written
+/// in the same transaction as the row. The 1 to 5 range is also a CHECK in
+/// the migration, so no code path can store anything else.
+model ContentRating {
+  id         String       @id @default(uuid())
+  userWawuId String
+  contentId  String
+  content    ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  stars      Int
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @default(now()) @updatedAt
+
+  @@unique([userWawuId, contentId])
+  @@index([userWawuId])
+  @@index([contentId])
+}
+
+/// What the content detail screen shows that ContentPiece does not hold
+/// (HOME-06). A separate one-to-one row, not new columns on ContentPiece,
+/// because ContentPiece is spread into every existing content response and a
+/// new column there would widen GET /content and GET /content/:id (protected
+/// route registry, entry H-1). A piece with no row here has no free preview
+/// and reports its creation time as its last update.
+/// Exactly one `free*` column applies to a piece, chosen by its contentType:
+/// pages for a pdf, seconds for a video or audio file, lessons for a course
+/// (the first N lessons by order). They are the creator's declaration of what
+/// the free preview file holds; the server cannot open the file to check.
+model ContentDetail {
+  contentId          String       @id
+  content            ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  freePreviewPages   Int?
+  freePreviewSeconds Int?
+  freePreviewLessons Int?
+  /// Set when the creator changes the piece or its preview.
+  contentUpdatedAt   DateTime?
 }
 
 /// One person looked at one profile, on one day.
@@ -3916,6 +3960,37 @@ model FintavaLedgerReference {
   @@id([accountNumber, direction, value])
   @@index([entryId])
   @@index([value])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// RECEIPTS (task WALLET-18)
+///
+/// A receipt is one ledger row (FintavaLedgerEntry) its owner chose to
+/// share, under a short code anyone can check at wawu/r/<code> (W41 to W43,
+/// W12, W27). One code per row, made the first time the owner asks and the
+/// same every time after. The code is 12 characters drawn at random
+/// (60 bits, never sequential and never derived from an id), so the public
+/// page cannot be walked by guessing.
+///
+/// Nothing about the movement is copied here: the public page and the image
+/// and PDF read the ledger row when they are asked, so a status Fintava
+/// moves (pending to completed, a reversal) shows on the receipt as it
+/// stands. A row that is gone, or no longer on its owner's wallet, makes
+/// its code a plain miss.
+/// ─────────────────────────────────────────────────────────────────────────
+model MoneyReceipt {
+  id            String   @id @default(uuid())
+  /// The public code: 12 characters of Crockford base 32, upper case.
+  code          String   @unique
+  /// The ledger row this receipt shows (FintavaLedgerEntry.id).
+  entryId       String   @unique
+  /// Whose row it is: the wallet's owner, who made the code.
+  wawuUserId    String
+  /// The wallet (NUBAN) the row is on, as the row says.
+  accountNumber String
+  createdAt     DateTime @default(now())
+
+  @@index([wawuUserId])
 }
 
 /// ─────────────────────────────────────────────────────────────────────────

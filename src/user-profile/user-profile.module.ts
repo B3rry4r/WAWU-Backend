@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
+import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 import { ContentPieceModule } from '../content-piece/content-piece.module';
 import { StorageModule } from '../storage/storage.module';
 import { WalletModule } from '../wallet/wallet.module';
@@ -37,8 +38,7 @@ import { ProfileAudienceService } from './profile-audience.service';
     // registration). The wallet module owns every Flutterwave call; nothing
     // here talks to Flutterwave itself.
     WalletModule,
-    // BlockedAccountService, so a hidden person's works and education answer
-    // 404 like a missing one (ME-16).
+    // BlockedAccountService, so a hidden profile answers 404 (SETTINGS-04).
     BlockedAccountModule,
   ],
   controllers: [

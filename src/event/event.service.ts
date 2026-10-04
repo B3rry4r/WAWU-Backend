@@ -19,6 +19,7 @@ import type {
   EventSpeakerModel,
 } from '../../generated/prisma/models';
 import type { PaginationQueryDto } from '../common/dto/pagination.dto';
+import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import {
   initialsFor,
   type EventGoingView,
@@ -64,6 +65,7 @@ export class EventService {
     private readonly prisma: PrismaService,
     private readonly verification: VerificationStateService,
     private readonly pricing: VerificationPricingService,
+    private readonly blockedAccounts: BlockedAccountService,
   ) {}
 
   /**
@@ -165,8 +167,17 @@ export class EventService {
     userWawuId: string,
     query: ListEventsQueryDto,
   ): Promise<Paginated<EventView>> {
+    // SETTINGS-04: events hosted by somebody the caller blocked, or who
+    // blocked the caller, are not listed, and not counted. `?host=` for a
+    // hidden host is an empty list, not a way around the filter.
+    const hidden = await this.blockedAccounts.hiddenFrom(userWawuId);
     const where = {
       status: 'published' as const,
+      hostWawuId: query.host
+        ? hidden.includes(query.host)
+          ? { in: [] as string[] }
+          : query.host
+        : { notIn: hidden },
       ...(query.format ? { format: query.format } : {}),
       ...(query.type ? { type: query.type } : {}),
       // The column, the submit form and the browse chips all existed; only
@@ -177,7 +188,6 @@ export class EventService {
       // One host's published events. `status: published` above still applies,
       // so this can never leak a pending or rejected submission the way
       // /events/mine (which returns every status to its owner) would.
-      ...(query.host ? { hostWawuId: query.host } : {}),
       ...timeWindow(query.view),
     };
 
@@ -504,6 +514,12 @@ export class EventService {
     ) {
       throw new NotFoundException('Event not found.');
     }
+    // SETTINGS-04: an event hosted by a hidden account is a 404 too.
+    await this.blockedAccounts.assertVisible(
+      userWawuId,
+      event.hostWawuId,
+      'Event not found.',
+    );
     return event;
   }
 
