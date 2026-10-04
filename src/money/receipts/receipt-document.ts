@@ -8,7 +8,7 @@ import type {
   TransactionView,
   TransferStatus,
 } from '../money-view.type';
-import { OTHER_DIGITS } from './unicode-digits.generated';
+import { OTHER_DIGITS, OTHER_NUMBERS } from './unicode-digits.generated';
 import type {
   ReceiptLineView,
   ReceiptPartyView,
@@ -242,30 +242,28 @@ function digitValue(ch: string): number {
   return (cp - start) % 10;
 }
 
-/** Every other character with a single-digit numeric value (No, Nl), from the UCD. */
-const OTHER_DIGIT_VALUES = new Map<number, number>(OTHER_DIGITS);
+/** The number characters that are not decimal digits, from one Unicode version (unicode-digits.generated.ts). */
+export interface DigitTable {
+  /** Every No or Nl character with a single-digit value, as [code point, value]. */
+  digits: ReadonlyArray<readonly [number, number]>;
+  /** Every other No or Nl character, as [first, last] code point ranges. */
+  otherNumbers: ReadonlyArray<readonly [number, number]>;
+}
+
+/** The table this build ships, from the Unicode Character Database. */
+export const UNICODE_DIGIT_TABLE: DigitTable = {
+  digits: OTHER_DIGITS,
+  otherNumbers: OTHER_NUMBERS,
+};
 
 /**
- * Text with every digit written 0 to 9. A "digit" is any character whose
- * Unicode numeric value is a whole number from 0 to 9 (lead ruling, round
- * 4): every decimal digit (`\p{Nd}`, any script, by its value) and every
- * other number character with such a value (circled, negative circled,
- * double circled, dingbat, Ethiopic, Roman numerals and the rest, from the
- * Unicode Character Database: unicode-digits.generated.ts). Those are
- * folded first, then NFKC (full-width, superscript and mathematical digits
- * become ordinary ones), then every decimal digit by its value.
+ * Stands for a number character the table does not know while a text is
+ * masked: a noncharacter, which Unicode keeps for a program's own use and
+ * never assigns. One already in the text becomes U+FFFD first, so it can
+ * never be read as a number.
  */
-export function foldDigits(text: string): string {
-  return text
-    .replace(/\p{N}/gu, (ch) => {
-      const v = OTHER_DIGIT_VALUES.get(ch.codePointAt(0)!);
-      return v === undefined ? ch : String(v);
-    })
-    .normalize('NFKC')
-    .replace(/\p{Nd}/gu, (d) =>
-      d >= '0' && d <= '9' ? d : String(digitValue(d)),
-    );
-}
+const UNKNOWN = '\ufdd0';
+const UNKNOWN_ALL = /\ufdd0/g;
 
 /**
  * One number, however it is written: digit groups joined by any run of
@@ -274,25 +272,96 @@ export function foldDigits(text: string): string {
  * which may also hold the letter x or X, once or more ("0803x123x4567",
  * "0803 x 123 x 4567", "0803xx123xx4567", "0803 X 123-4567"; lead ruling,
  * round 4). A leading + or ( belongs to it. Digits split by any other
- * letter are separate numbers.
+ * letter are separate numbers. A number character the table does not know
+ * (UNKNOWN) counts as a digit.
  */
-const NUMBER = /[+(]?\d(?:(?:[^\p{L}\d]|[xX])*\d)*/gu;
+const NUMBER = /[+(]?[\d\ufdd0](?:(?:[^\p{L}\d\ufdd0]|[xX])*[\d\ufdd0])*/gu;
+
+/** Every digit of a NUMBER run, in order: 0 to 9, or UNKNOWN. */
+const NOT_A_DIGIT = /[^\d\ufdd0]/gu;
 
 /**
- * Any phone-, meter- or account-like number keeps only its last 4 digits:
- * a number of 5 or more digits, in any script and with any separators
- * (NUMBER), becomes "•••• 4567". Text that is not a number keeps its
- * letters (NFKC-normalised). A date or an amount written into a name is a
- * number too and is reshaped the same way (Default (agent), owner may
- * override): only names are passed here, never the page's own amount,
- * date or reference.
+ * Folding and masking over one digit table. The shipped functions below
+ * use UNICODE_DIGIT_TABLE; a test can pass a table with an entry missing to
+ * act out a runtime whose Unicode is newer than the table.
  */
-export function maskDigits(text: string): string {
-  return foldDigits(text).replace(NUMBER, (run) => {
-    const digits = run.replace(/\D/g, '');
-    return digits.length >= 5 ? `•••• ${digits.slice(-4)}` : run;
-  });
+export function digitMasking(table: DigitTable): {
+  foldDigits: (text: string) => string;
+  maskDigits: (text: string) => string;
+} {
+  const values = new Map<number, number>(table.digits);
+  const known = new Set<number>(values.keys());
+  for (const [first, last] of table.otherNumbers)
+    for (let cp = first; cp <= last; cp += 1) known.add(cp);
+
+  /** One number character: its digit, itself (a decimal digit, or known not to be a digit), or UNKNOWN. */
+  const digitOf = (ch: string): string => {
+    const cp = ch.codePointAt(0)!;
+    const v = values.get(cp);
+    if (v !== undefined) return String(v);
+    if (DECIMAL.test(ch)) return ch;
+    return known.has(cp) ? ch : UNKNOWN;
+  };
+  /**
+   * Text with every digit written 0 to 9, and UNKNOWN for each number
+   * character the table does not know. A "digit" is any character whose
+   * Unicode numeric value is a whole number from 0 to 9 (lead ruling, round
+   * 4): every decimal digit (`\p{Nd}`, any script, by its value) and every
+   * other number character with such a value (circled, negative circled,
+   * double circled, dingbat, Ethiopic, Roman, Kaktovik numerals and the
+   * rest, from the table). Those are folded first, then NFKC (full-width,
+   * superscript and mathematical digits become ordinary ones), then every
+   * decimal digit by its value. Fail closed (lead ruling, round 5): a
+   * number character the runtime knows (`\p{N}`) that is neither a decimal
+   * digit nor in the table (it came with a newer Unicode than the table) is
+   * taken to be a digit whose value is not known.
+   */
+  const fold = (text: string): string =>
+    text
+      .replace(UNKNOWN_ALL, '\ufffd')
+      .replace(/\p{N}/gu, digitOf)
+      .normalize('NFKC')
+      .replace(/\p{N}/gu, (ch) => {
+        if (ch >= '0' && ch <= '9') return ch;
+        return DECIMAL.test(ch) ? String(digitValue(ch)) : digitOf(ch);
+      });
+
+  return {
+    /** fold, with each number character the table does not know shown as •. */
+    foldDigits: (text) => fold(text).replace(UNKNOWN_ALL, '•'),
+
+    /**
+     * Any phone-, meter- or account-like number keeps only its last 4
+     * digits: a number of 5 or more digits, in any script and with any
+     * separators (NUMBER), becomes "•••• 4567". Text that is not a number
+     * keeps its letters (NFKC-normalised). A date or an amount written into
+     * a name is a number too and is reshaped the same way (Default (agent),
+     * owner may override): only names are passed here, never the page's
+     * own amount, date or reference.
+     *
+     * A number character the table does not know is never shown: it is
+     * counted in its number like any digit, and wherever it would be shown
+     * (one of the last 4, or in a number of fewer than 5 digits) it is a •
+     * instead, so the last 4 keep their places and no other digit stands in
+     * for it ("•••• 4•67"; Default (agent), owner may override).
+     */
+    maskDigits: (text) =>
+      fold(text)
+        .replace(NUMBER, (run) => {
+          const digits = run.replace(NOT_A_DIGIT, '');
+          return digits.length >= 5 ? `•••• ${digits.slice(-4)}` : run;
+        })
+        .replace(UNKNOWN_ALL, '•'),
+  };
 }
+
+const SHIPPED_MASKING = digitMasking(UNICODE_DIGIT_TABLE);
+
+/** Text with every digit written 0 to 9 (digitMasking, over the shipped table). */
+export const foldDigits = SHIPPED_MASKING.foldDigits;
+
+/** Every number of 5 or more digits as "•••• 4567" (digitMasking, over the shipped table). */
+export const maskDigits = SHIPPED_MASKING.maskDigits;
 
 /**
  * A person's name as the public page shows it: the first name and the

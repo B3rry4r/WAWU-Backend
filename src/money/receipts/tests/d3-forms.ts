@@ -50,6 +50,13 @@ export const D3_FORMS: [string, string][] = [
   // Lead ruling, round 4: digits split by a letter other than x are separate numbers.
   ['MTN 0803 Ada 1234567', 'MTN 0803 Ada •••• 4567'],
   ['Shop 12 Lekki Phase 1', 'Shop 12 Lekki Phase 1'],
+  // Round 4's verifier (vw18r4, finding 1): Unicode 15 to 17 digits, Kaktovik numerals and Yangqin signs.
+  ['MTN 𝋀𝋈𝋀𝋃𝋁𝋂𝋃𝋄𝋅𝋆𝋇', 'MTN •••• 4567'],
+  ['MTN 0803𝋁𝋂𝋃𝋄𝋅𝋆𝋇', 'MTN •••• 4567'],
+  ['GTBank 𝋀𝋁𝋂𝋃𝋄𝋅𝋆𝋇𝋈𝋉', 'GTBank •••• 6789'],
+  ['MTN 080312345𖿴𖿶', 'MTN •••• 4512'],
+  ['MTN 𝋀8𜳰3𝋁2𜳳4𝋅6𜳷', 'MTN •••• 4567'],
+  ['MTN 08031234𖿴𖿶𝋉', 'MTN •••• 4129'],
 ];
 
 /** The longest run of digits a text shows once digits are folded and everything but digits and • is ignored. */

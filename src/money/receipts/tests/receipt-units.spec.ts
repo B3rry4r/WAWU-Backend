@@ -11,6 +11,7 @@ import { verifyBase } from '../receipt-config';
 import { ReceiptSettings } from '../receipt-config';
 import { DrawLimiter, ReceiptBusyError } from '../receipt-draw-limiter';
 import {
+  digitMasking,
   foldDigits,
   headlineOf,
   maskDigits,
@@ -38,12 +39,16 @@ import {
   textWidth,
   wrap,
 } from '../receipt-render';
-import type { ReceiptDocument } from '../receipt-document';
+import type { DigitTable, ReceiptDocument } from '../receipt-document';
 import type { ReceiptView } from '../receipt-view.type';
 import { drawnWidth } from './drawn-width';
 import { D3_FORMS, visibleDigits } from './d3-forms';
 import { PNG } from './png-rows';
-import { OTHER_DIGITS } from '../unicode-digits.generated';
+import {
+  OTHER_DIGITS,
+  OTHER_NUMBERS,
+  UNICODE_DIGIT_VERSION,
+} from '../unicode-digits.generated';
 
 /** Receipts (WALLET-18) without a server: the code, the words, the drawing. */
 
@@ -696,6 +701,130 @@ describe('every Unicode digit (round 4, lead ruling)', () => {
     expect(foldDigits('⑩')).toBe('10');
     expect(OTHER_DIGITS.some(([cp]) => cp === 0x2469)).toBe(false); // ⑩
     expect(OTHER_DIGITS.some(([cp]) => cp === 0xbd)).toBe(false); // ½
+  });
+});
+
+describe('the digit table keeps up with the runtime (round 5)', () => {
+  /** "17.0" or "17.0.0" as [17, 0, 0]. */
+  const version = (v: string) =>
+    [...v.split('.').map(Number), 0, 0, 0].slice(0, 3);
+  const notOlder = (table: string, runtime: string) => {
+    const [a, b] = [version(table), version(runtime)];
+    const i = a.findIndex((n, k) => n !== b[k]);
+    return i === -1 || a[i] > b[i];
+  };
+  /** Every No or Nl character this runtime knows. */
+  const runtimeOthers = (): number[] => {
+    const out: number[] = [];
+    for (let cp = 0; cp <= 0x10ffff; cp += 1) {
+      if (cp >= 0xd800 && cp <= 0xdfff) continue;
+      if (/[\p{No}\p{Nl}]/u.test(String.fromCodePoint(cp))) out.push(cp);
+    }
+    return out;
+  };
+  /** The shipped table with one character left out, as a table one Unicode version behind would be. */
+  const without = (gone: number): DigitTable => ({
+    digits: OTHER_DIGITS.filter(([cp]) => cp !== gone),
+    otherNumbers: OTHER_NUMBERS.flatMap(([a, b]) =>
+      gone < a || gone > b
+        ? [[a, b] as const]
+        : [
+            ...(gone > a ? [[a, gone - 1] as const] : []),
+            ...(gone < b ? [[gone + 1, b] as const] : []),
+          ],
+    ),
+  });
+
+  it("the table's Unicode version is not older than the runtime's", () => {
+    expect(notOlder('17.0.0', '17.0')).toBe(true);
+    expect(notOlder('14.0.0', '17.0')).toBe(false);
+    expect(notOlder('17.0.0', '17.0.1')).toBe(false);
+    const runtime = process.versions.unicode ?? '';
+    expect(runtime).toMatch(/^\d+\.\d+/);
+    expect({
+      table: UNICODE_DIGIT_VERSION,
+      runtime,
+      notOlder: notOlder(UNICODE_DIGIT_VERSION, runtime),
+    }).toEqual({ table: UNICODE_DIGIT_VERSION, runtime, notOlder: true });
+  });
+
+  it('the table holds exactly the No and Nl characters of the runtime, so none is unknown today', () => {
+    const table = new Set<number>(OTHER_DIGITS.map(([cp]) => cp));
+    for (const [a, b] of OTHER_NUMBERS)
+      for (let cp = a; cp <= b; cp += 1) table.add(cp);
+    const runtime = runtimeOthers();
+    expect(runtime.filter((cp) => !table.has(cp))).toEqual([]);
+    expect(table.size).toBe(runtime.length);
+  });
+
+  it('the 12 digits of Unicode 15 to 17 fold to their value: Kaktovik 0 to 9 and the Yangqin signs 1 and 2', () => {
+    const added: [number, number][] = [
+      ...Array.from(
+        { length: 10 },
+        (_, v) => [0x1d2c0 + v, v] as [number, number],
+      ),
+      [0x16ff4, 1],
+      [0x16ff6, 2],
+    ];
+    for (const [cp, value] of added) {
+      const ch = String.fromCodePoint(cp);
+      expect({
+        cp,
+        entry: OTHER_DIGITS.some(([c, v]) => c === cp && v === value),
+      }).toEqual({
+        cp,
+        entry: true,
+      });
+      expect({ cp, folded: foldDigits(ch) }).toEqual({
+        cp,
+        folded: String(value),
+      });
+      expect({ cp, masked: maskDigits(`MTN ${ch.repeat(6)}`) }).toEqual({
+        cp,
+        masked: `MTN •••• ${String(value).repeat(4)}`,
+      });
+    }
+    // Kaktovik 10 and 19 are numbers of 10 or more: never folded to one digit.
+    expect(maskDigits('MTN \u{1d2ca} \u{1d2d3}')).toBe(
+      'MTN \u{1d2ca} \u{1d2d3}',
+    );
+  });
+
+  it('fail closed: a number character the table does not know is hidden, counted, and never one of the shown 4', () => {
+    // A table without Kaktovik one (U+1D2C1) and five (U+1D2C5) stands for a runtime one Unicode version ahead.
+    const one = 0x1d2c1;
+    const five = 0x1d2c5;
+    const older = without(one);
+    const behind = digitMasking({
+      digits: older.digits.filter(([cp]) => cp !== five),
+      otherNumbers: older.otherNumbers,
+    });
+    // Counted in its number: 11 digits, the last 4 known.
+    expect(behind.maskDigits('MTN 𝋀𝋈𝋀𝋃𝋁𝋂𝋃𝋄𝋅𝋆𝋇')).toBe('MTN •••• 4•67');
+    expect(behind.maskDigits('MTN 0803𝋁234567')).toBe('MTN •••• 4567');
+    // One of the last 4: its place is a •, and no other digit moves up into it.
+    expect(behind.maskDigits('MTN 𝋀8𜳰3𝋁2𜳳4𝋅6𜳷')).toBe('MTN •••• 4•67');
+    expect(behind.maskDigits('MTN 0803123456𝋁')).toBe('MTN •••• 456•');
+    // All unknown: nothing but •.
+    expect(behind.maskDigits('MTN 𝋁𝋁𝋁𝋁𝋁𝋁')).toBe('MTN •••• ••••');
+    // Fewer than 5 digits: still never shown.
+    expect(behind.maskDigits('Flat 𝋁, Shop 12𝋅')).toBe('Flat •, Shop 12•');
+    expect(behind.foldDigits('𝋀𝋁')).toBe('0•');
+    // A noncharacter already in the text is never read as a number.
+    expect(behind.maskDigits('MTN 0803﷐')).toBe('MTN 0803�');
+    expect(maskDigits('MTN 0803﷐')).toBe('MTN 0803�');
+  });
+
+  it('fail closed, for every No and Nl character: left out of the table, it is never shown', () => {
+    for (const cp of runtimeOthers()) {
+      const ch = String.fromCodePoint(cp);
+      const { maskDigits: mask } = digitMasking(without(cp));
+      expect({ cp, alone: mask(`MTN ${ch}`) }).toEqual({ cp, alone: 'MTN •' });
+      expect({ cp, run: mask(`MTN 0803${ch}2${ch}4567`) }).toEqual({
+        cp,
+        run: 'MTN •••• 4567',
+      });
+    }
   });
 });
 
