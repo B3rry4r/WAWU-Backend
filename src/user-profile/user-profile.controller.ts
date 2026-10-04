@@ -17,6 +17,8 @@ import { ContentPieceService } from '../content-piece/content-piece.service';
 import { UserProfileService } from './user-profile.service';
 import { UpdateUserProfileDto } from './dto/update-user-profile.dto';
 import { ProfileExperienceService } from './profile-experience.service';
+import { ProfileDetailsService } from './profile-details.service';
+import { UpdateProfileFieldsDto } from './dto/update-profile-fields.dto';
 import {
   CreateProfileExperienceDto,
   UpdateProfileExperienceDto,
@@ -45,6 +47,7 @@ export class UserProfileController {
     private readonly userProfileService: UserProfileService,
     private readonly contentPieceService: ContentPieceService,
     private readonly profileExperienceService: ProfileExperienceService,
+    private readonly profileDetailsService: ProfileDetailsService,
   ) {}
 
   @Get('me')
@@ -73,6 +76,31 @@ export class UserProfileController {
   @Get('me/profile-stats')
   getProfileStats(@CurrentUser() user: WawuJwtClaims) {
     return this.userProfileService.getProfileStats(user.sub);
+  }
+
+  /*
+    ── THE PROFILE FIELDS (ME-05) ───────────────────────────────────────────
+
+    Location, skills, "open to", the Threads handle, the order of the social
+    links and "member since". On routes of their own, and not as more keys on
+    `GET`/`PATCH /users/me` or the public profile, because those answers are
+    read by the web and stay exactly as they are.
+
+    Declared above the `:wawuId` routes for the reason `me/profile-stats`
+    gives. `me` takes the owner from the token and has no parameter that
+    could point it at anybody else.
+  */
+  @Get('me/profile-fields')
+  getMyProfileFields(@CurrentUser() user: WawuJwtClaims) {
+    return this.profileDetailsService.getMine(user.sub);
+  }
+
+  @Patch('me/profile-fields')
+  updateMyProfileFields(
+    @CurrentUser() user: WawuJwtClaims,
+    @Body() dto: UpdateProfileFieldsDto,
+  ) {
+    return this.profileDetailsService.updateMine(user.sub, dto);
   }
 
   /*
@@ -129,6 +157,12 @@ export class UserProfileController {
     @CurrentUser() user: WawuJwtClaims,
   ) {
     return this.userProfileService.getPublicProfile(wawuId, user.sub);
+  }
+
+  /** Somebody else's profile fields: what M5 and M33 draw for a visitor. */
+  @Get(':wawuId/profile-fields')
+  getProfileFields(@Param('wawuId') wawuId: string) {
+    return this.profileDetailsService.getPublic(wawuId);
   }
 
   @Get(':wawuId/content')

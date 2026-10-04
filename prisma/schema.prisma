@@ -280,6 +280,39 @@ model UserProfile {
   @@index([accountType])
 }
 
+/// The profile fields the Me screens show beyond UserProfile's own (ME-05):
+/// where the person is, their skills and what they are open to, their Threads
+/// handle and the order of their social links.
+///
+/// ITS OWN TABLE, NOT MORE COLUMNS ON UserProfile. GET /users/me and
+/// PATCH /users/me return the whole UserProfile row, so a column added there
+/// would widen two live responses the web reads. A table of its own widens
+/// nothing: these fields are served by their own routes
+/// (`/users/me/profile-fields`, `/users/:wawuId/profile-fields`), and an
+/// account that never sets one has no row here at all.
+///
+/// No relation to UserProfile on purpose: it is keyed by the same id and
+/// read together, but a row here must not depend on, or be created by, a
+/// profile row. Everything on it is public, as M33 draws it for a visitor.
+model ProfileDetails {
+  wawuUserId    String   @id
+  /// Where this person is, written the way they write it ("Lagos, Nigeria").
+  /// FREE TEXT: the product keeps no list of places.
+  location      String?
+  /// Skills and expertise chips, separate from UserProfile.interests (which
+  /// decide where somebody appears in Explore).
+  skills        String[] @default([])
+  /// What this person is open to ("Brand films", "Workshops"), as chips.
+  openTo        String[] @default([])
+  /// Threads handle, stored bare (no "@") like the other handles.
+  threadsHandle String?
+  /// The order the person wants their social links shown above the follower
+  /// count: platform keys, first to last. Empty means the default order.
+  socialOrder   String[] @default([])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
 /// One role on somebody's profile: what they did, where, and when.
 ///
 /// WHY A TABLE AND NOT A JSON COLUMN. Each row is independently editable and
@@ -494,6 +527,9 @@ model ContentPiece {
   comments  Comment[]
   purchases Purchase[]
   savedBy   SavedItem[]
+  likedBy   ContentLike[]
+  viewedBy  ContentView[]
+  sharedBy  ContentShare[]
 
   @@index([creatorWawuId])
   @@index([status])
@@ -606,6 +642,56 @@ model SavedItem {
   @@index([contentId])
 }
 
+/// One person's like on one piece of content (HOME-04). Mirrors CommentLike:
+/// a join row with a unique (user, content) pair, so "did THIS viewer like
+/// THIS piece" is answerable and a repeat POST is a no-op rather than a second
+/// count. `ContentPiece.likes` stays the counter every existing response and
+/// the ranking already read; it moves only when a row is really created or
+/// removed.
+model ContentLike {
+  id         String       @id @default(uuid())
+  userWawuId String
+  contentId  String
+  content    ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  likedAt    DateTime     @default(now())
+
+  @@unique([userWawuId, contentId])
+  @@index([userWawuId])
+  @@index([contentId])
+}
+
+/// One person opened one piece on one day (HOME-04). Same rule as
+/// ProfileView: one row per viewer per UTC day, which the unique key enforces,
+/// because a number that goes up on every refresh measures nothing. The
+/// owner's own opens and anonymous reads write nothing.
+/// `ContentPiece.views` is the counter; it moves only when a row is created.
+model ContentView {
+  id           String       @id @default(uuid())
+  contentId    String
+  content      ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  viewerWawuId String
+  viewedOn     DateTime     @db.Date
+  viewedAt     DateTime     @default(now())
+
+  @@unique([contentId, viewerWawuId, viewedOn])
+  @@index([viewerWawuId])
+}
+
+/// One person shared one piece on one day (HOME-04). A share count is the
+/// number of rows; no counter column on ContentPiece, because a new column
+/// there would widen every live content response (protected route registry, entry H-1).
+model ContentShare {
+  id            String       @id @default(uuid())
+  contentId     String
+  content       ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  sharerWawuId  String
+  sharedOn      DateTime     @db.Date
+  sharedAt      DateTime     @default(now())
+
+  @@unique([contentId, sharerWawuId, sharedOn])
+  @@index([sharerWawuId])
+}
+
 /// One person looked at one profile, on one day.
 ///
 /// The profile screen's "Profile Views / This month" needs a number, and the
@@ -692,11 +778,30 @@ model DirectMessage {
   refundLockedAt  DateTime?
 
   reports DmReport[]
+  /// Every creator reply bubble inside this question's window (INBOX-08).
+  /// `responseText` above stays the FIRST reply, for the web.
+  replies DmReply[]
 
   @@index([creatorWawuId])
   @@index([senderWawuId])
   @@index([status, deadlineAt])
+  @@index([creatorWawuId, status, deadlineAt])
+  @@index([senderWawuId, creatorWawuId, sentAt])
   @@index([refundStatus, refundLockedAt])
+}
+
+/// One creator reply bubble on a paid question (task INBOX-08). A question
+/// may carry several while its window is open. The first is also written to
+/// DirectMessage.responseText so the web's reading of that column is unchanged.
+model DmReply {
+  id            String        @id @default(uuid())
+  messageId     String
+  message       DirectMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  creatorWawuId String
+  text          String
+  createdAt     DateTime      @default(now())
+
+  @@index([messageId, createdAt])
 }
 
 /// Rolling per-creator stats maintained by the DM-deadline-sweep cron job
