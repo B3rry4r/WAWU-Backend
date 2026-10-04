@@ -79,10 +79,28 @@ A `chat.read` does not carry an unread count: the phone that read refetches
 `GET /chats/:chatId` if it wants the number. Money-request events join this
 list when the money-request task writes them (BACKEND_GAPS).
 
-**Close codes the app reconnects on:** `1001` (the server is restarting),
-`4401`, `4409`, `4503`. `4503` means the server lost its own feed and closed
-every socket so that no client waits on events that cannot arrive; a socket is
-not accepted (HTTP 503 on the upgrade) until the feed is back.
+**Close codes the app reconnects on:** `1001` (the server is restarting; the
+gateway sends it on SIGTERM and SIGINT itself, then the process exits as it
+would have), `4401`, `4408` (the client is not reading what it is sent and
+more than 1 MiB is waiting for it), `4409`, `4503`. `4503` means the server
+lost its own feed and closed every socket so that no client waits on events
+that cannot arrive; a socket is not accepted (HTTP 503 on the upgrade) until
+the feed is back.
+
+**The feed proves it can hear.** When it connects, and every 30 s after, the
+listener sends itself a probe through the normal publish path and must hear it
+back within 3 s. A listener behind a transaction-mode pooler (or on a
+half-open connection) accepts `LISTEN` and then receives nothing, with no
+error; the missing probe is how that is noticed. The feed is then treated as
+down (4503, 503 on upgrades, an error in the log that says `DATABASE_URL must
+be a direct connection, not a transaction-mode pool`) and retried. The probe
+is never sent to any client.
+
+**Other limits.** At most 20 sockets from one address may be open and not yet
+signed in (the 21st upgrade gets HTTP 429); the address is read as the Hub's
+rate limits read it. Any request with an `Upgrade` header that is not a
+WebSocket handshake for `/api/hub/live` is answered by the Hub as it was
+before this module existed.
 
 ## 3. Reconnecting without losing anything: `GET /live/catch-up`
 
@@ -106,14 +124,20 @@ Doing it in this order (socket first) leaves no gap: whatever happens after
 the socket is up arrives on it, and whatever happened before is in the
 catch-up. With no `cursor` the answer is empty and `cursor` is "now".
 
-The cursor is a point in time. A catch-up reads 10 s behind the cursor it is
-given, because a message is stamped when its transaction starts and can
-commit after a later one has already been pushed; the id check in step 3
-removes the repeats. A cursor that continues a page is read exactly.
+The cursor is a time, and, when it continues a page, the last row that page
+ended on. A page lists rows by time, then by kind (chat messages, read marks,
+community messages), then by id, and a continuing cursor is read exactly after
+that row, so paging loses nothing however many rows share a millisecond. A
+cursor without a row (from an event, `ready`, or the last page) is read 10 s
+behind its time, because a message is stamped when its transaction starts and
+can commit after a later one has already been pushed; the id check in step 3
+removes the repeats. A cursor that is not one the server gave out is a 400.
 
 What it returns: new messages in the caller's chats and in the communities
 they are in, and the read marks the other person moved (one event per chat,
-the latest mark). It leaves out chats where either person has blocked the
+the latest mark; this includes the other person's mark when their own sending moved
+it, which the socket does not push, and applying it twice is harmless). It
+leaves out chats where either person has blocked the
 other and community messages from anyone on either side of a block, as the
 socket does. The caller's own read marks are not included (the phone that
 read already knows); unread counts come from `GET /chats`.

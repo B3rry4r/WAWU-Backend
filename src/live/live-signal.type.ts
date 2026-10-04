@@ -11,3 +11,13 @@ export type LiveSignal =
   | { kind: 'chat.message'; chatId: string; messageId: string }
   | { kind: 'chat.read'; chatId: string; readerWawuId: string }
   | { kind: 'community.message'; communityId: string; messageId: string };
+
+/**
+ * The feed's own test (never shown to anyone): a listener sends it to itself
+ * and must hear it back, which a listener behind a transaction-mode pooler or
+ * on a half-open connection never does. It never reaches LiveDispatcher.
+ */
+export interface LiveProbe {
+  kind: 'probe';
+  id: string;
+}

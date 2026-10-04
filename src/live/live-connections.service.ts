@@ -71,6 +71,12 @@ export class LiveConnections {
     const text = JSON.stringify(frame);
     for (const conn of set) {
       if (conn.ws.readyState !== conn.ws.OPEN) continue;
+      // A client that is not reading would otherwise hold everything it is
+      // sent in memory until the heartbeat notices.
+      if (conn.ws.bufferedAmount > LIVE_LIMITS.maxBufferedBytes) {
+        this.close(conn, LIVE_CLOSE.tooSlow, 'too_slow');
+        continue;
+      }
       conn.ws.send(text, (err) => {
         if (err) this.logger.debug(`send failed: ${err.message}`);
       });

@@ -1,4 +1,4 @@
-import type { IncomingMessage } from 'http';
+import type { IncomingMessage, Server } from 'http';
 import type { Duplex } from 'stream';
 import {
   Injectable,
@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { HttpAdapterHost } from '@nestjs/core';
 import { WebSocketServer, type RawData, type WebSocket } from 'ws';
+import { hubTrustProxy } from '../hub-app-options';
 import { encodeLiveCursor } from './live-cursor';
 import {
   LiveConnections,
@@ -47,6 +48,8 @@ export class LiveGateway
     maxPayload: LIVE_LIMITS.maxFrameBytes,
   });
   private heartbeat: NodeJS.Timeout | undefined;
+  /** Sockets from each address that have not signed in yet. */
+  private readonly unsigned = new Map<string, number>();
   private onUpgrade:
     ((req: IncomingMessage, socket: Duplex, head: Buffer) => void) | undefined;
 
@@ -58,30 +61,75 @@ export class LiveGateway
   ) {}
 
   onApplicationBootstrap(): void {
-    const server = this.adapterHost.httpAdapter.getHttpServer() as {
-      on(event: 'upgrade', cb: LiveGateway['onUpgrade']): void;
-    };
+    const server = this.adapterHost.httpAdapter.getHttpServer() as Server;
     this.onUpgrade = (req, socket, head) => {
       const path = (req.url ?? '').split('?')[0];
-      if (path !== LIVE_LIMITS.path) return;
+      const isSocket =
+        String(req.headers.upgrade ?? '').toLowerCase() === 'websocket';
+      if (path !== LIVE_LIMITS.path || !isSocket) {
+        handBack(server, req, socket, head);
+        return;
+      }
       if (!this.listener.isUp) {
         socket.end(
           'HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n',
         );
         return;
       }
-      this.wss.handleUpgrade(req, socket, head, (ws) => this.accept(ws, req));
+      const address = addressOf(req);
+      if ((this.unsigned.get(address) ?? 0) >= LIVE_LIMITS.unsignedPerAddress) {
+        socket.end(
+          'HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\nContent-Length: 0\r\n\r\n',
+        );
+        return;
+      }
+      this.wss.handleUpgrade(req, socket, head, (ws) =>
+        this.accept(ws, req, address),
+      );
     };
     server.on('upgrade', this.onUpgrade);
     this.heartbeat = setInterval(() => this.beat(), LIVE_LIMITS.heartbeatMs);
     this.heartbeat.unref();
+    // Without `enableShutdownHooks` (main.ts has none) Nest never hears a
+    // SIGTERM, so a restart would cut every socket with no close frame. The
+    // gateway tells its sockets 1001 itself, then lets the signal do what it
+    // would have done.
+    for (const signal of STOP_SIGNALS) process.on(signal, this.onStopSignal);
   }
 
   onApplicationShutdown(): void {
     clearInterval(this.heartbeat);
+    for (const signal of STOP_SIGNALS) {
+      process.removeListener(signal, this.onStopSignal);
+    }
     this.connections.closeAll(LIVE_CLOSE.goingAway, 'shutting down');
     this.wss.close();
   }
+
+  private readonly onStopSignal = (signal: NodeJS.Signals): void => {
+    const closed = this.connections
+      .all()
+      .map(
+        (c) =>
+          new Promise<void>((resolve) => c.ws.once('close', () => resolve())),
+      );
+    this.connections.closeAll(LIVE_CLOSE.goingAway, 'shutting down');
+    const flushed = new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, LIVE_LIMITS.shutdownFlushMs);
+      void Promise.all(closed).then(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+    void flushed.then(() => {
+      for (const s of STOP_SIGNALS) {
+        process.removeListener(s, this.onStopSignal);
+      }
+      // If nothing else is handling the signal, do what it does by default.
+      if (process.listenerCount(signal) === 0)
+        process.kill(process.pid, signal);
+    });
+  };
 
   private beat(): void {
     for (const conn of this.connections.all()) {
@@ -95,8 +143,17 @@ export class LiveGateway
     }
   }
 
-  private accept(ws: WebSocket, req: IncomingMessage): void {
+  private accept(ws: WebSocket, req: IncomingMessage, address: string): void {
     let conn: LiveConnection | undefined;
+    this.unsigned.set(address, (this.unsigned.get(address) ?? 0) + 1);
+    let counted = true;
+    const release = (): void => {
+      if (!counted) return;
+      counted = false;
+      const left = (this.unsigned.get(address) ?? 1) - 1;
+      if (left <= 0) this.unsigned.delete(address);
+      else this.unsigned.set(address, left);
+    };
     const authTimer = setTimeout(() => {
       if (!conn) ws.close(LIVE_CLOSE.unauthenticated, 'auth_timeout');
     }, LIVE_LIMITS.authTimeoutMs);
@@ -125,6 +182,7 @@ export class LiveGateway
         return;
       }
       clearTimeout(authTimer);
+      release();
       conn = {
         ws,
         wawuId: claims.sub,
@@ -166,6 +224,7 @@ export class LiveGateway
     });
     ws.on('close', () => {
       clearTimeout(authTimer);
+      release();
       if (conn) this.connections.remove(conn);
     });
     ws.on('error', (e) => this.logger.debug(`socket error: ${e.message}`));
@@ -213,4 +272,61 @@ function parseFrame(raw: RawData): ClientFrame | null {
     // not JSON
   }
   return null;
+}
+
+const STOP_SIGNALS: NodeJS.Signals[] = ['SIGTERM', 'SIGINT'];
+
+/**
+ * The address a socket comes from, read the way the Hub's own rate limits read
+ * it: behind nginx on loopback, the right-most X-Forwarded-For entry (the
+ * address nginx saw); from anywhere else, the peer itself.
+ */
+function addressOf(req: IncomingMessage): string {
+  const peer = req.socket.remoteAddress ?? 'unknown';
+  if (!hubTrustProxy(peer, 0)) return peer;
+  const forwarded = req.headers['x-forwarded-for'];
+  const list = (
+    Array.isArray(forwarded) ? forwarded.join(',') : (forwarded ?? '')
+  )
+    .split(',')
+    .map((a) => a.trim())
+    .filter(Boolean);
+  return list.length > 0 ? list[list.length - 1] : peer;
+}
+
+/**
+ * Gives a request that is not for the live socket back to the HTTP server as
+ * the ordinary request it is. Node treats a request with an Upgrade header as
+ * the 'upgrade' event's to answer once anything listens for it, and nothing
+ * else would: without this such a request (a proxy that forwards the header on
+ * every request, an h2c probe) would hang. The request is replayed on the
+ * same socket without its Upgrade header, so it gets the answer it gets when
+ * no one listens for upgrades.
+ */
+function handBack(
+  server: Server,
+  req: IncomingMessage,
+  socket: Duplex,
+  head: Buffer,
+): void {
+  const lines = [`${req.method} ${req.url} HTTP/${req.httpVersion}`];
+  for (let i = 0; i < req.rawHeaders.length; i += 2) {
+    const name = req.rawHeaders[i];
+    let value = req.rawHeaders[i + 1];
+    const lower = name.toLowerCase();
+    if (lower === 'upgrade') continue;
+    if (lower === 'connection') {
+      const kept = value
+        .split(',')
+        .map((t) => t.trim())
+        .filter((t) => t !== '' && t.toLowerCase() !== 'upgrade');
+      if (kept.length === 0) continue;
+      value = kept.join(', ');
+    }
+    lines.push(`${name}: ${value}`);
+  }
+  socket.unshift(
+    Buffer.concat([Buffer.from(`${lines.join('\r\n')}\r\n\r\n`), head]),
+  );
+  server.emit('connection', socket);
 }

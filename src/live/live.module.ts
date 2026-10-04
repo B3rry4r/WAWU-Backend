@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ChatModule } from '../chat/chat.module';
 import { CommunityMessageModule } from '../community-message/community-message.module';
+import { LivePublisherModule } from './live-publisher.module';
 import { LiveCatchUpService } from './live-catch-up.service';
 import { LiveConnections } from './live-connections.service';
 import { LiveDispatcher } from './live-dispatcher.service';
@@ -18,7 +19,12 @@ import { LiveGateway } from './live.gateway';
  * community modules supply the views a person is shown.
  */
 @Module({
-  imports: [ConfigModule, ChatModule, CommunityMessageModule],
+  imports: [
+    ConfigModule,
+    ChatModule,
+    CommunityMessageModule,
+    LivePublisherModule,
+  ],
   controllers: [LiveController],
   providers: [
     LiveTokenVerifier,

@@ -2,11 +2,17 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ChatService } from '../chat/chat.service';
 import { CommunityMessageService } from '../community-message/community-message.service';
-import { decodeLiveCursor, encodeLiveCursor } from './live-cursor';
+import {
+  decodeLiveCursor,
+  encodeLiveCursor,
+  LIVE_KIND_RANK,
+  type LiveKind,
+} from './live-cursor';
 import { LIVE_LIMITS } from './live-limits';
 import type { LiveCatchUp, LiveEvent } from './live-event.type';
 
 interface Item {
+  kind: LiveKind;
   at: Date;
   id: string;
   build: () => LiveEvent | Promise<LiveEvent>;
@@ -44,9 +50,29 @@ export class LiveCatchUpService {
       return { events: [], cursor: encodeLiveCursor(now), hasMore: false };
     }
     const parsed = decodeLiveCursor(cursor);
-    const since = parsed.exact
+    const since = parsed.position
       ? parsed.at
       : new Date(parsed.at.getTime() - LIVE_LIMITS.catchUpOverlapMs);
+    /**
+     * The rows of one list that come after the cursor. Pages list rows by
+     * time, then by list (messages, reads, room messages), then by id, so a
+     * continuing cursor (which holds the last row's time, list and id) is
+     * exact: lists before it are read past that time, the list it names past
+     * that row, and lists after it from that time on.
+     */
+    const after = (kind: LiveKind, time: 'createdAt' | 'readAt' | 'sentAt') => {
+      const p = parsed.position;
+      if (!p) return { [time]: { gte: since } };
+      const rank = LIVE_KIND_RANK[kind] - LIVE_KIND_RANK[p.kind];
+      if (rank < 0) return { [time]: { gt: parsed.at } };
+      if (rank > 0) return { [time]: { gte: parsed.at } };
+      return {
+        OR: [
+          { [time]: { gt: parsed.at } },
+          { [time]: parsed.at, id: { gt: p.id } },
+        ],
+      };
+    };
 
     const [chatRows, memberships, hosted, blocked] = await Promise.all([
       this.prisma.chatConversation.findMany({
@@ -84,10 +110,25 @@ export class LiveCatchUpService {
       ]),
     ];
 
+    // A read mark has no id of its own: its chat's id stands for it.
+    const readsAfter = (() => {
+      const p = parsed.position;
+      if (!p) return { readAt: { gte: since } };
+      const rank = LIVE_KIND_RANK.r - LIVE_KIND_RANK[p.kind];
+      if (rank < 0) return { readAt: { gt: parsed.at } };
+      if (rank > 0) return { readAt: { gte: parsed.at } };
+      return {
+        OR: [
+          { readAt: { gt: parsed.at } },
+          { readAt: parsed.at, conversationId: { gt: p.id } },
+        ],
+      };
+    })();
+
     const take = limit + 1;
     const [messages, reads, posts] = await Promise.all([
       this.prisma.chatMessage.findMany({
-        where: { conversationId: { in: chatIds }, createdAt: { gte: since } },
+        where: { conversationId: { in: chatIds }, ...after('m', 'createdAt') },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         take,
       }),
@@ -95,7 +136,7 @@ export class LiveCatchUpService {
         where: {
           conversationId: { in: chatIds },
           wawuUserId: { not: me },
-          readAt: { gte: since },
+          ...readsAfter,
         },
         orderBy: [{ readAt: 'asc' }, { conversationId: 'asc' }],
         take,
@@ -103,7 +144,7 @@ export class LiveCatchUpService {
       this.prisma.communityMessage.findMany({
         where: {
           communityId: { in: communityIds },
-          sentAt: { gte: since },
+          ...after('p', 'sentAt'),
           senderWawuId: { notIn: [...blockedIds] },
         },
         orderBy: [{ sentAt: 'asc' }, { id: 'asc' }],
@@ -113,6 +154,7 @@ export class LiveCatchUpService {
 
     const items: Item[] = [
       ...messages.map((row) => ({
+        kind: 'm' as const,
         at: row.createdAt,
         id: row.id,
         build: async (): Promise<LiveEvent> => {
@@ -128,6 +170,7 @@ export class LiveCatchUpService {
         mark.readAt
           ? [
               {
+                kind: 'r' as const,
                 at: mark.readAt,
                 id: mark.conversationId,
                 build: (): LiveEvent => ({
@@ -144,6 +187,7 @@ export class LiveCatchUpService {
           : [],
       ),
       ...posts.map((row) => ({
+        kind: 'p' as const,
         at: row.sentAt,
         id: row.id,
         build: (): LiveEvent => ({
@@ -154,7 +198,9 @@ export class LiveCatchUpService {
           message: row,
         }),
       })),
-    ].sort((a, b) => a.at.getTime() - b.at.getTime() || (a.id < b.id ? -1 : 1));
+      // Each list already comes in time-then-id order, and the sort is stable,
+      // so ties in time keep the page order the cursor relies on.
+    ].sort((a, b) => a.at.getTime() - b.at.getTime());
 
     const hasMore = items.length > limit;
     const page = items.slice(0, limit);
@@ -178,13 +224,11 @@ export class LiveCatchUpService {
     if (!hasMore) {
       return { events, cursor: encodeLiveCursor(now), hasMore: false };
     }
-    // The page ended inside a stretch of rows with the same time: carry on
-    // from the next millisecond rather than ask for the same page again.
-    const last = page[page.length - 1].at;
-    const next =
-      last.getTime() === since.getTime() && parsed.exact
-        ? new Date(last.getTime() + 1)
-        : last;
-    return { events, cursor: encodeLiveCursor(next, true), hasMore: true };
+    const last = page[page.length - 1];
+    return {
+      events,
+      cursor: encodeLiveCursor(last.at, { kind: last.kind, id: last.id }),
+      hasMore: true,
+    };
   }
 }

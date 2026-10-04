@@ -20,6 +20,16 @@ export const LIVE_LIMITS = {
    * already hold by id.
    */
   catchUpOverlapMs: 10_000,
+  /** How many sockets from one address may be open and not yet signed in. */
+  unsignedPerAddress: 20,
+  /** A socket with more than this waiting to be sent is closed: its client is not reading. */
+  maxBufferedBytes: 1_048_576,
+  /** The feed sends itself a probe this often and must hear it back. */
+  probeEveryMs: 30_000,
+  /** How long a probe may take to come back. */
+  probeTimeoutMs: 3_000,
+  /** On SIGTERM, how long close frames get to leave before the process goes. */
+  shutdownFlushMs: 1_000,
   catchUpDefaultLimit: 50,
   catchUpMaxLimit: 100,
 } as const;
@@ -34,6 +44,8 @@ export const LIVE_CLOSE = {
   wrongPerson: 4403,
   /** The person opened more sockets than they may hold. */
   replaced: 4409,
+  /** The client is not reading what it is sent. */
+  tooSlow: 4408,
   /** The server lost its feed of events; reconnect and catch up. */
   resync: 4503,
 } as const;

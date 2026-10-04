@@ -1,6 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { LIVE_CHANNEL, type LiveSignal } from './live-signal.type';
+import {
+  LIVE_CHANNEL,
+  type LiveProbe,
+  type LiveSignal,
+} from './live-signal.type';
 
 /**
  * Tells every Hub instance that something changed (task INBOX-02), through
@@ -20,10 +24,20 @@ export class LivePublisher {
 
   async publish(signal: LiveSignal): Promise<void> {
     try {
-      await this.prisma
-        .$queryRaw`SELECT pg_notify(${LIVE_CHANNEL}, ${JSON.stringify(signal)})`;
+      await this.send(signal);
     } catch (e) {
       this.logger.warn(`Could not signal ${signal.kind}: ${String(e)}`);
     }
+  }
+
+  /**
+   * The same signal, but a failure is thrown. The listener's own probe uses
+   * it: a probe that could not be sent is a feed that cannot be trusted.
+   * `$executeRaw`, because `pg_notify` returns `void`, a column type Prisma
+   * cannot read back from a query.
+   */
+  async send(signal: LiveSignal | LiveProbe): Promise<void> {
+    await this.prisma
+      .$executeRaw`SELECT pg_notify(${LIVE_CHANNEL}, ${JSON.stringify(signal)})`;
   }
 }
