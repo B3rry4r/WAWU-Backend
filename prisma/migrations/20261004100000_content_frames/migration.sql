@@ -1,6 +1,6 @@
 -- HOME-05: the ordered pictures of a photo set. Additive: one new table, no
 -- existing column, index or row touched (ContentPiece gains a relation field
--- only, no column, so no content response gains a key; protected-registry
+-- only, no column, so no content response gains a key; protected route registry,
 -- H-1). Rollback: DROP TABLE "ContentFrame";
 
 -- CreateTable
