@@ -190,6 +190,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "Refused: the creator has not enabled paid messages, a block stands between the two, or (reason.code paid_messages_paused, with reason.pausedUntil) the creator left too many paid questions unanswered and paid messages are switched off until pausedUntil (R-13)."
           }
         },
         "tags": [
@@ -440,6 +443,68 @@
           }
         },
         "summary": "The creator's waiting list: soonest deadline first, with the total waiting.",
+        "tags": [
+          "PaidDm"
+        ]
+      }
+    },
+    "/api/hub/paid-dm/standing": {
+      "get": {
+        "operationId": "PaidDmController_standing",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaidDmStanding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller is not a creator account."
+          }
+        },
+        "summary": "The creator's own standing on unanswered paid questions: warned, paused, and when it ends (R-13).",
+        "tags": [
+          "PaidDm"
+        ]
+      }
+    },
+    "/api/hub/paid-dm/creators/{wawuId}/availability": {
+      "get": {
+        "operationId": "PaidDmController_availability",
+        "parameters": [
+          {
+            "name": "wawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaidDmAvailability"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "wawuId is not a UUID."
+          },
+          "404": {
+            "description": "The account has no creator state."
+          }
+        },
+        "summary": "Whether a creator's paid messages are switched off, and until when (I8). Any signed-in user.",
         "tags": [
           "PaidDm"
         ]
@@ -29126,6 +29191,81 @@
           "items",
           "nextCursor",
           "waitingTotal"
+        ]
+      },
+      "PaidDmStanding": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "warning",
+              "paused"
+            ]
+          },
+          "acceptingPaidMessages": {
+            "type": "boolean"
+          },
+          "unansweredPct": {
+            "type": "number"
+          },
+          "unanswered": {
+            "type": "number",
+            "nullable": true
+          },
+          "questions": {
+            "type": "number",
+            "nullable": true
+          },
+          "warnAtPct": {
+            "type": "number"
+          },
+          "pauseAtPct": {
+            "type": "number"
+          },
+          "windowDays": {
+            "type": "number"
+          },
+          "pauseDays": {
+            "type": "number"
+          },
+          "pausedUntil": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "state",
+          "acceptingPaidMessages",
+          "unansweredPct",
+          "unanswered",
+          "questions",
+          "warnAtPct",
+          "pauseAtPct",
+          "windowDays",
+          "pauseDays",
+          "pausedUntil"
+        ]
+      },
+      "PaidDmAvailability": {
+        "type": "object",
+        "properties": {
+          "creatorWawuId": {
+            "type": "string"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "pausedUntil": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "creatorWawuId",
+          "paused",
+          "pausedUntil"
         ]
       },
       "PaidDmThread": {
