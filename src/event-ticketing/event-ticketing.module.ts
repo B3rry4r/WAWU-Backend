@@ -3,6 +3,7 @@ import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { DirectMessageModule } from '../direct-message/direct-message.module';
 import { EventTicketingController } from './event-ticketing.controller';
 import { EventTicketingService } from './event-ticketing.service';
+import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 
 /**
  * Event ticketing.
@@ -14,7 +15,7 @@ import { EventTicketingService } from './event-ticketing.service';
  * and its "accepted is not settled" distinction are already right there.
  */
 @Module({
-  imports: [WawuAuthModule, DirectMessageModule],
+  imports: [WawuAuthModule, DirectMessageModule, BlockedAccountModule],
   controllers: [EventTicketingController],
   providers: [EventTicketingService],
   exports: [EventTicketingService],

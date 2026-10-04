@@ -47,6 +47,14 @@ export interface BvnPrefillView {
 export interface BvnCheckView {
   identity: WalletIdentityView;
   prefill: BvnPrefillView;
+  /**
+   * KYC-03: the BVN and NIN of this check, sealed under a server key (no one
+   * else can read or change it), for the app to hold in memory and send to
+   * the selfie match and the account opening in their place. It is good for
+   * 30 minutes, for this person and this check only. The server stores none
+   * of it; the app must not either, and must never log it.
+   */
+  checkHandle: string;
 }
 
 /**

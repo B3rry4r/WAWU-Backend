@@ -1,5 +1,14 @@
 import { Transform } from 'class-transformer';
-import { IsString, Matches, MaxLength, ValidateBy } from 'class-validator';
+import { ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  IsString,
+  Matches,
+  MaxLength,
+  ValidateBy,
+  ValidateIf,
+} from 'class-validator';
+import { CHECK_HANDLE_MAX_LENGTH } from '../../identity/check-handle';
+import { CHECK_HANDLE_INVALID_MESSAGE } from '../../identity/dto/identity-request.dto';
 
 /**
  * The body of `POST /money/wallet/open` (task MONEY-12): what Fintava's
@@ -33,14 +42,44 @@ export function isBirthDate(value: unknown): boolean {
 
 const NAME = /^\p{L}[\p{L}\p{M}' .-]{0,49}$/u;
 
-export class OpenNairaWalletDto {
-  /** The BVN whose check passed: 11 digits, no spaces. */
-  @Matches(/^[0-9]{11}$/, { message: 'bvn must be 11 digits' })
-  bvn!: string;
+const sendsNumbers = (o: OpenNairaWalletDto) =>
+  o.checkHandle === undefined || o.bvn !== undefined || o.nin !== undefined;
 
-  /** The NIN given with that check: 11 digits, no spaces. */
+export class OpenNairaWalletDto {
+  /**
+   * The BVN whose check passed: 11 digits, no spaces. Leave it and `nin` out
+   * and send `checkHandle` instead (KYC-03); never both.
+   */
+  @ApiPropertyOptional({ pattern: '^[0-9]{11}$' })
+  @ValidateIf(sendsNumbers)
+  @Matches(/^[0-9]{11}$/, { message: 'bvn must be 11 digits' })
+  bvn?: string;
+
+  /** The NIN given with that check: 11 digits, no spaces. Left out with `checkHandle`. */
+  @ApiPropertyOptional({ pattern: '^[0-9]{11}$' })
+  @ValidateIf(sendsNumbers)
   @Matches(/^[0-9]{11}$/, { message: 'nin must be 11 digits' })
-  nin!: string;
+  nin?: string;
+
+  /**
+   * The `checkHandle` the passed BVN check answered, in place of `bvn` and
+   * `nin` (KYC-03): the server takes both from it. Never with them.
+   */
+  @ApiPropertyOptional({ maxLength: CHECK_HANDLE_MAX_LENGTH })
+  @ValidateIf((o: OpenNairaWalletDto) => o.checkHandle !== undefined)
+  @IsString({ message: CHECK_HANDLE_INVALID_MESSAGE })
+  @MaxLength(CHECK_HANDLE_MAX_LENGTH, { message: CHECK_HANDLE_INVALID_MESSAGE })
+  @ValidateBy({
+    name: 'checkHandleAlone',
+    validator: {
+      validate: (_: unknown, args) => {
+        const o = args?.object as OpenNairaWalletDto;
+        return o.bvn === undefined && o.nin === undefined;
+      },
+      defaultMessage: () => 'Send checkHandle, or bvn and nin, not both.',
+    },
+  })
+  checkHandle?: string;
 
   /** A5's first name, as the BVN check prefilled it. */
   @Transform(trim)

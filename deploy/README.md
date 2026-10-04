@@ -124,6 +124,9 @@ FINTAVA_RESEND_SAFETY_MS=
 # once, never changed (every stored hash would stop matching). Unset, the
 # server starts and both checks answer 503. BVN_CHECKS_PER_DAY and
 # SELFIE_CHECKS_PER_DAY may stay empty (3 each, provisional).
+# The same key also derives (HKDF, label wawu/kyc-check-handle/v1) the key
+# the BVN check's 30-minute `checkHandle` is sealed under (KYC-03): no
+# separate setting. Changing IDENTITY_HASH_KEY voids every handle out.
 IDENTITY_HASH_KEY=
 BVN_CHECKS_PER_DAY=
 SELFIE_CHECKS_PER_DAY=
@@ -133,6 +136,15 @@ SELFIE_CHECKS_PER_DAY=
 WALLET_BANK_NAME=
 WALLET_LICENCE_LINE=
 WALLET_DEPOSIT_INSURANCE_LINE=
+# Receipts (WALLET-18): the address a receipt's code opens, without the
+# code: https://<the API's public host>/api/hub/r. Empty: receipts print
+# wawu/r/<code> with no link. Receipts print WALLET_BANK_NAME and
+# WALLET_LICENCE_LINE as above.
+RECEIPT_VERIFY_BASE_URL=
+# Receipt images and PDFs drawn at once (WALLET-18; 1 to 8, empty: 2,
+# PROVISIONAL(RECEIPT-RENDER-CONCURRENCY)). A PDF in flight holds about
+# 45 MB; a request waits up to 10 s for a turn, then gets 503 with Retry-After.
+RECEIPT_RENDER_CONCURRENCY=
 
 GEMINI_API_KEY=
 

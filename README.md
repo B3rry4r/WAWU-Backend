@@ -496,6 +496,34 @@ person, so the app can render "here is what you need to do" instead of a wall.
 An exception without a `reason` produces exactly the envelope this filter has
 always produced.
 
+## Blocking and data export (SETTINGS-04)
+
+**A block hides people from each other, both ways.** `BlockedAccountService`
+is the one place that knows: `hiddenFrom(viewer)` is every account the viewer
+blocked or who blocked the viewer (empty for a signed-out reader), and
+`assertVisible(viewer, owner, notFound)` answers a hidden owner's profile,
+piece, room or event with the same 404 an unknown id gets, so the answer never
+says who blocked whom. It is applied to search (content, creators,
+suggestions, closest), Explore, the public profile and a creator's shelf, the
+feed (ranked and newest first), a single piece, comments, rooms and their
+messages, the professionals directory, events and the EVG score. Someone who
+already bought a piece keeps it, and someone already in a room keeps the room.
+The wallet recipient search (WALLET-08) filters with `hiddenFrom`. Chat
+enforces it in its own service (INBOX-06). A signed-out reader sees everyone.
+
+**Data export.** `POST /settings/privacy/export` records a request (asking
+again while one is pending returns that one). `DataExportFulfilmentService`
+sweeps pending requests every minute and asks WAWU ID to email a signed link
+(`POST /internal/users/:id/data-export`, the mock in `mock-wawu-id` records it
+in `GET /internal/mail-outbox`). `GET /settings/privacy/export/download?token=`
+builds the file when the link is opened, from `data-export-sections.ts`: every
+section names its fields, nothing is exported by default, and
+`data-export-map.spec.ts` fails when a table the account purge deletes is in
+neither the export nor the excluded list. The link expires after 72 hours
+(`EXPORT_LINK_HOURS`), is signed with a key derived from `ADMIN_JWT_SECRET`,
+and stops working when the request row is deleted with the account. Set
+`HUB_PUBLIC_URL` (`.env.example`) for the address inside the link.
+
 ## `WAWU_ADMIN_KEY` is retired
 
 It used to gate six operator surfaces — `legal/ops`, `services/ops/applications`,

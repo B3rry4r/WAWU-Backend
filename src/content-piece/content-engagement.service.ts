@@ -1,8 +1,14 @@
+import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type { ContentPieceResponse } from '../common/types/content-piece.type';
 import { ContentPieceService } from './content-piece.service';
+import {
+  ContentMediaService,
+  type MediaDetails,
+} from './content-media.service';
+import { FeedCardsService, type FeedCreator } from './feed-cards.service';
 import type { ContentSort } from './ranking';
 
 /** What the viewer has done with, and to, one piece. */
@@ -20,7 +26,13 @@ export interface ViewerContentState {
  * (protected route registry, entry H-1).
  */
 export type FeedItem = ContentPieceResponse &
-  ViewerContentState & { shares: number };
+  ViewerContentState & {
+    shares: number;
+    /** Who made the piece: name, avatar and ticks (G-85, HOME-05). */
+    creator: FeedCreator;
+    /** Duration, page count and a photo set's frames (HOME-05). */
+    media: MediaDetails;
+  };
 
 export interface LikeState {
   likes: number;
@@ -72,10 +84,17 @@ export class ContentEngagementService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly content: ContentPieceService,
+    private readonly blockedAccounts: BlockedAccountService,
+    private readonly cards: FeedCardsService,
+    private readonly mediaDetails: ContentMediaService,
   ) {}
 
-  /** A piece anyone may act on: it exists and is live. */
-  private async requireLive(contentId: string) {
+  /**
+   * A piece anyone may act on: it exists, is live and its owner is not hidden
+   * from the caller (SETTINGS-04: a blocked pair gets the same 404 as a
+   * missing piece, and nothing is counted).
+   */
+  private async requireLive(contentId: string, viewerWawuId: string) {
     const piece = await this.prisma.contentPiece.findUnique({
       where: { id: contentId },
       select: { id: true, status: true, creatorWawuId: true },
@@ -83,6 +102,11 @@ export class ContentEngagementService {
     if (!piece || piece.status !== 'live') {
       throw new NotFoundException('Content not found');
     }
+    await this.blockedAccounts.assertVisible(
+      viewerWawuId,
+      piece.creatorWawuId,
+      'Content not found',
+    );
     return piece;
   }
 
@@ -105,7 +129,7 @@ export class ContentEngagementService {
     liked: boolean,
   ): Promise<LikeState> {
     if (liked) {
-      await this.requireLive(contentId);
+      await this.requireLive(contentId, userWawuId);
       await this.prisma.$transaction(async (tx) => {
         const { count } = await tx.contentLike.createMany({
           data: [{ userWawuId, contentId }],
@@ -121,9 +145,14 @@ export class ContentEngagementService {
     } else {
       const exists = await this.prisma.contentPiece.findUnique({
         where: { id: contentId },
-        select: { id: true },
+        select: { id: true, creatorWawuId: true },
       });
       if (!exists) throw new NotFoundException('Content not found');
+      await this.blockedAccounts.assertVisible(
+        userWawuId,
+        exists.creatorWawuId,
+        'Content not found',
+      );
       await this.prisma.$transaction(async (tx) => {
         const { count } = await tx.contentLike.deleteMany({
           where: { userWawuId, contentId },
@@ -152,7 +181,7 @@ export class ContentEngagementService {
     contentId: string,
     viewerWawuId: string,
   ): Promise<ViewState> {
-    const piece = await this.requireLive(contentId);
+    const piece = await this.requireLive(contentId, viewerWawuId);
     let counted = false;
     if (piece.creatorWawuId !== viewerWawuId) {
       counted = await this.prisma.$transaction(async (tx) => {
@@ -182,7 +211,7 @@ export class ContentEngagementService {
     contentId: string,
     sharerWawuId: string,
   ): Promise<ShareState> {
-    await this.requireLive(contentId);
+    await this.requireLive(contentId, sharerWawuId);
     const { count } = await this.prisma.contentShare.createMany({
       data: [{ contentId, sharerWawuId, sharedOn: utcDay() }],
       skipDuplicates: true,
@@ -251,7 +280,11 @@ export class ContentEngagementService {
       perPage,
       sort,
     );
-    const state = await this.stateFor(viewerWawuId, result.items);
+    const [state, creators, media] = await Promise.all([
+      this.stateFor(viewerWawuId, result.items),
+      this.cards.creatorsFor(result.items.map((i) => i.creatorWawuId)),
+      this.mediaDetails.forPieces(result.items),
+    ]);
     return {
       ...result,
       items: result.items.map((item) => ({
@@ -260,14 +293,22 @@ export class ContentEngagementService {
         savedByMe: state.saved.has(item.id),
         followsCreator: state.follows.has(item.creatorWawuId),
         shares: state.shares.get(item.id) ?? 0,
+        creator: creators.get(item.creatorWawuId) as FeedCreator,
+        media: media.get(item.id) as MediaDetails,
       })),
     };
   }
 
   /** GET /feed/following/count: how many people the viewer follows. */
   async followingCount(viewerWawuId: string): Promise<FollowingCount> {
+    // Stale edges to a hidden person (a block deletes them, but rows from
+    // before it, or restored ones, may remain) are not counted.
+    const hidden = await this.blockedAccounts.hiddenFrom(viewerWawuId);
     const count = await this.prisma.followRelationship.count({
-      where: { followerWawuId: viewerWawuId },
+      where: {
+        followerWawuId: viewerWawuId,
+        followingWawuId: { notIn: hidden },
+      },
     });
     return { count };
   }
@@ -297,6 +338,11 @@ export class ContentEngagementService {
       piece.status !== 'removed' &&
       (piece.status === 'live' || piece.creatorWawuId === viewerWawuId);
     if (!piece || !visible) throw new NotFoundException('Content not found');
+    await this.blockedAccounts.assertVisible(
+      viewerWawuId,
+      piece.creatorWawuId,
+      'Content not found',
+    );
 
     const state = await this.stateFor(viewerWawuId, [piece]);
     return {

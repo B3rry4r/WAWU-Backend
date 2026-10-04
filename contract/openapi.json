@@ -7886,6 +7886,118 @@
         ]
       }
     },
+    "/api/hub/content/{id}/detail": {
+      "get": {
+        "operationId": "ContentDetailController_get",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentDetail"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ContentDetail"
+        ]
+      }
+    },
+    "/api/hub/content/{id}/rating": {
+      "put": {
+        "operationId": "ContentDetailController_rate",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RateContentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RatingState"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Rate, or change your rating. Always one rating per person.",
+        "tags": [
+          "ContentDetail"
+        ]
+      }
+    },
+    "/api/hub/content/{id}/preview": {
+      "put": {
+        "operationId": "ContentDetailController_setPreview",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPreviewDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FreePreview"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The creator sets how much of their own piece is free to preview.",
+        "tags": [
+          "ContentDetail"
+        ]
+      }
+    },
     "/api/hub/feed": {
       "get": {
         "operationId": "FeedController_feed",
@@ -7969,6 +8081,145 @@
         ]
       }
     },
+    "/api/hub/feed/entries": {
+      "get": {
+        "operationId": "FeedController_mixed",
+        "parameters": [
+          {
+            "name": "scope",
+            "required": true,
+            "in": "query",
+            "description": "`for_you` is the ranked browse; `following` is only people you follow.",
+            "schema": {
+              "default": "for_you",
+              "type": "string",
+              "enum": [
+                "for_you",
+                "following"
+              ]
+            }
+          },
+          {
+            "name": "category",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "required": true,
+            "in": "query",
+            "description": "Ordering of `for_you`. `following` is always newest first.",
+            "schema": {
+              "default": "trending",
+              "type": "string",
+              "enum": [
+                "trending",
+                "recent",
+                "top"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "content"
+                            ]
+                          },
+                          "content": {
+                            "$ref": "#/components/schemas/FeedItem"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "content"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "creator"
+                            ]
+                          },
+                          "creator": {
+                            "$ref": "#/components/schemas/CreatorCard"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "creator"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "professional"
+                            ]
+                          },
+                          "professional": {
+                            "$ref": "#/components/schemas/ProfessionalCard"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "professional"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "The mixed feed (HOME-05): the same cards as `GET /feed`, with creator and\nprofessional cards among them on For you.",
+        "tags": [
+          "Feed"
+        ]
+      }
+    },
     "/api/hub/feed/following/count": {
       "get": {
         "operationId": "FeedController_followingCount",
@@ -7987,6 +8238,74 @@
         },
         "tags": [
           "Feed"
+        ]
+      }
+    },
+    "/api/hub/content/{id}/media": {
+      "get": {
+        "operationId": "ContentMediaController_get",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaDetails"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ContentMedia"
+        ]
+      },
+      "put": {
+        "operationId": "ContentMediaController_set",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetMediaDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaDetails"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ContentMedia"
         ]
       }
     },
@@ -14097,10 +14416,10 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
+                    "userWawuId": {
                       "type": "string"
                     },
-                    "userWawuId": {
+                    "status": {
                       "type": "string"
                     },
                     "requestedAt": {
@@ -14110,8 +14429,8 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "userWawuId",
+                    "status",
                     "requestedAt"
                   ]
                 }
@@ -14121,6 +14440,71 @@
         },
         "tags": [
           "DataExportRequest"
+        ]
+      },
+      "get": {
+        "operationId": "DataExportRequestController_listMine",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "userWawuId": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      },
+                      "requestedAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "userWawuId",
+                      "status",
+                      "requestedAt"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "The caller's own export requests and where each one is (pending, sent, failed).",
+        "tags": [
+          "DataExportRequest"
+        ]
+      }
+    },
+    "/api/hub/settings/privacy/export/download": {
+      "get": {
+        "operationId": "DataExportDownloadController_download",
+        "parameters": [
+          {
+            "name": "token",
+            "required": false,
+            "in": "query",
+            "schema": {}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "DataExportDownload"
         ]
       }
     },
@@ -19685,15 +20069,15 @@
                     "id": {
                       "type": "string"
                     },
+                    "userWawuId": {
+                      "type": "string"
+                    },
                     "status": {
                       "type": "string",
                       "enum": [
                         "pending",
                         "joined"
                       ]
-                    },
-                    "userWawuId": {
-                      "type": "string"
                     },
                     "requestedAt": {
                       "type": "string",
@@ -19710,8 +20094,8 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "userWawuId",
+                    "status",
                     "requestedAt",
                     "communityId",
                     "joinedAt"
@@ -19787,15 +20171,15 @@
                     "id": {
                       "type": "string"
                     },
+                    "userWawuId": {
+                      "type": "string"
+                    },
                     "status": {
                       "type": "string",
                       "enum": [
                         "pending",
                         "joined"
                       ]
-                    },
-                    "userWawuId": {
-                      "type": "string"
                     },
                     "requestedAt": {
                       "type": "string",
@@ -19812,8 +20196,8 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "userWawuId",
+                    "status",
                     "requestedAt",
                     "communityId",
                     "joinedAt"
@@ -19916,15 +20300,15 @@
                     "id": {
                       "type": "string"
                     },
+                    "userWawuId": {
+                      "type": "string"
+                    },
                     "status": {
                       "type": "string",
                       "enum": [
                         "pending",
                         "joined"
                       ]
-                    },
-                    "userWawuId": {
-                      "type": "string"
                     },
                     "requestedAt": {
                       "type": "string",
@@ -19941,8 +20325,8 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "userWawuId",
+                    "status",
                     "requestedAt",
                     "communityId",
                     "joinedAt"
@@ -22295,6 +22679,119 @@
         "x-wawu-built-by": "MONEY-15"
       }
     },
+    "/api/hub/money/statements": {
+      "get": {
+        "operationId": "MoneyStatementController_statement",
+        "parameters": [
+          {
+            "name": "from",
+            "required": true,
+            "in": "query",
+            "description": "The first day of the statement, YYYY-MM-DD in Africa/Lagos time, included.",
+            "schema": {
+              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$",
+              "example": "2026-09-01",
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": true,
+            "in": "query",
+            "description": "The last day of the statement, YYYY-MM-DD in Africa/Lagos time,\nincluded. On or after `from`, not after today in Lagos, and at most\n366 days from `from`, both days counted (STATEMENT_MAX_DAYS).",
+            "schema": {
+              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$",
+              "example": "2026-09-30",
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "required": true,
+            "in": "query",
+            "description": "The file. Only `csv` today: Fintava issues no stamped statement\n(WALLET-27, BACKEND_GAPS G-68), so there is no `pdf`.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "csv"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatementView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: statement_too_large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "reason.code: statement_rate_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: statement_busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One statement. `from` and `to` are calendar days in Africa/Lagos time\nand BOTH are included: from 00:00 on `from` to 23:59:59.999 on `to`,\nLagos time. A day that does not exist, `from` after `to`, `to` after\ntoday in Lagos, or more than 366 days is a 400; a period with more than\n50,000 movements is `400 statement_too_large`. The app's global\nper-address limits apply as on every route; on top, one person may ask\nfor 5 a minute and 30 an hour (`429 statement_rate_limited`, counted\nhere, after the token is verified), and two statements are built at\nonce in the process (`503 statement_busy` after 5 s of waiting).\nThe route's own 400s never count: the period is checked before the\nperson is counted, and `statement_too_large` gives the place back.",
+        "tags": [
+          "MoneyStatement"
+        ],
+        "x-wawu-built-by": "WALLET-27"
+      }
+    },
     "/api/hub/money/fees/quote": {
       "get": {
         "operationId": "MoneyFeesController_feeQuote",
@@ -22392,6 +22889,255 @@
           "MoneyFees"
         ],
         "x-wawu-built-by": "WALLET-15"
+      }
+    },
+    "/api/hub/money/transactions/{id}/receipt": {
+      "post": {
+        "operationId": "MoneyReceiptController_issue",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReceiptView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "W41: the receipt and its code. The same code every time.",
+        "tags": [
+          "MoneyReceipt"
+        ],
+        "x-wawu-built-by": "WALLET-18"
+      }
+    },
+    "/api/hub/money/transactions/{id}/receipt/image": {
+      "get": {
+        "operationId": "MoneyReceiptController_image",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The receipt as a PNG image.",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Receipts are busy right now. Try again in a few seconds."
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "W42: the receipt as a PNG, always a white document.",
+        "tags": [
+          "MoneyReceipt"
+        ],
+        "x-wawu-built-by": "WALLET-18"
+      }
+    },
+    "/api/hub/money/transactions/{id}/receipt/pdf": {
+      "get": {
+        "operationId": "MoneyReceiptController_pdf",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The receipt as a one-page A4 PDF.",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Receipts are busy right now. Try again in a few seconds."
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "W43: the receipt as a one-page A4 PDF.",
+        "tags": [
+          "MoneyReceipt"
+        ],
+        "x-wawu-built-by": "WALLET-18"
+      }
+    },
+    "/api/hub/r/{code}": {
+      "get": {
+        "operationId": "PublicReceiptController_page",
+        "parameters": [
+          {
+            "name": "code",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The receipt check page: amount, date, status, both sides masked, reference.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No receipt has this code. The same page for every miss.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "PublicReceipt"
+        ]
       }
     },
     "/api/hub/chats": {
@@ -24575,6 +25321,52 @@
           "rating"
         ]
       },
+      "SetPreviewDto": {
+        "type": "object",
+        "properties": {
+          "freePages": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 1,
+            "maximum": 10000
+          },
+          "freeSeconds": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 1,
+            "maximum": 86400
+          },
+          "freeLessons": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 1,
+            "maximum": 1000
+          }
+        }
+      },
+      "SetMediaDto": {
+        "type": "object",
+        "properties": {
+          "frames": {
+            "description": "The pictures of a photo set, in the order they are shown. Replaces the\nwhole list. Photo sets only (content type `image`).",
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "durationLabel": {
+            "type": "string",
+            "description": "How long a video, audio or course runs, as `4:12` or `1:20:05`."
+          },
+          "pageCount": {
+            "type": "number",
+            "description": "How many pages a PDF has. PDFs only.",
+            "minimum": 1,
+            "maximum": 5000
+          }
+        }
+      },
       "CreateCreditPurchaseDto": {
         "type": "object",
         "properties": {
@@ -26196,7 +26988,10 @@
               "account_not_opened",
               "phone_held_by_other_identity",
               "reset_codes_exhausted",
-              "device_approval_refused"
+              "device_approval_refused",
+              "statement_too_large",
+              "statement_rate_limited",
+              "statement_busy"
             ],
             "type": "string"
           },
@@ -26411,21 +27206,25 @@
       "SelfieMatchDto": {
         "type": "object",
         "properties": {
+          "bvn": {
+            "type": "string",
+            "description": "The BVN whose check passed: 11 digits, no spaces. Leave it out and send\n`checkHandle` instead (KYC-03); one of the two, never both.",
+            "pattern": "^[0-9]{11}$"
+          },
+          "checkHandle": {
+            "type": "string",
+            "description": "The `checkHandle` the passed BVN check answered, in place of `bvn`\n(KYC-03): the server takes the BVN from it. One of the two, never both.",
+            "maxLength": 1024
+          },
           "image": {
             "type": "string",
             "description": "The selfie: plain base64 (no `data:` prefix) of a JPEG or PNG, 1 KB to\nabout 75 KB (at most 100,000 base64 characters), at most 2,048 pixels\non each side. A face match against the BVN photo, not a liveness check.",
             "format": "byte",
             "maxLength": 100000
-          },
-          "bvn": {
-            "type": "string",
-            "description": "The BVN whose check passed: 11 digits, no spaces.",
-            "pattern": "^[0-9]{11}$"
           }
         },
         "required": [
-          "image",
-          "bvn"
+          "image"
         ]
       },
       "IdentityOccupationDto": {
@@ -26447,13 +27246,18 @@
         "properties": {
           "bvn": {
             "type": "string",
-            "description": "The BVN whose check passed: 11 digits, no spaces.",
+            "description": "The BVN whose check passed: 11 digits, no spaces. Leave it and `nin` out\nand send `checkHandle` instead (KYC-03); never both.",
             "pattern": "^[0-9]{11}$"
           },
           "nin": {
             "type": "string",
-            "description": "The NIN given with that check: 11 digits, no spaces.",
+            "description": "The NIN given with that check: 11 digits, no spaces. Left out with `checkHandle`.",
             "pattern": "^[0-9]{11}$"
+          },
+          "checkHandle": {
+            "type": "string",
+            "description": "The `checkHandle` the passed BVN check answered, in place of `bvn` and\n`nin` (KYC-03): the server takes both from it. Never with them.",
+            "maxLength": 1024
           },
           "firstName": {
             "type": "string",
@@ -26475,8 +27279,6 @@
           }
         },
         "required": [
-          "bvn",
-          "nin",
           "firstName",
           "lastName",
           "dateOfBirth",
@@ -27035,6 +27837,52 @@
           "outKobo"
         ]
       },
+      "StatementView": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "timeZone": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv"
+            ]
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "rowCount": {
+            "type": "number"
+          },
+          "content": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "timeZone",
+          "format",
+          "fileName",
+          "contentType",
+          "rowCount",
+          "content",
+          "generatedAt"
+        ]
+      },
       "FeeQuotePartView": {
         "type": "object",
         "properties": {
@@ -27217,11 +28065,15 @@
           },
           "prefill": {
             "$ref": "#/components/schemas/BvnPrefillView"
+          },
+          "checkHandle": {
+            "type": "string"
           }
         },
         "required": [
           "identity",
-          "prefill"
+          "prefill",
+          "checkHandle"
         ]
       },
       "SelfieMatchView": {
@@ -27479,6 +28331,94 @@
           "expiresAt"
         ]
       },
+      "TickState": {
+        "type": "object",
+        "properties": {
+          "verified": {
+            "type": "boolean"
+          },
+          "expiresAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "verified",
+          "expiresAt"
+        ]
+      },
+      "VerificationState": {
+        "type": "object",
+        "properties": {
+          "creator": {
+            "$ref": "#/components/schemas/TickState"
+          },
+          "professional": {
+            "$ref": "#/components/schemas/TickState"
+          }
+        },
+        "required": [
+          "creator",
+          "professional"
+        ]
+      },
+      "BlockedAccountUser": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          }
+        },
+        "required": [
+          "wawuId",
+          "name",
+          "handle",
+          "avatarUrl",
+          "verification"
+        ]
+      },
+      "BlockedAccount": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "userWawuId": {
+            "type": "string"
+          },
+          "blockedWawuId": {
+            "type": "string"
+          },
+          "blockedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "blockedUser": {
+            "$ref": "#/components/schemas/BlockedAccountUser",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "userWawuId",
+          "blockedWawuId",
+          "blockedAt"
+        ]
+      },
       "MoneyPartyView": {
         "type": "object",
         "properties": {
@@ -27609,6 +28549,117 @@
           "updatedAt"
         ]
       },
+      "ReceiptPartyView": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "accountNumber": {
+            "type": "string",
+            "nullable": true
+          },
+          "accountNumberLast4": {
+            "type": "string",
+            "nullable": true
+          },
+          "bankName": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "name",
+          "accountNumber",
+          "accountNumberLast4",
+          "bankName"
+        ]
+      },
+      "ReceiptLineView": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "value"
+        ]
+      },
+      "ReceiptView": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "link": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "nullable": true
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/TransactionView"
+          },
+          "typeLabel": {
+            "type": "string"
+          },
+          "headline": {
+            "type": "string"
+          },
+          "from": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ReceiptPartyView"
+              }
+            ],
+            "nullable": true
+          },
+          "to": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ReceiptPartyView"
+              }
+            ],
+            "nullable": true
+          },
+          "bankName": {
+            "type": "string"
+          },
+          "licenceLine": {
+            "type": "string",
+            "nullable": true
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReceiptLineView"
+            }
+          },
+          "issuedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "link",
+          "url",
+          "transaction",
+          "typeLabel",
+          "headline",
+          "from",
+          "to",
+          "bankName",
+          "licenceLine",
+          "lines",
+          "issuedAt"
+        ]
+      },
       "AdminUserView": {
         "type": "object",
         "properties": {
@@ -27730,12 +28781,12 @@
                     "id": {
                       "type": "string"
                     },
+                    "userWawuId": {
+                      "type": "string"
+                    },
                     "createdAt": {
                       "type": "string",
                       "format": "date-time"
-                    },
-                    "userWawuId": {
-                      "type": "string"
                     },
                     "kind": {
                       "type": "string"
@@ -27779,8 +28830,8 @@
                   },
                   "required": [
                     "id",
-                    "createdAt",
                     "userWawuId",
+                    "createdAt",
                     "kind",
                     "title",
                     "body",
@@ -29379,94 +30430,6 @@
           "flutterwaveConfig"
         ]
       },
-      "TickState": {
-        "type": "object",
-        "properties": {
-          "verified": {
-            "type": "boolean"
-          },
-          "expiresAt": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "verified",
-          "expiresAt"
-        ]
-      },
-      "VerificationState": {
-        "type": "object",
-        "properties": {
-          "creator": {
-            "$ref": "#/components/schemas/TickState"
-          },
-          "professional": {
-            "$ref": "#/components/schemas/TickState"
-          }
-        },
-        "required": [
-          "creator",
-          "professional"
-        ]
-      },
-      "BlockedAccountUser": {
-        "type": "object",
-        "properties": {
-          "wawuId": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "handle": {
-            "type": "string",
-            "nullable": true
-          },
-          "avatarUrl": {
-            "type": "string",
-            "nullable": true
-          },
-          "verification": {
-            "$ref": "#/components/schemas/VerificationState"
-          }
-        },
-        "required": [
-          "wawuId",
-          "name",
-          "handle",
-          "avatarUrl",
-          "verification"
-        ]
-      },
-      "BlockedAccount": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "userWawuId": {
-            "type": "string"
-          },
-          "blockedWawuId": {
-            "type": "string"
-          },
-          "blockedAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "blockedUser": {
-            "$ref": "#/components/schemas/BlockedAccountUser",
-            "nullable": true
-          }
-        },
-        "required": [
-          "id",
-          "userWawuId",
-          "blockedWawuId",
-          "blockedAt"
-        ]
-      },
       "ContentPieceResponse": {
         "type": "object",
         "properties": {
@@ -29857,6 +30820,92 @@
           "followsCreator"
         ]
       },
+      "FeedCreator": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string",
+            "nullable": true
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          }
+        },
+        "required": [
+          "wawuId",
+          "displayName",
+          "handle",
+          "avatarUrl",
+          "verification"
+        ]
+      },
+      "MediaFrame": {
+        "type": "object",
+        "properties": {
+          "position": {
+            "type": "number"
+          },
+          "url": {
+            "type": "string",
+            "nullable": true
+          },
+          "locked": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "position",
+          "url",
+          "locked"
+        ]
+      },
+      "MediaDetails": {
+        "type": "object",
+        "properties": {
+          "contentId": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "durationLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "pageCount": {
+            "type": "number",
+            "nullable": true
+          },
+          "frameCount": {
+            "type": "number"
+          },
+          "frames": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MediaFrame"
+            }
+          }
+        },
+        "required": [
+          "contentId",
+          "contentType",
+          "durationLabel",
+          "pageCount",
+          "frameCount",
+          "frames"
+        ]
+      },
       "FeedItem": {
         "type": "object",
         "properties": {
@@ -29969,6 +31018,12 @@
           },
           "shares": {
             "type": "number"
+          },
+          "creator": {
+            "$ref": "#/components/schemas/FeedCreator"
+          },
+          "media": {
+            "$ref": "#/components/schemas/MediaDetails"
           }
         },
         "required": [
@@ -29998,7 +31053,238 @@
           "likedByMe",
           "savedByMe",
           "followsCreator",
-          "shares"
+          "shares",
+          "creator",
+          "media"
+        ]
+      },
+      "KnownFollower": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "wawuId",
+          "displayName",
+          "avatarUrl"
+        ]
+      },
+      "CardWork": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "accessType": {
+            "type": "string"
+          },
+          "price": {
+            "type": "number"
+          },
+          "locked": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          },
+          "thumbnailUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "durationLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "pageCount": {
+            "type": "number",
+            "nullable": true
+          },
+          "frameCount": {
+            "type": "number"
+          },
+          "views": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "contentType",
+          "accessType",
+          "price",
+          "locked",
+          "title",
+          "thumbnailUrl",
+          "durationLabel",
+          "pageCount",
+          "frameCount",
+          "views"
+        ]
+      },
+      "CreatorCard": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string",
+            "nullable": true
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "headline": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "coverUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          },
+          "followers": {
+            "type": "number"
+          },
+          "posts": {
+            "type": "number"
+          },
+          "rating": {
+            "type": "number",
+            "nullable": true
+          },
+          "knownFollowers": {
+            "type": "object",
+            "properties": {
+              "count": {
+                "type": "number"
+              },
+              "people": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/KnownFollower"
+                }
+              }
+            },
+            "required": [
+              "count",
+              "people"
+            ]
+          },
+          "works": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CardWork"
+            }
+          },
+          "followsCreator": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "wawuId",
+          "displayName",
+          "handle",
+          "headline",
+          "avatarUrl",
+          "coverUrl",
+          "verification",
+          "followers",
+          "posts",
+          "rating",
+          "knownFollowers",
+          "works",
+          "followsCreator"
+        ]
+      },
+      "ProfessionalCard": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "wawuId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string",
+            "nullable": true
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "headline": {
+            "type": "string"
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "coverUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          },
+          "category": {
+            "type": "string"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "ratingAvg": {
+            "type": "number",
+            "nullable": true
+          },
+          "reviewCount": {
+            "type": "number"
+          },
+          "dmPrice": {
+            "type": "number"
+          },
+          "dmResponseHours": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "wawuId",
+          "displayName",
+          "handle",
+          "headline",
+          "avatarUrl",
+          "coverUrl",
+          "verification",
+          "category",
+          "services",
+          "ratingAvg",
+          "reviewCount",
+          "dmPrice",
+          "dmResponseHours"
         ]
       },
       "FollowingCount": {
@@ -30010,6 +31296,138 @@
         },
         "required": [
           "count"
+        ]
+      },
+      "FreePreview": {
+        "type": "object",
+        "properties": {
+          "pages": {
+            "type": "number",
+            "nullable": true
+          },
+          "seconds": {
+            "type": "number",
+            "nullable": true
+          },
+          "lessons": {
+            "type": "number",
+            "nullable": true
+          }
+        },
+        "required": [
+          "pages",
+          "seconds",
+          "lessons"
+        ]
+      },
+      "DetailLesson": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "order": {
+            "type": "number"
+          },
+          "durationLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "isFree": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "order",
+          "durationLabel",
+          "isFree"
+        ]
+      },
+      "RatingState": {
+        "type": "object",
+        "properties": {
+          "average": {
+            "type": "number",
+            "nullable": true
+          },
+          "count": {
+            "type": "number"
+          },
+          "myRating": {
+            "type": "number",
+            "nullable": true
+          },
+          "canRate": {
+            "type": "boolean"
+          },
+          "cannotRateReason": {
+            "type": "string",
+            "enum": [
+              "own_content",
+              "not_purchased"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "average",
+          "count",
+          "myRating",
+          "canRate",
+          "cannotRateReason"
+        ]
+      },
+      "ContentDetail": {
+        "type": "object",
+        "properties": {
+          "contentId": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "purchasedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "buyerCount": {
+            "type": "number"
+          },
+          "studentCount": {
+            "type": "number",
+            "nullable": true
+          },
+          "freePreview": {
+            "$ref": "#/components/schemas/FreePreview"
+          },
+          "lessons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DetailLesson"
+            }
+          },
+          "rating": {
+            "$ref": "#/components/schemas/RatingState"
+          }
+        },
+        "required": [
+          "contentId",
+          "contentType",
+          "updatedAt",
+          "purchasedAt",
+          "buyerCount",
+          "studentCount",
+          "freePreview",
+          "lessons",
+          "rating"
         ]
       },
       "DmSendInitResponse": {
@@ -34830,15 +36248,15 @@
           "id": {
             "type": "string"
           },
+          "userWawuId": {
+            "type": "string"
+          },
           "status": {
             "type": "string",
             "enum": [
               "pending",
               "joined"
             ]
-          },
-          "userWawuId": {
-            "type": "string"
           },
           "requestedAt": {
             "type": "string",
@@ -34863,8 +36281,8 @@
         },
         "required": [
           "id",
-          "status",
           "userWawuId",
+          "status",
           "requestedAt",
           "communityId",
           "joinedAt",
