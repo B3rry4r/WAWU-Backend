@@ -7017,7 +7017,8 @@
               "type": "string",
               "enum": [
                 "feed",
-                "mine"
+                "mine",
+                "following"
               ]
             }
           },
@@ -7734,6 +7735,258 @@
         },
         "tags": [
           "PublicContent"
+        ]
+      }
+    },
+    "/api/hub/content/{id}/like": {
+      "post": {
+        "operationId": "ContentEngagementController_like",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LikeState"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ContentEngagement"
+        ]
+      },
+      "delete": {
+        "operationId": "ContentEngagementController_unlike",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LikeState"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ContentEngagement"
+        ]
+      }
+    },
+    "/api/hub/content/{id}/view": {
+      "post": {
+        "operationId": "ContentEngagementController_view",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViewState"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ContentEngagement"
+        ]
+      }
+    },
+    "/api/hub/content/{id}/share": {
+      "post": {
+        "operationId": "ContentEngagementController_share",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShareState"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ContentEngagement"
+        ]
+      }
+    },
+    "/api/hub/content/{id}/engagement": {
+      "get": {
+        "operationId": "ContentEngagementController_state",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentEngagement"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ContentEngagement"
+        ]
+      }
+    },
+    "/api/hub/feed": {
+      "get": {
+        "operationId": "FeedController_feed",
+        "parameters": [
+          {
+            "name": "scope",
+            "required": true,
+            "in": "query",
+            "description": "`for_you` is the ranked browse; `following` is only people you follow.",
+            "schema": {
+              "default": "for_you",
+              "type": "string",
+              "enum": [
+                "for_you",
+                "following"
+              ]
+            }
+          },
+          {
+            "name": "category",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "required": true,
+            "in": "query",
+            "description": "Ordering of `for_you`. `following` is always newest first.",
+            "schema": {
+              "default": "trending",
+              "type": "string",
+              "enum": [
+                "trending",
+                "recent",
+                "top"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FeedItem"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Feed"
+        ]
+      }
+    },
+    "/api/hub/feed/following/count": {
+      "get": {
+        "operationId": "FeedController_followingCount",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FollowingCount"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Feed"
         ]
       }
     },
@@ -29398,6 +29651,241 @@
         "required": [
           "purchased",
           "fullAssetUrl"
+        ]
+      },
+      "LikeState": {
+        "type": "object",
+        "properties": {
+          "likes": {
+            "type": "number"
+          },
+          "likedByMe": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "likes",
+          "likedByMe"
+        ]
+      },
+      "ViewState": {
+        "type": "object",
+        "properties": {
+          "views": {
+            "type": "number"
+          },
+          "counted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "views",
+          "counted"
+        ]
+      },
+      "ShareState": {
+        "type": "object",
+        "properties": {
+          "shares": {
+            "type": "number"
+          },
+          "counted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "shares",
+          "counted"
+        ]
+      },
+      "ContentEngagement": {
+        "type": "object",
+        "properties": {
+          "likes": {
+            "type": "number"
+          },
+          "views": {
+            "type": "number"
+          },
+          "shares": {
+            "type": "number"
+          },
+          "commentCount": {
+            "type": "number"
+          },
+          "likedByMe": {
+            "type": "boolean"
+          },
+          "savedByMe": {
+            "type": "boolean"
+          },
+          "followsCreator": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "likes",
+          "views",
+          "shares",
+          "commentCount",
+          "likedByMe",
+          "savedByMe",
+          "followsCreator"
+        ]
+      },
+      "FeedItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "live",
+              "rejected",
+              "removed"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "title": {
+            "type": "string"
+          },
+          "creatorWawuId": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string",
+            "enum": [
+              "video",
+              "course",
+              "audio",
+              "pdf",
+              "image",
+              "template"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "specializations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "accessType": {
+            "type": "string",
+            "enum": [
+              "free",
+              "paid"
+            ]
+          },
+          "price": {
+            "type": "number"
+          },
+          "durationLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "pageCount": {
+            "type": "number",
+            "nullable": true
+          },
+          "previewAssetUrl": {
+            "type": "string"
+          },
+          "creatorFirstUploadFree": {
+            "type": "boolean"
+          },
+          "views": {
+            "type": "number"
+          },
+          "ratingPct": {
+            "type": "number",
+            "nullable": true
+          },
+          "commentCount": {
+            "type": "number"
+          },
+          "likes": {
+            "type": "number"
+          },
+          "fullAssetUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "fullAssetLocked": {
+            "type": "boolean"
+          },
+          "likedByMe": {
+            "type": "boolean"
+          },
+          "savedByMe": {
+            "type": "boolean"
+          },
+          "followsCreator": {
+            "type": "boolean"
+          },
+          "shares": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "createdAt",
+          "title",
+          "creatorWawuId",
+          "slug",
+          "contentType",
+          "description",
+          "category",
+          "specializations",
+          "tags",
+          "accessType",
+          "price",
+          "durationLabel",
+          "pageCount",
+          "previewAssetUrl",
+          "creatorFirstUploadFree",
+          "views",
+          "ratingPct",
+          "commentCount",
+          "likes",
+          "fullAssetUrl",
+          "fullAssetLocked",
+          "likedByMe",
+          "savedByMe",
+          "followsCreator",
+          "shares"
+        ]
+      },
+      "FollowingCount": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "count"
         ]
       },
       "DmSendInitResponse": {

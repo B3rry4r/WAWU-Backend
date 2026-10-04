@@ -206,29 +206,50 @@ export class ContentPieceService {
 
   async list(
     requesterWawuId: string | undefined,
-    scope: 'feed' | 'mine' | undefined,
+    scope: 'feed' | 'mine' | 'following' | undefined,
     category: string | undefined,
     page: number,
     perPage: number,
     sort: ContentSort = 'trending',
   ): Promise<Paginated<ContentPieceResponse>> {
+    // Following (HOME-04): live pieces by the people the requester follows,
+    // newest first. A follow edge is one row per (follower, creator), so
+    // nobody the requester does not follow can appear, and unfollowing removes
+    // a creator's pieces from the tab at the next read. Nobody signed out
+    // follows anyone: an empty page, not an error.
+    let followedIds: string[] = [];
+    if (scope === 'following' && requesterWawuId) {
+      const edges = await this.prisma.followRelationship.findMany({
+        where: { followerWawuId: requesterWawuId },
+        select: { followingWawuId: true },
+      });
+      followedIds = edges.map((e) => e.followingWawuId);
+    }
+
     const where =
-      scope === 'mine'
+      scope === 'following'
         ? {
-            creatorWawuId: requesterWawuId ?? '__none__',
-            // Registry note says "any status", written before `removed`
-            // existed: a piece the creator deleted must disappear from their
-            // own shelf immediately, same as everywhere else, or `delete()`
-            // does nothing the creator can actually see.
-            status: { not: 'removed' as const },
+            status: 'live' as const,
+            creatorWawuId: { in: followedIds },
             ...(category ? { category } : {}),
           }
-        : { status: 'live' as const, ...(category ? { category } : {}) };
+        : scope === 'mine'
+          ? {
+              creatorWawuId: requesterWawuId ?? '__none__',
+              // Registry note says "any status", written before `removed`
+              // existed: a piece the creator deleted must disappear from their
+              // own shelf immediately, same as everywhere else, or `delete()`
+              // does nothing the creator can actually see.
+              status: { not: 'removed' as const },
+              ...(category ? { category } : {}),
+            }
+          : { status: 'live' as const, ...(category ? { category } : {}) };
 
     // "mine" is a creator looking at their own shelf, including drafts and
     // pieces still in review. That is a chronological list of their work, not
     // a ranked feed, so ranking is only applied to public browsing.
-    const ranked = scope !== 'mine' && sort !== 'recent';
+    const ranked =
+      scope !== 'mine' && scope !== 'following' && sort !== 'recent';
 
     const chronological = () =>
       this.prisma.$transaction([

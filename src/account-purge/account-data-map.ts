@@ -67,6 +67,12 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // ── things that exist only because this account exists ──────────────────
   { model: 'SavedItem', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CommentLike', column: 'userWawuId', disposition: 'OWNED' },
+  // Likes, daily opens and daily shares of content (HOME-04): what this
+  // person did on other people's pieces. It goes with them. The counters on
+  // the piece are not walked back, as with CommentLike above.
+  { model: 'ContentLike', column: 'userWawuId', disposition: 'OWNED' },
+  { model: 'ContentView', column: 'viewerWawuId', disposition: 'OWNED' },
+  { model: 'ContentShare', column: 'sharerWawuId', disposition: 'OWNED' },
   { model: 'MarketplaceSave', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CartItem', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'EventGoing', column: 'userWawuId', disposition: 'OWNED' },
