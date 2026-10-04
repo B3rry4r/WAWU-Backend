@@ -7,7 +7,12 @@ import {
   MaxLength,
   ValidateNested,
 } from 'class-validator';
-import { IsCleanText, IsRealDate, WithinPolicySize } from './policy-input';
+import {
+  IsCleanText,
+  IsPlainSections,
+  IsRealDate,
+  WithinPolicySize,
+} from './policy-input';
 
 export class PolicySectionDto {
   @IsString()
@@ -34,6 +39,7 @@ export class PutPolicyDto {
   @IsArray()
   @ArrayMinSize(1)
   @ArrayMaxSize(100)
+  @IsPlainSections()
   @WithinPolicySize()
   @ValidateNested({ each: true })
   @Type(() => PolicySectionDto)

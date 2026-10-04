@@ -129,7 +129,7 @@ describe('About and policies contract', () => {
     }
   });
 
-  it('serves nothing for a policy the owner has not filled in', async () => {
+  it('a user can read an unfilled policy and gets "not available", never text', async () => {
     for (const slug of ['terms', 'privacy']) {
       const res = await http().get(`/api/hub/policies/${slug}`).expect(200);
       expect(res.body.data).toEqual({
@@ -142,18 +142,18 @@ describe('About and policies contract', () => {
     }
   });
 
-  it('refuses a slug that is not a policy', async () => {
+  it('a user cannot read a policy that does not exist', async () => {
     await http().get('/api/hub/policies/cookies').expect(404);
   });
 
-  it('About has no licence line and no support address until the owner fills them in', async () => {
+  it('a user can read About and sees no licence line or support address until the owner fills them in', async () => {
     const res = await http().get('/api/hub/about').expect(200);
     expect(res.body.data.licenceLine).toBeNull();
     expect(res.body.data.supportEmail).toBeNull();
     expect(res.body.data.bankName).toBe('Loma Bank');
   });
 
-  it('only a superadmin can write a policy, and nothing is written without one', async () => {
+  it('a reviewer or a signed-out caller cannot write a policy, and nothing is written', async () => {
     await http().put('/api/hub/admin/policies/terms').send(DOC).expect(401);
     await http()
       .put('/api/hub/admin/policies/terms')
@@ -164,7 +164,7 @@ describe('About and policies contract', () => {
     expect(res.body.data.available).toBe(false);
   });
 
-  it('rejects a malformed document', async () => {
+  it('a superadmin cannot save a malformed document', async () => {
     const put = (body: object) =>
       http()
         .put('/api/hub/admin/policies/terms')
@@ -180,7 +180,7 @@ describe('About and policies contract', () => {
       .expect(404);
   });
 
-  it('what the owner puts in comes back to anyone, with its date, and a rewrite replaces it', async () => {
+  it('a user can read what the superadmin saved, with its date, and a rewrite replaces it', async () => {
     const put = await http()
       .put('/api/hub/admin/policies/terms')
       .set('Authorization', `Bearer ${superToken}`)
@@ -206,7 +206,7 @@ describe('About and policies contract', () => {
     expect(again.body.data.sections).toEqual([{ heading: 'Only', body: 'x' }]);
   });
 
-  it('About reads the bank, the licence line and the support address from config', async () => {
+  it('a user can read the bank, licence line and support address the config holds', async () => {
     process.env.WALLET_BANK_NAME = 'Test Bank';
     process.env.WALLET_LICENCE_LINE = 'Licensed line from config';
     process.env.SUPPORT_EMAIL = 'help@example.test';
@@ -245,6 +245,51 @@ describe('About and policies contract', () => {
         expect(got.body.data.effectiveDate).not.toBe(date);
       },
     );
+
+    it.each([
+      [[[]]],
+      [[[{ heading: 'h', body: 'b' }]]],
+      [[{ heading: 'ok', body: 'ok' }, []]],
+      [[null]],
+      [['text']],
+      [[{ heading: 'h' }]],
+      [[{ heading: 'h', body: 5 }]],
+      [[{ heading: 'h', body: 'b', extra: 'x' }]],
+      [[{}]],
+    ])(
+      'a superadmin cannot save sections %j (400) and the live document stays',
+      async (sections) => {
+        await put(DOC).expect(200);
+        const res = await put({ ...DOC, sections }).expect(400);
+        expect(res.body.data).toBeNull();
+        const got = await http().get('/api/hub/policies/terms').expect(200);
+        expect(got.body.data.available).toBe(true);
+        expect(got.body.data.sections).toEqual(DOC.sections);
+      },
+    );
+
+    it.each([
+      ['title', { title: 'Te\ud800rms' }],
+      ['heading', { sections: [{ heading: 'a\udc00b', body: 'x' }] }],
+      ['body', { sections: [{ heading: 'a', body: 'x\ud83d' }] }],
+    ])(
+      'a superadmin cannot save a lone surrogate in the %s (400, not 500, nothing altered)',
+      async (_where, patch) => {
+        await put(DOC).expect(200);
+        await put(JSON.stringify({ ...DOC, ...patch })).expect(400);
+        const got = await http().get('/api/hub/policies/terms').expect(200);
+        expect(got.body.data.title).toBe('Terms');
+      },
+    );
+
+    it('a superadmin can save a pair of surrogates (an emoji) and it reads back unchanged', async () => {
+      const sections = [
+        { heading: 'Emoji \ud83d\ude00', body: 'ok \ud83d\ude00' },
+      ];
+      await put({ ...DOC, sections }).expect(200);
+      const got = await http().get('/api/hub/policies/terms').expect(200);
+      expect(got.body.data.sections).toEqual(sections);
+    });
 
     it('a superadmin can save a real date, including 29 February of a leap year, and it reads back unchanged', async () => {
       for (const date of ['2028-02-29', '2000-01-01', '2100-12-31']) {

@@ -1,5 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { isPlainSections } from '../admin/legal-documents/policy-input';
 import type { PolicySectionView, PolicyView } from './about-view.type';
 
 export const POLICY_SLUGS = ['terms', 'privacy'] as const;
@@ -61,6 +66,11 @@ export class PoliciesService {
       heading: x.heading,
       body: x.body,
     }));
+    if (!isPlainSections(input.sections)) {
+      throw new BadRequestException(
+        'A document needs sections, each with a heading and a body.',
+      );
+    }
     const effectiveDate = new Date(`${input.effectiveDate}T00:00:00.000Z`);
     await this.prisma.legalDocument.upsert({
       where: { slug },

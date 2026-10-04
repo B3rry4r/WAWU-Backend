@@ -23,12 +23,17 @@ export function isRealDate(value: unknown): boolean {
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
 }
 
-/** Text with something in it after trimming, and no NUL (Postgres refuses it). */
+/** An unpaired UTF-16 code unit: Postgres refuses it in jsonb and replaces it in text. */
+const LONE_SURROGATE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+/** Text with something in it after trimming, no NUL and no lone surrogate. */
 export function isCleanText(value: unknown): boolean {
   return (
     typeof value === 'string' &&
     value.trim().length > 0 &&
-    !value.includes('\u0000')
+    !value.includes('\u0000') &&
+    !LONE_SURROGATE.test(value)
   );
 }
 
@@ -56,7 +61,7 @@ export const IsRealDate = decorate(
 export const IsCleanText = decorate(
   'isCleanText',
   isCleanText,
-  '$property must have text in it and no null characters',
+  '$property must have text in it, with no null characters or broken characters',
 );
 
 const bytesOf = (v: unknown): number =>
@@ -73,4 +78,27 @@ export const WithinPolicySize = decorate(
     return bytes <= POLICY_MAX_BYTES;
   },
   `the document is too long: at most ${POLICY_MAX_BYTES} bytes of text`,
+);
+
+/** Every section is a plain object `{ heading, body }` of two strings, nothing else. */
+export function isPlainSections(sections: unknown): boolean {
+  if (!Array.isArray(sections) || sections.length === 0) return false;
+  return sections.every((s: unknown) => {
+    if (typeof s !== 'object' || s === null || Array.isArray(s)) return false;
+    const keys = Object.keys(s).sort();
+    const x = s as { heading?: unknown; body?: unknown };
+    return (
+      keys.length === 2 &&
+      keys[0] === 'body' &&
+      keys[1] === 'heading' &&
+      typeof x.heading === 'string' &&
+      typeof x.body === 'string'
+    );
+  });
+}
+
+export const IsPlainSections = decorate(
+  'isPlainSections',
+  isPlainSections,
+  'sections must be a list of objects, each with a heading and a body',
 );
