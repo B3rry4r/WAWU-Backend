@@ -105,10 +105,11 @@ function incorrectMessage(triesLeft: number): string {
  *   and `argon2.verify` compares with `crypto.timingSafeEqual`.
  * - Five wrong tries in a row lock it for PIN_LOCK_MINUTES. A right PIN, a
  *   new PIN, or the end of a lock puts the count back to 0.
- * - A try is COUNTED BEFORE the hash is compared, in one conditional update,
- *   so tries sent at the same moment cannot get past the limit together:
- *   only the tries that won a slot are compared at all, and the fifth slot
- *   sets the lock in the same write. A right PIN then clears both.
+ * - Tries are checked one at a time per person, under a lock on the PIN
+ *   row held for the whole check (MONEY-17 round 2): tries sent at the same
+ *   moment cannot get past the limit together, and a right PIN never uses
+ *   up a try, however many arrive at once. The fifth wrong try sets the
+ *   lock in the same write. A right PIN clears the count.
  * - Nothing here logs, and no message carries what the caller sent.
  *
  * The routes and the X-Transaction-Pin guard are thin: every rule is here.
@@ -185,29 +186,73 @@ export class TransactionPinService {
    * screen shows the lock at once instead of "0 tries left".
    */
   async verify(wawuUserId: string, pin: string): Promise<PinStateView> {
-    const now = new Date();
-
-    // A lock that has ended starts the count again.
-    await this.prisma.transactionPin.updateMany({
-      where: { wawuUserId, lockedUntil: { lte: now } },
-      data: { failedTries: 0, lockedUntil: null },
-    });
-
-    const claimed = await this.claimTry(wawuUserId, now);
-
-    if (await argon2.verify(claimed.pinHash, pin)) {
-      const row = await this.prisma.transactionPin.update({
-        where: { wawuUserId },
-        data: { failedTries: 0, lockedUntil: null },
-      });
-      return pinStateView(row, new Date());
+    // One check at a time per person (MONEY-17 round 2): the PIN row is
+    // locked for the whole check, so tries sent at the same moment are
+    // counted one after another. A right PIN never uses up a try, however
+    // many arrive together (8 payments at once with the right PIN used to
+    // lock it), and wrong ones still cannot get past the limit together.
+    const outcome = await this.prisma.$transaction(
+      async (
+        tx,
+      ): Promise<
+        | { kind: 'ok'; row: PinRow }
+        | { kind: 'not_set' }
+        | { kind: 'locked'; until: Date }
+        | { kind: 'wrong'; triesLeft: number }
+      > => {
+        const now = new Date();
+        await tx.$queryRaw`
+          SELECT 1 FROM "TransactionPin" WHERE "wawuUserId" = ${wawuUserId} FOR UPDATE`;
+        const row = await tx.transactionPin.findUnique({
+          where: { wawuUserId },
+        });
+        if (!row) return { kind: 'not_set' };
+        if (row.lockedUntil && row.lockedUntil > now) {
+          return { kind: 'locked', until: row.lockedUntil };
+        }
+        // A lock that has ended starts the count again.
+        const before = row.lockedUntil ? 0 : row.failedTries;
+        if (await argon2.verify(row.pinHash, pin)) {
+          const fresh =
+            before === 0 && !row.lockedUntil
+              ? row
+              : await tx.transactionPin.update({
+                  where: { wawuUserId },
+                  data: { failedTries: 0, lockedUntil: null },
+                });
+          return { kind: 'ok', row: fresh };
+        }
+        const failedTries = before + 1;
+        if (failedTries >= PIN_MAX_TRIES) {
+          const until = new Date(now.getTime() + this.lockMs);
+          await tx.transactionPin.update({
+            where: { wawuUserId },
+            data: { failedTries: PIN_MAX_TRIES, lockedUntil: until },
+          });
+          return { kind: 'locked', until };
+        }
+        await tx.transactionPin.update({
+          where: { wawuUserId },
+          data: { failedTries, lockedUntil: null },
+        });
+        return { kind: 'wrong', triesLeft: PIN_MAX_TRIES - failedTries };
+      },
+      { maxWait: 30_000, timeout: 30_000 },
+    );
+    switch (outcome.kind) {
+      case 'ok':
+        return pinStateView(outcome.row, new Date());
+      case 'not_set':
+        throw new MoneyError('pin_not_set', NOT_SET_MESSAGE);
+      case 'locked':
+        throw lockedError(outcome.until);
+      case 'wrong':
+        throw new MoneyError(
+          'pin_incorrect',
+          incorrectMessage(outcome.triesLeft),
+          { triesLeft: outcome.triesLeft },
+        );
     }
-
-    if (claimed.lockedUntil) throw lockedError(claimed.lockedUntil);
-    const triesLeft = PIN_MAX_TRIES - claimed.failedTries;
-    throw new MoneyError('pin_incorrect', incorrectMessage(triesLeft), {
-      triesLeft,
-    });
   }
 
   /**
@@ -224,50 +269,6 @@ export class TransactionPinService {
     if (row.lockedUntil && row.lockedUntil > new Date()) {
       throw lockedError(row.lockedUntil);
     }
-  }
-
-  /**
-   * Takes one try before the PIN is compared. Tries 1 to 4 only count; the
-   * fifth also sets the lock, in the same write, so a concurrent try already
-   * sees it locked. Each step is a single conditional update: whichever
-   * request wins the row's next slot is the only one compared against it.
-   */
-  private async claimTry(wawuUserId: string, now: Date): Promise<PinRow> {
-    try {
-      return await this.prisma.transactionPin.update({
-        where: {
-          wawuUserId,
-          lockedUntil: null,
-          failedTries: { lt: PIN_MAX_TRIES - 1 },
-        },
-        data: { failedTries: { increment: 1 } },
-      });
-    } catch (err) {
-      if (!isNoMatch(err)) throw err;
-    }
-    try {
-      return await this.prisma.transactionPin.update({
-        where: {
-          wawuUserId,
-          lockedUntil: null,
-          failedTries: PIN_MAX_TRIES - 1,
-        },
-        data: {
-          failedTries: { increment: 1 },
-          lockedUntil: new Date(now.getTime() + this.lockMs),
-        },
-      });
-    } catch (err) {
-      if (!isNoMatch(err)) throw err;
-    }
-
-    const row = await this.prisma.transactionPin.findUnique({
-      where: { wawuUserId },
-    });
-    if (!row) throw new MoneyError('pin_not_set', NOT_SET_MESSAGE);
-    // No slot left, so it is locked: the fifth try sets lockedUntil in the
-    // same write that takes the last slot, and every reset clears both.
-    throw lockedError(row.lockedUntil ?? new Date(now.getTime() + this.lockMs));
   }
 }
 

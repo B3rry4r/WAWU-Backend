@@ -28,7 +28,22 @@ export function splitPrice(
 
 export const PAYMENT_CONFIG_KEYS = {
   idempotencyKeyHours: 'IDEMPOTENCY_KEY_HOURS',
+  reviewAfterHours: 'PAYMENT_REVIEW_AFTER_HOURS',
 } as const;
+
+/**
+ * PROVISIONAL(PAYMENT-REVIEW-AFTER-HOURS, owner=YOU, why=no ruling names how long a payment whose outcome Fintava has not settled is asked about before a person looks at it)
+ *
+ * A payment whose outcome is unknown stays `pending` and Fintava is asked
+ * about it again and again (backing off to hourly); absence is never taken
+ * as proof that no money left the buyer's wallet (lead ruling D1, 4 Oct
+ * 2026). Past this many hours with no answer it goes to manual review: still
+ * `pending`, still blocking a second payment for the same item, no longer
+ * in the sweep; Fintava's webhook or the ledger's status check still
+ * settles it. Three days is the ledger's own confirm window
+ * (LEDGER_CONFIRM_WINDOW_HOURS). Overridable (1 to 720).
+ */
+export const DEFAULT_PAYMENT_REVIEW_AFTER_HOURS = 72;
 
 /**
  * PROVISIONAL(IDEMPOTENCY-KEY-HOURS, owner=YOU, why=CONVENTIONS section 4 says keys are kept at least 24 hours and leaves the length to MONEY-17; no ruling names it)
@@ -44,8 +59,26 @@ export const DEFAULT_IDEMPOTENCY_KEY_HOURS = 48;
 @Injectable()
 export class PaymentSettings {
   readonly idempotencyKeyHours: number;
+  readonly reviewAfterHours: number;
 
   constructor(config: ConfigService) {
+    const review = PAYMENT_CONFIG_KEYS.reviewAfterHours;
+    try {
+      this.reviewAfterHours = koboSetting(
+        config.get<string>(review),
+        review,
+        DEFAULT_PAYMENT_REVIEW_AFTER_HOURS,
+        1,
+        720,
+      );
+    } catch (e) {
+      if (e instanceof FeeConfigError) {
+        throw new FeeConfigError(
+          `${review} must be a whole number of hours from 1 to 720.`,
+        );
+      }
+      throw e;
+    }
     const key = PAYMENT_CONFIG_KEYS.idempotencyKeyHours;
     try {
       this.idempotencyKeyHours = koboSetting(

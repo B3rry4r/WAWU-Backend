@@ -18,6 +18,7 @@ import {
   fintavaError,
   MERCHANT_ACCOUNT,
   MERCHANT_BALANCE,
+  customerHistory,
   recordByReference,
   type SeenRequest,
 } from '../../../../test/fintava/fintava-double';
@@ -32,7 +33,9 @@ import type { MoneyErrorReason } from '../../dto/money-error.dto';
 import { FeeSettings } from '../../fees/fee-config';
 import { FeeQuoteService } from '../../fees/fee-quote.service';
 import { NO_WALLET_MESSAGE } from '../../gate/wallet-gate';
+import { AccountPurgeService } from '../../../account-purge/account-purge.service';
 import { LedgerStatusService } from '../../ledger/ledger-status.service';
+import { LedgerService } from '../../ledger/ledger.service';
 import { MoneyError } from '../../money-error';
 import { MoneyModule } from '../../money.module';
 import type {
@@ -153,8 +156,40 @@ class Wallets {
     | 'timeout'
     | 'error500'
     | 'refuse'
-    | 'insufficient' = 'live';
+    | 'insufficient'
+    | 'wrongamount' = 'live';
   delayMs = 0;
+  /** Fintava's charge when set, whatever the band (its fee changed before our config). */
+  feeOverride: number | null = null;
+  /** References Fintava's lookup does not show yet (its record lags). */
+  readonly hidden = new Set<string>();
+  /** References Fintava reports as FAILURE. */
+  readonly failures = new Set<string>();
+  /** Held before a transfer is taken (a barrier for requests at once). */
+  sendGate: (() => Promise<void>) | null = null;
+  /** Held before a balance is answered. */
+  balanceGate: ((account: string) => Promise<void>) | null = null;
+}
+
+/** Resolves once `n` callers have arrived, for all of them. */
+function barrier(n: number): () => Promise<void> {
+  let arrived = 0;
+  let open!: () => void;
+  const all = new Promise<void>((r) => (open = r));
+  return () => {
+    arrived += 1;
+    if (arrived >= n) open();
+    return all;
+  };
+}
+
+/** Polls until `ok` answers true, for at most 10 s. */
+async function until(ok: () => Promise<boolean>): Promise<void> {
+  for (let i = 0; i < 200; i += 1) {
+    if (await ok()) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error('until: the condition never held');
 }
 
 describe('Pay from wallet (MONEY-17) over HTTP', () => {
@@ -162,6 +197,7 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
   let prisma: PrismaService;
   let payments: WalletPaymentService;
   let statusChecks: LedgerStatusService;
+  let ledger: LedgerService;
   const double = new FintavaDouble();
   const logger = new QuietLogger();
   const wallets = new Wallets();
@@ -274,113 +310,149 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
       status: 200,
       body: MERCHANT_BALANCE,
     });
-    double.on('GET', /^\/customer\/wallet\/balance\//, (req: SeenRequest) => {
-      const id = req.path.split('/').pop()!;
-      const account = wallets.byId.get(id);
-      if (!account) {
-        return { status: 400, body: fintavaError(400, 'Wallet not found') };
-      }
-      const naira = (wallets.kobo.get(account) ?? 0) / 100;
-      return {
-        status: 200,
-        body: {
-          data: {
-            balance: { bookedBalance: naira, availableBalance: naira },
-            tier: 'TIER_2',
-          },
+    double.on(
+      'GET',
+      /^\/customer\/wallet\/balance\//,
+      async (req: SeenRequest) => {
+        const id = req.path.split('/').pop()!;
+        const account = wallets.byId.get(id);
+        if (!account) {
+          return { status: 400, body: fintavaError(400, 'Wallet not found') };
+        }
+        if (wallets.balanceGate) await wallets.balanceGate(account);
+        const naira = (wallets.kobo.get(account) ?? 0) / 100;
+        return {
           status: 200,
-          message: 'Wallet details fetched',
-        },
-      };
-    });
-    double.on('POST', '/transaction/wallet-to-wallet', (req: SeenRequest) => {
-      const b = req.body as {
-        senderAccount: string;
-        receiverAccount: string;
-        amount: number;
-        CustomerReference: string;
-      };
-      const mode = wallets.mode;
-      if (mode === 'error500') {
-        return { status: 500, body: fintavaError(500, 'read ECONNRESET') };
-      }
-      if (mode === 'refuse') {
-        return {
-          status: 400,
-          body: fintavaError(400, 'Transfer could not be processed'),
+          body: {
+            data: {
+              balance: { bookedBalance: naira, availableBalance: naira },
+              tier: 'TIER_2',
+            },
+            status: 200,
+            message: 'Wallet details fetched',
+          },
         };
-      }
-      if (mode === 'insufficient') {
-        return {
-          status: 400,
-          body: fintavaError(
-            400,
-            'Insufficient balance on source wallet to complete this transfer.',
-          ),
-        };
-      }
-      if (wallets.references.has(b.CustomerReference)) {
-        return {
-          status: 400,
-          body: fintavaError(400, 'customerReference already exists'),
-        };
-      }
-      const amountKobo = Math.round(b.amount * 100);
-      const feeKobo = mode === 'sandbox' ? 0 : liveFee(amountKobo);
-      const have = wallets.kobo.get(b.senderAccount) ?? 0;
-      if (have < amountKobo + feeKobo) {
-        return {
-          status: 400,
-          body: fintavaError(
-            400,
-            'Insufficient balance on source wallet to complete this transfer.',
-          ),
-        };
-      }
-      // The money moves when Fintava takes the request, whether or not the
-      // answer reaches the caller in time.
-      wallets.references.add(b.CustomerReference);
-      wallets.kobo.set(b.senderAccount, have - amountKobo - feeKobo);
-      wallets.kobo.set(
-        b.receiverAccount,
-        (wallets.kobo.get(b.receiverAccount) ?? 0) + amountKobo,
+      },
+    );
+    double.on('GET', /^\/transaction\/reference\//, (req: SeenRequest) => {
+      const ref = decodeURIComponent(
+        req.path.replace('/transaction/reference/', ''),
       );
-      wallets.sends.push({
-        from: b.senderAccount,
-        to: b.receiverAccount,
-        amountKobo,
-        feeKobo,
-        reference: b.CustomerReference,
-      });
-      const after = (have - amountKobo - feeKobo) / 100;
+      const send = wallets.sends.find((x) => x.reference === ref);
+      if (!send || wallets.hidden.has(ref)) {
+        return {
+          status: 404,
+          body: fintavaError(404, 'Transaction not found!'),
+        };
+      }
       return {
         status: 200,
-        delayMs:
-          mode === 'timeout'
-            ? MONEY_TIMEOUT_MS + 1_000
-            : mode === 'slow'
-              ? 400
-              : 0,
-        body: {
-          data: {
-            amount: b.amount,
-            reference: `tagapay${randomUUID().replace(/-/g, '')}`,
-            customerReference: randomUUID(),
-            total: (amountKobo + feeKobo) / 100,
-            transaction_fee: feeKobo / 100,
-            source_customer_id: randomUUID(),
-            source_customer_accname: 'Pay Tester',
-            source_customer_accno: b.senderAccount,
-            source_customer_wallet: b.senderAccount,
-            source_availableBalance: after,
-            source_bookedBalance: after,
-            description: 'Fund transfer between customers',
-          },
-          status: 200,
-          message: 'successful',
-        },
+        body: recordByReference(
+          ref,
+          wallets.failures.has(ref) ? 'FAILURE' : 'SUCCESS',
+          (send.amountKobo / 100).toFixed(2),
+        ),
       };
     });
+    double.on('GET', '/txn', {
+      status: 200,
+      body: customerHistory([]),
+    });
+    double.on(
+      'POST',
+      '/transaction/wallet-to-wallet',
+      async (req: SeenRequest) => {
+        if (wallets.sendGate) await wallets.sendGate();
+        const b = req.body as {
+          senderAccount: string;
+          receiverAccount: string;
+          amount: number;
+          CustomerReference: string;
+        };
+        const mode = wallets.mode;
+        if (mode === 'error500') {
+          return { status: 500, body: fintavaError(500, 'read ECONNRESET') };
+        }
+        if (mode === 'refuse') {
+          return {
+            status: 400,
+            body: fintavaError(400, 'Transfer could not be processed'),
+          };
+        }
+        if (mode === 'insufficient') {
+          return {
+            status: 400,
+            body: fintavaError(
+              400,
+              'Insufficient balance on source wallet to complete this transfer.',
+            ),
+          };
+        }
+        if (wallets.references.has(b.CustomerReference)) {
+          return {
+            status: 400,
+            body: fintavaError(400, 'customerReference already exists'),
+          };
+        }
+        const amountKobo =
+          Math.round(b.amount * 100) + (mode === 'wrongamount' ? 100 : 0);
+        const feeKobo =
+          wallets.feeOverride ?? (mode === 'sandbox' ? 0 : liveFee(amountKobo));
+        const have = wallets.kobo.get(b.senderAccount) ?? 0;
+        if (have < amountKobo + feeKobo) {
+          return {
+            status: 400,
+            body: fintavaError(
+              400,
+              'Insufficient balance on source wallet to complete this transfer.',
+            ),
+          };
+        }
+        // The money moves when Fintava takes the request, whether or not the
+        // answer reaches the caller in time.
+        wallets.references.add(b.CustomerReference);
+        wallets.kobo.set(b.senderAccount, have - amountKobo - feeKobo);
+        wallets.kobo.set(
+          b.receiverAccount,
+          (wallets.kobo.get(b.receiverAccount) ?? 0) + amountKobo,
+        );
+        wallets.sends.push({
+          from: b.senderAccount,
+          to: b.receiverAccount,
+          amountKobo,
+          feeKobo,
+          reference: b.CustomerReference,
+        });
+        const after = (have - amountKobo - feeKobo) / 100;
+        return {
+          status: 200,
+          delayMs:
+            mode === 'timeout'
+              ? MONEY_TIMEOUT_MS + 1_000
+              : mode === 'slow'
+                ? 400
+                : 0,
+          body: {
+            data: {
+              amount: amountKobo / 100,
+              reference: `tagapay${randomUUID().replace(/-/g, '')}`,
+              customerReference: randomUUID(),
+              total: (amountKobo + feeKobo) / 100,
+              transaction_fee: feeKobo / 100,
+              source_customer_id: randomUUID(),
+              source_customer_accname: 'Pay Tester',
+              source_customer_accno: b.senderAccount,
+              source_customer_wallet: b.senderAccount,
+              source_availableBalance: after,
+              source_bookedBalance: after,
+              description: 'Fund transfer between customers',
+            },
+            status: 200,
+            message: 'successful',
+          },
+        };
+      },
+    );
   }
 
   beforeAll(async () => {
@@ -429,6 +501,7 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
     prisma = moduleRef.get(PrismaService);
     payments = moduleRef.get(WalletPaymentService);
     statusChecks = moduleRef.get(LedgerStatusService);
+    ledger = moduleRef.get(LedgerService);
 
     const registry = moduleRef.get(PayableRegistry);
     const unlock: PayableKindHandler = {
@@ -445,6 +518,13 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
           'piece-4999': 499_900,
           'piece-5000': 500_000,
           'piece-odd': 99_999,
+          'piece-1000b': 100_000,
+          'piece-1000c': 100_000,
+          'piece-1000d': 100_000,
+          'piece-1000e': 100_000,
+          'piece-1000f': 100_000,
+          'piece-1000g': 100_000,
+          'piece-1000h': 100_000,
         };
         const priceKobo = prices[targetId];
         if (!priceKobo) {
@@ -689,32 +769,65 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
     expect(later.text).toBe(ok[0].text);
   });
 
-  it('three payments at once with different keys and money for two: two debits, the third refused by Fintava with nothing moved', async () => {
-    const p = await buyer(210_000);
-    const q = await quoted(p, 'content_unlock', 'piece-1000');
-    wallets.mode = 'slow';
-    const answers = await Promise.all(
-      Array.from({ length: 3 }, () => pay(p, payBody(q))),
+  it('three payments at once for three items with money for two, both ways it can fall: two debits, nothing negative, every refusal a real shortfall', async () => {
+    // Order A: all three read a balance that covers them before any transfer
+    // is taken (a barrier on Fintava's transfer); Fintava refuses the third.
+    const a = await buyer(210_000);
+    const items = ['piece-1000', 'piece-1000b', 'piece-1000c'];
+    const qa = await Promise.all(
+      items.map((t) => quoted(a, 'content_unlock', t)),
     );
-    wallets.mode = 'live';
-    const statuses = answers.map((a) => a.status).sort();
-    expect(statuses).toEqual([201, 201, 402]);
-    expect(sendsFrom(p)).toHaveLength(2);
-    expect(wallets.kobo.get(p.accountNumber)).toBe(210_000 - 2 * 102_325);
-    const refused = answers.find((a) => a.status === 402)!;
-    expect(body(refused).reason).toMatchObject({
+    wallets.sendGate = barrier(3);
+    const answersA = await Promise.all(qa.map((q) => pay(a, payBody(q))));
+    wallets.sendGate = null;
+    expect(answersA.map((r) => r.status).sort()).toEqual([201, 201, 402]);
+    expect(sendsFrom(a)).toHaveLength(2);
+    expect(wallets.kobo.get(a.accountNumber)).toBe(210_000 - 2 * 102_325);
+    const refusedA = body(answersA.find((r) => r.status === 402)!).reason!;
+    expect(refusedA).toEqual({
       code: 'insufficient_funds',
+      message: 'You need ₦969.75 more in your wallet.',
+      balanceKobo: 5350,
       totalKobo: 102_325,
-      balanceKobo: 210_000 - 2 * 102_325,
-      shortfallKobo: 102_325 - (210_000 - 2 * 102_325),
+      shortfallKobo: 96_975,
     });
-    const rows = await prisma.walletPayment.findMany({
-      where: { payerWawuUserId: p.id },
+    const rowsA = await prisma.walletPayment.findMany({
+      where: { payerWawuUserId: a.id },
     });
-    expect(rows.map((r) => r.status).sort()).toEqual([
+    expect(rowsA.map((r) => r.status).sort()).toEqual([
       'completed',
       'completed',
       'failed',
+    ]);
+
+    // Order B: the third reads the balance only after the first two are
+    // taken (a barrier on its balance read); our own check refuses it and
+    // nothing is written.
+    const b = await buyer(210_000);
+    const qb = await Promise.all(
+      items.map((t) => quoted(b, 'content_unlock', t)),
+    );
+    let reads = 0;
+    wallets.balanceGate = async (account) => {
+      if (account !== b.accountNumber) return;
+      reads += 1;
+      if (reads === 3) {
+        await until(() => Promise.resolve(sendsFrom(b).length === 2));
+      }
+    };
+    const answersB = await Promise.all(qb.map((q) => pay(b, payBody(q))));
+    wallets.balanceGate = null;
+    expect(answersB.map((r) => r.status).sort()).toEqual([201, 201, 402]);
+    expect(sendsFrom(b)).toHaveLength(2);
+    expect(body(answersB.find((r) => r.status === 402)!).reason).toEqual(
+      refusedA,
+    );
+    const rowsB = await prisma.walletPayment.findMany({
+      where: { payerWawuUserId: b.id },
+    });
+    expect(rowsB.map((r) => r.status).sort()).toEqual([
+      'completed',
+      'completed',
     ]);
   });
 
@@ -1030,8 +1143,14 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
     );
     expect(checked.status).toBe('completed');
 
-    const swept = await payments.sweep(new Date(Date.now() + 2 * 60_000));
-    expect(swept.settled).toBeGreaterThanOrEqual(1);
+    // The ledger row's completion settles the payment at once (lead ruling
+    // D2), without waiting for the sweep.
+    await until(async () => {
+      const r = await prisma.walletPayment.findUniqueOrThrow({
+        where: { id: paid.id },
+      });
+      return r.status === 'completed' && r.fulfilledAt !== null;
+    });
     const row = await prisma.walletPayment.findUniqueOrThrow({
       where: { id: paid.id },
     });
@@ -1098,7 +1217,14 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
     const res = await pay(p, payBody(q), key);
     wallets.mode = 'live';
     expect(res.status).toBe(402);
-    expect(body(res).reason?.code).toBe('insufficient_funds');
+    // A fresh read still covers the total: no shortfall to show (lead
+    // ruling D3), never "₦0.00 more".
+    expect(body(res).reason).toEqual({
+      code: 'insufficient_funds',
+      message: 'Your balance changed. Check it and try again.',
+      balanceKobo: 500_000,
+      totalKobo: 102_325,
+    });
     const failed = await prisma.walletPayment.findFirstOrThrow({
       where: { payerWawuUserId: p.id },
     });
@@ -1126,6 +1252,437 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
       where: { id: paid.id },
     });
     expect(row.discrepancy).toMatch(/feeKobo 2325 vs 0/);
+  });
+
+  // -------------------------------------------------------------------------
+  // Round 2: an unknown outcome is never "no money moved" (lead ruling D1)
+  // -------------------------------------------------------------------------
+
+  it('D1: Fintava took it, the answer was lost and its record lags past the resend window: pending, "don\'t pay again", a second payment for the item refused, then completed and delivered once; one debit', async () => {
+    const p = await buyer(1_000_000);
+    const q = await quoted(p, 'content_unlock', 'piece-1000');
+    wallets.mode = 'timeout';
+    const first = await pay(p, payBody(q));
+    wallets.mode = 'live';
+    const paid = body<PaymentView>(first).data!;
+    wallets.hidden.add(paid.reference);
+    expect(paid).toMatchObject({
+      status: 'pending',
+      statusMessage:
+        "We're still confirming this payment. Don't pay again; we'll let you know.",
+      failureReason: null,
+    });
+    expect(sendsFrom(p)).toHaveLength(1);
+
+    // MONEY-08 concludes Fintava has no record (its 404, no history row,
+    // past the window) and fails the ledger row as absent.
+    const out = (await ledgerRows(paid.reference)).find(
+      (r) => r.direction === 'out',
+    )!;
+    const absent = await statusChecks.check(
+      out.id,
+      new Date(Date.now() + 60 * 60_000),
+    );
+    expect(absent.outcome).toBe('failed_absent');
+    // The sweep asks Fintava itself and still hears nothing: pending.
+    await payments.sweep(new Date(Date.now() + 2 * 60_000));
+    let row = await prisma.walletPayment.findUniqueOrThrow({
+      where: { id: paid.id },
+    });
+    expect(row.status).toBe('pending');
+    expect(row.checks).toBe(1);
+
+    // The buyer tries again, under a new key: refused, nothing sent.
+    const q2 = await quoted(p, 'content_unlock', 'piece-1000');
+    const again = await pay(p, payBody(q2));
+    expect(again.status).toBe(409);
+    expect(body(again).reason).toEqual({
+      code: 'payment_in_progress',
+      message:
+        "We're still confirming this payment. Don't pay again; we'll let you know.",
+      paymentId: paid.id,
+    });
+    expect(sendsFrom(p)).toHaveLength(1);
+
+    // Fintava's record shows up: the next check completes it, revives the
+    // ledger row, and delivers once.
+    wallets.hidden.delete(paid.reference);
+    await payments.sweep(new Date(Date.now() + 10 * 60_000));
+    row = await prisma.walletPayment.findUniqueOrThrow({
+      where: { id: paid.id },
+    });
+    expect(row.status).toBe('completed');
+    expect(row.openKey).toBeNull();
+    const rows = await ledgerRows(paid.reference);
+    expect(rows.map((r) => r.status)).toEqual(['completed', 'completed']);
+    await payments.sweep(new Date(Date.now() + 20 * 60_000));
+    expect(delivered.filter((d) => d.paymentId === paid.id)).toHaveLength(1);
+    expect(sendsFrom(p)).toHaveLength(1);
+    expect(wallets.kobo.get(p.accountNumber)).toBe(1_000_000 - 102_325);
+  });
+
+  it('D1: two payments for one item at once under two keys: one goes on, the other is payment_in_progress; one debit', async () => {
+    const p = await buyer(1_000_000);
+    const q = await quoted(p, 'content_unlock', 'piece-1000');
+    wallets.mode = 'slow';
+    const answers = await Promise.all([pay(p, payBody(q)), pay(p, payBody(q))]);
+    wallets.mode = 'live';
+    expect(answers.map((r) => r.status).sort()).toEqual([201, 409]);
+    const ok = body<PaymentView>(answers.find((r) => r.status === 201)!).data!;
+    expect(body(answers.find((r) => r.status === 409)!).reason).toMatchObject({
+      code: 'payment_in_progress',
+      paymentId: ok.id,
+    });
+    expect(sendsFrom(p)).toHaveLength(1);
+    // Once it completed, the item can be paid for again (a feature that
+    // sells it once refuses that itself).
+    expect(
+      (await pay(p, payBody(await quoted(p, 'content_unlock', 'piece-1000'))))
+        .status,
+    ).toBe(201);
+  });
+
+  it('D1: Fintava saying FAILURE is the only way a lost-answer payment fails', async () => {
+    const p = await buyer(1_000_000);
+    const q = await quoted(p, 'content_unlock', 'piece-1000');
+    wallets.mode = 'timeout';
+    const paid = body<PaymentView>(await pay(p, payBody(q))).data!;
+    wallets.mode = 'live';
+    wallets.failures.add(paid.reference);
+    await payments.sweep(new Date(Date.now() + 2 * 60_000));
+    const row = await prisma.walletPayment.findUniqueOrThrow({
+      where: { id: paid.id },
+    });
+    expect([row.status, row.failureReason, row.openKey]).toEqual([
+      'failed',
+      PAYMENT_FAILED_REASON,
+      null,
+    ]);
+    expect(delivered.filter((d) => d.paymentId === paid.id)).toHaveLength(0);
+  });
+
+  it('D1: no answer past PAYMENT_REVIEW_AFTER_HOURS goes to review: still pending, out of the sweep, the item still blocked; a late webhook completes it', async () => {
+    const p = await buyer(1_000_000);
+    const q = await quoted(p, 'content_unlock', 'piece-1000');
+    wallets.mode = 'timeout';
+    const paid = body<PaymentView>(await pay(p, payBody(q))).data!;
+    wallets.mode = 'live';
+    wallets.hidden.add(paid.reference);
+    await payments.sweep(new Date(Date.now() + 73 * 3_600_000));
+    let row = await prisma.walletPayment.findUniqueOrThrow({
+      where: { id: paid.id },
+    });
+    expect(row.status).toBe('pending');
+    expect(row.reviewSince).not.toBeNull();
+    expect(row.discrepancy).toMatch(/no answer from Fintava after 72 hours/);
+    const asked = () =>
+      double.seen.filter(
+        (r) => r.path === `/transaction/reference/${paid.reference}`,
+      ).length;
+    const before = asked();
+    await payments.sweep(new Date(Date.now() + 80 * 3_600_000));
+    expect(asked()).toBe(before);
+    expect(
+      body(
+        await pay(p, payBody(await quoted(p, 'content_unlock', 'piece-1000'))),
+      ).reason?.code,
+    ).toBe('payment_in_progress');
+    // Fintava's word arrives through the ledger (as a webhook would write it).
+    await ledger.record({
+      wallet: {
+        kind: 'user',
+        wawuUserId: p.id,
+        accountNumber: p.accountNumber,
+      },
+      direction: 'out',
+      status: 'completed',
+      category: 'purchase',
+      amountKobo: 100_000,
+      feeKobo: 2325,
+      totalKobo: 102_325,
+      references: { customerReference: paid.reference },
+      source: 'webhook',
+    });
+    await until(async () => {
+      row = await prisma.walletPayment.findUniqueOrThrow({
+        where: { id: paid.id },
+      });
+      return row.status === 'completed';
+    });
+    await until(() =>
+      Promise.resolve(
+        delivered.filter((d) => d.paymentId === paid.id).length === 1,
+      ),
+    );
+  });
+
+  it('D1.4: a second completed payment for one item made while the first was open is flagged on both for MONEY-16 and MONEY-18', async () => {
+    const p = await buyer(1_000_000);
+    const q = await quoted(p, 'content_unlock', 'piece-1000');
+    wallets.mode = 'timeout';
+    const paid = body<PaymentView>(await pay(p, payBody(q))).data!;
+    wallets.mode = 'live';
+    // As if one had slipped through: a completed twin made while it was open.
+    const twin = await prisma.walletPayment.create({
+      data: {
+        payerWawuUserId: p.id,
+        kind: 'content_unlock',
+        targetId: 'piece-1000',
+        title: 'twin',
+        priceKobo: 100_000n,
+        providerFeeKobo: 2325n,
+        wawuFeeKobo: 0n,
+        totalKobo: 102_325n,
+        payeeShareKobo: 85_000n,
+        wawuShareKobo: 15_000n,
+        customerReference: `wawu-pay-${randomUUID()}`,
+        payerAccountNumber: p.accountNumber,
+        merchantAccountNumber: MERCHANT_ACCOUNT,
+        status: 'completed',
+        completedAt: new Date(),
+      },
+    });
+    await payments.sweep(new Date(Date.now() + 2 * 60_000));
+    const rows = await prisma.walletPayment.findMany({
+      where: { id: { in: [paid.id, twin.id] } },
+    });
+    for (const r of rows) {
+      expect(r.status).toBe('completed');
+      expect(r.discrepancy).toMatch(/paid twice for one item.*MONEY-18/);
+    }
+  });
+
+  it('D2: a paid payment never waits behind 60 payments held for review', async () => {
+    const reviewer = await buyer(100_000_000);
+    await prisma.walletPayment.createMany({
+      data: Array.from({ length: 60 }, (_, i) => ({
+        payerWawuUserId: reviewer.id,
+        kind: 'content_unlock',
+        targetId: `held-${i}`,
+        title: 'held',
+        priceKobo: 100_000n,
+        providerFeeKobo: 2325n,
+        wawuFeeKobo: 0n,
+        totalKobo: 102_325n,
+        payeeShareKobo: 85_000n,
+        wawuShareKobo: 15_000n,
+        customerReference: `wawu-pay-${randomUUID()}`,
+        payerAccountNumber: reviewer.accountNumber,
+        merchantAccountNumber: MERCHANT_ACCOUNT,
+        status: 'pending',
+        sentAt: new Date(Date.now() - 3_600_000),
+        nextCheckAt: new Date(Date.now() - 3_600_000),
+        reviewSince: new Date(),
+        createdAt: new Date(Date.now() - 3_600_000),
+      })),
+    });
+    const p = await buyer(1_000_000);
+    const pq = await quoted(p, 'content_unlock', 'piece-1000');
+    wallets.mode = 'timeout';
+    const paid = body<PaymentView>(await pay(p, payBody(pq))).data!;
+    wallets.mode = 'live';
+    // MONEY-08 completes its ledger row: the payment follows at once.
+    const out = (await ledgerRows(paid.reference)).find(
+      (r) => r.direction === 'out',
+    )!;
+    await statusChecks.check(out.id, new Date(Date.now() + 5 * 60_000));
+    await until(
+      async () =>
+        (
+          await prisma.walletPayment.findUniqueOrThrow({
+            where: { id: paid.id },
+          })
+        ).status === 'completed',
+    );
+    // And the sweep, asked about due payments only, skips the 60 under review.
+    const swept = await payments.sweep(new Date(Date.now() + 2 * 60_000));
+    expect(swept.checked).toBeLessThan(60);
+    await prisma.walletPayment.deleteMany({
+      where: { payerWawuUserId: reviewer.id, title: 'held' },
+    });
+  });
+
+  it('D2: the sweep pages through every due payment, oldest check first, more than one page', async () => {
+    const p = await buyer(1_000_000);
+    const base = Date.now() - 3_600_000;
+    await prisma.walletPayment.createMany({
+      data: Array.from({ length: 120 }, (_, i) => ({
+        payerWawuUserId: p.id,
+        kind: 'content_unlock',
+        targetId: `due-${i}`,
+        title: 'due',
+        priceKobo: 100_000n,
+        providerFeeKobo: 2325n,
+        wawuFeeKobo: 0n,
+        totalKobo: 102_325n,
+        payeeShareKobo: 85_000n,
+        wawuShareKobo: 15_000n,
+        customerReference: `wawu-pay-${randomUUID()}`,
+        payerAccountNumber: p.accountNumber,
+        merchantAccountNumber: MERCHANT_ACCOUNT,
+        status: 'pending',
+        sentAt: new Date(base),
+        nextCheckAt: new Date(base + i),
+      })),
+    });
+    const swept = await payments.sweep(new Date());
+    expect(swept.checked).toBeGreaterThanOrEqual(120);
+    const left = await prisma.walletPayment.count({
+      where: {
+        payerWawuUserId: p.id,
+        title: 'due',
+        nextCheckAt: { lte: new Date() },
+      },
+    });
+    expect(left).toBe(0);
+    await prisma.walletPayment.deleteMany({
+      where: { payerWawuUserId: p.id, title: 'due' },
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Round 2: the rest of the verifier's findings
+  // -------------------------------------------------------------------------
+
+  it('D3: Fintava charging more than quoted with the buyer holding exactly the total: "Your balance changed", never a ₦0.00 shortfall', async () => {
+    const p = await buyer(102_325);
+    const q = await quoted(p, 'content_unlock', 'piece-1000');
+    wallets.feeOverride = 3000;
+    const res = await pay(p, payBody(q));
+    wallets.feeOverride = null;
+    expect(res.status).toBe(402);
+    expect(body(res).reason).toEqual({
+      code: 'insufficient_funds',
+      message: 'Your balance changed. Check it and try again.',
+      balanceKobo: 102_325,
+      totalKobo: 102_325,
+    });
+    expect(res.text).not.toMatch(/₦0\.00/);
+  });
+
+  it('a buyer holding exactly the total pays and is left with ₦0.00', async () => {
+    const p = await buyer(102_325);
+    const q = await quoted(p, 'content_unlock', 'piece-1000');
+    const res = await pay(p, payBody(q));
+    expect(res.status).toBe(201);
+    expect(body<PaymentView>(res).data!.status).toBe('completed');
+    expect(wallets.kobo.get(p.accountNumber)).toBe(0);
+  });
+
+  it('a quote is bound to its item: a quote for one ₦1,000 piece, or a plain fee quote, does not pay another', async () => {
+    const p = await buyer(1_000_000);
+    const forB = await quoted(p, 'content_unlock', 'piece-1000b');
+    const res = await pay(p, payBody(forB, { targetId: 'piece-1000c' }));
+    expect(res.status).toBe(409);
+    expect(body(res).reason?.code).toBe('quote_changed');
+    expect(body(res).reason?.paymentQuote?.targetId).toBe('piece-1000c');
+    const fee = await request(app.getHttpServer())
+      .get('/api/hub/money/fees/quote?kind=purchase&amountKobo=100000')
+      .set('Authorization', p.auth);
+    const feeToken = body<{ quoteToken: string }>(fee).data!.quoteToken;
+    const res2 = await pay(p, payBody(forB, { quoteToken: feeToken }));
+    expect(body(res2).reason?.code).toBe('quote_changed');
+    expect(sendsFrom(p)).toHaveLength(0);
+  });
+
+  it("the payer's wallet being WAWU's merchant wallet is refused before anything is sent", async () => {
+    const p = await buyer(1_000_000);
+    await prisma.fintavaWallet.update({
+      where: { wawuUserId: p.id },
+      data: { accountNumber: MERCHANT_ACCOUNT },
+    });
+    wallets.byId.set(p.walletId, MERCHANT_ACCOUNT);
+    wallets.kobo.set(MERCHANT_ACCOUNT, 1_000_000);
+    const q = await quoted(p, 'content_unlock', 'piece-1000');
+    const res = await pay(p, payBody(q));
+    expect(res.status).toBe(503);
+    expect(body(res).reason?.code).toBe('provider_unreachable');
+    expect(
+      wallets.sends.filter((s) => s.from === MERCHANT_ACCOUNT),
+    ).toHaveLength(0);
+    await prisma.fintavaWallet.update({
+      where: { wawuUserId: p.id },
+      data: { accountNumber: p.accountNumber },
+    });
+  });
+
+  it('Fintava moving another amount than the price: review, still pending, not delivered, the item blocked', async () => {
+    const p = await buyer(1_000_000);
+    const q = await quoted(p, 'content_unlock', 'piece-1000');
+    wallets.mode = 'wrongamount';
+    const res = await pay(p, payBody(q));
+    wallets.mode = 'live';
+    const paid = body<PaymentView>(res).data!;
+    expect(paid.status).toBe('pending');
+    const row = await prisma.walletPayment.findUniqueOrThrow({
+      where: { id: paid.id },
+    });
+    expect(row.reviewSince).not.toBeNull();
+    expect(row.discrepancy).toMatch(/amountKobo/);
+    await payments.sweep(new Date(Date.now() + 2 * 60_000));
+    expect(delivered.filter((d) => d.paymentId === paid.id)).toHaveLength(0);
+    expect(
+      body(
+        await pay(p, payBody(await quoted(p, 'content_unlock', 'piece-1000'))),
+      ).reason?.code,
+    ).toBe('payment_in_progress');
+  });
+
+  it('8 payments at once with the right PIN under 8 keys: all paid, the PIN never locks', async () => {
+    const p = await buyer(10_000_000);
+    const items = [
+      'piece-1000',
+      'piece-1000b',
+      'piece-1000c',
+      'piece-1000d',
+      'piece-1000e',
+      'piece-1000f',
+      'piece-1000g',
+      'piece-1000h',
+    ];
+    const qs = await Promise.all(
+      items.map((t) => quoted(p, 'content_unlock', t)),
+    );
+    const answers = await Promise.all(qs.map((q) => pay(p, payBody(q))));
+    expect(answers.map((r) => r.status)).toEqual(Array(8).fill(201));
+    expect(await pinState(p)).toMatchObject({
+      triesLeft: 5,
+      lockedUntil: null,
+    });
+    expect(sendsFrom(p)).toHaveLength(8);
+  });
+
+  it("deleting the payer keeps the payment and the payee's unpaid 85%, with the payer side anonymised", async () => {
+    const p = await buyer(1_000_000);
+    const q = await quoted(p, 'tip', creator.wawuUserId, '&amountKobo=200000');
+    const paid = body<PaymentView>(
+      await pay(p, payBody(q, { amountKobo: 200_000, note: 'For you' })),
+    ).data!;
+    await new AccountPurgeService(prisma).purge(p.id);
+    const row = await prisma.walletPayment.findUniqueOrThrow({
+      where: { id: paid.id },
+    });
+    expect({
+      payer: row.payerWawuUserId,
+      account: row.payerAccountNumber,
+      note: row.note,
+      payee: row.payeeWawuUserId,
+      share: row.payeeShareKobo,
+      settled: row.payeeSettledAt,
+      status: row.status,
+    }).toEqual({
+      payer: null,
+      account: null,
+      note: null,
+      payee: creator.wawuUserId,
+      share: 170_000n,
+      settled: null,
+      status: 'completed',
+    });
+    expect(
+      await prisma.moneyIdempotencyKey.count({ where: { wawuUserId: p.id } }),
+    ).toBe(0);
+    await prisma.walletPayment.delete({ where: { id: paid.id } });
   });
 
   it('the stored answers are scoped to the route that answered them', () => {

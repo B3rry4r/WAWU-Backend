@@ -299,21 +299,83 @@ function sightingOfRow(row: EntryRow): Sighting {
  * transaction. Two writers racing on the same movement queue on that key;
  * the second sees the first's row once it commits and folds into it.
  */
+/**
+ * A ledger row that carries a feature's payment (`paymentId`) left `pending`
+ * (MONEY-17 round 2): the paying feature hears of it at once, from whatever
+ * settled it (a webhook, the status check, a reversal), so a paid payment
+ * never waits on its own sweep.
+ */
+export interface LedgerPaymentSettled {
+  entryId: string;
+  paymentId: string;
+  status: TransferStatus;
+}
+
 @Injectable()
 export class LedgerService {
   private readonly logger = new Logger(LedgerService.name);
+  private readonly settledListeners: Array<
+    (e: LedgerPaymentSettled) => Promise<unknown>
+  > = [];
 
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Records one side of one movement, or merges it into the row that has it. */
+  /**
+   * Called (not awaited) after a write committed that left a row with a
+   * `paymentId` completed, failed or reversed. Errors are logged, never
+   * thrown into the ledger's own work.
+   */
+  onPaymentSettled(
+    listener: (e: LedgerPaymentSettled) => Promise<unknown>,
+  ): void {
+    this.settledListeners.push(listener);
+  }
+
+  private async notifySettled(entryId: string): Promise<void> {
+    if (this.settledListeners.length === 0) return;
+    let row: { paymentId: string | null; status: TransferStatus } | null;
+    try {
+      row = await this.prisma.fintavaLedgerEntry.findUnique({
+        where: { id: entryId },
+        select: { paymentId: true, status: true },
+      });
+    } catch {
+      // The payment sweep settles it later; the ledger write stands.
+      return;
+    }
+    if (!row?.paymentId || row.status === 'pending') return;
+    const event = {
+      entryId,
+      paymentId: row.paymentId,
+      status: row.status,
+    };
+    for (const listener of this.settledListeners) {
+      void listener(event).catch((e: unknown) =>
+        this.logger.error(
+          `ledger: a payment settle listener failed (${e instanceof Error ? e.name : 'error'})`,
+        ),
+      );
+    }
+  }
+
+  /**
+   * Records one side of one movement, or merges it into the row that has it.
+   * `quiet`: the caller settles the payment itself (MONEY-17's own writes),
+   * so the payment listeners are not told.
+   */
   async record(
     input: LedgerMovementInput,
     db?: Prisma.TransactionClient,
+    options: { quiet?: boolean } = {},
   ): Promise<LedgerRecordResult> {
     if (db) return this.recordIn(db, input);
     for (let attempt = 1; ; attempt += 1) {
       try {
-        return await this.prisma.$transaction((tx) => this.recordIn(tx, input));
+        const result = await this.prisma.$transaction((tx) =>
+          this.recordIn(tx, input),
+        );
+        if (!options.quiet) await this.notifySettled(result.entryId);
+        return result;
       } catch (e) {
         // Writers racing on one movement can deadlock on its keys or see a
         // row folded away under them; Postgres rolls one back, and running
@@ -844,6 +906,10 @@ export class LedgerService {
       return { state: 'applied', entryId, changed: true } as const;
     };
     if (db) return run(db);
-    return this.prisma.$transaction(run);
+    const result = await this.prisma.$transaction(run);
+    if (result.state === 'applied' && result.changed) {
+      await this.notifySettled(result.entryId);
+    }
+    return result;
   }
 }

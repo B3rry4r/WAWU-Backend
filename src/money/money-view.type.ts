@@ -457,6 +457,12 @@ export interface PaymentView {
   /** Set for held kinds. */
   hold: HoldView | null;
   failureReason: string | null;
+  /**
+   * What the app shows beside a `pending` payment (MONEY-17): "We're still
+   * confirming this payment. Don't pay again; we'll let you know." Null on
+   * every other status.
+   */
+  statusMessage: string | null;
   createdAt: string;
   completedAt: string | null;
 }

@@ -25,14 +25,22 @@
  *             by WAWU ID's anonymize, not by dropping the other party's data.
  *   AUDIT     an admin action record. Kept deliberately: an audit trail that
  *             disappears when its subject does is not an audit trail.
+ *   ANONYMISED
+ *             the row is this account's AND carries somebody else's money
+ *             (a payment whose payee's 85% may not have landed yet, MONEY-17).
+ *             The row stays; this column and the ones in `clear` are set to
+ *             null, so nothing in it names or reaches the account.
  */
 
-export type Disposition = 'OWNED' | 'AUTHORED' | 'COUNTERPARTY' | 'AUDIT';
+export type Disposition =
+  'OWNED' | 'AUTHORED' | 'COUNTERPARTY' | 'AUDIT' | 'ANONYMISED';
 
 export interface ColumnRule {
   model: string;
   column: string;
   disposition: Disposition;
+  /** ANONYMISED only: other columns of the row set to null with it. */
+  clear?: readonly string[];
 }
 
 /**
@@ -211,14 +219,21 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'MoneyBeneficiary', column: 'ownerWawuId', disposition: 'OWNED' },
   { model: 'MoneyPayoutAccount', column: 'wawuUserId', disposition: 'OWNED' },
   // Pay from wallet (MONEY-17): this person's stored answers to their own
-  // money-moving requests (kept a day or two), and the payments they made,
-  // like a Purchase they made (its buyer column above). Both go with them.
+  // money-moving requests (kept a day or two) go with them.
   {
     model: 'MoneyIdempotencyKey',
     column: 'wawuUserId',
     disposition: 'OWNED',
   },
-  { model: 'WalletPayment', column: 'payerWawuUserId', disposition: 'OWNED' },
+  // The payments they made keep the record of what each payee is owed
+  // (its 85%, which WALLET-16 lands); their side of it is anonymised: who
+  // paid, from which account, and their tip message (MONEY-17 round 2).
+  {
+    model: 'WalletPayment',
+    column: 'payerWawuUserId',
+    disposition: 'ANONYMISED',
+    clear: ['payerAccountNumber', 'note', 'openKey'],
+  },
 
   // Last: everything above may reference these.
   { model: 'CreatorState', column: 'wawuUserId', disposition: 'OWNED' },
@@ -336,6 +351,11 @@ export const NOT_A_USER_REFERENCE: ReadonlyArray<{
   { model: 'WalletPayment', column: 'wawuFeeKobo' },
   { model: 'WalletPayment', column: 'wawuShareKobo' },
 ];
+
+/** The rows a purge keeps with the account's side set to null. */
+export function rowsToAnonymise(): ColumnRule[] {
+  return ACCOUNT_DATA_MAP.filter((r) => r.disposition === 'ANONYMISED');
+}
 
 /** The rows a purge actually removes. */
 export function rowsToDelete(): ColumnRule[] {

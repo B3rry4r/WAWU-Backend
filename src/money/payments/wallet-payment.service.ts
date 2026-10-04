@@ -14,7 +14,10 @@ import {
   FintavaError,
   type FintavaErrorKind,
 } from '../../fintava/fintava-error';
-import type { FintavaTransferReceipt } from '../../fintava/fintava.interface';
+import type {
+  FintavaReconciliation,
+  FintavaTransferReceipt,
+} from '../../fintava/fintava.interface';
 import { WalletBalanceService } from '../balance/wallet-balance.service';
 import {
   PAYER_CHOSEN_AMOUNT_KINDS,
@@ -32,9 +35,10 @@ import type { OpenWallet } from '../gate/wallet-gate';
 import type { LedgerMovementInput } from '../ledger/ledger.interface';
 import {
   koboNumber,
-  LEDGER_ABSENT_FAILURE,
+  LEDGER_FINTAVA_FAILURE,
   LedgerService,
 } from '../ledger/ledger.service';
+import { ledgerStatusOf } from '../ledger/ledger-webhook';
 import { MoneyError } from '../money-error';
 import type {
   FeeQuoteView,
@@ -52,7 +56,7 @@ import {
   PayableRegistry,
   type PayableTarget,
 } from './payable-registry';
-import { splitPrice } from './payment-config';
+import { PaymentSettings, splitPrice } from './payment-config';
 
 /** The route a payment's Idempotency-Key is scoped to. */
 export const PAY_ROUTE = 'POST money/payments';
@@ -60,19 +64,26 @@ export const PAY_ROUTE = 'POST money/payments';
 export const NOT_PAYABLE_YET_MESSAGE =
   "This can't be paid for from your wallet yet.";
 export const OWN_ITEM_MESSAGE = "You can't pay yourself for this.";
+/** Only when Fintava refused the transfer or said it failed: its word, not our inference. */
 export const PAYMENT_FAILED_REASON =
   'The payment did not go through. No money left your wallet.';
 /**
- * A payment failed because Fintava had no record of it past the resend
- * window (the ledger's LEDGER_ABSENT_FAILURE, MONEY-08): our inference, not
- * Fintava's word, so the only failure a later sighting may undo.
+ * Beside every `pending` payment, and on `payment_in_progress` (lead ruling
+ * D1, 4 Oct 2026): the outcome is not known yet, so nothing says no money
+ * moved, and the buyer is told not to pay again.
  */
-export const PAYMENT_ABSENT_REASON =
-  'The payment did not reach the bank. No money left your wallet.';
-export const INSUFFICIENT_FALLBACK_MESSAGE =
-  'There is not enough money in your wallet for this.';
+export const STILL_CONFIRMING_MESSAGE =
+  "We're still confirming this payment. Don't pay again; we'll let you know.";
+/** Fintava refused for funds although a fresh balance read covers the total (lead ruling D3). */
+export const BALANCE_CHANGED_MESSAGE =
+  'Your balance changed. Check it and try again.';
 /** What Fintava sees on the transfer. Names nobody and nothing personal. */
 export const PAYMENT_NARRATION = 'WAWU purchase';
+
+/** Rows per page of the sweep, and pages per pass. */
+const SWEEP_PAGE = 50;
+const SWEEP_PAGES = 20;
+const MINUTE = 60_000;
 
 type PaymentRow = Prisma.WalletPaymentGetPayload<object>;
 
@@ -89,6 +100,20 @@ export function successBody(data: unknown): string {
   return JSON.stringify({ statusCode: 200, message: 'OK', data });
 }
 
+/** One open payment per buyer and item (lead ruling D1.2). */
+export function openKeyOf(
+  payer: string,
+  kind: PaymentKind,
+  targetId: string,
+): string {
+  return `${payer}:${kind}:${targetId}`;
+}
+
+/** The rest before the next check of a pending payment: 1, 2, 4 ... minutes, at most an hour. */
+export function nextCheckDelayMs(checks: number): number {
+  return Math.min(60, 2 ** Math.min(checks, 6)) * MINUTE;
+}
+
 /** Fintava refusals that mean no money moved and the person can fix it: the key is given back. */
 const RELEASED: readonly FintavaErrorKind[] = [
   'insufficient_funds',
@@ -100,6 +125,14 @@ const RELEASED: readonly FintavaErrorKind[] = [
   'unavailable',
 ];
 
+const isOpenKeyClash = (e: unknown) => {
+  const err = e as { code?: unknown; meta?: { target?: unknown } } | null;
+  return (
+    err?.code === 'P2002' &&
+    JSON.stringify(err.meta?.target ?? '').includes('openKey')
+  );
+};
+
 /**
  * Pay from wallet (task MONEY-17): one way to take a payment from a
  * person's wallet for anything WAWU sells.
@@ -109,30 +142,40 @@ const RELEASED: readonly FintavaErrorKind[] = [
  *   our CustomerReference `wawu-pay-<payment id>`. Fintava takes its
  *   balance-transfer charge on top (R-10), so the buyer pays the price plus
  *   the charge the fee quote showed (WALLET-15); WAWU adds no fee to a
- *   purchase.
+ *   purchase. The quote is bound to the item (`payment:<kind>:<targetId>`).
  * - **The split** is recorded with the payment, of the price only (R-10):
  *   the payee's 85% rounded down, WAWU's 15% the rest (R-5). Moving the 85%
  *   to the payee is WALLET-16's (R-11); Fintava's charge on that move is
  *   WAWU's (R-31).
- * - **Once.** The Idempotency-Key row and the payment, with its pending
- *   ledger rows, are written in one transaction before Fintava is called;
- *   the key's primary key is the lock (idempotency.ts). A repeat is
- *   answered from the stored answer and never reaches Fintava.
+ * - **Once per key.** The Idempotency-Key is taken before the PIN; the
+ *   payment, its pending ledger rows and the key's link to it are written in
+ *   one transaction before Fintava is called (idempotency.ts).
+ * - **One open payment per buyer and item** (lead ruling D1.2): `openKey` is
+ *   unique while the payment is `pending`, under review included; a second
+ *   one, under any key, at any moment, is `409 payment_in_progress` with the
+ *   open payment's id.
  * - **Before money moves**, in order: the wallet (gate), the key, the PIN
  *   (guards), the body, the target and its price (the owning feature,
- *   PayableRegistry), the quote (`FeeQuoteService.check`, `409
- *   quote_changed` with the new payment quote), the merchant cap, Fintava's
- *   available balance (`402 insufficient_funds` with the shortfall; never
- *   a sum of our own records). None of these stores anything.
- * - **An unknown outcome** (Fintava timed out, a 5xx, a 2xx without a
- *   transaction, a repeated reference) is `pending`, never retried here and
- *   never refunded: the ledger's status check (MONEY-08) asks Fintava by our
- *   reference and this service's sweep copies what it learns onto the
- *   payment (FIX-01).
+ *   PayableRegistry), the quote, the merchant cap, an open payment for the
+ *   item, Fintava's available balance (`402 insufficient_funds` with a real
+ *   shortfall; never a sum of our own records).
+ * - **An unknown outcome is `pending` until Fintava says** (lead ruling D1):
+ *   a timeout, a 5xx, a 2xx without a transaction, a repeated reference, and
+ *   Fintava having no record of it yet. Absence is never proof that no money
+ *   moved: the sweep keeps asking Fintava (lookup and the buyer's history,
+ *   backing off to hourly), never sends again and never refunds; past
+ *   PAYMENT_REVIEW_AFTER_HOURS it goes to manual review, still `pending`.
+ *   Only Fintava's own refusal or its FAILURE makes a payment `failed`.
+ * - **Settled at once.** A ledger row of the payment settled by anything
+ *   (a webhook, MONEY-08's status check, a reversal) settles the payment in
+ *   the same breath (`LedgerService.onPaymentSettled`); the sweep is the
+ *   fallback.
  * - **Fintava's figures are the record.** The ledger rows are written with
  *   the quoted figures before the send and Fintava's figures after; any
  *   difference is kept on the row's `discrepancy` and on the payment, for
  *   MONEY-16 to report (a stop, not a fix).
+ * - **Delivery is at least once:** a feature's `onCompleted` can run twice
+ *   for one payment and must be idempotent.
  */
 @Injectable()
 export class WalletPaymentService implements OnModuleInit {
@@ -148,6 +191,7 @@ export class WalletPaymentService implements OnModuleInit {
     private readonly merchant: MerchantWallet,
     private readonly registry: PayableRegistry,
     private readonly keys: IdempotencyService,
+    private readonly settings: PaymentSettings,
   ) {}
 
   onModuleInit(): void {
@@ -155,7 +199,7 @@ export class WalletPaymentService implements OnModuleInit {
     // is answered from its payment once the send can no longer be running.
     this.keys.onStale(
       PAY_ROUTE,
-      this.fintava.settings.moneyTimeoutMs + 60_000,
+      this.fintava.settings.moneyTimeoutMs + MINUTE,
       async (row) => {
         const p = row.resourceId
           ? await this.prisma.walletPayment.findUnique({
@@ -165,6 +209,8 @@ export class WalletPaymentService implements OnModuleInit {
         return p ? { status: 201, body: successBody(this.view(p)) } : null;
       },
     );
+    // A payment's ledger row settled by anything settles the payment now.
+    this.ledger.onPaymentSettled((e) => this.settle(e.paymentId));
   }
 
   // -------------------------------------------------------------------------
@@ -182,10 +228,12 @@ export class WalletPaymentService implements OnModuleInit {
       q.targetId,
       q.amountKobo,
     );
-    const fee = this.fees.quote(wallet.wawuUserId, {
-      kind: 'purchase',
-      amountKobo: target.priceKobo,
-    });
+    const fee = this.fees.quote(
+      wallet.wawuUserId,
+      { kind: 'purchase', amountKobo: target.priceKobo },
+      new Date(),
+      subjectOf(q.kind, q.targetId),
+    );
     return this.quoteView(
       q.kind,
       q.targetId,
@@ -219,6 +267,7 @@ export class WalletPaymentService implements OnModuleInit {
     );
     const price = target.priceKobo;
     const input = { kind: 'purchase' as const, amountKobo: price };
+    const subject = subjectOf(dto.kind, dto.targetId);
 
     let fee: FeeQuoteView;
     try {
@@ -227,10 +276,12 @@ export class WalletPaymentService implements OnModuleInit {
         input,
         dto.expectedTotalKobo,
         dto.quoteToken,
+        new Date(),
+        subject,
       );
     } catch (e) {
       if (e instanceof MoneyError && e.code === 'quote_changed') {
-        const fresh = this.fees.quote(payer, input);
+        const fresh = this.fees.quote(payer, input, new Date(), subject);
         throw new MoneyError('quote_changed', QUOTE_CHANGED_MESSAGE, {
           paymentQuote: this.quoteView(
             dto.kind,
@@ -244,6 +295,9 @@ export class WalletPaymentService implements OnModuleInit {
       throw e;
     }
 
+    const openKey = openKeyOf(payer, dto.kind, dto.targetId);
+    await this.refuseIfOpen(openKey);
+
     // Fintava's balance, never ours: a 503 or a 423 here moves nothing.
     const { availableKobo } = await this.balances.balance(wallet);
     if (availableKobo < fee.totalKobo) {
@@ -255,9 +309,7 @@ export class WalletPaymentService implements OnModuleInit {
       throw new MoneyError(
         'provider_unreachable',
         PAYMENTS_UNAVAILABLE_MESSAGE,
-        {
-          retryAfterSeconds: FINTAVA_DEFAULTS.retryAfterSeconds,
-        },
+        { retryAfterSeconds: FINTAVA_DEFAULTS.retryAfterSeconds },
       );
     }
 
@@ -281,26 +333,36 @@ export class WalletPaymentService implements OnModuleInit {
       payerAccountNumber: wallet.accountNumber,
       merchantAccountNumber: merchant,
       status: 'pending',
+      openKey,
+      nextCheckAt: new Date(now.getTime() + MINUTE),
       note: dto.note?.trim() ? dto.note.trim() : null,
       sentAt: now,
     };
 
     // The payment, its pending ledger rows and the key's link to it, in one
     // transaction, before Fintava is called: a crash after the send still
-    // leaves a row the status check settles, and a repeat of the key is
+    // leaves a payment the sweep settles, and a repeat of the key is
     // answered from this payment.
-    const payment = await this.prisma.$transaction(async (tx) => {
-      await this.keys.attach(tx, scope, id);
-      const row = await tx.walletPayment.create({ data });
-      await this.ledger.record(this.movement(row, 'out', 'pending'), tx);
-      await this.ledger.record(this.movement(row, 'in', 'pending'), tx);
-      return row;
-    });
+    let payment: PaymentRow;
+    try {
+      payment = await this.prisma.$transaction(async (tx) => {
+        await this.keys.attach(tx, scope, id);
+        const row = await tx.walletPayment.create({ data });
+        await this.ledger.record(this.movement(row, 'out', 'pending'), tx);
+        await this.ledger.record(this.movement(row, 'in', 'pending'), tx);
+        return row;
+      });
+    } catch (e) {
+      // Another payment for this item got there first (taps at once under
+      // different keys): it is the open one.
+      if (isOpenKeyClash(e)) await this.refuseIfOpen(openKey);
+      throw e;
+    }
 
     let receipt: FintavaTransferReceipt;
     try {
       receipt = await this.fintava.walletToWallet({
-        senderAccountNumber: payment.payerAccountNumber,
+        senderAccountNumber: wallet.accountNumber,
         receiverAccountNumber: payment.merchantAccountNumber,
         amountKobo: price,
         customerReference: payment.customerReference,
@@ -312,6 +374,19 @@ export class WalletPaymentService implements OnModuleInit {
     return this.afterReceipt(payment, scope, receipt, handler);
   }
 
+  /** `409 payment_in_progress` when this buyer has an open payment for this item. */
+  private async refuseIfOpen(openKey: string): Promise<void> {
+    const open = await this.prisma.walletPayment.findUnique({
+      where: { openKey },
+      select: { id: true },
+    });
+    if (open) {
+      throw new MoneyError('payment_in_progress', STILL_CONFIRMING_MESSAGE, {
+        paymentId: open.id,
+      });
+    }
+  }
+
   /** Fintava did not take the payment, or we do not know whether it did. */
   private async afterRefusal(
     payment: PaymentRow,
@@ -321,10 +396,10 @@ export class WalletPaymentService implements OnModuleInit {
   ): Promise<PaymentView> {
     const fintavaError = e instanceof FintavaError ? e : null;
     if (!fintavaError || fintavaError.recordMayExist) {
-      // Money may have moved. Pending: the ledger's status check asks
-      // Fintava by our reference; nothing is sent again from here.
+      // Money may have moved. Pending until Fintava says; nothing is sent
+      // again from here.
       this.logger.warn(
-        `payment ${payment.id}: outcome unknown (${fintavaError?.kind ?? 'error'}); left pending for the status check`,
+        `payment ${payment.id}: outcome unknown (${fintavaError?.kind ?? 'error'}); pending until Fintava says`,
       );
       return this.answer(scope, payment);
     }
@@ -334,17 +409,10 @@ export class WalletPaymentService implements OnModuleInit {
       // back so the same payment can be sent again (CONVENTIONS section 4).
       await this.keys.release(scope);
       if (fintavaError.kind === 'insufficient_funds') {
-        const balance = await this.balanceOrNull(wallet);
-        const total = koboNumber(payment.totalKobo);
-        throw balance === null
-          ? new MoneyError(
-              'insufficient_funds',
-              INSUFFICIENT_FALLBACK_MESSAGE,
-              {
-                totalKobo: total,
-              },
-            )
-          : this.insufficient(balance, total);
+        throw this.fintavaSaidInsufficient(
+          await this.balanceOrNull(wallet),
+          koboNumber(payment.totalKobo),
+        );
       }
       if (fintavaError.kind === 'wallet_inactive') {
         throw fintavaError.toHttpException();
@@ -352,9 +420,7 @@ export class WalletPaymentService implements OnModuleInit {
       throw new MoneyError(
         'provider_unreachable',
         PAYMENTS_UNAVAILABLE_MESSAGE,
-        {
-          retryAfterSeconds: FINTAVA_DEFAULTS.retryAfterSeconds,
-        },
+        { retryAfterSeconds: FINTAVA_DEFAULTS.retryAfterSeconds },
       );
     }
     this.logger.warn(
@@ -389,6 +455,8 @@ export class WalletPaymentService implements OnModuleInit {
           },
           refs,
         ),
+        undefined,
+        { quiet: true },
       );
       const inn = await this.ledger.record(
         this.movement(
@@ -402,6 +470,8 @@ export class WalletPaymentService implements OnModuleInit {
           },
           refs,
         ),
+        undefined,
+        { quiet: true },
       );
       if (out.discrepancy) notes.push(out.discrepancy);
       if (inn.discrepancy) notes.push(inn.discrepancy);
@@ -415,20 +485,19 @@ export class WalletPaymentService implements OnModuleInit {
     const discrepancy = notes.length ? notes.join('; ').slice(0, 1000) : null;
     let row: PaymentRow;
     if (receipt.amountKobo === koboNumber(payment.priceKobo)) {
-      row = await this.markCompleted(payment, discrepancy);
+      row = await this.complete(payment, discrepancy, handler);
     } else {
       // Fintava moved another amount than the price: a stop. The payment
-      // stays pending, the difference is kept, nothing is delivered.
+      // goes to review (still pending, nothing delivered).
       this.logger.error(
-        `payment ${payment.id}: Fintava moved another amount than the price; left pending for review`,
+        `payment ${payment.id}: Fintava moved another amount than the price; sent to review`,
       );
-      row = await this.noteDiscrepancy(
+      row = await this.toReview(
         payment,
         discrepancy ??
           `amountKobo ${payment.priceKobo} vs ${receipt.amountKobo}`,
       );
     }
-    if (row.status === 'completed') await this.fulfil(row, handler);
     return this.answer(scope, row);
   }
 
@@ -437,64 +506,70 @@ export class WalletPaymentService implements OnModuleInit {
   // -------------------------------------------------------------------------
 
   /**
-   * Every minute: each pending payment sent more than a minute ago takes the
-   * status of its buyer-side ledger row, which MONEY-08's status check and
-   * Fintava's webhooks settle (it never asks Fintava itself and never sends
-   * money); a payment failed because Fintava had no record of it is brought
-   * back if that row was revived (Fintava's record wins); and a completed
-   * payment whose delivery failed is delivered again.
+   * Every minute: every pending payment due a check (not under review), in
+   * the order of its next check, paged by key so none waits behind another;
+   * then every completed payment not yet delivered. A payment still unknown
+   * after a check is asked again later (1, 2, 4 ... minutes, at most an
+   * hour), and goes to review past PAYMENT_REVIEW_AFTER_HOURS.
    */
   @Cron(CronExpression.EVERY_MINUTE, { name: 'money-payment-settle' })
   async sweep(
     now = new Date(),
-  ): Promise<{ settled: number; delivered: number }> {
-    if (this.sweeping) return { settled: 0, delivered: 0 };
+  ): Promise<{ checked: number; settled: number; delivered: number }> {
+    const counts = { checked: 0, settled: 0, delivered: 0 };
+    if (this.sweeping) return counts;
     this.sweeping = true;
-    let settled = 0;
-    let delivered = 0;
     try {
-      const due = await this.prisma.walletPayment.findMany({
-        where: {
-          OR: [
-            {
-              status: 'pending',
-              sentAt: { lt: new Date(now.getTime() - 60_000) },
-            },
-            {
-              status: 'failed',
-              failureReason: PAYMENT_ABSENT_REASON,
-              updatedAt: { gt: new Date(now.getTime() - 72 * 3_600_000) },
-            },
-          ],
-        },
-        orderBy: { createdAt: 'asc' },
-        take: 50,
-        select: { id: true },
-      });
-      for (const { id } of due) {
-        const before = await this.prisma.walletPayment.findUnique({
-          where: { id },
+      let after: { at: Date; id: string } | null = null;
+      for (let page = 0; page < SWEEP_PAGES; page += 1) {
+        const where: Prisma.WalletPaymentWhereInput = {
+          status: 'pending',
+          reviewSince: null,
+          nextCheckAt: { lte: now },
+        };
+        if (after) {
+          where.OR = [
+            { nextCheckAt: { gt: after.at } },
+            { nextCheckAt: after.at, id: { gt: after.id } },
+          ];
+        }
+        const due = await this.prisma.walletPayment.findMany({
+          where,
+          orderBy: [{ nextCheckAt: 'asc' }, { id: 'asc' }],
+          take: SWEEP_PAGE,
+          select: { id: true, nextCheckAt: true },
         });
-        const after = await this.settle(id);
-        if (before && after && before.status !== after) settled += 1;
+        for (const { id } of due) {
+          counts.checked += 1;
+          const status = await this.settle(id, now, true);
+          if (status !== null && status !== 'pending') counts.settled += 1;
+        }
+        if (due.length < SWEEP_PAGE) break;
+        const last = due[due.length - 1];
+        after = { at: last.nextCheckAt!, id: last.id };
       }
+
       const kinds = this.registry
         .kinds()
         .filter((k) => typeof this.registry.get(k)?.onCompleted === 'function');
-      if (kinds.length) {
-        const owed = await this.prisma.walletPayment.findMany({
+      let cursor: string | null = null;
+      for (let page = 0; kinds.length && page < SWEEP_PAGES; page += 1) {
+        const owed: PaymentRow[] = await this.prisma.walletPayment.findMany({
           where: {
             status: 'completed',
             fulfilledAt: null,
             kind: { in: kinds },
+            ...(cursor ? { id: { gt: cursor } } : {}),
           },
-          orderBy: { completedAt: 'asc' },
-          take: 50,
+          orderBy: { id: 'asc' },
+          take: SWEEP_PAGE,
         });
         for (const p of owed) {
           const handler = this.registry.get(p.kind as PaymentKind);
-          if (handler && (await this.fulfil(p, handler))) delivered += 1;
+          if (handler && (await this.fulfil(p, handler))) counts.delivered += 1;
         }
+        if (owed.length < SWEEP_PAGE) break;
+        cursor = owed[owed.length - 1].id;
       }
     } catch (e) {
       this.logger.error(
@@ -503,57 +578,202 @@ export class WalletPaymentService implements OnModuleInit {
     } finally {
       this.sweeping = false;
     }
-    return { settled, delivered };
+    return counts;
   }
 
-  /** One payment takes its buyer-side ledger row's status. */
-  async settle(paymentId: string): Promise<PaymentStatus | null> {
+  /**
+   * Settles one pending payment from what is known: its buyer-side ledger
+   * row when that is settled, else Fintava itself (by our reference, then
+   * the buyer's history). `ask`: whether to ask Fintava (the sweep) or only
+   * read the ledger (the ledger listener).
+   */
+  async settle(
+    paymentId: string,
+    now = new Date(),
+    ask = false,
+  ): Promise<PaymentStatus | null> {
     const p = await this.prisma.walletPayment.findUnique({
       where: { id: paymentId },
     });
     if (!p) return null;
-    const absentFailed =
-      p.status === 'failed' && p.failureReason === PAYMENT_ABSENT_REASON;
-    if (p.status !== 'pending' && !absentFailed)
-      return p.status as PaymentStatus;
+    if (p.status !== 'pending') return p.status as PaymentStatus;
     const row = await this.prisma.fintavaLedgerEntry.findFirst({
       where: {
         customerReference: p.customerReference,
-        accountNumber: p.payerAccountNumber,
         direction: 'out',
+        walletKind: 'user',
       },
     });
-    if (!row) return p.status as PaymentStatus;
-    if (row.discrepancy && row.discrepancy !== p.discrepancy) {
+    if (row?.discrepancy && row.discrepancy !== p.discrepancy) {
       await this.prisma.walletPayment.update({
         where: { id: p.id },
         data: { discrepancy: row.discrepancy.slice(0, 1000) },
       });
     }
-    let next: PaymentRow = p;
-    if (row.status === 'completed' && !row.discrepancy) {
-      next = await this.markCompleted(p, null, absentFailed);
-      if (absentFailed && next.status === 'completed') {
-        this.logger.warn(
-          `payment ${p.id}: failed as unknown to Fintava, now found completed; brought back`,
-        );
+    if (row?.status === 'completed') {
+      return (await this.complete(p, null)).status as PaymentStatus;
+    }
+    if (row?.status === 'reversed') {
+      return (await this.transition(p, 'reversed', { openKey: null }))
+        .status as PaymentStatus;
+    }
+    if (
+      row?.status === 'failed' &&
+      row.failureReason === LEDGER_FINTAVA_FAILURE
+    ) {
+      return (await this.markFailed(p, PAYMENT_FAILED_REASON, false))
+        .status as PaymentStatus;
+    }
+    // Pending, a disagreement held for review, or failed only because
+    // Fintava had no record of it yet: never proof that no money moved.
+    // Fintava is asked.
+    if (!ask) return 'pending';
+    const answer = await this.askFintava(p);
+    if (answer?.state === 'found') {
+      const t = answer.transaction;
+      const status = ledgerStatusOf(t.status);
+      const price = koboNumber(p.priceKobo);
+      if (status === 'completed' && t.amountKobo === price) {
+        await this.recordSighting(p, row, 'completed', t, answer.source);
+        return (await this.complete(p, null)).status as PaymentStatus;
       }
-    } else if (row.status === 'failed' && !absentFailed) {
-      next = await this.markFailed(
-        p,
-        row.failureReason === LEDGER_ABSENT_FAILURE
-          ? PAYMENT_ABSENT_REASON
-          : PAYMENT_FAILED_REASON,
-        false,
+      if (status === 'completed') {
+        return (
+          await this.toReview(
+            p,
+            `Fintava moved ${t.amountKobo} kobo for a price of ${price}`,
+          )
+        ).status as PaymentStatus;
+      }
+      if (status === 'failed') {
+        await this.recordSighting(p, row, 'failed', t, answer.source);
+        return (await this.markFailed(p, PAYMENT_FAILED_REASON, false))
+          .status as PaymentStatus;
+      }
+    }
+    await this.reschedule(p, now);
+    return 'pending';
+  }
+
+  /** What Fintava knows of the payment's transfer, or null when it cannot be asked. */
+  private async askFintava(
+    p: PaymentRow,
+  ): Promise<FintavaReconciliation | null> {
+    const wallet = p.payerAccountNumber
+      ? await this.prisma.fintavaWallet.findUnique({
+          where: { accountNumber: p.payerAccountNumber },
+          select: { customerId: true },
+        })
+      : null;
+    if (!wallet) return null;
+    try {
+      return await this.fintava.reconcile(
+        p.customerReference,
+        { kind: 'customer', customerId: wallet.customerId },
+        p.sentAt ?? p.createdAt,
       );
-    } else if (row.status === 'reversed' && !absentFailed) {
-      next = await this.transition(p, 'reversed', {});
+    } catch (e) {
+      this.logger.warn(
+        `payment ${p.id}: Fintava could not be asked (${e instanceof FintavaError ? e.kind : 'error'})`,
+      );
+      return null;
     }
-    if (next.status === 'completed' && p.status !== 'completed') {
-      const handler = this.registry.get(next.kind as PaymentKind);
-      if (handler) await this.fulfil(next, handler);
+  }
+
+  /**
+   * Fintava's record of the transfer onto both ledger sides (a revival when
+   * the row was failed as absent), with the row's own fee: lookups and
+   * history carry none for a wallet-to-wallet send (MONEY-08's rule).
+   */
+  private async recordSighting(
+    p: PaymentRow,
+    out: { feeKobo: bigint; totalKobo: bigint } | null,
+    status: 'completed' | 'failed',
+    t: {
+      amountKobo: number;
+      fintavaReference: string | null;
+      tagapayTransRef: string | null;
+      id: string;
+      createdAt: string;
+    },
+    source: 'lookup' | 'history',
+  ): Promise<void> {
+    if (!p.payerAccountNumber) return;
+    const refs = {
+      fintavaReference: t.fintavaReference,
+      tagapayTransRef: t.tagapayTransRef,
+      fintavaTransactionId: t.id,
+    };
+    const occurredAt = Number.isNaN(Date.parse(t.createdAt))
+      ? null
+      : new Date(t.createdAt);
+    try {
+      const fee = out ? koboNumber(out.feeKobo) : koboNumber(p.providerFeeKobo);
+      const total = out ? koboNumber(out.totalKobo) : koboNumber(p.totalKobo);
+      await this.ledger.record(
+        {
+          ...this.movement(
+            p,
+            'out',
+            status,
+            {
+              amountKobo: t.amountKobo,
+              feeKobo: fee,
+              totalKobo: total,
+            },
+            refs,
+          ),
+          source,
+          occurredAt,
+          failureReason: status === 'failed' ? LEDGER_FINTAVA_FAILURE : null,
+        },
+        undefined,
+        { quiet: true },
+      );
+      await this.ledger.record(
+        {
+          ...this.movement(
+            p,
+            'in',
+            status,
+            {
+              amountKobo: t.amountKobo,
+              feeKobo: 0,
+              totalKobo: t.amountKobo,
+            },
+            refs,
+          ),
+          source,
+          occurredAt,
+          failureReason: status === 'failed' ? LEDGER_FINTAVA_FAILURE : null,
+        },
+        undefined,
+        { quiet: true },
+      );
+    } catch (e) {
+      this.logger.error(
+        `payment ${p.id}: the ledger could not record Fintava's record (${e instanceof Error ? e.name : 'error'})`,
+      );
     }
-    return next.status as PaymentStatus;
+  }
+
+  /** Still unknown: asked again later, or sent to review past the bound. */
+  private async reschedule(p: PaymentRow, now: Date): Promise<void> {
+    const sent = (p.sentAt ?? p.createdAt).getTime();
+    if (now.getTime() - sent >= this.settings.reviewAfterHours * 3_600_000) {
+      await this.toReview(
+        p,
+        `no answer from Fintava after ${this.settings.reviewAfterHours} hours`,
+      );
+      return;
+    }
+    await this.prisma.walletPayment.updateMany({
+      where: { id: p.id, status: 'pending' },
+      data: {
+        checks: { increment: 1 },
+        nextCheckAt: new Date(now.getTime() + nextCheckDelayMs(p.checks + 1)),
+      },
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -625,13 +845,33 @@ export class WalletPaymentService implements OnModuleInit {
     };
   }
 
+  /** Our own balance read was short: the shortfall is always 1 kobo or more. */
   private insufficient(balanceKobo: number, totalKobo: number): MoneyError {
-    const shortfallKobo = Math.max(0, totalKobo - balanceKobo);
+    const shortfallKobo = totalKobo - balanceKobo;
     return new MoneyError(
       'insufficient_funds',
       `You need ${nairaText(shortfallKobo)} more in your wallet.`,
       { balanceKobo, totalKobo, shortfallKobo },
     );
+  }
+
+  /**
+   * Fintava refused for funds after our read said there was enough (lead
+   * ruling D3): a real shortfall on a fresh read is shown; otherwise the
+   * balance moved or Fintava took more than quoted, and nothing below 1 kobo
+   * is ever shown as a shortfall.
+   */
+  private fintavaSaidInsufficient(
+    balanceKobo: number | null,
+    totalKobo: number,
+  ): MoneyError {
+    if (balanceKobo !== null && balanceKobo < totalKobo) {
+      return this.insufficient(balanceKobo, totalKobo);
+    }
+    return new MoneyError('insufficient_funds', BALANCE_CHANGED_MESSAGE, {
+      ...(balanceKobo === null ? {} : { balanceKobo }),
+      totalKobo,
+    });
   }
 
   /** Fintava's available balance, or null when it did not answer (the quote shows no figure). */
@@ -680,8 +920,8 @@ export class WalletPaymentService implements OnModuleInit {
         ...common,
         wallet: {
           kind: 'user',
-          wawuUserId: p.payerWawuUserId,
-          accountNumber: p.payerAccountNumber,
+          wawuUserId: p.payerWawuUserId ?? '',
+          accountNumber: p.payerAccountNumber ?? '',
         },
         direction: 'out',
         amountKobo: figures?.amountKobo ?? price,
@@ -715,35 +955,90 @@ export class WalletPaymentService implements OnModuleInit {
     };
   }
 
-  /** A status change that only ever leaves `pending` (or a failure-as-absent). */
+  /** A status change that only ever leaves `pending`. */
   private async transition(
     p: PaymentRow,
     status: PaymentStatus,
     data: Prisma.WalletPaymentUpdateManyMutationInput,
-    from: string[] = ['pending'],
   ): Promise<PaymentRow> {
     await this.prisma.walletPayment.updateMany({
-      where: { id: p.id, status: { in: from } },
+      where: { id: p.id, status: 'pending' },
       data: { ...data, status },
     });
     return this.prisma.walletPayment.findUniqueOrThrow({ where: { id: p.id } });
   }
 
-  private markCompleted(
+  /**
+   * Completes it (once: only from `pending`), frees the item for another
+   * payment, flags a second completed payment for the same item made while
+   * this one was open (lead ruling D1.4: MONEY-16 reports it, MONEY-18 owns
+   * the refund), and delivers.
+   */
+  private async complete(
     p: PaymentRow,
     discrepancy: string | null,
-    fromAbsentFailure = false,
+    handler?: PayableKindHandler,
   ): Promise<PaymentRow> {
-    return this.transition(
-      p,
-      'completed',
-      {
-        completedAt: new Date(),
-        failureReason: null,
+    const now = new Date();
+    const { count } = await this.prisma.walletPayment.updateMany({
+      where: { id: p.id, status: 'pending' },
+      data: {
+        status: 'completed',
+        completedAt: now,
+        openKey: null,
+        reviewSince: null,
+        nextCheckAt: null,
         ...(discrepancy ? { discrepancy } : {}),
       },
-      fromAbsentFailure ? ['failed'] : ['pending'],
-    );
+    });
+    let row = await this.prisma.walletPayment.findUniqueOrThrow({
+      where: { id: p.id },
+    });
+    if (count === 0) return row;
+    if (row.payerWawuUserId) {
+      const twins = await this.prisma.walletPayment.findMany({
+        where: {
+          id: { not: row.id },
+          payerWawuUserId: row.payerWawuUserId,
+          kind: row.kind,
+          targetId: row.targetId,
+          status: 'completed',
+          completedAt: { gt: row.createdAt },
+          createdAt: { lt: now },
+        },
+        select: { id: true },
+      });
+      if (twins.length) {
+        const note = `paid twice for one item: payments ${[row.id, ...twins.map((t) => t.id)].join(', ')} were open together; one may be owed back (refund: MONEY-18)`;
+        this.logger.error(`payment ${row.id}: ${note}`);
+        await this.prisma.walletPayment.updateMany({
+          where: { id: { in: [row.id, ...twins.map((t) => t.id)] } },
+          data: { discrepancy: note.slice(0, 1000) },
+        });
+        row = await this.prisma.walletPayment.findUniqueOrThrow({
+          where: { id: p.id },
+        });
+      }
+    }
+    const h = handler ?? this.registry.get(row.kind as PaymentKind);
+    if (h) await this.fulfil(row, h);
+    return row;
+  }
+
+  /** Still `pending`, out of the sweep, for a person to look at; the item stays blocked. */
+  private async toReview(
+    p: PaymentRow,
+    discrepancy: string,
+  ): Promise<PaymentRow> {
+    await this.prisma.walletPayment.updateMany({
+      where: { id: p.id, status: 'pending' },
+      data: {
+        reviewSince: new Date(),
+        nextCheckAt: null,
+        discrepancy: discrepancy.slice(0, 1000),
+      },
+    });
+    return this.prisma.walletPayment.findUniqueOrThrow({ where: { id: p.id } });
   }
 
   private async markFailed(
@@ -751,11 +1046,23 @@ export class WalletPaymentService implements OnModuleInit {
     reason: string,
     writeLedger = true,
   ): Promise<PaymentRow> {
-    const row = await this.transition(p, 'failed', { failureReason: reason });
+    const row = await this.transition(p, 'failed', {
+      failureReason: reason,
+      openKey: null,
+      nextCheckAt: null,
+    });
     if (writeLedger && row.status === 'failed') {
       try {
-        await this.ledger.record(this.movement(row, 'out', 'failed'));
-        await this.ledger.record(this.movement(row, 'in', 'failed'));
+        await this.ledger.record(
+          this.movement(row, 'out', 'failed'),
+          undefined,
+          { quiet: true },
+        );
+        await this.ledger.record(
+          this.movement(row, 'in', 'failed'),
+          undefined,
+          { quiet: true },
+        );
       } catch (e) {
         this.logger.error(
           `payment ${p.id}: the ledger could not record the refusal (${e instanceof Error ? e.name : 'error'})`,
@@ -765,22 +1072,14 @@ export class WalletPaymentService implements OnModuleInit {
     return row;
   }
 
-  private async noteDiscrepancy(
-    p: PaymentRow,
-    discrepancy: string,
-  ): Promise<PaymentRow> {
-    return this.prisma.walletPayment.update({
-      where: { id: p.id },
-      data: { discrepancy: discrepancy.slice(0, 1000) },
-    });
-  }
-
   /** Delivers what was paid for. True when the feature said it is done. */
   private async fulfil(
     p: PaymentRow,
     handler: PayableKindHandler,
   ): Promise<boolean> {
-    if (!handler.onCompleted || p.fulfilledAt) return false;
+    if (!handler.onCompleted || p.fulfilledAt || !p.payerWawuUserId) {
+      return false;
+    }
     try {
       await handler.onCompleted({
         paymentId: p.id,
@@ -817,12 +1116,13 @@ export class WalletPaymentService implements OnModuleInit {
   view(p: PaymentRow): PaymentView {
     const providerFeeKobo = koboNumber(p.providerFeeKobo);
     const wawuFeeKobo = koboNumber(p.wawuFeeKobo);
+    const status = p.status as PaymentStatus;
     return {
       id: p.id,
       kind: p.kind as PaymentKind,
       targetId: p.targetId,
       title: p.title,
-      status: p.status as PaymentStatus,
+      status,
       priceKobo: koboNumber(p.priceKobo),
       fee: {
         providerFeeKobo,
@@ -832,9 +1132,15 @@ export class WalletPaymentService implements OnModuleInit {
       totalKobo: koboNumber(p.totalKobo),
       reference: p.customerReference,
       hold: null,
-      failureReason: p.failureReason,
+      failureReason: status === 'failed' ? p.failureReason : null,
+      statusMessage: status === 'pending' ? STILL_CONFIRMING_MESSAGE : null,
       createdAt: p.createdAt.toISOString(),
       completedAt: p.completedAt ? p.completedAt.toISOString() : null,
     };
   }
+}
+
+/** What a payment quote is bound to: one kind and one item. */
+export function subjectOf(kind: PaymentKind, targetId: string): string {
+  return `payment:${kind}:${targetId}`;
 }

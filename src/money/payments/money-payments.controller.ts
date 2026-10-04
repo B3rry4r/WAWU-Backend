@@ -86,6 +86,7 @@ export class MoneyPaymentsController {
     'daily_limit_exceeded',
     'target_not_found',
     'target_not_payable',
+    'payment_in_progress',
   )
   pay(
     @CurrentWallet() wallet: OpenWallet,

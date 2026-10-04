@@ -34,6 +34,12 @@ interface QuoteClaims {
   t: number;
   /** expiresAt, in epoch milliseconds. */
   x: number;
+  /**
+   * What the quote is for, when the caller binds it to one thing (MONEY-17:
+   * `payment:<kind>:<targetId>`), so a quote for one item never pays
+   * another. Absent on a plain fee quote.
+   */
+  s?: string;
 }
 
 const TOKEN_CONTEXT = 'wawu-fee-quote.v1.';
@@ -93,6 +99,7 @@ export class FeeQuoteService {
     wawuUserId: string,
     input: FeeQuoteInput,
     now: Date = new Date(),
+    subject?: string,
   ): FeeQuoteView {
     const { fee, parts, totalKobo } = this.lines(input);
     const billCategory =
@@ -106,6 +113,7 @@ export class FeeQuoteService {
       a: input.amountKobo,
       t: totalKobo,
       x: expires,
+      ...(subject === undefined ? {} : { s: subject }),
     });
     return {
       kind: input.kind,
@@ -137,8 +145,9 @@ export class FeeQuoteService {
     expectedTotalKobo: number,
     quoteToken: string,
     now: Date = new Date(),
+    subject?: string,
   ): FeeQuoteView {
-    const fresh = this.quote(wawuUserId, input, now);
+    const fresh = this.quote(wawuUserId, input, now, subject);
     const claims = this.verify(quoteToken);
     const honoured =
       claims !== null &&
@@ -148,6 +157,7 @@ export class FeeQuoteService {
       claims.a === fresh.amountKobo &&
       claims.t === fresh.totalKobo &&
       expectedTotalKobo === fresh.totalKobo &&
+      claims.s === subject &&
       now.getTime() < claims.x;
     if (!honoured) {
       throw new MoneyError('quote_changed', QUOTE_CHANGED_MESSAGE, {

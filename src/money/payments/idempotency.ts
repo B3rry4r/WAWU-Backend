@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   applyDecorators,
   type ArgumentsHost,
@@ -75,6 +75,8 @@ export interface IdempotencyScope {
   route: string;
   key: string;
   fingerprint: string;
+  /** Set once this request holds the key: its own claim, never a later one's. */
+  claimId?: string;
 }
 
 /** JSON with every object's keys sorted, so the same body is the same text. */
@@ -161,17 +163,19 @@ export class IdempotencyService {
    * Takes the key for this request, or throws the answer a repeat gets
    * (the replay, `idempotency_key_reused`, `idempotency_in_progress`).
    */
-  async claim(scope: IdempotencyScope, now = new Date()): Promise<void> {
+  async claim(scope: IdempotencyScope, now = new Date()): Promise<string> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
+      const claimId = randomUUID();
       try {
         await this.prisma.moneyIdempotencyKey.create({
           data: {
             ...this.match(scope),
             fingerprint: scope.fingerprint,
             state: 'in_progress',
+            claimId,
           },
         });
-        return;
+        return claimId;
       } catch (e) {
         if (!isUniqueViolation(e)) throw e;
       }
@@ -247,6 +251,7 @@ export class IdempotencyService {
         fingerprint: scope.fingerprint,
         state: 'in_progress',
         resourceId: null,
+        ...(scope.claimId ? { claimId: scope.claimId } : {}),
       },
       data: { resourceId },
     });
@@ -278,6 +283,9 @@ export class IdempotencyService {
         fingerprint: scope.fingerprint,
         state: 'in_progress',
         ...(unattachedOnly ? { resourceId: null } : {}),
+        // Only this request's own claim: a key freed as dead and taken by a
+        // retry is the retry's (verifier finding 12).
+        ...(scope.claimId ? { claimId: scope.claimId } : {}),
       },
     });
   }
@@ -339,7 +347,7 @@ export class IdempotencyGuard implements CanActivate {
       key: raw,
       fingerprint: bodyFingerprint(req.body as unknown),
     };
-    await this.keys.claim(scope);
+    scope.claimId = await this.keys.claim(scope);
     req[SCOPE_KEY] = scope;
     return true;
   }

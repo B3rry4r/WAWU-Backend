@@ -583,9 +583,11 @@ describe('Transaction PIN (MONEY-09) over HTTP', () => {
         }
         responses.push(await verify(user.auth, newPin));
         // A request that fails inside the app (not a refusal): the database
-        // is unreachable for one call, so the exception filter logs it.
+        // is unreachable for one call, so the exception filter logs it. The
+        // check runs in one transaction per try since MONEY-17 round 2 (the
+        // PIN row is locked for the check), so that is where it fails.
         const spy = jest
-          .spyOn(prisma.transactionPin, 'updateMany')
+          .spyOn(prisma, '$transaction')
           .mockRejectedValueOnce(new Error('database went away'));
         responses.push(await verify(user.auth, newPin));
         spy.mockRestore();

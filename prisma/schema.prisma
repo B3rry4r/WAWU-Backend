@@ -3876,6 +3876,9 @@ model MoneyIdempotencyKey {
   key            String
   fingerprint    String
   state          String
+  /// Which request holds the key (a random id per claim), so a request that
+  /// gives a key back never frees a later request's claim on it.
+  claimId        String?
   /// The payment (or transfer) this request made.
   resourceId     String?
   responseStatus Int?
@@ -3909,7 +3912,9 @@ model MoneyIdempotencyKey {
 /// ─────────────────────────────────────────────────────────────────────────
 model WalletPayment {
   id                    String    @id @default(uuid())
-  payerWawuUserId       String
+  /// Null once the payer's account is deleted: the payment stays (the
+  /// payee's share may be unpaid), the payer side is anonymised.
+  payerWawuUserId       String?
   /// A PaymentKind of the wallet contract and the owning feature's id for it.
   kind                  String
   targetId              String
@@ -3927,9 +3932,20 @@ model WalletPayment {
   payeeSettledAt        DateTime?
   /// OUR CustomerReference at Fintava, derived from this row's id.
   customerReference     String    @unique
-  payerAccountNumber    String
+  payerAccountNumber    String?
   merchantAccountNumber String
   status                String
+  /// `<payer>:<kind>:<targetId>` while the payment is `pending`, null once
+  /// it is settled: the unique key is the rule "one open payment per buyer
+  /// and item" (a second answers `409 payment_in_progress`).
+  openKey               String?   @unique
+  /// The sweep's schedule for a `pending` payment: when Fintava is next
+  /// asked, how many times it has been, and when it went to manual review
+  /// (past PAYMENT_REVIEW_AFTER_HOURS with no answer; still pending, never
+  /// "no money moved").
+  nextCheckAt           DateTime?
+  checks                Int       @default(0)
+  reviewSince           DateTime?
   failureReason         String?
   /// Fintava's record of the debit disagreed with the quote (a fee, an
   /// amount): kept for review, as on the ledger row (MONEY-16 reports it).
@@ -3947,6 +3963,7 @@ model WalletPayment {
   @@index([payerWawuUserId, createdAt])
   @@index([status, createdAt])
   @@index([kind, targetId])
+  @@index([status, reviewSince, nextCheckAt, id])
 }
 
 /// ─────────────────────────────────────────────────────────────────────────

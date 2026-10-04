@@ -66,6 +66,9 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   // Never 401 (that signs the person out) and never a PIN code: a refused
   // biometric approval uses up no PIN try (R-26).
   device_approval_refused: 403,
+  // Default (lead), owner may override: a payment for this item is still
+  // being confirmed, so a second one is not taken (MONEY-17).
+  payment_in_progress: 409,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */
