@@ -3,8 +3,9 @@ import { registerDecorator, type ValidationOptions } from 'class-validator';
 /**
  * What the owner may put in a legal document (SETTINGS-02, round 2).
  *
- * PROVISIONAL(POLICY-LIMITS, owner=YOU, Default (agent), owner may override):
- * a document's date is a real calendar date from 2000-01-01 to 2100-12-31,
+ * PROVISIONAL(POLICY-LIMITS, owner=YOU, why=no ruling names the date range or the size a legal document may have)
+ *
+ * Default (agent), owner may override: a document's date is a real calendar date from 2000-01-01 to 2100-12-31,
  * and the title, headings and bodies together are at most 60000 bytes of
  * UTF-8. The size sits well under the 100 kB the body parser allows, so an
  * accepted document can always arrive.
