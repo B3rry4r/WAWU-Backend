@@ -121,23 +121,11 @@ export class CommunityService {
     }
     // SETTINGS-04: a room hosted by a hidden account is a 404, except for
     // somebody already in it, who keeps the room they joined.
-    if (
-      viewerWawuId &&
-      (await this.blockedAccounts.isBlockedEitherWay(
-        viewerWawuId,
-        community.hostWawuId,
-      ))
-    ) {
-      const member = await this.prisma.communityMembership.findFirst({
-        where: {
-          communityId: id,
-          userWawuId: viewerWawuId,
-          status: 'joined',
-        },
-        select: { id: true },
-      });
-      if (!member) throw new NotFoundException('Community not found');
-    }
+    await this.blockedAccounts.assertRoomVisible(
+      viewerWawuId,
+      community.hostWawuId,
+      id,
+    );
     return this.withDerivedFields(community);
   }
 
@@ -307,11 +295,16 @@ export class CommunityService {
   async join(id: string, userWawuId: string): Promise<CommunityMembership> {
     const community = await this.prisma.community.findUnique({
       where: { id },
-      select: { id: true, kind: true },
+      select: { id: true, kind: true, hostWawuId: true },
     });
     if (!community) {
       throw new NotFoundException('Community not found');
     }
+    await this.blockedAccounts.assertRoomVisible(
+      userWawuId,
+      community.hostWawuId,
+      id,
+    );
 
     const existing = await this.prisma.communityMembership.findUnique({
       where: { userWawuId_communityId: { userWawuId, communityId: id } },

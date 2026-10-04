@@ -396,6 +396,17 @@ export class ContentPieceService {
       creatorWawuId,
       'User not found',
     );
+    // A missing id answers exactly as a hidden creator does, so a signed-in
+    // caller cannot use the shelf to tell a blocked account from one that
+    // does not exist. A signed-out reader cannot be blocked, so the public
+    // shelf keeps its old answer (an empty list) for an unknown id.
+    if (requesterWawuId) {
+      const exists = await this.prisma.userProfile.findUnique({
+        where: { wawuUserId: creatorWawuId },
+        select: { wawuUserId: true },
+      });
+      if (!exists) throw new NotFoundException('User not found');
+    }
     const where = { creatorWawuId, status: 'live' as const };
 
     const [items, total] = await this.prisma.$transaction([

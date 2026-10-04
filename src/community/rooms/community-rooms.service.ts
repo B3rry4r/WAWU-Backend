@@ -75,14 +75,22 @@ export class CommunityRoomsService {
   }
 
   /** GET /communities/:id/link. Any signed-in user may share any room. */
-  async linkFor(communityId: string): Promise<CommunityLinkView> {
+  async linkFor(
+    communityId: string,
+    viewerWawuId?: string,
+  ): Promise<CommunityLinkView> {
     const community = await this.prisma.community.findUnique({
       where: { id: communityId },
-      select: { id: true, name: true },
+      select: { id: true, name: true, hostWawuId: true },
     });
     if (!community) {
       throw new NotFoundException('Community not found');
     }
+    await this.blockedAccounts.assertRoomVisible(
+      viewerWawuId,
+      community.hostWawuId,
+      community.id,
+    );
     const slug = await this.ensureLink(community.id, community.name);
     return { communityId: community.id, slug, link: shareLink(slug) };
   }
@@ -92,7 +100,10 @@ export class CommunityRoomsService {
    * not: what the caller may then do (read, ask to join) is decided by the
    * room routes exactly as it is for a room found any other way.
    */
-  async resolve(rawSlug: string): Promise<CommunityRoom> {
+  async resolve(
+    rawSlug: string,
+    viewerWawuId?: string,
+  ): Promise<CommunityRoom> {
     const slug = normaliseSlug(rawSlug);
     const link = slug
       ? await this.prisma.communityLink.findUnique({
@@ -103,6 +114,12 @@ export class CommunityRoomsService {
     if (!link) {
       throw new NotFoundException('No community has this link.');
     }
+    await this.blockedAccounts.assertRoomVisible(
+      viewerWawuId,
+      link.community.hostWawuId,
+      link.community.id,
+      'No community has this link.',
+    );
     const community = await this.communities.withDerivedFields(link.community);
     return { ...community, slug: link.slug, link: shareLink(link.slug) };
   }
@@ -123,6 +140,11 @@ export class CommunityRoomsService {
     if (!community) {
       throw new NotFoundException('Community not found');
     }
+    await this.blockedAccounts.assertRoomVisible(
+      userWawuId,
+      community.hostWawuId,
+      community.id,
+    );
     if (community.hostWawuId !== userWawuId) {
       const membership = await this.prisma.communityMembership.findUnique({
         where: { userWawuId_communityId: { userWawuId, communityId } },

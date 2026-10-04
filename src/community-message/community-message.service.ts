@@ -293,6 +293,11 @@ export class CommunityMessageService {
     perPage: number,
   ): Promise<Paginated<CommunityMessage>> {
     const community = await this.assertCommunityExists(communityId);
+    await this.blockedAccounts.assertRoomVisible(
+      readerWawuId,
+      community.hostWawuId,
+      communityId,
+    );
     await this.assertMember(communityId, readerWawuId, community.hostWawuId);
 
     // SETTINGS-04: what a blocked person wrote (or what somebody who blocked
@@ -355,6 +360,11 @@ export class CommunityMessageService {
     }
 
     const community = await this.assertCommunityExists(communityId);
+    await this.blockedAccounts.assertRoomVisible(
+      senderWawuId,
+      community.hostWawuId,
+      communityId,
+    );
     await this.assertMember(communityId, senderWawuId, community.hostWawuId);
 
     const entitlement = await this.resolveEntitlement(community, senderWawuId);

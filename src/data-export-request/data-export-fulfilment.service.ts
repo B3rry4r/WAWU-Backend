@@ -51,40 +51,62 @@ export class DataExportFulfilmentService {
     }
   }
 
-  /** True when the email was handed over. A failure leaves the row pending (or failed, after a day). */
+  /**
+   * True when the email was handed over.
+   *
+   * The row is claimed BEFORE the mail goes out: inside one transaction the
+   * row is locked (`FOR UPDATE SKIP LOCKED`, still `pending`), so a second
+   * sweep, a second `fulfil` or a second app instance finds it locked and
+   * does nothing, and only the winner sends. It is marked `sent` in the same
+   * transaction. If the send fails the row stays `pending` (or becomes
+   * `failed` after a day), and if the process dies mid-send the lock goes
+   * with it and the row is simply tried again: nothing is lost, and a mail is
+   * never sent twice by two workers.
+   */
   async fulfil(requestId: string, now: Date = new Date()): Promise<boolean> {
-    const row = await this.prisma.dataExportRequest.findUnique({
-      where: { id: requestId },
-    });
-    if (!row || row.status !== 'pending') return false;
+    return this.prisma.$transaction(
+      async (tx) => {
+        const claimed = await tx.$queryRaw<
+          Array<{ id: string; userWawuId: string; requestedAt: Date }>
+        >`SELECT "id", "userWawuId", "requestedAt" FROM "DataExportRequest"
+          WHERE "id" = ${requestId} AND "status" = 'pending'
+          FOR UPDATE SKIP LOCKED`;
+        const row = claimed[0];
+        if (!row) return false;
 
-    try {
-      const expiresAt = new Date(now.getTime() + EXPORT_LINK_HOURS * 3_600_000);
-      const token = signExportLink(
-        row.id,
-        expiresAt,
-        this.config.get<string>('ADMIN_JWT_SECRET'),
-      );
-      const url = `${this.publicBase()}/api/hub/settings/privacy/export/download?token=${encodeURIComponent(token)}`;
-      await this.mailer.sendLink(row.userWawuId, url, expiresAt);
-    } catch (e) {
-      const ageHours = (now.getTime() - row.requestedAt.getTime()) / 3_600_000;
-      this.logger.warn(
-        `Export ${row.id} not emailed yet: ${e instanceof Error ? e.message : String(e)}`,
-      );
-      if (ageHours >= GIVE_UP_AFTER_HOURS) {
-        await this.prisma.dataExportRequest.updateMany({
-          where: { id: row.id, status: 'pending' },
-          data: { status: 'failed' },
+        try {
+          const expiresAt = new Date(
+            now.getTime() + EXPORT_LINK_HOURS * 3_600_000,
+          );
+          const token = signExportLink(
+            row.id,
+            expiresAt,
+            this.config.get<string>('ADMIN_JWT_SECRET'),
+          );
+          const url = `${this.publicBase()}/api/hub/settings/privacy/export/download?token=${encodeURIComponent(token)}`;
+          await this.mailer.sendLink(row.userWawuId, url, expiresAt);
+        } catch (e) {
+          const ageHours =
+            (now.getTime() - row.requestedAt.getTime()) / 3_600_000;
+          this.logger.warn(
+            `Export ${row.id} not emailed yet: ${e instanceof Error ? e.message : String(e)}`,
+          );
+          if (ageHours >= GIVE_UP_AFTER_HOURS) {
+            await tx.dataExportRequest.update({
+              where: { id: row.id },
+              data: { status: 'failed' },
+            });
+          }
+          return false;
+        }
+        await tx.dataExportRequest.update({
+          where: { id: row.id },
+          data: { status: 'sent' },
         });
-      }
-      return false;
-    }
-    const { count } = await this.prisma.dataExportRequest.updateMany({
-      where: { id: row.id, status: 'pending' },
-      data: { status: 'sent' },
-    });
-    return count > 0;
+        return true;
+      },
+      { timeout: 30_000, maxWait: 10_000 },
+    );
   }
 
   private publicBase(): string {

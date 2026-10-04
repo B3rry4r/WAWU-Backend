@@ -258,6 +258,26 @@ export class BlockedAccountService {
   }
 
   /**
+   * A room hosted by a hidden account is a 404 on every way in (open, share
+   * link, join, read, post, mark read), except for somebody already joined,
+   * who keeps the room they are in. Same wording as a room that is missing.
+   */
+  async assertRoomVisible(
+    viewer: string | null | undefined,
+    hostWawuId: string,
+    communityId: string,
+    notFound = 'Community not found',
+  ): Promise<void> {
+    if (!viewer || viewer === hostWawuId) return;
+    if (!(await this.isBlockedEitherWay(viewer, hostWawuId))) return;
+    const member = await this.prisma.communityMembership.findFirst({
+      where: { communityId, userWawuId: viewer, status: 'joined' },
+      select: { id: true },
+    });
+    if (!member) throw new NotFoundException(notFound);
+  }
+
+  /**
    * The one line every gated interaction calls.
    *
    * 403, not 404: the caller already knows the account exists (they are on

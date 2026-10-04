@@ -611,6 +611,75 @@ describe('Blocking hides people (contract)', () => {
     expect((await room())?.lastMessage?.id).toBe(MESSAGE_BY_PRO);
   });
 
+  it('a user who blocked a host cannot reach their room by share link, link by id, join or messages, and each answers like a missing room', async () => {
+    const missingRoom = '5a040000-0000-4000-8000-0000000000ee';
+    const slug = envelope<{ slug: string }>(
+      await get(`/communities/${ROOM_BY_PRO}/link`, pro).expect(200),
+    ).data.slug;
+    const join = () =>
+      request(app.getHttpServer())
+        .post(`/communities/${ROOM_BY_PRO}/join`)
+        .set(as(plain));
+    const entries = () => [
+      get(`/communities/${ROOM_BY_PRO}/link`, plain),
+      get(`/communities/links/${slug}`, plain),
+      get(`/communities/${ROOM_BY_PRO}/messages`, plain),
+      join(),
+    ];
+    const missing = [
+      get(`/communities/${missingRoom}/link`, plain),
+      get('/communities/links/no-such-room-s04', plain),
+      get(`/communities/${missingRoom}/messages`, plain),
+      request(app.getHttpServer())
+        .post(`/communities/${missingRoom}/join`)
+        .set(as(plain)),
+    ];
+    const missingAnswers = await Promise.all(missing);
+    missingAnswers.forEach((r) => expect(r.status).toBe(404));
+
+    // Before the block the link entries open (the control).
+    await get(`/communities/${ROOM_BY_PRO}/link`, plain).expect(200);
+    await get(`/communities/links/${slug}`, plain).expect(200);
+
+    for (const blockIt of [plainBlocksPro, proBlocksPlain]) {
+      await clearBlocks();
+      await blockIt();
+      const answers = await Promise.all(entries());
+      answers.forEach((r, i) => {
+        expect({ entry: i, status: r.status }).toEqual({
+          entry: i,
+          status: 404,
+        });
+        expect(message(r)).toBe(message(missingAnswers[i]));
+      });
+    }
+    // Nobody joined through the blocked door.
+    expect(
+      await prisma.communityMembership.count({
+        where: { communityId: ROOM_BY_PRO, userWawuId: USER_PLAIN },
+      }),
+    ).toBe(0);
+    await clearBlocks();
+    await get(`/communities/links/${slug}`, plain).expect(200);
+  });
+
+  it('a user already in a room keeps its link and messages after blocking its host', async () => {
+    await plainBlocksPro();
+    await get(`/communities/${FOUNDERS_ROOM}/link`, plain).expect(200);
+    await get(`/communities/${FOUNDERS_ROOM}/messages`, plain).expect(200);
+  });
+
+  it('a user gets the same "not found" for the shelf of an account that does not exist as for one they blocked', async () => {
+    const missing = await get(
+      '/users/5a040000-0000-4000-8000-0000000000ef/content',
+      plain,
+    ).expect(404);
+    await plainBlocksPro();
+    const hidden = await get(`/users/${USER_PRO}/content`, plain).expect(404);
+    expect(message(hidden)).toBe(message(missing));
+    expect(hidden.body).toEqual(missing.body);
+  });
+
   // ---- directory and events ---------------------------------------------
 
   it('a user who blocked a professional does not see their listing in the directory or on its page', async () => {

@@ -22,7 +22,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
  *     identity number, bank account, device key, file key or signed URL, and
  *     no payment-provider transaction id.
  *
- * `data-export.spec.ts` fails the build when a model that the account purge
+ * `data-export-map.spec.ts` fails the build when a model that the account purge
  * treats as the account's own (account-data-map.ts) is in neither
  * EXPORT_SECTIONS nor EXPORT_EXCLUDED, so a new table cannot quietly be left
  * out of both the deletion and the export.

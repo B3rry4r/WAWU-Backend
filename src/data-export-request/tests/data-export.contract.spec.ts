@@ -288,6 +288,14 @@ describe('Data export (contract)', () => {
     if (ownedMock && mock) mock.kill();
   });
 
+  // Each test starts with no export requests for USER, so the daily limit
+  // (3 in 24 hours) is only ever what the test itself asks for.
+  beforeEach(async () => {
+    await prisma.dataExportRequest.deleteMany({
+      where: { userWawuId: { in: [USER, OTHER] } },
+    });
+  });
+
   it('a user can ask for their data and the link is emailed to them through WAWU ID', async () => {
     const before = (await outbox()).length;
     const req = await ask();
@@ -564,5 +572,145 @@ describe('Data export (contract)', () => {
     ).toBe('sent');
     expect(await fulfil.sweep()).toBe(0);
     expect((await outbox()).length).toBeGreaterThan(before);
+  });
+
+  const fulfilWorker = () =>
+    new DataExportFulfilmentService(
+      prisma,
+      new DataExportMailer(config),
+      config,
+    );
+  const mailsToUser = async () =>
+    (await outbox()).filter((m) => m.userId === USER).length;
+  const post = () =>
+    request(app.getHttpServer())
+      .post('/settings/privacy/export')
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+
+  it('a user who asks four times at once gets one request and one email, in 12 trials', async () => {
+    for (let trial = 0; trial < 12; trial++) {
+      await prisma.dataExportRequest.deleteMany({
+        where: { userWawuId: USER },
+      });
+      const before = await mailsToUser();
+      const res = await Promise.all([post(), post(), post(), post()]);
+      res.forEach((r) => expect(r.status).toBe(201));
+      const rowIds = new Set(
+        res.map((r) => (r.body as { data: { id: string } }).data.id),
+      );
+      expect(rowIds.size).toBe(1);
+      expect(
+        await prisma.dataExportRequest.count({ where: { userWawuId: USER } }),
+      ).toBe(1);
+      await Promise.all([fulfil.sweep(), fulfil.sweep()]);
+      expect((await mailsToUser()) - before).toBe(1);
+    }
+  }, 120_000);
+
+  it('a request is emailed once however many workers race for it, in 12 trials', async () => {
+    const workers = [fulfilWorker(), fulfilWorker(), fulfil];
+    for (let trial = 0; trial < 12; trial++) {
+      await prisma.dataExportRequest.deleteMany({
+        where: { userWawuId: USER },
+      });
+      const rows = await Promise.all(
+        [0, 1, 2, 3].map(() =>
+          prisma.dataExportRequest.create({ data: { userWawuId: USER } }),
+        ),
+      );
+      rows.forEach((r) => requestIds.push(r.id));
+      const before = await mailsToUser();
+      await Promise.all([
+        workers[0].sweep(),
+        workers[1].sweep(),
+        workers[2].sweep(),
+        ...rows.map((r) => workers[0].fulfil(r.id)),
+        ...rows.map((r) => workers[1].fulfil(r.id)),
+      ]);
+      expect((await mailsToUser()) - before).toBe(4);
+      const states = await prisma.dataExportRequest.findMany({
+        where: { id: { in: rows.map((r) => r.id) } },
+      });
+      expect(states.map((r) => r.status)).toEqual([
+        'sent',
+        'sent',
+        'sent',
+        'sent',
+      ]);
+    }
+  }, 180_000);
+
+  it('a request whose email fails is not lost and is sent on the next try', async () => {
+    const req = await ask();
+    const down = new ConfigService({
+      WAWU_ID_BASE_URL: 'http://localhost:1',
+      WAWU_ID_INTERNAL_SERVICE_KEY: SERVICE_KEY,
+      ADMIN_JWT_SECRET: config.get<string>('ADMIN_JWT_SECRET'),
+    });
+    const flaky = new DataExportFulfilmentService(
+      prisma,
+      new DataExportMailer(down),
+      down,
+    );
+    expect(await flaky.fulfil(req.id)).toBe(false);
+    expect(
+      (
+        await prisma.dataExportRequest.findUniqueOrThrow({
+          where: { id: req.id },
+        })
+      ).status,
+    ).toBe('pending');
+    expect(await fulfil.fulfil(req.id)).toBe(true);
+  });
+
+  it('a user cannot ask for their data more than 3 times in 24 hours, even in a burst, and gets 429 in the usual error shape', async () => {
+    // Three requests, each emailed, so none is "pending" any more.
+    for (let i = 0; i < 3; i++) {
+      const r = await ask();
+      expect(await fulfil.fulfil(r.id)).toBe(true);
+    }
+    const refused = await post();
+    expect(refused.status).toBe(429);
+    const body = refused.body as {
+      statusCode: number;
+      message: string;
+      data: unknown;
+    };
+    expect(body.data).toBeNull();
+    expect(body.message).toMatch(/3 times a day/);
+    expect(body.message).not.toMatch(/\u2014/);
+
+    // One listening server for the whole burst: supertest would otherwise
+    // open 40 throwaway ones at once.
+    const server = app.getHttpServer() as import('http').Server;
+    if (!server.listening) {
+      await new Promise<void>((resolve) => server.listen(0, resolve));
+    }
+    const burst = await Promise.all(Array.from({ length: 40 }, () => post()));
+    expect(burst.every((r) => r.status === 429)).toBe(true);
+    expect(
+      await prisma.dataExportRequest.count({ where: { userWawuId: USER } }),
+    ).toBe(3);
+  });
+
+  it('a user who made 3 requests a day ago can ask again, and one account hitting the limit does not block another', async () => {
+    for (let i = 0; i < 3; i++) {
+      await prisma.dataExportRequest.create({
+        data: {
+          userWawuId: USER,
+          status: 'sent',
+          requestedAt: new Date(Date.now() - (25 + i) * 3_600_000),
+        },
+      });
+    }
+    await post().expect(201);
+    // Fill OTHER's window directly; USER is untouched by it.
+    for (let i = 0; i < 3; i++) {
+      await prisma.dataExportRequest.create({
+        data: { userWawuId: OTHER, status: 'sent' },
+      });
+    }
+    await post().expect(201);
   });
 });
