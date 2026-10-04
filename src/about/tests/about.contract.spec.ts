@@ -219,4 +219,84 @@ describe('About and policies contract', () => {
       supportEmail: 'help@example.test',
     });
   });
+
+  describe('round 2: strict input', () => {
+    const put = (body: object | string) =>
+      http()
+        .put('/api/hub/admin/policies/terms')
+        .set('Authorization', `Bearer ${superToken}`)
+        .set('Content-Type', 'application/json')
+        .send(body);
+
+    it.each([
+      '2026-13-45',
+      '0000-00-00',
+      '2026-02-30',
+      '2027-02-29',
+      '2026-00-10',
+      '1999-12-31',
+      '2101-01-01',
+    ])(
+      'a superadmin cannot save a document dated %s (400, nothing stored)',
+      async (date) => {
+        const res = await put({ ...DOC, effectiveDate: date }).expect(400);
+        expect(res.body.data).toBeNull();
+        const got = await http().get('/api/hub/policies/terms').expect(200);
+        expect(got.body.data.effectiveDate).not.toBe(date);
+      },
+    );
+
+    it('a superadmin can save a real date, including 29 February of a leap year, and it reads back unchanged', async () => {
+      for (const date of ['2028-02-29', '2000-01-01', '2100-12-31']) {
+        await put({ ...DOC, effectiveDate: date }).expect(200);
+        const got = await http().get('/api/hub/policies/terms').expect(200);
+        expect(got.body.data.effectiveDate).toBe(date);
+      }
+    });
+
+    it('a superadmin cannot save text with a NUL character (400, not 500)', async () => {
+      await put({ ...DOC, title: 'Te\u0000rms' }).expect(400);
+      await put({
+        ...DOC,
+        sections: [{ heading: 'One', body: 'bad \u0000 text' }],
+      }).expect(400);
+    });
+
+    it('a superadmin cannot save a title, heading or body that is empty after trimming', async () => {
+      await put({ ...DOC, title: '   ' }).expect(400);
+      await put({ ...DOC, sections: [{ heading: ' \n ', body: 'x' }] }).expect(
+        400,
+      );
+      await put({
+        ...DOC,
+        sections: [{ heading: 'x', body: '\n\t  ' }],
+      }).expect(400);
+    });
+
+    it('a superadmin cannot save more than 60000 bytes of text (400), and a body over the parser limit is 413 in the usual shape', async () => {
+      const chunk = 'a'.repeat(20000);
+      const big = {
+        ...DOC,
+        sections: [0, 1, 2, 3].map((i) => ({ heading: `H${i}`, body: chunk })),
+      };
+      const tooLong = await put(big).expect(400);
+      expect(tooLong.body.message).toMatch(/too long/);
+      const raw = await put(
+        JSON.stringify({ ...DOC, junk: 'x'.repeat(150_000) }),
+      ).expect(413);
+      expect(raw.body).toEqual({
+        statusCode: 413,
+        message: 'The request is too large.',
+        data: null,
+      });
+    });
+
+    it('a document just under the limit is accepted', async () => {
+      const body = 'b'.repeat(19900);
+      await put({
+        ...DOC,
+        sections: [0, 1, 2].map((i) => ({ heading: `H${i}`, body })),
+      }).expect(200);
+    });
+  });
 });

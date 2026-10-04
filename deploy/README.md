@@ -136,6 +136,9 @@ SELFIE_CHECKS_PER_DAY=
 WALLET_BANK_NAME=
 WALLET_LICENCE_LINE=
 WALLET_DEPOSIT_INSURANCE_LINE=
+# About: where "Contact support" sends mail (SETTINGS-02). The owner's fact, no default
+# (empty: the row says "Not available yet").
+SUPPORT_EMAIL=
 
 GEMINI_API_KEY=
 
