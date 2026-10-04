@@ -47,7 +47,7 @@ export const D3_FORMS: [string, string][] = [
   ['MTN 0803½1234567', 'MTN •••• 4567'],
   ['MTN 0803…123…4567', 'MTN •••• 4567'],
   ['GTBank ⓿❶❷❸❹❺❻❼❽❾', 'GTBank •••• 6789'],
-  // Out of scope by ruling: digits split by a letter other than x stay separate numbers.
+  // Lead ruling, round 4: digits split by a letter other than x are separate numbers.
   ['MTN 0803 Ada 1234567', 'MTN 0803 Ada •••• 4567'],
   ['Shop 12 Lekki Phase 1', 'Shop 12 Lekki Phase 1'],
 ];
