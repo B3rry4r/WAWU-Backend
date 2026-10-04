@@ -190,6 +190,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "Refused: the creator has not enabled paid messages, a block stands between the two, or (reason.code paid_messages_paused, with reason.pausedUntil) the creator left too many paid questions unanswered and paid messages are switched off until pausedUntil (R-13)."
           }
         },
         "tags": [
@@ -440,6 +443,68 @@
           }
         },
         "summary": "The creator's waiting list: soonest deadline first, with the total waiting.",
+        "tags": [
+          "PaidDm"
+        ]
+      }
+    },
+    "/api/hub/paid-dm/standing": {
+      "get": {
+        "operationId": "PaidDmController_standing",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaidDmStanding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller is not a creator account."
+          }
+        },
+        "summary": "The creator's own standing on unanswered paid questions: warned, paused, and when it ends (R-13).",
+        "tags": [
+          "PaidDm"
+        ]
+      }
+    },
+    "/api/hub/paid-dm/creators/{wawuId}/availability": {
+      "get": {
+        "operationId": "PaidDmController_availability",
+        "parameters": [
+          {
+            "name": "wawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaidDmAvailability"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "wawuId is not a UUID."
+          },
+          "404": {
+            "description": "The account has no creator state."
+          }
+        },
+        "summary": "Whether a creator's paid messages are switched off, and until when (I8). Any signed-in user.",
         "tags": [
           "PaidDm"
         ]
@@ -6952,7 +7017,8 @@
               "type": "string",
               "enum": [
                 "feed",
-                "mine"
+                "mine",
+                "following"
               ]
             }
           },
@@ -7097,6 +7163,120 @@
         ]
       }
     },
+    "/api/hub/content/mine/library": {
+      "get": {
+        "operationId": "ContentPieceController_myLibrary",
+        "parameters": [
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "live",
+                "pending",
+                "rejected"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MyContentItem"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "M28: my pieces with sales and the reviewer's reason. Literal paths stay above ':id'.",
+        "tags": [
+          "ContentPiece"
+        ]
+      }
+    },
+    "/api/hub/content/mine/library/counts": {
+      "get": {
+        "operationId": "ContentPieceController_myLibraryCounts",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyContentCounts"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The numbers on the M28 filter tabs.",
+        "tags": [
+          "ContentPiece"
+        ]
+      }
+    },
+    "/api/hub/content/mine/library/{id}": {
+      "get": {
+        "operationId": "ContentPieceController_myPiece",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyContentItem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "M26: one of my pieces, with its latest rejection reason.",
+        "tags": [
+          "ContentPiece"
+        ]
+      }
+    },
     "/api/hub/content/purchases": {
       "get": {
         "operationId": "ContentPieceController_purchases",
@@ -7191,6 +7371,76 @@
             "description": ""
           }
         },
+        "tags": [
+          "ContentPiece"
+        ]
+      },
+      "patch": {
+        "operationId": "ContentPieceController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateContentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyContentItem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Edit the details or the file of a piece that is pending or rejected.",
+        "tags": [
+          "ContentPiece"
+        ]
+      }
+    },
+    "/api/hub/content/{id}/resubmit": {
+      "post": {
+        "operationId": "ContentPieceController_resubmit",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyContentItem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Send a rejected piece for review again.",
         "tags": [
           "ContentPiece"
         ]
@@ -7485,6 +7735,258 @@
         },
         "tags": [
           "PublicContent"
+        ]
+      }
+    },
+    "/api/hub/content/{id}/like": {
+      "post": {
+        "operationId": "ContentEngagementController_like",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LikeState"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ContentEngagement"
+        ]
+      },
+      "delete": {
+        "operationId": "ContentEngagementController_unlike",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LikeState"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ContentEngagement"
+        ]
+      }
+    },
+    "/api/hub/content/{id}/view": {
+      "post": {
+        "operationId": "ContentEngagementController_view",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViewState"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ContentEngagement"
+        ]
+      }
+    },
+    "/api/hub/content/{id}/share": {
+      "post": {
+        "operationId": "ContentEngagementController_share",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShareState"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ContentEngagement"
+        ]
+      }
+    },
+    "/api/hub/content/{id}/engagement": {
+      "get": {
+        "operationId": "ContentEngagementController_state",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentEngagement"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ContentEngagement"
+        ]
+      }
+    },
+    "/api/hub/feed": {
+      "get": {
+        "operationId": "FeedController_feed",
+        "parameters": [
+          {
+            "name": "scope",
+            "required": true,
+            "in": "query",
+            "description": "`for_you` is the ranked browse; `following` is only people you follow.",
+            "schema": {
+              "default": "for_you",
+              "type": "string",
+              "enum": [
+                "for_you",
+                "following"
+              ]
+            }
+          },
+          {
+            "name": "category",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "required": true,
+            "in": "query",
+            "description": "Ordering of `for_you`. `following` is always newest first.",
+            "schema": {
+              "default": "trending",
+              "type": "string",
+              "enum": [
+                "trending",
+                "recent",
+                "top"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FeedItem"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Feed"
+        ]
+      }
+    },
+    "/api/hub/feed/following/count": {
+      "get": {
+        "operationId": "FeedController_followingCount",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FollowingCount"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Feed"
         ]
       }
     },
@@ -18409,6 +18911,56 @@
         ]
       }
     },
+    "/api/hub/users/me/profile-fields": {
+      "get": {
+        "operationId": "UserProfileController_getMyProfileFields",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileFieldsView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "UserProfile"
+        ]
+      },
+      "patch": {
+        "operationId": "UserProfileController_updateMyProfileFields",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProfileFieldsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileFieldsView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "UserProfile"
+        ]
+      }
+    },
     "/api/hub/users/me/experience": {
       "post": {
         "operationId": "UserProfileController_addExperience",
@@ -18542,6 +19094,37 @@
           }
         },
         "summary": "Somebody else's public profile.\n\nThe caller is passed through so the visit can be counted once per viewer\nper day. Your own profile is never counted as a view of itself — see\nUserProfileService.recordProfileView.",
+        "tags": [
+          "UserProfile"
+        ]
+      }
+    },
+    "/api/hub/users/{wawuId}/profile-fields": {
+      "get": {
+        "operationId": "UserProfileController_getProfileFields",
+        "parameters": [
+          {
+            "name": "wawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileFieldsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Somebody else's profile fields: what M5 and M33 draw for a visitor.",
         "tags": [
           "UserProfile"
         ]
@@ -23885,6 +24468,85 @@
           "fullAsset"
         ]
       },
+      "UpdateContentDto": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "agriculture_food",
+              "trade_commerce",
+              "business_entrepreneurship",
+              "finance",
+              "technology",
+              "education",
+              "healthcare",
+              "employment",
+              "entertainment_creative",
+              "beauty",
+              "family_lifestyle",
+              "culture_heritage",
+              "religion_faith",
+              "travel_tourism",
+              "real_estate",
+              "transport_logistics",
+              "manufacturing",
+              "energy_utilities",
+              "media_communications",
+              "professional_services",
+              "legal_services",
+              "insurance_pensions",
+              "sports_fitness",
+              "government_public",
+              "social_impact"
+            ]
+          },
+          "specializations": {
+            "description": "Replaces the whole list, as on create (at most three).",
+            "maxItems": 3,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "description": "Replaces the whole list, as on create (at most twenty).",
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "accessType": {
+            "type": "string",
+            "enum": [
+              "free",
+              "paid"
+            ]
+          },
+          "price": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10000000
+          },
+          "previewAsset": {
+            "type": "string",
+            "format": "uri"
+          },
+          "fullAsset": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      },
       "VerifyUnlockDto": {
         "type": "object",
         "properties": {
@@ -24974,6 +25636,56 @@
             "nullable": true,
             "maxLength": 2048,
             "format": "uri"
+          }
+        }
+      },
+      "UpdateProfileFieldsDto": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "nullable": true,
+            "description": "Where the person is, free text (\"Lagos, Nigeria\"). null or \"\" clears it.",
+            "maxLength": 120
+          },
+          "skills": {
+            "description": "Skills and expertise chips. [] clears them.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 40
+            }
+          },
+          "openTo": {
+            "description": "What the person is open to, as chips. [] clears them.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 40
+            }
+          },
+          "threadsHandle": {
+            "type": "string",
+            "nullable": true,
+            "description": "Threads handle, with or without the \"@\". null or \"\" clears it.",
+            "maxLength": 50
+          },
+          "socialOrder": {
+            "type": "array",
+            "description": "The order the social links show in, first to last, as platform keys. Each\nkey once. [] puts them back in the default order.",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "instagram",
+                "tiktok",
+                "youtube",
+                "x",
+                "threads",
+                "linkedin",
+                "facebook"
+              ]
+            }
           }
         }
       },
@@ -28883,6 +29595,172 @@
           "fullAssetLocked"
         ]
       },
+      "MyContentItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "live",
+              "rejected",
+              "removed"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "title": {
+            "type": "string"
+          },
+          "creatorWawuId": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string",
+            "enum": [
+              "video",
+              "course",
+              "audio",
+              "pdf",
+              "image",
+              "template"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "specializations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "accessType": {
+            "type": "string",
+            "enum": [
+              "free",
+              "paid"
+            ]
+          },
+          "price": {
+            "type": "number"
+          },
+          "durationLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "pageCount": {
+            "type": "number",
+            "nullable": true
+          },
+          "previewAssetUrl": {
+            "type": "string"
+          },
+          "creatorFirstUploadFree": {
+            "type": "boolean"
+          },
+          "views": {
+            "type": "number"
+          },
+          "ratingPct": {
+            "type": "number",
+            "nullable": true
+          },
+          "commentCount": {
+            "type": "number"
+          },
+          "likes": {
+            "type": "number"
+          },
+          "fullAssetUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "fullAssetLocked": {
+            "type": "boolean"
+          },
+          "salesCount": {
+            "type": "number"
+          },
+          "rejectionReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "rejectedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "createdAt",
+          "title",
+          "creatorWawuId",
+          "slug",
+          "contentType",
+          "description",
+          "category",
+          "specializations",
+          "tags",
+          "accessType",
+          "price",
+          "durationLabel",
+          "pageCount",
+          "previewAssetUrl",
+          "creatorFirstUploadFree",
+          "views",
+          "ratingPct",
+          "commentCount",
+          "likes",
+          "fullAssetUrl",
+          "fullAssetLocked",
+          "salesCount",
+          "rejectionReason",
+          "rejectedAt"
+        ]
+      },
+      "MyContentCounts": {
+        "type": "object",
+        "properties": {
+          "all": {
+            "type": "number"
+          },
+          "live": {
+            "type": "number"
+          },
+          "pending": {
+            "type": "number"
+          },
+          "rejected": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "all",
+          "live",
+          "pending",
+          "rejected"
+        ]
+      },
       "UnlockVerifyResult": {
         "type": "object",
         "properties": {
@@ -28897,6 +29775,241 @@
         "required": [
           "purchased",
           "fullAssetUrl"
+        ]
+      },
+      "LikeState": {
+        "type": "object",
+        "properties": {
+          "likes": {
+            "type": "number"
+          },
+          "likedByMe": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "likes",
+          "likedByMe"
+        ]
+      },
+      "ViewState": {
+        "type": "object",
+        "properties": {
+          "views": {
+            "type": "number"
+          },
+          "counted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "views",
+          "counted"
+        ]
+      },
+      "ShareState": {
+        "type": "object",
+        "properties": {
+          "shares": {
+            "type": "number"
+          },
+          "counted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "shares",
+          "counted"
+        ]
+      },
+      "ContentEngagement": {
+        "type": "object",
+        "properties": {
+          "likes": {
+            "type": "number"
+          },
+          "views": {
+            "type": "number"
+          },
+          "shares": {
+            "type": "number"
+          },
+          "commentCount": {
+            "type": "number"
+          },
+          "likedByMe": {
+            "type": "boolean"
+          },
+          "savedByMe": {
+            "type": "boolean"
+          },
+          "followsCreator": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "likes",
+          "views",
+          "shares",
+          "commentCount",
+          "likedByMe",
+          "savedByMe",
+          "followsCreator"
+        ]
+      },
+      "FeedItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "live",
+              "rejected",
+              "removed"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "title": {
+            "type": "string"
+          },
+          "creatorWawuId": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string",
+            "enum": [
+              "video",
+              "course",
+              "audio",
+              "pdf",
+              "image",
+              "template"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "specializations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "accessType": {
+            "type": "string",
+            "enum": [
+              "free",
+              "paid"
+            ]
+          },
+          "price": {
+            "type": "number"
+          },
+          "durationLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "pageCount": {
+            "type": "number",
+            "nullable": true
+          },
+          "previewAssetUrl": {
+            "type": "string"
+          },
+          "creatorFirstUploadFree": {
+            "type": "boolean"
+          },
+          "views": {
+            "type": "number"
+          },
+          "ratingPct": {
+            "type": "number",
+            "nullable": true
+          },
+          "commentCount": {
+            "type": "number"
+          },
+          "likes": {
+            "type": "number"
+          },
+          "fullAssetUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "fullAssetLocked": {
+            "type": "boolean"
+          },
+          "likedByMe": {
+            "type": "boolean"
+          },
+          "savedByMe": {
+            "type": "boolean"
+          },
+          "followsCreator": {
+            "type": "boolean"
+          },
+          "shares": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "createdAt",
+          "title",
+          "creatorWawuId",
+          "slug",
+          "contentType",
+          "description",
+          "category",
+          "specializations",
+          "tags",
+          "accessType",
+          "price",
+          "durationLabel",
+          "pageCount",
+          "previewAssetUrl",
+          "creatorFirstUploadFree",
+          "views",
+          "ratingPct",
+          "commentCount",
+          "likes",
+          "fullAssetUrl",
+          "fullAssetLocked",
+          "likedByMe",
+          "savedByMe",
+          "followsCreator",
+          "shares"
+        ]
+      },
+      "FollowingCount": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "count"
         ]
       },
       "DmSendInitResponse": {
@@ -29110,6 +30223,81 @@
           "items",
           "nextCursor",
           "waitingTotal"
+        ]
+      },
+      "PaidDmStanding": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "warning",
+              "paused"
+            ]
+          },
+          "acceptingPaidMessages": {
+            "type": "boolean"
+          },
+          "unansweredPct": {
+            "type": "number"
+          },
+          "unanswered": {
+            "type": "number",
+            "nullable": true
+          },
+          "questions": {
+            "type": "number",
+            "nullable": true
+          },
+          "warnAtPct": {
+            "type": "number"
+          },
+          "pauseAtPct": {
+            "type": "number"
+          },
+          "windowDays": {
+            "type": "number"
+          },
+          "pauseDays": {
+            "type": "number"
+          },
+          "pausedUntil": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "state",
+          "acceptingPaidMessages",
+          "unansweredPct",
+          "unanswered",
+          "questions",
+          "warnAtPct",
+          "pauseAtPct",
+          "windowDays",
+          "pauseDays",
+          "pausedUntil"
+        ]
+      },
+      "PaidDmAvailability": {
+        "type": "object",
+        "properties": {
+          "creatorWawuId": {
+            "type": "string"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "pausedUntil": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "creatorWawuId",
+          "paused",
+          "pausedUntil"
         ]
       },
       "PaidDmThread": {
@@ -33315,6 +34503,53 @@
           "monthStart",
           "profileCompletenessPct",
           "profileCompletenessMissing"
+        ]
+      },
+      "ProfileFieldsView": {
+        "type": "object",
+        "properties": {
+          "wawuUserId": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string",
+            "nullable": true
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "openTo": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "threadsHandle": {
+            "type": "string",
+            "nullable": true
+          },
+          "socialOrder": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "memberSince": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "wawuUserId",
+          "location",
+          "skills",
+          "openTo",
+          "threadsHandle",
+          "socialOrder",
+          "memberSince"
         ]
       },
       "CreatorProfile": {
