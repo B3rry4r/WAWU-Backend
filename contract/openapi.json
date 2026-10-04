@@ -19383,7 +19383,7 @@
             }
           }
         },
-        "summary": "Declared before `me/featured-works/:id`, so \"order\" is never read as an id.",
+        "summary": "Declared above `me/featured-works/:id` so that route does not take \"order\" for an id.",
         "tags": [
           "ProfileWorks"
         ]

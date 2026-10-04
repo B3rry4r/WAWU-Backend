@@ -99,6 +99,51 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    // Featured works (ME-16). The pictures are file keys, which an export
+    // never carries (rule 3), so `media` is left out; the count says how
+    // many there were.
+    key: 'profileWorks',
+    models: ['ProfileWork'],
+    load: async (prisma, me) => {
+      const rows = await prisma.profileWork.findMany({
+        where: { wawuUserId: me },
+        select: {
+          title: true,
+          role: true,
+          client: true,
+          year: true,
+          link: true,
+          category: true,
+          description: true,
+          media: true,
+          position: true,
+          createdAt: true,
+        },
+        orderBy: [{ position: 'asc' }, { id: 'asc' }],
+      });
+      return rows.map(({ media, ...work }) => ({
+        ...work,
+        mediaCount: media.length,
+      }));
+    },
+  },
+  {
+    key: 'profileEducation',
+    models: ['ProfileEducation'],
+    load: (prisma, me) =>
+      prisma.profileEducation.findMany({
+        where: { wawuUserId: me },
+        select: {
+          school: true,
+          field: true,
+          startYear: true,
+          endYear: true,
+          createdAt: true,
+        },
+        orderBy: [{ startYear: 'desc' }, { id: 'asc' }],
+      }),
+  },
+  {
     key: 'likes',
     models: ['ContentLike'],
     load: (prisma, me) =>

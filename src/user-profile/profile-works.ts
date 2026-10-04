@@ -64,6 +64,9 @@ const MULTI_LINE_FORBIDDEN =
 const LINK_FORBIDDEN =
   /[\s\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069<>"'`\\]/;
 /* eslint-enable no-control-regex */
+/** A UTF-16 half with no partner: it cannot be stored as UTF-8 and would come back as U+FFFD. */
+const LONE_SURROGATE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 /** A dotted host name of plain labels (the URL parser has already turned any non-ASCII into punycode). */
 const HOSTNAME =
   /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
@@ -92,7 +95,7 @@ export function cleanText(
   const forbidden = opts.multiline
     ? MULTI_LINE_FORBIDDEN
     : SINGLE_LINE_FORBIDDEN;
-  if (forbidden.test(raw)) {
+  if (LONE_SURROGATE.test(raw) || forbidden.test(raw)) {
     throw new BadRequestException(
       `${field} has a character that is not allowed`,
     );
@@ -137,12 +140,15 @@ export function cleanLink(raw: string): string | null {
     );
   }
   const bad = () => new BadRequestException('Link is not a web address');
-  if (LINK_FORBIDDEN.test(text)) {
+  if (LONE_SURROGATE.test(text) || LINK_FORBIDDEN.test(text)) {
     throw bad();
   }
   if (/^wawu\/[A-Za-z0-9._~\-/]+$/.test(text) && !text.includes('..')) {
     return text;
   }
+  // `//host`, `/path` and `///x` are not web addresses: refused, never
+  // turned into `https:////host`.
+  if (text.startsWith('/')) throw bad();
   const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(text);
   const withScheme = hasScheme ? text : `https://${text}`;
   let url: URL;
@@ -153,7 +159,7 @@ export function cleanLink(raw: string): string | null {
   }
   if (
     (url.protocol !== 'https:' && url.protocol !== 'http:') ||
-    !/^https?:\/\//i.test(withScheme) ||
+    !/^https?:\/\/[^/?#]/i.test(withScheme) ||
     url.username !== '' ||
     url.password !== '' ||
     !HOSTNAME.test(url.hostname)

@@ -22,6 +22,7 @@ import {
   MAX_WORK_MEDIA,
   latestWorkYear,
 } from '../profile-works';
+import { EXPORT_SECTIONS } from '../../data-export-request/data-export-sections';
 import { rowsToDelete } from '../../account-purge/account-data-map';
 
 /**
@@ -657,6 +658,9 @@ describe('Featured works and education (contract)', () => {
       'a‮b',
       '<script>alert(1)</script>',
       'x <img src=x onerror=alert(1)>',
+      'a\ud800b',
+      '\udc00',
+      'tail\ud83d',
       '<!-- c -->',
     ];
     for (const title of bad) {
@@ -734,6 +738,13 @@ describe('Featured works and education (contract)', () => {
       'https://example..com',
       'wawu/../etc',
       'https://example.com/"onmouseover="x',
+      '//evil.com',
+      '///evil.com',
+      '/evil',
+      'https:////evil.com',
+      'https:///evil.com',
+      'http:/evil.com',
+      'https://exa\ud800mple.com',
       `https://example.com/${'a'.repeat(300)}`,
     ]) {
       await http()
@@ -986,6 +997,60 @@ describe('Featured works and education (contract)', () => {
     expect(allowed).not.toContain('image/svg+xml');
     expect(FOLDER_MAX_BYTES['profile/work']).toBeGreaterThan(0);
     expect(FOLDER_MAX_BYTES['profile/work']).toBeLessThan(512 * 1024 * 1024);
+  });
+
+  it('refuses a lone surrogate in a paragraph and in education, and keeps a real emoji', async () => {
+    await http()
+      .post('/users/me/featured-works')
+      .set(auth(ownerToken))
+      .send(workBody({ description: 'x\ud83d' }))
+      .expect(400);
+    await http()
+      .post('/users/me/education')
+      .set(auth(ownerToken))
+      .send({ school: 'a\ud800b', startYear: 2014 })
+      .expect(400);
+    await http()
+      .post('/users/me/education')
+      .set(auth(ownerToken))
+      .send({ school: 'Studio', field: '\udc00', startYear: 2014 })
+      .expect(400);
+    const ok = await addWork(ownerToken, { title: 'Film \ud83c\udfac' });
+    expect(ok.title).toBe('Film \ud83c\udfac');
+  });
+
+  it("a user's data export holds their own works and education, without file keys, and nobody else's", async () => {
+    const key = await upload(OWNER_SUB);
+    await addWork(ownerToken, {
+      title: 'Mine',
+      client: 'Kora',
+      link: 'wawu/lennox/kora',
+      media: [key],
+    });
+    await addWork(visitorToken, { title: 'Theirs' });
+    await addEducation(ownerToken, { school: 'My school' });
+    await addEducation(visitorToken, { school: 'Their school' });
+
+    const load = (k: string) =>
+      EXPORT_SECTIONS.find((s) => s.key === k)!.load(prisma, OWNER_SUB);
+    const works = (await load('profileWorks')) as Record<string, unknown>[];
+    const education = (await load('profileEducation')) as Record<
+      string,
+      unknown
+    >[];
+    expect(works.map((w) => w.title)).toEqual(['Mine']);
+    expect(works[0]).toMatchObject({
+      role: 'Director',
+      client: 'Kora',
+      link: 'wawu/lennox/kora',
+      mediaCount: 1,
+    });
+    // No file key, in any field, under any name.
+    expect(JSON.stringify(works)).not.toContain('profile/work/');
+    expect(works[0]).not.toHaveProperty('media');
+    expect(works[0]).not.toHaveProperty('wawuUserId');
+    expect(education.map((e) => e.school)).toEqual(['My school']);
+    expect(education[0]).not.toHaveProperty('wawuUserId');
   });
 
   /* ----------------------- races and the cap ------------------------------ */
