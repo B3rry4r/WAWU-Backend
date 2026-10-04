@@ -23130,6 +23130,181 @@
         ]
       }
     },
+    "/api/hub/tgif/{date}/stats": {
+      "get": {
+        "operationId": "TgifController_stats",
+        "parameters": [
+          {
+            "name": "date",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TgifStats"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tgif"
+        ]
+      }
+    },
+    "/api/hub/tgif/{date}/react": {
+      "post": {
+        "operationId": "TgifController_react",
+        "parameters": [
+          {
+            "name": "date",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReactTgifDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TgifReactionState"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tgif"
+        ]
+      }
+    },
+    "/api/hub/tgif/{date}/react/{card}": {
+      "delete": {
+        "operationId": "TgifController_unreact",
+        "parameters": [
+          {
+            "name": "date",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "card",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "enum": [
+                "verse",
+                "reality",
+                "remember",
+                "prayer",
+                "takeaway"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TgifReactionState"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tgif"
+        ]
+      }
+    },
+    "/api/hub/tgif/{date}/read": {
+      "post": {
+        "operationId": "TgifController_read",
+        "parameters": [
+          {
+            "name": "date",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TgifReadState"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tgif"
+        ]
+      }
+    },
+    "/api/hub/tgif/{date}/share": {
+      "post": {
+        "operationId": "TgifController_share",
+        "parameters": [
+          {
+            "name": "date",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TgifShareState"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tgif"
+        ]
+      }
+    },
     "/api/hub/webhooks/fintava": {
       "post": {
         "operationId": "FintavaWebhookController_receive",
@@ -27291,6 +27466,32 @@
         "required": [
           "contentType",
           "contentLength"
+        ]
+      },
+      "ReactTgifDto": {
+        "type": "object",
+        "properties": {
+          "card": {
+            "type": "string",
+            "description": "Which card: verse, reality, remember, prayer or takeaway.",
+            "enum": [
+              "verse",
+              "reality",
+              "remember",
+              "prayer",
+              "takeaway"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "description": "What the person says to it. Defaults to \"amen\", the only reaction.",
+            "enum": [
+              "amen"
+            ]
+          }
+        },
+        "required": [
+          "card"
         ]
       },
       "NameCheckDto": {
@@ -37503,6 +37704,122 @@
         "required": [
           "uploadUrl",
           "key"
+        ]
+      },
+      "TgifCardStats": {
+        "type": "object",
+        "properties": {
+          "card": {
+            "type": "string",
+            "enum": [
+              "verse",
+              "reality",
+              "remember",
+              "prayer",
+              "takeaway"
+            ]
+          },
+          "amen": {
+            "type": "number"
+          },
+          "amenByMe": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "card",
+          "amen",
+          "amenByMe"
+        ]
+      },
+      "TgifStats": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string"
+          },
+          "cards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TgifCardStats"
+            }
+          },
+          "readers": {
+            "type": "number"
+          },
+          "shares": {
+            "type": "number"
+          },
+          "readByMe": {
+            "type": "boolean"
+          },
+          "sharedByMe": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "date",
+          "cards",
+          "readers",
+          "shares",
+          "readByMe",
+          "sharedByMe"
+        ]
+      },
+      "TgifReactionState": {
+        "type": "object",
+        "properties": {
+          "card": {
+            "type": "string",
+            "enum": [
+              "verse",
+              "reality",
+              "remember",
+              "prayer",
+              "takeaway"
+            ]
+          },
+          "amen": {
+            "type": "number"
+          },
+          "amenByMe": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "card",
+          "amen",
+          "amenByMe"
+        ]
+      },
+      "TgifReadState": {
+        "type": "object",
+        "properties": {
+          "readers": {
+            "type": "number"
+          },
+          "counted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "readers",
+          "counted"
+        ]
+      },
+      "TgifShareState": {
+        "type": "object",
+        "properties": {
+          "shares": {
+            "type": "number"
+          },
+          "counted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "shares",
+          "counted"
         ]
       },
       "PaymentQuoteView": {

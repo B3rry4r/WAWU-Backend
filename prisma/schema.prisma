@@ -701,12 +701,12 @@ model ContentFrame {
 /// number of rows; no counter column on ContentPiece, because a new column
 /// there would widen every live content response (protected route registry, entry H-1).
 model ContentShare {
-  id            String       @id @default(uuid())
-  contentId     String
-  content       ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
-  sharerWawuId  String
-  sharedOn      DateTime     @db.Date
-  sharedAt      DateTime     @default(now())
+  id           String       @id @default(uuid())
+  contentId    String
+  content      ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  sharerWawuId String
+  sharedOn     DateTime     @db.Date
+  sharedAt     DateTime     @default(now())
 
   @@unique([contentId, sharerWawuId, sharedOn])
   @@index([sharerWawuId])
@@ -3355,32 +3355,32 @@ model TransactionPinReset {
 /// so does a PIN reset by code. Holds no secret: a public key.
 /// ─────────────────────────────────────────────────────────────────────────
 model ApprovalDevice {
-  wawuUserId  String    @id
+  wawuUserId String    @id
   /// New on every registration; the app keeps it to know this phone is the one.
-  deviceId    String    @unique @default(uuid())
+  deviceId   String    @unique @default(uuid())
   /// SubjectPublicKeyInfo (DER) of a P-256 key, base64url.
-  publicKey   String
+  publicKey  String
   /// What the phone approves with: `fingerprint` or `face` (W35's label).
-  biometric   String
+  biometric  String
   /// The last approval that passed.
-  lastUsedAt  DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 }
 
 /// One challenge for one biometric approval (task MONEY-14): random, short
 /// lived, tied to the person and the phone it was issued for, and used up by
 /// the first approval that names it, right or wrong.
 model ApprovalChallenge {
-  id          String    @id @default(uuid())
-  wawuUserId  String
+  id         String    @id @default(uuid())
+  wawuUserId String
   /// ApprovalDevice.deviceId when the challenge was issued.
-  deviceId    String
+  deviceId   String
   /// 32 random bytes, base64url. Not a secret: only the phone's key can sign it.
-  challenge   String
-  expiresAt   DateTime
-  usedAt      DateTime?
-  createdAt   DateTime  @default(now())
+  challenge  String
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime  @default(now())
 
   @@index([wawuUserId, createdAt])
 }
@@ -3634,16 +3634,16 @@ model BvnCheckAttempt {
 /// holds the selfie, the BVN photo or any part of the BVN: only the outcome,
 /// when, and Fintava's confidence score when it gives one.
 model SelfieMatchAttempt {
-  id         String    @id @default(uuid())
-  wawuUserId String
+  id            String    @id @default(uuid())
+  wawuUserId    String
   /// `pending` while Fintava is being asked; then `matched`, `not_matched`
   /// or `unavailable`.
-  outcome    String    @default("pending")
+  outcome       String    @default("pending")
   /// Fintava's confidence score for this match, as sent, when it sends one.
-  confidence Float?
+  confidence    Float?
   /// When Fintava's answer came back; null while pending.
-  settledAt  DateTime?
-  createdAt  DateTime  @default(now())
+  settledAt     DateTime?
+  createdAt     DateTime  @default(now())
   /// The passed BVN check this selfie was compared against, read once at the
   /// start of the request (migration 20261002230000): when that check passed
   /// (WalletIdentity.bvnVerifiedAt) and its BVN's keyed hash
@@ -4099,4 +4099,46 @@ model CourseIntake {
   updatedAt DateTime @updatedAt
 
   @@index([courseId, startDate])
+}
+
+/// One person's reaction to one TGIF card on one day (HOME-10). The unique
+/// (person, day, card) key is what makes a reaction count once: two taps at
+/// once race on the key and one row exists. Counts are always the number of
+/// rows (no counter column), so a count can never drift from its rows. `kind`
+/// is "amen" today; the migration holds it to that with a CHECK.
+model TgifReaction {
+  id         String   @id @default(uuid())
+  userWawuId String
+  /// The calendar day the card belongs to (a date, not an instant).
+  day        DateTime @db.Date
+  card       String
+  kind       String   @default("amen")
+  createdAt  DateTime @default(now())
+
+  @@unique([userWawuId, day, card])
+  @@index([day, card])
+}
+
+/// One person opened TGIF on one day (HOME-10). "Readers today" is the number
+/// of rows for the day: one person is one row however often they open it.
+model TgifRead {
+  id         String   @id @default(uuid())
+  userWawuId String
+  day        DateTime @db.Date
+  createdAt  DateTime @default(now())
+
+  @@unique([userWawuId, day])
+  @@index([day])
+}
+
+/// One person shared TGIF on one day (HOME-10). The share count for a day is
+/// the number of rows, as ContentShare's is for a piece.
+model TgifShare {
+  id         String   @id @default(uuid())
+  userWawuId String
+  day        DateTime @db.Date
+  createdAt  DateTime @default(now())
+
+  @@unique([userWawuId, day])
+  @@index([day])
 }
