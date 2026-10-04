@@ -28,6 +28,7 @@ import type { CreateContentDto } from './dto/create-content.dto';
 import type { RateContentDto } from './dto/rate-content.dto';
 import { netOfCommission } from '../common/money';
 import { NotificationService } from '../notification/notification.service';
+import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { StorageService } from '../storage/storage.service';
 import type { VerifyUnlockDto } from './dto/verify-unlock.dto';
 
@@ -96,6 +97,7 @@ export class ContentPieceService {
     @Inject(FLUTTERWAVE_CLIENT) private readonly flutterwave: FlutterwaveClient,
     private readonly notifications: NotificationService,
     private readonly storage: StorageService,
+    private readonly blockedAccounts: BlockedAccountService,
   ) {}
 
   /**
@@ -197,6 +199,17 @@ export class ContentPieceService {
     const unlockedSet = await this.resolveUnlockedSet(requesterWawuId, [
       content.id,
     ]);
+    // SETTINGS-04: a piece by someone the caller blocked (or who blocked the
+    // caller) is gone, with the same 404 as a piece that never existed. One
+    // exception: somebody who already paid for it keeps their copy, because a
+    // block must never take away what a person bought.
+    if (!unlockedSet.has(content.id)) {
+      await this.blockedAccounts.assertVisible(
+        requesterWawuId,
+        content.creatorWawuId,
+        'Content not found',
+      );
+    }
     return this.toResponse(content, unlockedSet.has(content.id));
   }
 
@@ -208,6 +221,12 @@ export class ContentPieceService {
     perPage: number,
     sort: ContentSort = 'trending',
   ): Promise<Paginated<ContentPieceResponse>> {
+    // SETTINGS-04: the feed leaves out anyone the caller blocked or who
+    // blocked the caller. The caller's own shelf ('mine') is theirs alone.
+    const hidden =
+      scope === 'mine'
+        ? []
+        : await this.blockedAccounts.hiddenFrom(requesterWawuId);
     const where =
       scope === 'mine'
         ? {
@@ -219,7 +238,11 @@ export class ContentPieceService {
             status: { not: 'removed' as const },
             ...(category ? { category } : {}),
           }
-        : { status: 'live' as const, ...(category ? { category } : {}) };
+        : {
+            status: 'live' as const,
+            creatorWawuId: { notIn: hidden },
+            ...(category ? { category } : {}),
+          };
 
     // "mine" is a creator looking at their own shelf, including drafts and
     // pieces still in review. That is a chronological list of their work, not
@@ -244,7 +267,13 @@ export class ContentPieceService {
     let total: number;
     if (ranked) {
       try {
-        [items, total] = await this.listRanked(category, sort, page, perPage);
+        [items, total] = await this.listRanked(
+          category,
+          sort,
+          page,
+          perPage,
+          hidden,
+        );
       } catch (e) {
         this.logger.error(
           `Ranked feed query failed, falling back to newest-first: ${String(e)}`,
@@ -283,6 +312,7 @@ export class ContentPieceService {
     sort: ContentSort,
     page: number,
     perPage: number,
+    hidden: string[],
   ): Promise<[ContentPieceRow[], number]> {
     // Every weight is cast to numeric. Postgres infers a bound parameter's type
     // from its context, so `c."views" * $n` typed the 0.1 view weight as an
@@ -319,12 +349,17 @@ export class ContentPieceService {
         GROUP BY "contentId"
       ) p ON p."contentId" = c."id"
       WHERE c."status" = 'live' ${categoryFilter}
+        AND NOT (c."creatorWawuId" = ANY(${hidden}::text[]))
       ORDER BY ${score} DESC, c."createdAt" DESC
       LIMIT ${perPage} OFFSET ${(page - 1) * perPage}
     `);
 
     const total = await this.prisma.contentPiece.count({
-      where: { status: 'live', ...(category ? { category } : {}) },
+      where: {
+        status: 'live',
+        creatorWawuId: { notIn: hidden },
+        ...(category ? { category } : {}),
+      },
     });
     return [rows, total];
   }
@@ -355,6 +390,12 @@ export class ContentPieceService {
     page: number,
     perPage: number,
   ): Promise<Paginated<ContentPieceResponse>> {
+    // SETTINGS-04: a hidden creator's shelf is a 404, like their profile.
+    await this.blockedAccounts.assertVisible(
+      requesterWawuId,
+      creatorWawuId,
+      'User not found',
+    );
     const where = { creatorWawuId, status: 'live' as const };
 
     const [items, total] = await this.prisma.$transaction([
@@ -597,6 +638,11 @@ export class ContentPieceService {
     if (!content || content.status !== 'live') {
       throw new NotFoundException('Content not found');
     }
+    await this.blockedAccounts.assertVisible(
+      buyerWawuId,
+      content.creatorWawuId,
+      'Content not found',
+    );
     if (content.accessType === 'free') {
       throw new BadRequestException(
         'This content is free — no unlock required.',
@@ -734,11 +780,16 @@ export class ContentPieceService {
   async save(contentId: string, userWawuId: string): Promise<SavedItem> {
     const content = await this.prisma.contentPiece.findUnique({
       where: { id: contentId },
-      select: { id: true },
+      select: { id: true, creatorWawuId: true },
     });
     if (!content) {
       throw new NotFoundException('Content not found');
     }
+    await this.blockedAccounts.assertVisible(
+      userWawuId,
+      content.creatorWawuId,
+      'Content not found',
+    );
 
     return this.prisma.savedItem.upsert({
       where: { userWawuId_contentId: { userWawuId, contentId } },
@@ -775,6 +826,11 @@ export class ContentPieceService {
     if (!content) {
       throw new NotFoundException('Content not found');
     }
+    await this.blockedAccounts.assertVisible(
+      raterWawuId,
+      content.creatorWawuId,
+      'Content not found',
+    );
 
     const submittedPct = dto.rating * 20;
     const newRatingPct =

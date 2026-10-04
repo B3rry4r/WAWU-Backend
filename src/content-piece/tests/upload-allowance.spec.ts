@@ -122,6 +122,9 @@ function buildService(opts: {
     {
       freshUrlFor: jest.fn((url: string | null) => Promise.resolve(url)),
     } as never,
+    // BlockedAccountService (SETTINGS-04) — nothing on the upload path reads
+    // a block.
+    {} as never,
   );
   return { service, state, tx, created, upserted };
 }

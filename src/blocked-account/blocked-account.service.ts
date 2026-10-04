@@ -215,6 +215,49 @@ export class BlockedAccountService {
   }
 
   /**
+   * Every account that must not be shown to `viewer`: the ones they blocked
+   * and the ones who blocked them (SETTINGS-04). A block hides people from
+   * each other on every read surface, never just from the one who pressed
+   * the button, for the same reason `isBlockedEitherWay` is symmetric.
+   *
+   * Read surfaces call this once per request and filter with the result
+   * (`notIn`), so a page costs one indexed query, not one per row. Returns an
+   * empty list for a caller with no account (a signed-out reader): a block is
+   * between two accounts, so there is nobody to hide anything from.
+   *
+   * Exported on purpose: the wallet recipient search (WALLET-08) filters its
+   * results with this same method.
+   */
+  async hiddenFrom(viewer: string | null | undefined): Promise<string[]> {
+    if (!viewer) return [];
+    const rows = await this.prisma.blockedAccount.findMany({
+      where: { OR: [{ userWawuId: viewer }, { blockedWawuId: viewer }] },
+      select: { userWawuId: true, blockedWawuId: true },
+    });
+    const ids = new Set<string>();
+    for (const r of rows) {
+      ids.add(r.userWawuId === viewer ? r.blockedWawuId : r.userWawuId);
+    }
+    return [...ids];
+  }
+
+  /**
+   * A profile, piece or room that belongs to a hidden account answers exactly
+   * like one that does not exist: a 404 with the caller's own wording, never
+   * a 403, so the response cannot be used to learn who blocked whom.
+   */
+  async assertVisible(
+    viewer: string | null | undefined,
+    owner: string,
+    notFound: string,
+  ): Promise<void> {
+    if (!viewer || viewer === owner) return;
+    if (await this.isBlockedEitherWay(viewer, owner)) {
+      throw new NotFoundException(notFound);
+    }
+  }
+
+  /**
    * The one line every gated interaction calls.
    *
    * 403, not 404: the caller already knows the account exists (they are on

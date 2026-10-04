@@ -1,3 +1,4 @@
+import { BlockedAccountService } from '../../blocked-account/blocked-account.service';
 import {
   BadRequestException,
   ConflictException,
@@ -51,6 +52,7 @@ export class CommunityRoomsService {
     private readonly prisma: PrismaService,
     private readonly communities: CommunityService,
     private readonly messages: CommunityMessageService,
+    private readonly blockedAccounts: BlockedAccountService,
   ) {}
 
   /**
@@ -193,19 +195,25 @@ export class CommunityRoomsService {
     ]);
     const readUpTo = new Map(markers.map((m) => [m.communityId, m.lastReadAt]));
 
+    // SETTINGS-04: a room's preview line and unread count leave out what
+    // people the caller blocked (or who blocked the caller) wrote.
+    const hidden = await this.blockedAccounts.hiddenFrom(userWawuId);
     const ranked = await Promise.all(
       communities.map(async (community) => {
         const { role, joinedAt } = roles.get(community.id)!;
         const since = readUpTo.get(community.id) ?? joinedAt ?? null;
         const [last, unreadCount] = await this.prisma.$transaction([
           this.prisma.communityMessage.findFirst({
-            where: { communityId: community.id },
+            where: {
+              communityId: community.id,
+              senderWawuId: { notIn: hidden },
+            },
             orderBy: [{ sentAt: 'desc' }, { id: 'desc' }],
           }),
           this.prisma.communityMessage.count({
             where: {
               communityId: community.id,
-              senderWawuId: { not: userWawuId },
+              senderWawuId: { notIn: [userWawuId, ...hidden] },
               ...(since ? { sentAt: { gt: since } } : {}),
             },
           }),

@@ -12,6 +12,7 @@ import {
   type VerificationState,
 } from '../common/verification/verification-state';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
+import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import {
   AccountType,
   ContentStatus,
@@ -97,6 +98,7 @@ export class ProfessionalService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly wawuId: WawuIdClient,
+    private readonly blockedAccounts: BlockedAccountService,
   ) {}
 
   // -------------------------------------------------------------------
@@ -249,12 +251,16 @@ export class ProfessionalService {
    * and showing one would mean the badge on the card was granted by pressing
    * submit.
    */
-  async list(query: ListProfessionalsQueryDto) {
+  async list(query: ListProfessionalsQueryDto, viewerWawuId?: string) {
     const page = query.page ?? 1;
     const perPage = query.perPage ?? DEFAULT_PER_PAGE;
+    // SETTINGS-04: a professional the caller blocked, or who blocked the
+    // caller, is not in the directory, and not counted.
+    const hidden = await this.blockedAccounts.hiddenFrom(viewerWawuId);
     const where = {
       status: 'approved' as const,
       listed: true,
+      wawuUserId: { notIn: hidden },
       ...(query.category ? { category: query.category } : {}),
     };
 
@@ -368,11 +374,16 @@ export class ProfessionalService {
   }
 
   /** GET /professionals/:id — one listing, in full. */
-  async detail(id: string) {
+  async detail(id: string, viewerWawuId?: string) {
     const row = await this.prisma.professionalProfile.findFirst({
       where: { id, status: 'approved', listed: true },
     });
     if (!row) throw new NotFoundException('Professional profile not found');
+    await this.blockedAccounts.assertVisible(
+      viewerWawuId,
+      row.wawuUserId,
+      'Professional profile not found',
+    );
 
     const [identities, profile, state, pieceCount, rating] = await Promise.all([
       this.wawuId.lookupPublicIdentities([row.wawuUserId]),

@@ -7,6 +7,7 @@ import { FLUTTERWAVE_CLIENT } from './flutterwave-client.interface';
 import { RealFlutterwaveAdapter } from './real-flutterwave.adapter';
 import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';
 import { shouldUseMockFlutterwave } from '../common/flutterwave/require-payment-config';
+import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 import { NotificationModule } from '../notification/notification.module';
 import { StorageModule } from '../storage/storage.module';
 
@@ -20,7 +21,7 @@ import { StorageModule } from '../storage/storage.module';
  * ContentPiece's own unlock/verify flow).
  */
 @Module({
-  imports: [NotificationModule, StorageModule],
+  imports: [NotificationModule, StorageModule, BlockedAccountModule],
   controllers: [ContentPieceController, PublicContentController],
   providers: [
     ContentPieceService,

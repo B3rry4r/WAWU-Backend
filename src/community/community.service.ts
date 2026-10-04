@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { NotificationService } from '../notification/notification.service';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type {
@@ -59,6 +60,7 @@ export class CommunityService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationService,
+    private readonly blockedAccounts: BlockedAccountService,
   ) {}
 
   /** Start of "today" in UTC, per the task brief's derivation rule for `messagesToday`. */
@@ -88,14 +90,20 @@ export class CommunityService {
   async list(
     page: number,
     perPage: number,
+    viewerWawuId?: string,
   ): Promise<Paginated<CommunityResponse>> {
+    // SETTINGS-04: rooms hosted by somebody the caller blocked (or who
+    // blocked the caller) are not listed, and not counted.
+    const hidden = await this.blockedAccounts.hiddenFrom(viewerWawuId);
+    const where = { hostWawuId: { notIn: hidden } };
     const [items, total] = await this.prisma.$transaction([
       this.prisma.community.findMany({
+        where,
         orderBy: { name: 'asc' },
         skip: (page - 1) * perPage,
         take: perPage,
       }),
-      this.prisma.community.count(),
+      this.prisma.community.count({ where }),
     ]);
 
     const withDerived = await Promise.all(
@@ -106,10 +114,29 @@ export class CommunityService {
   }
 
   /** GET /communities/:id — 404s (via AllExceptionsFilter) when the id doesn't exist. */
-  async findOne(id: string): Promise<CommunityResponse> {
+  async findOne(id: string, viewerWawuId?: string): Promise<CommunityResponse> {
     const community = await this.prisma.community.findUnique({ where: { id } });
     if (!community) {
       throw new NotFoundException('Community not found');
+    }
+    // SETTINGS-04: a room hosted by a hidden account is a 404, except for
+    // somebody already in it, who keeps the room they joined.
+    if (
+      viewerWawuId &&
+      (await this.blockedAccounts.isBlockedEitherWay(
+        viewerWawuId,
+        community.hostWawuId,
+      ))
+    ) {
+      const member = await this.prisma.communityMembership.findFirst({
+        where: {
+          communityId: id,
+          userWawuId: viewerWawuId,
+          status: 'joined',
+        },
+        select: { id: true },
+      });
+      if (!member) throw new NotFoundException('Community not found');
     }
     return this.withDerivedFields(community);
   }

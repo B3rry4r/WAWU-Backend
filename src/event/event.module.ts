@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { VerificationStateModule } from '../common/verification/verification-state.module';
 import { EventController } from './event.controller';
 import { EventService } from './event.service';
+import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 
 /**
  * Events, app-facing half. Reinstated 22 Aug 2026 by product-owner decision.
@@ -23,7 +24,7 @@ import { EventService } from './event.service';
  * controller, a guard, or a role assumption.
  */
 @Module({
-  imports: [VerificationStateModule],
+  imports: [VerificationStateModule, BlockedAccountModule],
   controllers: [EventController],
   providers: [EventService],
   exports: [EventService],

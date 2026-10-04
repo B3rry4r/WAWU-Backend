@@ -3,25 +3,39 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import type { DataExportRequest } from '../common/types';
 
 /**
- * Owns DataExportRequest — the "download my data" flow off the
- * settings-privacy screen (registry.json § DataExportRequest). Each call
- * creates a fresh request row; there is no dedup/idempotency in the frozen
- * contract (no unique constraint on userWawuId in the schema, no notion of
- * "already pending" in the fields), so repeat requests simply queue
- * another one. Fulfilment (assembling the export, flipping pending ->
- * ready) is a background job outside this resource's frozen contract —
- * this service only ever writes `status: "pending"` on create.
+ * Owns DataExportRequest, the "download my data" flow off the
+ * settings-privacy screen (registry.json § DataExportRequest).
+ *
+ * SETTINGS-04 fulfils it: DataExportFulfilmentService emails a signed link
+ * and DataExportDownloadController serves the file. Asking while a request is
+ * still pending returns that request instead of queueing a second email: the
+ * answer has the same shape either way, and a person tapping twice does not
+ * get two emails.
  */
 @Injectable()
 export class DataExportRequestService {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(userWawuId: string): Promise<DataExportRequest> {
+    const waiting = await this.prisma.dataExportRequest.findFirst({
+      where: { userWawuId, status: 'pending' },
+      orderBy: { requestedAt: 'desc' },
+    });
+    if (waiting) return waiting;
     return this.prisma.dataExportRequest.create({
       data: {
         userWawuId,
         status: 'pending',
       },
+    });
+  }
+
+  /** The caller's own requests, newest first. */
+  async listMine(userWawuId: string): Promise<DataExportRequest[]> {
+    return this.prisma.dataExportRequest.findMany({
+      where: { userWawuId },
+      orderBy: { requestedAt: 'desc' },
+      take: 20,
     });
   }
 }

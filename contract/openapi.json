@@ -13337,6 +13337,71 @@
         "tags": [
           "DataExportRequest"
         ]
+      },
+      "get": {
+        "operationId": "DataExportRequestController_listMine",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      },
+                      "userWawuId": {
+                        "type": "string"
+                      },
+                      "requestedAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "status",
+                      "userWawuId",
+                      "requestedAt"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "The caller's own export requests and where each one is (pending, sent, failed).",
+        "tags": [
+          "DataExportRequest"
+        ]
+      }
+    },
+    "/api/hub/settings/privacy/export/download": {
+      "get": {
+        "operationId": "DataExportDownloadController_download",
+        "parameters": [
+          {
+            "name": "token",
+            "required": false,
+            "in": "query",
+            "schema": {}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "DataExportDownload"
+        ]
       }
     },
     "/api/hub/dm/{messageId}/report": {
