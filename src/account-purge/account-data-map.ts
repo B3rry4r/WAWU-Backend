@@ -88,6 +88,12 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // Location, skills, open-to chips, Threads handle and social-link order (ME-05).
   // Part of this person's profile and nothing else references it.
   { model: 'ProfileDetails', column: 'wawuUserId', disposition: 'OWNED' },
+  // Featured works and education (ME-16): part of this person's profile, shown
+  // under their name; nothing else references them. The works' pictures are
+  // storage objects, which the purge's storage step handles with the rest of
+  // this person's uploads.
+  { model: 'ProfileWork', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'ProfileEducation', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'CourseEnrollment', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CommunityMembership', column: 'userWawuId', disposition: 'OWNED' },
   // How far this person has read in each community (INBOX-01).

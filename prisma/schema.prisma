@@ -313,6 +313,56 @@ model ProfileDetails {
   updatedAt     DateTime @updatedAt
 }
 
+/// One featured work on somebody's profile (ME-16): what M33 shows under
+/// "Featured works", M34 lists and M35 opens.
+///
+/// ITS OWN TABLE, WITH NO RELATION TO UserProfile, for the reason ProfileDetails
+/// gives: nothing here widens GET or PATCH /users/me or the public profile.
+/// `position` is the order the owner chose (0 first); a new work goes to 0 and
+/// the rest move down one, inside a per-person advisory lock, so two requests
+/// cannot take the same slot or push a person past the cap. `media` holds
+/// object KEYS (never signed URLs, which expire) of the owner's own uploads,
+/// first one is the cover; every read signs them fresh.
+model ProfileWork {
+  id          String   @id @default(uuid())
+  wawuUserId  String
+  title       String
+  /// What the person did on it ("Director"). Required: M36 draws it unmarked.
+  role        String
+  client      String?
+  /// The year it was made. A whole year, never a date.
+  year        Int
+  /// Where to see it elsewhere. Stored as inert text, never fetched.
+  link        String?
+  /// Free text; M34's filter chips are the distinct categories one person used.
+  category    String?
+  description String?
+  media       String[] @default([])
+  position    Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([wawuUserId, position])
+}
+
+/// One education entry on somebody's profile (ME-16): school, field of study,
+/// first and last year. A NULL `endYear` means still studying there (the same
+/// single-column rule ProfileExperience.endedOn follows). No relation to
+/// UserProfile, same reason as ProfileWork.
+model ProfileEducation {
+  id         String   @id @default(uuid())
+  wawuUserId String
+  school     String
+  /// "Mass Communication". Optional: M33 draws the line from whatever is there.
+  field      String?
+  startYear  Int
+  endYear    Int?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([wawuUserId, startYear])
+}
+
 /// One role on somebody's profile: what they did, where, and when.
 ///
 /// WHY A TABLE AND NOT A JSON COLUMN. Each row is independently editable and

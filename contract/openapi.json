@@ -19109,6 +19109,437 @@
         ]
       }
     },
+    "/api/hub/users/me/featured-works": {
+      "get": {
+        "operationId": "ProfileWorksController_myWorks",
+        "parameters": [
+          {
+            "name": "category",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "maxLength": 1000,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "At most this many works (M33 shows three and \"See all\").",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileWorksView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ProfileWorks"
+        ]
+      },
+      "post": {
+        "operationId": "ProfileWorksController_addWork",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProfileWorkDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileWorkView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ProfileWorks"
+        ]
+      }
+    },
+    "/api/hub/users/me/featured-works/order": {
+      "put": {
+        "operationId": "ProfileWorksController_reorderWorks",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReorderProfileWorksDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileWorksView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Declared before `me/featured-works/:id`, so \"order\" is never read as an id.",
+        "tags": [
+          "ProfileWorks"
+        ]
+      }
+    },
+    "/api/hub/users/me/featured-works/{id}": {
+      "patch": {
+        "operationId": "ProfileWorksController_editWork",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProfileWorkDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileWorkView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ProfileWorks"
+        ]
+      },
+      "delete": {
+        "operationId": "ProfileWorksController_removeWork",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "deleted"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ProfileWorks"
+        ]
+      }
+    },
+    "/api/hub/users/me/education": {
+      "get": {
+        "operationId": "ProfileWorksController_myEducation",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProfileEducationView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ProfileWorks"
+        ]
+      },
+      "post": {
+        "operationId": "ProfileWorksController_addEducation",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProfileEducationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileEducationView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ProfileWorks"
+        ]
+      }
+    },
+    "/api/hub/users/me/education/{id}": {
+      "patch": {
+        "operationId": "ProfileWorksController_editEducation",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProfileEducationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileEducationView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ProfileWorks"
+        ]
+      },
+      "delete": {
+        "operationId": "ProfileWorksController_removeEducation",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "deleted"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ProfileWorks"
+        ]
+      }
+    },
+    "/api/hub/users/{wawuId}/featured-works": {
+      "get": {
+        "operationId": "ProfileWorksController_worksOf",
+        "parameters": [
+          {
+            "name": "wawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "maxLength": 1000,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "At most this many works (M33 shows three and \"See all\").",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileWorksView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ProfileWorks"
+        ]
+      }
+    },
+    "/api/hub/users/{wawuId}/featured-works/{workId}": {
+      "get": {
+        "operationId": "ProfileWorksController_workOf",
+        "parameters": [
+          {
+            "name": "wawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileWorkView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "M35: one work.",
+        "tags": [
+          "ProfileWorks"
+        ]
+      }
+    },
+    "/api/hub/users/{wawuId}/education": {
+      "get": {
+        "operationId": "ProfileWorksController_educationOf",
+        "parameters": [
+          {
+            "name": "wawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProfileEducationView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "M33: somebody's education.",
+        "tags": [
+          "ProfileWorks"
+        ]
+      }
+    },
     "/api/hub/users/public/{wawuId}": {
       "get": {
         "operationId": "PublicUserProfileController_get",
@@ -23775,7 +24206,8 @@
               "profile/cover",
               "community/image",
               "community/message",
-              "event/speaker"
+              "event/speaker",
+              "profile/work"
             ]
           },
           "contentType": {
@@ -25862,6 +26294,163 @@
             "type": "string",
             "nullable": true,
             "maxLength": 1000
+          }
+        }
+      },
+      "CreateProfileWorkDto": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "role": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "year": {
+            "type": "number"
+          },
+          "client": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 1000
+          },
+          "link": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 1000
+          },
+          "category": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 1000
+          },
+          "description": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 4000
+          },
+          "media": {
+            "description": "The keys (or the `fileUrl`s) `POST /uploads/presign` returned for the\n`profile/work` folder, first one the cover. Each must be this person's\nown upload; anything else is a 400.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          }
+        },
+        "required": [
+          "title",
+          "role",
+          "year"
+        ]
+      },
+      "ReorderProfileWorksDto": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 64
+            }
+          }
+        },
+        "required": [
+          "ids"
+        ]
+      },
+      "UpdateProfileWorkDto": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "role": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "year": {
+            "type": "number"
+          },
+          "client": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 1000
+          },
+          "link": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 1000
+          },
+          "category": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 1000
+          },
+          "description": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 4000
+          },
+          "media": {
+            "description": "The whole list, replaced. [] clears it.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          }
+        }
+      },
+      "CreateProfileEducationDto": {
+        "type": "object",
+        "properties": {
+          "school": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "field": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 1000
+          },
+          "startYear": {
+            "type": "number"
+          },
+          "endYear": {
+            "type": "number",
+            "nullable": true,
+            "description": "Omitted or null means still studying there."
+          }
+        },
+        "required": [
+          "school",
+          "startYear"
+        ]
+      },
+      "UpdateProfileEducationDto": {
+        "type": "object",
+        "properties": {
+          "school": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "field": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 1000
+          },
+          "startYear": {
+            "type": "number"
+          },
+          "endYear": {
+            "type": "number",
+            "nullable": true,
+            "description": "null means still studying there."
           }
         }
       },
@@ -35303,6 +35892,157 @@
           "followerCount",
           "followingCount",
           "communityCount"
+        ]
+      },
+      "ProfileWorkCategoryView": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "count": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "count"
+        ]
+      },
+      "ProfileWorkMediaView": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "nullable": true
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "video",
+              "image"
+            ]
+          }
+        },
+        "required": [
+          "url",
+          "kind"
+        ]
+      },
+      "ProfileWorkView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "client": {
+            "type": "string",
+            "nullable": true
+          },
+          "year": {
+            "type": "number"
+          },
+          "link": {
+            "type": "string",
+            "nullable": true
+          },
+          "category": {
+            "type": "string",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "media": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProfileWorkMediaView"
+            }
+          },
+          "position": {
+            "type": "number"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "role",
+          "client",
+          "year",
+          "link",
+          "category",
+          "description",
+          "media",
+          "position",
+          "createdAt"
+        ]
+      },
+      "ProfileWorksView": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number"
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProfileWorkCategoryView"
+            }
+          },
+          "works": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProfileWorkView"
+            }
+          }
+        },
+        "required": [
+          "count",
+          "categories",
+          "works"
+        ]
+      },
+      "ProfileEducationView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "school": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string",
+            "nullable": true
+          },
+          "startYear": {
+            "type": "number"
+          },
+          "endYear": {
+            "type": "number",
+            "nullable": true
+          },
+          "current": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "school",
+          "field",
+          "startYear",
+          "endYear",
+          "current"
         ]
       },
       "EnrolResponse": {
