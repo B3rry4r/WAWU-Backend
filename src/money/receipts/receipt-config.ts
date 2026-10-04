@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { wholeSetting } from '../pin/pin-reset-config';
 
 /**
  * Settings for receipts (task WALLET-18). None is required: the server
@@ -7,7 +8,22 @@ import { ConfigService } from '@nestjs/config';
  */
 export const RECEIPT_CONFIG_KEYS = {
   verifyBaseUrl: 'RECEIPT_VERIFY_BASE_URL',
+  renderConcurrency: 'RECEIPT_RENDER_CONCURRENCY',
 } as const;
+
+/**
+ * PROVISIONAL(RECEIPT-RENDER-CONCURRENCY, owner=YOU, why=no ruling names how much of the droplet's memory receipt drawing may take)
+ *
+ * Receipt images and PDFs drawn at once in this process, whoever asks: a
+ * PDF in flight holds about 45 MB, so 2 at once stays near 100 MB over the
+ * server's usual size on the 4 GB droplet. A request beyond that waits up
+ * to RECEIPT_RENDER_WAIT_MS for a slot, then is answered 503 with
+ * Retry-After. Overridable with RECEIPT_RENDER_CONCURRENCY (1 to 8).
+ */
+export const DEFAULT_RECEIPT_RENDER_CONCURRENCY = 2;
+
+/** How long a drawing request waits for a slot before the busy answer. */
+export const RECEIPT_RENDER_WAIT_MS = 10_000;
 
 /**
  * PROVISIONAL(RECEIPT-LOOKUP-LIMITS, owner=YOU, why=no ruling names how often one address may open receipt pages)
@@ -46,8 +62,16 @@ export const RECEIPT_RENDER_THROTTLE = {
 @Injectable()
 export class ReceiptSettings {
   readonly verifyBaseUrl: string | null;
+  readonly renderConcurrency: number;
 
   constructor(config: ConfigService) {
+    this.renderConcurrency = wholeSetting(
+      RECEIPT_CONFIG_KEYS.renderConcurrency,
+      config.get<string>(RECEIPT_CONFIG_KEYS.renderConcurrency),
+      DEFAULT_RECEIPT_RENDER_CONCURRENCY,
+      1,
+      8,
+    );
     this.verifyBaseUrl = verifyBase(
       config.get<string>(RECEIPT_CONFIG_KEYS.verifyBaseUrl),
       config.get<string>('NODE_ENV') === 'production',

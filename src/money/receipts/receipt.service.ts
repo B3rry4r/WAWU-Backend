@@ -5,7 +5,9 @@ import { TransactionHistoryService } from '../history/transaction-history.servic
 import { MoneyError } from '../money-error';
 import type { TransactionView } from '../money-view.type';
 import { WalletOpeningSettings } from '../opening/wallet-opening-config';
-import { ReceiptSettings } from './receipt-config';
+import { RECEIPT_RENDER_WAIT_MS, ReceiptSettings } from './receipt-config';
+import { DrawLimiter } from './receipt-draw-limiter';
+import { receiptPdf, receiptPng } from './receipt-render';
 import { newReceiptCode, normalReceiptCode, receiptLink } from './receipt-code';
 import {
   headlineOf,
@@ -43,12 +45,41 @@ const CODE_ATTEMPTS = 3;
  */
 @Injectable()
 export class ReceiptService {
+  /** One per process (the service is a singleton): every image and PDF draws through it. */
+  readonly drawing: DrawLimiter;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly history: TransactionHistoryService,
     private readonly wallets: WalletOpeningSettings,
     private readonly settings: ReceiptSettings,
-  ) {}
+  ) {
+    this.drawing = new DrawLimiter(
+      settings.renderConcurrency,
+      RECEIPT_RENDER_WAIT_MS,
+    );
+  }
+
+  /** W42: the receipt as a PNG, drawn when a slot is free (DrawLimiter). */
+  async image(
+    wallet: OpenWallet,
+    entryId: string,
+  ): Promise<{ body: Buffer; code: string }> {
+    const { doc, code } = await this.document(wallet, entryId);
+    return { body: await this.drawing.run(() => receiptPng(doc)), code };
+  }
+
+  /** W43: the receipt as a one-page A4 PDF, drawn when a slot is free. */
+  async pdf(
+    wallet: OpenWallet,
+    entryId: string,
+  ): Promise<{ body: Buffer; code: string }> {
+    const { doc, code, issuedAt } = await this.document(wallet, entryId);
+    return {
+      body: await this.drawing.run(() => receiptPdf(doc, issuedAt)),
+      code,
+    };
+  }
 
   /** POST /money/transactions/{id}/receipt: the receipt, made on the first ask. */
   async issue(wallet: OpenWallet, entryId: string): Promise<ReceiptView> {

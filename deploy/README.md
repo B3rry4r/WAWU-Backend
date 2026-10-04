@@ -138,6 +138,10 @@ WALLET_DEPOSIT_INSURANCE_LINE=
 # wawu/r/<code> with no link. Receipts print WALLET_BANK_NAME and
 # WALLET_LICENCE_LINE as above.
 RECEIPT_VERIFY_BASE_URL=
+# Receipt images and PDFs drawn at once (WALLET-18; 1 to 8, empty: 2,
+# PROVISIONAL(RECEIPT-RENDER-CONCURRENCY)). A PDF in flight holds about
+# 45 MB; a request waits up to 10 s for a turn, then gets 503 with Retry-After.
+RECEIPT_RENDER_CONCURRENCY=
 
 GEMINI_API_KEY=
 

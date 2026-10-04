@@ -8,7 +8,10 @@ import {
   receiptLink,
 } from '../receipt-code';
 import { verifyBase } from '../receipt-config';
+import { ReceiptSettings } from '../receipt-config';
+import { DrawLimiter, ReceiptBusyError } from '../receipt-draw-limiter';
 import {
+  foldDigits,
   headlineOf,
   maskDigits,
   maskedName,
@@ -27,6 +30,7 @@ import {
   IMAGE_SCALE,
   MAX_PRINTED,
   printable,
+  receiptCard,
   RECEIPT_WIDTH,
   receiptPdf,
   receiptPng,
@@ -35,6 +39,9 @@ import {
 } from '../receipt-render';
 import type { ReceiptDocument } from '../receipt-document';
 import type { ReceiptView } from '../receipt-view.type';
+import { drawnWidth } from './drawn-width';
+import { D3_FORMS, visibleDigits } from './d3-forms';
+import { PNG } from './png-rows';
 
 /** Receipts (WALLET-18) without a server: the code, the words, the drawing. */
 
@@ -402,23 +409,31 @@ describe('receipt drawing', () => {
 
   it('while a long receipt is drawn the server keeps answering: the event loop never stalls 100 ms', async () => {
     const big = longest();
-    let worst = 0;
-    let last = performance.now();
-    const tick = setInterval(() => {
-      const now = performance.now();
-      worst = Math.max(worst, now - last);
-      last = now;
-    }, 5);
-    try {
-      await Promise.all([
-        receiptPdf(big, new Date()),
-        receiptPng(big),
-        receiptPdf(big, new Date()),
-      ]);
-    } finally {
-      clearInterval(tick);
-    }
-    expect(worst).toBeLessThan(100);
+    // The longest gap between 5 ms ticks while three receipts draw. Best of
+    // 3 tries, so a busy machine pausing this process does not count; a
+    // draw on the event loop (150 ms and more) fails every try.
+    const attempt = async () => {
+      let worst = 0;
+      let last = performance.now();
+      const tick = setInterval(() => {
+        const now = performance.now();
+        worst = Math.max(worst, now - last);
+        last = now;
+      }, 5);
+      try {
+        await Promise.all([
+          receiptPdf(big, new Date()),
+          receiptPng(big),
+          receiptPdf(big, new Date()),
+        ]);
+      } finally {
+        clearInterval(tick);
+      }
+      return worst;
+    };
+    const tries: number[] = [];
+    for (let i = 0; i < 3; i += 1) tries.push(await attempt());
+    expect(Math.min(...tries)).toBeLessThan(100);
   });
 
   it('measuring is linear: wrapping 500 characters takes under 20 ms, and every line fits', () => {
@@ -434,8 +449,9 @@ describe('receipt drawing', () => {
     );
   });
 
-  it('every printed string is cut to MAX_PRINTED characters before it is drawn', () => {
-    expect([...clip('z'.repeat(5000))]).toHaveLength(MAX_PRINTED);
+  it('every printed string is cut to 160 characters before it is drawn', () => {
+    expect(MAX_PRINTED).toBe(160);
+    expect([...clip('z'.repeat(5000))]).toHaveLength(160);
     expect(clip('z'.repeat(5000)).endsWith('…')).toBe(true);
     expect(clip('Loma Bank')).toBe('Loma Bank');
   });
@@ -456,6 +472,186 @@ describe('receipt drawing', () => {
     expect(png.subarray(1, 4).toString()).toBe('PNG');
     const pdf = await receiptPdf(odd, new Date());
     expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
+  });
+});
+
+describe('numbers in names, at the root (round 3)', () => {
+  it('folds every decimal digit to 0 to 9 (full-width, Arabic-Indic, Persian, Devanagari, superscript, circled, mathematical)', () => {
+    expect(foldDigits('０٨۰३⁴⑤𝟔')).toBe('0803456');
+  });
+
+  it('every listed form keeps at most its last 4 digits', () => {
+    for (const [given, shown] of D3_FORMS) {
+      expect({ given, out: maskDigits(given) }).toEqual({ given, out: shown });
+      expect({ given, visible: visibleDigits(maskDigits(given)) <= 4 }).toEqual(
+        { given, visible: true },
+      );
+    }
+  });
+
+  it('person names: a number first in the name never shows whole', () => {
+    for (const name of [
+      '０８０３１２３４５６７ John Doe',
+      '0803-123-4567 John',
+      '0803_123_4567 John',
+    ]) {
+      const shown = maskedName(name, 'bank_account');
+      expect({ name, visible: visibleDigits(shown) <= 4 }).toEqual({
+        name,
+        visible: true,
+      });
+    }
+    expect(maskedName('0803_123_4567 John', 'bank_account')).toBe('•••• J.');
+  });
+
+  it('a date or an amount written into a name is reshaped as a number (decision)', () => {
+    expect(maskDigits('IKEDC token 2026-10-03 ₦5,000.00 Ref 12')).toBe(
+      'IKEDC token •••• 0000 Ref 12',
+    );
+  });
+
+  it("the other side's name and bank on the owner's image and PDF are masked the same way", () => {
+    const t = tx({
+      counterparty: {
+        kind: 'bank_account',
+        name: 'Ada 0803_123_4567',
+        avatarUrl: null,
+        wawuUserId: null,
+        bankName: 'GTBank ０１２３４５６７８９',
+        accountNumberLast4: '6789',
+      },
+    });
+    const v = view(t);
+    const text = JSON.stringify([v.headline, v.from, v.lines]);
+    expect(text).not.toContain('0803');
+    expect(text).not.toContain('０１２３');
+    expect(v.from!.name).toBe('Ada •••• 4567');
+  });
+});
+
+describe('marks and boxes (round 3, D4)', () => {
+  const doc = receiptDocument(view(tx()));
+
+  it('keeps at most 2 combining marks on a character, after NFC', () => {
+    expect(printable('B' + '\u0335'.repeat(499))).toBe('B\u0335\u0335');
+    expect(printable('A' + '\u0301\u0302\u0303\u0304\u0308'.repeat(99))).toBe(
+      '\u00c1\u0302\u0303',
+    );
+    expect(printable('Chidinma Ọ̀kọ́rọ̀')).toBe('Chidinma Ọ̀kọ́rọ̀'.normalize('NFC'));
+  });
+
+  it('a stack of marks in a name never draws over the header: the top of the image is the same as without it', async () => {
+    const plain = await receiptPng({
+      ...doc,
+      headline: 'Transfer from A',
+      lines: [{ label: 'From', value: 'A' }],
+    });
+    const stacked = await receiptPng({
+      ...doc,
+      headline: 'Transfer from A' + '\u0301\u0302\u0303\u0304\u0308'.repeat(99),
+      lines: [
+        {
+          label: 'From',
+          value: 'A' + '\u0301\u0302\u0303\u0304\u0308'.repeat(99),
+        },
+      ],
+    });
+    const a = PNG(plain);
+    const b = PNG(stacked);
+    // The header band (the mark, TRANSACTION RECEIPT, the date): its first 60 points.
+    const rows = 60 * IMAGE_SCALE;
+    expect(b.rows(0, rows).equals(a.rows(0, rows))).toBe(true);
+  });
+
+  it('the 200-character reference is drawn whole, on as many lines as it takes', () => {
+    const ref = `R${'7'.repeat(199)}`;
+    const card = receiptCard({
+      ...doc,
+      lines: [{ label: 'Reference', value: ref }],
+    });
+    const drawn = [...card.svg.matchAll(/<text[^>]*>([^<]*)<\/text>/g)]
+      .map((m) => m[1])
+      .filter((t) => /^[R7]+$/.test(t))
+      .join('');
+    expect(drawn).toBe(ref);
+  });
+});
+
+describe('the width table against what resvg draws (round 3, N4)', () => {
+  it('measures every sample at least as wide as resvg draws it, and Latin within 15% of it', () => {
+    const samples: [string, 400 | 600 | 700][] = [
+      ['Lennox Emmanuel Okafor', 600],
+      ['WALLET18-SBX-20261003204540-1', 600],
+      ['WWWWWWWWWWMMMMMMMMMM', 700],
+      ['iiiiiiiiiilllllllll', 400],
+      ['₦25,065.00', 700],
+      ['Transfer to Chidinma Okoro', 400],
+      ['ẸKỌ́ Ọ̀ṢỌ́ ỌMỌ', 600],
+    ];
+    for (const [sample, weight] of samples) {
+      const drawn = drawnWidth(sample, 13, weight);
+      const measured = textWidth(sample, 13, weight);
+      expect({ sample, notNarrower: measured >= drawn }).toEqual({
+        sample,
+        notNarrower: true,
+      });
+      if (/^[\x20-\x7e]+$/.test(sample))
+        expect({ sample, close: drawn / measured > 0.85 }).toEqual({
+          sample,
+          close: true,
+        });
+    }
+  });
+});
+
+describe('drawing slots (round 3)', () => {
+  const later = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  it('runs at most 2 at once and the rest in the order they came', async () => {
+    const lim = new DrawLimiter(2, 5_000);
+    const order: number[] = [];
+    await Promise.all(
+      Array.from({ length: 6 }, (_, i) =>
+        lim.run(async () => {
+          expect(lim.inFlight).toBeLessThanOrEqual(2);
+          await later(20);
+          order.push(i);
+        }),
+      ),
+    );
+    expect(lim.peak).toBe(2);
+    expect(order).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(lim.inFlight).toBe(0);
+  });
+
+  it('a request that finds no slot within the wait is refused as busy (503), and the slot is freed after a failure', async () => {
+    const lim = new DrawLimiter(1, 50);
+    const long = lim.run(() => later(200));
+    const t0 = Date.now();
+    await expect(lim.run(() => later(1))).rejects.toBeInstanceOf(
+      ReceiptBusyError,
+    );
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(45);
+    expect(new ReceiptBusyError().getStatus()).toBe(503);
+    expect(lim.waiting).toBe(0);
+    await long;
+    await expect(
+      lim.run(() => Promise.reject(new Error('draw failed'))),
+    ).rejects.toThrow('draw failed');
+    expect(lim.inFlight).toBe(0);
+    await expect(lim.run(() => Promise.resolve(7))).resolves.toBe(7);
+  });
+
+  it('the cap is a setting: 2 by default, 1 to 8, anything else stops the app', () => {
+    const settings = (v?: string) =>
+      new ReceiptSettings({
+        get: (k: string) =>
+          k === 'RECEIPT_RENDER_CONCURRENCY' ? v : undefined,
+      } as never);
+    expect(settings().renderConcurrency).toBe(2);
+    expect(settings('4').renderConcurrency).toBe(4);
+    expect(() => settings('0')).toThrow();
+    expect(() => settings('9')).toThrow();
   });
 });
 

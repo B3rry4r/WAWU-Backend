@@ -32,6 +32,8 @@ import type { LedgerMovementInput } from '../../ledger/ledger.interface';
 import { LedgerService } from '../../ledger/ledger.service';
 import { MoneyModule } from '../../money.module';
 import { newReceiptCode } from '../receipt-code';
+import { ReceiptService } from '../receipt.service';
+import { D3_FORMS, visibleDigits } from './d3-forms';
 import { RECEIPT_NOT_FOUND_PAGE } from '../receipt-page';
 import type { ReceiptView } from '../receipt-view.type';
 
@@ -128,6 +130,7 @@ describe('Receipts (WALLET-18) over HTTP', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
   let ledger: LedgerService;
+  let receipts: ReceiptService;
   const logger = new QuietLogger();
   const users: string[] = [];
   const accounts: string[] = [];
@@ -282,6 +285,7 @@ describe('Receipts (WALLET-18) over HTTP', () => {
     await app.listen(0, '127.0.0.1');
     prisma = moduleRef.get(PrismaService);
     ledger = moduleRef.get(LedgerService);
+    receipts = moduleRef.get(ReceiptService);
   });
 
   afterAll(async () => {
@@ -632,6 +636,115 @@ describe('Receipts (WALLET-18) over HTTP', () => {
       expect(html).toContain('BadNameX');
       // eslint-disable-next-line no-control-regex
       expect(html).not.toMatch(/[\u0000-\u0008\uFFFE]/);
+    });
+
+    it('every number form the round-2 verifier listed shows at most its last 4 digits on the public page (round 3)', async () => {
+      const p = await withWallet('Ada Obi');
+      const dd = (html: string, row: string) =>
+        new RegExp(`<dt>${row}</dt><dd>(.*?)</dd>`)
+          .exec(html)?.[1]
+          .replace(/<[^>]+>/g, ' ') ?? '';
+      const rows: { name: string; cp: Move['counterparty'] }[] = [
+        ...D3_FORMS.filter(
+          ([n]) => n.startsWith('MTN') || n.startsWith('Shop'),
+        ).map(([name]) => ({
+          name,
+          cp: { kind: 'biller' as const, name, accountNumber: '08031234567' },
+        })),
+        ...D3_FORMS.filter(([n]) => n.startsWith('GTBank')).map(([name]) => ({
+          name,
+          cp: {
+            kind: 'bank_account' as const,
+            name: 'Chidinma Okoro',
+            bankName: name,
+            accountNumber: '1234567890',
+          },
+        })),
+        ...[
+          '０８０３１２３４５６７ John Doe',
+          '0803-123-4567 John',
+          '0803_123_4567 John',
+        ].map((name) => ({
+          name,
+          cp: {
+            kind: 'bank_account' as const,
+            name,
+            bankName: 'Opay',
+            accountNumber: '1234567890',
+          },
+        })),
+      ];
+      for (const r of rows) {
+        const id = await record(p, {
+          direction: 'out',
+          status: 'completed',
+          category: r.cp?.kind === 'biller' ? 'bill' : 'transfer',
+          amountKobo: 123456,
+          totalKobo: 123456,
+          counterparty: r.cp,
+        });
+        const { code } = body<ReceiptView>(
+          await issue({ ...p, ip: address() }, id).expect(200),
+        ).data!;
+        const html = (await page(code).expect(200)).text;
+        const shown = Math.max(
+          visibleDigits(dd(html, 'From')),
+          visibleDigits(dd(html, 'To')),
+        );
+        expect({ name: r.name, visible: shown <= 4 }).toEqual({
+          name: r.name,
+          visible: true,
+        });
+        expect(html).toContain('₦1,234.56');
+      }
+    });
+
+    it('a name with a stack of combining marks draws as an image and a PDF, with at most 2 marks a letter on the page (round 3)', async () => {
+      const p = await withWallet('Ada Obi');
+      const id = await record(p, {
+        direction: 'in',
+        status: 'completed',
+        category: 'transfer',
+        amountKobo: 1000,
+        totalKobo: 1000,
+        counterparty: {
+          kind: 'bank_account',
+          name: 'A' + '\u0301\u0302\u0303\u0304\u0308'.repeat(99),
+          accountNumber: '1234567890',
+          bankName: 'B' + '\u0335'.repeat(499),
+        },
+      });
+      await drawn(p, id, 'image').expect(200);
+      await drawn(p, id, 'pdf').expect(200);
+      const { code } = body<ReceiptView>(await issue(p, id).expect(200)).data!;
+      const html = (await page(code).expect(200)).text;
+      expect(html).not.toMatch(/\p{M}{3}/u);
+    });
+
+    it('at most 2 receipts draw at once, whoever asks; the rest wait their turn (round 3)', async () => {
+      const p = await withWallet('Ada Obi');
+      const id = await record(p, {
+        direction: 'in',
+        status: 'completed',
+        category: 'transfer',
+        amountKobo: 1000,
+        totalKobo: 1000,
+        counterparty: {
+          kind: 'bank_account',
+          name: 'Bayo Ade',
+          accountNumber: '1234567890',
+          bankName: 'Opay',
+        },
+      });
+      receipts.drawing.peak = 0;
+      const answers = await Promise.all([
+        ...Array.from({ length: 4 }, () => drawn(p, id, 'pdf')),
+        ...Array.from({ length: 4 }, () => drawn(p, id, 'image')),
+      ]);
+      expect(answers.map((a) => a.status)).toEqual(Array(8).fill(200));
+      expect(receipts.drawing.slots).toBe(2);
+      expect(receipts.drawing.peak).toBe(2);
+      expect(receipts.drawing.inFlight).toBe(0);
     });
 
     it('is throttled per address: 10 a minute, the 11th is 429, and another address is unaffected', async () => {

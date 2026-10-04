@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 import { crc32, deflate } from 'node:zlib';
 import { renderAsync, type ResvgRenderOptions } from '@resvg/resvg-js';
 import { RECEIPT_TOKENS, type ReceiptTone } from '../../styles/tokens-receipt';
-import type { ReceiptDocument } from './receipt-document';
+import { REFERENCE_LABEL, type ReceiptDocument } from './receipt-document';
 import { FontMetrics } from './receipt-font-metrics';
 
 const deflateAsync = promisify(deflate);
@@ -102,13 +102,22 @@ const TONE: Record<ReceiptTone, string> = {
 /**
  * Everything XML 1.0 cannot carry is dropped (C0 controls, lone surrogates,
  * U+FFFE and U+FFFF), and the other control characters too; a tab or a line
- * break becomes a space, as a receipt line is one line.
+ * break becomes a space, as a receipt line is one line. Then NFC, and at
+ * most 2 combining marks (`\p{M}`) on any one character.
  */
 export function printable(s: string): string {
-  return s.replace(/[\t\n\r]/g, ' ').replace(
-    // eslint-disable-next-line no-control-regex
-    /[\u0000-\u001f\u007f-\u009f\ufffe\uffff]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g,
-    '',
+  return (
+    s
+      .replace(/[\t\n\r]/g, ' ')
+      .replace(
+        // eslint-disable-next-line no-control-regex
+        /[\u0000-\u001f\u007f-\u009f\ufffe\uffff]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g,
+        '',
+      )
+      .normalize('NFC')
+      // At most MAX_MARKS combining marks on one character: a stack of
+      // hundreds would draw up over the rest of the receipt (D4).
+      .replace(/(\p{M}{2})\p{M}+/gu, '$1')
   );
 }
 
@@ -118,15 +127,18 @@ export function escapeXml(s: string): string {
 }
 
 /** A string as it is printed: printable, and at most MAX_PRINTED characters. */
-export function clip(s: string): string {
+export function clip(s: string, max = MAX_PRINTED): string {
   const chars = [...printable(s)];
-  return chars.length > MAX_PRINTED
+  return chars.length > max
     ? `${chars
-        .slice(0, MAX_PRINTED - 1)
+        .slice(0, max - 1)
         .join('')
         .trimEnd()}…`
     : chars.join('');
 }
+
+/** The longest reference the ledger keeps (ledger.service.ts MAX_REFERENCE): drawn whole. */
+export const MAX_REFERENCE = 200;
 
 /** How wide `value` is drawn, in points, from the font's width table. */
 export function textWidth(
@@ -199,6 +211,14 @@ export function wrap(
   return kept;
 }
 
+let clipSeq = 0;
+
+/**
+ * One line of text, clipped to its own box: the receipt's content width,
+ * and the line's height (from 1.15 em above the baseline to 0.4 em below).
+ * Whatever a font or a mark does, a line never draws over another line or
+ * past the content edge.
+ */
 function text(
   x: number,
   y: number,
@@ -211,7 +231,11 @@ function text(
     spacing?: number;
   },
 ): string {
-  return `<text x="${x}" y="${y}" font-family="${FAMILY}" font-size="${o.size}" font-weight="${o.weight ?? 400}" fill="${o.fill}"${o.anchor ? ` text-anchor="${o.anchor}"` : ''}${o.spacing ? ` letter-spacing="${o.spacing}"` : ''}>${escapeXml(value)}</text>`;
+  clipSeq = (clipSeq + 1) % 1_000_000;
+  const id = `l${clipSeq}`;
+  const top = y - o.size * 1.15;
+  const box = `<clipPath id="${id}"><rect x="${PAD_X}" y="${top.toFixed(2)}" width="${RECEIPT_WIDTH - 2 * PAD_X}" height="${(o.size * 1.55).toFixed(2)}"/></clipPath>`;
+  return `${box}<text clip-path="url(#${id})" x="${x}" y="${y}" font-family="${FAMILY}" font-size="${o.size}" font-weight="${o.weight ?? 400}" fill="${o.fill}"${o.anchor ? ` text-anchor="${o.anchor}"` : ''}${o.spacing ? ` letter-spacing="${o.spacing}"` : ''}>${escapeXml(value)}</text>`;
 }
 
 /** The receipt as SVG content at RECEIPT_WIDTH, with its height and where the footer's link sits. */
@@ -230,7 +254,10 @@ export function receiptCard(raw: ReceiptDocument): {
     statusText: clip(raw.statusText),
     lines: raw.lines.map((l) => ({
       label: clip(l.label),
-      value: clip(l.value),
+      value: clip(
+        l.value,
+        l.label === REFERENCE_LABEL ? MAX_REFERENCE : MAX_PRINTED,
+      ),
     })),
     footer: clip(raw.footer),
   };
@@ -293,7 +320,14 @@ export function receiptCard(raw: ReceiptDocument): {
   // The rows: label left, value right (on as many as 3 lines), a hairline under each.
   for (const line of doc.lines) {
     const labelWidth = textWidth(line.label, 13) + 16;
-    const values = wrap(line.value, 13, inner - labelWidth, 600);
+    // The reference is drawn on as many lines as it takes; anything else on 3 at most.
+    const values = wrap(
+      line.value,
+      13,
+      inner - labelWidth,
+      600,
+      line.label === REFERENCE_LABEL ? MAX_REFERENCE : 3,
+    );
     const height = ROW_HEIGHT + (values.length - 1) * VALUE_LINE;
     parts.push(
       text(PAD_X, y + 22, line.label, { size: 13, fill: RECEIPT_TOKENS.muted }),
@@ -414,12 +448,14 @@ export async function receiptPdf(
 ): Promise<Buffer> {
   const card = receiptCard(doc);
   const cardW = RECEIPT_WIDTH * PDF_CARD_SCALE;
+  const cardH = card.height * PDF_CARD_SCALE;
   const left = (A4.width - cardW) / 2;
-  const edge = `<rect x="${left - 0.5}" y="${PDF_TOP - 0.5}" width="${cardW + 1}" height="${card.height * PDF_CARD_SCALE + 1}" rx="6" fill="none" stroke="${RECEIPT_TOKENS.hairline}" stroke-width="1"/>`;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${A4.width}" height="${A4.height}" viewBox="0 0 ${A4.width} ${A4.height}"><rect width="100%" height="100%" fill="${RECEIPT_TOKENS.paper}"/>${edge}<g transform="translate(${left} ${PDF_TOP}) scale(${PDF_CARD_SCALE})">${card.svg}</g></svg>`;
+  // Only the receipt is a picture; the page around it is the PDF's own
+  // white, and its edge a drawn line. Half the pixels of drawing the page.
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${RECEIPT_WIDTH}" height="${card.height}" viewBox="0 0 ${RECEIPT_WIDTH} ${card.height}"><rect width="100%" height="100%" fill="${RECEIPT_TOKENS.paper}"/>${card.svg}</svg>`;
   const page = await renderAsync(
     svg,
-    RENDER_OPTIONS(Math.round((A4.width * PDF_DPI) / 72)),
+    RENDER_OPTIONS(Math.round((cardW * PDF_DPI) / 72)),
   );
   // RGBA to RGB: the page is opaque white, so the alpha byte carries nothing.
   // Converted a slice of rows at a time, so the server keeps answering.
@@ -447,21 +483,34 @@ export async function receiptPdf(
       }
     : null;
   const image = await deflateAsync(rgb, { level: 6 });
-  return pdfWithImage(image, page.width, page.height, link, createdAt);
+  return pdfWithImage(
+    image,
+    page.width,
+    page.height,
+    { x: left, y: A4.height - PDF_TOP - cardH, w: cardW, h: cardH },
+    link,
+    createdAt,
+  );
 }
 
 const n2 = (n: number) => n.toFixed(2);
 
-/** A one-page A4 PDF whose page is one deflated RGB picture, with an optional link. */
+/** A one-page A4 PDF with one deflated RGB picture placed `at`, with an optional link. */
 export function pdfWithImage(
   image: Buffer,
   width: number,
   height: number,
+  at: { x: number; y: number; w: number; h: number },
   link: { x0: number; y0: number; x1: number; y1: number; uri: string } | null,
   createdAt: Date,
 ): Buffer {
+  // The picture where it goes, and a hairline round it (W43's page edge).
+  const [r, g, b] = [1, 3, 5].map(
+    (i) => parseInt(RECEIPT_TOKENS.hairline.slice(i, i + 2), 16) / 255,
+  );
   const content = Buffer.from(
-    `q ${n2(A4.width)} 0 0 ${n2(A4.height)} 0 0 cm /Im1 Do Q\n`,
+    `q ${n2(at.w)} 0 0 ${n2(at.h)} ${n2(at.x)} ${n2(at.y)} cm /Im1 Do Q\n` +
+      `q ${r.toFixed(3)} ${g.toFixed(3)} ${b.toFixed(3)} RG 1 w ${n2(at.x - 0.5)} ${n2(at.y - 0.5)} ${n2(at.w + 1)} ${n2(at.h + 1)} re S Q\n`,
     'latin1',
   );
   const stamp = createdAt.toISOString().replace(/[-:T]/g, '').slice(0, 14);

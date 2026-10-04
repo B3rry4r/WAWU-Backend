@@ -26,6 +26,9 @@ export const OWN_WALLET_FALLBACK_NAME = 'Naira wallet';
 
 export const RECEIPT_TITLE = 'TRANSACTION RECEIPT';
 
+/** The row that proves the movement: drawn whole, never cut (receipt-render.ts). */
+export const REFERENCE_LABEL = 'Reference';
+
 export const STATUS_WORDS: Record<TransferStatus, string> = {
   completed: 'Completed',
   pending: 'Pending',
@@ -110,10 +113,10 @@ function otherParty(
 ): ReceiptPartyView | null {
   if (!cp) return null;
   return {
-    name: cp.name,
+    name: maskDigits(cp.name),
     accountNumber: null,
     accountNumberLast4: cp.accountNumberLast4,
-    bankName: cp.bankName,
+    bankName: cp.bankName ? maskDigits(cp.bankName) : null,
   };
 }
 
@@ -144,7 +147,7 @@ export function headlineOf(tx: TransactionView): string {
   const label = typeLabelOf(tx);
   const cp = tx.counterparty;
   if (!cp) return label;
-  return `${label} ${tx.direction === 'in' ? 'from' : 'to'} ${cp.name}`;
+  return `${label} ${tx.direction === 'in' ? 'from' : 'to'} ${maskDigits(cp.name)}`;
 }
 
 /**
@@ -172,7 +175,7 @@ export function receiptLines(
       lines.push({ label: "WAWU's fee", value: naira(tx.fee.wawuFeeKobo) });
     lines.push({ label: 'Total paid', value: naira(tx.totalKobo) });
   }
-  lines.push({ label: 'Reference', value: tx.reference });
+  lines.push({ label: REFERENCE_LABEL, value: tx.reference });
   return lines;
 }
 
@@ -221,22 +224,59 @@ const FALLBACK_NAMES = new Set<string>(
   Object.values(COUNTERPARTY_FALLBACK_NAMES),
 );
 
-/**
- * A run of five or more digits, written whole or in groups joined by
- * spaces, hyphens, dots, slashes or brackets, with or without a leading
- * `+`: "08031234567", "0803 123 4567", "+234 803-123-4567", "(0803) 123.4567".
- */
-const DIGIT_RUN = /\+?\(?\d(?:[\s.\-/()]*\d){4,}\)?/g;
+/** Where each run of decimal digits starts, for digitValue. */
+const DECIMAL = /\p{Nd}/u;
 
 /**
- * Any phone-, meter- or account-like number in a name keeps only its last
- * 4 digits, however it is spaced: a public page never shows more.
+ * The value of any Unicode decimal digit (Arabic-Indic, Persian,
+ * Devanagari, ...). Unicode keeps every set of decimal digits as ten
+ * consecutive code points from 0 to 9, so the value is the distance from
+ * the start of its run of digits, modulo 10 (sets can sit back to back, as
+ * the mathematical digits do).
+ */
+function digitValue(ch: string): number {
+  const cp = ch.codePointAt(0)!;
+  let start = cp;
+  while (start > 0 && DECIMAL.test(String.fromCodePoint(start - 1))) start -= 1;
+  return (cp - start) % 10;
+}
+
+/**
+ * Text with every digit written 0 to 9: NFKC first (full-width,
+ * superscript, circled and mathematical digits become ordinary ones), then
+ * every other decimal digit by its value.
+ */
+export function foldDigits(text: string): string {
+  return text
+    .normalize('NFKC')
+    .replace(/\p{Nd}/gu, (d) =>
+      d >= '0' && d <= '9' ? d : String(digitValue(d)),
+    );
+}
+
+/**
+ * One number, however it is written: digits joined by anything that is not
+ * a letter (spaces, punctuation, dashes, dots, underscores, commas,
+ * symbols, zero-width and other format characters), or by a single x or X
+ * between two digits ("0803x123x4567"). A leading + or ( belongs to it.
+ * Digits split by other letters are separate numbers.
+ */
+const NUMBER = /[+(]?\d(?:(?:[^\p{L}\d]|(?<=\d)[xX](?=\d))*\d)*/gu;
+
+/**
+ * Any phone-, meter- or account-like number keeps only its last 4 digits:
+ * a number of 5 or more digits, in any script and with any separators
+ * (NUMBER), becomes "•••• 4567". Text that is not a number keeps its
+ * letters (NFKC-normalised). A date or an amount written into a name is a
+ * number too and is reshaped the same way (Default (agent), owner may
+ * override): only names are passed here, never the page's own amount,
+ * date or reference.
  */
 export function maskDigits(text: string): string {
-  return text.replace(
-    DIGIT_RUN,
-    (run) => `•••• ${run.replace(/\D/g, '').slice(-4)}`,
-  );
+  return foldDigits(text).replace(NUMBER, (run) => {
+    const digits = run.replace(/\D/g, '');
+    return digits.length >= 5 ? `•••• ${digits.slice(-4)}` : run;
+  });
 }
 
 /**

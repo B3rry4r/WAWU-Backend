@@ -9,7 +9,7 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOkResponse } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOkResponse, ApiResponse } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
@@ -20,7 +20,11 @@ import {
 } from '../gate/wallet-gate';
 import { BuiltBy, MoneyErrors, WALLET_GATE_ERRORS } from '../money-contract';
 import { RECEIPT_RENDER_THROTTLE } from './receipt-config';
-import { receiptPdf, receiptPng } from './receipt-render';
+import {
+  RECEIPT_BUSY_MESSAGE,
+  RECEIPT_BUSY_RETRY_SECONDS,
+  ReceiptBusyError,
+} from './receipt-draw-limiter';
 import type { ReceiptView } from './receipt-view.type';
 import { ReceiptService } from './receipt.service';
 
@@ -34,7 +38,9 @@ import { ReceiptService } from './receipt.service';
  * not_found` as no row (MONEY-15's detail). Each route makes the code the
  * first time and answers the same code after. Nothing here calls Fintava
  * or moves money. The image and the PDF are drawn on each request, so they
- * are throttled tighter than the app's default (RECEIPT_RENDER_THROTTLE).
+ * are throttled tighter than the app's default (RECEIPT_RENDER_THROTTLE),
+ * and at most RECEIPT_RENDER_CONCURRENCY draw at once in the process; a
+ * request that finds no slot in 10 s is answered 503 with Retry-After.
  */
 @ApiBearerAuth('wawu-id')
 @UseGuards(WawuAuthGuard)
@@ -66,13 +72,14 @@ export class MoneyReceiptController {
     content: { 'image/png': { schema: { type: 'string', format: 'binary' } } },
   })
   @MoneyErrors(...WALLET_GATE_ERRORS, 'not_found')
+  @ApiResponse({ status: 503, description: RECEIPT_BUSY_MESSAGE })
   async image(
     @CurrentWallet() wallet: OpenWallet,
     @Param('id', ParseUUIDPipe) id: string,
     @Res() res: Response,
   ): Promise<void> {
-    const { doc, code } = await this.receipts.document(wallet, id);
-    send(res, await receiptPng(doc), 'image/png', `Receipt-${code}.png`);
+    const { body, code } = await busy(res, this.receipts.image(wallet, id));
+    send(res, body, 'image/png', `Receipt-${code}.png`);
   }
 
   /** W43: the receipt as a one-page A4 PDF. */
@@ -87,18 +94,25 @@ export class MoneyReceiptController {
     },
   })
   @MoneyErrors(...WALLET_GATE_ERRORS, 'not_found')
+  @ApiResponse({ status: 503, description: RECEIPT_BUSY_MESSAGE })
   async pdf(
     @CurrentWallet() wallet: OpenWallet,
     @Param('id', ParseUUIDPipe) id: string,
     @Res() res: Response,
   ): Promise<void> {
-    const { doc, code, issuedAt } = await this.receipts.document(wallet, id);
-    send(
-      res,
-      await receiptPdf(doc, issuedAt),
-      'application/pdf',
-      `Receipt-${code}.pdf`,
-    );
+    const { body, code } = await busy(res, this.receipts.pdf(wallet, id));
+    send(res, body, 'application/pdf', `Receipt-${code}.pdf`);
+  }
+}
+
+/** Every drawing slot stayed busy (DrawLimiter): the 503 also says when to try again. */
+async function busy<T>(res: Response, drawing: Promise<T>): Promise<T> {
+  try {
+    return await drawing;
+  } catch (e) {
+    if (e instanceof ReceiptBusyError)
+      res.set('Retry-After', String(RECEIPT_BUSY_RETRY_SECONDS));
+    throw e;
   }
 }
 
