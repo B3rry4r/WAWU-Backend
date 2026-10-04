@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { StorageService } from '../storage/storage.service';
+import { StorageService, objectKeyFrom } from '../storage/storage.service';
 import { ContentPieceService } from './content-piece.service';
 import type { SetMediaDto } from './dto/set-media.dto';
 
@@ -36,6 +36,23 @@ export interface MediaDetails {
   /** Number of pictures in the set; 0 for anything else. */
   frameCount: number;
   frames: MediaFrame[];
+}
+
+/**
+ * Whether `key` is an object key of the grammar `presignUpload` writes
+ * (`content/<preview|full>/<wawuId>/<uuid>.<ext>`) under THIS person's own
+ * prefix. Same shape of check as chat's `isChatKey`.
+ */
+export function isOwnContentKey(key: string, wawuId: string): boolean {
+  if (key.includes('..') || key.includes('//')) return false;
+  const parts = key.split('/');
+  return (
+    parts.length === 4 &&
+    parts[0] === 'content' &&
+    (parts[1] === 'preview' || parts[1] === 'full') &&
+    parts[2] === wawuId &&
+    /^[0-9a-f-]{36}\.[a-z0-9]{2,5}$/.test(parts[3])
+  );
 }
 
 /** The fields of a piece MediaDetails is built from. */
@@ -87,8 +104,24 @@ export class ContentMediaService {
       byPiece.set(row.contentId, list);
     }
 
+    const owners = imageIds.length
+      ? new Map(
+          (
+            await this.prisma.contentPiece.findMany({
+              where: { id: { in: imageIds } },
+              select: { id: true, creatorWawuId: true },
+            })
+          ).map((o) => [o.id, o.creatorWawuId]),
+        )
+      : new Map<string, string>();
+
     for (const piece of pieces) {
-      const stored = byPiece.get(piece.id) ?? [];
+      const owner = owners.get(piece.id) ?? '';
+      // Defence in depth: a frame is only ever signed when it is one of the
+      // piece owner's own objects, whatever a row happens to hold.
+      const stored = (byPiece.get(piece.id) ?? []).filter((f) =>
+        isOwnContentKey(objectKeyFrom(f.url), owner),
+      );
       const frames: MediaFrame[] = await Promise.all(
         stored.map(async (f, i) => {
           if (!piece.fullAssetLocked) {
@@ -124,6 +157,39 @@ export class ContentMediaService {
     const piece = await this.content.findOne(contentId, viewerWawuId);
     const map = await this.forPieces([piece]);
     return map.get(piece.id) as MediaDetails;
+  }
+
+  /**
+   * Each frame must be an upload this person made: the url or key resolves to
+   * their own `content/` key and a StorageObject row of theirs that is not
+   * abandoned (the chat attachment rule). The key is what is stored, so the
+   * read path signs it fresh. Anything else is a 400.
+   */
+  private async ownedFrameKeys(
+    values: string[],
+    ownerWawuId: string,
+  ): Promise<string[]> {
+    const keys = values.map((v) => objectKeyFrom(v));
+    if (!keys.every((k) => isOwnContentKey(k, ownerWawuId))) {
+      throw new BadRequestException(
+        'Every frame must be a picture you uploaded.',
+      );
+    }
+    const rows = await this.prisma.storageObject.findMany({
+      where: {
+        key: { in: keys },
+        wawuUserId: ownerWawuId,
+        status: { not: 'abandoned' },
+      },
+      select: { key: true },
+    });
+    const found = new Set(rows.map((r) => r.key));
+    if (!keys.every((k) => found.has(k))) {
+      throw new BadRequestException(
+        'Every frame must be a picture you uploaded.',
+      );
+    }
+    return keys;
   }
 
   /**
@@ -173,7 +239,9 @@ export class ContentMediaService {
       );
     }
 
-    const frames = dto.frames;
+    const frames = dto.frames
+      ? await this.ownedFrameKeys(dto.frames, ownerWawuId)
+      : undefined;
     await this.prisma.$transaction(async (tx) => {
       if (dto.durationLabel !== undefined || dto.pageCount !== undefined) {
         await tx.contentPiece.update({

@@ -24095,8 +24095,7 @@
             "minItems": 1,
             "type": "array",
             "items": {
-              "type": "string",
-              "format": "uri"
+              "type": "string"
             }
           },
           "durationLabel": {

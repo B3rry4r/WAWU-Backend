@@ -631,11 +631,31 @@ describe('Feed cards, creator info and media details (contract)', () => {
   });
 
   describe('photo sets, durations and page counts', () => {
-    const frames = [
-      'https://example.com/f1.jpg',
-      'https://example.com/f2.jpg',
-      'https://example.com/f3.jpg',
-    ];
+    let frames: string[] = [];
+    const ownKey = (who: Who) =>
+      `content/preview/${who.sub}/${randomUUID()}.jpg`;
+    const upload = async (who: Who, key: string, status = 'confirmed') =>
+      prisma.storageObject.create({
+        data: {
+          wawuUserId: who.sub,
+          key,
+          bytes: 1000,
+          contentType: 'image/jpeg',
+          folder: 'content/preview',
+          status: status as 'confirmed',
+        },
+      });
+
+    beforeAll(async () => {
+      frames = [ownKey(top), ownKey(top), ownKey(top)];
+      for (const k of frames) await upload(top, k);
+    });
+
+    afterAll(async () => {
+      await prisma.storageObject.deleteMany({
+        where: { wawuUserId: { in: [top.sub, filler.sub] } },
+      });
+    });
 
     it('a creator can set a photo set and a user gets its frames in order', async () => {
       const put = await call('put', `/content/${topSetFree}/media`, top, 200, {
@@ -680,8 +700,8 @@ describe('Feed cards, creator info and media details (contract)', () => {
       });
       expect(out[1]).toEqual({ position: 2, url: null, locked: true });
       expect(out[2]).toEqual({ position: 3, url: null, locked: true });
-      expect(got.text).not.toContain('f2.jpg');
-      expect(got.text).not.toContain('f3.jpg');
+      expect(got.text).not.toContain(frames[1]);
+      expect(got.text).not.toContain(frames[2]);
     });
 
     it('a user who bought the paid set, and its creator, get every frame', async () => {
@@ -754,13 +774,73 @@ describe('Feed cards, creator info and media details (contract)', () => {
       });
       await call('put', `/content/${topSetFree}/media`, top, 400, {});
       await call('put', `/content/${topSetFree}/media`, top, 400, {
-        frames: ['not a url'],
-      });
-      await call('put', `/content/${topSetFree}/media`, top, 400, {
         frames: Array.from(
           { length: 21 },
           (_, i) => `https://example.com/${i}.jpg`,
         ),
+      });
+    });
+
+    it('a creator cannot use a frame that is not their own upload', async () => {
+      const other = ownKey(filler);
+      await upload(filler, other);
+      const mine = ownKey(top);
+      await upload(top, mine);
+      const unknown = ownKey(top); // right shape, never uploaded
+      const abandoned = ownKey(top);
+      await upload(top, abandoned, 'abandoned');
+      const bad = [
+        'notaurl',
+        'localhost',
+        'ftp://cdn.example.com/a.jpg',
+        'https://example.com/f1.jpg',
+        other, // another creator's key
+        `https://bucket.example.com/${other}?X-Amz-Signature=x`,
+        `content/preview/${top.sub}/../${filler.sub}/x.jpg`,
+        'content/preview/../full/x.jpg',
+        `content/full/${filler.sub}/${randomUUID()}.mp4`,
+        unknown,
+        abandoned,
+      ];
+      for (const frame of bad) {
+        await call('put', `/content/${topSetFree}/media`, top, 400, {
+          frames: [mine, frame],
+        });
+      }
+      // nothing was written by any refused call
+      expect(
+        (
+          await prisma.contentFrame.findMany({
+            where: { contentId: topSetFree },
+          })
+        ).map((f) => f.url),
+      ).not.toContain(other);
+    });
+
+    it('a creator can use their own uploaded keys, and a signed url of their own upload', async () => {
+      const a = ownKey(top);
+      const b = ownKey(top);
+      await upload(top, a);
+      await upload(top, b, 'pending');
+      const res = await call('put', `/content/${topSetFree}/media`, top, 200, {
+        frames: [`https://bucket.example.com/${a}?X-Amz-Signature=x`, b],
+      });
+      expect(
+        (res.data.frames as Array<{ url: string }>).map((f) => f.url),
+      ).toEqual([a, b]);
+      await call('put', `/content/${topSetFree}/media`, top, 200, { frames });
+    });
+
+    it('a user is never given a signed link to a frame the piece owner does not own', async () => {
+      const other = ownKey(filler);
+      await prisma.contentFrame.create({
+        data: { contentId: topSetFree, position: 9, url: other },
+      });
+      const got = await call('get', `/content/${topSetFree}/media`, stranger);
+      expect(got.text).not.toContain(other);
+      expect(got.data.frameCount).toBe(3);
+      await prisma.contentFrame.deleteMany({
+        where: { contentId: topSetFree, position: 9 },
       });
     });
 

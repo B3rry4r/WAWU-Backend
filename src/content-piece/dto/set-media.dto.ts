@@ -5,7 +5,6 @@ import {
   IsInt,
   IsOptional,
   IsString,
-  IsUrl,
   Matches,
   Max,
   Min,
@@ -41,7 +40,7 @@ export class SetMediaDto {
   @ArrayMaxSize(MAX_FRAMES, {
     message: `a photo set holds at most ${MAX_FRAMES} pictures`,
   })
-  @IsUrl({ require_tld: false }, { each: true })
+  @IsString({ each: true })
   frames?: string[];
 
   /** How long a video, audio or course runs, as `4:12` or `1:20:05`. */
