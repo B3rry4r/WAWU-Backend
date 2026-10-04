@@ -1,7 +1,7 @@
 -- HOME-04: per-viewer likes, one view per viewer per day, one share per sharer
 -- per day. Additive: three new tables, no existing column, index or row
 -- touched (ContentPiece gains no column, so no content response gains a key;
--- protected-registry H-1). Rollback: DROP TABLE "ContentLike", "ContentView",
+-- protected route registry, entry H-1). Rollback: DROP TABLE "ContentLike", "ContentView",
 -- "ContentShare";
 
 -- CreateTable

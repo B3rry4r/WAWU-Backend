@@ -17,7 +17,7 @@ export interface ViewerContentState {
  * One card of GET /feed: the same piece GET /content serves, plus what only
  * this viewer's session can know. The extra keys live here, never on
  * GET /content or GET /content/:id, whose shapes the web depends on
- * (protected-registry H-1).
+ * (protected route registry, entry H-1).
  */
 export type FeedItem = ContentPieceResponse &
   ViewerContentState & { shares: number };

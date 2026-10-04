@@ -679,7 +679,7 @@ model ContentView {
 
 /// One person shared one piece on one day (HOME-04). A share count is the
 /// number of rows; no counter column on ContentPiece, because a new column
-/// there would widen every live content response (protected-registry H-1).
+/// there would widen every live content response (protected route registry, entry H-1).
 model ContentShare {
   id            String       @id @default(uuid())
   contentId     String
