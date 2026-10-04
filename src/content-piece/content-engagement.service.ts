@@ -4,6 +4,11 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type { ContentPieceResponse } from '../common/types/content-piece.type';
 import { ContentPieceService } from './content-piece.service';
+import {
+  ContentMediaService,
+  type MediaDetails,
+} from './content-media.service';
+import { FeedCardsService, type FeedCreator } from './feed-cards.service';
 import type { ContentSort } from './ranking';
 
 /** What the viewer has done with, and to, one piece. */
@@ -21,7 +26,13 @@ export interface ViewerContentState {
  * (protected route registry, entry H-1).
  */
 export type FeedItem = ContentPieceResponse &
-  ViewerContentState & { shares: number };
+  ViewerContentState & {
+    shares: number;
+    /** Who made the piece: name, avatar and ticks (G-85, HOME-05). */
+    creator: FeedCreator;
+    /** Duration, page count and a photo set's frames (HOME-05). */
+    media: MediaDetails;
+  };
 
 export interface LikeState {
   likes: number;
@@ -74,6 +85,8 @@ export class ContentEngagementService {
     private readonly prisma: PrismaService,
     private readonly content: ContentPieceService,
     private readonly blockedAccounts: BlockedAccountService,
+    private readonly cards: FeedCardsService,
+    private readonly mediaDetails: ContentMediaService,
   ) {}
 
   /**
@@ -267,7 +280,11 @@ export class ContentEngagementService {
       perPage,
       sort,
     );
-    const state = await this.stateFor(viewerWawuId, result.items);
+    const [state, creators, media] = await Promise.all([
+      this.stateFor(viewerWawuId, result.items),
+      this.cards.creatorsFor(result.items.map((i) => i.creatorWawuId)),
+      this.mediaDetails.forPieces(result.items),
+    ]);
     return {
       ...result,
       items: result.items.map((item) => ({
@@ -276,6 +293,8 @@ export class ContentEngagementService {
         savedByMe: state.saved.has(item.id),
         followsCreator: state.follows.has(item.creatorWawuId),
         shares: state.shares.get(item.id) ?? 0,
+        creator: creators.get(item.creatorWawuId) as FeedCreator,
+        media: media.get(item.id) as MediaDetails,
       })),
     };
   }

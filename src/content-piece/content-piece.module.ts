@@ -6,6 +6,11 @@ import {
   FeedController,
 } from './content-engagement.controller';
 import { ContentEngagementService } from './content-engagement.service';
+import { ContentMediaController } from './content-media.controller';
+import { ContentMediaService } from './content-media.service';
+import { FeedCardsService } from './feed-cards.service';
+import { FeedEntriesService } from './feed-entries.service';
+import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { ContentPieceService } from './content-piece.service';
 import { CreatorAccountGuard } from './guards/creator-account-guard';
 import { FLUTTERWAVE_CLIENT } from './flutterwave-client.interface';
@@ -26,16 +31,25 @@ import { StorageModule } from '../storage/storage.module';
  * ContentPiece's own unlock/verify flow).
  */
 @Module({
-  imports: [NotificationModule, StorageModule, BlockedAccountModule],
+  imports: [
+    NotificationModule,
+    StorageModule,
+    BlockedAccountModule,
+    WawuAuthModule,
+  ],
   controllers: [
     ContentPieceController,
     PublicContentController,
     ContentEngagementController,
     FeedController,
+    ContentMediaController,
   ],
   providers: [
     ContentPieceService,
     ContentEngagementService,
+    ContentMediaService,
+    FeedCardsService,
+    FeedEntriesService,
     CreatorAccountGuard,
     RealFlutterwaveAdapter,
     MockFlutterwaveAdapter,
