@@ -1,6 +1,13 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsString, Matches, MaxLength, ValidateBy } from 'class-validator';
+import {
+  IsString,
+  Matches,
+  MaxLength,
+  ValidateBy,
+  ValidateIf,
+} from 'class-validator';
+import { CHECK_HANDLE_MAX_LENGTH } from '../check-handle';
 import { isJpeg, isPng } from '../selfie-image';
 
 /**
@@ -34,6 +41,10 @@ export class IdentityOccupationDto {
   })
   occupation!: string;
 }
+
+/** The one sentence a malformed check handle gets: it never says what was sent, or what was wrong with it. */
+export const CHECK_HANDLE_INVALID_MESSAGE =
+  'Your BVN check could not be read. Check your BVN again to continue.';
 
 /** The longest selfie accepted, in base64 characters (about 75 KB of image). */
 export const SELFIE_IMAGE_MAX_CHARS = 100_000;
@@ -73,9 +84,34 @@ export function isSelfieImage(value: unknown): boolean {
  * validation message repeats it.
  */
 export class SelfieMatchDto {
-  /** The BVN whose check passed: 11 digits, no spaces. */
+  /**
+   * The BVN whose check passed: 11 digits, no spaces. Leave it out and send
+   * `checkHandle` instead (KYC-03); one of the two, never both.
+   */
+  @ApiPropertyOptional({ pattern: '^[0-9]{11}$' })
+  @ValidateIf(
+    (o: SelfieMatchDto) => o.checkHandle === undefined || o.bvn !== undefined,
+  )
   @Matches(/^[0-9]{11}$/, { message: 'bvn must be 11 digits' })
-  bvn!: string;
+  bvn?: string;
+
+  /**
+   * The `checkHandle` the passed BVN check answered, in place of `bvn`
+   * (KYC-03): the server takes the BVN from it. One of the two, never both.
+   */
+  @ApiPropertyOptional({ maxLength: CHECK_HANDLE_MAX_LENGTH })
+  @ValidateIf((o: SelfieMatchDto) => o.checkHandle !== undefined)
+  @IsString({ message: CHECK_HANDLE_INVALID_MESSAGE })
+  @MaxLength(CHECK_HANDLE_MAX_LENGTH, { message: CHECK_HANDLE_INVALID_MESSAGE })
+  @ValidateBy({
+    name: 'checkHandleAlone',
+    validator: {
+      validate: (_: unknown, args) =>
+        (args?.object as SelfieMatchDto).bvn === undefined,
+      defaultMessage: () => 'Send checkHandle or bvn, not both.',
+    },
+  })
+  checkHandle?: string;
 
   /**
    * The selfie: plain base64 (no `data:` prefix) of a JPEG or PNG, 1 KB to

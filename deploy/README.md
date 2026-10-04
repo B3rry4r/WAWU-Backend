@@ -124,6 +124,9 @@ FINTAVA_RESEND_SAFETY_MS=
 # once, never changed (every stored hash would stop matching). Unset, the
 # server starts and both checks answer 503. BVN_CHECKS_PER_DAY and
 # SELFIE_CHECKS_PER_DAY may stay empty (3 each, provisional).
+# The same key also derives (HKDF, label wawu/kyc-check-handle/v1) the key
+# the BVN check's 30-minute `checkHandle` is sealed under (KYC-03): no
+# separate setting. Changing IDENTITY_HASH_KEY voids every handle out.
 IDENTITY_HASH_KEY=
 BVN_CHECKS_PER_DAY=
 SELFIE_CHECKS_PER_DAY=
