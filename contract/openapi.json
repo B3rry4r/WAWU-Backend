@@ -401,6 +401,211 @@
         ]
       }
     },
+    "/api/hub/paid-dm/queue": {
+      "get": {
+        "operationId": "PaidDmController_queue",
+        "parameters": [
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "Opaque: send back the `nextCursor` of the previous page as given.",
+            "schema": {
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "1 to 100, 20 when left out.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaidDmQueuePage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The creator's waiting list: soonest deadline first, with the total waiting.",
+        "tags": [
+          "PaidDm"
+        ]
+      }
+    },
+    "/api/hub/paid-dm/threads": {
+      "get": {
+        "operationId": "PaidDmController_threads",
+        "parameters": [
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "Opaque: send back the `nextCursor` of the previous page as given.",
+            "schema": {
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "1 to 100, 20 when left out.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "as",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "fan",
+                "creator"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaidDmThreadPage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The caller's threads, one per person, latest activity first. `as=creator` reads the creator side.",
+        "tags": [
+          "PaidDm"
+        ]
+      }
+    },
+    "/api/hub/paid-dm/threads/{wawuId}": {
+      "get": {
+        "operationId": "PaidDmController_thread",
+        "parameters": [
+          {
+            "name": "wawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "Opaque: send back the `nextCursor` of the previous page as given.",
+            "schema": {
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "1 to 100, 20 when left out.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "as",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "fan",
+                "creator"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaidDmThreadDetail"
+                }
+              }
+            }
+          }
+        },
+        "summary": "One thread: every question with all its reply bubbles.",
+        "tags": [
+          "PaidDm"
+        ]
+      }
+    },
+    "/api/hub/paid-dm/questions/{messageId}/replies": {
+      "post": {
+        "operationId": "PaidDmController_reply",
+        "parameters": [
+          {
+            "name": "messageId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaidDmReplyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaidDmQuestion"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Add a reply bubble to a question, while its window is open.",
+        "tags": [
+          "PaidDm"
+        ]
+      }
+    },
     "/api/hub/settings/privacy/blocked": {
       "post": {
         "operationId": "BlockedAccountController_create",
@@ -21507,6 +21712,105 @@
         "x-wawu-built-by": "MONEY-15"
       }
     },
+    "/api/hub/money/fees/quote": {
+      "get": {
+        "operationId": "MoneyFeesController_feeQuote",
+        "parameters": [
+          {
+            "name": "kind",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "wawu_transfer",
+                "bank_transfer",
+                "purchase",
+                "bill"
+              ]
+            }
+          },
+          {
+            "name": "amountKobo",
+            "required": true,
+            "in": "query",
+            "description": "In kobo: what the recipient gets on a send, the price on a purchase,\nthe bill's own amount on a bill. Fees are added on top, never taken\nout of it. Digits only: `100.00` (a naira decimal), `1e4` or `10,000`\nis a 400, never read as some other number of kobo.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "billCategory",
+            "required": false,
+            "in": "query",
+            "description": "Required when kind is `bill`; any other kind with it is a 400.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "electricity",
+                "cable",
+                "airtime",
+                "data"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeeQuoteView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "What a send, a withdrawal, a purchase or a bill will cost, before the\nPIN (W10, W17, H14): Fintava's charge plus WAWU's fee from config\n(R-10, R-31), each charge as its own part, the total, and a signed\nquote the paying request can send back. Nothing is reserved and\nFintava is not asked. A purchase or bill whose total is above\nMERCHANT_MAX_PER_TXN_KOBO is amount_out_of_range with maximumKobo.",
+        "tags": [
+          "MoneyFees"
+        ],
+        "x-wawu-built-by": "WALLET-15"
+      }
+    },
     "/api/hub/chats": {
       "post": {
         "operationId": "ChatController_open",
@@ -22022,90 +22326,6 @@
         ],
         "x-wawu-built-by": "WALLET-08",
         "description": "Declared by MONEY-04, not served yet: WALLET-08 serves it.",
-        "x-wawu-served": false
-      }
-    },
-    "/api/hub/money/fees/quote": {
-      "get": {
-        "operationId": "MoneyTransferController_feeQuote",
-        "parameters": [
-          {
-            "name": "kind",
-            "required": true,
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "enum": [
-                "wawu_transfer",
-                "bank_transfer"
-              ]
-            }
-          },
-          {
-            "name": "amountKobo",
-            "required": true,
-            "in": "query",
-            "description": "What the recipient should get, in kobo.",
-            "schema": {
-              "minimum": 1,
-              "maximum": 9007199254740991,
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FeeQuoteView"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "reason.code: amount_out_of_range",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "What a send will cost, before the PIN (W10, W17): Fintava's charge plus\nWAWU's fee from config (R-10), the total, and whether it fits today's\nlimit. Nothing is reserved; the send repeats totalKobo as expectedTotalKobo.",
-        "tags": [
-          "MoneyTransfer"
-        ],
-        "x-wawu-built-by": "WALLET-15",
-        "description": "Declared by MONEY-04, not served yet: WALLET-15 serves it.",
         "x-wawu-served": false
       }
     },
@@ -22962,6 +23182,19 @@
           "text": {
             "type": "string",
             "maxLength": 2000
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "PaidDmReplyDto": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 2000,
+            "pattern": "\\S"
           }
         },
         "required": [
@@ -26090,6 +26323,99 @@
           "outKobo"
         ]
       },
+      "FeeQuotePartView": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "bank_transfer",
+              "balance_transfer",
+              "bill_charge",
+              "wawu_fee"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "wawu",
+              "provider"
+            ]
+          },
+          "amountKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code",
+          "source",
+          "amountKobo"
+        ]
+      },
+      "FeeQuoteView": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "purchase",
+              "bill",
+              "wawu_transfer",
+              "bank_transfer"
+            ]
+          },
+          "billCategory": {
+            "type": "string",
+            "enum": [
+              "electricity",
+              "cable",
+              "airtime",
+              "data"
+            ],
+            "nullable": true
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "fee": {
+            "$ref": "#/components/schemas/FeeBreakdown"
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FeeQuotePartView"
+            }
+          },
+          "totalKobo": {
+            "type": "integer"
+          },
+          "withinDailyLimit": {
+            "type": "boolean"
+          },
+          "remainingTodayKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "quoteToken": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "billCategory",
+          "amountKobo",
+          "fee",
+          "parts",
+          "totalKobo",
+          "withinDailyLimit",
+          "remainingTodayKobo",
+          "quoteToken",
+          "expiresAt"
+        ]
+      },
       "CheckedBvnView": {
         "type": "object",
         "properties": {
@@ -28730,6 +29056,217 @@
           "refundReference",
           "refundedAt",
           "otherParty"
+        ]
+      },
+      "PaidDmQueueItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "sentAt": {
+            "type": "string"
+          },
+          "deadlineAt": {
+            "type": "string"
+          },
+          "sender": {
+            "$ref": "#/components/schemas/DmOtherParty"
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "amountKobo",
+          "sentAt",
+          "deadlineAt",
+          "sender"
+        ]
+      },
+      "PaidDmQueuePage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PaidDmQueueItem"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          },
+          "waitingTotal": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor",
+          "waitingTotal"
+        ]
+      },
+      "PaidDmThread": {
+        "type": "object",
+        "properties": {
+          "other": {
+            "$ref": "#/components/schemas/DmOtherParty"
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "creator",
+              "fan"
+            ]
+          },
+          "questionCount": {
+            "type": "number"
+          },
+          "waitingCount": {
+            "type": "number"
+          },
+          "nextDeadlineAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastActivityAt": {
+            "type": "string"
+          },
+          "lastText": {
+            "type": "string"
+          },
+          "lastTextMine": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "other",
+          "side",
+          "questionCount",
+          "waitingCount",
+          "nextDeadlineAt",
+          "lastActivityAt",
+          "lastText",
+          "lastTextMine"
+        ]
+      },
+      "PaidDmThreadPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PaidDmThread"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "PaidDmReply": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "createdAt"
+        ]
+      },
+      "PaidDmQuestion": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "awaiting_response",
+              "responded",
+              "refunded"
+            ]
+          },
+          "mine": {
+            "type": "boolean"
+          },
+          "sentAt": {
+            "type": "string"
+          },
+          "deadlineAt": {
+            "type": "string"
+          },
+          "respondedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "replies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PaidDmReply"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "amountKobo",
+          "status",
+          "mine",
+          "sentAt",
+          "deadlineAt",
+          "respondedAt",
+          "replies"
+        ]
+      },
+      "PaidDmThreadDetail": {
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/components/schemas/PaidDmThread"
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PaidDmQuestion"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "thread",
+          "questions",
+          "nextCursor"
         ]
       },
       "JsonObject": {
@@ -34583,42 +35120,6 @@
           "handle",
           "avatarUrl",
           "tick"
-        ]
-      },
-      "FeeQuoteView": {
-        "type": "object",
-        "properties": {
-          "kind": {
-            "type": "string",
-            "enum": [
-              "wawu_transfer",
-              "bank_transfer"
-            ]
-          },
-          "amountKobo": {
-            "type": "integer"
-          },
-          "fee": {
-            "$ref": "#/components/schemas/FeeBreakdown"
-          },
-          "totalKobo": {
-            "type": "integer"
-          },
-          "withinDailyLimit": {
-            "type": "boolean"
-          },
-          "remainingTodayKobo": {
-            "type": "integer",
-            "nullable": true
-          }
-        },
-        "required": [
-          "kind",
-          "amountKobo",
-          "fee",
-          "totalKobo",
-          "withinDailyLimit",
-          "remainingTodayKobo"
         ]
       },
       "TransferTimelineEntry": {

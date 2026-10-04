@@ -44,7 +44,7 @@ caller from the token.
 | `DELETE /money/beneficiaries/{id}` | `null` | | WALLET-14 (served; CONVENTIONS.md section 10) |
 | `GET /money/payout-account` | `PayoutAccountView` or `null` | | WALLET-14 (served; CONVENTIONS.md section 10) |
 | `PUT /money/payout-account` | `PayoutAccountView` | `PayoutAccountDto` | WALLET-14 (served; CONVENTIONS.md section 10) |
-| `GET /money/fees/quote?kind=&amountKobo=` | `FeeQuoteView` | | WALLET-15 |
+| `GET /money/fees/quote?kind=&amountKobo=&billCategory=` | `FeeQuoteView` | | WALLET-15 (served; CONVENTIONS.md section 11) |
 | `POST /money/transfers/wawu` | `TransferView` | `WawuTransferDto`, `Idempotency-Key`, `X-Transaction-Pin` | WALLET-07 |
 | `POST /money/transfers/bank` | `TransferView` | `BankTransferDto`, `Idempotency-Key`, `X-Transaction-Pin` | WALLET-09 |
 | `GET /money/transfers/{id}` | `TransferView` | | WALLET-07 |
@@ -131,6 +131,7 @@ in `components.schemas`, so the app gets one type per shape:
 `WalletBalanceView`, `PinStateView`, `PinResetView`, `BankView`,
 `AccountNameView`, `RecipientView`, `MoneyPartyView`, `BankAccountView`,
 `BeneficiaryView`, `PayoutAccountView`, `FeeBreakdown`, `FeeQuoteView`,
+`FeeQuotePartView`,
 `TransferView`, `TransferTimelineEntry`, `TransferReversalView`,
 `PaymentQuoteView`, `PaymentView`, `HoldView`, `HoldPage`, `TransactionView`,
 `TransactionCounterpartyView`, `TransactionLinkView`, `TransactionGroupView`,
@@ -177,7 +178,7 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 | | name check before Continue | `POST /money/banks/name-check` → `AccountNameView`; `422 name_check_failed` |
 | | saved beneficiaries, "My payout account" | `GET /money/beneficiaries`; `GET /money/payout-account` |
 | W9 Amount | live balance; recipient; note | `GET /money/wallet/balance`; `RecipientView` from W7; `WawuTransferDto.note` |
-| W10 Review | fee breakdown per transfer type; total; "They get" | `GET /money/fees/quote` → `fee` (`providerFeeKobo` + `wawuFeeKobo` = `totalFeeKobo`), `totalKobo`, `amountKobo` |
+| W10 Review | fee breakdown per transfer type; total; "They get" | `GET /money/fees/quote` → `fee` (`providerFeeKobo` + `wawuFeeKobo` = `totalFeeKobo`), one row per charge in `parts`, `totalKobo`, `amountKobo` |
 | W11 PIN | PIN checked on the debit itself; tries left; lock | `X-Transaction-Pin` on the transfer; `403 pin_incorrect.triesLeft`, `423 pin_locked.lockedUntil`; `GET /money/pin` |
 | | fingerprint or face instead of the PIN (R-26) | `X-Device-Approval` on the debit (`@RequireApproval()`): `POST /money/device/challenge`, then the registered phone's signature; a refusal is `403 device_approval_refused` and uses no PIN try (MONEY-14, CONVENTIONS.md section 5) |
 | W12 Receipt | status, fee, total paid, reference, time | the transfer response, then `GET /money/transfers/{id}` → `TransferView` |
