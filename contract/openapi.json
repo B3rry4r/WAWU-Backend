@@ -22854,6 +22854,99 @@
         ]
       }
     },
+    "/api/hub/about": {
+      "get": {
+        "operationId": "AboutController_about",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AboutView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The bank, the licence line and the support address, from config.",
+        "tags": [
+          "About"
+        ]
+      }
+    },
+    "/api/hub/policies/{slug}": {
+      "get": {
+        "operationId": "AboutController_policy",
+        "parameters": [
+          {
+            "name": "slug",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "`terms` or `privacy`; `available: false` until the owner fills it in.",
+        "tags": [
+          "About"
+        ]
+      }
+    },
+    "/api/hub/admin/policies/{slug}": {
+      "put": {
+        "operationId": "AdminLegalDocumentsController_put",
+        "parameters": [
+          {
+            "name": "slug",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutPolicyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminLegalDocuments"
+        ]
+      }
+    },
     "/api/hub/chats": {
       "post": {
         "operationId": "ChatController_open",
@@ -27381,6 +27474,49 @@
         "required": [
           "bankCode",
           "accountNumber"
+        ]
+      },
+      "PolicySectionDto": {
+        "type": "object",
+        "properties": {
+          "heading": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 20000
+          }
+        },
+        "required": [
+          "heading",
+          "body"
+        ]
+      },
+      "PutPolicyDto": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "effectiveDate": {
+            "type": "string",
+            "description": "The date the owner gives the text, YYYY-MM-DD."
+          },
+          "sections": {
+            "minItems": 1,
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PolicySectionDto"
+            }
+          }
+        },
+        "required": [
+          "title",
+          "effectiveDate",
+          "sections"
         ]
       },
       "OpenChatDto": {
@@ -35067,6 +35203,78 @@
           "recipientCount",
           "deliveredCount",
           "suppressedByPreference"
+        ]
+      },
+      "AboutView": {
+        "type": "object",
+        "properties": {
+          "bankName": {
+            "type": "string"
+          },
+          "licenceLine": {
+            "type": "string",
+            "nullable": true
+          },
+          "supportEmail": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "bankName",
+          "licenceLine",
+          "supportEmail"
+        ]
+      },
+      "PolicySectionView": {
+        "type": "object",
+        "properties": {
+          "heading": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "heading",
+          "body"
+        ]
+      },
+      "PolicyView": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "enum": [
+              "terms",
+              "privacy"
+            ]
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "effectiveDate": {
+            "type": "string",
+            "nullable": true
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PolicySectionView"
+            }
+          }
+        },
+        "required": [
+          "slug",
+          "available",
+          "title",
+          "effectiveDate",
+          "sections"
         ]
       },
       "AccountDeletionResponse": {

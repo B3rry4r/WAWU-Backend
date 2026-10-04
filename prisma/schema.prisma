@@ -4101,6 +4101,20 @@ model CourseIntake {
   @@index([courseId, startDate])
 }
 
+/// SETTINGS-02: the owner's legal text, one row per document ("terms",
+/// "privacy"), served by GET /policies/:slug and written by the superadmin
+/// route PUT /admin/policies/:slug. No row means the owner has not filled it
+/// in yet, and the app says so; nothing here is ever seeded with wording.
+model LegalDocument {
+  /// "terms" or "privacy".
+  slug          String   @id
+  title         String
+  /// The date the owner gives the text. Shown as "Updated 1 September 2026".
+  effectiveDate DateTime @db.Date
+  /// [{ heading, body }]; a body's paragraphs are separated by a blank line.
+  sections      Json
+  updatedAt     DateTime @updatedAt
+
 /// One person's reaction to one TGIF card on one day (HOME-10). The unique
 /// (person, day, card) key is what makes a reaction count once: two taps at
 /// once race on the key and one row exists. Counts are always the number of
