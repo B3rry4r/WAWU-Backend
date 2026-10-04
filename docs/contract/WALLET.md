@@ -48,14 +48,24 @@ caller from the token.
 | `POST /money/transfers/wawu` | `TransferView` | `WawuTransferDto`, `Idempotency-Key`, `X-Transaction-Pin` | WALLET-07 |
 | `POST /money/transfers/bank` | `TransferView` | `BankTransferDto`, `Idempotency-Key`, `X-Transaction-Pin` | WALLET-09 |
 | `GET /money/transfers/{id}` | `TransferView` | | WALLET-07 |
-| `GET /money/payments/quote?kind=&targetId=&amountKobo=` | `PaymentQuoteView` | | MONEY-17 (served; CONVENTIONS.md section 12) |
-| `POST /money/payments` | `PaymentView` | `PaymentDto`, `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | MONEY-17 (served; CONVENTIONS.md section 12) |
+| `GET /money/payments/quote?kind=&targetId=&amountKobo=` | `PaymentQuoteView` | | MONEY-17 (served; CONVENTIONS.md section 13) |
+| `POST /money/payments` | `PaymentView` | `PaymentDto`, `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | MONEY-17 (served; CONVENTIONS.md section 13) |
 | `GET /money/payments/{id}` | `PaymentView` | | MONEY-19 |
 | `GET /money/holds?role=&cursor=&limit=` | `HoldPage` | | MONEY-18 |
 | `GET /money/holds/{id}` | `HoldView` | | MONEY-18 |
 | `GET /money/transactions?filter=&q=&month=&group=&cursor=&limit=` | `TransactionPage` | | MONEY-15 (served; CONVENTIONS.md section 6) |
 | `GET /money/transactions/summary?month=` | `MonthlySummaryView` | | MONEY-15 (served) |
 | `GET /money/transactions/{id}` | `TransactionView` | | MONEY-15 (served) |
+| `POST /money/transactions/{id}/receipt` | `ReceiptView` | | WALLET-18 (served; one code per row, the same on every ask) |
+| `GET /money/transactions/{id}/receipt/image` | PNG (`image/png`) | | WALLET-18 (served; throttled 10 a minute, 60 an hour) |
+| `GET /money/transactions/{id}/receipt/pdf` | one-page A4 PDF (`application/pdf`) | | WALLET-18 (served; throttled as the image) |
+| `GET /money/statements?from=&to=&format=` | `StatementView` (the CSV file as text) | | WALLET-27 (served; CONVENTIONS.md section 12) |
+
+The public check of a receipt, `GET /r/{code}` (wawu/r/<code>), is not a
+money route: no sign-in, HTML only, throttled 10 a minute and 60 an hour per
+address. It shows the amount, the date, the status, both sides masked (a
+first name and initials, at most an account's last 4 digits) and the
+reference, and the same 404 page for every miss (WALLET-18).
 
 A withdrawal (W17) is `POST /money/transfers/bank` to the payout account; it
 has no route of its own. Releasing or refunding a hold is never a client
@@ -183,7 +193,7 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 | | fingerprint or face instead of the PIN (R-26) | `X-Device-Approval` on the debit (`@RequireApproval()`): `POST /money/device/challenge`, then the registered phone's signature; a refusal is `403 device_approval_refused` and uses no PIN try (MONEY-14, CONVENTIONS.md section 5) |
 | W12 Receipt | status, fee, total paid, reference, time | the transfer response, then `GET /money/transfers/{id}` → `TransferView` |
 | | Save as beneficiary | `POST /money/beneficiaries` |
-| | Share receipt | after launch (WALLET-12) |
+| | Share receipt | at launch the phone's share sheet (R-33); the image and the PDF after launch (WALLET-12) on WALLET-18's routes, keyed by the ledger row's id: `TransferView` names no row yet (mobile repo BACKEND_GAPS G-66) |
 | W13 Not enough | balance and the total, server-checked | `GET /money/wallet/balance` with `FeeQuoteView.totalKobo`; on send `402 insufficient_funds` → `balanceKobo`, `totalKobo`, `shortfallKobo` |
 | W14 Send failed | final status and reason | `TransferView.status` (`failed`, `reversed`), `failureReason` |
 | | what came back, a kept charge as its own row | `TransferView.reversal` → `returnedKobo`, `keptKobo`, `reversedAt` |
@@ -213,7 +223,11 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 | | beneficiaries count | `WalletView.beneficiaryCount` |
 | | account details | `WalletView.account` |
 | | fingerprint or face switch | `GET /money/device` (`registered`, `deviceId`, `biometric`); on: `PUT /money/device` with the PIN; off: `DELETE /money/device` (MONEY-14) |
-| | Cards; Statements | after launch (WALLET-22, WALLET-27); W38 is hidden at launch |
+| | Cards; Statements | after launch (WALLET-22; statements WALLET-27 serves, WALLET-35 builds the row); W38 is hidden at launch |
+| W38 Statements (after launch) | period: presets or a custom range | `GET /money/statements?from=&to=` (Lagos days, both included; at most 366 days and 50,000 movements, `400 statement_too_large`; 5 a minute, 30 an hour) |
+| | format: CSV | `format=csv` → `StatementView.content`, `fileName`, `contentType` |
+| | format: Stamped PDF | not served: Fintava issues no statement (BACKEND_GAPS G-68) |
+| | Send to (email) | not served: the backend has no email sender (G-69); the app saves or shares the file |
 | W36 PIN create | set; confirm | `POST /money/pin` (`pin`, `pinConfirmation`); change is `PUT /money/pin` |
 | W37 PIN reset | code to the phone on file, resend timer | `POST /money/pin/reset` → `sentTo` (last 4 digits), `resendAvailableAt`, `expiresAt`; `429 reset_codes_exhausted`, `503 provider_unreachable` (MONEY-14) |
 | | code check, then W36 | `POST /money/pin/reset/confirm` (`code`, `newPin`, `newPinConfirmation`) |
@@ -241,8 +255,8 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 
 W2, W3, W20 to W23 (Dollar, crypto, swap: WALLET-21, WALLET-32, WALLET-33),
 W16 (card top-up: WALLET-25), W24, W25 (QR: WALLET-20, WALLET-28), W29 to W34
-(cards: WALLET-22, WALLET-31), W38 (statements: WALLET-27), W41 to W43
-(receipt sharing: WALLET-12), A17 to A20 (limits and tiers: WALLET-19, held
+(cards: WALLET-22, WALLET-31), W38 (statements: WALLET-27 serves the CSV route above, WALLET-35 builds the screen), W41 to W43
+(receipt sharing screens: WALLET-12, on WALLET-18's served receipt routes), A17 to A20 (limits and tiers: WALLET-19, held
 for the owner by the designer brief). W40 is not built (R-11).
 
 ## 4. Where the canvas and Fintava disagree (for the owner)

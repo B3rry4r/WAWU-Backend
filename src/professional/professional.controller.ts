@@ -66,14 +66,20 @@ export class ProfessionalController {
 
   @UseGuards(OptionalWawuAuthGuard)
   @Get()
-  list(@Query() query: ListProfessionalsQueryDto) {
-    return this.service.list(query);
+  list(
+    @Query() query: ListProfessionalsQueryDto,
+    @CurrentUser() user: WawuJwtClaims | undefined,
+  ) {
+    return this.service.list(query, user?.sub);
   }
 
   @UseGuards(OptionalWawuAuthGuard)
   @Get(':id')
-  detail(@Param('id', ParseUUIDPipe) id: string) {
-    return this.service.detail(id);
+  detail(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: WawuJwtClaims | undefined,
+  ) {
+    return this.service.detail(id, user?.sub);
   }
 
   /**

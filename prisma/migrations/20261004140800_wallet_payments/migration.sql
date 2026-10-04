@@ -58,6 +58,8 @@ CREATE TABLE "WalletPayment" (
     "sentAt" TIMESTAMP(3),
     "completedAt" TIMESTAMP(3),
     "fulfilledAt" TIMESTAMP(3),
+    "deliveryAttempts" INTEGER NOT NULL DEFAULT 0,
+    "nextDeliveryAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -84,3 +86,6 @@ CREATE INDEX "WalletPayment_kind_targetId_idx" ON "WalletPayment"("kind", "targe
 
 -- CreateIndex
 CREATE INDEX "WalletPayment_status_reviewSince_nextCheckAt_id_idx" ON "WalletPayment"("status", "reviewSince", "nextCheckAt", "id");
+
+-- CreateIndex
+CREATE INDEX "WalletPayment_status_fulfilledAt_reviewSince_nextDeliveryAt_idx" ON "WalletPayment"("status", "fulfilledAt", "reviewSince", "nextDeliveryAt");

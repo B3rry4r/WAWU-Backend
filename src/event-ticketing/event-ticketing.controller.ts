@@ -44,8 +44,11 @@ export class EventTicketingController {
   /** Public: what is on sale, and what is left. */
   @UseGuards(OptionalWawuAuthGuard)
   @Get(':id/tickets')
-  ticketTypes(@Param('id', ParseUUIDPipe) id: string) {
-    return this.service.listTicketTypes(id);
+  ticketTypes(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: WawuJwtClaims | undefined,
+  ) {
+    return this.service.listTicketTypes(id, user?.sub);
   }
 
   /** Organiser: set the tiers. */

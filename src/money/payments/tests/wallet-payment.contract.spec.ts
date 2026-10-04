@@ -28,7 +28,13 @@ import { AllExceptionsFilter } from '../../../common/filters/all-exceptions.filt
 import { ResponseInterceptor } from '../../../common/interceptors/response.interceptor';
 import { PrismaModule } from '../../../common/prisma/prisma.module';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import {
+  FINTAVA_SIGNATURE_HEADER,
+  signFintavaBody,
+} from '../../../fintava/webhook/fintava-signature';
+import { FintavaWebhookModule } from '../../../fintava/webhook/fintava-webhook.module';
 import { HUB_APP_OPTIONS } from '../../../hub-app-options';
+import { LedgerConsumerService } from '../../ledger/ledger-consumer.service';
 import type { MoneyErrorReason } from '../../dto/money-error.dto';
 import { FeeSettings } from '../../fees/fee-config';
 import { FeeQuoteService } from '../../fees/fee-quote.service';
@@ -88,6 +94,7 @@ import {
 const BASE = '/api/hub/money/payments';
 const MONEY_TIMEOUT_MS = 1_500;
 const PIN = '4826';
+const WEBHOOK_SECRET = 'whsec_local_m17_pay_Qv7Lp3Xc9Ty2Hb5Jn';
 const WRONG_PIN = '1397';
 
 // Several tests wait out the money timeout, poll for a settlement for up to
@@ -212,6 +219,9 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
   let statusChecks: LedgerStatusService;
   let ledger: LedgerService;
   let pins: TransactionPinService;
+  let consumer: LedgerConsumerService;
+  let fees: FeeQuoteService;
+  let registry: PayableRegistry;
   const double = new FintavaDouble();
   const logger = new QuietLogger();
   const wallets = new Wallets();
@@ -225,6 +235,8 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
    * them. Written by onCompleted, before the payment's claim is given up.
    */
   const owned = new Set<string>();
+  /** Every call of the feature's delivery, failed or not, per payment. */
+  const deliveryCalls = new Map<string, number>();
   /** Held inside the next delivery (a slow feature), until released. */
   let beforeDelivery: Promise<void> | null = null;
   /**
@@ -494,6 +506,7 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
       FINTAVA_CHECK_TIMEOUT_MS: String(MONEY_TIMEOUT_MS),
       FEE_QUOTE_KEY: 'm17-test-fee-quote-key-0123456789abcdef0123',
       MERCHANT_MAX_PER_TXN_KOBO: '1000000000',
+      FINTAVA_WEBHOOK_SECRET: WEBHOOK_SECRET,
       PIN_LOCK_MINUTES: '',
       IDEMPOTENCY_KEY_HOURS: '',
     };
@@ -508,6 +521,7 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
         PassportModule.register({ defaultStrategy: 'wawu-jwt' }),
         PrismaModule,
         MoneyModule,
+        FintavaWebhookModule,
       ],
       providers: [WawuJwtStrategy, WawuIdClient],
     })
@@ -532,8 +546,10 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
     statusChecks = moduleRef.get(LedgerStatusService);
     ledger = moduleRef.get(LedgerService);
     pins = moduleRef.get(TransactionPinService);
+    consumer = moduleRef.get(LedgerConsumerService);
+    fees = moduleRef.get(FeeQuoteService);
 
-    const registry = moduleRef.get(PayableRegistry);
+    registry = moduleRef.get(PayableRegistry);
     const unlock: PayableKindHandler = {
       kind: 'content_unlock',
       resolve: async ({ targetId, payerWawuUserId }) => {
@@ -578,6 +594,10 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
         return answer;
       },
       onCompleted: async (p) => {
+        deliveryCalls.set(
+          p.paymentId,
+          (deliveryCalls.get(p.paymentId) ?? 0) + 1,
+        );
         if (beforeDelivery) await beforeDelivery;
         if (failDeliveries > 0) {
           failDeliveries -= 1;
@@ -1736,6 +1756,300 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
       expect(reason.paymentId).toBe(winnerId);
     }
     expect(sendsFrom(p)).toHaveLength(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // Round 4: delivery backs off and goes to review (R3-1), a webhook settles
+  // a payment from review or backoff (R3-3), and the surviving mutants of
+  // round 3 (V4, V5)
+  // -------------------------------------------------------------------------
+
+  const rowOf = (id: string) =>
+    prisma.walletPayment.findUniqueOrThrow({ where: { id } });
+
+  it("R3-1: a paid payment the feature cannot deliver is retried on the check's backoff (1, 2, 4 ... 60 minutes), with its own count; past 72 hours it goes to review, still claimed, and the sweep stops", async () => {
+    const p = await buyer(1_000_000);
+    const q = await quoted(p, 'content_unlock', 'once-d1');
+    failDeliveries = 1_000_000;
+    const paid = body<PaymentView>(await pay(p, payBody(q))).data!;
+    failDeliveries = 0;
+    expect(paid.status).toBe('completed');
+    const calls = () => deliveryCalls.get(paid.id) ?? 0;
+    // The request's own attempt failed: counted, the next in a minute.
+    let row = await rowOf(paid.id);
+    expect(calls()).toBe(1);
+    expect(row.deliveryAttempts).toBe(1);
+    expect(row.fulfilledAt).toBeNull();
+    expect(row.openKey).not.toBeNull();
+    let due = row.nextDeliveryAt!.getTime();
+    expect(due - row.completedAt!.getTime()).toBeGreaterThanOrEqual(60_000);
+    expect(due - row.completedAt!.getTime()).toBeLessThan(65_000);
+
+    // A sweep a second before it is due does nothing; at the minute it tries.
+    failDeliveries = 1_000_000;
+    await payments.sweep(new Date(due - 1_000));
+    expect(calls()).toBe(1);
+    const minutes: number[] = [];
+    for (let attempt = 2; attempt <= 9; attempt += 1) {
+      await payments.sweep(new Date(due));
+      row = await rowOf(paid.id);
+      expect(calls()).toBe(attempt);
+      expect(row.deliveryAttempts).toBe(attempt);
+      minutes.push((row.nextDeliveryAt!.getTime() - due) / 60_000);
+      due = row.nextDeliveryAt!.getTime();
+    }
+    expect(minutes).toEqual([2, 4, 8, 16, 32, 60, 60, 60]);
+    expect(row.reviewSince).toBeNull();
+
+    // 73 hours after it completed and still undelivered: review, still
+    // claimed, and the sweep never calls the feature for it again.
+    await prisma.walletPayment.update({
+      where: { id: paid.id },
+      data: {
+        completedAt: new Date(Date.now() - 73 * 3_600_000),
+        sentAt: new Date(Date.now() - 73 * 3_600_000),
+      },
+    });
+    await payments.sweep(new Date(due));
+    row = await rowOf(paid.id);
+    expect(row.reviewSince).not.toBeNull();
+    expect(row.nextDeliveryAt).toBeNull();
+    expect(row.openKey).not.toBeNull();
+    expect(row.status).toBe('completed');
+    expect(row.discrepancy).toMatch(/delivery: not delivered 72 hours/);
+    expect(calls()).toBe(9);
+    await payments.sweep(new Date(due + 3 * 3_600_000));
+    await payments.sweep(new Date(due + 100 * 3_600_000));
+    expect(calls()).toBe(9);
+    // Money moved: never payable again while it is claimed.
+    failDeliveries = 0;
+    const again = await pay(p, payBody(q));
+    expect(again.status).toBe(409);
+    expect(body(again).reason).toMatchObject({
+      code: 'payment_in_progress',
+      paymentId: paid.id,
+    });
+    expect(sendsFrom(p)).toHaveLength(1);
+  });
+
+  it('R3-1: a delivery that works on a later attempt is recorded once, the schedule is cleared and the item is released', async () => {
+    const p = await buyer(1_000_000);
+    const q = await quoted(p, 'content_unlock', 'once-d2');
+    failDeliveries = 2;
+    const paid = body<PaymentView>(await pay(p, payBody(q))).data!;
+    const first = (await rowOf(paid.id)).nextDeliveryAt!;
+    await payments.sweep(new Date(first.getTime()));
+    const second = await rowOf(paid.id);
+    expect(second.deliveryAttempts).toBe(2);
+    await payments.sweep(new Date(second.nextDeliveryAt!.getTime()));
+    const done = await rowOf(paid.id);
+    expect(done.fulfilledAt).not.toBeNull();
+    expect(done.openKey).toBeNull();
+    expect(done.nextDeliveryAt).toBeNull();
+    expect(deliveryCalls.get(paid.id)).toBe(3);
+    expect(delivered.filter((d) => d.paymentId === paid.id)).toHaveLength(1);
+  });
+
+  it('R3-1: a paid payment whose kind nothing registers is not skipped in silence: review at once, logged, still claimed; a kind with nothing to deliver is left alone', async () => {
+    const p = await buyer(0);
+    const make = (kind: string, openKey: string | null) =>
+      prisma.walletPayment.create({
+        data: {
+          payerWawuUserId: p.id,
+          kind,
+          targetId: `unreg-${randomUUID()}`,
+          title: 'unregistered',
+          priceKobo: 100_000n,
+          providerFeeKobo: 2325n,
+          wawuFeeKobo: 0n,
+          totalKobo: 102_325n,
+          payeeShareKobo: 85_000n,
+          wawuShareKobo: 15_000n,
+          customerReference: `wawu-pay-${randomUUID()}`,
+          payerAccountNumber: p.accountNumber,
+          merchantAccountNumber: MERCHANT_ACCOUNT,
+          status: 'completed',
+          completedAt: new Date(Date.now() - 3 * 60_000),
+          openKey,
+        },
+      });
+    const orphan = await make('event_ticket', `${p.id}:event_ticket:x`);
+    const nothingToDeliver = await make('credit_pack', null);
+    logger.lines.length = 0;
+    await payments.sweep(new Date());
+    const a = await rowOf(orphan.id);
+    expect(a.reviewSince).not.toBeNull();
+    expect(a.openKey).not.toBeNull();
+    expect(a.discrepancy).toMatch(/no feature is registered for event_ticket/);
+    expect(
+      logger.lines.some(
+        (l) => l.includes(orphan.id) && /not delivered/.test(l),
+      ),
+    ).toBe(true);
+    const b = await rowOf(nothingToDeliver.id);
+    expect(b.reviewSince).toBeNull();
+    expect(b.discrepancy).toBeNull();
+  });
+
+  /** Fintava's signed wallet-to-wallet delivery for a payment's send, stored by the real route. */
+  async function deliverWebhook(p: Person, paymentId: string): Promise<string> {
+    const ref = `wawu-pay-${paymentId}`;
+    const send = wallets.sends.find((x) => x.reference === ref)!;
+    const text = JSON.stringify({
+      event: 'wallet_to_wallet_transfer_v2',
+      data: {
+        amount: send.amountKobo / 100,
+        reference: `tagapay${randomUUID().replace(/-/g, '')}`,
+        customerReference: ref,
+        total: (send.amountKobo + send.feeKobo) / 100,
+        transaction_fee: send.feeKobo / 100,
+        target_customer_id: randomUUID(),
+        source_customer_id: p.customerId,
+        target_customer_accname: 'WAWU',
+        source_customer_accname: 'Pay Tester',
+        target_customer_accno: send.to,
+        source_customer_accno: send.from,
+        source_customer_wallet: send.from,
+        target_customer_wallet: send.to,
+        target_availableBalance: 1,
+        target_bookedBalance: 1,
+        source_availableBalance: 1,
+        source_bookedBalance: 1,
+        description: 'Fund transfer between customers',
+        customer_id: randomUUID(),
+      },
+    });
+    const res = await request(app.getHttpServer())
+      .post('/api/hub/webhooks/fintava')
+      .set('Content-Type', 'application/json')
+      .set(
+        FINTAVA_SIGNATURE_HEADER,
+        signFintavaBody(WEBHOOK_SECRET, Buffer.from(text)),
+      )
+      .send(text);
+    expect(res.status).toBe(200);
+    const ids = await prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM "FintavaWebhookEvent"
+       WHERE position(convert_to(${ref}, 'UTF8') in "rawBody") > 0
+       ORDER BY "receivedAt" DESC`;
+    return ids[0].id;
+  }
+
+  it.each([
+    [
+      'under review (72 hours, no answer)',
+      { reviewSince: new Date(), nextCheckAt: null, checks: 9 },
+    ],
+    [
+      'in the hourly backoff, not in review',
+      {
+        reviewSince: null,
+        nextCheckAt: new Date(Date.now() + 55 * 60_000),
+        checks: 6,
+      },
+    ],
+  ])(
+    "R3-3: Fintava's webhook completes the ledger rows of a payment %s: the payment settles within seconds and is delivered once",
+    async (_label, state) => {
+      const p = await buyer(1_000_000);
+      const q = await quoted(p, 'content_unlock', 'once-w1');
+      wallets.mode = 'timeout';
+      const paid = body<PaymentView>(await pay(p, payBody(q))).data!;
+      wallets.mode = 'live';
+      expect(paid.status).toBe('pending');
+      await prisma.walletPayment.update({
+        where: { id: paid.id },
+        data: state,
+      });
+      // The ledger rows are still pending; the webhook is what completes them.
+      expect((await ledgerRows(paid.reference)).map((r) => r.status)).toEqual([
+        'pending',
+        'pending',
+      ]);
+      const event = await deliverWebhook(p, paid.id);
+      expect(await consumer.consume(event)).toBe('processed');
+      expect((await ledgerRows(paid.reference)).map((r) => r.status)).toEqual([
+        'completed',
+        'completed',
+      ]);
+      // The payment hears of it at once: no sweep, no status check.
+      await until(async () => (await rowOf(paid.id)).status === 'completed');
+      const row = await rowOf(paid.id);
+      expect(row.reviewSince).toBeNull();
+      await until(async () => (await rowOf(paid.id)).fulfilledAt !== null);
+      expect((await rowOf(paid.id)).openKey).toBeNull();
+      expect(delivered.filter((d) => d.paymentId === paid.id)).toHaveLength(1);
+      expect(sendsFrom(p)).toHaveLength(1);
+    },
+  );
+
+  it('V4: the quote is checked a second time inside the claim: one that no longer holds then gives the claim back, nothing is sent', async () => {
+    const p = await buyer(1_000_000);
+    const q = await quoted(p, 'content_unlock', 'piece-1000');
+    const real = fees.check.bind(fees);
+    const check = jest.spyOn(fees, 'check');
+    try {
+      check.mockImplementationOnce(real);
+      // The second call (inside the claim) is refused as an expired token would be.
+      check.mockImplementationOnce(() => {
+        throw new MoneyError('quote_changed', 'The price changed.', {
+          feeQuote: {} as never,
+        });
+      });
+      const res = await pay(p, payBody(q));
+      expect(check).toHaveBeenCalledTimes(2);
+      expect(res.status).toBe(409);
+      expect(body(res).reason?.code).toBe('quote_changed');
+    } finally {
+      check.mockRestore();
+    }
+    expect(sendsFrom(p)).toHaveLength(0);
+    const rows = await prisma.walletPayment.findMany({
+      where: { payerWawuUserId: p.id },
+    });
+    expect(rows.map((r) => [r.status, r.openKey])).toEqual([['failed', null]]);
+  });
+
+  it('V5: a claim that clashes with a holder that has finished in the meantime is tried again, up to three times, then goes through', async () => {
+    const p = await buyer(1_000_000);
+    const q = await quoted(p, 'content_unlock', 'piece-1000');
+    const clash = () =>
+      Object.assign(new Error('Unique constraint failed'), {
+        code: 'P2002',
+        meta: {
+          driverAdapterError: {
+            cause: { constraint: { fields: ['"openKey"'] } },
+          },
+        },
+      });
+    // Nothing is open when asked (the holder finished), yet the claim clashed
+    // twice: the third try is the one that lands.
+    const tx = jest
+      .spyOn(prisma, '$transaction')
+      .mockRejectedValueOnce(clash())
+      .mockRejectedValueOnce(clash());
+    let res: Response;
+    try {
+      res = await pay(p, payBody(q));
+    } finally {
+      tx.mockRestore();
+    }
+    expect(res.status).toBe(201);
+    expect(body<PaymentView>(res).data!.status).toBe('completed');
+    expect(sendsFrom(p)).toHaveLength(1);
+    // And a fourth clash is told "in progress" with nothing to name.
+    const p2 = await buyer(1_000_000);
+    const q2 = await quoted(p2, 'content_unlock', 'piece-1000');
+    const tx2 = jest.spyOn(prisma, '$transaction').mockRejectedValue(clash());
+    let res2: Response;
+    try {
+      res2 = await pay(p2, payBody(q2));
+    } finally {
+      tx2.mockRestore();
+    }
+    expect(res2.status).toBe(409);
+    expect(body(res2).reason?.code).toBe('payment_in_progress');
+    expect(sendsFrom(p2)).toHaveLength(0);
   });
 
   it('R7: a payment still unknown after many checks is asked again an hour later, never sooner and never later', async () => {

@@ -5,6 +5,7 @@ import {
   type VerificationState,
 } from '../common/verification/verification-state';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
+import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { AccountType, ContentStatus } from '../../generated/prisma/enums';
 import type { ListCreatorsQueryDto } from './dto/list-creators-query.dto';
 
@@ -68,6 +69,7 @@ export class CreatorDiscoveryService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly wawuId: WawuIdClient,
+    private readonly blockedAccounts: BlockedAccountService,
   ) {}
 
   async list(query: ListCreatorsQueryDto, requesterWawuId: string | null) {
@@ -86,7 +88,14 @@ export class CreatorDiscoveryService {
     const pieceCountBy = new Map(
       liveCounts.map((c) => [c.creatorWawuId, c._count._all]),
     );
-    const eligibleIds = [...pieceCountBy.keys()];
+    // SETTINGS-04: a creator the caller blocked, or who blocked the caller,
+    // is not on Explore, and is not counted in `total` either.
+    const hidden = new Set(
+      await this.blockedAccounts.hiddenFrom(requesterWawuId),
+    );
+    const eligibleIds = [...pieceCountBy.keys()].filter(
+      (id) => !hidden.has(id),
+    );
 
     if (eligibleIds.length === 0) {
       return { items: [], currentPage: page, perPage, total: 0 };

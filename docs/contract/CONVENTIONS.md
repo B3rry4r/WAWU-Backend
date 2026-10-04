@@ -233,6 +233,9 @@ Every refusal is the envelope this backend already answers with
 | `reset_codes_exhausted` | 429 | the person or the phone has had today's PIN reset texts (MONEY-14); nothing is sent | `retryAfterSeconds` |
 | `device_approval_refused` | 403 | `X-Device-Approval` not accepted: not the registered phone, a wrong signature, a used, expired or another person's challenge, or no phone registered; never uses a PIN try (MONEY-14) | |
 | `payment_in_progress` | 409 | a payment for this item by this person is still being confirmed (or is under review); a second one is not taken, under any Idempotency-Key (MONEY-17) | `paymentId` |
+| `statement_rate_limited` | 429 | the person has asked for 5 statements in the last minute or 30 in the last hour (`STATEMENT_RATE_LIMITS`, PROVISIONAL), counted after the token is verified (WALLET-27) | `retryAfterSeconds` |
+| `statement_busy` | 503 | two statements are already being built and no place came free within 5 s (`STATEMENT_CONCURRENCY`, PROVISIONAL) (WALLET-27) | `retryAfterSeconds` |
+| `statement_too_large` | 400 | the period holds more movements than one statement lists (`STATEMENT_MAX_ROWS`, 50,000); counted before anything is written, and the person picks a shorter range (WALLET-27) | |
 | `phone_held_by_other_identity` | 409 | account opening where Fintava already has a customer for the person's phone whose record does not carry the checked BVN (or carries none): nothing is adopted or created, and the opening stops for review (MONEY-12, BACKEND_GAPS G-37) | |
 
 The same table is `MONEY_ERROR_STATUS` in `src/money/money-contract.ts`; each
@@ -345,7 +348,7 @@ one retry at a time per payment.
   never uses up a try however many arrive at once, and one person's checks
   cannot hold up anyone else's requests; a check that finds every slot taken
   waits for one (in memory) and answers the lock as soon as there is one. A
-  slot left by a check that died frees itself after 30 seconds. A right PIN
+  slot left by a check that died frees itself after 30 seconds. A check held up past that (a saturated thread pool) can lose its slot, so more than five wrong compares can happen; what holds is what is answered: every wrong compare counts when recorded (at most four are ever answered `pin_incorrect` before the lock), a lock already set is not extended, and a PIN that is locked at the moment a result is recorded answers `423 pin_locked`, a right PIN included (R3-2). A right PIN
   resets the count; so does the end of a lock; a reset by code
   (`/money/pin/reset/confirm`, MONEY-14) clears the lock.
 - **The guard removes the header** from the request once read (`headers` and
@@ -965,7 +968,86 @@ still reads. Every answer is `Cache-Control: no-store`.
   `FEE_QUOTE_KEY` makes a key at boot (one warning): quotes given before a
   restart are then re-quoted, never charged wrongly.
 
-## 12. Pay from wallet (MONEY-17)
+## 12. Statements (WALLET-27)
+
+- **Route** (`src/money/statements/`): `GET /money/statements?from=&to=&format=csv`
+  answers `StatementView` in the usual envelope, with the file as text in
+  `content` and the name and type to save it under (`fileName`,
+  `contentType`). It runs MONEY-13's gate (`@RequireOpenWallet()`): no
+  wallet is `409 wallet_not_open` or `409 wallet_opening` before the query
+  is read. It takes no wallet id and no person: the statement is always the
+  caller's own, and a query that names anyone (`wawuUserId=`,
+  `accountNumber=`) is refused by validation. `no-store`. It reads the
+  ledger only and never calls Fintava.
+- **The period is two calendar days in Africa/Lagos time, both included.**
+  `from=2026-09-01&to=2026-09-30` is 00:00 on 1 September to 23:59:59.999
+  on 30 September, Lagos time (UTC+1): a movement at 23:30 UTC on 31 August
+  is in it (1 September in Lagos) and one at 23:30 UTC on 30 September is
+  not (1 October in Lagos). `from` equal to `to` is that one whole day. Each
+  line's date and time are Lagos time too.
+- **Refused with a plain 400:** a day not written `YYYY-MM-DD`, a day not on
+  the calendar (`2026-02-30`, year `0000`), `from` after `to`, `to` after
+  today in Lagos, a period longer than `STATEMENT_MAX_DAYS` (366, both days
+  counted; PROVISIONAL), and any `format` but `csv`.
+- **Rows are capped** (lead's ruling after the round-1 load run; Default
+  (agent/lead), owner may override). The day cap bounds days, not rows, so
+  the rows in the period are counted first (no further than one past the
+  cap) and a period with more than `STATEMENT_MAX_ROWS` (50,000) is `400
+  statement_too_large`, "pick a shorter range", before any row is read
+  into a file. The read itself stops one past the cap and is checked again,
+  so rows landing between the count and the read cannot pass it.
+- **Limits** (`src/money/statements/statement-config.ts`; rounds 3 and 4).
+  The route sets no throttler of its own: the app's global `short` and
+  `medium` limits apply per address exactly as on every route. On top:
+  - **Per person** (`StatementRateLimiter`, PROVISIONAL
+    `STATEMENT-RATE-LIMITS`): at most 5 statements a minute and 30 an hour,
+    each a fixed window that starts at the person's first request in it,
+    keyed by the verified wawuUserId. It is counted in the handler, after
+    WawuAuthGuard has verified the token and the wallet gate has found the
+    wallet, so a forged token, no token or no wallet never makes an entry.
+    Beyond either window is `429 statement_rate_limited` with
+    `retryAfterSeconds` (rounded up). The counts live in memory in one map,
+    swept at most once a minute of everyone whose windows have both ended;
+    no timer is kept per request.
+  - **What counts:** every request that reaches the build: a statement
+    served, and a `503 statement_busy`. **What does not:** the route's own
+    400s. The DTO's (a day not written `YYYY-MM-DD`, any `format` but `csv`,
+    an extra field) and the period's (a day not on the calendar, `from`
+    after `to`, `to` after today in Lagos, more than 366 days) are refused
+    before the person is counted, and `statement_too_large` gives its place
+    back. Nor do the gate's 409s and the token's 401.
+  - **Two at once** (`StatementSlots`, PROVISIONAL `STATEMENT-CONCURRENCY`):
+    at most 2 statements are built at once in the process (count, read and
+    file). Another waits in order, up to 5 s, for a place, then is `503
+    statement_busy`, "Statements are busy right now. Try again in a few
+    seconds.", with `retryAfterSeconds` (rounded up).
+- **What is listed:** every `completed` movement on the caller's own wallet
+  (the history's three keys: a person's wallet, the token's wawuUserId,
+  the wallet's account number) whose `occurredAt` is in the period, oldest
+  first, one line each (unlock earnings are never grouped). Pending, failed
+  and reversed movements are not listed: they are the rows the month
+  summary (section 6) leaves out, so a month's statement adds up to W26's
+  In and Out for that month. Default (agent), owner may override.
+- **No balance and no totals.** The only balance is Fintava's live one, and
+  Fintava gives none at a past moment, so a statement has no opening or
+  closing balance. It does not add its lines up either.
+- **The file** (RFC 4180): a byte-order mark, then the header `Date, Time,
+  Description, Counterparty, Reference, Note, Money in (₦), Money out (₦),
+  Of which fees (₦)`, one line per movement, lines ending CRLF. Money in is
+  what arrived; money out is what left, fees included, with the fee part
+  beside it (the receipt's `fee.totalFeeKobo`). Amounts are naira with two
+  decimals written from integer kobo (`25065.00`). The description, the
+  other side's name and the reference are the history's own (section 6,
+  `history-labels.ts`), so every line can be found on W26 and W27. A text
+  cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return is
+  written with a `'` first, so a spreadsheet never runs it (an `@handle`
+  shows as `'@handle`). Only the last four digits of a bank account ever
+  reach the history; the statement shows none.
+- **Not served:** a stamped PDF (Fintava issues no statement; mobile repo
+  BACKEND_GAPS G-68) and sending it by email (the backend has no email
+  sender; G-69).
+
+## 13. Pay from wallet (MONEY-17)
 
 As built in round 2 (4 Oct 2026, lead rulings D1 to D4, each "Default
 (lead), owner may override"):
@@ -981,9 +1063,15 @@ As built in round 2 (4 Oct 2026, lead rulings D1 to D4, each "Default
   target_not_payable`), and `onCompleted` delivers it once the debit is
   confirmed. **Delivery is at least once**: `onCompleted` can be called
   twice for one payment (two servers, or a delivery slower than a minute)
-  and must be idempotent. The sweep tries a delivery again only once the
-  payment has been completed for a minute, so it does not race the one the
-  completion started. A kind nobody registered answers `409 target_not_payable`
+  and must be idempotent. A delivery that fails is tried again on the same
+  capped backoff as the check (1, 2, 4, 8, 16, 32, then 60 minutes, with its
+  own count `deliveryAttempts` and next try `nextDeliveryAt`; the first retry
+  is a minute after completion, so it does not race the one the completion
+  started). Past `PAYMENT_REVIEW_AFTER_HOURS` (72) after completion with no
+  delivery the payment goes to review (`reviewSince`, still `completed`, the
+  item still claimed, so it is never payable again while money moved) and
+  the sweep stops. A paid payment whose kind nothing registers at boot goes
+  to review at once, logged, never skipped in silence. A kind nobody registered answers `409 target_not_payable`
   "This can't be paid for from your wallet yet." Held kinds (paid DM,
   ticket, bill) are refused until MONEY-18. `amountKobo` and `note` only on
   a tip; paying for your own item is `target_not_payable`.
@@ -1044,7 +1132,10 @@ As built in round 2 (4 Oct 2026, lead rulings D1 to D4, each "Default
     and never refunds; past `PAYMENT_REVIEW_AFTER_HOURS` (PROVISIONAL, 72) it
     goes to manual review: still `pending`, out of the sweep, the item still
     blocked. Whatever settles a payment's ledger row (a webhook, MONEY-08's
-    status check, a reversal) settles the payment at once (D2).
+    status check, a reversal) settles the payment at once (D2), including a
+    payment under review or in its hourly backoff, and the webhook consumer's
+    own transaction: the payment hears of its ledger rows once that
+    transaction has committed (R3-3).
   - `failed`, with `failureReason` "The payment did not go through. No money
     left your wallet.": only Fintava's own refusal of the transfer, or its
     FAILURE status. Fintava's "not enough", a frozen wallet, or Fintava

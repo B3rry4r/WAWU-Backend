@@ -582,6 +582,153 @@ describe('Transaction PIN (MONEY-09) over HTTP', () => {
       expect((await rowOf(user.id)).pendingTries).toBe(0);
     });
 
+    /**
+     * Holds every compare of the PIN service until the test lets it go (then
+     * it is the real compare). Compares are numbered in the order they start.
+     */
+    function holdCompares() {
+      const real = argon2.verify.bind(argon2);
+      const held: Array<() => void> = [];
+      const spy = jest
+        .spyOn(argon2, 'verify')
+        .mockImplementation((hash, pin) => {
+          return new Promise<boolean>((resolve, reject) => {
+            held.push(() => {
+              real(hash, pin as string).then(resolve, reject);
+            });
+          });
+        });
+      return {
+        held,
+        spy,
+        async started(n: number) {
+          for (let i = 0; i < 400 && held.length < n; i += 1) {
+            await new Promise((r) => setTimeout(r, 25));
+          }
+          expect(held.length).toBeGreaterThanOrEqual(n);
+        },
+        release(from: number, to: number) {
+          for (let i = from; i < to; i += 1) held[i]();
+        },
+      };
+    }
+
+    const codes = (rs: Response[]) =>
+      rs.map(
+        (r) => `${r.status}${r.status === 200 ? '' : ':' + reason(r).code}`,
+      );
+
+    it('R3-2: a check held up past the slot staleness, then a second batch admitted on its slots: at most four are answered "wrong", a right PIN is never answered 200 once the PIN is locked, and a late wrong one does not extend the lock', async () => {
+      const user = await withPin('1928');
+      const hold = holdCompares();
+      try {
+        // Batch 1: five wrong PINs, compares started and held.
+        const batch1 = Promise.all(
+          Array.from({ length: 5 }, () => verify(user.auth, '0000')),
+        );
+        await hold.started(5);
+        // They have been held so long their slots read as free.
+        await prisma.transactionPin.update({
+          where: { wawuUserId: user.id },
+          data: { pendingSince: new Date(Date.now() - 31_000) },
+        });
+        // Batch 2, admitted on the reclaimed slots: the right PIN, four wrong.
+        const batch2 = Promise.all([
+          verify(user.auth, '1928'),
+          ...Array.from({ length: 4 }, () => verify(user.auth, '1111')),
+        ]);
+        await hold.started(10);
+        // Batch 1's results are recorded first: the fifth wrong one locks it.
+        hold.release(0, 5);
+        const first = await batch1;
+        const lockAfterFirst = (
+          await prisma.transactionPin.findUniqueOrThrow({
+            where: { wawuUserId: user.id },
+          })
+        ).lockedUntil;
+        expect(lockAfterFirst).not.toBeNull();
+        expect(codes(first).sort()).toEqual([
+          '403:pin_incorrect',
+          '403:pin_incorrect',
+          '403:pin_incorrect',
+          '403:pin_incorrect',
+          '423:pin_locked',
+        ]);
+        // Batch 2's compares finish after the lock was set: all 423, the
+        // right PIN included, none "wrong, N tries left".
+        hold.release(5, 10);
+        const second = await batch2;
+        expect(codes(second)).toEqual(Array(5).fill('423:pin_locked'));
+        const row = await prisma.transactionPin.findUniqueOrThrow({
+          where: { wawuUserId: user.id },
+        });
+        expect(row.failedTries).toBe(PIN_MAX_TRIES);
+        expect(row.lockedUntil!.getTime()).toBe(lockAfterFirst!.getTime());
+        expect(row.pendingTries).toBe(0);
+      } finally {
+        hold.release(0, hold.held.length);
+        hold.spy.mockRestore();
+      }
+    });
+
+    it('R3-2: ten wrong compares in the other order (the second batch recorded first): still four "wrong" answers in all, then the lock', async () => {
+      const user = await withPin('5731');
+      const hold = holdCompares();
+      try {
+        const batch1 = Promise.all(
+          Array.from({ length: 5 }, () => verify(user.auth, '0000')),
+        );
+        await hold.started(5);
+        await prisma.transactionPin.update({
+          where: { wawuUserId: user.id },
+          data: { pendingSince: new Date(Date.now() - 31_000) },
+        });
+        const batch2 = Promise.all(
+          Array.from({ length: 5 }, () => verify(user.auth, '1111')),
+        );
+        await hold.started(10);
+        hold.release(5, 10);
+        const second = await batch2;
+        hold.release(0, 5);
+        const first = await batch1;
+        const all = codes([...first, ...second]);
+        expect(all.filter((c) => c === '403:pin_incorrect')).toHaveLength(4);
+        expect(all.filter((c) => c === '423:pin_locked')).toHaveLength(6);
+        expect(all.some((c) => c === '200')).toBe(false);
+      } finally {
+        hold.release(0, hold.held.length);
+        hold.spy.mockRestore();
+      }
+    });
+
+    it('V13: a wrong result for a PIN that was changed while it was compared is not counted against the new PIN', async () => {
+      const user = await withPin('2046');
+      const hold = holdCompares();
+      try {
+        const wrong = verify(user.auth, '0000').then((r) => r);
+        await hold.started(1);
+        // The PIN is changed under the check (a reset by code, say).
+        const fresh = await argon2.hash('7777', { type: argon2.argon2id });
+        await prisma.transactionPin.update({
+          where: { wawuUserId: user.id },
+          data: { pinHash: fresh, failedTries: 0, lockedUntil: null },
+        });
+        hold.release(0, 1);
+        const res = await wrong;
+        expect(res.status).toBe(403);
+        // Told how many tries the new PIN has, which the old one's miss did not use.
+        expect(reason(res).triesLeft).toBe(PIN_MAX_TRIES);
+        const row = await prisma.transactionPin.findUniqueOrThrow({
+          where: { wawuUserId: user.id },
+        });
+        expect(row.failedTries).toBe(0);
+        expect(row.pendingTries).toBe(0);
+      } finally {
+        hold.release(0, hold.held.length);
+        hold.spy.mockRestore();
+      }
+    });
+
     it('a compare that fails outright gives its slot back and uses no try', async () => {
       const user = await withPin('4680');
       const compare = jest

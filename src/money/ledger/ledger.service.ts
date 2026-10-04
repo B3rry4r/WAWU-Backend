@@ -331,6 +331,16 @@ export class LedgerService {
     this.settledListeners.push(listener);
   }
 
+  /**
+   * For a caller that wrote rows inside ITS OWN transaction (the webhook
+   * consumer): call it once that transaction has committed, with the ids of
+   * the rows it wrote. Rows with a payment that left `pending` are told to
+   * the payment listeners, as for a write the ledger commits itself.
+   */
+  async notifyCommitted(entryIds: readonly string[]): Promise<void> {
+    for (const id of new Set(entryIds)) await this.notifySettled(id);
+  }
+
   private async notifySettled(entryId: string): Promise<void> {
     if (this.settledListeners.length === 0) return;
     let row: { paymentId: string | null; status: TransferStatus } | null;

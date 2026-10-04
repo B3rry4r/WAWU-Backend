@@ -120,7 +120,14 @@ function incorrectMessage(triesLeft: number): string {
  *   checks cannot hold up anyone else's requests. A check that finds every
  *   slot taken waits for one (in memory, holding no connection) and then
  *   looks again; it answers the lock as soon as there is one.
- * - A slot left by a check that died is free again after PIN_SLOT_STALE_MS.
+ * - A slot left by a check that died is free again after PIN_SLOT_STALE_MS. A
+ *   check that is only slow (a saturated thread pool) can lose its slot the
+ *   same way, so more than five wrong compares can happen; what holds is
+ *   what is ANSWERED: every wrong compare still counts when it is recorded
+ *   (so at most four are ever answered "wrong, N tries left" before the
+ *   lock), a lock already set is never extended by a late one, and a PIN
+ *   that is locked when a result is recorded answers `423 pin_locked`, a
+ *   right PIN included (R3-2).
  * - Nothing here logs, and no message carries what the caller sent.
  *
  * The routes and the X-Transaction-Pin guard are thin: every rule is here.
@@ -214,11 +221,15 @@ export class TransactionPinService {
       slot.pinHash,
       right ? 'right' : 'wrong',
     );
-    if (right) return pinStateView(done.row, new Date());
     const now = new Date();
+    // The lock is read from the very update that recorded this result: a PIN
+    // that is locked when its result is recorded is never answered as right,
+    // however long the compare took (MONEY-17 round 4, R3-2), and a wrong PIN
+    // recorded after the lock is told so, never "wrong, N tries left".
     if (done.row.lockedUntil && done.row.lockedUntil > now) {
       throw lockedError(done.row.lockedUntil);
     }
+    if (right) return pinStateView(done.row, now);
     const triesLeft = Math.max(0, PIN_MAX_TRIES - done.row.failedTries);
     throw new MoneyError('pin_incorrect', incorrectMessage(triesLeft), {
       triesLeft,
@@ -301,7 +312,8 @@ export class TransactionPinService {
           ELSE "failedTries" END,
         "lockedUntil" = CASE
           WHEN "pinHash" <> ${comparedHash} THEN "lockedUntil"
-          WHEN ${wrong} AND "failedTries" + 1 >= ${PIN_MAX_TRIES} THEN ${lockedUntil}
+          WHEN ${wrong} AND "failedTries" + 1 >= ${PIN_MAX_TRIES}
+            AND ("lockedUntil" IS NULL OR "lockedUntil" <= ${now}) THEN ${lockedUntil}
           WHEN ${right} AND "lockedUntil" <= ${now} THEN NULL
           ELSE "lockedUntil" END,
         "updatedAt" = ${now}

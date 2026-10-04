@@ -605,7 +605,9 @@ export class WalletPaymentService implements OnModuleInit {
   /**
    * Every minute: every pending payment due a check (not under review), in
    * the order of its next check, paged by key so none waits behind another;
-   * then every completed payment not yet delivered. A payment still unknown
+   * then every completed payment not yet delivered whose next attempt is due
+   * (same backoff as the check, review past the bound; a paid kind nothing
+   * registers goes to review at once). A payment still unknown
    * after a check is asked again later (1, 2, 4 ... minutes, at most an
    * hour), and goes to review past PAYMENT_REVIEW_AFTER_HOURS.
    */
@@ -646,27 +648,51 @@ export class WalletPaymentService implements OnModuleInit {
         after = { at: last.nextCheckAt!, id: last.id };
       }
 
-      const kinds = this.registry
+      const delivering = this.registry
         .kinds()
         .filter((k) => typeof this.registry.get(k)?.onCompleted === 'function');
+      // A paid payment whose kind nothing here registers (a feature that was
+      // taken out, a boot without its module): nobody can deliver it, and it
+      // is never skipped in silence. It goes to review at once, logged.
+      await this.reviewUnregistered(now);
+      const reviewAfterMs = this.settings.reviewAfterHours * 3_600_000;
       let cursor: string | null = null;
-      for (let page = 0; kinds.length && page < SWEEP_PAGES; page += 1) {
+      for (let page = 0; delivering.length && page < SWEEP_PAGES; page += 1) {
         const owed: PaymentRow[] = await this.prisma.walletPayment.findMany({
           where: {
             status: 'completed',
             fulfilledAt: null,
-            kind: { in: kinds },
-            // The delivery the completion itself started has had a minute:
-            // only a delivery that failed or died is tried again here.
-            completedAt: { lt: new Date(now.getTime() - MINUTE) },
+            reviewSince: null,
+            payerWawuUserId: { not: null },
+            kind: { in: delivering },
+            // The delivery the completion itself started has had a minute,
+            // then each failed one pushes the next out (1, 2, 4 ... 60
+            // minutes, as the check does): only one that is due is tried.
+            OR: [
+              { nextDeliveryAt: { lte: now } },
+              {
+                nextDeliveryAt: null,
+                completedAt: { lt: new Date(now.getTime() - MINUTE) },
+              },
+            ],
             ...(cursor ? { id: { gt: cursor } } : {}),
           },
           orderBy: { id: 'asc' },
           take: SWEEP_PAGE,
         });
         for (const p of owed) {
+          const since = (p.completedAt ?? p.sentAt ?? p.createdAt).getTime();
+          if (now.getTime() - since >= reviewAfterMs) {
+            await this.toDeliveryReview(
+              p,
+              `not delivered ${this.settings.reviewAfterHours} hours after the payment completed (${p.deliveryAttempts} attempts)`,
+            );
+            continue;
+          }
           const handler = this.registry.get(p.kind as PaymentKind);
-          if (handler && (await this.fulfil(p, handler))) counts.delivered += 1;
+          if (handler && (await this.fulfil(p, handler, now))) {
+            counts.delivered += 1;
+          }
         }
         if (owed.length < SWEEP_PAGE) break;
         cursor = owed[owed.length - 1].id;
@@ -1091,7 +1117,11 @@ export class WalletPaymentService implements OnModuleInit {
       data: {
         status: 'completed',
         completedAt: now,
-        ...(delivers ? {} : { openKey: null }),
+        ...(delivers
+          ? // The request's own delivery has a minute before the sweep
+            // takes it over (R3-1: the sweep's backoff starts here).
+            { nextDeliveryAt: new Date(now.getTime() + MINUTE) }
+          : { openKey: null }),
         reviewSince: null,
         nextCheckAt: null,
         ...(discrepancy ? { discrepancy } : {}),
@@ -1147,6 +1177,59 @@ export class WalletPaymentService implements OnModuleInit {
     return this.prisma.walletPayment.findUniqueOrThrow({ where: { id: p.id } });
   }
 
+  /**
+   * A `completed` payment, money moved and nothing delivered, that the sweep
+   * stops retrying: still claimed (`openKey` kept, so the item cannot be paid
+   * for again), for a person to look at. `reviewSince` is the marker.
+   */
+  private async toDeliveryReview(p: PaymentRow, note: string): Promise<void> {
+    const { count } = await this.prisma.walletPayment.updateMany({
+      where: {
+        id: p.id,
+        status: 'completed',
+        fulfilledAt: null,
+        reviewSince: null,
+      },
+      data: {
+        reviewSince: new Date(),
+        nextDeliveryAt: null,
+        discrepancy: (p.discrepancy ? `${p.discrepancy}; ` : '')
+          .concat(`delivery: ${note}`)
+          .slice(0, 1000),
+      },
+    });
+    if (count > 0) {
+      this.logger.error(
+        `payment ${p.id}: paid (${p.kind}) and not delivered: ${note}; sent to review, the item stays claimed`,
+      );
+    }
+  }
+
+  /** Paid payments of a kind nothing registers: to review, once, logged. */
+  private async reviewUnregistered(now: Date): Promise<void> {
+    const known = this.registry.kinds();
+    for (let page = 0; page < SWEEP_PAGES; page += 1) {
+      const stuck = await this.prisma.walletPayment.findMany({
+        where: {
+          status: 'completed',
+          fulfilledAt: null,
+          reviewSince: null,
+          payerWawuUserId: { not: null },
+          kind: { notIn: known },
+        },
+        orderBy: { id: 'asc' },
+        take: SWEEP_PAGE,
+      });
+      for (const p of stuck) {
+        await this.toDeliveryReview(
+          p,
+          `no feature is registered for ${p.kind} here, so nothing can deliver it (${now.toISOString()})`,
+        );
+      }
+      if (stuck.length < SWEEP_PAGE) return;
+    }
+  }
+
   private async markFailed(
     p: PaymentRow,
     reason: string,
@@ -1182,6 +1265,7 @@ export class WalletPaymentService implements OnModuleInit {
   private async fulfil(
     p: PaymentRow,
     handler: PayableKindHandler,
+    now = new Date(),
   ): Promise<boolean> {
     if (!handler.onCompleted || p.fulfilledAt || !p.payerWawuUserId) {
       return false;
@@ -1201,13 +1285,30 @@ export class WalletPaymentService implements OnModuleInit {
       // payment for the item can be claimed (R2-1).
       await this.prisma.walletPayment.updateMany({
         where: { id: p.id, fulfilledAt: null },
-        data: { fulfilledAt: new Date(), openKey: null },
+        data: {
+          fulfilledAt: new Date(),
+          openKey: null,
+          nextDeliveryAt: null,
+        },
       });
       return true;
     } catch (e) {
+      const delay = nextCheckDelayMs(p.deliveryAttempts);
       this.logger.warn(
-        `payment ${p.id}: delivering ${p.kind} failed (${e instanceof Error ? e.name : 'error'}); the sweep tries again`,
+        `payment ${p.id}: delivering ${p.kind} failed (${e instanceof Error ? e.name : 'error'}); the sweep tries again in ${Math.round(delay / MINUTE)} minutes`,
       );
+      try {
+        await this.prisma.walletPayment.updateMany({
+          where: { id: p.id, status: 'completed', fulfilledAt: null },
+          data: {
+            deliveryAttempts: { increment: 1 },
+            nextDeliveryAt: new Date(now.getTime() + delay),
+          },
+        });
+      } catch {
+        // The schedule is not written: the row's own due time stands and
+        // the sweep tries it again after it.
+      }
       return false;
     }
   }
