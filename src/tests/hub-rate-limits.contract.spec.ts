@@ -37,6 +37,13 @@ import {
 } from '../hub-throttler-storage';
 import { HUB_THROTTLERS, SKIP_EVERY_HUB_THROTTLER } from '../hub-throttlers';
 import { MoneyIdentityController } from '../money/identity/money-identity.controller';
+import { MoneyStatementController } from '../money/statements/money-statement.controller';
+import {
+  STATEMENT_CONCURRENCY,
+  STATEMENT_RATE_LIMITS,
+  STATEMENT_WAIT_MS,
+  StatementSlots,
+} from '../money/statements/statement-config';
 
 /**
  * OPS-11: behind nginx, every caller gets its own rate-limit bucket, and no
@@ -288,6 +295,29 @@ describe('Rate limits behind nginx (OPS-11)', () => {
         'admin/auth/admin-auth.controller.ts': 2,
         'money/identity/money-identity.controller.ts': 2,
       });
+    });
+
+    it('statements (WALLET-27) set no throttler of their own: the global per-address limits apply; the per-person limit (5 a minute, 30 an hour) and two at once are counted after the token is verified', () => {
+      const proto = MoneyStatementController.prototype as unknown as Record<
+        string,
+        object
+      >;
+      for (const target of [MoneyStatementController, proto.statement]) {
+        const keys = (Reflect.getOwnMetadataKeys(target) as unknown[]).filter(
+          // Any of the throttler's keys: limit, ttl, tracker, block, skip.
+          (k) => typeof k === 'string' && k.startsWith('THROTTLER:'),
+        );
+        expect(keys).toEqual([]);
+      }
+      // The provisional figures in statement-config.ts (STATEMENT-RATE-LIMITS,
+      // STATEMENT-CONCURRENCY): these exact ones.
+      expect(STATEMENT_RATE_LIMITS).toEqual([
+        { name: 'minute', limit: 5, windowMs: 60_000 },
+        { name: 'hour', limit: 30, windowMs: 3_600_000 },
+      ]);
+      expect([STATEMENT_CONCURRENCY, STATEMENT_WAIT_MS]).toEqual([2, 5_000]);
+      const slots = new StatementSlots();
+      expect([slots.max, slots.waitMs]).toEqual([2, 5_000]);
     });
 
     it('each of those overrides only tightens the limits: per throttler, no more requests in no shorter a window, and no shorter a block', () => {

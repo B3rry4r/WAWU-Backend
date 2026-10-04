@@ -4,6 +4,12 @@ import { FintavaModule } from '../fintava/fintava.module';
 import { MoneyBalanceController } from './balance/money-balance.controller';
 import { MoneyHistoryController } from './history/money-history.controller';
 import { TransactionHistoryService } from './history/transaction-history.service';
+import { MoneyStatementController } from './statements/money-statement.controller';
+import {
+  StatementRateLimiter,
+  StatementSlots,
+} from './statements/statement-config';
+import { StatementService } from './statements/statement.service';
 import { LedgerModule } from './ledger/ledger.module';
 import { WalletBalanceService } from './balance/wallet-balance.service';
 import { FeeSettings } from './fees/fee-config';
@@ -90,6 +96,10 @@ import { TransactionPinService } from './pin/transaction-pin.service';
  * Fintava. FeeQuoteService is exported for the routes that charge what was
  * quoted (WALLET-07, WALLET-09, MONEY-17): they fill their fees from it and
  * check the quote the person saw with `check()`.
+ *
+ * WALLET-27: statements (`/money/statements`), the caller's completed
+ * movements over a period of Lagos days as a CSV file, behind the wallet
+ * gate, read from the ledger only; it never calls Fintava.
  */
 @Module({
   imports: [ConfigModule, FintavaModule, LedgerModule, WawuAuthModule],
@@ -102,6 +112,7 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     MoneyWalletController,
     MoneySavedAccountsController,
     MoneyHistoryController,
+    MoneyStatementController,
     MoneyFeesController,
   ],
   providers: [
@@ -122,6 +133,9 @@ import { TransactionPinService } from './pin/transaction-pin.service';
     BeneficiaryService,
     PayoutAccountService,
     TransactionHistoryService,
+    StatementService,
+    StatementRateLimiter,
+    StatementSlots,
     FeeSettings,
     FeeQuoteService,
   ],
