@@ -88,3 +88,42 @@ export interface PaidDmQueuePage {
   /** Every question waiting for this creator, not just this page. */
   waitingTotal: number;
 }
+
+/** Where a creator stands on unanswered paid questions (R-13). */
+export type PaidDmStandingState = 'ok' | 'warning' | 'paused';
+
+/**
+ * GET /paid-dm/standing: the creator's own standing. The share is taken over
+ * the questions whose outcome is known (answered, or past their deadline)
+ * sent inside the window.
+ */
+export interface PaidDmStanding {
+  state: PaidDmStandingState;
+  /** False while paused: a fan's new paid question is refused. */
+  acceptingPaidMessages: boolean;
+  /** Share of resolved questions left unanswered, 0 to 100, two decimals. While paused, the share that caused the pause. */
+  unansweredPct: number;
+  /** Questions left unanswered inside the window. Null while paused. */
+  unanswered: number | null;
+  /** Questions with a known outcome inside the window. Null while paused. */
+  questions: number | null;
+  /** The share that earns a warning, from config (R-13). */
+  warnAtPct: number;
+  /** The share that switches paid messages off, from config (R-13). */
+  pauseAtPct: number;
+  /** The rolling window, in days. */
+  windowDays: number;
+  /** How long a pause lasts, in days. */
+  pauseDays: number;
+  /** ISO time paid messages come back. Null unless paused. */
+  pausedUntil: string | null;
+}
+
+/** GET /paid-dm/creators/:wawuId/availability: what a fan sees on a creator's profile (I8). */
+export interface PaidDmAvailability {
+  creatorWawuId: string;
+  /** True while the creator's paid messages are switched off. */
+  paused: boolean;
+  /** ISO time they come back. Null unless paused. */
+  pausedUntil: string | null;
+}
