@@ -7623,7 +7623,6 @@
             }
           }
         },
-        "summary": "The web's rating call, now behind the same rules as PUT\n/content/:id/rating (HOME-06): buyers only for paid pieces, nobody rates\ntheir own, one rating per person, edits replace. The answer is the piece,\nas before, with `ratingPct` recomputed from the rating rows.",
         "tags": [
           "ContentPiece"
         ]

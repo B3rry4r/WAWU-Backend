@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
@@ -200,7 +201,7 @@ export class ContentDetailService {
   }
 
   /**
-   * PUT /content/:id/rating, and the old POST /content/:id/rate behind it.
+   * PUT /content/:id/rating.
    *
    * The rules, all enforced here and never from anything the client sends
    * beyond the star count:
@@ -210,10 +211,10 @@ export class ContentDetailService {
    *  - a piece the caller is blocked from, or that is not live, answers with
    *    the same 404 as a missing id
    *
-   * Concurrency: the piece's row is locked (`FOR UPDATE`) before the rating is
-   * written and the cache is recomputed, so two ratings at once run one after
-   * the other and the later one sees the earlier one's row. The average is
-   * always recomputed from the rows in the same transaction.
+   * Store: this route writes ContentRating only and never touches
+   * `ContentPiece.ratingPct`, which the web's POST /content/:id/rate (a
+   * protected route) still owns with its own rules. The average and count
+   * served by `detail` and by this route are computed from the rating rows.
    */
   async rate(
     contentId: string,
@@ -241,27 +242,15 @@ export class ContentDetailService {
       throw new ForbiddenException('Only people who bought this can rate it.');
     }
 
-    await this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw(
-        Prisma.sql`SELECT "id" FROM "ContentPiece" WHERE "id" = ${contentId} FOR UPDATE`,
-      );
-      await tx.contentRating.upsert({
-        where: { userWawuId_contentId: { userWawuId: rater, contentId } },
-        create: { userWawuId: rater, contentId, stars },
-        update: { stars },
-      });
-      const agg = await tx.contentRating.aggregate({
-        where: { contentId },
-        _avg: { stars: true },
-      });
-      await tx.contentPiece.update({
-        where: { id: contentId },
-        data: {
-          ratingPct:
-            agg._avg.stars === null ? null : Math.round(agg._avg.stars * 20),
-        },
-      });
-    });
+    // One statement on the unique (person, piece) key: two taps at once land
+    // on the same row (the second updates it), so there is never a second row
+    // and never a duplicate-key error. Nothing on ContentPiece is written.
+    await this.prisma.$executeRaw(Prisma.sql`
+      INSERT INTO "ContentRating" ("id", "userWawuId", "contentId", "stars")
+      VALUES (${randomUUID()}, ${rater}, ${contentId}, ${stars})
+      ON CONFLICT ("userWawuId", "contentId")
+      DO UPDATE SET "stars" = EXCLUDED."stars", "updatedAt" = CURRENT_TIMESTAMP
+    `);
 
     return this.ratingState(contentId, rater, piece, !!purchase);
   }

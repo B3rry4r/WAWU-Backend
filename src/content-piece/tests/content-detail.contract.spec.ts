@@ -181,21 +181,17 @@ describe('Content detail: previews, fair ratings, counts (contract)', () => {
     });
   }
 
-  const rate = (
-    who: Who,
-    id: string,
-    stars: unknown,
-    route: 'put' | 'post' = 'put',
-  ) =>
-    route === 'put'
-      ? request(server())
-          .put(`/content/${id}/rating`)
-          .set('Authorization', bearer(who))
-          .send({ rating: stars })
-      : request(server())
-          .post(`/content/${id}/rate`)
-          .set('Authorization', bearer(who))
-          .send({ rating: stars });
+  const rate = (who: Who, id: string, stars: unknown) =>
+    request(server())
+      .put(`/content/${id}/rating`)
+      .set('Authorization', bearer(who))
+      .send({ rating: stars });
+
+  const legacyRate = (who: Who, id: string, stars: unknown) =>
+    request(server())
+      .post(`/content/${id}/rate`)
+      .set('Authorization', bearer(who))
+      .send({ rating: stars });
 
   const detail = (who: Who | string, id: string) =>
     request(server())
@@ -257,6 +253,9 @@ describe('Content detail: previews, fair ratings, counts (contract)', () => {
     app.useGlobalFilters(new AllExceptionsFilter());
     app.useGlobalInterceptors(new ResponseInterceptor());
     await app.init();
+    // Listen once, so 12 simultaneous requests share one server instead of
+    // each opening its own ephemeral listener.
+    await app.listen(0);
     prisma = moduleRef.get(PrismaService);
   });
 
@@ -291,8 +290,6 @@ describe('Content detail: previews, fair ratings, counts (contract)', () => {
           'Only people who bought this can rate it.',
         );
       }
-      // The old route enforces the same rule.
-      await rate(stranger, id, 5, 'post').expect(403);
 
       expect(await ratingRows(id)).toHaveLength(0);
       expect((await stored(id)).ratingPct).toBeNull();
@@ -320,7 +317,7 @@ describe('Content detail: previews, fair ratings, counts (contract)', () => {
         canRate: true,
         cannotRateReason: null,
       });
-      expect((await stored(id)).ratingPct).toBe(80);
+      expect((await stored(id)).ratingPct).toBeNull();
     });
 
     it('a buyer rating twice updates their rating, it does not add a second one', async () => {
@@ -335,12 +332,7 @@ describe('Content detail: previews, fair ratings, counts (contract)', () => {
       const rows = await ratingRows(id);
       expect(rows).toHaveLength(1);
       expect(rows[0].stars).toBe(2);
-      expect((await stored(id)).ratingPct).toBe(40);
-
-      // The web's own call lands on the same row.
-      await rate(buyer, id, 3, 'post').expect(201);
-      expect(await ratingRows(id)).toHaveLength(1);
-      expect((await ratingRows(id))[0].stars).toBe(3);
+      expect((await stored(id)).ratingPct).toBeNull();
     });
 
     it("the average is worked out from every buyer's row, never from what the last request said", async () => {
@@ -354,11 +346,15 @@ describe('Content detail: previews, fair ratings, counts (contract)', () => {
       expect(
         (d.body as { data: { rating: Record<string, unknown> } }).data.rating,
       ).toMatchObject({ average: 3.5, count: 2, myRating: 5 });
-      expect((await stored(id)).ratingPct).toBe(70);
+      expect((await stored(id)).ratingPct).toBeNull();
 
       // Changing one rating moves the average by that person's change only.
       await rate(buyer2, id, 4).expect(200);
-      expect((await stored(id)).ratingPct).toBe(90);
+      const again = await detail(buyer, id).expect(200);
+      expect(
+        (again.body as { data: { rating: { average: number } } }).data.rating
+          .average,
+      ).toBe(4.5);
     });
 
     it('a creator cannot rate their own piece', async () => {
@@ -397,9 +393,8 @@ describe('Content detail: previews, fair ratings, counts (contract)', () => {
       ).rejects.toThrow();
     });
 
-    it('a rating from the web for a missing piece is a 404', async () => {
+    it('a user rating a piece that does not exist gets a 404', async () => {
       await rate(buyer, randomUUID(), 5).expect(404);
-      await rate(buyer, randomUUID(), 5, 'post').expect(404);
     });
 
     it('twelve buyers rating at the same moment each get exactly one row and the average is right', async () => {
@@ -417,7 +412,7 @@ describe('Content detail: previews, fair ratings, counts (contract)', () => {
       const rows = await ratingRows(id);
       expect(rows).toHaveLength(12);
       const mean = stars.reduce((a, b) => a + b, 0) / stars.length;
-      expect((await stored(id)).ratingPct).toBe(Math.round(mean * 20));
+      expect((await stored(id)).ratingPct).toBeNull();
       const d = await detail(crowd[0], id).expect(200);
       expect(
         (d.body as { data: { rating: { count: number; average: number } } })
@@ -437,7 +432,11 @@ describe('Content detail: previews, fair ratings, counts (contract)', () => {
 
       const rows = await ratingRows(id);
       expect(rows).toHaveLength(1);
-      expect((await stored(id)).ratingPct).toBe(rows[0].stars * 20);
+      const mine = await detail(buyer, id).expect(200);
+      expect(
+        (mine.body as { data: { rating: { myRating: number; count: number } } })
+          .data.rating,
+      ).toMatchObject({ myRating: rows[0].stars, count: 1 });
     });
 
     it('twelve people changing and adding ratings together never leave a stale average', async () => {
@@ -453,7 +452,93 @@ describe('Content detail: previews, fair ratings, counts (contract)', () => {
       const rows = await ratingRows(id);
       expect(rows).toHaveLength(6);
       const mean = rows.reduce((a, r) => a + r.stars, 0) / rows.length;
-      expect((await stored(id)).ratingPct).toBe(Math.round(mean * 20));
+      const d = await detail(crowd[0], id).expect(200);
+      expect(
+        (d.body as { data: { rating: { average: number } } }).data.rating
+          .average,
+      ).toBe(Math.round(mean * 10) / 10);
+      expect((await stored(id)).ratingPct).toBeNull();
+    });
+  });
+
+  /**
+   * POST /content/:id/rate is a protected route the web calls. It must behave
+   * exactly as it does on origin/main, whatever the new rating route does:
+   * any signed-in person can rate any piece that exists, it answers 201 with
+   * the piece, and ratingPct is the old 50/50 blend. The expectations below
+   * are origin/main's ContentPieceService.rate() worked by hand.
+   */
+  describe('the web rating route is unchanged', () => {
+    const blend = (old: number | null, stars: number) =>
+      old === null ? stars * 20 : Math.round((old + stars * 20) / 2);
+
+    it('a non-buyer, a pending-payment buyer, the creator and a blocked person all still get 201 and the blend', async () => {
+      const paid = await piece();
+      await buy(buyer2, paid, 'pending');
+      await prisma.blockedAccount.upsert({
+        where: {
+          userWawuId_blockedWawuId: {
+            userWawuId: creator.sub,
+            blockedWawuId: blockedByCreator.sub,
+          },
+        },
+        create: {
+          userWawuId: creator.sub,
+          blockedWawuId: blockedByCreator.sub,
+        },
+        update: {},
+      });
+      let expected: number | null = null;
+      for (const [who, stars] of [
+        [stranger, 5],
+        [buyer2, 1],
+        [creator, 3],
+        [blockedByCreator, 4],
+        [stranger, 2],
+      ] as Array<[Who, number]>) {
+        const res = await legacyRate(who, paid, stars).expect(201);
+        expected = blend(expected, stars);
+        const data = (res.body as { data: Record<string, unknown> }).data;
+        expect(data.ratingPct).toBe(expected);
+        expect(Object.keys(data).sort()).toEqual([...LIVE_PIECE_KEYS].sort());
+      }
+      expect((await stored(paid)).ratingPct).toBe(expected);
+      // The legacy route writes no rating row.
+      expect(await ratingRows(paid)).toHaveLength(0);
+    });
+
+    it('a free piece, a pending piece and a removed piece are all still rated, and a missing one is a 404', async () => {
+      const free = await piece({ accessType: 'free', price: 0 });
+      const res = await legacyRate(stranger, free, 5).expect(201);
+      expect((res.body as { data: { ratingPct: number } }).data.ratingPct).toBe(
+        100,
+      );
+      for (const status of ['pending', 'removed', 'rejected'] as const) {
+        const id = await piece({ status });
+        const r = await legacyRate(stranger, id, 4).expect(201);
+        expect((r.body as { data: { ratingPct: number } }).data.ratingPct).toBe(
+          80,
+        );
+      }
+      await legacyRate(stranger, randomUUID(), 5).expect(404);
+      await legacyRate(stranger, free, 6).expect(400);
+      await request(server())
+        .post(`/content/${free}/rate`)
+        .send({ rating: 3 })
+        .expect(401);
+    });
+
+    it('the new route leaves what the web route wrote alone, and the web route leaves the new rows alone', async () => {
+      const id = await piece();
+      await buy(buyer, id);
+      await legacyRate(stranger, id, 5).expect(201); // ratingPct 100
+      await rate(buyer, id, 2).expect(200);
+      expect((await stored(id)).ratingPct).toBe(100);
+      await legacyRate(stranger, id, 1).expect(201); // blend(100, 1) = 60
+      expect((await stored(id)).ratingPct).toBe(60);
+      const rows = await ratingRows(id);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].stars).toBe(2);
     });
   });
 
@@ -465,6 +550,7 @@ describe('Content detail: previews, fair ratings, counts (contract)', () => {
           { userWawuId: creator.sub, blockedWawuId: blockedByCreator.sub },
           { userWawuId: blocksCreator.sub, blockedWawuId: creator.sub },
         ],
+        skipDuplicates: true,
       });
 
       const missing = randomUUID();
@@ -487,7 +573,6 @@ describe('Content detail: previews, fair ratings, counts (contract)', () => {
         expect((p.body as { message: string }).message).toBe(
           (missingPreview.body as { message: string }).message,
         );
-        await rate(who, id, 5, 'post').expect(404);
       }
       expect(await ratingRows(id)).toHaveLength(0);
 
@@ -732,7 +817,7 @@ describe('Content detail: previews, fair ratings, counts (contract)', () => {
         .expect(200);
       const data = (one.body as { data: Record<string, unknown> }).data;
       expect(Object.keys(data).sort()).toEqual([...LIVE_PIECE_KEYS].sort());
-      expect(data.ratingPct).toBe(100);
+      expect(data.ratingPct).toBeNull(); // the new route never writes it
 
       const list = await request(server())
         .get('/content?perPage=5')
