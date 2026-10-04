@@ -325,6 +325,106 @@ describe('Recipient search throttle through the global ThrottlerGuard (WALLET-08
       expect((await one('zzqqxx', auth, addr())).status).toBe(429);
     });
 
+    /** A person with a clock the test moves; every request from its own address. */
+    async function onMovedClock() {
+      const limiter = app.get(RecipientSearchLimiter, { strict: false });
+      const auth = await holder();
+      const t0 = 1_900_000_000_000;
+      let clock = t0;
+      limiter.now = () => clock;
+      let n = 0;
+      const search = () =>
+        searchFrom(auth, `2001:db8:7::${(n++).toString(16)}`);
+      const burst = async (count: number) => {
+        const out: number[] = [];
+        for (let i = 0; i < count; i += 1) out.push((await search()).status);
+        return out;
+      };
+      return {
+        t0,
+        at: (ms: number) => {
+          clock = t0 + ms;
+        },
+        search,
+        burst,
+        restore: () => {
+          limiter.now = () => Date.now();
+        },
+      };
+    }
+
+    it('the minute window starts again: 20 pass and the 21st is refused, then exactly 20 pass again 61 s later, and the 21st is refused again', async () => {
+      const c = await onMovedClock();
+      try {
+        c.at(0);
+        expect(await c.burst(20)).toEqual(Array(20).fill(200));
+        expect((await c.search()).status).toBe(429);
+        // 59.999 s after the first: still the same minute.
+        c.at(59_999);
+        expect((await c.search()).status).toBe(429);
+        // The window began at 0 and holds 60 s: at 61 s it is a new one.
+        c.at(61_000);
+        expect(await c.burst(20)).toEqual(Array(20).fill(200));
+        expect((await c.search()).status).toBe(429);
+        // And again, a third time.
+        c.at(122_000);
+        expect(await c.burst(20)).toEqual(Array(20).fill(200));
+        expect((await c.search()).status).toBe(429);
+      } finally {
+        c.restore();
+      }
+    }, 60_000);
+
+    it('the hour window starts again: 120 pass and the 121st is refused, then exactly 120 pass again an hour later, and the 121st is refused again', async () => {
+      const c = await onMovedClock();
+      try {
+        for (const base of [0, 3_600_000]) {
+          for (let m = 0; m < 6; m += 1) {
+            c.at(base + m * 61_000);
+            expect(await c.burst(20)).toEqual(Array(20).fill(200));
+          }
+          c.at(base + 6 * 61_000);
+          const over = await c.search();
+          expect(over.status).toBe(429);
+          // The hour began at `base`: the same wait each time, 3,234 s.
+          expect(
+            (over.body as { reason?: { retryAfterSeconds?: number } }).reason
+              ?.retryAfterSeconds,
+          ).toBe(3_234);
+        }
+      } finally {
+        c.restore();
+      }
+    }, 60_000);
+
+    it('a wait that is not a whole number of seconds is rounded UP, in the body and in Retry-After', async () => {
+      const wait = async (elapsedMs: number) => {
+        const c = await onMovedClock();
+        try {
+          c.at(0);
+          expect(await c.burst(20)).toEqual(Array(20).fill(200));
+          c.at(elapsedMs);
+          const res = await c.search();
+          expect(res.status).toBe(429);
+          return {
+            body: (res.body as { reason?: { retryAfterSeconds?: number } })
+              .reason?.retryAfterSeconds,
+            header: res.headers['retry-after'],
+          };
+        } finally {
+          c.restore();
+        }
+      };
+      // 60,000 - 10,500 = 49,500 ms: 49.5 s, so 50 (never 49).
+      expect(await wait(10_500)).toEqual({ body: 50, header: '50' });
+      // 60,000 - 10,999 = 49,001 ms: a thousandth over 49 s is still 50.
+      expect(await wait(10_999)).toEqual({ body: 50, header: '50' });
+      // 60,000 - 11,000 = 49,000 ms: a whole number stays as it is.
+      expect(await wait(11_000)).toEqual({ body: 49, header: '49' });
+      // 1 ms left is 1 s, never 0.
+      expect(await wait(59_999)).toEqual({ body: 1, header: '1' });
+    }, 60_000);
+
     it('the hour and the day count too: 120 an hour, 500 a day, with the wait rounded up, on a clock the test moves', async () => {
       const limiter = app.get(RecipientSearchLimiter, { strict: false });
       const auth = await holder();
