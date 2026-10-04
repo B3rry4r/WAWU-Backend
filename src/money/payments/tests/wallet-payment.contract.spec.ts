@@ -84,6 +84,12 @@ const MONEY_TIMEOUT_MS = 1_500;
 const PIN = '4826';
 const WRONG_PIN = '1397';
 
+// Several tests wait out the money timeout, poll for a settlement for up to
+// 10 s, or check a dozen PINs one after another (argon2 each); at the load
+// the deploy suite meets beside other jobs that passes 5 s (verifier
+// defect 4, round 2).
+jest.setTimeout(60_000);
+
 function mintToken(sub: string): string {
   const privateKey = readFileSync(
     join(__dirname, '../../../../mock-wawu-id/private.pem'),
@@ -205,6 +211,8 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
   const wallets = new Wallets();
   const users: string[] = [];
   const delivered: CompletedPayment[] = [];
+  /** How many of the next deliveries fail (the feature down). */
+  let failDeliveries = 0;
   const previous: Record<string, string | undefined> = {};
   let accountSeq = 0;
 
@@ -540,6 +548,10 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
         });
       },
       onCompleted: (p) => {
+        if (failDeliveries > 0) {
+          failDeliveries -= 1;
+          return Promise.reject(new Error('feature down'));
+        }
         delivered.push(p);
         return Promise.resolve();
       },
@@ -605,6 +617,7 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
 
   beforeEach(() => {
     wallets.mode = 'live';
+    failDeliveries = 0;
   });
 
   // -------------------------------------------------------------------------
@@ -1607,6 +1620,27 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
       where: { wawuUserId: p.id },
       data: { accountNumber: p.accountNumber },
     });
+  });
+
+  it("a delivery that failed is tried again by the sweep after a minute, once; a sweep inside that minute leaves the completion's own delivery alone (verifier finding 5)", async () => {
+    const p = await buyer(500_000);
+    const q = await quoted(p, 'content_unlock', 'piece-1000');
+    failDeliveries = 1;
+    const paid = body<PaymentView>(await pay(p, payBody(q))).data!;
+    expect(paid.status).toBe('completed');
+    const mine = () => delivered.filter((d) => d.paymentId === paid.id);
+    expect(mine()).toHaveLength(0);
+    // Inside the minute: the request's delivery may still be running.
+    await payments.sweep(new Date());
+    expect(mine()).toHaveLength(0);
+    await payments.sweep(new Date(Date.now() + 2 * 60_000));
+    expect(mine()).toHaveLength(1);
+    const row = await prisma.walletPayment.findUniqueOrThrow({
+      where: { id: paid.id },
+    });
+    expect(row.fulfilledAt).not.toBeNull();
+    await payments.sweep(new Date(Date.now() + 5 * 60_000));
+    expect(mine()).toHaveLength(1);
   });
 
   it('Fintava moving another amount than the price: review, still pending, not delivered, the item blocked', async () => {

@@ -559,6 +559,9 @@ export class WalletPaymentService implements OnModuleInit {
             status: 'completed',
             fulfilledAt: null,
             kind: { in: kinds },
+            // The delivery the completion itself started has had a minute:
+            // only a delivery that failed or died is tried again here.
+            completedAt: { lt: new Date(now.getTime() - MINUTE) },
             ...(cursor ? { id: { gt: cursor } } : {}),
           },
           orderBy: { id: 'asc' },

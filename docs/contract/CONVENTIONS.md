@@ -948,8 +948,10 @@ As built in round 2 (4 Oct 2026, lead rulings D1 to D4, each "Default
   price from its own record and the payee (or `404 target_not_found`, `409
   target_not_payable`), and `onCompleted` delivers it once the debit is
   confirmed. **Delivery is at least once**: `onCompleted` can be called
-  twice for one payment (the request and the sweep, or two servers) and must
-  be idempotent. A kind nobody registered answers `409 target_not_payable`
+  twice for one payment (two servers, or a delivery slower than a minute)
+  and must be idempotent. The sweep tries a delivery again only once the
+  payment has been completed for a minute, so it does not race the one the
+  completion started. A kind nobody registered answers `409 target_not_payable`
   "This can't be paid for from your wallet yet." Held kinds (paid DM,
   ticket, bill) are refused until MONEY-18. `amountKobo` and `note` only on
   a tip; paying for your own item is `target_not_payable`.
