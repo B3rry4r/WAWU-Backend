@@ -10,7 +10,7 @@ import { ConfigService } from '@nestjs/config';
  * user and the link, and WAWU ID decides the address, the subject and the
  * wording: `POST /internal/users/:userId/data-export`
  * `{ downloadUrl, expiresAt }`. That route is built by WAWU ID (BACKEND_GAPS
- * G-95); until it exists WAWU ID answers 404, the request stays pending and
+ * G-131); until it exists WAWU ID answers 404, the request stays pending and
  * the sweep retries.
  */
 @Injectable()

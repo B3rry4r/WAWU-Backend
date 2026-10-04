@@ -363,7 +363,7 @@ app.post("/internal/users/lookup", requireServiceKey, (req, res) => {
 });
 
 // The data-export email (SETTINGS-04). Mirrors the route WAWU ID is to build
-// (BACKEND_GAPS G-95): POST /internal/users/:userId/data-export
+// (BACKEND_GAPS G-131): POST /internal/users/:userId/data-export
 // { downloadUrl, expiresAt }. Like unpaid-warning, the Hub names the user and
 // the link; WAWU ID owns the address and the wording, so the mock records
 // "who was mailed what link" in an outbox the contract suite can read, and

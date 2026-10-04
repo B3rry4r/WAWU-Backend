@@ -834,7 +834,21 @@ export class ContentPieceService {
         'This piece was reviewed a moment ago. Open it again to see where it stands.',
       );
     }
+    await this.stampUpdated(this.prisma, id);
     return this.getMyPiece(id, creatorWawuId);
+  }
+
+  /** Records that the creator changed the piece now (HOME-06: "Updated Sep 2026"). */
+  private async stampUpdated(
+    db: Pick<Prisma.TransactionClient, 'contentDetail'>,
+    contentId: string,
+  ): Promise<void> {
+    const now = new Date();
+    await db.contentDetail.upsert({
+      where: { contentId },
+      create: { contentId, contentUpdatedAt: now },
+      update: { contentUpdatedAt: now },
+    });
   }
 
   /**
@@ -871,6 +885,7 @@ export class ContentPieceService {
       });
       // Lost a race with a second tap: the winner already claimed the slot.
       if (flipped.count === 0) return;
+      await this.stampUpdated(tx, id);
 
       await tx.creatorState.upsert({
         where: { wawuUserId: creatorWawuId },

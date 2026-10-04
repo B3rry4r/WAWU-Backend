@@ -7886,6 +7886,118 @@
         ]
       }
     },
+    "/api/hub/content/{id}/detail": {
+      "get": {
+        "operationId": "ContentDetailController_get",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentDetail"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ContentDetail"
+        ]
+      }
+    },
+    "/api/hub/content/{id}/rating": {
+      "put": {
+        "operationId": "ContentDetailController_rate",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RateContentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RatingState"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Rate, or change your rating. Always one rating per person.",
+        "tags": [
+          "ContentDetail"
+        ]
+      }
+    },
+    "/api/hub/content/{id}/preview": {
+      "put": {
+        "operationId": "ContentDetailController_setPreview",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPreviewDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FreePreview"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The creator sets how much of their own piece is free to preview.",
+        "tags": [
+          "ContentDetail"
+        ]
+      }
+    },
     "/api/hub/feed": {
       "get": {
         "operationId": "FeedController_feed",
@@ -24674,6 +24786,29 @@
           "rating"
         ]
       },
+      "SetPreviewDto": {
+        "type": "object",
+        "properties": {
+          "freePages": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 1,
+            "maximum": 10000
+          },
+          "freeSeconds": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 1,
+            "maximum": 86400
+          },
+          "freeLessons": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 1,
+            "maximum": 1000
+          }
+        }
+      },
       "SetMediaDto": {
         "type": "object",
         "properties": {
@@ -30677,6 +30812,138 @@
         },
         "required": [
           "count"
+        ]
+      },
+      "FreePreview": {
+        "type": "object",
+        "properties": {
+          "pages": {
+            "type": "number",
+            "nullable": true
+          },
+          "seconds": {
+            "type": "number",
+            "nullable": true
+          },
+          "lessons": {
+            "type": "number",
+            "nullable": true
+          }
+        },
+        "required": [
+          "pages",
+          "seconds",
+          "lessons"
+        ]
+      },
+      "DetailLesson": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "order": {
+            "type": "number"
+          },
+          "durationLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "isFree": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "order",
+          "durationLabel",
+          "isFree"
+        ]
+      },
+      "RatingState": {
+        "type": "object",
+        "properties": {
+          "average": {
+            "type": "number",
+            "nullable": true
+          },
+          "count": {
+            "type": "number"
+          },
+          "myRating": {
+            "type": "number",
+            "nullable": true
+          },
+          "canRate": {
+            "type": "boolean"
+          },
+          "cannotRateReason": {
+            "type": "string",
+            "enum": [
+              "own_content",
+              "not_purchased"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "average",
+          "count",
+          "myRating",
+          "canRate",
+          "cannotRateReason"
+        ]
+      },
+      "ContentDetail": {
+        "type": "object",
+        "properties": {
+          "contentId": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "purchasedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "buyerCount": {
+            "type": "number"
+          },
+          "studentCount": {
+            "type": "number",
+            "nullable": true
+          },
+          "freePreview": {
+            "$ref": "#/components/schemas/FreePreview"
+          },
+          "lessons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DetailLesson"
+            }
+          },
+          "rating": {
+            "$ref": "#/components/schemas/RatingState"
+          }
+        },
+        "required": [
+          "contentId",
+          "contentType",
+          "updatedAt",
+          "purchasedAt",
+          "buyerCount",
+          "studentCount",
+          "freePreview",
+          "lessons",
+          "rating"
         ]
       },
       "DmSendInitResponse": {

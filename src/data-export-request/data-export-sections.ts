@@ -119,6 +119,21 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    key: 'contentRatingsGiven',
+    models: ['ContentRating'],
+    load: (prisma, me) =>
+      prisma.contentRating.findMany({
+        where: { userWawuId: me },
+        select: {
+          contentId: true,
+          stars: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+        orderBy: { updatedAt: 'desc' },
+      }),
+  },
+  {
     key: 'piecesShared',
     models: ['ContentShare'],
     load: (prisma, me) =>
@@ -687,20 +702,20 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
     {
       model: 'FintavaLedgerEntry',
       reason:
-        'Wallet transactions carry the other side bank details. Statements are an after-launch task (BACKEND_GAPS G-95).',
+        'Wallet transactions carry the other side bank details. Statements are an after-launch task (BACKEND_GAPS G-130).',
     },
     {
       model: 'CreatorWallet',
-      reason: 'Web wallet pointer; statements are after launch (G-95).',
+      reason: 'Web wallet pointer; statements are after launch (G-130).',
     },
     {
       model: 'WalletWithdrawal',
       reason:
-        'Holds a bank account number; statements are after launch (G-95).',
+        'Holds a bank account number; statements are after launch (G-130).',
     },
     {
       model: 'WalletLedgerEntry',
-      reason: 'Web wallet ledger; statements are after launch (G-95).',
+      reason: 'Web wallet ledger; statements are after launch (G-130).',
     },
     {
       model: 'MoneyBeneficiary',

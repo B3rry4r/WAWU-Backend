@@ -6,6 +6,8 @@ import {
   FeedController,
 } from './content-engagement.controller';
 import { ContentEngagementService } from './content-engagement.service';
+import { ContentDetailController } from './content-detail.controller';
+import { ContentDetailService } from './content-detail.service';
 import { ContentMediaController } from './content-media.controller';
 import { ContentMediaService } from './content-media.service';
 import { FeedCardsService } from './feed-cards.service';
@@ -41,12 +43,14 @@ import { StorageModule } from '../storage/storage.module';
     ContentPieceController,
     PublicContentController,
     ContentEngagementController,
+    ContentDetailController,
     FeedController,
     ContentMediaController,
   ],
   providers: [
     ContentPieceService,
     ContentEngagementService,
+    ContentDetailService,
     ContentMediaService,
     FeedCardsService,
     FeedEntriesService,
