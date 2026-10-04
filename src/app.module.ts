@@ -12,6 +12,8 @@ import { AdminCreatorsModule } from './admin/creators/admin-creators.module';
 import { AdminFinanceModule } from './admin/finance/admin-finance.module';
 import { AdminEventsModule } from './admin/events/admin-events.module';
 import { AdminNotificationsModule } from './admin/notifications/admin-notifications.module';
+import { AdminLegalDocumentsModule } from './admin/legal-documents/admin-legal-documents.module';
+import { AboutModule } from './about/about.module';
 import { PrismaModule } from './common/prisma/prisma.module';
 import { AccountModule } from './account/account.module';
 import { CommentModule } from './comment/comment.module';
@@ -74,6 +76,7 @@ import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
 import { PaymentWebhookModule } from './payment-webhook/payment-webhook.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { HUB_THROTTLERS } from './hub-throttlers';
+import { HUB_THROTTLER_STORAGE } from './hub-throttler-storage';
 import { APP_GUARD } from '@nestjs/core';
 // Phase 5 build (waves 0-3, all 39 registry resources) is now complete.
 // The deferred Flutterwave webhook has now shipped as PaymentWebhookModule
@@ -332,6 +335,11 @@ import { APP_GUARD } from '@nestjs/core';
     // so it can neither shadow nor be shadowed wherever it sits. The declared,
     // unserved half (MoneyContractModule) is never imported here.
     MoneyModule,
+    // About and the Terms and Privacy policy text (task SETTINGS-02): `about` and
+    // `policies` are first segments nothing else declares; the admin write sits
+    // under `admin/policies`.
+    AboutModule,
+    AdminLegalDocumentsModule,
     // Free chat between two users (task INBOX-06). `@Controller('chats')` is a
     // first segment nothing else declares, so it cannot shadow or be shadowed.
     ChatModule,
@@ -350,6 +358,12 @@ import { APP_GUARD } from '@nestjs/core';
     PaymentWebhookModule,
   ],
   controllers: [AppController],
-  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
+  providers: [
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // FIX-05: the guard above counts in our own store, one bucket per caller
+    // (src/hub-throttler-storage.ts), not the library's default one, whose
+    // ending of one caller's block stopped every other caller's hits expiring.
+    HUB_THROTTLER_STORAGE,
+  ],
 })
 export class AppModule {}

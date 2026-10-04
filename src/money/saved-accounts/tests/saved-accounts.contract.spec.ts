@@ -973,6 +973,38 @@ describe('Saved beneficiaries and the payout account (WALLET-14) over HTTP', () 
       expect(nameChecks()).toHaveLength(0);
     });
 
+    // SETTINGS-04: a block hides a saved person and refuses saving one.
+    it('a user cannot save, and no longer sees, a person they blocked or who blocked them, and sees them again after unblocking', async () => {
+      const who = await withWallet();
+      const them = await recipient('Hidden', 'Person');
+      const saved = body<BeneficiaryView>(
+        await save(who, { kind: 'wawu_user', wawuUserId: them.id }).expect(201),
+      ).data!;
+      const ids = async () =>
+        body<BeneficiaryView[]>(await list(who)).data!.map((x) => x.id);
+      expect(await ids()).toContain(saved.id);
+
+      for (const [blocker, blocked] of [
+        [who.id, them.id],
+        [them.id, who.id],
+      ]) {
+        await prisma.blockedAccount.create({
+          data: { userWawuId: blocker, blockedWawuId: blocked },
+        });
+        expect(await ids()).not.toContain(saved.id);
+        // Saving them (again) answers as for a person who is not found.
+        expectRefusal(
+          await save(who, { kind: 'wawu_user', wawuUserId: them.id }),
+          404,
+          'recipient_not_found',
+        );
+        await prisma.blockedAccount.deleteMany({
+          where: { userWawuId: blocker, blockedWawuId: blocked },
+        });
+        expect(await ids()).toContain(saved.id);
+      }
+    });
+
     it('refuses a WAWU user without a wallet (409), an unknown person (404) and oneself (400)', async () => {
       const who = await withWallet();
       const noWallet = await recipient('No', 'Wallet', { wallet: false });

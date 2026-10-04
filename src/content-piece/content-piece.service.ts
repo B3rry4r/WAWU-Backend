@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Inject,
   Injectable,
@@ -28,8 +29,12 @@ import type { CreateContentDto } from './dto/create-content.dto';
 import type { RateContentDto } from './dto/rate-content.dto';
 import { netOfCommission } from '../common/money';
 import { NotificationService } from '../notification/notification.service';
+import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { StorageService } from '../storage/storage.service';
 import type { VerifyUnlockDto } from './dto/verify-unlock.dto';
+import type { UpdateContentDto } from './dto/update-content.dto';
+import type { MyContentFilter } from './dto/my-content-query.dto';
+import type { MyContentCounts, MyContentItem } from './dto/my-content.view';
 
 /**
  * The commission rate, for every creator (conventions.md § Identity & format
@@ -96,6 +101,7 @@ export class ContentPieceService {
     @Inject(FLUTTERWAVE_CLIENT) private readonly flutterwave: FlutterwaveClient,
     private readonly notifications: NotificationService,
     private readonly storage: StorageService,
+    private readonly blockedAccounts: BlockedAccountService,
   ) {}
 
   /**
@@ -197,34 +203,77 @@ export class ContentPieceService {
     const unlockedSet = await this.resolveUnlockedSet(requesterWawuId, [
       content.id,
     ]);
+    // SETTINGS-04: a piece by someone the caller blocked (or who blocked the
+    // caller) is gone, with the same 404 as a piece that never existed. One
+    // exception: somebody who already paid for it keeps their copy, because a
+    // block must never take away what a person bought.
+    if (!unlockedSet.has(content.id)) {
+      await this.blockedAccounts.assertVisible(
+        requesterWawuId,
+        content.creatorWawuId,
+        'Content not found',
+      );
+    }
     return this.toResponse(content, unlockedSet.has(content.id));
   }
 
   async list(
     requesterWawuId: string | undefined,
-    scope: 'feed' | 'mine' | undefined,
+    scope: 'feed' | 'mine' | 'following' | undefined,
     category: string | undefined,
     page: number,
     perPage: number,
     sort: ContentSort = 'trending',
   ): Promise<Paginated<ContentPieceResponse>> {
-    const where =
+    // SETTINGS-04: the feed leaves out anyone the caller blocked or who
+    // blocked the caller. The caller's own shelf ('mine') is theirs alone.
+    const hidden =
       scope === 'mine'
+        ? []
+        : await this.blockedAccounts.hiddenFrom(requesterWawuId);
+
+    // Following (HOME-04): live pieces by the people the requester follows,
+    // newest first. A follow edge is one row per (follower, creator), so
+    // nobody the requester does not follow can appear, and unfollowing removes
+    // a creator's pieces from the tab at the next read. Nobody signed out
+    // follows anyone: an empty page, not an error.
+    let followedIds: string[] = [];
+    if (scope === 'following' && requesterWawuId) {
+      const edges = await this.prisma.followRelationship.findMany({
+        where: { followerWawuId: requesterWawuId },
+        select: { followingWawuId: true },
+      });
+      followedIds = edges.map((e) => e.followingWawuId);
+    }
+
+    const where =
+      scope === 'following'
         ? {
-            creatorWawuId: requesterWawuId ?? '__none__',
-            // Registry note says "any status", written before `removed`
-            // existed: a piece the creator deleted must disappear from their
-            // own shelf immediately, same as everywhere else, or `delete()`
-            // does nothing the creator can actually see.
-            status: { not: 'removed' as const },
+            status: 'live' as const,
+            creatorWawuId: { in: followedIds, notIn: hidden },
             ...(category ? { category } : {}),
           }
-        : { status: 'live' as const, ...(category ? { category } : {}) };
+        : scope === 'mine'
+          ? {
+              creatorWawuId: requesterWawuId ?? '__none__',
+              // Registry note says "any status", written before `removed`
+              // existed: a piece the creator deleted must disappear from their
+              // own shelf immediately, same as everywhere else, or `delete()`
+              // does nothing the creator can actually see.
+              status: { not: 'removed' as const },
+              ...(category ? { category } : {}),
+            }
+          : {
+              status: 'live' as const,
+              creatorWawuId: { notIn: hidden },
+              ...(category ? { category } : {}),
+            };
 
     // "mine" is a creator looking at their own shelf, including drafts and
     // pieces still in review. That is a chronological list of their work, not
     // a ranked feed, so ranking is only applied to public browsing.
-    const ranked = scope !== 'mine' && sort !== 'recent';
+    const ranked =
+      scope !== 'mine' && scope !== 'following' && sort !== 'recent';
 
     const chronological = () =>
       this.prisma.$transaction([
@@ -244,7 +293,13 @@ export class ContentPieceService {
     let total: number;
     if (ranked) {
       try {
-        [items, total] = await this.listRanked(category, sort, page, perPage);
+        [items, total] = await this.listRanked(
+          category,
+          sort,
+          page,
+          perPage,
+          hidden,
+        );
       } catch (e) {
         this.logger.error(
           `Ranked feed query failed, falling back to newest-first: ${String(e)}`,
@@ -283,6 +338,7 @@ export class ContentPieceService {
     sort: ContentSort,
     page: number,
     perPage: number,
+    hidden: string[],
   ): Promise<[ContentPieceRow[], number]> {
     // Every weight is cast to numeric. Postgres infers a bound parameter's type
     // from its context, so `c."views" * $n` typed the 0.1 view weight as an
@@ -319,12 +375,17 @@ export class ContentPieceService {
         GROUP BY "contentId"
       ) p ON p."contentId" = c."id"
       WHERE c."status" = 'live' ${categoryFilter}
+        AND NOT (c."creatorWawuId" = ANY(${hidden}::text[]))
       ORDER BY ${score} DESC, c."createdAt" DESC
       LIMIT ${perPage} OFFSET ${(page - 1) * perPage}
     `);
 
     const total = await this.prisma.contentPiece.count({
-      where: { status: 'live', ...(category ? { category } : {}) },
+      where: {
+        status: 'live',
+        creatorWawuId: { notIn: hidden },
+        ...(category ? { category } : {}),
+      },
     });
     return [rows, total];
   }
@@ -355,6 +416,23 @@ export class ContentPieceService {
     page: number,
     perPage: number,
   ): Promise<Paginated<ContentPieceResponse>> {
+    // SETTINGS-04: a hidden creator's shelf is a 404, like their profile.
+    await this.blockedAccounts.assertVisible(
+      requesterWawuId,
+      creatorWawuId,
+      'User not found',
+    );
+    // A missing id answers exactly as a hidden creator does, so a signed-in
+    // caller cannot use the shelf to tell a blocked account from one that
+    // does not exist. A signed-out reader cannot be blocked, so the public
+    // shelf keeps its old answer (an empty list) for an unknown id.
+    if (requesterWawuId) {
+      const exists = await this.prisma.userProfile.findUnique({
+        where: { wawuUserId: creatorWawuId },
+        select: { wawuUserId: true },
+      });
+      if (!exists) throw new NotFoundException('User not found');
+    }
     const where = { creatorWawuId, status: 'live' as const };
 
     const [items, total] = await this.prisma.$transaction([
@@ -560,6 +638,283 @@ export class ContentPieceService {
     return this.toResponse(created, true);
   }
 
+  // ── My content (ME-09): library, edit, send again ──────────────────────────
+
+  /**
+   * Sales and the latest rejection for a batch of the creator's own pieces,
+   * in two grouped reads. A rejection is reported only for a piece that is
+   * `rejected` right now: after a resubmit the stored decision is history.
+   */
+  private async toMyContentItems(
+    rows: ContentPieceRow[],
+  ): Promise<MyContentItem[]> {
+    if (rows.length === 0) return [];
+    const ids = rows.map((r) => r.id);
+    const rejectedIds = rows
+      .filter((r) => r.status === 'rejected')
+      .map((r) => r.id);
+
+    const [sales, rejections] = await Promise.all([
+      this.prisma.purchase.groupBy({
+        by: ['contentId'],
+        where: { contentId: { in: ids }, type: 'content', status: 'completed' },
+        _count: { _all: true },
+      }),
+      rejectedIds.length === 0
+        ? Promise.resolve([])
+        : this.prisma.adminContentReview.findMany({
+            where: { contentId: { in: rejectedIds }, decision: 'rejected' },
+            orderBy: { reviewedAt: 'desc' },
+            select: { contentId: true, reason: true, reviewedAt: true },
+          }),
+    ]);
+
+    const salesById = new Map<string, number>();
+    for (const row of sales) {
+      if (row.contentId) salesById.set(row.contentId, row._count._all);
+    }
+    // Newest first, so the first row seen per piece is the latest decision.
+    const latest = new Map<
+      string,
+      { reason: string | null; reviewedAt: Date }
+    >();
+    for (const row of rejections) {
+      if (!latest.has(row.contentId)) {
+        latest.set(row.contentId, {
+          reason: row.reason,
+          reviewedAt: row.reviewedAt,
+        });
+      }
+    }
+
+    // The owner always has the full file (resolveUnlockedSet counts the creator).
+    return Promise.all(
+      rows.map(async (row) => {
+        const rejection = latest.get(row.id);
+        return {
+          ...(await this.toResponse(row, true)),
+          salesCount: salesById.get(row.id) ?? 0,
+          rejectionReason: rejection?.reason ?? null,
+          rejectedAt: rejection?.reviewedAt ?? null,
+        };
+      }),
+    );
+  }
+
+  /** GET /content/mine/library: the creator's pieces, newest first, with sales and the reason. */
+  async listMyLibrary(
+    creatorWawuId: string,
+    status: MyContentFilter | undefined,
+    page: number,
+    perPage: number,
+  ): Promise<Paginated<MyContentItem>> {
+    const where = {
+      creatorWawuId,
+      status: status ? status : { not: 'removed' as const },
+    };
+    const [rows, total] = await this.prisma.$transaction([
+      this.prisma.contentPiece.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * perPage,
+        take: perPage,
+      }),
+      this.prisma.contentPiece.count({ where }),
+    ]);
+    return {
+      items: await this.toMyContentItems(rows),
+      currentPage: page,
+      perPage,
+      total,
+    };
+  }
+
+  /** GET /content/mine/library/counts: the numbers on the filter tabs. */
+  async myLibraryCounts(creatorWawuId: string): Promise<MyContentCounts> {
+    const grouped = await this.prisma.contentPiece.groupBy({
+      by: ['status'],
+      where: { creatorWawuId, status: { in: ['live', 'pending', 'rejected'] } },
+      _count: { _all: true },
+    });
+    const count = (s: string) =>
+      grouped.find((g) => g.status === s)?._count._all ?? 0;
+    const live = count('live');
+    const pending = count('pending');
+    const rejected = count('rejected');
+    return { all: live + pending + rejected, live, pending, rejected };
+  }
+
+  /** GET /content/mine/library/:id: one of the creator's own pieces (M26). */
+  async getMyPiece(id: string, creatorWawuId: string): Promise<MyContentItem> {
+    const row = await this.ownPieceOrThrow(id, creatorWawuId);
+    return (await this.toMyContentItems([row]))[0];
+  }
+
+  private async ownPieceOrThrow(
+    id: string,
+    creatorWawuId: string,
+  ): Promise<ContentPieceRow> {
+    const row = await this.prisma.contentPiece.findUnique({ where: { id } });
+    if (!row || row.status === 'removed') {
+      throw new NotFoundException('Content not found');
+    }
+    if (row.creatorWawuId !== creatorWawuId) {
+      throw new ForbiddenException('You can only change your own content.');
+    }
+    return row;
+  }
+
+  /**
+   * PATCH /content/:id: edit details or replace the file while the piece is
+   * `pending` (waiting for review) or `rejected` (to fix what the reviewer
+   * named). A live piece is not editable: the review approved those files and
+   * that text, and an edit would skip the review.
+   *
+   * Editing never changes `status`: a rejected piece stays rejected until the
+   * creator sends it again (`resubmit`), so a half-finished fix is never
+   * queued. The same price rules as `create` apply to the result of the edit,
+   * not only to the fields sent.
+   */
+  async updateMine(
+    id: string,
+    creatorWawuId: string,
+    dto: UpdateContentDto,
+  ): Promise<MyContentItem> {
+    const existing = await this.ownPieceOrThrow(id, creatorWawuId);
+    if (existing.status === 'live') {
+      throw new ConflictException(
+        'A live piece cannot be edited. Take it down to change it.',
+      );
+    }
+
+    const changes: Prisma.ContentPieceUpdateManyMutationInput = {};
+    if (dto.title !== undefined) changes.title = dto.title;
+    if (dto.description !== undefined) changes.description = dto.description;
+    if (dto.category !== undefined) changes.category = dto.category;
+    if (dto.specializations !== undefined)
+      changes.specializations = dto.specializations;
+    if (dto.tags !== undefined) changes.tags = dto.tags;
+    if (dto.accessType !== undefined) changes.accessType = dto.accessType;
+    if (dto.previewAsset !== undefined)
+      changes.previewAssetUrl = dto.previewAsset;
+    if (dto.fullAsset !== undefined) changes.fullAssetUrl = dto.fullAsset;
+
+    const accessType = dto.accessType ?? existing.accessType;
+    // Switching to free needs no price from the creator: free is ₦0.
+    const price = dto.price ?? (dto.accessType === 'free' ? 0 : existing.price);
+    changes.price = price;
+
+    if (Object.keys(changes).length === 1 && dto.price === undefined) {
+      throw new BadRequestException('Send at least one field to change.');
+    }
+    if (accessType === 'free' && price !== 0) {
+      throw new BadRequestException('Free content must be priced at ₦0.');
+    }
+    if (accessType === 'paid' && price <= 0) {
+      throw new BadRequestException(
+        'Paid content must have a price greater than ₦0.',
+      );
+    }
+    const previewAsset = dto.previewAsset ?? existing.previewAssetUrl;
+    const fullAsset = dto.fullAsset ?? existing.fullAssetUrl;
+    if (accessType === 'paid' && previewAsset === fullAsset) {
+      throw new BadRequestException(
+        'Paid content needs a separate free preview. previewAsset must not be the same file as fullAsset.',
+      );
+    }
+
+    // Conditional on the status read above: a reviewer approving the piece
+    // at this instant must win, and the edit must not land on a live piece.
+    const written = await this.prisma.contentPiece.updateMany({
+      where: { id, creatorWawuId, status: { in: ['pending', 'rejected'] } },
+      data: changes,
+    });
+    if (written.count === 0) {
+      throw new ConflictException(
+        'This piece was reviewed a moment ago. Open it again to see where it stands.',
+      );
+    }
+    await this.stampUpdated(this.prisma, id);
+    return this.getMyPiece(id, creatorWawuId);
+  }
+
+  /** Records that the creator changed the piece now (HOME-06: "Updated Sep 2026"). */
+  private async stampUpdated(
+    db: Pick<Prisma.TransactionClient, 'contentDetail'>,
+    contentId: string,
+  ): Promise<void> {
+    const now = new Date();
+    await db.contentDetail.upsert({
+      where: { contentId },
+      create: { contentId, contentUpdatedAt: now },
+      update: { contentUpdatedAt: now },
+    });
+  }
+
+  /**
+   * POST /content/:id/resubmit: send a rejected piece for review again.
+   *
+   * A rejection handed the slot back (admin reject), so sending it again
+   * claims one, conditionally and in the same transaction as the status flip,
+   * against the same allowance as an upload. At the cap it is refused with
+   * the same `upload_limit_reached` reason as POST /content. Pressing it
+   * twice is safe: a piece already `pending` is returned unchanged and no
+   * second slot is claimed.
+   */
+  async resubmit(id: string, creatorWawuId: string): Promise<MyContentItem> {
+    const existing = await this.ownPieceOrThrow(id, creatorWawuId);
+    if (existing.status === 'pending') {
+      return this.getMyPiece(id, creatorWawuId);
+    }
+    if (existing.status !== 'rejected') {
+      throw new ConflictException('Only a rejected piece can be sent again.');
+    }
+
+    const tickHeld = holdsTick(
+      await this.prisma.userProfile.findUnique({
+        where: { wawuUserId: creatorWawuId },
+        select: TICK_COLUMNS,
+      }),
+    );
+    const allowance = uploadAllowanceFor(tickHeld);
+
+    await this.prisma.$transaction(async (tx) => {
+      const flipped = await tx.contentPiece.updateMany({
+        where: { id, creatorWawuId, status: 'rejected' },
+        data: { status: 'pending' },
+      });
+      // Lost a race with a second tap: the winner already claimed the slot.
+      if (flipped.count === 0) return;
+      await this.stampUpdated(tx, id);
+
+      await tx.creatorState.upsert({
+        where: { wawuUserId: creatorWawuId },
+        create: { wawuUserId: creatorWawuId },
+        update: {},
+      });
+      const claimed = await tx.creatorState.updateMany({
+        where: {
+          wawuUserId: creatorWawuId,
+          slotsUsed: { lt: allowance.total },
+        },
+        data: { slotsUsed: { increment: 1 } },
+      });
+      if (claimed.count === 0) {
+        // Throwing rolls the status flip back with it.
+        throw new ForbiddenException({
+          message: `You have used all ${allowance.total} of your upload slots. Remove an item to free one up.`,
+          reason: {
+            code: 'upload_limit_reached',
+            uploadsAllowed: allowance.total,
+            tickHeld,
+            uploadsWithTick: TICK_UPLOADS,
+          },
+        });
+      }
+    });
+    return this.getMyPiece(id, creatorWawuId);
+  }
+
   async listPurchases(
     buyerWawuId: string,
     page: number,
@@ -597,6 +952,11 @@ export class ContentPieceService {
     if (!content || content.status !== 'live') {
       throw new NotFoundException('Content not found');
     }
+    await this.blockedAccounts.assertVisible(
+      buyerWawuId,
+      content.creatorWawuId,
+      'Content not found',
+    );
     if (content.accessType === 'free') {
       throw new BadRequestException(
         'This content is free — no unlock required.',
@@ -734,11 +1094,16 @@ export class ContentPieceService {
   async save(contentId: string, userWawuId: string): Promise<SavedItem> {
     const content = await this.prisma.contentPiece.findUnique({
       where: { id: contentId },
-      select: { id: true },
+      select: { id: true, creatorWawuId: true },
     });
     if (!content) {
       throw new NotFoundException('Content not found');
     }
+    await this.blockedAccounts.assertVisible(
+      userWawuId,
+      content.creatorWawuId,
+      'Content not found',
+    );
 
     return this.prisma.savedItem.upsert({
       where: { userWawuId_contentId: { userWawuId, contentId } },
@@ -775,6 +1140,11 @@ export class ContentPieceService {
     if (!content) {
       throw new NotFoundException('Content not found');
     }
+    await this.blockedAccounts.assertVisible(
+      raterWawuId,
+      content.creatorWawuId,
+      'Content not found',
+    );
 
     const submittedPct = dto.rating * 20;
     const newRatingPct =

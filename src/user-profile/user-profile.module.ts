@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
+import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 import { ContentPieceModule } from '../content-piece/content-piece.module';
 import { StorageModule } from '../storage/storage.module';
 import { WalletModule } from '../wallet/wallet.module';
@@ -7,6 +8,7 @@ import { UserProfileController } from './user-profile.controller';
 import { PublicUserProfileController } from './public-user-profile.controller';
 import { UserProfileService } from './user-profile.service';
 import { ProfileExperienceService } from './profile-experience.service';
+import { ProfileDetailsService } from './profile-details.service';
 
 /**
  * registry.json "UserProfile" resource module. PrismaService comes from the
@@ -31,8 +33,14 @@ import { ProfileExperienceService } from './profile-experience.service';
     // registration). The wallet module owns every Flutterwave call; nothing
     // here talks to Flutterwave itself.
     WalletModule,
+    // BlockedAccountService, so a hidden profile answers 404 (SETTINGS-04).
+    BlockedAccountModule,
   ],
   controllers: [UserProfileController, PublicUserProfileController],
-  providers: [UserProfileService, ProfileExperienceService],
+  providers: [
+    UserProfileService,
+    ProfileExperienceService,
+    ProfileDetailsService,
+  ],
 })
 export class UserProfileModule {}

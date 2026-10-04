@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { CreditSpendModule } from '../credit-spend/credit-spend.module';
 import { CommunityMessageController } from './community-message.controller';
 import { CommunityMessageService } from './community-message.service';
+import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 import { NotificationModule } from '../notification/notification.module';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { LivePublisherModule } from '../live/live-publisher.module';
@@ -24,6 +25,7 @@ import { LivePublisherModule } from '../live/live-publisher.module';
     CreditSpendModule,
     WawuAuthModule,
     LivePublisherModule,
+    BlockedAccountModule,
   ],
   controllers: [CommunityMessageController],
   providers: [CommunityMessageService],

@@ -10,6 +10,7 @@ import type {
   MoneyPartyView,
 } from '../money-view.type';
 import { BankAccountCheckService } from './bank-account-check.service';
+import { BlockedAccountService } from '../../blocked-account/blocked-account.service';
 
 /**
  * PROVISIONAL(BENEFICIARIES-MAX, owner=YOU, why=no ruling or design names how many beneficiaries a person may save; the contract wants a stated maximum on short lists)
@@ -75,10 +76,20 @@ export class BeneficiaryService {
     private readonly prisma: PrismaService,
     private readonly banks: BankAccountCheckService,
     private readonly wawuId: WawuIdClient,
+    private readonly blockedAccounts: BlockedAccountService,
   ) {}
 
   async list(owner: string): Promise<BeneficiaryView[]> {
-    return this.toViews(await visibleBeneficiaries(this.prisma, owner));
+    // SETTINGS-04: a saved person the owner blocked, or who blocked the
+    // owner, is not offered. The row stays and returns on unblocking.
+    const [rows, hidden] = await Promise.all([
+      visibleBeneficiaries(this.prisma, owner),
+      this.blockedAccounts.hiddenFrom(owner),
+    ]);
+    const hide = new Set(hidden);
+    return this.toViews(
+      rows.filter((r) => !r.recipientWawuId || !hide.has(r.recipientWawuId)),
+    );
   }
 
   /**
@@ -116,6 +127,13 @@ export class BeneficiaryService {
   ): Promise<BeneficiaryView> {
     if (recipient === owner) {
       throw new MoneyError('self_transfer', SELF_BENEFICIARY_MESSAGE);
+    }
+    // SETTINGS-04: a hidden person answers as a person who is not found.
+    if (await this.blockedAccounts.isBlockedEitherWay(owner, recipient)) {
+      throw new MoneyError(
+        'recipient_not_found',
+        RECIPIENT_NOT_FOUND_MESSAGE,
+      );
     }
     const [wallet, profile] = await Promise.all([
       this.prisma.fintavaWallet.findUnique({

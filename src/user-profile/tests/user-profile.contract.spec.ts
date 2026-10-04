@@ -480,14 +480,16 @@ describe('UserProfile (contract)', () => {
       expect(res.body.pagination.total).toBeGreaterThan(1);
     });
 
-    it('is empty, not an error, for a creator with nothing live', async () => {
+    // SETTINGS-04 round 2: this case used an id with no account and expected
+    // an empty list, which let a caller tell a missing account (200, empty)
+    // from a blocked one (404). A missing account is now the same 404.
+    it('is "not found" for an id with no account, the same as a hidden one', async () => {
       const res = await request(app.getHttpServer())
         .get(`/users/${randomUUID()}/content`)
         .set('Authorization', `Bearer ${userToken}`)
-        .expect(200);
+        .expect(404);
 
-      expect(res.body.data).toEqual([]);
-      expect(res.body.pagination.total).toBe(0);
+      expect(res.body.data).toBeNull();
     });
 
     it('401s with no Authorization header', async () => {

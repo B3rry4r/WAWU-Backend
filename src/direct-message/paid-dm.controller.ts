@@ -8,19 +8,23 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { ApiResponse } from '@nestjs/swagger';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { CreatorAccountGuard } from './guards/creator-account-guard';
 import { PaidDmService } from './paid-dm.service';
+import { PaidDmPauseService } from './paid-dm-pause.service';
 import {
   PaidDmPageQueryDto,
   PaidDmReplyDto,
   PaidDmThreadsQueryDto,
 } from './dto/paid-dm.dto';
 import type {
+  PaidDmAvailability,
   PaidDmQuestion,
   PaidDmQueuePage,
+  PaidDmStanding,
   PaidDmThreadDetail,
   PaidDmThreadPage,
 } from './paid-dm-view.type';
@@ -33,7 +37,10 @@ import type {
 @UseGuards(WawuAuthGuard)
 @Controller('paid-dm')
 export class PaidDmController {
-  constructor(private readonly paidDm: PaidDmService) {}
+  constructor(
+    private readonly paidDm: PaidDmService,
+    private readonly pause: PaidDmPauseService,
+  ) {}
 
   /** The creator's waiting list: soonest deadline first, with the total waiting. */
   @Get('queue')
@@ -43,6 +50,31 @@ export class PaidDmController {
     @Query() query: PaidDmPageQueryDto,
   ): Promise<PaidDmQueuePage> {
     return this.paidDm.queue(user.sub, query.cursor, query.limit);
+  }
+
+  /** The creator's own standing on unanswered paid questions: warned, paused, and when it ends (R-13). */
+  @Get('standing')
+  @ApiResponse({
+    status: 403,
+    description: 'The caller is not a creator account.',
+  })
+  @UseGuards(CreatorAccountGuard)
+  standing(@CurrentUser() user: WawuJwtClaims): Promise<PaidDmStanding> {
+    return this.pause.standing(user.sub);
+  }
+
+  /** Whether a creator's paid messages are switched off, and until when (I8). Any signed-in user. */
+  @Get('creators/:wawuId/availability')
+  @ApiResponse({ status: 400, description: 'wawuId is not a UUID.' })
+  @ApiResponse({
+    status: 404,
+    description: 'The account has no creator state.',
+  })
+  availability(
+    @Param('wawuId', ParseUUIDPipe) wawuId: string,
+    @CurrentUser() user: WawuJwtClaims,
+  ): Promise<PaidDmAvailability> {
+    return this.pause.availability(wawuId, undefined, user.sub);
   }
 
   /** The caller's threads, one per person, latest activity first. `as=creator` reads the creator side. */
