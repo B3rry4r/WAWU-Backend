@@ -1025,3 +1025,59 @@ still reads. Every answer is `Cache-Control: no-store`.
 - **Not served:** a stamped PDF (Fintava issues no statement; mobile repo
   BACKEND_GAPS G-68) and sending it by email (the backend has no email
   sender; G-69).
+
+---
+
+## 13. Finding a recipient (WALLET-08)
+
+`src/money/recipients/`. `GET /money/recipients?q=` and `GET
+/money/recipients/recent` answer `RecipientView[]` (plain arrays, at most 20
+and 10, no paging: section 6 keeps recipients a short list, and a search is
+narrowed by typing more). Both run MONEY-13's gate (`@RequireOpenWallet()`),
+send `Cache-Control: no-store`, read our database only and never call Fintava.
+
+- **Who can be found, on both routes.** Only a person with an OPEN wallet (a
+  `FintavaWallet` row; R-6). Never the caller. Never a person blocked either
+  way: the one list `BlockedAccountService.hiddenFrom` (SETTINGS-04), read
+  once per request. A blocked person, a person with no wallet and a person
+  who does not exist all answer the same way: nothing.
+- **What a result is.** `wawuUserId`, `displayName`, `handle`, `avatarUrl`,
+  `tick`, and nothing else. Never a phone number (not even masked), an
+  account number, an email, a BVN or a NIN: the queries select none of them.
+  A person found by phone is shown exactly like one found by name. The name
+  is WAWU ID's, else the name on their wallet, else the handle; one with
+  none of the three is left out.
+- **A phone is matched in full, as a phone, and as nothing else.** The text
+  is a phone when it is a whole Nigerian mobile after normalising
+  (`08031234567`, `8031234567`, `2348031234567`, `+2348031234567`, spaces,
+  dashes and brackets ignored; section 2). It is compared with the phone the
+  person's wallet was opened with (`FintavaWalletOpening.phone`, and
+  `WalletIdentity.verifiedPhone`, E.164). Digits that are not a whole mobile
+  are read as text: they can match the beginning of a name or handle, never
+  part of a phone. A handle written like a number never stands in for that
+  number. The Hub holds no other phone: a person who changed the phone on
+  their WAWU account since opening the wallet is found by the one they opened
+  it with.
+- **A name or @handle is matched by its beginning**, case ignored: the
+  beginning of the handle, or of the name on the wallet or any word of it
+  (`okoro` finds `ADAEZE OKORO`). `@text` searches handles only. `%`, `_` and
+  `\` are the characters they are, never wildcards. At least 2 characters
+  after trimming (and after a leading `@`), at most 60; anything else, a
+  missing `q`, a repeated `q` or another query field is a plain 400 in the
+  one error shape (no `reason`: it is a malformed field, section 3). Names
+  live in WAWU ID, which has no search, so a name search reads the name on
+  the wallet and the handle (BACKEND_GAPS G-132).
+- **Order and size.** Search: name order, then id, the first 20. Recent:
+  the caller's own completed outgoing ledger rows (`direction out`, `status
+  completed`, `counterpartyKind wawu_user`, category `transfer` or
+  `purchase`), one person once at the time of their latest send, newest
+  first, the first 10 after blocked people and people with no open wallet are
+  taken out. A pending, failed or reversed send is not a person sent to.
+- **Limits** (PROVISIONAL `RECIPIENT-SEARCH-RATE`,
+  `src/money/recipients/recipient-config.ts`). The search sets a per-address
+  limit tighter than the global ones, on the app's named throttlers: at most
+  20 a minute and 120 an hour from one address (a 429 in the usual envelope,
+  before the token is read). The global `short` and `medium` limits stay.
+  The recent list sets none of its own. There is no per-person count: the
+  global guard runs before the token is verified (BACKEND_GAPS G-133).
+

@@ -22854,6 +22854,119 @@
         ]
       }
     },
+    "/api/hub/money/recipients": {
+      "get": {
+        "operationId": "MoneyRecipientController_search",
+        "parameters": [
+          {
+            "name": "q",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minLength": 2,
+              "maxLength": 60,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RecipientView"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "WAWU users with an open wallet, by name, @handle or phone (W7). Blocked people never appear. At most 20.",
+        "tags": [
+          "MoneyRecipient"
+        ],
+        "x-wawu-built-by": "WALLET-08"
+      }
+    },
+    "/api/hub/money/recipients/recent": {
+      "get": {
+        "operationId": "MoneyRecipientController_recentRecipients",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RecipientView"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The people this user sent money to most recently, newest first (W7). At most 10.",
+        "tags": [
+          "MoneyRecipient"
+        ],
+        "x-wawu-built-by": "WALLET-08"
+      }
+    },
     "/api/hub/chats": {
       "post": {
         "operationId": "ChatController_open",
@@ -23252,123 +23365,6 @@
         ],
         "x-wawu-built-by": "WALLET-09",
         "description": "Declared by MONEY-04, not served yet: WALLET-09 serves it.",
-        "x-wawu-served": false
-      }
-    },
-    "/api/hub/money/recipients": {
-      "get": {
-        "operationId": "MoneyTransferController_recipients",
-        "parameters": [
-          {
-            "name": "q",
-            "required": true,
-            "in": "query",
-            "schema": {
-              "minLength": 2,
-              "maxLength": 60,
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/RecipientView"
-                  }
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "WAWU users with an open wallet, by name, @handle or phone (W7). Blocked people never appear. At most 20.",
-        "tags": [
-          "MoneyTransfer"
-        ],
-        "x-wawu-built-by": "WALLET-08",
-        "description": "Declared by MONEY-04, not served yet: WALLET-08 serves it.",
-        "x-wawu-served": false
-      }
-    },
-    "/api/hub/money/recipients/recent": {
-      "get": {
-        "operationId": "MoneyTransferController_recentRecipients",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/RecipientView"
-                  }
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "The people this user sent money to most recently, newest first (W7). At most 10.",
-        "tags": [
-          "MoneyTransfer"
-        ],
-        "x-wawu-built-by": "WALLET-08",
-        "description": "Declared by MONEY-04, not served yet: WALLET-08 serves it.",
         "x-wawu-served": false
       }
     },
@@ -28423,6 +28419,40 @@
           "accountName",
           "matchesBvnName",
           "updatedAt"
+        ]
+      },
+      "RecipientView": {
+        "type": "object",
+        "properties": {
+          "wawuUserId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "tick": {
+            "type": "string",
+            "enum": [
+              "creator",
+              "professional"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "wawuUserId",
+          "displayName",
+          "handle",
+          "avatarUrl",
+          "tick"
         ]
       },
       "ReceiptPartyView": {
@@ -37796,40 +37826,6 @@
           "bankName",
           "accountNumber",
           "accountName"
-        ]
-      },
-      "RecipientView": {
-        "type": "object",
-        "properties": {
-          "wawuUserId": {
-            "type": "string"
-          },
-          "displayName": {
-            "type": "string"
-          },
-          "handle": {
-            "type": "string",
-            "nullable": true
-          },
-          "avatarUrl": {
-            "type": "string",
-            "nullable": true
-          },
-          "tick": {
-            "type": "string",
-            "enum": [
-              "creator",
-              "professional"
-            ],
-            "nullable": true
-          }
-        },
-        "required": [
-          "wawuUserId",
-          "displayName",
-          "handle",
-          "avatarUrl",
-          "tick"
         ]
       },
       "TransferTimelineEntry": {

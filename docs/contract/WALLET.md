@@ -37,8 +37,8 @@ caller from the token.
 | `POST /money/approval/verify` | `PinStateView` | `X-Transaction-Pin` or `X-Device-Approval` | MONEY-14 (served) |
 | `GET /money/banks` | `BankView[]` | | WALLET-09 |
 | `POST /money/banks/name-check` | `AccountNameView` | `NameCheckDto` | WALLET-09 |
-| `GET /money/recipients?q=` | `RecipientView[]` (at most 20) | | WALLET-08 |
-| `GET /money/recipients/recent` | `RecipientView[]` (at most 10) | | WALLET-08 |
+| `GET /money/recipients?q=` | `RecipientView[]` (at most 20) | | WALLET-08 (served; CONVENTIONS.md section 13) |
+| `GET /money/recipients/recent` | `RecipientView[]` (at most 10) | | WALLET-08 (served; CONVENTIONS.md section 13) |
 | `GET /money/beneficiaries` | `BeneficiaryView[]` | | WALLET-14 (served; CONVENTIONS.md section 10) |
 | `POST /money/beneficiaries` | `BeneficiaryView` | `CreateBeneficiaryDto` | WALLET-14 (served; CONVENTIONS.md section 10) |
 | `DELETE /money/beneficiaries/{id}` | `null` | | WALLET-14 (served; CONVENTIONS.md section 10) |
@@ -183,7 +183,7 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 | W6 Can't reach account | a typed "provider unreachable", tiles still usable | `GET /money/wallet/balance` → `503 provider_unreachable`; `GET /money/wallet` never calls Fintava, so it still answers |
 | W7 Send to a WAWU user | search by name, @handle, phone; id, name, handle, avatar, tick | `GET /money/recipients?q=` → `RecipientView` (phone normalised to `+234`, full match only) |
 | | recent recipients | `GET /money/recipients/recent` |
-| | whether they have a wallet | search returns wallet holders only (WALLET-08 scope); a send to anyone else is `409 recipient_has_no_wallet` |
+| | whether they have a wallet | search returns wallet holders only (WALLET-08, CONVENTIONS.md section 13); a send to anyone else is `409 recipient_has_no_wallet` |
 | W8 Send to a bank | bank list | `GET /money/banks` |
 | | name check before Continue | `POST /money/banks/name-check` → `AccountNameView`; `422 name_check_failed` |
 | | saved beneficiaries, "My payout account" | `GET /money/beneficiaries`; `GET /money/payout-account` |
