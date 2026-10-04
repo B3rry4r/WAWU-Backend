@@ -723,6 +723,11 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
     },
     { model: 'MoneyPayoutAccount', reason: 'A bank account number.' },
     {
+      model: 'MoneyReceipt',
+      reason:
+        'A receipt code for one wallet transaction; it holds the account number, and wallet transactions are not exported (G-130).',
+    },
+    {
       model: 'PendingCharge',
       reason: 'An internal payment attempt, not a record.',
     },
