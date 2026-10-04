@@ -9,11 +9,7 @@ import {
   RECENT_RECIPIENTS_MAX,
   RECIPIENT_SEARCH_MAX,
 } from './recipient-config';
-import {
-  likeLiteral,
-  readRecipientQuery,
-  type RecipientQuery,
-} from './recipient-query';
+import { likeLiteral, type RecipientQuery } from './recipient-query';
 
 /** A person the queries found: who, and the name on their wallet (the fallback name). */
 type Found = { wawuUserId: string; accountName: string | null };
@@ -49,7 +45,8 @@ export class RecipientService {
   ) {}
 
   /**
-   * `GET /money/recipients?q=`. By phone: the one person whose proved phone
+   * `GET /money/recipients?q=` (the text is read by `readRecipientQuery`
+   * first, in the controller). By phone: the one person whose proved phone
    * (the one their wallet was opened with, E.164) is exactly that number.
    * By name or @handle: whose handle, or the name on whose wallet (or any
    * word of it), begins with the text, case ignored. At most
@@ -61,8 +58,10 @@ export class RecipientService {
    * G-132). The name shown is still WAWU ID's, then the wallet's, then the
    * handle.
    */
-  async search(caller: string, raw: string): Promise<RecipientView[]> {
-    const query = readRecipientQuery(raw);
+  async search(
+    caller: string,
+    query: RecipientQuery,
+  ): Promise<RecipientView[]> {
     const hidden = await this.blockedAccounts.hiddenFrom(caller);
     const found =
       query.kind === 'phone'

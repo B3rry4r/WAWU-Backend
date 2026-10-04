@@ -410,7 +410,13 @@ function main() {
         let inner = toSchema(returnType, 0);
         if (inner === null) continue; // void: no body to describe
         if (route.startsWith(`${GLOBAL_PREFIX}/money/`)) inner = nullableRefAsAllOf(inner);
-        const schema = paginated ? { type: 'array', items: inner } : inner;
+        let schema = paginated ? { type: 'array', items: inner } : inner;
+        // A list route that states its maximum (`@MaxItems(n)`, money
+        // contract) carries it on the array.
+        const max = op['x-wawu-max-items'];
+        if (typeof max === 'number' && schema.type === 'array') {
+          schema = { ...schema, maxItems: max };
+        }
 
         for (const code of Object.keys(op.responses ?? {})) {
           if (!/^2/.test(code)) continue;

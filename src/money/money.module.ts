@@ -38,6 +38,7 @@ import { PinResetService } from './pin/pin-reset.service';
 import { TransactionPinGuard } from './pin/transaction-pin.guard';
 import { TransactionPinService } from './pin/transaction-pin.service';
 import { MoneyRecipientController } from './recipients/money-recipient.controller';
+import { RecipientSearchLimiter } from './recipients/recipient-config';
 import { RecipientService } from './recipients/recipient.service';
 import { MoneyReceiptController } from './receipts/money-receipt.controller';
 import { PublicReceiptController } from './receipts/public-receipt.controller';
@@ -168,6 +169,7 @@ import { ReceiptService } from './receipts/receipt.service';
     ReceiptSettings,
     ReceiptService,
     RecipientService,
+    RecipientSearchLimiter,
   ],
   exports: [
     WalletGate,

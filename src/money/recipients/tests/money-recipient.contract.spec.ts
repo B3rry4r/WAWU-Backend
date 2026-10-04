@@ -499,6 +499,39 @@ describe('Recipient search and recent recipients (WALLET-08) over HTTP', () => {
       }
     });
 
+    it('reads digits written in another script as text, never as the phone: fullwidth, Arabic-Indic, Devanagari, superscript', async () => {
+      const me = await holder({});
+      const target = await holder({ wallet: `${TAG}SCRIPT ONE` });
+      const ascii = local(target.phone);
+      const written = (zero: number) =>
+        [...ascii].map((d) => String.fromCodePoint(zero + Number(d))).join('');
+      const forms = [
+        written(0xff10), // fullwidth
+        written(0x0660), // Arabic-Indic
+        written(0x06f0), // Eastern Arabic-Indic
+        written(0x0966), // Devanagari
+        `+２３４${[...target.phone.slice(4)].map((d) => String.fromCodePoint(0xff10 + Number(d))).join('')}`,
+        // One ASCII digit among them is still not a phone.
+        `${ascii.slice(0, 1)}${written(0xff10).slice(1)}`,
+        `${[...ascii.slice(0, 10)].map((d) => '⁰¹²³⁴⁵⁶⁷⁸⁹'[Number(d)]).join('')}${ascii.slice(10)}`,
+      ];
+      for (const q of forms) {
+        expect(readRecipientQuery(q).kind).toBe('name');
+        const res = await search(me, q).expect(200);
+        expect({ q, ids: ids(body<RecipientView[]>(res).data!) }).toEqual({
+          q,
+          ids: [],
+        });
+      }
+      // The same number in ASCII does find them.
+      expect(ids(await found(me, ascii))).toEqual([target.id]);
+      // A 9-digit text is a name text, not a number with a digit put in front.
+      expect(readRecipientQuery(target.phone.slice(5)).kind).toBe('name');
+      expect(readRecipientQuery(local(target.phone).slice(0, 10)).kind).toBe(
+        'name',
+      );
+    });
+
     it('does not match a number that only shares its last digits, or its first', async () => {
       const me = await holder({});
       // Eight random digits, then the same eight under another network
@@ -933,20 +966,61 @@ describe('Recipient search and recent recipients (WALLET-08) over HTTP', () => {
   });
 
   describe('the size of an answer', () => {
-    it(`answers at most ${RECIPIENT_SEARCH_MAX} people, the first ${RECIPIENT_SEARCH_MAX} in name order`, async () => {
+    it('answers at most 20 people, the first 20 in name order, and 20 is the declared maximum', async () => {
       const me = await holder({});
       const names: string[] = [];
-      for (let i = 0; i < RECIPIENT_SEARCH_MAX + 5; i += 1) {
+      for (let i = 0; i < 25; i += 1) {
         const n = `${TAG}CAP${String(i).padStart(2, '0')}`;
         names.push(n);
         await holder({ wallet: n });
       }
       const answer = await found(me, `${TAG}cap`);
-      expect(answer).toHaveLength(RECIPIENT_SEARCH_MAX);
-      expect(answer.map((r) => r.displayName)).toEqual(
-        names.slice(0, RECIPIENT_SEARCH_MAX),
-      );
+      expect(RECIPIENT_SEARCH_MAX).toBe(20);
+      expect(answer).toHaveLength(20);
+      expect(answer.map((r) => r.displayName)).toEqual(names.slice(0, 20));
     }, 30_000);
+  });
+
+  describe('the contract', () => {
+    type Op = {
+      responses: Record<
+        string,
+        { content?: Record<string, { schema?: Record<string, unknown> }> }
+      >;
+      'x-wawu-served'?: boolean;
+    };
+    const spec = JSON.parse(
+      readFileSync(
+        join(__dirname, '../../../../contract/openapi.json'),
+        'utf8',
+      ),
+    ) as { paths: Record<string, { get: Op }> };
+
+    it('serves both routes, declares the search 400 and 429 beside the gate answers, and states the maximum on both arrays', () => {
+      const search = spec.paths['/api/hub/money/recipients'].get;
+      const recent = spec.paths['/api/hub/money/recipients/recent'].get;
+      expect(search['x-wawu-served']).toBeUndefined();
+      expect(recent['x-wawu-served']).toBeUndefined();
+      expect(Object.keys(search.responses).sort()).toEqual([
+        '200',
+        '400',
+        '409',
+        '423',
+        '429',
+      ]);
+      expect(
+        search.responses['400'].content?.['application/json'].schema,
+      ).toEqual({ $ref: '#/components/schemas/MoneyPlainErrorEnvelope' });
+      expect(
+        search.responses['429'].content?.['application/json'].schema,
+      ).toEqual({ $ref: '#/components/schemas/MoneyErrorEnvelope' });
+      expect(
+        search.responses['200'].content?.['application/json'].schema,
+      ).toMatchObject({ type: 'array', maxItems: 20 });
+      expect(
+        recent.responses['200'].content?.['application/json'].schema,
+      ).toMatchObject({ type: 'array', maxItems: 10 });
+    });
   });
 
   describe('recent recipients', () => {
@@ -1024,19 +1098,21 @@ describe('Recipient search and recent recipients (WALLET-08) over HTTP', () => {
       ).toEqual([theirs.id]);
     });
 
-    it(`answers at most ${RECENT_RECIPIENTS_MAX} people, the newest ${RECENT_RECIPIENTS_MAX}`, async () => {
+    it('answers at most 10 people, the newest 10, and 10 is the declared maximum', async () => {
       const me = await holder({});
       const made: Person[] = [];
       const now = Date.now();
-      for (let i = 0; i < RECENT_RECIPIENTS_MAX + 3; i += 1) {
+      for (let i = 0; i < 13; i += 1) {
         const p = await holder({ wallet: `${TAG}REC${i}` });
         made.push(p);
         await sent(me, p, { at: new Date(now - (100 - i) * 1000) });
       }
       const answer = body<RecipientView[]>(await recent(me).expect(200)).data!;
+      expect(RECENT_RECIPIENTS_MAX).toBe(10);
+      expect(answer).toHaveLength(10);
       expect(ids(answer)).toEqual(
         made
-          .slice(-RECENT_RECIPIENTS_MAX)
+          .slice(-10)
           .reverse()
           .map((p) => p.id),
       );

@@ -234,6 +234,7 @@ Every refusal is the envelope this backend already answers with
 | `device_approval_refused` | 403 | `X-Device-Approval` not accepted: not the registered phone, a wrong signature, a used, expired or another person's challenge, or no phone registered; never uses a PIN try (MONEY-14) | |
 | `statement_rate_limited` | 429 | the person has asked for 5 statements in the last minute or 30 in the last hour (`STATEMENT_RATE_LIMITS`, PROVISIONAL), counted after the token is verified (WALLET-27) | `retryAfterSeconds` |
 | `statement_busy` | 503 | two statements are already being built and no place came free within 5 s (`STATEMENT_CONCURRENCY`, PROVISIONAL) (WALLET-27) | `retryAfterSeconds` |
+| `recipient_search_rate_limited` | 429 | the person has searched for recipients 20 times in the last minute, 120 in the last hour or 500 in the last day (`RECIPIENT_SEARCH_PERSON_LIMITS`, PROVISIONAL), counted after the token is verified (WALLET-08); also sent as the `Retry-After` header | `retryAfterSeconds` |
 | `statement_too_large` | 400 | the period holds more movements than one statement lists (`STATEMENT_MAX_ROWS`, 50,000); counted before anything is written, and the person picks a shorter range (WALLET-27) | |
 | `phone_held_by_other_identity` | 409 | account opening where Fintava already has a customer for the person's phone whose record does not carry the checked BVN (or carries none): nothing is adopted or created, and the opening stops for review (MONEY-12, BACKEND_GAPS G-37) | |
 
@@ -1074,10 +1075,28 @@ send `Cache-Control: no-store`, read our database only and never call Fintava.
   first, the first 10 after blocked people and people with no open wallet are
   taken out. A pending, failed or reversed send is not a person sent to.
 - **Limits** (PROVISIONAL `RECIPIENT-SEARCH-RATE`,
-  `src/money/recipients/recipient-config.ts`). The search sets a per-address
-  limit tighter than the global ones, on the app's named throttlers: at most
-  20 a minute and 120 an hour from one address (a 429 in the usual envelope,
-  before the token is read). The global `short` and `medium` limits stay.
-  The recent list sets none of its own. There is no per-person count: the
-  global guard runs before the token is verified (BACKEND_GAPS G-133).
-
+  `src/money/recipients/recipient-config.ts`; lead's figures after the
+  round-1 verifier walked 6,000 holders at about 3 requests a person). Two
+  kinds, both kept:
+  - **Per address**, on the app's named throttlers, tighter than the global
+    ones (which stay): at most 20 a minute and 120 an hour from one address.
+    A refusal is the guard's own `429` with no `reason`, before the token is
+    read. The recent list sets none of its own.
+  - **Per person** (`RecipientSearchLimiter`, the shared
+    `PersonWindowLimiter` that statements use too): at most 20 a minute, 120
+    an hour and 500 a day, each a fixed window that starts at the person's
+    first search in it, keyed by the verified wawuUserId. It is counted in
+    the handler, after `WawuAuthGuard` has verified the token and the wallet
+    gate has found the wallet, so a forged or missing token never makes an
+    entry and a person with no wallet is refused by the gate first. A search
+    the route refuses with a 400 is read before it is counted and does not
+    count. Beyond any window: `429 recipient_search_rate_limited`, "You have
+    searched a lot in a short time. Try again in a little while.", with
+    `retryAfterSeconds` (seconds to the end of the longest full window,
+    rounded up, at least 1) and the same number in a `Retry-After` header.
+    One account cannot get round it by changing address (a whole IPv6 /64 is
+    one caller's), and two accounts on one address each keep their own
+    budget while the address limit still holds for the address.
+- **Contract.** The search declares its plain `400` (a malformed `q`, no
+  `reason`) and `429` (`recipient_search_rate_limited`; the per-address 429
+  has no `reason`); both lists carry `maxItems` (20 and 10).

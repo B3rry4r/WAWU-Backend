@@ -13,11 +13,16 @@ import {
   applyHubHttpSettings,
   HUB_APP_OPTIONS,
 } from '../../../hub-app-options';
-import { RECIPIENT_SEARCH_THROTTLE } from '../recipient-config';
+import {
+  RECIPIENT_SEARCH_PERSON_LIMITS,
+  RECIPIENT_SEARCH_THROTTLE,
+  RecipientSearchLimiter,
+} from '../recipient-config';
 
 /**
  * GET /money/recipients is limited per address, tighter than the global
- * limits, by the app's OWN global ThrottlerGuard (task WALLET-08): the whole
+ * limits, by the app's OWN global ThrottlerGuard, and per person by
+ * RecipientSearchLimiter in the handler (task WALLET-08): the whole
  * AppModule, so the guard, its storage and its named throttlers (`short`,
  * `medium`, app.module.ts) are the real ones. A route-level `@Throttle()`
  * only takes effect for a throttler the module registered, which the first
@@ -208,8 +213,179 @@ describe('Recipient search throttle through the global ThrottlerGuard (WALLET-08
     }
     expect(a.slice(0, 20)).toEqual(Array(20).fill(200));
     expect(a[20]).toBe(429);
-    // Another caller, the same moment, is not held up by it.
-    expect((await searchFrom(auth, '198.51.100.84')).status).toBe(200);
+    // Another caller on another address, the same moment, is not held up by it.
+    expect((await searchFrom(await holder(), '198.51.100.84')).status).toBe(
+      200,
+    );
+  });
+
+  describe('per person, counted after the token is verified', () => {
+    const body = (res: request.Response) =>
+      res.body as {
+        statusCode: number;
+        message: string;
+        data: null;
+        reason?: { code: string; message: string; retryAfterSeconds?: number };
+      };
+
+    it('the figures are these exact ones: 20 a minute, 120 an hour, 500 a day', () => {
+      expect(RECIPIENT_SEARCH_PERSON_LIMITS).toEqual([
+        { name: 'minute', limit: 20, windowMs: 60_000 },
+        { name: 'hour', limit: 120, windowMs: 3_600_000 },
+        { name: 'day', limit: 500, windowMs: 86_400_000 },
+      ]);
+    });
+
+    it('one account from 30 addresses in one /64 is refused after 20 in a minute, in the one error shape with Retry-After', async () => {
+      const auth = await holder();
+      const results: request.Response[] = [];
+      for (let i = 1; i <= 30; i += 1) {
+        results.push(
+          await searchFrom(auth, `2001:db8:abcd:12::${i.toString(16)}`),
+        );
+      }
+      expect(results.slice(0, 20).map((r) => r.status)).toEqual(
+        Array(20).fill(200),
+      );
+      expect(results.slice(20).map((r) => r.status)).toEqual(
+        Array(10).fill(429),
+      );
+      for (const r of results.slice(20)) {
+        const b = body(r);
+        expect(b).toMatchObject({ statusCode: 429, data: null });
+        expect(b.reason?.code).toBe('recipient_search_rate_limited');
+        expect(b.reason?.message).toBe(b.message);
+        const wait = b.reason?.retryAfterSeconds ?? 0;
+        expect(wait).toBeGreaterThanOrEqual(1);
+        expect(wait).toBeLessThanOrEqual(60);
+        expect(Number.isInteger(wait)).toBe(true);
+        expect(r.headers['retry-after']).toBe(String(wait));
+        expect(JSON.stringify(b)).not.toContain('\u2014');
+      }
+    });
+
+    it('two accounts on one address each keep their own budget, and the address limit still applies to the address', async () => {
+      const a = await holder();
+      const b = await holder();
+      const x = '198.51.100.91';
+      const y = '198.51.100.92';
+      for (let i = 0; i < 15; i += 1) {
+        expect((await searchFrom(a, x)).status).toBe(200);
+      }
+      for (let i = 0; i < 5; i += 1) {
+        expect((await searchFrom(b, x)).status).toBe(200);
+      }
+      // The address has had its 20: both accounts are refused from it, by
+      // the address limit (a 429 with no `reason`).
+      for (const who of [a, b]) {
+        const res = await searchFrom(who, x);
+        expect(res.status).toBe(429);
+        expect(body(res).reason).toBeUndefined();
+      }
+      // From another address each has what is left of their own 20: A used
+      // 15, B used 5 (the two refusals above were never counted).
+      for (let i = 0; i < 5; i += 1) {
+        expect((await searchFrom(a, y)).status).toBe(200);
+      }
+      const aOver = await searchFrom(a, y);
+      expect(aOver.status).toBe(429);
+      expect(body(aOver).reason?.code).toBe('recipient_search_rate_limited');
+      const z = '198.51.100.93';
+      for (let i = 0; i < 15; i += 1) {
+        expect((await searchFrom(b, z)).status).toBe(200);
+      }
+      const bOver = await searchFrom(b, z);
+      expect(bOver.status).toBe(429);
+      expect(body(bOver).reason?.code).toBe('recipient_search_rate_limited');
+    });
+
+    it('a request that is refused before the handler (no token, a bad token, a 400, no wallet) is never counted', async () => {
+      const auth = await holder();
+      const one = (q: string, a: string | null, c: string) => {
+        const req = request(app.getHttpServer())
+          .get('/api/hub/money/recipients')
+          .query({ q })
+          .set('X-Forwarded-For', c);
+        return a ? req.set('Authorization', a) : req;
+      };
+      let n = 0;
+      const addr = () => `2001:db8:94::${(n++).toString(16)}`;
+      for (let i = 0; i < 30; i += 1) {
+        expect((await one('zzqqxx', null, addr())).status).toBe(401);
+        expect((await one('a', auth, addr())).status).toBe(400);
+        expect(
+          (await one('zzqqxx', `Bearer ${mintToken(randomUUID())}`, addr()))
+            .status,
+        ).toBe(409);
+      }
+      // 90 refused requests, none counted: all 20 searches are still there.
+      for (let i = 0; i < 20; i += 1) {
+        expect((await one('zzqqxx', auth, addr())).status).toBe(200);
+      }
+      expect((await one('zzqqxx', auth, addr())).status).toBe(429);
+    });
+
+    it('the hour and the day count too: 120 an hour, 500 a day, with the wait rounded up, on a clock the test moves', async () => {
+      const limiter = app.get(RecipientSearchLimiter, { strict: false });
+      const auth = await holder();
+      const t0 = 1_800_000_000_000;
+      let clock = t0;
+      limiter.now = () => clock;
+      let n = 0;
+      const addr = () => `2001:db8:5::${(n++).toString(16)}`;
+      const search = () => searchFrom(auth, addr());
+      const burst = async (count: number) => {
+        const out: number[] = [];
+        for (let i = 0; i < count; i += 1) out.push((await search()).status);
+        return out;
+      };
+      try {
+        // Hour 1: six minutes of 20 (a new minute window every 61 s) is 120.
+        for (let m = 0; m < 6; m += 1) {
+          clock = t0 + m * 61_000;
+          expect(await burst(20)).toEqual(Array(20).fill(200));
+        }
+        // The 121st, in minute 7 of the same hour, is the hour's.
+        clock = t0 + 6 * 61_000;
+        const hourOver = await search();
+        expect(hourOver.status).toBe(429);
+        expect(body(hourOver).reason?.code).toBe(
+          'recipient_search_rate_limited',
+        );
+        // The hour began at t0: 3,600,000 - 366,000 ms = 3,234 s, exactly.
+        expect(body(hourOver).reason?.retryAfterSeconds).toBe(3_234);
+        expect(hourOver.headers['retry-after']).toBe('3234');
+        // A part second rounds up: 1 ms before the hour ends, 1 s to wait.
+        clock = t0 + 3_599_999;
+        const nearly = await search();
+        expect(nearly.status).toBe(429);
+        expect(body(nearly).reason?.retryAfterSeconds).toBe(1);
+        // Hours 2 to 4: 120 each, so 480 in all by the end of hour 4.
+        for (let h = 1; h < 4; h += 1) {
+          for (let m = 0; m < 6; m += 1) {
+            clock = t0 + h * 3_600_000 + m * 61_000;
+            expect(await burst(20)).toEqual(Array(20).fill(200));
+          }
+        }
+        // Hour 5: 20 more makes 500 for the day; the 501st is the day's,
+        // although the minute and the hour have room.
+        clock = t0 + 4 * 3_600_000;
+        expect(await burst(20)).toEqual(Array(20).fill(200));
+        clock = t0 + 4 * 3_600_000 + 61_000;
+        const dayOver = await search();
+        expect(dayOver.status).toBe(429);
+        expect(body(dayOver).reason?.code).toBe(
+          'recipient_search_rate_limited',
+        );
+        // The day began at t0: 86,400,000 - 14,461,000 ms = 71,939 s.
+        expect(body(dayOver).reason?.retryAfterSeconds).toBe(71_939);
+        // A day later the person has a clean sheet.
+        clock = t0 + 86_400_000;
+        expect((await search()).status).toBe(200);
+      } finally {
+        limiter.now = () => Date.now();
+      }
+    }, 60_000);
   });
 
   it('the recent list sets no limit of its own: its headers show the global ones, 20 a second and 200 a minute', async () => {

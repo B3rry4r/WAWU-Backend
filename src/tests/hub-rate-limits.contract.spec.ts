@@ -40,7 +40,10 @@ import { MoneyIdentityController } from '../money/identity/money-identity.contro
 import { MoneyReceiptController } from '../money/receipts/money-receipt.controller';
 import { PublicReceiptController } from '../money/receipts/public-receipt.controller';
 import { MoneyRecipientController } from '../money/recipients/money-recipient.controller';
-import { RECIPIENT_SEARCH_THROTTLE } from '../money/recipients/recipient-config';
+import {
+  RECIPIENT_SEARCH_PERSON_LIMITS,
+  RECIPIENT_SEARCH_THROTTLE,
+} from '../money/recipients/recipient-config';
 import { MoneyStatementController } from '../money/statements/money-statement.controller';
 import {
   STATEMENT_CONCURRENCY,
@@ -417,6 +420,13 @@ describe('Rate limits behind nginx (OPS-11)', () => {
       // WALLET-08: the recipient search reaches every wallet holder, and sets
       // exactly these per-address limits: 20 a minute and 120 an hour, no
       // block of its own. The recent list (a different handler) sets none.
+      // On top, one person is counted in the handler, after the token is
+      // verified (RecipientSearchLimiter): 20 a minute, 120 an hour, 500 a day.
+      expect(RECIPIENT_SEARCH_PERSON_LIMITS).toEqual([
+        { name: 'minute', limit: 20, windowMs: 60_000 },
+        { name: 'hour', limit: 120, windowMs: 3_600_000 },
+        { name: 'day', limit: 500, windowMs: 86_400_000 },
+      ]);
       expect(RECIPIENT_SEARCH_THROTTLE).toEqual({
         short: { limit: 20, ttl: 60_000 },
         medium: { limit: 120, ttl: 3_600_000 },

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { MoneyError } from '../money-error';
+import { PersonWindowLimiter } from '../person-window-limiter';
 
 /**
  * Limits on statements (task WALLET-27, rounds 2 and 3). A statement's cost
@@ -56,96 +57,26 @@ export const STATEMENT_RATE_LIMITED_MESSAGE =
 export const STATEMENT_BUSY_MESSAGE =
   'Statements are busy right now. Try again in a few seconds.';
 
-/** How often the limiter sweeps out people whose windows have all ended. */
-const PRUNE_EVERY_MS = 60_000;
-
 /**
- * The per-person statement limit: a fixed-window counter per verified
- * wawuUserId, in memory, one process.
- *
- * Bounded: an entry is made only by `take`, which the controller calls
- * after WawuAuthGuard verified the token and the wallet gate found the
- * person's wallet, so a request with a forged or no token never makes one.
- * An entry whose windows have all ended is removed by a sweep at most once
- * a minute (and checked on its own next use), so the map holds at most the
- * people who asked for a statement in the last hour. No timer is kept per
- * request.
+ * The per-person statement limit: the shared fixed-window counter per
+ * verified wawuUserId (`PersonWindowLimiter`), with STATEMENT_RATE_LIMITS
+ * and `429 statement_rate_limited`. A statement's entry is made only by
+ * `take`, which the controller calls after WawuAuthGuard verified the token
+ * and the wallet gate found the person's wallet, so a request with a forged
+ * or no token never makes one.
  */
 @Injectable()
-export class StatementRateLimiter {
-  /** The clock; a test may replace it. */
-  now: () => number = () => Date.now();
-  private readonly entries = new Map<
-    string,
-    { starts: number[]; counts: number[] }
-  >();
-  private lastPrune = 0;
-
-  /**
-   * Counts one statement for this person, or refuses with 429. Returns a
-   * function that gives the place back (for an answer that should not
-   * count, `statement_too_large`); it gives back only within the windows it
-   * was counted in, and only once.
-   */
-  take(wawuUserId: string): () => void {
-    const now = this.now();
-    if (now - this.lastPrune >= PRUNE_EVERY_MS) this.prune(now);
-    let e = this.entries.get(wawuUserId);
-    if (!e) {
-      e = {
-        starts: STATEMENT_RATE_LIMITS.map(() => now),
-        counts: STATEMENT_RATE_LIMITS.map(() => 0),
-      };
-      this.entries.set(wawuUserId, e);
-    }
-    let waitMs = 0;
-    STATEMENT_RATE_LIMITS.forEach((w, i) => {
-      if (now - e.starts[i] >= w.windowMs) {
-        e.starts[i] = now;
-        e.counts[i] = 0;
-      }
-      if (e.counts[i] >= w.limit) {
-        waitMs = Math.max(waitMs, e.starts[i] + w.windowMs - now);
-      }
-    });
-    if (waitMs > 0) {
-      throw new MoneyError(
-        'statement_rate_limited',
-        STATEMENT_RATE_LIMITED_MESSAGE,
-        { retryAfterSeconds: Math.max(1, Math.ceil(waitMs / 1000)) },
-      );
-    }
-    STATEMENT_RATE_LIMITS.forEach((_w, i) => {
-      e.counts[i] += 1;
-    });
-    const starts = [...e.starts];
-    let given = false;
-    return () => {
-      if (given) return;
-      given = true;
-      const now = this.entries.get(wawuUserId);
-      if (!now) return;
-      STATEMENT_RATE_LIMITS.forEach((_w, i) => {
-        if (now.starts[i] === starts[i] && now.counts[i] > 0)
-          now.counts[i] -= 1;
-      });
-    };
-  }
-
-  /** Removes everyone whose every window has ended. */
-  prune(now: number = this.now()): void {
-    this.lastPrune = now;
-    for (const [key, e] of this.entries) {
-      const live = STATEMENT_RATE_LIMITS.some(
-        (w, i) => now - e.starts[i] < w.windowMs,
-      );
-      if (!live) this.entries.delete(key);
-    }
-  }
-
-  /** How many people the limiter holds (for tests and the bound above). */
-  get size(): number {
-    return this.entries.size;
+export class StatementRateLimiter extends PersonWindowLimiter {
+  constructor() {
+    super(
+      STATEMENT_RATE_LIMITS,
+      (retryAfterSeconds) =>
+        new MoneyError(
+          'statement_rate_limited',
+          STATEMENT_RATE_LIMITED_MESSAGE,
+          { retryAfterSeconds },
+        ),
+    );
   }
 }
 
