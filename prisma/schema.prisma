@@ -4115,3 +4115,13 @@ model LegalDocument {
   sections      Json
   updatedAt     DateTime @updatedAt
 }
+
+/// HOME-11: whether this person wants TGIF on Today. One row per person, made
+/// the first time they change it; no row means the default (shown). Nothing
+/// else references it.
+model TgifPreference {
+  userWawuId String   @id
+  /// false = the person turned TGIF off on Today.
+  show       Boolean  @default(true)
+  updatedAt  DateTime @updatedAt
+}

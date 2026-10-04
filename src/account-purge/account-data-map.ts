@@ -102,6 +102,8 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'Notification', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'NotificationSettings', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'PrivacySettings', column: 'userWawuId', disposition: 'OWNED' },
+  // Whether this person wants TGIF on Today (HOME-11): theirs alone.
+  { model: 'TgifPreference', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'DataExportRequest', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'BlockedAccount', column: 'userWawuId', disposition: 'OWNED' },
   // How far this person had read in each chat: theirs alone.
