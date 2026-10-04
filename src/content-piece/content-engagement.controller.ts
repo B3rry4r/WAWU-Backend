@@ -14,6 +14,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { ContentEngagementService } from './content-engagement.service';
 import { FeedQueryDto } from './feed-query.dto';
+import { FeedEntriesService } from './feed-entries.service';
 
 /**
  * Likes, views, shares and the viewer's flags on a piece (HOME-04). All new
@@ -74,11 +75,30 @@ export class ContentEngagementController {
 @UseGuards(WawuAuthGuard)
 @Controller('feed')
 export class FeedController {
-  constructor(private readonly engagement: ContentEngagementService) {}
+  constructor(
+    private readonly engagement: ContentEngagementService,
+    private readonly entries: FeedEntriesService,
+  ) {}
 
   @Get()
   feed(@CurrentUser() user: WawuJwtClaims, @Query() query: FeedQueryDto) {
     return this.engagement.feed(
+      user.sub,
+      query.scope,
+      query.category,
+      query.sort,
+      query.page,
+      query.perPage,
+    );
+  }
+
+  /**
+   * The mixed feed (HOME-05): the same cards as `GET /feed`, with creator and
+   * professional cards among them on For you.
+   */
+  @Get('entries')
+  mixed(@CurrentUser() user: WawuJwtClaims, @Query() query: FeedQueryDto) {
+    return this.entries.entries(
       user.sub,
       query.scope,
       query.category,
