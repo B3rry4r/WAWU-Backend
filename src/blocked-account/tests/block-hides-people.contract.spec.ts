@@ -680,6 +680,123 @@ describe('Blocking hides people (contract)', () => {
     expect(hidden.body).toEqual(missing.body);
   });
 
+  it("a user cannot like, unlike, view, share or read the engagement of a hidden creator's piece, in either block direction, and nothing is counted", async () => {
+    const missingPiece = '5a040000-0000-4000-8000-0000000000dd';
+    const call = (
+      method: 'post' | 'delete' | 'get',
+      suffix: string,
+      id: string,
+    ) => {
+      const r = request(app.getHttpServer())[method](
+        `/content/${id}/${suffix}`,
+      );
+      return r.set(as(plain));
+    };
+    const routes: Array<['post' | 'delete' | 'get', string]> = [
+      ['post', 'like'],
+      ['delete', 'like'],
+      ['post', 'view'],
+      ['post', 'share'],
+      ['get', 'engagement'],
+    ];
+    const piece = () =>
+      prisma.contentPiece.findUniqueOrThrow({
+        where: { id: INVOICE_PACK },
+        select: { likes: true, views: true },
+      });
+    const rows = async () => ({
+      likes: await prisma.contentLike.count({
+        where: { contentId: INVOICE_PACK },
+      }),
+      views: await prisma.contentView.count({
+        where: { contentId: INVOICE_PACK },
+      }),
+      shares: await prisma.contentShare.count({
+        where: { contentId: INVOICE_PACK },
+      }),
+    });
+    const original = await piece();
+    const rowsBefore = await rows();
+    try {
+      // Control: the five routes work on a visible piece.
+      for (const [m, suffix] of routes) {
+        await call(m, suffix, INVOICE_PACK).expect(200);
+      }
+      await prisma.contentLike.deleteMany({
+        where: { contentId: INVOICE_PACK, userWawuId: USER_PLAIN },
+      });
+      await prisma.contentView.deleteMany({
+        where: { contentId: INVOICE_PACK, viewerWawuId: USER_PLAIN },
+      });
+      await prisma.contentShare.deleteMany({
+        where: { contentId: INVOICE_PACK, sharerWawuId: USER_PLAIN },
+      });
+      await prisma.contentPiece.update({
+        where: { id: INVOICE_PACK },
+        data: original,
+      });
+
+      for (const blockIt of [plainBlocksPro, proBlocksPlain]) {
+        await clearBlocks();
+        await blockIt();
+        for (const [m, suffix] of routes) {
+          const missing = await call(m, suffix, missingPiece).expect(404);
+          const hidden = await call(m, suffix, INVOICE_PACK);
+          expect({ route: `${m} ${suffix}`, status: hidden.status }).toEqual({
+            route: `${m} ${suffix}`,
+            status: 404,
+          });
+          expect(hidden.body).toEqual(missing.body);
+        }
+        expect(await piece()).toEqual(original);
+        expect(await rows()).toEqual(rowsBefore);
+      }
+      // The owner of a piece still reaches their own.
+      await clearBlocks();
+      await proBlocksPlain();
+      await request(app.getHttpServer())
+        .get(`/content/${INVOICE_PACK}/engagement`)
+        .set(as(pro))
+        .expect(200);
+    } finally {
+      await prisma.contentLike.deleteMany({
+        where: { contentId: INVOICE_PACK, userWawuId: USER_PLAIN },
+      });
+      await prisma.contentView.deleteMany({
+        where: { contentId: INVOICE_PACK, viewerWawuId: USER_PLAIN },
+      });
+      await prisma.contentShare.deleteMany({
+        where: { contentId: INVOICE_PACK, sharerWawuId: USER_PLAIN },
+      });
+      await prisma.contentPiece.update({
+        where: { id: INVOICE_PACK },
+        data: original,
+      });
+    }
+  });
+
+  it('a user who follows a creator they then blocked does not count that person in "following"', async () => {
+    await prisma.followRelationship.deleteMany({
+      where: { followerWawuId: USER_PLAIN, followingWawuId: USER_PRO },
+    });
+    await prisma.followRelationship.create({
+      data: { followerWawuId: USER_PLAIN, followingWawuId: USER_PRO },
+    });
+    const count = async () =>
+      envelope<{ count: number }>(
+        await get('/feed/following/count', plain).expect(200),
+      ).data.count;
+    try {
+      const before = await count();
+      await plainBlocksPro(); // direct row: the stale follow edge stays on purpose
+      expect(await count()).toBe(before - 1);
+    } finally {
+      await prisma.followRelationship.deleteMany({
+        where: { followerWawuId: USER_PLAIN, followingWawuId: USER_PRO },
+      });
+    }
+  });
+
   // ---- directory and events ---------------------------------------------
 
   it('a user who blocked a professional does not see their listing in the directory or on its page', async () => {

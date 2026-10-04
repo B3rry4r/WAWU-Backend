@@ -82,6 +82,53 @@ export const EXPORT_SECTIONS: ExportSection[] = [
     },
   },
   {
+    key: 'profileDetails',
+    models: ['ProfileDetails'],
+    load: (prisma, me) =>
+      prisma.profileDetails.findUnique({
+        where: { wawuUserId: me },
+        select: {
+          location: true,
+          skills: true,
+          openTo: true,
+          threadsHandle: true,
+          socialOrder: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      }),
+  },
+  {
+    key: 'likes',
+    models: ['ContentLike'],
+    load: (prisma, me) =>
+      prisma.contentLike.findMany({
+        where: { userWawuId: me },
+        select: { contentId: true, likedAt: true },
+        orderBy: { likedAt: 'desc' },
+      }),
+  },
+  {
+    key: 'piecesViewed',
+    models: ['ContentView'],
+    load: (prisma, me) =>
+      prisma.contentView.findMany({
+        where: { viewerWawuId: me },
+        select: { contentId: true, viewedOn: true, viewedAt: true },
+        orderBy: { viewedAt: 'desc' },
+      }),
+  },
+  {
+    key: 'piecesShared',
+    models: ['ContentShare'],
+    load: (prisma, me) =>
+      prisma.contentShare.findMany({
+        where: { sharerWawuId: me },
+        select: { contentId: true, sharedOn: true, sharedAt: true },
+        orderBy: { sharedAt: 'desc' },
+      }),
+  },
+  {
     key: 'creatorSettings',
     models: ['CreatorState'],
     load: (prisma, me) =>

@@ -713,4 +713,78 @@ describe('Data export (contract)', () => {
     }
     await post().expect(201);
   });
+
+  it("a user who opens the emailed link finds their profile details and their likes, and nobody else's", async () => {
+    const original = await prisma.profileDetails.findUnique({
+      where: { wawuUserId: USER },
+    });
+    const likeIds = [
+      '5b040000-0000-4000-8000-0000000000a1',
+      '5b040000-0000-4000-8000-0000000000a2',
+    ];
+    await prisma.contentLike.deleteMany({ where: { id: { in: likeIds } } });
+    try {
+      await prisma.profileDetails.upsert({
+        where: { wawuUserId: USER },
+        update: {
+          location: 'S04 Lagos',
+          skills: ['S04 skill'],
+          threadsHandle: 's04threads',
+        },
+        create: {
+          wawuUserId: USER,
+          location: 'S04 Lagos',
+          skills: ['S04 skill'],
+          threadsHandle: 's04threads',
+        },
+      });
+      await prisma.contentLike.createMany({
+        data: [
+          { id: likeIds[0], userWawuId: USER, contentId: MAKEUP_VIDEO },
+          { id: likeIds[1], userWawuId: OTHER, contentId: MAKEUP_VIDEO },
+        ],
+        skipDuplicates: true,
+      });
+      const req = await ask();
+      await fulfil.fulfil(req.id);
+      const mail = await mailFor(req.id);
+      const file = JSON.parse(
+        (await openLink(mail.downloadUrl).expect(200)).text,
+      ) as {
+        data: {
+          profileDetails: {
+            location: string;
+            skills: string[];
+            threadsHandle: string;
+          };
+          likes: Array<{ contentId: string }>;
+        };
+      };
+      expect(file.data.profileDetails).toMatchObject({
+        location: 'S04 Lagos',
+        skills: ['S04 skill'],
+        threadsHandle: 's04threads',
+      });
+      const ownLikes = await prisma.contentLike.count({
+        where: { userWawuId: USER },
+      });
+      expect(file.data.likes.length).toBe(ownLikes);
+      expect(file.data.likes.map((l) => l.contentId)).toContain(MAKEUP_VIDEO);
+      // OTHER liked the same piece; that row is theirs, so USER's list holds
+      // only USER's rows (the count above), never two for one piece.
+      expect(
+        file.data.likes.filter((l) => l.contentId === MAKEUP_VIDEO).length,
+      ).toBe(1);
+    } finally {
+      await prisma.contentLike.deleteMany({ where: { id: { in: likeIds } } });
+      if (original) {
+        await prisma.profileDetails.update({
+          where: { wawuUserId: USER },
+          data: original,
+        });
+      } else {
+        await prisma.profileDetails.deleteMany({ where: { wawuUserId: USER } });
+      }
+    }
+  });
 });
