@@ -4,6 +4,7 @@ import { CommunityService } from './community.service';
 import { CreatorAccountGuard } from './guards/creator-account-guard';
 import { CommunityRoomsController } from './rooms/community-rooms.controller';
 import { CommunityRoomsService } from './rooms/community-rooms.service';
+import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 import { NotificationModule } from '../notification/notification.module';
 import { CommunityMessageModule } from '../community-message/community-message.module';
 
@@ -22,7 +23,7 @@ import { CommunityMessageModule } from '../community-message/community-message.m
  * lookup for each room's last message.
  */
 @Module({
-  imports: [NotificationModule, CommunityMessageModule],
+  imports: [NotificationModule, CommunityMessageModule, BlockedAccountModule],
   controllers: [CommunityRoomsController, CommunityController],
   providers: [CommunityService, CommunityRoomsService, CreatorAccountGuard],
 })

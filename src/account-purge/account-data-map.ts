@@ -73,6 +73,13 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'ContentLike', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'ContentView', column: 'viewerWawuId', disposition: 'OWNED' },
   { model: 'ContentShare', column: 'sharerWawuId', disposition: 'OWNED' },
+  // A star rating of a piece (HOME-06) is this person's opinion, published
+  // under their account and counted in an average other people read, so it
+  // goes with them (AUTHORED, as ProfessionalReview is). The cached
+  // `ratingPct` on the piece is not walked back until the next rating; the
+  // average the detail route serves is computed from the rows, so it is right
+  // at once.
+  { model: 'ContentRating', column: 'userWawuId', disposition: 'AUTHORED' },
   { model: 'MarketplaceSave', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CartItem', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'EventGoing', column: 'userWawuId', disposition: 'OWNED' },

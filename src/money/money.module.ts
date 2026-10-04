@@ -4,6 +4,12 @@ import { FintavaModule } from '../fintava/fintava.module';
 import { MoneyBalanceController } from './balance/money-balance.controller';
 import { MoneyHistoryController } from './history/money-history.controller';
 import { TransactionHistoryService } from './history/transaction-history.service';
+import { MoneyStatementController } from './statements/money-statement.controller';
+import {
+  StatementRateLimiter,
+  StatementSlots,
+} from './statements/statement-config';
+import { StatementService } from './statements/statement.service';
 import { LedgerModule } from './ledger/ledger.module';
 import { WalletBalanceService } from './balance/wallet-balance.service';
 import { FeeSettings } from './fees/fee-config';
@@ -23,6 +29,7 @@ import { MoneyPinResetController } from './pin/money-pin-reset.controller';
 import { MoneyPinController } from './pin/money-pin.controller';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { BankAccountCheckService } from './saved-accounts/bank-account-check.service';
+import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 import { BeneficiaryService } from './saved-accounts/beneficiary.service';
 import { MoneySavedAccountsController } from './saved-accounts/money-saved-accounts.controller';
 import { PayoutAccountService } from './saved-accounts/payout-account.service';
@@ -99,9 +106,19 @@ import { ReceiptService } from './receipts/receipt.service';
  * its image and its PDF) sit behind the wallet gate and read the row through
  * the history's detail; the public check (`/r/{code}`, no sign-in,
  * throttled) shows only what proves the movement. Neither calls Fintava.
+ *
+ * WALLET-27: statements (`/money/statements`), the caller's completed
+ * movements over a period of Lagos days as a CSV file, behind the wallet
+ * gate, read from the ledger only; it never calls Fintava.
  */
 @Module({
-  imports: [ConfigModule, FintavaModule, LedgerModule, WawuAuthModule],
+  imports: [
+    ConfigModule,
+    FintavaModule,
+    LedgerModule,
+    WawuAuthModule,
+    BlockedAccountModule,
+  ],
   controllers: [
     MoneyPinController,
     MoneyPinResetController,
@@ -111,6 +128,7 @@ import { ReceiptService } from './receipts/receipt.service';
     MoneyWalletController,
     MoneySavedAccountsController,
     MoneyHistoryController,
+    MoneyStatementController,
     MoneyFeesController,
     MoneyReceiptController,
     PublicReceiptController,
@@ -133,6 +151,9 @@ import { ReceiptService } from './receipts/receipt.service';
     BeneficiaryService,
     PayoutAccountService,
     TransactionHistoryService,
+    StatementService,
+    StatementRateLimiter,
+    StatementSlots,
     FeeSettings,
     FeeQuoteService,
     ReceiptSettings,
