@@ -495,6 +495,7 @@ model ContentPiece {
   purchases Purchase[]
   savedBy   SavedItem[]
   likedBy   ContentLike[]
+  frames    ContentFrame[]
   viewedBy  ContentView[]
   sharedBy  ContentShare[]
 
@@ -642,6 +643,23 @@ model ContentView {
 
   @@unique([contentId, viewerWawuId, viewedOn])
   @@index([viewerWawuId])
+}
+
+/// One picture of a photo set (HOME-05), in order. A set is a ContentPiece of
+/// type `image`; its frames live here, not in a column on ContentPiece, so no
+/// live content response gains a key (protected-registry H-1). `position` is
+/// 1-based and unique per piece: reading in order is `ORDER BY position`.
+/// `url` is stored as uploaded and re-signed on read, like the piece's own
+/// asset urls.
+model ContentFrame {
+  id        String       @id @default(uuid())
+  contentId String
+  content   ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  position  Int
+  url       String
+  createdAt DateTime     @default(now())
+
+  @@unique([contentId, position])
 }
 
 /// One person shared one piece on one day (HOME-04). A share count is the
