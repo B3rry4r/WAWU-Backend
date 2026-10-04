@@ -7969,6 +7969,145 @@
         ]
       }
     },
+    "/api/hub/feed/entries": {
+      "get": {
+        "operationId": "FeedController_mixed",
+        "parameters": [
+          {
+            "name": "scope",
+            "required": true,
+            "in": "query",
+            "description": "`for_you` is the ranked browse; `following` is only people you follow.",
+            "schema": {
+              "default": "for_you",
+              "type": "string",
+              "enum": [
+                "for_you",
+                "following"
+              ]
+            }
+          },
+          {
+            "name": "category",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "required": true,
+            "in": "query",
+            "description": "Ordering of `for_you`. `following` is always newest first.",
+            "schema": {
+              "default": "trending",
+              "type": "string",
+              "enum": [
+                "trending",
+                "recent",
+                "top"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "content"
+                            ]
+                          },
+                          "content": {
+                            "$ref": "#/components/schemas/FeedItem"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "content"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "creator"
+                            ]
+                          },
+                          "creator": {
+                            "$ref": "#/components/schemas/CreatorCard"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "creator"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "professional"
+                            ]
+                          },
+                          "professional": {
+                            "$ref": "#/components/schemas/ProfessionalCard"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "professional"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "The mixed feed (HOME-05): the same cards as `GET /feed`, with creator and\nprofessional cards among them on For you.",
+        "tags": [
+          "Feed"
+        ]
+      }
+    },
     "/api/hub/feed/following/count": {
       "get": {
         "operationId": "FeedController_followingCount",
@@ -7987,6 +8126,74 @@
         },
         "tags": [
           "Feed"
+        ]
+      }
+    },
+    "/api/hub/content/{id}/media": {
+      "get": {
+        "operationId": "ContentMediaController_get",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaDetails"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ContentMedia"
+        ]
+      },
+      "put": {
+        "operationId": "ContentMediaController_set",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetMediaDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaDetails"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ContentMedia"
         ]
       }
     },
@@ -24295,6 +24502,29 @@
           "rating"
         ]
       },
+      "SetMediaDto": {
+        "type": "object",
+        "properties": {
+          "frames": {
+            "description": "The pictures of a photo set, in the order they are shown. Replaces the\nwhole list. Photo sets only (content type `image`).",
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "durationLabel": {
+            "type": "string",
+            "description": "How long a video, audio or course runs, as `4:12` or `1:20:05`."
+          },
+          "pageCount": {
+            "type": "number",
+            "description": "How many pages a PDF has. PDFs only.",
+            "minimum": 1,
+            "maximum": 5000
+          }
+        }
+      },
       "CreateCreditPurchaseDto": {
         "type": "object",
         "properties": {
@@ -30001,6 +30231,92 @@
           "followsCreator"
         ]
       },
+      "FeedCreator": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string",
+            "nullable": true
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          }
+        },
+        "required": [
+          "wawuId",
+          "displayName",
+          "handle",
+          "avatarUrl",
+          "verification"
+        ]
+      },
+      "MediaFrame": {
+        "type": "object",
+        "properties": {
+          "position": {
+            "type": "number"
+          },
+          "url": {
+            "type": "string",
+            "nullable": true
+          },
+          "locked": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "position",
+          "url",
+          "locked"
+        ]
+      },
+      "MediaDetails": {
+        "type": "object",
+        "properties": {
+          "contentId": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "durationLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "pageCount": {
+            "type": "number",
+            "nullable": true
+          },
+          "frameCount": {
+            "type": "number"
+          },
+          "frames": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MediaFrame"
+            }
+          }
+        },
+        "required": [
+          "contentId",
+          "contentType",
+          "durationLabel",
+          "pageCount",
+          "frameCount",
+          "frames"
+        ]
+      },
       "FeedItem": {
         "type": "object",
         "properties": {
@@ -30113,6 +30429,12 @@
           },
           "shares": {
             "type": "number"
+          },
+          "creator": {
+            "$ref": "#/components/schemas/FeedCreator"
+          },
+          "media": {
+            "$ref": "#/components/schemas/MediaDetails"
           }
         },
         "required": [
@@ -30142,7 +30464,238 @@
           "likedByMe",
           "savedByMe",
           "followsCreator",
-          "shares"
+          "shares",
+          "creator",
+          "media"
+        ]
+      },
+      "KnownFollower": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "wawuId",
+          "displayName",
+          "avatarUrl"
+        ]
+      },
+      "CardWork": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "accessType": {
+            "type": "string"
+          },
+          "price": {
+            "type": "number"
+          },
+          "locked": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          },
+          "thumbnailUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "durationLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "pageCount": {
+            "type": "number",
+            "nullable": true
+          },
+          "frameCount": {
+            "type": "number"
+          },
+          "views": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "contentType",
+          "accessType",
+          "price",
+          "locked",
+          "title",
+          "thumbnailUrl",
+          "durationLabel",
+          "pageCount",
+          "frameCount",
+          "views"
+        ]
+      },
+      "CreatorCard": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string",
+            "nullable": true
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "headline": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "coverUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          },
+          "followers": {
+            "type": "number"
+          },
+          "posts": {
+            "type": "number"
+          },
+          "rating": {
+            "type": "number",
+            "nullable": true
+          },
+          "knownFollowers": {
+            "type": "object",
+            "properties": {
+              "count": {
+                "type": "number"
+              },
+              "people": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/KnownFollower"
+                }
+              }
+            },
+            "required": [
+              "count",
+              "people"
+            ]
+          },
+          "works": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CardWork"
+            }
+          },
+          "followsCreator": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "wawuId",
+          "displayName",
+          "handle",
+          "headline",
+          "avatarUrl",
+          "coverUrl",
+          "verification",
+          "followers",
+          "posts",
+          "rating",
+          "knownFollowers",
+          "works",
+          "followsCreator"
+        ]
+      },
+      "ProfessionalCard": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "wawuId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string",
+            "nullable": true
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "headline": {
+            "type": "string"
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "coverUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          },
+          "category": {
+            "type": "string"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "ratingAvg": {
+            "type": "number",
+            "nullable": true
+          },
+          "reviewCount": {
+            "type": "number"
+          },
+          "dmPrice": {
+            "type": "number"
+          },
+          "dmResponseHours": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "wawuId",
+          "displayName",
+          "handle",
+          "headline",
+          "avatarUrl",
+          "coverUrl",
+          "verification",
+          "category",
+          "services",
+          "ratingAvg",
+          "reviewCount",
+          "dmPrice",
+          "dmResponseHours"
         ]
       },
       "FollowingCount": {
