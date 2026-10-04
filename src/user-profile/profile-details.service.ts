@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import type { UpdateProfileFieldsDto } from './dto/update-profile-fields.dto';
 import { normaliseHandle } from './social-handles';
 import { memberSinceOf, normaliseChips, normaliseText } from './profile-fields';
@@ -15,7 +16,10 @@ import type { ProfileFieldsView } from './profile-fields.type';
  */
 @Injectable()
 export class ProfileDetailsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly blockedAccounts: BlockedAccountService,
+  ) {}
 
   /** The caller's own fields. Never 404s: no row means nothing set yet. */
   async getMine(wawuUserId: string): Promise<ProfileFieldsView> {
@@ -29,7 +33,10 @@ export class ProfileDetailsService {
    * gives, so these routes never show what that one withholds. Reading them
    * counts no profile view; the profile read already does.
    */
-  async getPublic(idOrHandle: string): Promise<ProfileFieldsView> {
+  async getPublic(
+    idOrHandle: string,
+    viewerWawuId?: string,
+  ): Promise<ProfileFieldsView> {
     const profile =
       (await this.prisma.userProfile.findUnique({
         where: { wawuUserId: idOrHandle },
@@ -42,6 +49,12 @@ export class ProfileDetailsService {
     if (!profile) {
       throw new NotFoundException('User not found');
     }
+    // SETTINGS-04: a hidden account's fields answer like a missing user.
+    await this.blockedAccounts.assertVisible(
+      viewerWawuId,
+      profile.wawuUserId,
+      'User not found',
+    );
     const creatorState = await this.prisma.creatorState.findUnique({
       where: { wawuUserId: profile.wawuUserId },
       select: { wawuUserId: true },

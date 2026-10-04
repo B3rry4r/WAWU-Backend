@@ -41,6 +41,8 @@ import { CommentModule } from '../../comment/comment.module';
 import { CommunityModule } from '../../community/community.module';
 import { CommunityMessageModule } from '../../community-message/community-message.module';
 import { ProfessionalModule } from '../../professional/professional.module';
+import { EventTicketingModule } from '../../event-ticketing/event-ticketing.module';
+import { DirectMessageModule } from '../../direct-message/direct-message.module';
 import { EventModule } from '../../event/event.module';
 import { EvgScoreModule } from '../../evg-score/evg-score.module';
 import { FollowRelationshipModule } from '../../follow-relationship/follow-relationship.module';
@@ -187,6 +189,8 @@ describe('Blocking hides people (contract)', () => {
         CommunityMessageModule,
         ProfessionalModule,
         EventModule,
+        EventTicketingModule,
+        DirectMessageModule,
         EvgScoreModule,
         FollowRelationshipModule,
       ],
@@ -794,6 +798,217 @@ describe('Blocking hides people (contract)', () => {
       await prisma.followRelationship.deleteMany({
         where: { followerWawuId: USER_PLAIN, followingWawuId: USER_PRO },
       });
+    }
+  });
+
+  // ---- the rest of the sweep (round 4): every route that reaches another person
+
+  const bothDirections = async (
+    fn: (direction: 'viewer blocks' | 'viewer is blocked') => Promise<void>,
+  ) => {
+    for (const [name, blockIt] of [
+      ['viewer blocks', plainBlocksPro],
+      ['viewer is blocked', proBlocksPlain],
+    ] as const) {
+      await clearBlocks();
+      await blockIt();
+      await fn(name);
+    }
+    await clearBlocks();
+  };
+
+  it('a user gets the same "not found" for the profile fields of an account they blocked, or who blocked them, as for one that does not exist, and still reads their own', async () => {
+    await get(`/users/${USER_PRO}/profile-fields`, plain).expect(200);
+    const missing = await get(
+      '/users/5a040000-0000-4000-8000-0000000000f0/profile-fields',
+      plain,
+    ).expect(404);
+    await bothDirections(async () => {
+      const byId = await get(`/users/${USER_PRO}/profile-fields`, plain).expect(
+        404,
+      );
+      const byHandle = await get(
+        '/users/zainab-pro/profile-fields',
+        plain,
+      ).expect(404);
+      expect(byId.body).toEqual(missing.body);
+      expect(byHandle.body).toEqual(missing.body);
+      await get('/users/me/profile-fields', plain).expect(200);
+    });
+    await get(`/users/${USER_PRO}/profile-fields`, plain).expect(200);
+  });
+
+  it('a user cannot like or unlike a comment written by, or under the piece of, a hidden account, and gets the missing-comment answer', async () => {
+    const onPro = '5a040000-0000-4000-8000-0000000000c1';
+    await prisma.comment.create({
+      data: {
+        id: onPro,
+        contentId: INVOICE_PACK,
+        authorWawuId: USER_BASIC,
+        text: 'S04 comment under Zainab',
+      },
+    });
+    try {
+      const like = (
+        method: 'post' | 'delete',
+        content: string,
+        comment: string,
+      ) =>
+        request(app.getHttpServer())
+          [method](`/content/${content}/comments/${comment}/like`)
+          .set(as(plain));
+      const missing = await like(
+        'post',
+        MAKEUP_VIDEO,
+        '5a040000-0000-4000-8000-0000000000c2',
+      ).expect(404);
+      // Controls: both work before any block.
+      await like('post', MAKEUP_VIDEO, COMMENT_BY_PRO_ON_BASIC).expect(200);
+      await like('delete', MAKEUP_VIDEO, COMMENT_BY_PRO_ON_BASIC).expect(200);
+      await like('post', INVOICE_PACK, onPro).expect(200);
+      await like('delete', INVOICE_PACK, onPro).expect(200);
+      const before = await prisma.comment.findMany({
+        where: { id: { in: [COMMENT_BY_PRO_ON_BASIC, onPro] } },
+        select: { id: true, likes: true },
+        orderBy: { id: 'asc' },
+      });
+      await bothDirections(async () => {
+        for (const method of ['post', 'delete'] as const) {
+          // Author hidden (comment by PRO under BASIC's piece).
+          const a = await like(method, MAKEUP_VIDEO, COMMENT_BY_PRO_ON_BASIC);
+          expect(a.status).toBe(404);
+          expect(a.body).toEqual(missing.body);
+          // Piece owner hidden (comment by BASIC under PRO's piece).
+          const b = await like(method, INVOICE_PACK, onPro);
+          expect(b.status).toBe(404);
+          expect(b.body).toEqual(missing.body);
+        }
+        expect(
+          await prisma.comment.findMany({
+            where: { id: { in: [COMMENT_BY_PRO_ON_BASIC, onPro] } },
+            select: { id: true, likes: true },
+            orderBy: { id: 'asc' },
+          }),
+        ).toEqual(before);
+      });
+    } finally {
+      await prisma.commentLike.deleteMany({
+        where: {
+          commentId: { in: [onPro, COMMENT_BY_PRO_ON_BASIC] },
+          userWawuId: USER_PLAIN,
+        },
+      });
+      await prisma.comment.deleteMany({ where: { id: onPro } });
+      await prisma.comment.update({
+        where: { id: COMMENT_BY_PRO_ON_BASIC },
+        data: { likes: 0 },
+      });
+    }
+  });
+
+  it('a host does not see join requests from people they blocked or who blocked them', async () => {
+    const request_ = '5a040000-0000-4000-8000-0000000000c3';
+    await prisma.communityMembership.create({
+      data: {
+        id: request_,
+        userWawuId: USER_PLAIN,
+        communityId: ROOM_BY_PRO,
+        status: 'pending',
+      },
+    });
+    try {
+      const q = `/communities/${ROOM_BY_PRO}/requests?perPage=50`;
+      const before = await get(q, pro).expect(200);
+      expect(ids(before, 'userWawuId')).toContain(USER_PLAIN);
+      await bothDirections(async () => {
+        const after = await get(q, pro).expect(200);
+        expect(ids(after, 'userWawuId')).not.toContain(USER_PLAIN);
+        expect(total(after)).toBe(total(before) - 1);
+      });
+      expect(ids(await get(q, pro).expect(200), 'userWawuId')).toContain(
+        USER_PLAIN,
+      );
+    } finally {
+      await prisma.communityMembership.deleteMany({ where: { id: request_ } });
+    }
+  });
+
+  it('a user cannot rate a professional they blocked or who blocked them, and gets the missing-listing answer', async () => {
+    const rate = (id: string) =>
+      request(app.getHttpServer())
+        .post(`/professionals/${id}/reviews`)
+        .set(as(plain))
+        .send({ stars: 5 });
+    const missing = await rate('5a040000-0000-4000-8000-0000000000c4').expect(
+      404,
+    );
+    // Control: the listing is found (the refusal is the "deal first" rule, not 404).
+    expect((await rate(LISTING_BY_PRO)).status).not.toBe(404);
+    await bothDirections(async () => {
+      const hidden = await rate(LISTING_BY_PRO);
+      expect(hidden.status).toBe(404);
+      expect(message(hidden)).toBe(message(missing));
+    });
+  });
+
+  it('a user gets the missing-creator answer for the paid-message availability of a creator they blocked or who blocked them', async () => {
+    const q = (id: string) =>
+      get(`/paid-dm/creators/${id}/availability`, plain);
+    await q(USER_PRO).expect(200);
+    const missing = await q('5a040000-0000-4000-8000-0000000000c5').expect(404);
+    await bothDirections(async () => {
+      const hidden = await q(USER_PRO);
+      expect(hidden.status).toBe(404);
+      expect(hidden.body).toEqual(missing.body);
+    });
+  });
+
+  it('a user cannot read the tiers of, or buy a ticket to, an event hosted by a hidden account, and gets the missing-event answers', async () => {
+    const tier = '5a040000-0000-4000-8000-0000000000c6';
+    await prisma.eventTicketType.create({
+      data: {
+        id: tier,
+        eventId: EVENT_BY_PRO,
+        tier: 'regular',
+        name: 'S04 tier',
+        priceNaira: 0,
+        quantity: 5,
+      },
+    });
+    try {
+      const tiers = (id: string) => get(`/events/${id}/tickets`, plain);
+      const buy = (ticketTypeId: string) =>
+        request(app.getHttpServer())
+          .post(`/events/${EVENT_BY_PRO}/orders`)
+          .set(as(plain))
+          .send({ ticketTypeId, quantity: 1 });
+      const missingTiers = await tiers(
+        '5a040000-0000-4000-8000-0000000000c7',
+      ).expect(404);
+      const missingBuy = await buy(
+        '5a040000-0000-4000-8000-0000000000c8',
+      ).expect(404);
+      expect(ids(await tiers(EVENT_BY_PRO).expect(200))).toContain(tier);
+      await bothDirections(async () => {
+        const t = await tiers(EVENT_BY_PRO);
+        expect(t.status).toBe(404);
+        expect(t.body).toEqual(missingTiers.body);
+        const b = await buy(tier);
+        expect(b.status).toBe(404);
+        expect(b.body).toEqual(missingBuy.body);
+      });
+      expect(
+        await prisma.eventOrder.count({
+          where: { buyerWawuId: USER_PLAIN, eventId: EVENT_BY_PRO },
+        }),
+      ).toBe(0);
+      // A signed-out reader still sees the tiers, and an unknown event is still an empty list for them.
+      await plainBlocksPro();
+      expect(
+        ids(await get(`/events/${EVENT_BY_PRO}/tickets`).expect(200)),
+      ).toContain(tier);
+    } finally {
+      await prisma.eventTicketType.deleteMany({ where: { id: tier } });
     }
   });
 

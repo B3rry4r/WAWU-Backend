@@ -23,6 +23,7 @@ import { MoneyPinResetController } from './pin/money-pin-reset.controller';
 import { MoneyPinController } from './pin/money-pin.controller';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { BankAccountCheckService } from './saved-accounts/bank-account-check.service';
+import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 import { BeneficiaryService } from './saved-accounts/beneficiary.service';
 import { MoneySavedAccountsController } from './saved-accounts/money-saved-accounts.controller';
 import { PayoutAccountService } from './saved-accounts/payout-account.service';
@@ -92,7 +93,13 @@ import { TransactionPinService } from './pin/transaction-pin.service';
  * check the quote the person saw with `check()`.
  */
 @Module({
-  imports: [ConfigModule, FintavaModule, LedgerModule, WawuAuthModule],
+  imports: [
+    ConfigModule,
+    FintavaModule,
+    LedgerModule,
+    WawuAuthModule,
+    BlockedAccountModule,
+  ],
   controllers: [
     MoneyPinController,
     MoneyPinResetController,

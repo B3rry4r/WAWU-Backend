@@ -480,6 +480,11 @@ export class ProfessionalService {
     // temporarily unavailable should not be able to switch off the rating of
     // work they have already done.
     if (!listing) throw new NotFoundException('Professional profile not found');
+    await this.blockedAccounts.assertVisible(
+      authorWawuId,
+      listing.wawuUserId,
+      'Professional profile not found',
+    );
 
     if (listing.wawuUserId === authorWawuId) {
       throw new ForbiddenException('You cannot review your own listing.');

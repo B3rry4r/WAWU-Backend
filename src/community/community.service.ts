@@ -397,7 +397,14 @@ export class CommunityService {
   ): Promise<Paginated<CommunityJoinRequest>> {
     await this.assertHost(id, hostWawuId, 'review join requests for');
 
-    const where = { communityId: id, status: 'pending' as const };
+    // SETTINGS-04: a host does not see requests from people they blocked
+    // or who blocked them.
+    const hidden = await this.blockedAccounts.hiddenFrom(hostWawuId);
+    const where = {
+      communityId: id,
+      status: 'pending' as const,
+      userWawuId: { notIn: hidden },
+    };
     const [items, total] = await this.prisma.$transaction([
       this.prisma.communityMembership.findMany({
         where,

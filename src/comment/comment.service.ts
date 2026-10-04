@@ -182,6 +182,25 @@ export class CommentService {
     liked: boolean,
   ): Promise<{ likes: number; likedByMe: boolean }> {
     await this.assertCommentOnContent(contentId, commentId);
+    // SETTINGS-04: liking (or unliking) a comment by, or under a piece of, a
+    // hidden account is the same 404 as a missing comment.
+    const [content, target] = await Promise.all([
+      this.assertContentExists(contentId),
+      this.prisma.comment.findUniqueOrThrow({
+        where: { id: commentId },
+        select: { authorWawuId: true },
+      }),
+    ]);
+    await this.blockedAccounts.assertVisible(
+      userWawuId,
+      content.creatorWawuId,
+      'Comment not found',
+    );
+    await this.blockedAccounts.assertVisible(
+      userWawuId,
+      target.authorWawuId,
+      'Comment not found',
+    );
 
     if (liked) {
       try {
