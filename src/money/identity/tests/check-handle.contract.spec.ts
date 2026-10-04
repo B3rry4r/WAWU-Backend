@@ -238,7 +238,11 @@ describe('The check handle (KYC-03) over HTTP', () => {
   }
 
   /** KYC-01's check, passed, through its own route: answers the handle. */
-  async function checked(who: Person, bvn = who.bvn): Promise<string> {
+  async function checked(
+    who: Person,
+    bvn = who.bvn,
+    nin = who.nin,
+  ): Promise<string> {
     double.on('GET', '/compliance/verify/bvn', {
       status: 200,
       body: { data: { ...BVN_200.data, bvn, phone_number1: who.local } },
@@ -246,7 +250,7 @@ describe('The check handle (KYC-03) over HTTP', () => {
     const res = await http()
       .post('/api/hub/money/identity/bvn')
       .set('Authorization', who.auth)
-      .send({ bvn, nin: who.nin })
+      .send({ bvn, nin })
       .expect(200);
     const handle = body<BvnCheckView>(res, true).data!.checkHandle;
     handles.push(handle);
@@ -483,6 +487,22 @@ describe('The check handle (KYC-03) over HTTP', () => {
       await checked(user, digits(11));
       expectCheckAgain(await selfie(user, { checkHandle: first }));
       expectCheckAgain(await open(user, { checkHandle: first }));
+    });
+
+    it('a handle from an earlier check is refused once a check of the same BVN with another NIN has passed: the NIN is compared too', async () => {
+      const user = person();
+      const first = await checked(user);
+      const newNin = digits(11);
+      const second = await checked(user, user.bvn, newNin);
+      expectCheckAgain(await selfie(user, { checkHandle: first }));
+      expectCheckAgain(await open(user, { checkHandle: first }));
+      expect(selfieCalls()).toHaveLength(0);
+      expect(creates()).toHaveLength(0);
+      // The newer handle serves, and Fintava gets the NIN of the check that is current.
+      await selfie(user, { checkHandle: second }).expect(200);
+      await open(user, { checkHandle: second }).expect(200);
+      expect(JSON.stringify(creates()[0].body)).toContain(newNin);
+      expect(JSON.stringify(creates()[0].body)).not.toContain(user.nin);
     });
 
     it('a handle sealed under another key, or not a handle at all, is refused, never a 500', async () => {
