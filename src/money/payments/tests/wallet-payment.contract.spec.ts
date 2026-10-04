@@ -36,6 +36,7 @@ import { NO_WALLET_MESSAGE } from '../../gate/wallet-gate';
 import { AccountPurgeService } from '../../../account-purge/account-purge.service';
 import { LedgerStatusService } from '../../ledger/ledger-status.service';
 import { LedgerService } from '../../ledger/ledger.service';
+import { TransactionPinService } from '../../pin/transaction-pin.service';
 import { MoneyError } from '../../money-error';
 import { MoneyModule } from '../../money.module';
 import type {
@@ -198,6 +199,7 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
   let payments: WalletPaymentService;
   let statusChecks: LedgerStatusService;
   let ledger: LedgerService;
+  let pins: TransactionPinService;
   const double = new FintavaDouble();
   const logger = new QuietLogger();
   const wallets = new Wallets();
@@ -502,6 +504,7 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
     payments = moduleRef.get(WalletPaymentService);
     statusChecks = moduleRef.get(LedgerStatusService);
     ledger = moduleRef.get(LedgerService);
+    pins = moduleRef.get(TransactionPinService);
 
     const registry = moduleRef.get(PayableRegistry);
     const unlock: PayableKindHandler = {
@@ -1650,6 +1653,30 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
       lockedUntil: null,
     });
     expect(sendsFrom(p)).toHaveLength(8);
+  });
+
+  it('12 right PINs checked at the same moment: every one passes, no try used, no lock (MONEY-09 code, round 2)', async () => {
+    const p = await buyer(0);
+    const results = await Promise.allSettled(
+      Array.from({ length: 12 }, () => pins.verify(p.id, PIN)),
+    );
+    expect(results.filter((r) => r.status === 'rejected')).toEqual([]);
+    expect(await pinState(p)).toMatchObject({
+      triesLeft: 5,
+      lockedUntil: null,
+    });
+  });
+
+  it('10 wrong PINs at the same moment still lock after five: 4 pin_incorrect, 6 pin_locked', async () => {
+    const p = await buyer(0);
+    const results = await Promise.allSettled(
+      Array.from({ length: 10 }, () => pins.verify(p.id, WRONG_PIN)),
+    );
+    const codes = results.map((r) =>
+      r.status === 'rejected' ? (r.reason as MoneyError).code : 'passed',
+    );
+    expect(codes.filter((c) => c === 'pin_incorrect')).toHaveLength(4);
+    expect(codes.filter((c) => c === 'pin_locked')).toHaveLength(6);
   });
 
   it("deleting the payer keeps the payment and the payee's unpaid 85%, with the payer side anonymised", async () => {

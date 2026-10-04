@@ -232,6 +232,7 @@ Every refusal is the envelope this backend already answers with
 | `account_not_opened` | 422 | Fintava refused the details sent (a validation or identity refusal, such as a blacklisted NIN), or the account has no email; nothing was created and the person may try again | |
 | `reset_codes_exhausted` | 429 | the person or the phone has had today's PIN reset texts (MONEY-14); nothing is sent | `retryAfterSeconds` |
 | `device_approval_refused` | 403 | `X-Device-Approval` not accepted: not the registered phone, a wrong signature, a used, expired or another person's challenge, or no phone registered; never uses a PIN try (MONEY-14) | |
+| `payment_in_progress` | 409 | a payment for this item by this person is still being confirmed (or is under review); a second one is not taken, under any Idempotency-Key (MONEY-17) | `paymentId` |
 | `phone_held_by_other_identity` | 409 | account opening where Fintava already has a customer for the person's phone whose record does not carry the checked BVN (or carries none): nothing is adopted or created, and the opening stops for review (MONEY-12, BACKEND_GAPS G-37) | |
 
 The same table is `MONEY_ERROR_STATUS` in `src/money/money-contract.ts`; each
@@ -926,11 +927,16 @@ still reads. Every answer is `Cache-Control: no-store`.
   BACKEND_GAPS G-64): it answers the quote as it stands now when the token
   is this server's, for this person and this input, not expired, and both
   its total and `expectedTotalKobo` equal today's total; otherwise `409
-  quote_changed` with the new quote in `reason.feeQuote`. An unset
+  quote_changed` with the new quote in `reason.feeQuote`. A caller may
+  bind a quote to one thing with a subject (`quote(..., subject)`, `check(...,
+  subject)`; MONEY-17 binds payments to their item). An unset
   `FEE_QUOTE_KEY` makes a key at boot (one warning): quotes given before a
   restart are then re-quoted, never charged wrongly.
 
 ## 12. Pay from wallet (MONEY-17)
+
+As built in round 2 (4 Oct 2026, lead rulings D1 to D4, each "Default
+(lead), owner may override"):
 
 - **Routes** (`src/money/payments/`): `GET /money/payments/quote?kind=&targetId=&amountKobo=`
   (`PaymentQuoteView`, behind the wallet gate, `no-store`) and `POST
@@ -941,45 +947,75 @@ still reads. Every answer is `Cache-Control: no-store`.
   `PayableRegistry` (MoneyModule exports it): `resolve` gives the title, the
   price from its own record and the payee (or `404 target_not_found`, `409
   target_not_payable`), and `onCompleted` delivers it once the debit is
-  confirmed (idempotent; the payment sweep calls it again until it
-  succeeds). A kind nobody registered answers `409 target_not_payable`
-  "This can't be paid for from your wallet yet.", so nothing is ever charged
-  for something nothing would deliver. Held kinds (paid DM, ticket, bill) are
-  refused until MONEY-18. `amountKobo` only on a tip (digits only), `note`
-  only on a tip; paying for your own item is `target_not_payable`.
+  confirmed. **Delivery is at least once**: `onCompleted` can be called
+  twice for one payment (the request and the sweep, or two servers) and must
+  be idempotent. A kind nobody registered answers `409 target_not_payable`
+  "This can't be paid for from your wallet yet." Held kinds (paid DM,
+  ticket, bill) are refused until MONEY-18. `amountKobo` and `note` only on
+  a tip; paying for your own item is `target_not_payable`.
+- **The quote is bound to the item.** The payment quote's `quoteToken` is
+  the fee quote (section 11) signed with the subject
+  `payment:<kind>:<targetId>`; `POST /money/payments` checks it with the
+  same subject, so a quote for one item, or a plain `GET /money/fees/quote`
+  token, never pays another (`409 quote_changed` with `reason.paymentQuote`,
+  the quote as it stands). Expired, another person's, another price, signed
+  before a restart: the same answer.
 - **The money.** One `/transaction/wallet-to-wallet` of the price from the
   buyer's wallet to WAWU's merchant wallet (R-19; its account number as
   `GET /merchant/balance` reports it), our CustomerReference
   `wawu-pay-<payment id>`. Fintava takes its balance-transfer charge on top
-  (R-10), so the buyer pays the price plus the charge quoted by WALLET-15
-  (`fee.providerFeeKobo`; `wawuFeeKobo` 0). The quote's `quoteToken` and
-  `totalKobo` go back as `quoteToken` and `expectedTotalKobo`; anything
-  `FeeQuoteService.check()` does not honour (expired, another person's,
-  another price, signed before a restart) is `409 quote_changed` with
-  `reason.paymentQuote`, the quote as it stands.
+  (R-10), as the quote showed (`fee.providerFeeKobo`; `wawuFeeKobo` 0).
+- **One open payment per buyer and item** (D1.2). While a payment is
+  `pending` (under review included), another for the same person, kind and
+  target, under any Idempotency-Key and at any moment, is `409
+  payment_in_progress` with `reason.paymentId`. Held by a unique column
+  (`WalletPayment.openKey`), cleared when the payment settles.
 - **Before money moves**, in order, none of which stores anything: the
   wallet gate, the Idempotency-Key, the PIN, the body, the target, the
-  quote, the merchant cap (`amount_out_of_range`), Fintava's available
-  balance (`402 insufficient_funds` with `balanceKobo`, `totalKobo`,
-  `shortfallKobo`, "You need ₦523.25 more in your wallet."). The daily limit
-  is not held by any task (G-7).
+  quote, the merchant cap (`amount_out_of_range`), an open payment for the
+  item, Fintava's available balance (`402 insufficient_funds` with
+  `balanceKobo`, `totalKobo`, `shortfallKobo`, "You need ₦523.25 more in
+  your wallet."; a buyer holding exactly the total pays). When Fintava
+  itself refuses for funds, the balance is read again: a real shortfall is
+  shown as above; otherwise "Your balance changed. Check it and try again."
+  with no `shortfallKobo` (D3). A shortfall shown is never ₦0.00 or less.
+  The daily limit is not held by any task (G-7).
 - **The split** is recorded on the payment (`WalletPayment`), of the price
   only: the payee's 85% rounded down to the kobo, WAWU's 15% the rest (R-5;
   ₦1,000 is ₦850 and ₦150, ₦999.99 is ₦849.99 and ₦150.00). No payee: all
   of it is WAWU's. Landing the 85% in the payee's wallet is WALLET-16's.
+  Deleting the payer's account keeps the payment (the payee's share may be
+  unpaid) with the payer side set to null (`ANONYMISED` in the account data
+  map).
 - **The ledger** gets both sides (buyer `out`, merchant `in`, category
   `purchase`, `paymentId`, the link) as `pending` in the same transaction as
   the payment, with the quoted charge as the expected fee, then Fintava's
   figures from its answer. A difference (the sandbox charges ₦0) is kept on
-  the row's `discrepancy` and on the payment for MONEY-16; the payment
-  completes when Fintava moved the price, and stays `pending` for review
-  when it moved another amount.
+  the row's `discrepancy` and on the payment for MONEY-16.
 - **Answers** (all `201` with `PaymentView`, stored for the key):
-  `completed`; `pending` when the outcome is unknown (a timeout, a 5xx, a
-  2xx without a transaction, a repeated reference): never sent again from
-  here and never refunded; the ledger's status check (MONEY-08) settles the
-  row by our reference and the payment sweep (every minute) copies it onto
-  the payment; `failed` when Fintava refused the transfer and nothing moved.
-  Fintava's own "not enough", a frozen wallet, or Fintava being unusable
-  (no key, wrong key, merchant inactive) fail the payment, give the key
-  back, and answer `402`, `423 wallet_frozen` or `503`.
+  - `completed`: Fintava moved the price.
+  - `pending`, with `statusMessage` "We're still confirming this payment.
+    Don't pay again; we'll let you know.": the outcome is not known (a
+    timeout, a 5xx, a 2xx without a transaction, a repeated reference), or
+    Fintava moved another amount than the price (then straight to review).
+    **Absence is never proof that no money moved** (D1): Fintava having no
+    record of the transfer yet keeps it `pending`. The payment sweep (every
+    minute) asks Fintava itself (lookup by our reference, then the buyer's
+    history), backing off 1, 2, 4 ... minutes to hourly, never sends again
+    and never refunds; past `PAYMENT_REVIEW_AFTER_HOURS` (PROVISIONAL, 72) it
+    goes to manual review: still `pending`, out of the sweep, the item still
+    blocked. Whatever settles a payment's ledger row (a webhook, MONEY-08's
+    status check, a reversal) settles the payment at once (D2).
+  - `failed`, with `failureReason` "The payment did not go through. No money
+    left your wallet.": only Fintava's own refusal of the transfer, or its
+    FAILURE status. Fintava's "not enough", a frozen wallet, or Fintava
+    being unusable (no key, wrong key, merchant inactive) fail the payment,
+    give the key back, and answer `402`, `423 wallet_frozen` or `503`.
+  - `reversed`: the debit came back.
+  A key answers what it stored: a payment answered `pending` stays `pending`
+  on its key after it completes; the app reads the outcome from `GET
+  /money/payments/{id}` (MONEY-19).
+- **Paid twice for one item** (D1.4): if a second payment for the same
+  person and item completes while another was open, both carry a
+  `discrepancy` for MONEY-16; the refund is MONEY-18's (BACKEND_GAPS G-70 in
+  the mobile repo).

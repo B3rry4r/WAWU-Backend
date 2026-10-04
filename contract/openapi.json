@@ -22314,7 +22314,7 @@
             }
           },
           "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, target_not_payable",
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, target_not_payable, payment_in_progress",
             "content": {
               "application/json": {
                 "schema": {
@@ -26078,7 +26078,8 @@
               "account_not_opened",
               "phone_held_by_other_identity",
               "reset_codes_exhausted",
-              "device_approval_refused"
+              "device_approval_refused",
+              "payment_in_progress"
             ],
             "type": "string"
           },
@@ -26142,6 +26143,10 @@
           "lockedUntil": {
             "type": "string",
             "description": "pin_locked: when the lock ends, ISO 8601 UTC."
+          },
+          "paymentId": {
+            "type": "string",
+            "description": "payment_in_progress: the payment for this item still being confirmed (MONEY-17)."
           },
           "retryAfterSeconds": {
             "type": "number",
@@ -27719,6 +27724,10 @@
             "type": "string",
             "nullable": true
           },
+          "statusMessage": {
+            "type": "string",
+            "nullable": true
+          },
           "createdAt": {
             "type": "string"
           },
@@ -27739,6 +27748,7 @@
           "reference",
           "hold",
           "failureReason",
+          "statusMessage",
           "createdAt",
           "completedAt"
         ]
@@ -30531,9 +30541,9 @@
           "status": {
             "type": "string",
             "enum": [
+              "refunded",
               "awaiting_response",
-              "responded",
-              "refunded"
+              "responded"
             ]
           },
           "mine": {
