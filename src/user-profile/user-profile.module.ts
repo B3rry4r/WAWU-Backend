@@ -8,6 +8,7 @@ import { UserProfileController } from './user-profile.controller';
 import { PublicUserProfileController } from './public-user-profile.controller';
 import { UserProfileService } from './user-profile.service';
 import { ProfileExperienceService } from './profile-experience.service';
+import { ProfileDetailsService } from './profile-details.service';
 
 /**
  * registry.json "UserProfile" resource module. PrismaService comes from the
@@ -36,6 +37,10 @@ import { ProfileExperienceService } from './profile-experience.service';
     BlockedAccountModule,
   ],
   controllers: [UserProfileController, PublicUserProfileController],
-  providers: [UserProfileService, ProfileExperienceService],
+  providers: [
+    UserProfileService,
+    ProfileExperienceService,
+    ProfileDetailsService,
+  ],
 })
 export class UserProfileModule {}

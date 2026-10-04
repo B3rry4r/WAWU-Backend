@@ -50,7 +50,12 @@ export type NotificationKind =
   /** The host let the requester in. */
   | 'community_join_approved'
   /** The host said no. */
-  | 'community_join_declined';
+  | 'community_join_declined'
+  // INBOX-09: a creator's paid-question standing (DECISIONS R-13).
+  /** Too many paid questions went unanswered: the first warning. */
+  | 'paid_dm_warning'
+  /** Paid messages are switched off for a while. */
+  | 'paid_dm_paused';
 
 /** Exactly the union in WAWU-Web/src/types/notification.ts. */
 export type NotificationTone =
@@ -77,6 +82,27 @@ export type NotificationEvent =
   | { kind: 'dm_deadline'; userWawuId: string; hoursLeft: number }
   /** The 24h window closed unanswered. Recipient: the fan who paid. */
   | { kind: 'dm_refunded'; userWawuId: string; amount: number }
+  /**
+   * Too many paid questions went unanswered over the window (R-13). Recipient:
+   * the creator. Every figure arrives from config, never from this file.
+   */
+  | {
+      kind: 'paid_dm_warning';
+      userWawuId: string;
+      unansweredPct: number;
+      windowDays: number;
+      pauseAtPct: number;
+      pauseDays: number;
+    }
+  /** Paid messages switched off until `until` (R-13). Recipient: the creator. */
+  | {
+      kind: 'paid_dm_paused';
+      userWawuId: string;
+      unansweredPct: number;
+      windowDays: number;
+      pauseDays: number;
+      until: Date;
+    }
   /** Credits ran low or ran out. Recipient: the spender. Always a COUNT. */
   | { kind: 'credits_low'; userWawuId: string; creditsCount: number }
   /** Somebody followed this creator. Recipient: the creator. */
@@ -315,6 +341,30 @@ export function composeNotification(
         body: `Your ${formatNaira(event.amount)} has been refunded. The creator did not reply within 24 hours.`,
         tone: 'info',
         amount: Math.round(event.amount),
+        creditsCount: null,
+        actionLabel: null,
+        ...NO_RICH_MEDIA,
+      };
+
+    case 'paid_dm_warning':
+      return {
+        ...base,
+        title: 'Reply to your paid questions',
+        body: `${event.unansweredPct}% of the paid questions you got in the last ${event.windowDays} days went unanswered. At ${event.pauseAtPct}%, paid messages switch off for ${event.pauseDays} days.`,
+        tone: 'warning',
+        amount: null,
+        creditsCount: null,
+        actionLabel: 'Reply now',
+        ...NO_RICH_MEDIA,
+      };
+
+    case 'paid_dm_paused':
+      return {
+        ...base,
+        title: 'Paid messages are off',
+        body: `${event.unansweredPct}% of the paid questions you got in the last ${event.windowDays} days went unanswered, so paid messages are off for ${event.pauseDays} days. They come back on ${formatDate(event.until)}.`,
+        tone: 'danger',
+        amount: null,
         creditsCount: null,
         actionLabel: null,
         ...NO_RICH_MEDIA,
