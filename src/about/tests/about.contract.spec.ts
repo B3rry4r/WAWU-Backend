@@ -273,7 +273,7 @@ describe('About and policies contract', () => {
       }).expect(400);
     });
 
-    it('a superadmin cannot save more than 60000 bytes of text (400), and a body over the parser limit is 413 in the usual shape', async () => {
+    it('a superadmin cannot save more than 60000 bytes of text (400)', async () => {
       const chunk = 'a'.repeat(20000);
       const big = {
         ...DOC,
@@ -281,14 +281,6 @@ describe('About and policies contract', () => {
       };
       const tooLong = await put(big).expect(400);
       expect(tooLong.body.message).toMatch(/too long/);
-      const raw = await put(
-        JSON.stringify({ ...DOC, junk: 'x'.repeat(150_000) }),
-      ).expect(413);
-      expect(raw.body).toEqual({
-        statusCode: 413,
-        message: 'The request is too large.',
-        data: null,
-      });
     });
 
     it('a document just under the limit is accepted', async () => {

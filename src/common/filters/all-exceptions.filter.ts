@@ -56,19 +56,6 @@ function prismaErrorCode(exception: unknown): string | undefined {
   return looksPrisma ? candidate.code : undefined;
 }
 
-function isParserRefusal(
-  e: unknown,
-): e is Error & { status: number; expose: true } {
-  const x = e as { status?: unknown; expose?: unknown } | null;
-  return (
-    e instanceof Error &&
-    typeof x?.status === 'number' &&
-    x.status >= 400 &&
-    x.status < 500 &&
-    x.expose === true
-  );
-}
-
 /**
  * Single production point for the error envelope (conventions.md § Error
  * envelope). No controller/service ever hand-rolls an error response shape.
@@ -112,14 +99,6 @@ export class AllExceptionsFilter implements ExceptionFilter {
       } else {
         message = exception.message;
       }
-    } else if (isParserRefusal(exception)) {
-      // A body the global parser refused (too large, unreadable): its own
-      // 4xx, never a 500 (SHARED-CHANGES.md, KYC-02 #3, applied in SETTINGS-02).
-      statusCode = exception.status;
-      message =
-        statusCode === HttpStatus.PAYLOAD_TOO_LARGE
-          ? 'The request is too large.'
-          : 'The request could not be read.';
     } else if (exception instanceof Error) {
       const mapped = PRISMA_ERROR_MAP[prismaErrorCode(exception) ?? ''];
       if (mapped) {
