@@ -22115,7 +22115,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "One statement. `from` and `to` are calendar days in Africa/Lagos time\nand BOTH are included: from 00:00 on `from` to 23:59:59.999 on `to`,\nLagos time. A day that does not exist, `from` after `to`, `to` after\ntoday in Lagos, or more than 366 days is a 400; a period with more than\n50,000 movements is `400 statement_too_large`. The app's global\nper-address limits apply as on every route; on top, one person may ask\nfor 5 a minute and 30 an hour (`429 statement_rate_limited`, counted\nhere, after the token is verified), and two statements are built at\nonce in the process (`503 statement_busy` after 5 s of waiting).",
+        "summary": "One statement. `from` and `to` are calendar days in Africa/Lagos time\nand BOTH are included: from 00:00 on `from` to 23:59:59.999 on `to`,\nLagos time. A day that does not exist, `from` after `to`, `to` after\ntoday in Lagos, or more than 366 days is a 400; a period with more than\n50,000 movements is `400 statement_too_large`. The app's global\nper-address limits apply as on every route; on top, one person may ask\nfor 5 a minute and 30 an hour (`429 statement_rate_limited`, counted\nhere, after the token is verified), and two statements are built at\nonce in the process (`503 statement_busy` after 5 s of waiting).\nThe route's own 400s never count: the period is checked before the\nperson is counted, and `statement_too_large` gives the place back.",
         "tags": [
           "MoneyStatement"
         ],

@@ -10,7 +10,8 @@ import { BuiltBy, MoneyErrors, WALLET_GATE_ERRORS } from '../money-contract';
 import { StatementRateLimiter } from './statement-config';
 import { StatementQueryDto } from './statement-query.dto';
 import type { StatementView } from './statement-view.type';
-import { StatementService } from './statement.service';
+import { checkedPeriod, StatementService } from './statement.service';
+import { MoneyError } from '../money-error';
 
 /**
  * Statements (task WALLET-27, W38): the caller's completed movements over a
@@ -46,6 +47,8 @@ export class MoneyStatementController {
    * for 5 a minute and 30 an hour (`429 statement_rate_limited`, counted
    * here, after the token is verified), and two statements are built at
    * once in the process (`503 statement_busy` after 5 s of waiting).
+   * The route's own 400s never count: the period is checked before the
+   * person is counted, and `statement_too_large` gives the place back.
    */
   @Get('statements')
   @Header('Cache-Control', 'no-store')
@@ -57,13 +60,24 @@ export class MoneyStatementController {
     'statement_rate_limited',
     'statement_busy',
   )
-  statement(
+  async statement(
     @CurrentWallet() wallet: OpenWallet,
     @Query() query: StatementQueryDto,
   ): Promise<StatementView> {
+    // A period that is not a real one is a 400 before anything is counted.
+    checkedPeriod(query.from, query.to, new Date());
     // The guards have run: the token is verified and the wallet found, so
     // this key is a real person's and a forged token never reaches here.
-    this.limiter.take(wallet.wawuUserId);
-    return this.statements.statement(wallet, query);
+    const giveBack = this.limiter.take(wallet.wawuUserId);
+    try {
+      return await this.statements.statement(wallet, query);
+    } catch (e) {
+      // Too many rows is the person's to fix by a shorter range, like the
+      // other 400s: it does not count (lead ruling, round 4). A busy answer
+      // (503) does count.
+      if (e instanceof MoneyError && e.code === 'statement_too_large')
+        giveBack();
+      throw e;
+    }
   }
 }

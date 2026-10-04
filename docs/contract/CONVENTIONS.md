@@ -943,17 +943,38 @@ still reads. Every answer is `Cache-Control: no-store`.
   the calendar (`2026-02-30`, year `0000`), `from` after `to`, `to` after
   today in Lagos, a period longer than `STATEMENT_MAX_DAYS` (366, both days
   counted; PROVISIONAL), and any `format` but `csv`.
-- **Rows are capped, and the route is rate-limited** (round 2, lead's
-  ruling after the verifier's load run; Default (agent/lead), owner may
-  override). The day cap bounds days, not rows, so the rows in the period
-  are counted first (no further than one past the cap) and a period with
-  more than `STATEMENT_MAX_ROWS` (50,000) is `400 statement_too_large`,
-  "pick a shorter range", before any row is read into a file. The route has
-  its own `@Throttle` (`STATEMENT_THROTTLE`, `statement-config.ts`;
-  PROVISIONAL): at most 5 a minute and 30 an hour per person per address
-  (the bucket is the caller's address as the BVN check reads it, plus the
-  token's `sub`), on the app's `short` and `medium` throttlers; beyond is
-  `429`.
+- **Rows are capped** (lead's ruling after the round-1 load run; Default
+  (agent/lead), owner may override). The day cap bounds days, not rows, so
+  the rows in the period are counted first (no further than one past the
+  cap) and a period with more than `STATEMENT_MAX_ROWS` (50,000) is `400
+  statement_too_large`, "pick a shorter range", before any row is read
+  into a file. The read itself stops one past the cap and is checked again,
+  so rows landing between the count and the read cannot pass it.
+- **Limits** (`src/money/statements/statement-config.ts`; rounds 3 and 4).
+  The route sets no throttler of its own: the app's global `short` and
+  `medium` limits apply per address exactly as on every route. On top:
+  - **Per person** (`StatementRateLimiter`, PROVISIONAL
+    `STATEMENT-RATE-LIMITS`): at most 5 statements a minute and 30 an hour,
+    each a fixed window that starts at the person's first request in it,
+    keyed by the verified wawuUserId. It is counted in the handler, after
+    WawuAuthGuard has verified the token and the wallet gate has found the
+    wallet, so a forged token, no token or no wallet never makes an entry.
+    Beyond either window is `429 statement_rate_limited` with
+    `retryAfterSeconds` (rounded up). The counts live in memory in one map,
+    swept at most once a minute of everyone whose windows have both ended;
+    no timer is kept per request.
+  - **What counts:** every request that reaches the build: a statement
+    served, and a `503 statement_busy`. **What does not:** the route's own
+    400s. The DTO's (a day not written `YYYY-MM-DD`, any `format` but `csv`,
+    an extra field) and the period's (a day not on the calendar, `from`
+    after `to`, `to` after today in Lagos, more than 366 days) are refused
+    before the person is counted, and `statement_too_large` gives its place
+    back. Nor do the gate's 409s and the token's 401.
+  - **Two at once** (`StatementSlots`, PROVISIONAL `STATEMENT-CONCURRENCY`):
+    at most 2 statements are built at once in the process (count, read and
+    file). Another waits in order, up to 5 s, for a place, then is `503
+    statement_busy`, "Statements are busy right now. Try again in a few
+    seconds.", with `retryAfterSeconds` (rounded up).
 - **What is listed:** every `completed` movement on the caller's own wallet
   (the history's three keys: a person's wallet, the token's wawuUserId,
   the wallet's account number) whose `occurredAt` is in the period, oldest

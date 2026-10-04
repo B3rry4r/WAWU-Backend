@@ -81,8 +81,13 @@ export class StatementRateLimiter {
   >();
   private lastPrune = 0;
 
-  /** Counts one statement for this person, or refuses with 429. */
-  take(wawuUserId: string): void {
+  /**
+   * Counts one statement for this person, or refuses with 429. Returns a
+   * function that gives the place back (for an answer that should not
+   * count, `statement_too_large`); it gives back only within the windows it
+   * was counted in, and only once.
+   */
+  take(wawuUserId: string): () => void {
     const now = this.now();
     if (now - this.lastPrune >= PRUNE_EVERY_MS) this.prune(now);
     let e = this.entries.get(wawuUserId);
@@ -113,6 +118,18 @@ export class StatementRateLimiter {
     STATEMENT_RATE_LIMITS.forEach((_w, i) => {
       e.counts[i] += 1;
     });
+    const starts = [...e.starts];
+    let given = false;
+    return () => {
+      if (given) return;
+      given = true;
+      const now = this.entries.get(wawuUserId);
+      if (!now) return;
+      STATEMENT_RATE_LIMITS.forEach((_w, i) => {
+        if (now.starts[i] === starts[i] && now.counts[i] > 0)
+          now.counts[i] -= 1;
+      });
+    };
   }
 
   /** Removes everyone whose every window has ended. */

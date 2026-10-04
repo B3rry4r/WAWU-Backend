@@ -317,7 +317,7 @@ describe('GET /money/statements (WALLET-27) over HTTP', () => {
     // proved on its own below, with its own app.
     jest
       .spyOn(moduleRef.get(StatementRateLimiter), 'take')
-      .mockImplementation(() => undefined);
+      .mockImplementation(() => () => undefined);
   });
 
   afterAll(async () => {
@@ -1088,6 +1088,9 @@ function walletMaker(prismaOf: () => PrismaService) {
       return { id, auth: `Bearer ${mintToken(id)}` };
     },
     async clean() {
+      await prismaOf().fintavaLedgerEntry.deleteMany({
+        where: { wawuUserId: { in: users } },
+      });
       await prismaOf().fintavaWallet.deleteMany({
         where: { wawuUserId: { in: users } },
       });
@@ -1210,6 +1213,51 @@ describe('the statement limiter, on its own (WALLET-27)', () => {
     takes(5);
     // Someone else is untouched throughout.
     l.take('q');
+  });
+
+  it('rounds the wait up, never down, so a client told to wait is not refused again (X4)', async () => {
+    const l = new StatementRateLimiter();
+    let t = 2_000_000;
+    l.now = () => t;
+    for (let i = 0; i < 5; i += 1) l.take('p');
+    // 500 ms into the minute: 59.5 s left, told 60, never 59.
+    t += 500;
+    let err: unknown;
+    try {
+      l.take('p');
+    } catch (e) {
+      err = e;
+    }
+    expect(
+      (
+        err as { getResponse(): { reason: { retryAfterSeconds: number } } }
+      ).getResponse().reason.retryAfterSeconds,
+    ).toBe(60);
+    // A place given back is a place again; given back twice, still one.
+    const l2 = new StatementRateLimiter();
+    l2.now = () => t;
+    for (let i = 0; i < 4; i += 1) l2.take('q');
+    const giveBack = l2.take('q');
+    giveBack();
+    giveBack();
+    l2.take('q');
+    expect(() => l2.take('q')).toThrow(STATEMENT_RATE_LIMITED_MESSAGE);
+    // The busy answer's wait is rounded up too: 1.5 s is 2.
+    const slots = new StatementSlots();
+    slots.waitMs = 1_500;
+    const hold = () => new Promise((r) => setTimeout(r, 1_700));
+    const results = await Promise.allSettled([
+      slots.run(hold),
+      slots.run(hold),
+      slots.run(hold),
+    ]);
+    expect(
+      (
+        (results[2] as PromiseRejectedResult).reason as {
+          getResponse(): { reason: { retryAfterSeconds: number } };
+        }
+      ).getResponse().reason.retryAfterSeconds,
+    ).toBe(2);
   });
 
   it('stays bounded: 10,000 people in an hour, then one more an hour later, leaves one entry', () => {
@@ -1357,6 +1405,56 @@ describe('statements over HTTP: forged floods and two at once (WALLET-27)', () =
     } finally {
       spy2.mockRestore();
     }
+  }, 60_000);
+
+  it('the route’s own 400s never count against the person: each sent five times, then a good request is 200, and the limit still holds after (defect 2)', async () => {
+    const p = await people.make();
+    const acct = (
+      await prisma.fintavaWallet.findUniqueOrThrow({
+        where: { wawuUserId: p.id },
+      })
+    ).accountNumber;
+    // 50,001 completed rows in September: that month is too large.
+    await prisma.$executeRaw`
+      INSERT INTO "FintavaLedgerEntry"
+        ("id", "walletKind", "wawuUserId", "accountNumber", "direction",
+         "status", "category", "amountKobo", "feeKobo", "totalKobo",
+         "customerReference", "source", "occurredAt", "completedAt", "updatedAt")
+      SELECT gen_random_uuid()::text, 'user', ${p.id}, ${acct}, 'in',
+             'completed', 'transfer', 100, 0, 100,
+             'W27-R4-' || ${p.id} || '-' || g, 'send',
+             timestamp '2026-09-01 00:00:00' + (g * interval '30 seconds'),
+             now(), now()
+        FROM generate_series(1, ${STATEMENT_MAX_ROWS + 1}::int) g`;
+    const today = lagosToday(new Date());
+    const [ty, tm, td] = today.split('-').map(Number);
+    const day = (back: number) =>
+      new Date(Date.UTC(ty, tm - 1, td - back)).toISOString().slice(0, 10);
+    const refusals: Array<[string, string]> = [
+      ['from=2026-02-30&to=2026-03-01&format=csv', 'not a day'],
+      ['from=2026-09-30&to=2026-09-01&format=csv', 'from after to'],
+      [`from=${today}&to=${day(-1)}&format=csv`, 'to in the future'],
+      [`from=${day(366)}&to=${today}&format=csv`, 'more than 366 days'],
+      ['from=2026-09-01&to=2026-09-30&format=csv', 'statement_too_large'],
+    ];
+    const server = app.getHttpServer();
+    for (const [q, why] of refusals) {
+      for (let i = 0; i < 5; i += 1) {
+        const r = await request(server)
+          .get(`${BASE}?${q}`)
+          .set('Authorization', p.auth);
+        expect({ why, i, status: r.status }).toEqual({ why, i, status: 400 });
+      }
+    }
+    const good = `${BASE}?from=2026-07-01&to=2026-07-31&format=csv`;
+    // None of those 25 counted: five good ones, then the sixth is 429.
+    for (let i = 0; i < 5; i += 1)
+      await request(server).get(good).set('Authorization', p.auth).expect(200);
+    const sixth = await request(server)
+      .get(good)
+      .set('Authorization', p.auth)
+      .expect(429);
+    expect(body(sixth).reason?.code).toBe('statement_rate_limited');
   }, 60_000);
 
   it('the generated contract documents every refusal the route gives (N4)', () => {
