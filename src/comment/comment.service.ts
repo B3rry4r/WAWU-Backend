@@ -119,16 +119,26 @@ export class CommentService {
     page: number,
     perPage: number,
   ): Promise<Paginated<Comment>> {
-    await this.assertContentExists(contentId);
+    const content = await this.assertContentExists(contentId);
+    // SETTINGS-04: the thread under a hidden creator's piece is gone with
+    // the piece, and inside any thread the comments of people the caller
+    // blocked (or who blocked the caller) are left out, and not counted.
+    await this.blockedAccounts.assertVisible(
+      requesterWawuId,
+      content.creatorWawuId,
+      'Content not found',
+    );
+    const hidden = await this.blockedAccounts.hiddenFrom(requesterWawuId);
+    const where = { contentId, authorWawuId: { notIn: hidden } };
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.comment.findMany({
-        where: { contentId },
+        where,
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * perPage,
         take: perPage,
       }),
-      this.prisma.comment.count({ where: { contentId } }),
+      this.prisma.comment.count({ where }),
     ]);
 
     const [authors, likedIds] = await Promise.all([
@@ -172,6 +182,25 @@ export class CommentService {
     liked: boolean,
   ): Promise<{ likes: number; likedByMe: boolean }> {
     await this.assertCommentOnContent(contentId, commentId);
+    // SETTINGS-04: liking (or unliking) a comment by, or under a piece of, a
+    // hidden account is the same 404 as a missing comment.
+    const [content, target] = await Promise.all([
+      this.assertContentExists(contentId),
+      this.prisma.comment.findUniqueOrThrow({
+        where: { id: commentId },
+        select: { authorWawuId: true },
+      }),
+    ]);
+    await this.blockedAccounts.assertVisible(
+      userWawuId,
+      content.creatorWawuId,
+      'Comment not found',
+    );
+    await this.blockedAccounts.assertVisible(
+      userWawuId,
+      target.authorWawuId,
+      'Comment not found',
+    );
 
     if (liked) {
       try {

@@ -72,8 +72,9 @@ export class PaidDmController {
   })
   availability(
     @Param('wawuId', ParseUUIDPipe) wawuId: string,
+    @CurrentUser() user: WawuJwtClaims,
   ): Promise<PaidDmAvailability> {
-    return this.pause.availability(wawuId);
+    return this.pause.availability(wawuId, undefined, user.sub);
   }
 
   /** The caller's threads, one per person, latest activity first. `as=creator` reads the creator side. */

@@ -14021,10 +14021,10 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
+                    "userWawuId": {
                       "type": "string"
                     },
-                    "userWawuId": {
+                    "status": {
                       "type": "string"
                     },
                     "requestedAt": {
@@ -14034,8 +14034,8 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "userWawuId",
+                    "status",
                     "requestedAt"
                   ]
                 }
@@ -14045,6 +14045,71 @@
         },
         "tags": [
           "DataExportRequest"
+        ]
+      },
+      "get": {
+        "operationId": "DataExportRequestController_listMine",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "userWawuId": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      },
+                      "requestedAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "userWawuId",
+                      "status",
+                      "requestedAt"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "The caller's own export requests and where each one is (pending, sent, failed).",
+        "tags": [
+          "DataExportRequest"
+        ]
+      }
+    },
+    "/api/hub/settings/privacy/export/download": {
+      "get": {
+        "operationId": "DataExportDownloadController_download",
+        "parameters": [
+          {
+            "name": "token",
+            "required": false,
+            "in": "query",
+            "schema": {}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "DataExportDownload"
         ]
       }
     },
@@ -19609,15 +19674,15 @@
                     "id": {
                       "type": "string"
                     },
+                    "userWawuId": {
+                      "type": "string"
+                    },
                     "status": {
                       "type": "string",
                       "enum": [
                         "pending",
                         "joined"
                       ]
-                    },
-                    "userWawuId": {
-                      "type": "string"
                     },
                     "requestedAt": {
                       "type": "string",
@@ -19634,8 +19699,8 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "userWawuId",
+                    "status",
                     "requestedAt",
                     "communityId",
                     "joinedAt"
@@ -19711,15 +19776,15 @@
                     "id": {
                       "type": "string"
                     },
+                    "userWawuId": {
+                      "type": "string"
+                    },
                     "status": {
                       "type": "string",
                       "enum": [
                         "pending",
                         "joined"
                       ]
-                    },
-                    "userWawuId": {
-                      "type": "string"
                     },
                     "requestedAt": {
                       "type": "string",
@@ -19736,8 +19801,8 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "userWawuId",
+                    "status",
                     "requestedAt",
                     "communityId",
                     "joinedAt"
@@ -19840,15 +19905,15 @@
                     "id": {
                       "type": "string"
                     },
+                    "userWawuId": {
+                      "type": "string"
+                    },
                     "status": {
                       "type": "string",
                       "enum": [
                         "pending",
                         "joined"
                       ]
-                    },
-                    "userWawuId": {
-                      "type": "string"
                     },
                     "requestedAt": {
                       "type": "string",
@@ -19865,8 +19930,8 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "userWawuId",
+                    "status",
                     "requestedAt",
                     "communityId",
                     "joinedAt"
@@ -27758,6 +27823,94 @@
           "expiresAt"
         ]
       },
+      "TickState": {
+        "type": "object",
+        "properties": {
+          "verified": {
+            "type": "boolean"
+          },
+          "expiresAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "verified",
+          "expiresAt"
+        ]
+      },
+      "VerificationState": {
+        "type": "object",
+        "properties": {
+          "creator": {
+            "$ref": "#/components/schemas/TickState"
+          },
+          "professional": {
+            "$ref": "#/components/schemas/TickState"
+          }
+        },
+        "required": [
+          "creator",
+          "professional"
+        ]
+      },
+      "BlockedAccountUser": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          }
+        },
+        "required": [
+          "wawuId",
+          "name",
+          "handle",
+          "avatarUrl",
+          "verification"
+        ]
+      },
+      "BlockedAccount": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "userWawuId": {
+            "type": "string"
+          },
+          "blockedWawuId": {
+            "type": "string"
+          },
+          "blockedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "blockedUser": {
+            "$ref": "#/components/schemas/BlockedAccountUser",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "userWawuId",
+          "blockedWawuId",
+          "blockedAt"
+        ]
+      },
       "MoneyPartyView": {
         "type": "object",
         "properties": {
@@ -28009,12 +28162,12 @@
                     "id": {
                       "type": "string"
                     },
+                    "userWawuId": {
+                      "type": "string"
+                    },
                     "createdAt": {
                       "type": "string",
                       "format": "date-time"
-                    },
-                    "userWawuId": {
-                      "type": "string"
                     },
                     "kind": {
                       "type": "string"
@@ -28058,8 +28211,8 @@
                   },
                   "required": [
                     "id",
-                    "createdAt",
                     "userWawuId",
+                    "createdAt",
                     "kind",
                     "title",
                     "body",
@@ -29656,94 +29809,6 @@
         },
         "required": [
           "flutterwaveConfig"
-        ]
-      },
-      "TickState": {
-        "type": "object",
-        "properties": {
-          "verified": {
-            "type": "boolean"
-          },
-          "expiresAt": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "verified",
-          "expiresAt"
-        ]
-      },
-      "VerificationState": {
-        "type": "object",
-        "properties": {
-          "creator": {
-            "$ref": "#/components/schemas/TickState"
-          },
-          "professional": {
-            "$ref": "#/components/schemas/TickState"
-          }
-        },
-        "required": [
-          "creator",
-          "professional"
-        ]
-      },
-      "BlockedAccountUser": {
-        "type": "object",
-        "properties": {
-          "wawuId": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "handle": {
-            "type": "string",
-            "nullable": true
-          },
-          "avatarUrl": {
-            "type": "string",
-            "nullable": true
-          },
-          "verification": {
-            "$ref": "#/components/schemas/VerificationState"
-          }
-        },
-        "required": [
-          "wawuId",
-          "name",
-          "handle",
-          "avatarUrl",
-          "verification"
-        ]
-      },
-      "BlockedAccount": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "userWawuId": {
-            "type": "string"
-          },
-          "blockedWawuId": {
-            "type": "string"
-          },
-          "blockedAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "blockedUser": {
-            "$ref": "#/components/schemas/BlockedAccountUser",
-            "nullable": true
-          }
-        },
-        "required": [
-          "id",
-          "userWawuId",
-          "blockedWawuId",
-          "blockedAt"
         ]
       },
       "ContentPieceResponse": {
@@ -35613,15 +35678,15 @@
           "id": {
             "type": "string"
           },
+          "userWawuId": {
+            "type": "string"
+          },
           "status": {
             "type": "string",
             "enum": [
               "pending",
               "joined"
             ]
-          },
-          "userWawuId": {
-            "type": "string"
           },
           "requestedAt": {
             "type": "string",
@@ -35646,8 +35711,8 @@
         },
         "required": [
           "id",
-          "status",
           "userWawuId",
+          "status",
           "requestedAt",
           "communityId",
           "joinedAt",
