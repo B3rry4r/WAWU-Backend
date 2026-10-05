@@ -417,6 +417,34 @@ describe('Inbox (contract, INBOX-07)', () => {
     });
   });
 
+  describe('a forged cursor', () => {
+    const forge = (time: string, key = `chat:${randomUUID()}`) =>
+      Buffer.from(`${time}|${key}`, 'utf8').toString('base64url');
+
+    it.each([
+      ['year 10000', '+010000-01-01T00:00:00.000Z'],
+      ['year 0', '0000-01-01T00:00:00.000Z'],
+      ['a negative year', '-000001-01-01T00:00:00.000Z'],
+      ['the largest JavaScript date', '+275760-09-13T00:00:00.000Z'],
+      ['a time before 1970', '1969-12-31T23:59:59.999Z'],
+      ['a time that does not round-trip', '2026-02-31T00:00:00.000Z'],
+      ['a time with no zone', '2026-01-01T00:00:00'],
+    ])('is refused with 400 when its time is %s', async (_name, time) => {
+      await as(hana)
+        .get(`/inbox?cursor=${forge(time)}`)
+        .expect(400);
+    });
+
+    it('still works at the first and last instants the server accepts', async () => {
+      await as(hana)
+        .get(`/inbox?cursor=${forge('1970-01-01T00:00:00.000Z')}`)
+        .expect(200);
+      await as(hana)
+        .get(`/inbox?cursor=${forge('9999-12-31T23:59:59.999Z')}`)
+        .expect(200);
+    });
+  });
+
   describe('the capability check', () => {
     let ifeChat: string;
 
