@@ -1,18 +1,19 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import type { Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { FintavaClient } from '../../fintava/fintava-client';
-import { FintavaError } from '../../fintava/fintava-error';
-import { decideFintavaRetry } from '../../fintava/fintava-reconcile';
-import type {
-  FintavaReconciliation,
-  FintavaRetryDecision,
-  FintavaSender,
-  FintavaSendKind,
-  FintavaTransaction,
-} from '../../fintava/fintava.interface';
+import {
+  type ProviderHolder,
+  type ProviderReconciliation,
+  type ProviderRetryDecision,
+  type ProviderSendKind,
+  type ProviderTransaction,
+  safeKoboNumber,
+  WALLET_PROVIDER,
+  type WalletProvider,
+} from '../../wallet-provider/wallet-provider.interface';
+import { WalletProviderError } from '../../wallet-provider/wallet-provider-error';
 import type { TransferStatus } from '../money-view.type';
 import {
   LEDGER_CONFIG_KEYS,
@@ -25,7 +26,6 @@ import {
   LEDGER_FINTAVA_FAILURE,
   LedgerService,
 } from './ledger.service';
-import { ledgerStatusOf } from './ledger-webhook';
 
 /** What one status check did to one ledger row. */
 export type LedgerStatusOutcome =
@@ -46,11 +46,11 @@ export interface LedgerStatusCheck {
   status: TransferStatus | null;
   /**
    * For one of our sends checked by our reference: what MONEY-06's rules
-   * (decideFintavaRetry) allow its sender to do next. Advice only: this
+   * (the provider's `decideRetry`) allow its sender to do next. Advice only: this
    * service never sends money, and a resend is the sending feature's, under
    * its own lock on the payment (one retry at a time, MONEY-06).
    */
-  decision: FintavaRetryDecision | null;
+  decision: ProviderRetryDecision | null;
   /**
    * What Fintava answered about the row's movement this time: `found`,
    * `absent` (its own "not found", and for our reference no history row
@@ -100,6 +100,10 @@ const MINUTE = 60_000;
  *   which MONEY-10 applies as the row's `reversed` status; WAWU paying it
  *   back as well would pay it twice.
  * - It never adds anything up: the balance is Fintava's (MONEY-11).
+ *
+ * Every question goes through the wallet provider seam (MONEY-20): the
+ * provider's `reconcileSend`, `decideRetry`, lookups and second reference.
+ * Fintava's rules behind them are unchanged (src/fintava/).
  */
 @Injectable()
 export class LedgerStatusService {
@@ -109,7 +113,7 @@ export class LedgerStatusService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly fintava: FintavaClient,
+    @Inject(WALLET_PROVIDER) private readonly provider: WalletProvider,
     private readonly ledger: LedgerService,
     config: ConfigService,
   ) {
@@ -285,10 +289,10 @@ export class LedgerStatusService {
         status: e.status,
         decision: null,
         fintava: null,
-        why: 'a disagreement with Fintava is recorded; left for review',
+        why: `a disagreement with ${this.provider.label} is recorded; left for review`,
       };
     }
-    if (this.fintava.environment === 'unconfigured') {
+    if (!this.provider.configured) {
       return this.waiting(e, null, 'not_configured');
     }
 
@@ -308,13 +312,16 @@ export class LedgerStatusService {
         e.customerReference,
         sender,
       );
-      const decision = decideFintavaRetry(this.kindOf(e), reconciliation, {
-        attemptedAt: this.attemptedAt(e),
-        now,
-        resendAfterMs:
-          this.fintava.settings.moneyTimeoutMs +
-          this.fintava.settings.resendSafetyMs,
-      });
+      const timings = this.provider.timings;
+      const decision = this.provider.decideRetry(
+        this.kindOf(e),
+        reconciliation,
+        {
+          attemptedAt: this.attemptedAt(e),
+          now,
+          resendAfterMs: timings.moneyTimeoutMs + timings.resendSafetyMs,
+        },
+      );
       const answered = reconciliation.state;
       if (reconciliation.state === 'found') {
         return {
@@ -352,7 +359,7 @@ export class LedgerStatusService {
           status: 'failed',
           decision,
           fintava: answered,
-          why: 'no record at Fintava',
+          why: `no record at ${this.provider.label}`,
         };
       }
       return {
@@ -389,49 +396,50 @@ export class LedgerStatusService {
   /** Settles the row from Fintava's record, or records why it cannot. */
   private async apply(
     e: Entry,
-    t: FintavaTransaction,
+    t: ProviderTransaction,
     source: 'lookup' | 'history',
-    decision: FintavaRetryDecision | null,
+    decision: ProviderRetryDecision | null,
   ): Promise<LedgerStatusCheck> {
     const stored = koboNumber(e.amountKobo);
-    if (t.amountKobo !== stored) {
+    if (t.amountKobo !== e.amountKobo) {
       // A stop: never settle a row whose figure Fintava does not confirm.
       await this.ledger.noteDiscrepancy(
         e.id,
         `status check: amountKobo ${stored} vs ${t.amountKobo}`,
       );
       this.logger.error(
-        `ledger status: Fintava's record of row ${e.id} has another amount; the row is left pending for review`,
+        `ledger status: ${this.provider.label}'s record of row ${e.id} has another amount; the row is left pending for review`,
       );
       return {
         outcome: 'disagrees',
         status: 'pending',
         decision,
         fintava: 'found',
-        why: 'amount differs from Fintava',
+        why: `amount differs from ${this.provider.label}`,
       };
     }
-    const status = ledgerStatusOf(t.status) ?? 'pending';
+    const status = t.outcome ?? 'pending';
     const out = e.direction === 'out';
-    const tagapay = t.tagapayTransRef ?? (await this.tagapayOf(t));
+    const tagapay =
+      t.secondaryReference ?? (await this.provider.secondaryReferenceOf(t));
     await this.ledger.record({
       wallet: this.walletOf(e),
       direction: e.direction,
       status,
       category: e.category,
-      amountKobo: t.amountKobo,
+      amountKobo: safeKoboNumber(t.amountKobo),
       // Lookups and history carry no fee for a wallet-to-wallet send: the
       // row's own fee and total stand, and only the amount is compared.
       feeKobo: koboNumber(e.feeKobo),
       totalKobo: koboNumber(e.totalKobo),
       references: {
-        customerReference: out ? t.customerReference : null,
-        fintavaReference: t.fintavaReference,
+        customerReference: out ? t.ourReference : null,
+        fintavaReference: t.providerReference,
         tagapayTransRef: tagapay,
         fintavaTransactionId: t.id,
         sessionId: t.sessionId,
         // On a receiving side, the sender's reference is only another one.
-        delivery: out ? [] : [t.customerReference],
+        delivery: out ? [] : [t.ourReference],
       },
       failureReason: status === 'failed' ? LEDGER_FINTAVA_FAILURE : null,
       source,
@@ -440,18 +448,18 @@ export class LedgerStatusService {
         : new Date(t.createdAt),
     });
     if (status === 'pending') {
-      return this.waiting(e, decision, 'pending at Fintava');
+      return this.waiting(e, decision, `pending at ${this.provider.label}`);
     }
     return this.reread(
       e.id,
       decision,
-      `Fintava says ${t.status.toUpperCase()}`,
+      `${this.provider.label} says ${t.status.toUpperCase()}`,
     );
   }
 
   private async reread(
     entryId: string,
-    decision: FintavaRetryDecision | null,
+    decision: ProviderRetryDecision | null,
     why: string,
   ): Promise<LedgerStatusCheck> {
     const row = await this.prisma.fintavaLedgerEntry.findUnique({
@@ -481,7 +489,7 @@ export class LedgerStatusService {
 
   private waiting(
     e: Entry,
-    decision: FintavaRetryDecision | null,
+    decision: ProviderRetryDecision | null,
     why: string,
   ): LedgerStatusCheck {
     return {
@@ -493,20 +501,20 @@ export class LedgerStatusService {
     };
   }
 
-  /** MONEY-06's reconcile; a Fintava error of any kind is an unknown answer. */
+  /** MONEY-06's reconcile; a provider error of any kind is an unknown answer. */
   private async reconcile(
     e: Entry,
     reference: string,
-    sender: FintavaSender,
-  ): Promise<FintavaReconciliation> {
+    sender: ProviderHolder,
+  ): Promise<ProviderReconciliation> {
     const since =
       e.occurredAt.getTime() < e.createdAt.getTime()
         ? e.occurredAt
         : e.createdAt;
     try {
-      return await this.fintava.reconcile(reference, sender, since);
+      return await this.provider.reconcileSend(reference, sender, since);
     } catch (err) {
-      if (err instanceof FintavaError) {
+      if (err instanceof WalletProviderError) {
         return { state: 'unknown', why: 'unreachable' };
       }
       throw err;
@@ -516,7 +524,7 @@ export class LedgerStatusService {
   /** The row's own findable references, by lookup, then its transaction id. */
   private async lookUp(
     e: Entry,
-  ): Promise<{ transaction: FintavaTransaction | null; why: string }> {
+  ): Promise<{ transaction: ProviderTransaction | null; why: string }> {
     const held = await this.prisma.fintavaLedgerReference.findMany({
       where: { entryId: e.id, kind: { in: ['ours', 'fintava', 'delivery'] } },
       select: { value: true },
@@ -533,23 +541,25 @@ export class LedgerStatusService {
       refs.length || e.fintavaTransactionId ? 'not found' : 'nothing to ask by';
     for (const ref of refs) {
       try {
-        const l = await this.fintava.getTransactionByReference(ref);
+        const l = await this.provider.findTransactionByReference(ref);
         if (l.state === 'found')
           return { transaction: l.transaction, why: 'found' };
         if (l.state === 'unknown') why = 'empty_lookup';
       } catch (err) {
-        if (!(err instanceof FintavaError)) throw err;
+        if (!(err instanceof WalletProviderError)) throw err;
         why = 'unreachable';
       }
     }
     if (e.fintavaTransactionId) {
       try {
-        const l = await this.fintava.getTransactionById(e.fintavaTransactionId);
+        const l = await this.provider.findTransactionById(
+          e.fintavaTransactionId,
+        );
         if (l.state === 'found')
           return { transaction: l.transaction, why: 'found' };
         if (l.state === 'unknown') why = 'empty_lookup';
       } catch (err) {
-        if (!(err instanceof FintavaError)) throw err;
+        if (!(err instanceof WalletProviderError)) throw err;
         why = 'unreachable';
       }
     }
@@ -557,7 +567,7 @@ export class LedgerStatusService {
   }
 
   /** Whose history holds the row's debit: WAWU's, or the person's customerId. */
-  private async senderOf(e: Entry): Promise<FintavaSender | null> {
+  private async senderOf(e: Entry): Promise<ProviderHolder | null> {
     if (e.walletKind === 'merchant') return { kind: 'merchant' };
     if (!e.wawuUserId) return null;
     const w = await this.prisma.fintavaWallet.findUnique({
@@ -580,7 +590,7 @@ export class LedgerStatusService {
   }
 
   /** A send to a bank account is a bank send; anything else moved between wallets. */
-  private kindOf(e: Entry): FintavaSendKind {
+  private kindOf(e: Entry): ProviderSendKind {
     return e.counterpartyKind === 'bank_account'
       ? 'bank_transfer'
       : 'wallet_to_wallet';
@@ -600,16 +610,5 @@ export class LedgerStatusService {
         e.updatedAt.getTime(),
       ),
     );
-  }
-
-  /** The by-id record's tagapayTransRef: the only record that carries it. */
-  private async tagapayOf(t: FintavaTransaction): Promise<string | null> {
-    try {
-      const l = await this.fintava.getTransactionById(t.id);
-      return l.state === 'found' ? l.transaction.tagapayTransRef : null;
-    } catch (err) {
-      if (err instanceof FintavaError) return null;
-      throw err;
-    }
   }
 }

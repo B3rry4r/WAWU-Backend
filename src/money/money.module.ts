@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { FintavaModule } from '../fintava/fintava.module';
 import { MoneyBalanceController } from './balance/money-balance.controller';
 import { MoneyHistoryController } from './history/money-history.controller';
 import { TransactionHistoryService } from './history/transaction-history.service';
@@ -41,6 +40,7 @@ import { MoneyReceiptController } from './receipts/money-receipt.controller';
 import { PublicReceiptController } from './receipts/public-receipt.controller';
 import { ReceiptSettings } from './receipts/receipt-config';
 import { ReceiptService } from './receipts/receipt.service';
+import { WalletProviderModule } from '../wallet-provider/wallet-provider.module';
 
 /**
  * The served half of the Naira wallet contract. Routes move here from
@@ -52,7 +52,9 @@ import { ReceiptService } from './receipts/receipt.service';
  * its service are exported for that.
  *
  * MONEY-11: the balance, read from Fintava through the MONEY-06 client on
- * every request. Importing FintavaModule here mounts that client in the app.
+ * every request. MONEY-20: every service here reaches the provider through
+ * WalletProviderModule (`WALLET_PROVIDER`, `OTP_SENDER`), which mounts the
+ * client and picks the adapter from WALLET_PROVIDER (`fintava` by default).
  * The server starts without any FINTAVA_* setting (the client is then
  * unconfigured and the balance answers 503); the settings are needed for the
  * wallet to work (deploy/README.md step 4).
@@ -114,7 +116,7 @@ import { ReceiptService } from './receipts/receipt.service';
 @Module({
   imports: [
     ConfigModule,
-    FintavaModule,
+    WalletProviderModule,
     LedgerModule,
     WawuAuthModule,
     BlockedAccountModule,

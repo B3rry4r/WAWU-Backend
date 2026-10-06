@@ -43,6 +43,7 @@ import { ResponseInterceptor } from '../../../common/interceptors/response.inter
 import { PrismaModule } from '../../../common/prisma/prisma.module';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { FintavaClient } from '../../../fintava/fintava-client';
+import { FintavaWalletProvider } from '../../../fintava/fintava-wallet-provider';
 import { SELFIE_ANSWER_MAX_BYTES } from '../../../fintava/fintava-selfie-answer';
 import type { MoneyErrorReason } from '../../dto/money-error.dto';
 import { MoneyModule } from '../../money.module';
@@ -953,11 +954,12 @@ describe('Selfie match to the BVN photo (KYC-02) over HTTP', () => {
       const hasher = new IdentityHasher(
         new ConfigService({ IDENTITY_HASH_KEY: '' }),
       );
+      const provider = new FintavaWalletProvider(fintava);
       const bare = new SelfieMatchService(
         prisma,
-        fintava,
+        provider,
         hasher,
-        new WalletIdentityService(prisma, fintava, hasher),
+        new WalletIdentityService(prisma, provider, hasher),
       );
       const user = person();
       await expect(
