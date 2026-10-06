@@ -9,10 +9,12 @@ import {
   IsOptional,
   IsString,
   IsUrl,
+  IsUUID,
   Max,
   MaxLength,
   Min,
   registerDecorator,
+  ValidateIf,
   type ValidationOptions,
 } from 'class-validator';
 import {
@@ -55,10 +57,24 @@ export const SCHOOL_LIMITS = {
 
 const THIS_YEAR = () => new Date().getUTCFullYear();
 
-/** `YYYY-MM-DD` that is a real calendar date and reads back unchanged. */
+/**
+ * A PATCH field that may be left out but never sent as `null`: the column
+ * behind it is required, so `null` is a 400 naming the field, not a database
+ * error. (`@IsOptional()` lets `null` through; it stays only on the columns
+ * that really clear to null.)
+ */
+const OptionalNotNull = () => ValidateIf((_o, v) => v !== undefined);
+
+/**
+ * `YYYY-MM-DD` that is a real calendar date, reads back unchanged, and that
+ * Postgres can hold in a `date` column. Postgres has no year 0 (the year
+ * before 1 AD is 1 BC), so `0000-..` is refused; years 0001 to 9999 are what
+ * four digits can say and all are in its range.
+ */
 export function isCalendarDate(value: unknown): boolean {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value))
     return false;
+  if (value.startsWith('0000-')) return false;
   const d = new Date(`${value}T00:00:00.000Z`);
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
 }
@@ -78,6 +94,17 @@ function decorate(
         validator: { validate: check },
       });
 }
+
+/**
+ * Goes last in a field's decorators (nearest the property) so its message is
+ * the one a `null` gets: validators report in that order and the API answers
+ * with the first.
+ */
+const NotNull = decorate(
+  'isNotNull',
+  (v) => v !== null,
+  '$property must not be null',
+);
 
 const IsCalendarDate = decorate(
   'isCalendarDate',
@@ -164,22 +191,25 @@ export class CreateSchoolDto {
 
 /** Every field optional; `hidden` hides or shows the school. */
 export class UpdateSchoolDto {
-  @IsOptional()
+  @OptionalNotNull()
   @Transform(trimmed)
   @IsString()
   @IsCleanText()
   @MaxLength(SCHOOL_LIMITS.name)
+  @NotNull()
   name?: string;
 
-  @IsOptional()
+  @OptionalNotNull()
   @IsIn(SCHOOL_CATEGORIES)
+  @NotNull()
   category?: (typeof SCHOOL_CATEGORIES)[number];
 
-  @IsOptional()
+  @OptionalNotNull()
   @Transform(trimmed)
   @IsString()
   @IsCleanText()
   @MaxLength(SCHOOL_LIMITS.location)
+  @NotNull()
   location?: string;
 
   @IsOptional()
@@ -188,18 +218,20 @@ export class UpdateSchoolDto {
   @Max(THIS_YEAR())
   foundedYear?: number | null;
 
-  @IsOptional()
+  @OptionalNotNull()
   @Transform(trimmedList)
   @IsArray()
   @ArrayMaxSize(SCHOOL_LIMITS.expertiseItems)
   @IsTextList(SCHOOL_LIMITS.expertiseLength)
+  @NotNull()
   expertise?: string[];
 
-  @IsOptional()
+  @OptionalNotNull()
   @Transform(trimmed)
   @IsString()
   @IsCleanText()
   @MaxLength(SCHOOL_LIMITS.about)
+  @NotNull()
   about?: string;
 
   @IsOptional()
@@ -214,14 +246,16 @@ export class UpdateSchoolDto {
   @MaxLength(2000)
   applyUrl?: string | null;
 
-  @IsOptional()
+  @OptionalNotNull()
   @Transform(trimmed)
   @IsEmail()
   @MaxLength(254)
+  @NotNull()
   reportEmail?: string;
 
-  @IsOptional()
+  @OptionalNotNull()
   @IsBoolean()
+  @NotNull()
   hidden?: boolean;
 }
 
@@ -245,10 +279,9 @@ export class ListSchoolsDto {
   @Max(100)
   limit?: number;
 
-  /** The `nextCursor` of the previous page. */
+  /** The `nextCursor` of the previous page: a school id. */
   @IsOptional()
-  @IsString()
-  @MaxLength(100)
+  @IsUUID()
   cursor?: string;
 }
 
@@ -291,45 +324,52 @@ export class CreateCourseDto {
 }
 
 export class UpdateCourseDto {
-  @IsOptional()
+  @OptionalNotNull()
   @Transform(trimmed)
   @IsString()
   @IsCleanText()
   @MaxLength(SCHOOL_LIMITS.title)
+  @NotNull()
   title?: string;
 
-  @IsOptional()
+  @OptionalNotNull()
   @IsInt()
   @Min(1)
   @Max(SCHOOL_LIMITS.weeks)
+  @NotNull()
   weeks?: number;
 
-  @IsOptional()
+  @OptionalNotNull()
   @IsIn(COURSE_MODES)
+  @NotNull()
   mode?: (typeof COURSE_MODES)[number];
 
-  @IsOptional()
+  @OptionalNotNull()
   @Transform(trimmedList)
   @IsArray()
   @ArrayMaxSize(SCHOOL_LIMITS.listItems)
   @IsTextList(SCHOOL_LIMITS.listLength)
+  @NotNull()
   syllabus?: string[];
 
-  @IsOptional()
+  @OptionalNotNull()
   @Transform(trimmedList)
   @IsArray()
   @ArrayMaxSize(SCHOOL_LIMITS.listItems)
   @IsTextList(SCHOOL_LIMITS.listLength)
+  @NotNull()
   outcomes?: string[];
 
-  @IsOptional()
+  @OptionalNotNull()
   @IsInt()
   @Min(0)
   @Max(SCHOOL_LIMITS.priceKoboMax)
+  @NotNull()
   priceKobo?: number;
 
-  @IsOptional()
+  @OptionalNotNull()
   @IsBoolean()
+  @NotNull()
   hidden?: boolean;
 }
 
@@ -361,15 +401,17 @@ export class CreateIntakeDto {
 }
 
 export class UpdateIntakeDto {
-  @IsOptional()
+  @OptionalNotNull()
   @IsCalendarDate()
+  @NotNull()
   startDate?: string;
 
-  @IsOptional()
+  @OptionalNotNull()
   @Transform(trimmed)
   @IsString()
   @IsCleanText()
   @MaxLength(SCHOOL_LIMITS.schedule)
+  @NotNull()
   schedule?: string;
 
   @IsOptional()
@@ -380,13 +422,15 @@ export class UpdateIntakeDto {
   location?: string | null;
 
   /** Never below the seats already taken. */
-  @IsOptional()
+  @OptionalNotNull()
   @IsInt()
   @Min(1)
   @Max(SCHOOL_LIMITS.capacity)
+  @NotNull()
   capacity?: number;
 
-  @IsOptional()
+  @OptionalNotNull()
   @IsBoolean()
+  @NotNull()
   hidden?: boolean;
 }

@@ -7,6 +7,7 @@ import { ResponseInterceptor } from '../../../common/interceptors/response.inter
 import { PrismaModule } from '../../../common/prisma/prisma.module';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { AdminAuthModule } from '../../auth/admin-auth.module';
+import { isCalendarDate } from '../../../schools/school-admin.dto';
 import { AdminSchoolsModule } from '../admin-schools.module';
 
 /**
@@ -442,6 +443,222 @@ describe('Admin schools contract (SCHOOLS-02)', () => {
         .expect(200)
     ).body.data;
     expect(second.items[0].id).not.toBe(first.items[0].id);
+  });
+
+  // ---- fix round 1 (verifier D1, D2 and the minor records) ----------------
+
+  it('refuses null for a required column in a PATCH with a 400 that names the field, and still clears the nullable ones', async () => {
+    const { school, course, intake } = await addSchool();
+    const patch = (path: string, body: object) =>
+      http().patch(`/api/hub/admin/${path}`).set(as('superadmin')).send(body);
+    const cases: [string, string[]][] = [
+      [
+        `schools/${school.id}`,
+        [
+          'name',
+          'category',
+          'location',
+          'expertise',
+          'about',
+          'reportEmail',
+          'hidden',
+        ],
+      ],
+      [
+        `school-courses/${course.id}`,
+        [
+          'title',
+          'weeks',
+          'mode',
+          'syllabus',
+          'outcomes',
+          'priceKobo',
+          'hidden',
+        ],
+      ],
+      [
+        `school-intakes/${intake.id}`,
+        ['startDate', 'schedule', 'capacity', 'hidden'],
+      ],
+    ];
+    for (const [path, fields] of cases) {
+      for (const field of fields) {
+        const res = await patch(path, { [field]: null }).expect(400);
+        expect(res.body.message).toBe(`${field} must not be null`);
+        expect(JSON.stringify(res.body)).not.toContain('Something went wrong');
+      }
+    }
+    // nothing above changed the rows
+    const read = (
+      await http()
+        .get(`/api/hub/admin/schools/${school.id}`)
+        .set(as('superadmin'))
+        .expect(200)
+    ).body.data;
+    expect(read.name).toBe(SCHOOL.name);
+    expect(read.hidden).toBe(false);
+    expect(read.courses[0].intakes[0].capacity).toBe(INTAKE.capacity);
+    // the columns that really clear to null still do
+    await patch(`schools/${school.id}`, {
+      foundedYear: null,
+      logo: null,
+      applyUrl: null,
+    }).expect(200);
+    await patch(`school-intakes/${intake.id}`, { location: null }).expect(200);
+    const cleared = (
+      await http()
+        .get(`/api/hub/admin/schools/${school.id}`)
+        .set(as('superadmin'))
+        .expect(200)
+    ).body.data;
+    expect(cleared.foundedYear).toBeNull();
+    expect(cleared.logo).toBeNull();
+    expect(cleared.applyUrl).toBeNull();
+    expect(cleared.courses[0].intakes[0].location).toBeNull();
+    // and a body that leaves a field out is still fine
+    await patch(`school-courses/${course.id}`, { weeks: 8 }).expect(200);
+  });
+
+  describe('calendar dates', () => {
+    const accepted = [
+      '2026-11-03',
+      '2024-02-29',
+      '2000-02-29',
+      '0001-01-01',
+      '0400-02-29',
+      '1000-06-15',
+      '9999-12-31',
+    ];
+    const refused = [
+      '0000-01-01',
+      '0000-12-31',
+      '0000-02-29',
+      '2026-00-10',
+      '2026-13-01',
+      '2026-01-00',
+      '2026-01-32',
+      '2026-02-30',
+      '2026-04-31',
+      '2023-02-29',
+      '1900-02-29',
+      '0100-02-29',
+      '2026-1-3',
+      '26-01-03',
+      '10000-01-01',
+      '-001-01-01',
+      '-0001-01-01',
+      '+2026-01-01',
+      '2026-01-01T00:00:00.000Z',
+      '2026-01-01 ',
+      ' 2026-01-01',
+      '2026-01-01\n',
+      '2026/01/01',
+      '01/03/2026',
+      '２０２６-01-01',
+      '',
+      'tomorrow',
+    ];
+
+    it('isCalendarDate accepts only dates Postgres can hold and that read back unchanged', () => {
+      for (const v of accepted)
+        expect([v, isCalendarDate(v)]).toEqual([v, true]);
+      for (const v of refused)
+        expect([v, isCalendarDate(v)]).toEqual([v, false]);
+      for (const v of [null, undefined, 20260103, true, {}, [], ['2026-01-03']])
+        expect(isCalendarDate(v)).toBe(false);
+    });
+
+    it('an intake start date Postgres would refuse is a 400 on create and on edit, never a 500', async () => {
+      const { course, intake } = await addSchool();
+      for (const startDate of refused) {
+        await http()
+          .post(`/api/hub/admin/school-courses/${course.id}/intakes`)
+          .set(as('superadmin'))
+          .send({ ...INTAKE, startDate })
+          .expect(400);
+        await http()
+          .patch(`/api/hub/admin/school-intakes/${intake.id}`)
+          .set(as('superadmin'))
+          .send({ startDate })
+          .expect(400);
+      }
+      for (const startDate of accepted) {
+        const made = await http()
+          .post(`/api/hub/admin/school-courses/${course.id}/intakes`)
+          .set(as('superadmin'))
+          .send({ ...INTAKE, startDate })
+          .expect(201);
+        expect(made.body.data.startDate).toBe(startDate);
+        const edited = await http()
+          .patch(`/api/hub/admin/school-intakes/${intake.id}`)
+          .set(as('superadmin'))
+          .send({ startDate })
+          .expect(200);
+        expect(edited.body.data.startDate).toBe(startDate);
+      }
+    });
+  });
+
+  it('hiding a row that is already hidden keeps the time it was first hidden', async () => {
+    const { school, course, intake } = await addSchool();
+    const stamps = async () => ({
+      school: (
+        await prisma.school.findUniqueOrThrow({ where: { id: school.id } })
+      ).hiddenAt,
+      course: (
+        await prisma.schoolCourse.findUniqueOrThrow({
+          where: { id: course.id },
+        })
+      ).hiddenAt,
+      intake: (
+        await prisma.courseIntake.findUniqueOrThrow({
+          where: { id: intake.id },
+        })
+      ).hiddenAt,
+    });
+    const hide = async (value: boolean) => {
+      for (const path of [
+        `schools/${school.id}`,
+        `school-courses/${course.id}`,
+        `school-intakes/${intake.id}`,
+      ])
+        await http()
+          .patch(`/api/hub/admin/${path}`)
+          .set(as('superadmin'))
+          .send({ hidden: value })
+          .expect(200);
+    };
+    await hide(true);
+    const first = await stamps();
+    expect(first.school).toBeInstanceOf(Date);
+    expect(first.course).toBeInstanceOf(Date);
+    expect(first.intake).toBeInstanceOf(Date);
+    await new Promise((r) => setTimeout(r, 25));
+    await hide(true);
+    expect(await stamps()).toEqual(first);
+    // showing then hiding again is a new hide
+    await hide(false);
+    expect(await stamps()).toEqual({
+      school: null,
+      course: null,
+      intake: null,
+    });
+    await hide(true);
+    const again = await stamps();
+    expect(again.school!.getTime()).toBeGreaterThan(first.school!.getTime());
+  });
+
+  it('a cursor this server did not give out is a 400, not an empty page', async () => {
+    await addSchool();
+    for (const cursor of [
+      'nonsense',
+      '5c020200-0000-4000-8000-00000000dead',
+      '123',
+    ])
+      await http()
+        .get(`/api/hub/admin/schools?cursor=${cursor}`)
+        .set(as('superadmin'))
+        .expect(400);
   });
 
   describe('who may call', () => {

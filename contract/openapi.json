@@ -22989,9 +22989,9 @@
             "name": "cursor",
             "required": false,
             "in": "query",
-            "description": "The `nextCursor` of the previous page.",
+            "description": "The `nextCursor` of the previous page: a school id.",
             "schema": {
-              "maxLength": 100,
+              "format": "uuid",
               "type": "string"
             }
           }

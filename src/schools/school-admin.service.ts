@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -27,10 +28,20 @@ import {
 
 const DEFAULT_PAGE = 25;
 
-/** `hidden` in a body becomes the column: true stamps now, false clears. */
-function hiddenAt(hidden: boolean | undefined): { hiddenAt?: Date | null } {
-  if (hidden === undefined) return {};
-  return { hiddenAt: hidden ? new Date() : null };
+/**
+ * `hidden` in a body becomes the column: true stamps now, but only on a row
+ * that is not hidden yet (hiding twice keeps the first time); false clears.
+ */
+function hiddenWrite(
+  id: string,
+  hidden: boolean,
+): {
+  where: { id: string; hiddenAt?: null };
+  data: { hiddenAt: Date | null };
+} {
+  return hidden
+    ? { where: { id, hiddenAt: null }, data: { hiddenAt: new Date() } }
+    : { where: { id }, data: { hiddenAt: null } };
 }
 
 /** Only the fields the body carries; Prisma treats undefined as "leave alone". */
@@ -72,6 +83,13 @@ export class SchoolAdminService {
 
   async listSchools(q: ListSchoolsDto): Promise<AdminSchoolsPage> {
     const limit = q.limit ?? DEFAULT_PAGE;
+    // A cursor is a school id this server gave out; anything else is a 400,
+    // as on the other cursor lists, not an empty page.
+    if (
+      q.cursor !== undefined &&
+      (await this.prisma.school.count({ where: { id: q.cursor } })) === 0
+    )
+      throw new BadRequestException('cursor is not one this server gave out');
     const where: Prisma.SchoolWhereInput = {
       ...(q.category ? { category: q.category } : {}),
       ...(q.hidden === undefined
@@ -112,9 +130,10 @@ export class SchoolAdminService {
     dto: UpdateSchoolDto,
   ): Promise<AdminSchoolDetail> {
     await this.requireSchool(id);
-    await this.prisma.school.update({
-      where: { id },
-      data: { ...without(dto), ...hiddenAt(dto.hidden) },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.school.update({ where: { id }, data: without(dto) });
+      if (dto.hidden !== undefined)
+        await tx.school.updateMany(hiddenWrite(id, dto.hidden));
     });
     return this.getSchool(id);
   }
@@ -155,9 +174,10 @@ export class SchoolAdminService {
     dto: UpdateCourseDto,
   ): Promise<AdminCourseView> {
     await this.requireCourse(id);
-    await this.prisma.schoolCourse.update({
-      where: { id },
-      data: { ...without(dto), ...hiddenAt(dto.hidden) },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.schoolCourse.update({ where: { id }, data: without(dto) });
+      if (dto.hidden !== undefined)
+        await tx.schoolCourse.updateMany(hiddenWrite(id, dto.hidden));
     });
     return this.getCourse(id);
   }
@@ -197,21 +217,28 @@ export class SchoolAdminService {
       ...(startDate
         ? { startDate: new Date(`${startDate}T00:00:00.000Z`) }
         : {}),
-      ...hiddenAt(dto.hidden),
     };
     // One conditional write: the capacity may not drop below the seats already
     // taken, and a seat claim landing between a read and this write cannot
     // slip past it. Zero rows means the intake is missing or the seats win.
-    const res = await this.prisma.courseIntake.updateMany({
-      where: {
-        id,
-        ...(dto.capacity === undefined
-          ? {}
-          : { seatsTaken: { lte: dto.capacity } }),
-      },
-      data,
+    // The hide stamp rides in the same transaction, so a refused capacity
+    // never hides the intake, and hiding twice keeps the first time.
+    const applied = await this.prisma.$transaction(async (tx) => {
+      const res = await tx.courseIntake.updateMany({
+        where: {
+          id,
+          ...(dto.capacity === undefined
+            ? {}
+            : { seatsTaken: { lte: dto.capacity } }),
+        },
+        data,
+      });
+      if (res.count === 0) return false;
+      if (dto.hidden !== undefined)
+        await tx.courseIntake.updateMany(hiddenWrite(id, dto.hidden));
+      return true;
     });
-    if (res.count === 0) {
+    if (!applied) {
       await this.getIntake(id);
       throw new ConflictException(
         'Capacity cannot be lower than the seats already taken',
