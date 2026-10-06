@@ -1,0 +1,392 @@
+import { Transform, Type } from 'class-transformer';
+import {
+  ArrayMaxSize,
+  IsArray,
+  IsBoolean,
+  IsEmail,
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  IsUrl,
+  Max,
+  MaxLength,
+  Min,
+  registerDecorator,
+  type ValidationOptions,
+} from 'class-validator';
+import {
+  IsCleanText,
+  isCleanText,
+} from '../admin/legal-documents/policy-input';
+
+export const SCHOOL_CATEGORIES = [
+  'tech',
+  'business',
+  'creative',
+  'languages',
+  'vocational',
+] as const;
+export const COURSE_MODES = ['online', 'in_person', 'hybrid'] as const;
+
+/**
+ * PROVISIONAL(SCHOOLS-ADMIN-LIMITS, owner=YOU, why=no ruling gives the length of a school's text, the founding years or the seat range)
+ *
+ * Default (agent), owner may override: sizes that keep a card and a syllabus
+ * readable, a founding year from 1800 to this year, a course of 1 to 520
+ * weeks, a fee up to the largest Int kobo the column holds, 1 to 100000
+ * seats. A bound the dashboard hits is a one-line change here.
+ */
+export const SCHOOL_LIMITS = {
+  name: 120,
+  location: 120,
+  about: 4000,
+  expertiseItems: 12,
+  expertiseLength: 40,
+  title: 160,
+  weeks: 520,
+  listItems: 60,
+  listLength: 300,
+  schedule: 120,
+  capacity: 100_000,
+  priceKoboMax: 2_147_483_647,
+  foundedYearMin: 1800,
+} as const;
+
+const THIS_YEAR = () => new Date().getUTCFullYear();
+
+/** `YYYY-MM-DD` that is a real calendar date and reads back unchanged. */
+export function isCalendarDate(value: unknown): boolean {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value))
+    return false;
+  const d = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
+}
+
+function decorate(
+  name: string,
+  check: (v: unknown) => boolean,
+  message: string,
+) {
+  return (options?: ValidationOptions) =>
+    (object: object, propertyName: string) =>
+      registerDecorator({
+        name,
+        target: object.constructor,
+        propertyName,
+        options: { message, ...options },
+        validator: { validate: check },
+      });
+}
+
+const IsCalendarDate = decorate(
+  'isCalendarDate',
+  isCalendarDate,
+  '$property must be a real date (YYYY-MM-DD)',
+);
+
+/** Every item is clean text of at most `max` characters. */
+const IsTextList = (max: number) =>
+  decorate(
+    'isTextList',
+    (v) =>
+      Array.isArray(v) &&
+      v.every((x) => isCleanText(x) && (x as string).length <= max),
+    `$property must be a list of text, each at most ${max} characters`,
+  )();
+
+const trimmed = ({ value }: { value: unknown }) =>
+  typeof value === 'string' ? value.trim() : value;
+const trimmedList = ({ value }: { value: unknown }): unknown =>
+  Array.isArray(value)
+    ? (value as unknown[]).map((x) => (typeof x === 'string' ? x.trim() : x))
+    : value;
+const emptyToNull = ({ value }: { value: unknown }) =>
+  typeof value === 'string' && value.trim() === '' ? null : trimmed({ value });
+
+const URL_OPTIONS = { protocols: ['https'], require_protocol: true };
+
+// ---- school ---------------------------------------------------------------
+
+export class CreateSchoolDto {
+  @Transform(trimmed)
+  @IsString()
+  @IsCleanText()
+  @MaxLength(SCHOOL_LIMITS.name)
+  name!: string;
+
+  @IsIn(SCHOOL_CATEGORIES)
+  category!: (typeof SCHOOL_CATEGORIES)[number];
+
+  @Transform(trimmed)
+  @IsString()
+  @IsCleanText()
+  @MaxLength(SCHOOL_LIMITS.location)
+  location!: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(SCHOOL_LIMITS.foundedYearMin)
+  @Max(THIS_YEAR())
+  foundedYear?: number | null;
+
+  @IsOptional()
+  @Transform(trimmedList)
+  @IsArray()
+  @ArrayMaxSize(SCHOOL_LIMITS.expertiseItems)
+  @IsTextList(SCHOOL_LIMITS.expertiseLength)
+  expertise?: string[];
+
+  @Transform(trimmed)
+  @IsString()
+  @IsCleanText()
+  @MaxLength(SCHOOL_LIMITS.about)
+  about!: string;
+
+  /** A storage URL. Empty or null clears it. */
+  @IsOptional()
+  @Transform(emptyToNull)
+  @IsUrl(URL_OPTIONS)
+  @MaxLength(2000)
+  logo?: string | null;
+
+  @IsOptional()
+  @Transform(emptyToNull)
+  @IsUrl(URL_OPTIONS)
+  @MaxLength(2000)
+  applyUrl?: string | null;
+
+  @Transform(trimmed)
+  @IsEmail()
+  @MaxLength(254)
+  reportEmail!: string;
+}
+
+/** Every field optional; `hidden` hides or shows the school. */
+export class UpdateSchoolDto {
+  @IsOptional()
+  @Transform(trimmed)
+  @IsString()
+  @IsCleanText()
+  @MaxLength(SCHOOL_LIMITS.name)
+  name?: string;
+
+  @IsOptional()
+  @IsIn(SCHOOL_CATEGORIES)
+  category?: (typeof SCHOOL_CATEGORIES)[number];
+
+  @IsOptional()
+  @Transform(trimmed)
+  @IsString()
+  @IsCleanText()
+  @MaxLength(SCHOOL_LIMITS.location)
+  location?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(SCHOOL_LIMITS.foundedYearMin)
+  @Max(THIS_YEAR())
+  foundedYear?: number | null;
+
+  @IsOptional()
+  @Transform(trimmedList)
+  @IsArray()
+  @ArrayMaxSize(SCHOOL_LIMITS.expertiseItems)
+  @IsTextList(SCHOOL_LIMITS.expertiseLength)
+  expertise?: string[];
+
+  @IsOptional()
+  @Transform(trimmed)
+  @IsString()
+  @IsCleanText()
+  @MaxLength(SCHOOL_LIMITS.about)
+  about?: string;
+
+  @IsOptional()
+  @Transform(emptyToNull)
+  @IsUrl(URL_OPTIONS)
+  @MaxLength(2000)
+  logo?: string | null;
+
+  @IsOptional()
+  @Transform(emptyToNull)
+  @IsUrl(URL_OPTIONS)
+  @MaxLength(2000)
+  applyUrl?: string | null;
+
+  @IsOptional()
+  @Transform(trimmed)
+  @IsEmail()
+  @MaxLength(254)
+  reportEmail?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  hidden?: boolean;
+}
+
+export class ListSchoolsDto {
+  @IsOptional()
+  @IsIn(SCHOOL_CATEGORIES)
+  category?: (typeof SCHOOL_CATEGORIES)[number];
+
+  /** `true`: only hidden. `false`: only shown. Omitted: both. */
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }): unknown =>
+    value === 'true' ? true : value === 'false' ? false : value,
+  )
+  @IsBoolean()
+  hidden?: boolean;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit?: number;
+
+  /** The `nextCursor` of the previous page. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  cursor?: string;
+}
+
+// ---- course ---------------------------------------------------------------
+
+export class CreateCourseDto {
+  @Transform(trimmed)
+  @IsString()
+  @IsCleanText()
+  @MaxLength(SCHOOL_LIMITS.title)
+  title!: string;
+
+  @IsInt()
+  @Min(1)
+  @Max(SCHOOL_LIMITS.weeks)
+  weeks!: number;
+
+  @IsIn(COURSE_MODES)
+  mode!: (typeof COURSE_MODES)[number];
+
+  @IsOptional()
+  @Transform(trimmedList)
+  @IsArray()
+  @ArrayMaxSize(SCHOOL_LIMITS.listItems)
+  @IsTextList(SCHOOL_LIMITS.listLength)
+  syllabus?: string[];
+
+  @IsOptional()
+  @Transform(trimmedList)
+  @IsArray()
+  @ArrayMaxSize(SCHOOL_LIMITS.listItems)
+  @IsTextList(SCHOOL_LIMITS.listLength)
+  outcomes?: string[];
+
+  /** Whole kobo (CONVENTIONS section 1). */
+  @IsInt()
+  @Min(0)
+  @Max(SCHOOL_LIMITS.priceKoboMax)
+  priceKobo!: number;
+}
+
+export class UpdateCourseDto {
+  @IsOptional()
+  @Transform(trimmed)
+  @IsString()
+  @IsCleanText()
+  @MaxLength(SCHOOL_LIMITS.title)
+  title?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(SCHOOL_LIMITS.weeks)
+  weeks?: number;
+
+  @IsOptional()
+  @IsIn(COURSE_MODES)
+  mode?: (typeof COURSE_MODES)[number];
+
+  @IsOptional()
+  @Transform(trimmedList)
+  @IsArray()
+  @ArrayMaxSize(SCHOOL_LIMITS.listItems)
+  @IsTextList(SCHOOL_LIMITS.listLength)
+  syllabus?: string[];
+
+  @IsOptional()
+  @Transform(trimmedList)
+  @IsArray()
+  @ArrayMaxSize(SCHOOL_LIMITS.listItems)
+  @IsTextList(SCHOOL_LIMITS.listLength)
+  outcomes?: string[];
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(SCHOOL_LIMITS.priceKoboMax)
+  priceKobo?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  hidden?: boolean;
+}
+
+// ---- intake ---------------------------------------------------------------
+
+export class CreateIntakeDto {
+  /** The day classes start, YYYY-MM-DD. */
+  @IsCalendarDate()
+  startDate!: string;
+
+  @Transform(trimmed)
+  @IsString()
+  @IsCleanText()
+  @MaxLength(SCHOOL_LIMITS.schedule)
+  schedule!: string;
+
+  /** Null or empty for an online intake. */
+  @IsOptional()
+  @Transform(emptyToNull)
+  @IsString()
+  @IsCleanText()
+  @MaxLength(SCHOOL_LIMITS.location)
+  location?: string | null;
+
+  @IsInt()
+  @Min(1)
+  @Max(SCHOOL_LIMITS.capacity)
+  capacity!: number;
+}
+
+export class UpdateIntakeDto {
+  @IsOptional()
+  @IsCalendarDate()
+  startDate?: string;
+
+  @IsOptional()
+  @Transform(trimmed)
+  @IsString()
+  @IsCleanText()
+  @MaxLength(SCHOOL_LIMITS.schedule)
+  schedule?: string;
+
+  @IsOptional()
+  @Transform(emptyToNull)
+  @IsString()
+  @IsCleanText()
+  @MaxLength(SCHOOL_LIMITS.location)
+  location?: string | null;
+
+  /** Never below the seats already taken. */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(SCHOOL_LIMITS.capacity)
+  capacity?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  hidden?: boolean;
+}

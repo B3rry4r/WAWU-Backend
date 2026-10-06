@@ -13,6 +13,7 @@ import { AdminFinanceModule } from './admin/finance/admin-finance.module';
 import { AdminEventsModule } from './admin/events/admin-events.module';
 import { AdminNotificationsModule } from './admin/notifications/admin-notifications.module';
 import { AdminLegalDocumentsModule } from './admin/legal-documents/admin-legal-documents.module';
+import { AdminSchoolsModule } from './admin/schools/admin-schools.module';
 import { AboutModule } from './about/about.module';
 import { PrismaModule } from './common/prisma/prisma.module';
 import { AccountModule } from './account/account.module';
@@ -339,6 +340,7 @@ import { APP_GUARD } from '@nestjs/core';
     // under `admin/policies`.
     AboutModule,
     AdminLegalDocumentsModule,
+    AdminSchoolsModule,
     // Free chat between two users (task INBOX-06). `@Controller('chats')` is a
     // first segment nothing else declares, so it cannot shadow or be shadowed.
     ChatModule,
