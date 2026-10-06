@@ -269,7 +269,8 @@ export class EventRunningService {
             );
           }
         } else {
-          let n = taken.size + 1;
+          // The lowest free number, so a gap left by someone removed is filled.
+          let n = 1;
           while (taken.has(`door ${n}`)) n += 1;
           label = `Door ${n}`;
         }

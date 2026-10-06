@@ -842,5 +842,25 @@ describe('Running an event: organiser numbers and door staff (EVENTS-05)', () =>
       });
       expect(after.removedAt).toBeNull();
     });
+
+    it('the default label is the lowest free "Door n": a gap left by someone removed is filled', async () => {
+      // Start this event's door from nothing, so the labels are known.
+      await prisma.eventDoorStaff.deleteMany({ where: { eventId: EV_EMPTY } });
+      const add = async (wawuUserId: string) =>
+        data<DoorStaffView>(
+          await post(hostToken, EV_EMPTY, { wawuUserId }).expect(201),
+        );
+
+      const first = await add(STAFF_SUB);
+      const second = await add(BUYER_SUB);
+      expect([first.label, second.label]).toEqual(['Door 1', 'Door 2']);
+
+      // Door 1 leaves; the next person added takes Door 1, not Door 3.
+      await http()
+        .delete(`/api/hub/events/${EV_EMPTY}/door-staff/${first.id}`)
+        .set(auth(hostToken))
+        .expect(200);
+      expect((await add(outsider.sub)).label).toBe('Door 1');
+    });
   });
 });
