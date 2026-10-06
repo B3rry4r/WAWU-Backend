@@ -38254,15 +38254,27 @@
             "type": "string"
           },
           "content": {
-            "$ref": "#/components/schemas/SavedContentView",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedContentView"
+              }
+            ],
             "nullable": true
           },
           "event": {
-            "$ref": "#/components/schemas/SavedEventView",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedEventView"
+              }
+            ],
             "nullable": true
           },
           "creator": {
-            "$ref": "#/components/schemas/FeedCreator",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FeedCreator"
+              }
+            ],
             "nullable": true
           }
         },
@@ -38373,7 +38385,11 @@
             "$ref": "#/components/schemas/PurchasedPieceView"
           },
           "lessons": {
-            "$ref": "#/components/schemas/LessonProgressView",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LessonProgressView"
+              }
+            ],
             "nullable": true
           }
         },
@@ -38511,11 +38527,19 @@
             "type": "string"
           },
           "target": {
-            "$ref": "#/components/schemas/NotificationTargetView",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NotificationTargetView"
+              }
+            ],
             "nullable": true
           },
           "actor": {
-            "$ref": "#/components/schemas/FeedCreator",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FeedCreator"
+              }
+            ],
             "nullable": true
           }
         },
