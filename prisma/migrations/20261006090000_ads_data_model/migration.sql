@@ -106,23 +106,40 @@ ALTER TABLE "AdCampaign" ADD CONSTRAINT "AdCampaign_weight_check" CHECK ("weight
 
 -- A card is never drawn with an empty name, headline, button or destination.
 -- "Empty" here means no character a person can see: the string is empty or
--- made only of control characters, spaces (ASCII, U+00A0, U+1680, U+2000 to
--- U+200A, U+202F, U+205F, U+3000), zero-width and direction marks (U+200B to
--- U+200F, U+202A to U+202E, U+2060 to U+206F, U+061C, U+FEFF), the soft hyphen
--- (U+00AD), the combining grapheme joiner (U+034F), the Mongolian free
--- variation selectors and vowel separator (U+180B to U+180E), the Hangul
--- fillers (U+115F, U+1160, U+3164, U+FFA0), the Khmer inherent vowels (U+17B4,
--- U+17B5), the line and paragraph separators (U+2028, U+2029) and the
--- variation selectors (U+FE00 to U+FE0F). Every code point is spelled as a
--- \u escape, so the test is the same on a server built with any locale (the
--- class \s is not: it follows the locale). A value with one visible character
--- among them is accepted.
-ALTER TABLE "AdCampaign" ADD CONSTRAINT "AdCampaign_advertiser_check" CHECK ("advertiser" !~ '^[\u0001- \u007F- ­͏؜ᅟᅠ ឴឵᠋-᠎ -‏ -  -⁯　ㅤ︀-️﻿ﾠ]*$');
+-- made only of the code points below (control characters, spaces, zero-width
+-- and direction marks, joiners and fillers). Each one is written as a \uXXXX
+-- regex escape, so this file holds only printable ASCII in the class, the test
+-- is the same whatever encoding the client or the database uses, and it does
+-- not depend on the server's locale (the class \s does: it follows the
+-- locale). A value with one visible character among them is accepted. The set
+-- is finite: other invisible code points (for example U+2800, U+FFFC, the
+-- tag characters) are not in it; ADS-06's DTO owns any rule by Unicode category.
+-- ads-data-model.contract.spec.ts fails if this class holds a non-ASCII byte.
+--   \u0001 to \u0020  START OF HEADING (C0 controls start here) .. SPACE
+--   \u007F to \u00A0  DELETE .. NO-BREAK SPACE
+--   \u00AD  SOFT HYPHEN
+--   \u034F  COMBINING GRAPHEME JOINER
+--   \u061C  ARABIC LETTER MARK
+--   \u115F  HANGUL CHOSEONG FILLER
+--   \u1160  HANGUL JUNGSEONG FILLER
+--   \u1680  OGHAM SPACE MARK
+--   \u17B4  KHMER VOWEL INHERENT AQ
+--   \u17B5  KHMER VOWEL INHERENT AA
+--   \u180B to \u180E  MONGOLIAN FREE VARIATION SELECTOR ONE .. MONGOLIAN VOWEL SEPARATOR
+--   \u2000 to \u200F  EN QUAD .. RIGHT-TO-LEFT MARK
+--   \u2028 to \u202F  LINE SEPARATOR .. NARROW NO-BREAK SPACE
+--   \u205F to \u206F  MEDIUM MATHEMATICAL SPACE .. NOMINAL DIGIT SHAPES
+--   \u3000  IDEOGRAPHIC SPACE
+--   \u3164  HANGUL FILLER
+--   \uFE00 to \uFE0F  VARIATION SELECTOR-1 .. VARIATION SELECTOR-16
+--   \uFEFF  ZERO WIDTH NO-BREAK SPACE
+--   \uFFA0  HALFWIDTH HANGUL FILLER
+ALTER TABLE "AdCampaign" ADD CONSTRAINT "AdCampaign_advertiser_check" CHECK ("advertiser" !~ '^[\u0001-\u0020\u007F-\u00A0\u00AD\u034F\u061C\u115F\u1160\u1680\u17B4\u17B5\u180B-\u180E\u2000-\u200F\u2028-\u202F\u205F-\u206F\u3000\u3164\uFE00-\uFE0F\uFEFF\uFFA0]*$');
 ALTER TABLE "AdCreative" ADD CONSTRAINT "AdCreative_text_check" CHECK (
-    "headline" !~ '^[\u0001- \u007F- ­͏؜ᅟᅠ ឴឵᠋-᠎ -‏ -  -⁯　ㅤ︀-️﻿ﾠ]*$'
-    AND "ctaLabel" !~ '^[\u0001- \u007F- ­͏؜ᅟᅠ ឴឵᠋-᠎ -‏ -  -⁯　ㅤ︀-️﻿ﾠ]*$'
-    AND "ctaDestinationId" !~ '^[\u0001- \u007F- ­͏؜ᅟᅠ ឴឵᠋-᠎ -‏ -  -⁯　ㅤ︀-️﻿ﾠ]*$'
-    AND ("subline" IS NULL OR "subline" !~ '^[\u0001- \u007F- ­͏؜ᅟᅠ ឴឵᠋-᠎ -‏ -  -⁯　ㅤ︀-️﻿ﾠ]*$')
+    "headline" !~ '^[\u0001-\u0020\u007F-\u00A0\u00AD\u034F\u061C\u115F\u1160\u1680\u17B4\u17B5\u180B-\u180E\u2000-\u200F\u2028-\u202F\u205F-\u206F\u3000\u3164\uFE00-\uFE0F\uFEFF\uFFA0]*$'
+    AND "ctaLabel" !~ '^[\u0001-\u0020\u007F-\u00A0\u00AD\u034F\u061C\u115F\u1160\u1680\u17B4\u17B5\u180B-\u180E\u2000-\u200F\u2028-\u202F\u205F-\u206F\u3000\u3164\uFE00-\uFE0F\uFEFF\uFFA0]*$'
+    AND "ctaDestinationId" !~ '^[\u0001-\u0020\u007F-\u00A0\u00AD\u034F\u061C\u115F\u1160\u1680\u17B4\u17B5\u180B-\u180E\u2000-\u200F\u2028-\u202F\u205F-\u206F\u3000\u3164\uFE00-\uFE0F\uFEFF\uFFA0]*$'
+    AND ("subline" IS NULL OR "subline" !~ '^[\u0001-\u0020\u007F-\u00A0\u00AD\u034F\u061C\u115F\u1160\u1680\u17B4\u17B5\u180B-\u180E\u2000-\u200F\u2028-\u202F\u205F-\u206F\u3000\u3164\uFE00-\uFE0F\uFEFF\uFFA0]*$')
 );
 
 -- Artwork is a web link a client will load: http or https, never javascript: or data:.

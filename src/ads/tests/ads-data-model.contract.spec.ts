@@ -1,3 +1,5 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { Client } from 'pg';
 import { AD_WEIGHT_MAX, AD_WEIGHT_MIN } from '../ads-limits';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -550,6 +552,34 @@ describe('Ads data model (ADS-03)', () => {
         [id],
       );
       expect(status.code).toBe('22P02');
+    });
+  });
+
+  describe('the migration file itself', () => {
+    const MIGRATION = join(
+      __dirname,
+      '../../../prisma/migrations/20261006090000_ads_data_model/migration.sql',
+    );
+
+    it('holds only ASCII, so no invisible character is written into a CHECK as itself', () => {
+      const bytes = readFileSync(MIGRATION);
+      const offenders: number[] = [];
+      bytes.forEach((b, i) => {
+        if (b > 0x7e || (b < 0x20 && b !== 0x0a && b !== 0x09))
+          offenders.push(i);
+      });
+      expect(offenders).toEqual([]);
+    });
+
+    it('spells the blank class with \\uXXXX escapes on every CHECK that uses it', () => {
+      const sql = readFileSync(MIGRATION, 'utf8');
+      const classes = sql.match(/!~ '\^\[[^\]]*\]\*\$'/g) ?? [];
+      expect(classes).toHaveLength(5);
+      for (const c of classes) {
+        expect(c).toMatch(
+          /^!~ '\^\[(\\u[0-9A-F]{4}(-\\u[0-9A-F]{4})?)+\]\*\$'$/,
+        );
+      }
     });
   });
 
