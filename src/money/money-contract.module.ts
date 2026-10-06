@@ -13,7 +13,8 @@ import { MoneyTransferController } from './money-transfer.controller';
  * and deletes it here in the same change; the emitter refuses a route that
  * is declared here and served as well. Served so far: the transaction PIN
  * (MONEY-09, MoneyModule), the balance (MONEY-11), the wallet itself
- * (MONEY-12), the history (MONEY-15) and the fee quote (WALLET-15).
+ * (MONEY-12), the history (MONEY-15), the fee quote (WALLET-15) and the
+ * recipient search and recent recipients (WALLET-08).
  */
 @Module({
   controllers: [MoneyTransferController, MoneyPaymentController],
