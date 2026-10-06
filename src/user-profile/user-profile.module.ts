@@ -9,6 +9,10 @@ import { PublicUserProfileController } from './public-user-profile.controller';
 import { UserProfileService } from './user-profile.service';
 import { ProfileExperienceService } from './profile-experience.service';
 import { ProfileDetailsService } from './profile-details.service';
+import { ProfileWorksController } from './profile-works.controller';
+import { ProfileWorkService } from './profile-work.service';
+import { ProfileEducationService } from './profile-education.service';
+import { ProfileAudienceService } from './profile-audience.service';
 
 /**
  * registry.json "UserProfile" resource module. PrismaService comes from the
@@ -36,11 +40,18 @@ import { ProfileDetailsService } from './profile-details.service';
     // BlockedAccountService, so a hidden profile answers 404 (SETTINGS-04).
     BlockedAccountModule,
   ],
-  controllers: [UserProfileController, PublicUserProfileController],
+  controllers: [
+    UserProfileController,
+    ProfileWorksController,
+    PublicUserProfileController,
+  ],
   providers: [
     UserProfileService,
     ProfileExperienceService,
     ProfileDetailsService,
+    ProfileWorkService,
+    ProfileEducationService,
+    ProfileAudienceService,
   ],
 })
 export class UserProfileModule {}
