@@ -99,6 +99,51 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    // Featured works (ME-16). The pictures are file keys, which an export
+    // never carries (rule 3), so `media` is left out; the count says how
+    // many there were.
+    key: 'profileWorks',
+    models: ['ProfileWork'],
+    load: async (prisma, me) => {
+      const rows = await prisma.profileWork.findMany({
+        where: { wawuUserId: me },
+        select: {
+          title: true,
+          role: true,
+          client: true,
+          year: true,
+          link: true,
+          category: true,
+          description: true,
+          media: true,
+          position: true,
+          createdAt: true,
+        },
+        orderBy: [{ position: 'asc' }, { id: 'asc' }],
+      });
+      return rows.map(({ media, ...work }) => ({
+        ...work,
+        mediaCount: media.length,
+      }));
+    },
+  },
+  {
+    key: 'profileEducation',
+    models: ['ProfileEducation'],
+    load: (prisma, me) =>
+      prisma.profileEducation.findMany({
+        where: { wawuUserId: me },
+        select: {
+          school: true,
+          field: true,
+          startYear: true,
+          endYear: true,
+          createdAt: true,
+        },
+        orderBy: [{ startYear: 'desc' }, { id: 'asc' }],
+      }),
+  },
+  {
     key: 'likes',
     models: ['ContentLike'],
     load: (prisma, me) =>
@@ -144,6 +189,36 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    key: 'tgifReactions',
+    models: ['TgifReaction'],
+    load: (prisma, me) =>
+      prisma.tgifReaction.findMany({
+        where: { userWawuId: me },
+        select: { day: true, card: true, kind: true, createdAt: true },
+        orderBy: NEWEST,
+      }),
+  },
+  {
+    key: 'tgifReads',
+    models: ['TgifRead'],
+    load: (prisma, me) =>
+      prisma.tgifRead.findMany({
+        where: { userWawuId: me },
+        select: { day: true, createdAt: true },
+        orderBy: NEWEST,
+      }),
+  },
+  {
+    key: 'tgifShares',
+    models: ['TgifShare'],
+    load: (prisma, me) =>
+      prisma.tgifShare.findMany({
+        where: { userWawuId: me },
+        select: { day: true, createdAt: true },
+        orderBy: NEWEST,
+      }),
+  },
+  {
     key: 'creatorSettings',
     models: ['CreatorState'],
     load: (prisma, me) =>
@@ -164,6 +239,15 @@ export const EXPORT_SECTIONS: ExportSection[] = [
           showFollowing: true,
           showInMemberLists: true,
         },
+      }),
+  },
+  {
+    key: 'tgifPreference',
+    models: ['TgifPreference'],
+    load: (prisma, me) =>
+      prisma.tgifPreference.findUnique({
+        where: { userWawuId: me },
+        select: { show: true, updatedAt: true },
       }),
   },
   {
@@ -666,6 +750,12 @@ export const EXPORT_SECTIONS: ExportSection[] = [
  */
 export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
   [
+    // Editorial placement, not the person's own content (EXPLORE-03).
+    {
+      model: 'FeaturedCreator',
+      reason:
+        'An admin choice to show the creator in Explore, with the admin id; the person wrote none of it.',
+    },
     // Secrets and identity records: never in an email.
     {
       model: 'EventDoorStaff',

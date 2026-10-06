@@ -165,5 +165,7 @@ export const MONEY_ERROR_CODES = [
   'statement_too_large',
   'statement_rate_limited',
   'statement_busy',
+  // Finding a recipient (WALLET-08).
+  'recipient_search_rate_limited',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];
