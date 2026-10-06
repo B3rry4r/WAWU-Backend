@@ -4165,3 +4165,45 @@ model LegalDocument {
   sections      Json
   updatedAt     DateTime @updatedAt
 }
+
+/// One person's reaction to one TGIF card on one day (HOME-10). The unique
+/// (person, day, card) key is what makes a reaction count once: two taps at
+/// once race on the key and one row exists. Counts are always the number of
+/// rows (no counter column), so a count can never drift from its rows. `kind`
+/// is "amen" today; the migration holds it to that with a CHECK.
+model TgifReaction {
+  id         String   @id @default(uuid())
+  userWawuId String
+  /// The calendar day the card belongs to (a date, not an instant).
+  day        DateTime @db.Date
+  card       String
+  kind       String   @default("amen")
+  createdAt  DateTime @default(now())
+
+  @@unique([userWawuId, day, card])
+  @@index([day, card])
+}
+
+/// One person opened TGIF on one day (HOME-10). "Readers today" is the number
+/// of rows for the day: one person is one row however often they open it.
+model TgifRead {
+  id         String   @id @default(uuid())
+  userWawuId String
+  day        DateTime @db.Date
+  createdAt  DateTime @default(now())
+
+  @@unique([userWawuId, day])
+  @@index([day])
+}
+
+/// One person shared TGIF on one day (HOME-10). The share count for a day is
+/// the number of rows, as ContentShare's is for a piece.
+model TgifShare {
+  id         String   @id @default(uuid())
+  userWawuId String
+  day        DateTime @db.Date
+  createdAt  DateTime @default(now())
+
+  @@unique([userWawuId, day])
+  @@index([day])
+}

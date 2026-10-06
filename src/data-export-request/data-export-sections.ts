@@ -189,6 +189,36 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    key: 'tgifReactions',
+    models: ['TgifReaction'],
+    load: (prisma, me) =>
+      prisma.tgifReaction.findMany({
+        where: { userWawuId: me },
+        select: { day: true, card: true, kind: true, createdAt: true },
+        orderBy: NEWEST,
+      }),
+  },
+  {
+    key: 'tgifReads',
+    models: ['TgifRead'],
+    load: (prisma, me) =>
+      prisma.tgifRead.findMany({
+        where: { userWawuId: me },
+        select: { day: true, createdAt: true },
+        orderBy: NEWEST,
+      }),
+  },
+  {
+    key: 'tgifShares',
+    models: ['TgifShare'],
+    load: (prisma, me) =>
+      prisma.tgifShare.findMany({
+        where: { userWawuId: me },
+        select: { day: true, createdAt: true },
+        orderBy: NEWEST,
+      }),
+  },
+  {
     key: 'creatorSettings',
     models: ['CreatorState'],
     load: (prisma, me) =>
