@@ -65,7 +65,8 @@ function lagosMonthStart(month: string): Date {
  *    earns it; one still awaiting a reply is held, a refunded one was never
  *    the creator's), at `respondedAt`, 85% (R-5);
  *  - WAWU Credits spent in the creator's rooms: `CreditSpendEarning`, at
- *    `earnedAt`, its `hostShareKobo` as stored.
+ *    `earnedAt`, its `hostShareKobo` as stored. A spend that earned nothing
+ *    (credits WAWU was paid nothing for) is not a sale and is left out.
  * These are the streams and rules GET /content/mine/earnings already uses,
  * with held paid questions left out because they are not completed.
  *
@@ -120,6 +121,7 @@ export class MeEarningsService {
       FROM "CreditSpendEarning" e
       LEFT JOIN "Community" cm ON cm."id" = e."communityId"
       WHERE e."creatorWawuId" = ${me}
+        AND e."hostShareKobo" > 0
         AND e."earnedAt" >= ${lo} AND e."earnedAt" < ${hi}`;
   }
 

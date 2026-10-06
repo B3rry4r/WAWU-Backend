@@ -888,6 +888,28 @@ describe('ME-10: the caller’s own lists (contract)', () => {
           },
         ],
       });
+      // A spend of credits WAWU was paid nothing for earned nothing: not a sale.
+      await prisma.creditSpend.create({
+        data: {
+          userWawuId: PLAIN,
+          communityId: ROOM_ID,
+          creatorWawuId: BASIC,
+          creditsSpent: 1,
+          spentAt: at('2025-03-13T12:00:00.000Z'),
+          earning: {
+            create: {
+              creatorWawuId: BASIC,
+              communityId: ROOM_ID,
+              creditsSpent: 1,
+              creditsFunded: 0,
+              grossKobo: 0,
+              hostShareKobo: 0,
+              platformShareKobo: 0,
+              earnedAt: at('2025-03-13T12:00:00.000Z'),
+            },
+          },
+        },
+      });
       await prisma.creditSpend.create({
         data: {
           userWawuId: PLAIN,
