@@ -292,7 +292,8 @@ describe('MONEY-20: the Fintava adapter changes nothing but the names', () => {
   });
 
   it('what Fintava has no equivalent for answers not_supported, sending nothing', async () => {
-    const p = adapter({});
+    // Called through the interface, as a service would.
+    const p: WalletProvider = adapter({});
     for (const call of [
       () => p.startLivenessSession({ customerId: 'c' }),
       () => p.getLivenessResult('s'),

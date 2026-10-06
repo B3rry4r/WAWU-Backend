@@ -66,7 +66,7 @@ matters most here:
   Credits are a count, never naira.
 - Fintava's balance is the truth. Never add up our own records and show that
   as a balance.
-- **One provider seam** (R-38, owner, 6 Oct 2026; MONEY-20). Code under
+- **One provider seam** (R-39, owner, 6 Oct 2026; MONEY-20). Code under
   `src/money/` reaches the wallet provider only through `WALLET_PROVIDER`
   (and `OTP_SENDER` for the PIN reset text), defined in `src/wallet-provider/`.
   It never imports `src/fintava/` (a spec checks). `WALLET_PROVIDER=fintava`
