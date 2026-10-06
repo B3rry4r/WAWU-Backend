@@ -749,7 +749,7 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
     {
       model: 'AdEvent',
       reason:
-        'Which sponsored cards were opened, tapped or skipped on which day: an advertising count kept so each is counted once a day, not something the person made (BACKEND_GAPS G-196).',
+        'Which sponsored cards were opened, tapped or skipped on which day: an advertising count kept so each is counted once a day, not something the person made (BACKEND_GAPS G-199).',
     },
     {
       model: 'DmReport',
