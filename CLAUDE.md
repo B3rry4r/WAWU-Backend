@@ -66,6 +66,12 @@ matters most here:
   Credits are a count, never naira.
 - Fintava's balance is the truth. Never add up our own records and show that
   as a balance.
+- **One provider seam** (R-38, owner, 6 Oct 2026; MONEY-20). Code under
+  `src/money/` reaches the wallet provider only through `WALLET_PROVIDER`
+  (and `OTP_SENDER` for the PIN reset text), defined in `src/wallet-provider/`.
+  It never imports `src/fintava/` (a spec checks). `WALLET_PROVIDER=fintava`
+  (the default) or `nuvion` picks the adapter at boot; rollback is that one
+  setting and a restart. Provider quirks live in the provider's adapter.
 - What Fintava's API really does is in the mobile repo's `docs/fintava/`.
   Facts come from there and from real sandbox responses, never from the design.
 - **Money routes follow `docs/contract/CONVENTIONS.md`** (kobo, `+234`, one
