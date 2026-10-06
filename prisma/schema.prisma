@@ -2638,8 +2638,58 @@ model LegalIntake {
   startedAt   DateTime  @default(now())
   completedAt DateTime?
 
+  /// How the intake is being filled. Null: the question form (the web's
+  /// `/legal/intake` routes, every row written before LEGAL-01).
+  /// `assistant`: the chat-first flow (`/legal/assistant`, LEGAL-01), where
+  /// the assistant profiles the problem in conversation before any payment.
+  channel String?
+
+  /// The assistant's working brief while the conversation runs (LEGAL-01):
+  /// `{ headline, facts: [{ label, value }], ready }`. Only what the client
+  /// said, as the client is shown it to confirm. On "Send to a consultant"
+  /// it becomes `brief` above, in the same shape the form writes.
+  draftBrief Json?
+
   @@index([wawuUserId, status])
   @@index([status, completedAt])
+}
+
+/// Who wrote a message in the assistant conversation on an intake.
+enum LegalIntakeAuthor {
+  client
+  /// The WAWU Legal assistant: Gemini, or a line the server writes itself
+  /// (`scripted`). Never a person.
+  assistant
+}
+
+/// One message in the assistant conversation on an UNPAID legal intake
+/// (LEGAL-01: legal starts as a chat).
+///
+/// Kept apart from LegalChatMessage on purpose: that thread belongs to a
+/// LegalRequest, which only exists once the client sends the brief to a
+/// consultant. Everything said before that lives here; everything after it
+/// (the consultant joining, the client's replies) lives on the request's
+/// own thread, so the dashboard's consultant routes read it unchanged.
+///
+/// `wawuUserId` is carried so the account purge can delete these rows by
+/// owner (account-data-map.ts), like the intake itself.
+model LegalIntakeMessage {
+  id            String            @id @default(uuid())
+  legalIntakeId String
+  wawuUserId    String
+  authorRole    LegalIntakeAuthor
+  /// Written by the server, not the model: the opener (which carries the
+  /// client's first name) and the "sent to a consultant" line. Never sent to
+  /// the model.
+  scripted      Boolean           @default(false)
+  body          String
+  /// The answers offered as taps under this message: `[{ id, label }]`.
+  /// Only the newest assistant message's are live.
+  quickReplies  Json?
+  createdAt     DateTime          @default(now())
+
+  @@index([legalIntakeId, createdAt])
+  @@index([wawuUserId, createdAt])
 }
 
 /// Who said it.

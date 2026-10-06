@@ -3322,6 +3322,216 @@
         ]
       }
     },
+    "/api/hub/legal/assistant/topics": {
+      "get": {
+        "operationId": "LegalAssistantController_topics",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LegalAssistantTopic"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "The problems offered as taps when the assistant opens (S14).",
+        "tags": [
+          "LegalAssistant"
+        ]
+      }
+    },
+    "/api/hub/legal/assistant": {
+      "post": {
+        "operationId": "LegalAssistantController_start",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalAssistantThread"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Open the conversation, or pick up the unfinished one. A new one starts\nwith the assistant's two opening lines and the topic taps.",
+        "tags": [
+          "LegalAssistant"
+        ]
+      }
+    },
+    "/api/hub/legal/assistant/{id}": {
+      "get": {
+        "operationId": "LegalAssistantController_thread",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalAssistantThread"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "LegalAssistant"
+        ]
+      }
+    },
+    "/api/hub/legal/assistant/{id}/messages": {
+      "post": {
+        "operationId": "LegalAssistantController_send",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendAssistantMessageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalAssistantThread"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The client says something: typed (`body`) or a tap (`quickReplyId`).\nBefore the brief is sent the assistant answers; after, the message goes\nto the consultant on the matter's thread.",
+        "tags": [
+          "LegalAssistant"
+        ]
+      }
+    },
+    "/api/hub/legal/assistant/{id}/reply": {
+      "post": {
+        "operationId": "LegalAssistantController_reply",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalAssistantThread"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Ask the assistant again after `503 assistant_unavailable`.",
+        "tags": [
+          "LegalAssistant"
+        ]
+      }
+    },
+    "/api/hub/legal/assistant/{id}/send": {
+      "post": {
+        "operationId": "LegalAssistantController_sendToConsultant",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalAssistantThread"
+                }
+              }
+            }
+          }
+        },
+        "summary": "\"Send to a consultant\" (S16): the brief goes to WAWU Legal's consultant\nqueue and the matter opens at `awaiting_quote`. Nothing is charged.\nSending again answers the same thread and opens nothing new.",
+        "tags": [
+          "LegalAssistant"
+        ]
+      }
+    },
+    "/api/hub/legal/ops/intakes/{id}/assistant": {
+      "get": {
+        "operationId": "LegalAssistantOpsController_transcript",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalAssistantTranscript"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "LegalAssistantOps"
+        ]
+      }
+    },
     "/api/hub/legal/availability": {
       "get": {
         "operationId": "LegalController_availability",
@@ -24680,6 +24890,22 @@
           "body"
         ]
       },
+      "SendAssistantMessageDto": {
+        "type": "object",
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "What the client typed. At most 2000 characters.",
+            "maxLength": 2000
+          },
+          "quickReplyId": {
+            "type": "string",
+            "description": "The `id` of one of the thread's live `quickReplies`.",
+            "maxLength": 64,
+            "pattern": "^[a-z0-9_:]+$"
+          }
+        }
+      },
       "CreateLegalRequestDto": {
         "type": "object",
         "properties": {
@@ -37464,6 +37690,246 @@
           "brief",
           "completedAt",
           "legalRequestId"
+        ]
+      },
+      "LegalAssistantTopic": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "matter": {
+            "type": "string"
+          },
+          "matterLabel": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "matter",
+          "matterLabel"
+        ]
+      },
+      "LegalAssistantMessage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "authorRole": {
+            "type": "string",
+            "enum": [
+              "client",
+              "consultant",
+              "assistant"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "consultantName": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "authorRole",
+          "body",
+          "createdAt",
+          "consultantName"
+        ]
+      },
+      "LegalAssistantQuickReply": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ]
+      },
+      "LegalAssistantBriefRow": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "value"
+        ]
+      },
+      "LegalAssistantBrief": {
+        "type": "object",
+        "properties": {
+          "matter": {
+            "type": "string"
+          },
+          "matterLabel": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LegalAssistantBriefRow"
+            }
+          },
+          "ready": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "matter",
+          "matterLabel",
+          "rows",
+          "ready"
+        ]
+      },
+      "LegalAssistantConsultant": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "joinedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "name",
+          "joinedAt"
+        ]
+      },
+      "LegalAssistantThread": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "sent",
+              "profiling",
+              "brief_ready"
+            ]
+          },
+          "matter": {
+            "type": "string"
+          },
+          "matterLabel": {
+            "type": "string"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LegalAssistantMessage"
+            }
+          },
+          "quickReplies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LegalAssistantQuickReply"
+            }
+          },
+          "brief": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LegalAssistantBrief"
+              }
+            ],
+            "nullable": true
+          },
+          "awaitingReply": {
+            "type": "boolean"
+          },
+          "legalRequestId": {
+            "type": "string",
+            "nullable": true
+          },
+          "requestStatus": {
+            "type": "string",
+            "nullable": true
+          },
+          "consultant": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LegalAssistantConsultant"
+              }
+            ],
+            "nullable": true
+          },
+          "assistantStopped": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "stage",
+          "matter",
+          "matterLabel",
+          "messages",
+          "quickReplies",
+          "brief",
+          "awaitingReply",
+          "legalRequestId",
+          "requestStatus",
+          "consultant",
+          "assistantStopped"
+        ]
+      },
+      "LegalAssistantTranscript": {
+        "type": "object",
+        "properties": {
+          "intakeId": {
+            "type": "string"
+          },
+          "legalRequestId": {
+            "type": "string",
+            "nullable": true
+          },
+          "brief": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LegalAssistantBrief"
+              }
+            ],
+            "nullable": true
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LegalAssistantMessage"
+            }
+          }
+        },
+        "required": [
+          "intakeId",
+          "legalRequestId",
+          "brief",
+          "messages"
         ]
       },
       "ChatPerson": {

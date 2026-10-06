@@ -92,7 +92,10 @@ export class LegalIntakeService {
     }
 
     const existing = await this.prisma.legalIntake.findFirst({
-      where: { wawuUserId, matter, status: 'in_progress' },
+      // `channel: null`: the form resumes only form intakes, never an
+      // assistant conversation (LEGAL-01). Every intake written before
+      // LEGAL-01 has a null channel, so this resumes exactly what it did.
+      where: { wawuUserId, matter, status: 'in_progress', channel: null },
       orderBy: { startedAt: 'desc' },
     });
     if (existing) return this.toView(existing);
