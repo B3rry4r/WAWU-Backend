@@ -19,6 +19,7 @@ import type { CommunityMessage, CommunityMessageSender } from '../common/types';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { NotificationService } from '../notification/notification.service';
+import { LivePublisher } from '../live/live-publisher.service';
 import type { CreateCommunityMessageDto } from './dto/create-community-message.dto';
 
 /**
@@ -148,6 +149,7 @@ export class CommunityMessageService {
     private readonly creditSpendService: CreditSpendService,
     private readonly notifications: NotificationService,
     private readonly wawuId: WawuIdClient,
+    private readonly live: LivePublisher,
     private readonly blockedAccounts: BlockedAccountService,
   ) {}
 
@@ -343,6 +345,22 @@ export class CommunityMessageService {
    * it is a plain single INSERT and needs no transaction.
    */
   async create(
+    communityId: string,
+    senderWawuId: string,
+    dto: CreateCommunityMessageDto,
+  ): Promise<CommunityMessage> {
+    const message = await this.store(communityId, senderWawuId, dto);
+    // After the commit, so a listener that hydrates the message finds it.
+    await this.live.publish({
+      kind: 'community.message',
+      communityId,
+      messageId: message.id,
+    });
+    return message;
+  }
+
+  /** Checks, charges and stores one message (everything `create` did before INBOX-02). */
+  private async store(
     communityId: string,
     senderWawuId: string,
     dto: CreateCommunityMessageDto,
