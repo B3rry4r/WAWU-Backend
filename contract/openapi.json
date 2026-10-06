@@ -23282,6 +23282,55 @@
         ]
       }
     },
+    "/api/hub/ads/{id}/events": {
+      "post": {
+        "operationId": "AdsEventsController_record",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordAdEventDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accepted": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "accepted"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "The app reports that this person viewed, tapped or skipped the card of a\ncampaign (the id GET /ads returned). Counted once per person, kind and\nUTC day: a repeat answers the same as the first and changes nothing, so\nthe app may retry freely and the answer says nothing about earlier counts.\nA campaign that is not being served (unknown, draft, paused, ended, outside\nits window) is a plain 404, the same for all of them.",
+        "tags": [
+          "AdsEvents"
+        ]
+      }
+    },
     "/api/hub/money/banks": {
       "get": {
         "operationId": "MoneyTransferController_banks",
@@ -27464,6 +27513,22 @@
         "required": [
           "contentType",
           "contentLength"
+        ]
+      },
+      "RecordAdEventDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "view",
+              "tap",
+              "skip"
+            ]
+          }
+        },
+        "required": [
+          "type"
         ]
       },
       "NameCheckDto": {

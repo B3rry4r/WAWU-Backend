@@ -78,6 +78,7 @@ import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { HUB_THROTTLERS } from './hub-throttlers';
 import { HUB_THROTTLER_STORAGE } from './hub-throttler-storage';
 import { APP_GUARD } from '@nestjs/core';
+import { AdsEventsModule } from './ads/ads-events.module';
 // Phase 5 build (waves 0-3, all 39 registry resources) is now complete.
 // The deferred Flutterwave webhook has now shipped as PaymentWebhookModule
 // (POST /api/hub/webhooks/flutterwave) alongside the scheduled-job cron pass,
@@ -352,6 +353,12 @@ import { APP_GUARD } from '@nestjs/core';
     // once, no money moved. `webhooks/fintava` is a fixed path no other
     // controller declares, beside the unchanged `webhooks/flutterwave`.
     FintavaWebhookModule,
+
+    // Counting views, taps and skips of sponsored cards (task ADS-05):
+    // POST /ads/:id/events. Same `ads` first segment as AdsModule, with a
+    // literal tail after the id, so it cannot shadow GET /ads.
+    AdsEventsModule,
+
     // LAST on purpose. PaymentWebhookModule imports every money module so it
     // can reuse their /verify settlement, and every one of them is already
     // registered above — Nest dedupes, so the load-bearing controller order
