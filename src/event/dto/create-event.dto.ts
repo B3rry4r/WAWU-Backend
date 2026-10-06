@@ -53,6 +53,12 @@ export class EventSpeakerDto {
 /** How many ticket types one submit may carry. */
 export const MAX_TICKET_TYPES_PER_EVENT = 20;
 
+// One message per field: class-validator reports a single constraint, and for a
+// value that is not a number it is the range one, which names the wrong problem.
+const PRICE_MESSAGE =
+  'priceNaira must be a whole number of naira, from 0 to 10000000.';
+const QUANTITY_MESSAGE = 'quantity must be a whole number, from 1 to 1000000.';
+
 /**
  * One ticket type sent with a new event: what the host wizard asks for, a
  * name, a price and how many.
@@ -70,17 +76,18 @@ export class NewEventTicketTypeDto {
   name!: string;
 
   /** Naira, like every ticket price this backend stores. 0 is a free ticket. */
-  @Type(() => Number)
-  @IsInt()
-  @Min(0)
-  @Max(10_000_000)
+  // No `@Type(() => Number)` here or on `quantity`: JSON must carry a number.
+  // Coercion turned `""` into a free ticket and `"5000"`, `true` and `"0x10"`
+  // into values the host never typed. PUT /events/:id/tickets refuses them too.
+  @IsInt({ message: PRICE_MESSAGE })
+  @Min(0, { message: PRICE_MESSAGE })
+  @Max(10_000_000, { message: PRICE_MESSAGE })
   priceNaira!: number;
 
   /** How many exist. A venue has a capacity, so there is no unlimited option. */
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(1_000_000)
+  @IsInt({ message: QUANTITY_MESSAGE })
+  @Min(1, { message: QUANTITY_MESSAGE })
+  @Max(1_000_000, { message: QUANTITY_MESSAGE })
   quantity!: number;
 
   @IsOptional()

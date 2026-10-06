@@ -373,6 +373,38 @@ describe('Event hosting, one submit (EVENTS-02)', () => {
       expect(await submitted(name)).toHaveLength(0);
     });
 
+    it('400s a price or quantity that is not a JSON integer, as PUT /events/:id/tickets does, and saves nothing', async () => {
+      const name = `${PREFIX}Not integers`;
+      const bad: Array<[string, unknown, unknown]> = [
+        ['priceNaira', '', 10],
+        ['priceNaira', '5000', 10],
+        ['priceNaira', true, 10],
+        ['priceNaira', '0x10', 10],
+        ['priceNaira', '1e3', 10],
+        ['priceNaira', '5,000', 10],
+        ['priceNaira', null, 10],
+        ['quantity', '', 5000],
+        ['quantity', '10', 5000],
+        ['quantity', true, 5000],
+        ['quantity', '0x10', 5000],
+        ['quantity', null, 5000],
+      ];
+      for (const [field, value, other] of bad) {
+        const ticket =
+          field === 'priceNaira'
+            ? { name: 'Regular', priceNaira: value, quantity: other }
+            : { name: 'Regular', priceNaira: other, quantity: value };
+        const res = await http()
+          .post('/api/hub/events')
+          .set(auth(hostToken))
+          .send(wizardBody({ name, ticketTypes: [ticket] }))
+          .expect(400);
+        const message = JSON.stringify(bodyOf(res).message);
+        expect(message).toContain(`${field} must be a whole number`);
+      }
+      expect(await submitted(name)).toHaveLength(0);
+    });
+
     it('refuses an unverified host with ticket types, and saves nothing', async () => {
       const name = `${PREFIX}Unverified host`;
       const res = await http()
