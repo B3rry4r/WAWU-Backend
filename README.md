@@ -268,6 +268,35 @@ Revocation has no session table: bump `AdminUser.tokenVersion` and every
 outstanding access and refresh token for that admin stops working on the next
 request.
 
+### Ads (`/api/hub/admin/ads`, task ADS-06)
+
+Ads are booked by the WAWU team and invoiced by hand (R-15), so these routes
+are where staff create, edit, schedule, pause, resume, end and report on
+sponsored cards. Same admin auth as above; reads are open to every admin role,
+writes to `superadmin` and `reviewer`.
+
+| Route | Notes |
+| --- | --- |
+| `GET /admin/ads` | Filters `status`, `placement`, `phase` (`upcoming`, `running`, `over`), `from` and `to` (campaigns whose window overlaps the range); `sort` `latest` or `soonest` by window start, ties by id; `page` and `perPage` like the other admin lists. |
+| `GET /admin/ads/report` | Campaigns in a range counted by status, placement and phase, plus how many serving would show right now per placement. |
+| `POST /admin/ads` | A draft with its card. Nothing is served until it is scheduled. |
+| `GET /admin/ads/:id` | Campaign, card, its event, overlapping bookings on the placement and the whole audit history. |
+| `GET /admin/ads/:id/report` | Window, how much of it has run, what was done to it. |
+| `PATCH /admin/ads/:id` | Edit a draft or a paused campaign; the audit row records each changed field's before and after. |
+| `DELETE /admin/ads/:id` | A draft only. Its audit rows stay. |
+| `POST /admin/ads/:id/schedule`, `/pause`, `/resume`, `/end` | The state machine in `src/admin/ads/ad-campaign-state.ts`. An illegal move, or a repeat, is a 409 whose `reason` names the code and the statuses allowed. |
+
+Every change runs in one transaction that locks the campaign row, so two
+requests for one campaign take turns: one outcome, one audit row
+(`AdminAdAudit`), and a 409 for the loser. Serving reads `status` on every
+request with no cache, so a pause is in force before its response is sent.
+Nothing moves a campaign to `live` or `ended` on a timer: serving checks the
+window itself. Times are UTC, written `2026-10-18T09:00:00Z`; the picture is an
+`https` link the admin supplies (there is no admin upload route). Text is
+checked by Unicode category and capped by `src/ads/ads-text-limits.ts`
+(provisional). The report carries no views, taps or skips until ADS-05 counts
+them.
+
 ### Environment
 
 | Variable | Required | Notes |

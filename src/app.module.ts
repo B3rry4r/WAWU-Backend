@@ -73,6 +73,7 @@ import { MoneyModule } from './money/money.module';
 import { ChatModule } from './chat/chat.module';
 import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
 import { PaymentWebhookModule } from './payment-webhook/payment-webhook.module';
+import { AdminAdsModule } from './admin/ads/admin-ads.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { HUB_THROTTLERS } from './hub-throttlers';
 import { HUB_THROTTLER_STORAGE } from './hub-throttler-storage';
@@ -346,6 +347,10 @@ import { APP_GUARD } from '@nestjs/core';
     // once, no money moved. `webhooks/fintava` is a fixed path no other
     // controller declares, beside the unchanged `webhooks/flutterwave`.
     FintavaWebhookModule,
+    // Admin ad management (task ADS-06): `admin/ads`, a second segment no other
+    // controller declares, so it cannot shadow or be shadowed wherever it sits.
+    AdminAdsModule,
+
     // LAST on purpose. PaymentWebhookModule imports every money module so it
     // can reuse their /verify settlement, and every one of them is already
     // registered above — Nest dedupes, so the load-bearing controller order
