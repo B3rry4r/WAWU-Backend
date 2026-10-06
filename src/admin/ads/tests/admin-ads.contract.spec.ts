@@ -1456,6 +1456,88 @@ describe('Admin ads contract (ADS-06)', () => {
     });
   });
 
+  // ── times outside what the database stores ───────────────────────────────
+
+  describe('a time the database cannot store is a 400 at every place a time is read', () => {
+    const bad = [
+      '0000-01-01T00:00:00Z',
+      '0000-12-31T23:59:59.999Z',
+      '-000001-01-01T00:00:00Z',
+      '+275760-09-13T00:00:00.000Z',
+      '10000-01-01T00:00:00Z',
+      '9999-12-31T23:59:60Z',
+    ];
+
+    it.each(bad)('create: startsAt and endsAt %s', async (t) => {
+      const before = await prisma.adCampaign.count();
+      for (const over of [{ startsAt: t }, { endsAt: t }]) {
+        const res = await http().post(BASE).set(asSuper()).send(body(over));
+        expect(res.status).toBe(400);
+        expect(res.body.data).toBeNull();
+        expect(res.body.message).toMatch(/UTC time/);
+      }
+      expect(await prisma.adCampaign.count()).toBe(before);
+    });
+
+    it.each(bad)('edit: startsAt and endsAt %s', async (t) => {
+      const c = await create();
+      for (const send of [{ startsAt: t }, { endsAt: t }]) {
+        const res = await http()
+          .patch(`${BASE}/${c.id}`)
+          .set(asSuper())
+          .send(send);
+        expect(res.status).toBe(400);
+        expect(res.body.message).toMatch(/UTC time/);
+      }
+      expect(await auditOf(c.id)).toHaveLength(1);
+    });
+
+    it.each(bad)('list and report: from and to %s', async (t) => {
+      for (const path of [BASE, `${BASE}/report`]) {
+        for (const q of [{ from: t }, { to: t }]) {
+          const res = await http().get(path).query(q).set(asSuper());
+          expect([path, JSON.stringify(q), res.status]).toEqual([
+            path,
+            JSON.stringify(q),
+            400,
+          ]);
+          expect(res.body.message).toMatch(/UTC time/);
+        }
+      }
+    });
+
+    it('the first and last stored instants are accepted everywhere and round-trip', async () => {
+      const first = '0001-01-01T00:00:00.000Z';
+      const last = '9999-12-31T23:59:59.999Z';
+      // 0001-01-01 is the first instant Postgres is sent; the window must also end in the future.
+      const c = await create({ startsAt: first, endsAt: last });
+      expect(c.startsAt).toBe(first);
+      expect(c.endsAt).toBe(last);
+      const row = await rowOf(c.id);
+      expect(row?.startsAt.toISOString()).toBe(first);
+      expect(row?.endsAt.toISOString()).toBe(last);
+      const d = (await http().get(`${BASE}/${c.id}`).set(asSuper())).body.data;
+      expect([d.startsAt, d.endsAt]).toEqual([first, last]);
+      const edit = await http()
+        .patch(`${BASE}/${c.id}`)
+        .set(asSuper())
+        .send({ endsAt: '9999-12-31T23:59:59Z' });
+      expect(edit.status).toBe(200);
+      for (const q of [
+        { from: first },
+        { to: last },
+        { from: first, to: last },
+      ]) {
+        for (const path of [BASE, `${BASE}/report`]) {
+          expect((await http().get(path).query(q).set(asSuper())).status).toBe(
+            200,
+          );
+        }
+      }
+      expect((await act(c.id, 'schedule')).status).toBe(200);
+    });
+  });
+
   // ── edit and delete ──────────────────────────────────────────────────────
 
   describe('PATCH and DELETE', () => {

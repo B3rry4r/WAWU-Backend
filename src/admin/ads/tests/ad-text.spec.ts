@@ -285,6 +285,15 @@ describe('parseUtcInstant', () => {
     '2026-10-18T09:00:00z',
     '2026-10-18T09:00Z',
     '2026-10-18T09:00:00.1234Z',
+    '0000-01-01T00:00:00Z',
+    '0000-12-31T23:59:59.999Z',
+    '-000001-01-01T00:00:00Z',
+    '+275760-09-13T00:00:00.000Z',
+    '+010000-01-01T00:00:00Z',
+    '10000-01-01T00:00:00Z',
+    '99999-01-01T00:00:00Z',
+    '9999-12-31T23:59:60Z',
+    '2016-12-31T23:59:60Z',
     '2026-02-31T09:00:00Z',
     '2026-13-01T09:00:00Z',
     '2026-10-18T24:00:00Z',
@@ -296,6 +305,15 @@ describe('parseUtcInstant', () => {
     '',
   ])('refuses %s', (value) => {
     expect(parseUtcInstant(value)).toBeNull();
+  });
+
+  it('accepts the first and last instants the database is sent', () => {
+    expect(parseUtcInstant('0001-01-01T00:00:00Z')?.toISOString()).toBe(
+      '0001-01-01T00:00:00.000Z',
+    );
+    expect(parseUtcInstant('9999-12-31T23:59:59.999Z')?.toISOString()).toBe(
+      '9999-12-31T23:59:59.999Z',
+    );
   });
 
   it('accepts a real leap day and refuses a false one', () => {

@@ -203,13 +203,20 @@ const INSTANT =
 
 /**
  * An instant written in UTC and nothing else: `2026-10-18T09:00:00Z` or with up
- * to three decimals. An offset (`+01:00`), a date without a time, or a day that
- * does not exist (31 February) gives null.
+ * to three decimals. An offset (`+01:00`), a date without a time, a day that
+ * does not exist (31 February), an expanded or negative year, or a year
+ * outside 0001 to 9999 gives null.
+ *
+ * The year bounds are what the database can be sent: the calendar has no year
+ * 0000 (Postgres refuses it, error 22008), and the four-digit form of the
+ * input already keeps a year above 9999 out. 0001-01-01T00:00:00Z and
+ * 9999-12-31T23:59:59.999Z are accepted and stored.
  */
 export function parseUtcInstant(raw: string): Date | null {
   const m = INSTANT.exec(raw);
   if (!m) return null;
   const [, y, mo, d, h, mi, s, frac] = m;
+  if (Number(y) < 1) return null;
   const ms = frac === undefined ? 0 : Number(frac.padEnd(3, '0'));
   const date = new Date(0);
   date.setUTCFullYear(Number(y), Number(mo) - 1, Number(d));
