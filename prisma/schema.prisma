@@ -4232,3 +4232,120 @@ model FeaturedCreator {
 
   @@index([position])
 }
+
+// -----------------------------------------------------------------------------
+// Sponsored cards (ADS-03, R-15)
+//
+// Ads at launch are booked by the WAWU team and invoiced by hand, so nothing
+// here records a price, an advertiser account or a payment. Money lives in the
+// team's invoices, not in this schema.
+//
+// Holds no personal data: no column names a WAWU user, so
+// src/account-purge/account-data-map.ts has nothing to classify here. (ADS-05's
+// per-viewer rows will, and classify themselves in that task.)
+//
+// CHECK constraints are in the migration, because Prisma does not model them:
+//   AdCampaign: endsAt > startsAt; weight between 1 and 100 (the range
+//   is AD_WEIGHT_MIN and AD_WEIGHT_MAX in src/ads/ads-limits.ts); advertiser
+//   is not blank.
+//   AdCreative: headline, CTA label and destination id are not blank, and a
+//   subline is absent or not blank; artworkUrl is absent or an http(s) link.
+//   "Blank" means empty or only white space, control, zero-width or other
+//   invisible characters, spelled out in the migration so it does not depend
+//   on the server's locale.
+// -----------------------------------------------------------------------------
+
+/// Where a sponsored card shows: inside the TGIF reader before the takeaway
+/// (`tgif_card`), or in TGIF's place on Today when the person has TGIF off
+/// (`today_slot`). Adding a placement is an `ALTER TYPE ... ADD VALUE`.
+enum AdPlacement {
+  tgif_card
+  today_slot
+}
+
+/// Where the team has put a campaign. The window (`startsAt`, `endsAt`) decides
+/// when it may run; this decides whether it may run at all. Only `scheduled`
+/// and `live` are ever served; `draft`, `paused` and `ended` never are.
+enum AdCampaignStatus {
+  draft
+  scheduled
+  live
+  paused
+  ended
+}
+
+/// What the card's button opens. THE ALLOW-LIST: a card can only open one of
+/// these, so a destination outside it cannot be stored. `event` opens the event
+/// detail screen for `AdCreative.ctaDestinationId` (H33 "Get tickets", H36
+/// "Tickets"). The only destination the design draws is the event; a new kind
+/// is an additive `ALTER TYPE ... ADD VALUE` that the task needing it names.
+enum AdCtaDestination {
+  event
+}
+
+/// One booking: who it is for, where it shows, when, and how it ranks against
+/// another booking for the same placement. The card itself is the AdCreative.
+model AdCampaign {
+  id String @id @default(uuid())
+
+  /// The advertiser's name as the card shows it ("SPONSORED · <advertiser>").
+  /// A name, not an account: advertisers have no accounts (R-15).
+  advertiser String
+
+  placement AdPlacement
+  status    AdCampaignStatus @default(draft)
+
+  /// The window the card may be served in: startsAt <= now < endsAt. Instants
+  /// (UTC); the dashboard turns "Saturday 18 October" into instants.
+  startsAt DateTime
+  endsAt   DateTime
+
+  /// Ranks bookings that overlap on one placement, so one is served: the
+  /// higher weight wins, and ADS-04 breaks a tie. 1 to 100, whole numbers. Range: src/ads/ads-limits.ts.
+  weight Int @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// At most one (AdCreative.campaignId is unique). Removing a campaign
+  /// removes its card.
+  creative AdCreative?
+
+  /// The serving query (ADS-04): one placement, a servable status, a window
+  /// that contains now.
+  @@index([placement, status, startsAt, endsAt])
+}
+
+/// The card a campaign shows. Everything on H33 and H36 is here and nothing
+/// else: the advertiser's name is the campaign's, the "SPONSORED" label and
+/// "Ads keep TGIF free" are the app's own words, and the event's date and
+/// price are typed into `subline` by the team (the app never invents them).
+model AdCreative {
+  id String @id @default(uuid())
+
+  campaignId String     @unique
+  campaign   AdCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  /// "Gospel Night Live".
+  headline String
+  /// "Abuja · Sat 18 October", exactly as the team wrote it, price and all.
+  /// Optional: a card with only a headline is allowed.
+  subline  String?
+
+  /// The button's words ("Get tickets", "Tickets").
+  ctaLabel         String
+  /// What the button opens: a kind from the allow-list (AdCtaDestination) and
+  /// the id of the thing of that kind. For `event`, an Event id. No foreign
+  /// key: the id's table depends on the kind, and an FK onto Event would stop
+  /// an event being deleted. Serving checks the target is still open.
+  ctaDestination   AdCtaDestination
+  ctaDestinationId String
+
+  /// The picture. An http(s) URL from POST /uploads/presign, the same as
+  /// Event.bannerUrl and NotificationCampaign.imageUrl. Null: the card is drawn
+  /// without a picture.
+  artworkUrl String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
