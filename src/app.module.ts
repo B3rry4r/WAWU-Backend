@@ -76,6 +76,7 @@ import { WalletModule } from './wallet/wallet.module';
 import { MoneyModule } from './money/money.module';
 import { ChatModule } from './chat/chat.module';
 import { TgifModule } from './tgif/tgif.module';
+import { LiveModule } from './live/live.module';
 import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
 import { PaymentWebhookModule } from './payment-webhook/payment-webhook.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
@@ -362,6 +363,9 @@ import { APP_GUARD } from '@nestjs/core';
     ChatModule,
     // TGIF reactions, readers and shares (HOME-10): GET and POST under /tgif.
     TgifModule,
+    // Live updates for chat (task INBOX-02): the WebSocket at `/api/hub/live`
+    // and `GET /live/catch-up`. `live` is a first segment nothing else declares.
+    LiveModule,
     // Fintava's webhooks (task MONEY-07): POST /webhooks/fintava, recorded
     // once, no money moved. `webhooks/fintava` is a fixed path no other
     // controller declares, beside the unchanged `webhooks/flutterwave`.
