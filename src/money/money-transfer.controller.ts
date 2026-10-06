@@ -6,7 +6,6 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
-  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
@@ -14,7 +13,6 @@ import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import {
   BankTransferDto,
   NameCheckDto,
-  RecipientSearchQueryDto,
   WawuTransferDto,
 } from './dto/money-request.dto';
 import {
@@ -29,12 +27,11 @@ import {
 import type {
   AccountNameView,
   BankView,
-  RecipientView,
   TransferView,
 } from './money-view.type';
 
 /**
- * Sending money: to another WAWU user (WALLET-07, WALLET-08) and to any
+ * Sending money: to another WAWU user (WALLET-07; finding one is WALLET-08, src/money/recipients/) and to any
  * Nigerian bank account (WALLET-09), with the name check. The fee quote is
  * served by WALLET-15 (src/money/fees/), saved beneficiaries and the payout
  * account by WALLET-14 (src/money/saved-accounts/).
@@ -60,24 +57,6 @@ export class MoneyTransferController {
   @MoneyErrors('name_check_failed', 'provider_unreachable')
   nameCheck(@Body() dto: NameCheckDto): Promise<AccountNameView> {
     return declaredOnly('WALLET-09', dto);
-  }
-
-  /** WAWU users with an open wallet, by name, @handle or phone (W7). Blocked people never appear. At most 20. */
-  @Get('recipients')
-  @BuiltBy('WALLET-08')
-  @MoneyErrors(...WALLET_GATE_ERRORS)
-  recipients(
-    @Query() query: RecipientSearchQueryDto,
-  ): Promise<RecipientView[]> {
-    return declaredOnly('WALLET-08', query);
-  }
-
-  /** The people this user sent money to most recently, newest first (W7). At most 10. */
-  @Get('recipients/recent')
-  @BuiltBy('WALLET-08')
-  @MoneyErrors(...WALLET_GATE_ERRORS)
-  recentRecipients(): Promise<RecipientView[]> {
-    return declaredOnly('WALLET-08');
   }
 
   /** Send to a WAWU user (W10 to W12). Completes at once or is refused; never pending. */
