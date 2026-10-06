@@ -2,7 +2,7 @@
 -- person per day) and shares (one per person per day). Additive: three new
 -- tables, no existing table, column, index or row touched. Rollback:
 -- DROP TABLE "TgifReaction", "TgifRead", "TgifShare";
--- (then DELETE FROM "_prisma_migrations" WHERE migration_name = '20261004144723_tgif_engagement').
+-- (then DELETE FROM "_prisma_migrations" WHERE migration_name = '20261005100000_tgif_engagement').
 
 -- CreateTable
 CREATE TABLE "TgifReaction" (
