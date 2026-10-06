@@ -37,6 +37,9 @@ import { PinResetSettings } from './pin/pin-reset-config';
 import { PinResetService } from './pin/pin-reset.service';
 import { TransactionPinGuard } from './pin/transaction-pin.guard';
 import { TransactionPinService } from './pin/transaction-pin.service';
+import { MoneyRecipientController } from './recipients/money-recipient.controller';
+import { RecipientSearchLimiter } from './recipients/recipient-config';
+import { RecipientService } from './recipients/recipient.service';
 import { MoneyReceiptController } from './receipts/money-receipt.controller';
 import { PublicReceiptController } from './receipts/public-receipt.controller';
 import { ReceiptSettings } from './receipts/receipt-config';
@@ -107,6 +110,12 @@ import { ReceiptService } from './receipts/receipt.service';
  * the history's detail; the public check (`/r/{code}`, no sign-in,
  * throttled) shows only what proves the movement. Neither calls Fintava.
  *
+ * WALLET-08: finding a person to send money to (`/money/recipients`,
+ * `/money/recipients/recent`), behind the wallet gate: only people with an
+ * open wallet, never the caller, never anyone blocked either way
+ * (BlockedAccountService), the recent ones from the ledger. It never calls
+ * Fintava.
+ *
  * WALLET-27: statements (`/money/statements`), the caller's completed
  * movements over a period of Lagos days as a CSV file, behind the wallet
  * gate, read from the ledger only; it never calls Fintava.
@@ -132,6 +141,7 @@ import { ReceiptService } from './receipts/receipt.service';
     MoneyFeesController,
     MoneyReceiptController,
     PublicReceiptController,
+    MoneyRecipientController,
   ],
   providers: [
     WalletGate,
@@ -158,6 +168,8 @@ import { ReceiptService } from './receipts/receipt.service';
     FeeQuoteService,
     ReceiptSettings,
     ReceiptService,
+    RecipientService,
+    RecipientSearchLimiter,
   ],
   exports: [
     WalletGate,

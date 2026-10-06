@@ -20,6 +20,9 @@ import {
   ADMIN_TOKEN_ISSUER,
 } from '../../auth/admin-token.service';
 import { AdminAdsModule } from '../admin-ads.module';
+import { AdsModule } from '../../../ads/ads.module';
+import { SERVED_STATUSES as SERVING_STATUSES } from '../../../ads/ads-serving';
+import { SERVED_STATUSES } from '../ad-campaign-state';
 import { AD_WEIGHT_MAX, AD_WEIGHT_MIN } from '../../../ads/ads-limits';
 import { AD_TEXT_LIMITS } from '../../../ads/ads-text-limits';
 
@@ -381,6 +384,9 @@ describe('Admin ads contract (ADS-06)', () => {
         // routes" is proved against a route a user really calls.
         WawuAuthModule,
         EventModule,
+        // The real serving half (ADS-04), so a pause is proved against what a
+        // person's app calls and not against a copy of its filter.
+        AdsModule,
       ],
     }).compile();
     app = moduleRef.createNestApplication();
@@ -1202,6 +1208,76 @@ describe('Admin ads contract (ADS-06)', () => {
       expect(res.status).toBe(409);
       expect(res.body.reason).toMatchObject({ code: 'event_not_open' });
       expect((await rowOf(c.id))?.status).toBe('paused');
+    });
+  });
+
+  describe('against the real serving route (ADS-04, GET /ads)', () => {
+    const serve = async (placement: string) =>
+      (
+        await http()
+          .get('/api/hub/ads')
+          .query({ placement })
+          .set(bearer(userToken))
+      ).body.data as Json | null;
+
+    it('serves exactly the statuses the admin side puts on air: one list, not two', () => {
+      expect(SERVED_STATUSES).toBe(SERVING_STATUSES);
+    });
+
+    it('create, schedule, pause: the next GET /ads is null; resume serves it; a closed event stops it', async () => {
+      const c = await create({
+        startsAt: iso(hoursFromNow(-1)),
+        placement: 'today_slot',
+      });
+      expect(await serve('today_slot')).toBeNull(); // a draft is never served
+      expect((await act(c.id, 'schedule')).body.data.campaign.status).toBe(
+        'live',
+      );
+      expect((await serve('today_slot'))?.id).toBe(c.id);
+
+      const started = Date.now();
+      expect((await act(c.id, 'pause')).status).toBe(200);
+      expect(await serve('today_slot')).toBeNull();
+      expect(Date.now() - started).toBeLessThan(60_000);
+
+      expect((await act(c.id, 'resume')).status).toBe(200);
+      expect((await serve('today_slot'))?.id).toBe(c.id);
+
+      await prisma.event.update({
+        where: { id: EV.open },
+        data: { cancelledAt: new Date() },
+      });
+      expect(await serve('today_slot')).toBeNull();
+      const d = (await http().get(`${BASE}/${c.id}`).set(asSuper())).body.data;
+      expect([d.status, d.event.open, d.servingNow]).toEqual([
+        'live',
+        false,
+        false,
+      ]);
+      await prisma.event.update({
+        where: { id: EV.open },
+        data: { cancelledAt: null },
+      });
+      expect((await serve('today_slot'))?.id).toBe(c.id);
+      expect(
+        (await http().get(`${BASE}/${c.id}`).set(asSuper())).body.data
+          .servingNow,
+      ).toBe(true);
+
+      expect((await act(c.id, 'end')).status).toBe(200);
+      expect(await serve('today_slot')).toBeNull();
+    });
+
+    it('a scheduled campaign is served once its window opens, and pausing it stops it', async () => {
+      const c = await inStatus('scheduled');
+      expect(await serve('tgif_card')).toBeNull();
+      await prisma.adCampaign.update({
+        where: { id: c.id },
+        data: { startsAt: hoursFromNow(-1) },
+      });
+      expect((await serve('tgif_card'))?.id).toBe(c.id);
+      await act(c.id, 'pause');
+      expect(await serve('tgif_card')).toBeNull();
     });
   });
 

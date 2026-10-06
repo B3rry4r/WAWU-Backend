@@ -15251,16 +15251,16 @@
                           "category": {
                             "type": "string"
                           },
-                          "tagline": {
-                            "type": "string"
-                          },
                           "handle": {
                             "type": "string"
                           },
-                          "field": {
+                          "bio": {
                             "type": "string"
                           },
-                          "bio": {
+                          "tagline": {
+                            "type": "string"
+                          },
+                          "field": {
                             "type": "string"
                           },
                           "topics": {
@@ -15294,10 +15294,10 @@
                           "name",
                           "id",
                           "category",
-                          "tagline",
                           "handle",
-                          "field",
                           "bio",
+                          "tagline",
+                          "field",
                           "topics",
                           "openForRequests",
                           "fullUntil",
@@ -15327,16 +15327,16 @@
                               "category": {
                                 "type": "string"
                               },
-                              "tagline": {
-                                "type": "string"
-                              },
                               "handle": {
                                 "type": "string"
                               },
-                              "field": {
+                              "bio": {
                                 "type": "string"
                               },
-                              "bio": {
+                              "tagline": {
+                                "type": "string"
+                              },
+                              "field": {
                                 "type": "string"
                               },
                               "topics": {
@@ -15370,10 +15370,10 @@
                               "name",
                               "id",
                               "category",
-                              "tagline",
                               "handle",
-                              "field",
                               "bio",
+                              "tagline",
+                              "field",
                               "topics",
                               "openForRequests",
                               "fullUntil",
@@ -15445,16 +15445,16 @@
                     "category": {
                       "type": "string"
                     },
-                    "tagline": {
-                      "type": "string"
-                    },
                     "handle": {
                       "type": "string"
                     },
-                    "field": {
+                    "bio": {
                       "type": "string"
                     },
-                    "bio": {
+                    "tagline": {
+                      "type": "string"
+                    },
+                    "field": {
                       "type": "string"
                     },
                     "topics": {
@@ -15488,10 +15488,10 @@
                     "name",
                     "id",
                     "category",
-                    "tagline",
                     "handle",
-                    "field",
                     "bio",
+                    "tagline",
+                    "field",
                     "topics",
                     "openForRequests",
                     "fullUntil",
@@ -17344,6 +17344,181 @@
         ]
       }
     },
+    "/api/hub/explore/categories": {
+      "get": {
+        "operationId": "ExploreController_categories",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "label"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Explore"
+        ]
+      }
+    },
+    "/api/hub/explore/creators": {
+      "get": {
+        "operationId": "ExploreController_creators",
+        "parameters": [
+          {
+            "name": "category",
+            "required": false,
+            "in": "query",
+            "description": "One of the ids from GET /explore/categories.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "music_audio",
+                "film_video",
+                "photography",
+                "fashion_beauty",
+                "business_finance",
+                "technology",
+                "food_lifestyle",
+                "faith_spirituality",
+                "art_design",
+                "writing_publishing",
+                "sports_fitness",
+                "gaming_esports"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 10000,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ExploreCreatorCard"
+                      }
+                    },
+                    "currentPage": {
+                      "type": "number"
+                    },
+                    "perPage": {
+                      "type": "number"
+                    },
+                    "total": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "currentPage",
+                    "perPage",
+                    "total"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Explore"
+        ]
+      }
+    },
+    "/api/hub/explore/featured-creators": {
+      "get": {
+        "operationId": "ExploreController_featured",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ExploreCreatorCard"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Explore"
+        ]
+      }
+    },
     "/api/hub/professionals/applications": {
       "post": {
         "operationId": "ProfessionalController_apply",
@@ -17394,6 +17569,9 @@
                     "wawuUserId": {
                       "type": "string"
                     },
+                    "headline": {
+                      "type": "string"
+                    },
                     "submittedAt": {
                       "type": "string",
                       "format": "date-time"
@@ -17401,9 +17579,6 @@
                     "rejectionReason": {
                       "type": "string",
                       "nullable": true
-                    },
-                    "headline": {
-                      "type": "string"
                     },
                     "about": {
                       "type": "string"
@@ -17441,9 +17616,9 @@
                     "category",
                     "documents",
                     "wawuUserId",
+                    "headline",
                     "submittedAt",
                     "rejectionReason",
-                    "headline",
                     "about",
                     "services",
                     "credentialKind",
@@ -17503,6 +17678,9 @@
                       "wawuUserId": {
                         "type": "string"
                       },
+                      "headline": {
+                        "type": "string"
+                      },
                       "submittedAt": {
                         "type": "string",
                         "format": "date-time"
@@ -17510,9 +17688,6 @@
                       "rejectionReason": {
                         "type": "string",
                         "nullable": true
-                      },
-                      "headline": {
-                        "type": "string"
                       },
                       "about": {
                         "type": "string"
@@ -17550,9 +17725,9 @@
                       "category",
                       "documents",
                       "wawuUserId",
+                      "headline",
                       "submittedAt",
                       "rejectionReason",
-                      "headline",
                       "about",
                       "services",
                       "credentialKind",
@@ -17630,6 +17805,9 @@
                     "wawuUserId": {
                       "type": "string"
                     },
+                    "headline": {
+                      "type": "string"
+                    },
                     "submittedAt": {
                       "type": "string",
                       "format": "date-time"
@@ -17637,9 +17815,6 @@
                     "rejectionReason": {
                       "type": "string",
                       "nullable": true
-                    },
-                    "headline": {
-                      "type": "string"
                     },
                     "about": {
                       "type": "string"
@@ -17677,9 +17852,9 @@
                     "category",
                     "documents",
                     "wawuUserId",
+                    "headline",
                     "submittedAt",
                     "rejectionReason",
-                    "headline",
                     "about",
                     "services",
                     "credentialKind",
@@ -18812,6 +18987,56 @@
         ]
       }
     },
+    "/api/hub/settings/tgif": {
+      "get": {
+        "operationId": "TgifPreferenceController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TgifPreferenceView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "TgifPreference"
+        ]
+      },
+      "patch": {
+        "operationId": "TgifPreferenceController_update",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTgifPreferenceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TgifPreferenceView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "TgifPreference"
+        ]
+      }
+    },
     "/api/hub/users/me": {
       "get": {
         "operationId": "UserProfileController_getMe",
@@ -18860,14 +19085,6 @@
                     "wawuUserId": {
                       "type": "string"
                     },
-                    "handle": {
-                      "type": "string",
-                      "nullable": true
-                    },
-                    "bio": {
-                      "type": "string",
-                      "nullable": true
-                    },
                     "accountType": {
                       "type": "string",
                       "enum": [
@@ -18885,6 +19102,14 @@
                       "nullable": true
                     },
                     "coverUrl": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "handle": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "bio": {
                       "type": "string",
                       "nullable": true
                     },
@@ -18958,12 +19183,12 @@
                   "required": [
                     "createdAt",
                     "wawuUserId",
-                    "handle",
-                    "bio",
                     "accountType",
                     "unpaidWarnedAt",
                     "avatarUrl",
                     "coverUrl",
+                    "handle",
+                    "bio",
                     "interests",
                     "instagramHandle",
                     "whatsappHandle",
@@ -19283,6 +19508,437 @@
         },
         "tags": [
           "UserProfile"
+        ]
+      }
+    },
+    "/api/hub/users/me/featured-works": {
+      "get": {
+        "operationId": "ProfileWorksController_myWorks",
+        "parameters": [
+          {
+            "name": "category",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "maxLength": 1000,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "At most this many works (M33 shows three and \"See all\").",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileWorksView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ProfileWorks"
+        ]
+      },
+      "post": {
+        "operationId": "ProfileWorksController_addWork",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProfileWorkDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileWorkView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ProfileWorks"
+        ]
+      }
+    },
+    "/api/hub/users/me/featured-works/order": {
+      "put": {
+        "operationId": "ProfileWorksController_reorderWorks",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReorderProfileWorksDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileWorksView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Declared above `me/featured-works/:id` so that route does not take \"order\" for an id.",
+        "tags": [
+          "ProfileWorks"
+        ]
+      }
+    },
+    "/api/hub/users/me/featured-works/{id}": {
+      "patch": {
+        "operationId": "ProfileWorksController_editWork",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProfileWorkDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileWorkView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ProfileWorks"
+        ]
+      },
+      "delete": {
+        "operationId": "ProfileWorksController_removeWork",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "deleted"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ProfileWorks"
+        ]
+      }
+    },
+    "/api/hub/users/me/education": {
+      "get": {
+        "operationId": "ProfileWorksController_myEducation",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProfileEducationView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ProfileWorks"
+        ]
+      },
+      "post": {
+        "operationId": "ProfileWorksController_addEducation",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProfileEducationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileEducationView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ProfileWorks"
+        ]
+      }
+    },
+    "/api/hub/users/me/education/{id}": {
+      "patch": {
+        "operationId": "ProfileWorksController_editEducation",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProfileEducationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileEducationView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ProfileWorks"
+        ]
+      },
+      "delete": {
+        "operationId": "ProfileWorksController_removeEducation",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "deleted"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ProfileWorks"
+        ]
+      }
+    },
+    "/api/hub/users/{wawuId}/featured-works": {
+      "get": {
+        "operationId": "ProfileWorksController_worksOf",
+        "parameters": [
+          {
+            "name": "wawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "maxLength": 1000,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "At most this many works (M33 shows three and \"See all\").",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileWorksView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ProfileWorks"
+        ]
+      }
+    },
+    "/api/hub/users/{wawuId}/featured-works/{workId}": {
+      "get": {
+        "operationId": "ProfileWorksController_workOf",
+        "parameters": [
+          {
+            "name": "wawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileWorkView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "M35: one work.",
+        "tags": [
+          "ProfileWorks"
+        ]
+      }
+    },
+    "/api/hub/users/{wawuId}/education": {
+      "get": {
+        "operationId": "ProfileWorksController_educationOf",
+        "parameters": [
+          {
+            "name": "wawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProfileEducationView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "M33: somebody's education.",
+        "tags": [
+          "ProfileWorks"
         ]
       }
     },
@@ -20692,6 +21348,43 @@
         "summary": "Un-bookmark it. Idempotent: removing one that was never there is a 200.",
         "tags": [
           "Event"
+        ]
+      }
+    },
+    "/api/hub/ads": {
+      "get": {
+        "operationId": "AdsController_serve",
+        "parameters": [
+          {
+            "name": "placement",
+            "required": true,
+            "in": "query",
+            "description": "`tgif_card` (the TGIF reader) or `today_slot` (Today, TGIF off).",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "tgif_card",
+                "today_slot"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdCardView",
+                  "nullable": true
+                }
+              }
+            }
+          }
+        },
+        "summary": "The one live sponsored card for a placement, or `data: null` when nothing\nis eligible (the app draws no card and no empty frame). Never cached: a\ncard must stop the moment its window ends or an admin pauses it.",
+        "tags": [
+          "Ads"
         ]
       }
     },
@@ -22854,6 +23547,143 @@
         ]
       }
     },
+    "/api/hub/money/recipients": {
+      "get": {
+        "operationId": "MoneyRecipientController_search",
+        "parameters": [
+          {
+            "name": "q",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minLength": 2,
+              "maxLength": 60,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RecipientView"
+                  },
+                  "maxItems": 20
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "q is missing, repeated, shorter than 2 characters (not counting a leading @) or longer than 60, or another field was sent. No `reason`: a malformed field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyPlainErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "reason.code: recipient_search_rate_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "WAWU users with an open wallet, by name, @handle or phone (W7). Blocked people never appear. At most 20.",
+        "tags": [
+          "MoneyRecipient"
+        ],
+        "x-wawu-built-by": "WALLET-08",
+        "x-wawu-max-items": 20
+      }
+    },
+    "/api/hub/money/recipients/recent": {
+      "get": {
+        "operationId": "MoneyRecipientController_recentRecipients",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RecipientView"
+                  },
+                  "maxItems": 10
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The people this user sent money to most recently, newest first (W7). At most 10.",
+        "tags": [
+          "MoneyRecipient"
+        ],
+        "x-wawu-built-by": "WALLET-08",
+        "x-wawu-max-items": 10
+      }
+    },
     "/api/hub/about": {
       "get": {
         "operationId": "AboutController_about",
@@ -22944,6 +23774,103 @@
         },
         "tags": [
           "AdminLegalDocuments"
+        ]
+      }
+    },
+    "/api/hub/admin/featured-creators/{wawuId}": {
+      "put": {
+        "operationId": "AdminFeaturedCreatorsController_put",
+        "parameters": [
+          {
+            "name": "wawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutFeaturedCreatorDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "wawuId": {
+                      "type": "string"
+                    },
+                    "featured": {
+                      "type": "boolean"
+                    },
+                    "position": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "wawuId",
+                    "featured",
+                    "position"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminFeaturedCreators"
+        ]
+      },
+      "delete": {
+        "operationId": "AdminFeaturedCreatorsController_remove",
+        "parameters": [
+          {
+            "name": "wawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "wawuId": {
+                      "type": "string"
+                    },
+                    "featured": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "wawuId",
+                    "featured"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "Idempotent: un-featuring a creator who is not featured is still 200.",
+        "tags": [
+          "AdminFeaturedCreators"
         ]
       }
     },
@@ -23220,6 +24147,225 @@
         "summary": "Where to upload one photo, video or PDF for this chat.",
         "tags": [
           "Chat"
+        ]
+      }
+    },
+    "/api/hub/tgif/{date}/stats": {
+      "get": {
+        "operationId": "TgifController_stats",
+        "parameters": [
+          {
+            "name": "date",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TgifStats"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tgif"
+        ]
+      }
+    },
+    "/api/hub/tgif/{date}/react": {
+      "post": {
+        "operationId": "TgifController_react",
+        "parameters": [
+          {
+            "name": "date",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReactTgifDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TgifReactionState"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tgif"
+        ]
+      }
+    },
+    "/api/hub/tgif/{date}/react/{card}": {
+      "delete": {
+        "operationId": "TgifController_unreact",
+        "parameters": [
+          {
+            "name": "date",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "card",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "enum": [
+                "verse",
+                "reality",
+                "remember",
+                "prayer",
+                "takeaway"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TgifReactionState"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tgif"
+        ]
+      }
+    },
+    "/api/hub/tgif/{date}/read": {
+      "post": {
+        "operationId": "TgifController_read",
+        "parameters": [
+          {
+            "name": "date",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TgifReadState"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tgif"
+        ]
+      }
+    },
+    "/api/hub/tgif/{date}/share": {
+      "post": {
+        "operationId": "TgifController_share",
+        "parameters": [
+          {
+            "name": "date",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TgifShareState"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tgif"
+        ]
+      }
+    },
+    "/api/hub/live/catch-up": {
+      "get": {
+        "operationId": "LiveController_catchUp",
+        "parameters": [
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "The newest `cursor` the app holds: from an event, from the socket's\n`ready` frame, or from the last catch-up. Left out, nothing is returned\nand the cursor in the answer is where \"now\" is.",
+            "schema": {
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "1 to 100, 50 when left out.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveCatchUp"
+                }
+              }
+            }
+          }
+        },
+        "summary": "What the caller missed since a cursor: messages and read marks, oldest first.",
+        "tags": [
+          "Live"
         ]
       }
     },
@@ -23827,123 +24973,6 @@
         ],
         "x-wawu-built-by": "WALLET-09",
         "description": "Declared by MONEY-04, not served yet: WALLET-09 serves it.",
-        "x-wawu-served": false
-      }
-    },
-    "/api/hub/money/recipients": {
-      "get": {
-        "operationId": "MoneyTransferController_recipients",
-        "parameters": [
-          {
-            "name": "q",
-            "required": true,
-            "in": "query",
-            "schema": {
-              "minLength": 2,
-              "maxLength": 60,
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/RecipientView"
-                  }
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "WAWU users with an open wallet, by name, @handle or phone (W7). Blocked people never appear. At most 20.",
-        "tags": [
-          "MoneyTransfer"
-        ],
-        "x-wawu-built-by": "WALLET-08",
-        "description": "Declared by MONEY-04, not served yet: WALLET-08 serves it.",
-        "x-wawu-served": false
-      }
-    },
-    "/api/hub/money/recipients/recent": {
-      "get": {
-        "operationId": "MoneyTransferController_recentRecipients",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/RecipientView"
-                  }
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "The people this user sent money to most recently, newest first (W7). At most 10.",
-        "tags": [
-          "MoneyTransfer"
-        ],
-        "x-wawu-built-by": "WALLET-08",
-        "description": "Declared by MONEY-04, not served yet: WALLET-08 serves it.",
         "x-wawu-served": false
       }
     },
@@ -24889,7 +25918,8 @@
               "profile/cover",
               "community/image",
               "community/message",
-              "event/speaker"
+              "event/speaker",
+              "profile/work"
             ]
           },
           "contentType": {
@@ -26769,6 +27799,18 @@
           }
         }
       },
+      "UpdateTgifPreferenceDto": {
+        "type": "object",
+        "properties": {
+          "show": {
+            "type": "boolean",
+            "description": "false hides TGIF on Today for this account; true shows it again."
+          }
+        },
+        "required": [
+          "show"
+        ]
+      },
       "UpdateUserProfileDto": {
         "type": "object",
         "properties": {
@@ -26999,6 +28041,163 @@
             "type": "string",
             "nullable": true,
             "maxLength": 1000
+          }
+        }
+      },
+      "CreateProfileWorkDto": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "role": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "year": {
+            "type": "number"
+          },
+          "client": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 1000
+          },
+          "link": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 1000
+          },
+          "category": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 1000
+          },
+          "description": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 4000
+          },
+          "media": {
+            "description": "The keys (or the `fileUrl`s) `POST /uploads/presign` returned for the\n`profile/work` folder, first one the cover. Each must be this person's\nown upload; anything else is a 400.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          }
+        },
+        "required": [
+          "title",
+          "role",
+          "year"
+        ]
+      },
+      "ReorderProfileWorksDto": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 64
+            }
+          }
+        },
+        "required": [
+          "ids"
+        ]
+      },
+      "UpdateProfileWorkDto": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "role": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "year": {
+            "type": "number"
+          },
+          "client": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 1000
+          },
+          "link": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 1000
+          },
+          "category": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 1000
+          },
+          "description": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 4000
+          },
+          "media": {
+            "description": "The whole list, replaced. [] clears it.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          }
+        }
+      },
+      "CreateProfileEducationDto": {
+        "type": "object",
+        "properties": {
+          "school": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "field": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 1000
+          },
+          "startYear": {
+            "type": "number"
+          },
+          "endYear": {
+            "type": "number",
+            "nullable": true,
+            "description": "Omitted or null means still studying there."
+          }
+        },
+        "required": [
+          "school",
+          "startYear"
+        ]
+      },
+      "UpdateProfileEducationDto": {
+        "type": "object",
+        "properties": {
+          "school": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "field": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 1000
+          },
+          "startYear": {
+            "type": "number"
+          },
+          "endYear": {
+            "type": "number",
+            "nullable": true,
+            "description": "null means still studying there."
           }
         }
       },
@@ -27442,7 +28641,8 @@
               "device_approval_refused",
               "statement_too_large",
               "statement_rate_limited",
-              "statement_busy"
+              "statement_busy",
+              "recipient_search_rate_limited"
             ],
             "type": "string"
           },
@@ -27509,7 +28709,7 @@
           },
           "retryAfterSeconds": {
             "type": "number",
-            "description": "provider_unreachable, idempotency_in_progress, identity_checks_exhausted, selfie_checks_exhausted, reset_codes_exhausted: seconds to wait before trying again."
+            "description": "provider_unreachable, idempotency_in_progress, identity_checks_exhausted, selfie_checks_exhausted, reset_codes_exhausted, recipient_search_rate_limited: seconds to wait before trying again."
           },
           "checksLeft": {
             "type": "number",
@@ -27783,6 +28983,30 @@
           "accountNumber"
         ]
       },
+      "MoneyPlainErrorEnvelope": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "description": "Always null on an error.",
+            "type": "object",
+            "nullable": true,
+            "example": null
+          },
+          "statusCode": {
+            "type": "number",
+            "description": "400."
+          },
+          "message": {
+            "type": "string",
+            "description": "A sentence about the first field that is wrong."
+          }
+        },
+        "required": [
+          "data",
+          "statusCode",
+          "message"
+        ]
+      },
       "PolicySectionDto": {
         "type": "object",
         "properties": {
@@ -27825,6 +29049,17 @@
           "effectiveDate",
           "sections"
         ]
+      },
+      "PutFeaturedCreatorDto": {
+        "type": "object",
+        "properties": {
+          "position": {
+            "type": "number",
+            "description": "Rail order, lowest first. Default 0.",
+            "minimum": 0,
+            "maximum": 1000
+          }
+        }
       },
       "OpenChatDto": {
         "type": "object",
@@ -27909,6 +29144,32 @@
         "required": [
           "contentType",
           "contentLength"
+        ]
+      },
+      "ReactTgifDto": {
+        "type": "object",
+        "properties": {
+          "card": {
+            "type": "string",
+            "description": "Which card: verse, reality, remember, prayer or takeaway.",
+            "enum": [
+              "verse",
+              "reality",
+              "remember",
+              "prayer",
+              "takeaway"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "description": "What the person says to it. Defaults to \"amen\", the only reaction.",
+            "enum": [
+              "amen"
+            ]
+          }
+        },
+        "required": [
+          "card"
         ]
       },
       "CreateAdCreativeDto": {
@@ -29175,6 +30436,40 @@
           "accountName",
           "matchesBvnName",
           "updatedAt"
+        ]
+      },
+      "RecipientView": {
+        "type": "object",
+        "properties": {
+          "wawuUserId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "tick": {
+            "type": "string",
+            "enum": [
+              "creator",
+              "professional"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "wawuUserId",
+          "displayName",
+          "handle",
+          "avatarUrl",
+          "tick"
         ]
       },
       "ReceiptPartyView": {
@@ -35620,6 +36915,48 @@
           "suppressedByPreference"
         ]
       },
+      "ExploreCreatorCard": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "field": {
+            "type": "string",
+            "nullable": true
+          },
+          "pieceCount": {
+            "type": "number"
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          },
+          "following": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "wawuId",
+          "name",
+          "handle",
+          "avatarUrl",
+          "field",
+          "pieceCount",
+          "verification",
+          "following"
+        ]
+      },
       "AboutView": {
         "type": "object",
         "properties": {
@@ -35690,6 +37027,50 @@
           "title",
           "effectiveDate",
           "sections"
+        ]
+      },
+      "AdCardView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "advertiser": {
+            "type": "string"
+          },
+          "headline": {
+            "type": "string"
+          },
+          "subline": {
+            "type": "string",
+            "nullable": true
+          },
+          "ctaLabel": {
+            "type": "string"
+          },
+          "ctaDestination": {
+            "type": "string",
+            "enum": [
+              "event"
+            ]
+          },
+          "ctaDestinationId": {
+            "type": "string"
+          },
+          "artworkUrl": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "advertiser",
+          "headline",
+          "subline",
+          "ctaLabel",
+          "ctaDestination",
+          "ctaDestinationId",
+          "artworkUrl"
         ]
       },
       "AccountDeletionResponse": {
@@ -36518,6 +37899,17 @@
           "communityDigest"
         ]
       },
+      "TgifPreferenceView": {
+        "type": "object",
+        "properties": {
+          "show": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "show"
+        ]
+      },
       "ProfileExperienceView": {
         "type": "object",
         "properties": {
@@ -36570,14 +37962,6 @@
           "wawuUserId": {
             "type": "string"
           },
-          "handle": {
-            "type": "string",
-            "nullable": true
-          },
-          "bio": {
-            "type": "string",
-            "nullable": true
-          },
           "accountType": {
             "type": "string",
             "enum": [
@@ -36595,6 +37979,14 @@
             "nullable": true
           },
           "coverUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "bio": {
             "type": "string",
             "nullable": true
           },
@@ -36718,12 +38110,12 @@
         "required": [
           "createdAt",
           "wawuUserId",
-          "handle",
-          "bio",
           "accountType",
           "unpaidWarnedAt",
           "avatarUrl",
           "coverUrl",
+          "handle",
+          "bio",
           "interests",
           "instagramHandle",
           "whatsappHandle",
@@ -36981,6 +38373,157 @@
           "followerCount",
           "followingCount",
           "communityCount"
+        ]
+      },
+      "ProfileWorkCategoryView": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "count": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "count"
+        ]
+      },
+      "ProfileWorkMediaView": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "nullable": true
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "video",
+              "image"
+            ]
+          }
+        },
+        "required": [
+          "url",
+          "kind"
+        ]
+      },
+      "ProfileWorkView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "client": {
+            "type": "string",
+            "nullable": true
+          },
+          "year": {
+            "type": "number"
+          },
+          "link": {
+            "type": "string",
+            "nullable": true
+          },
+          "category": {
+            "type": "string",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "media": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProfileWorkMediaView"
+            }
+          },
+          "position": {
+            "type": "number"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "role",
+          "client",
+          "year",
+          "link",
+          "category",
+          "description",
+          "media",
+          "position",
+          "createdAt"
+        ]
+      },
+      "ProfileWorksView": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number"
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProfileWorkCategoryView"
+            }
+          },
+          "works": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProfileWorkView"
+            }
+          }
+        },
+        "required": [
+          "count",
+          "categories",
+          "works"
+        ]
+      },
+      "ProfileEducationView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "school": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string",
+            "nullable": true
+          },
+          "startYear": {
+            "type": "number"
+          },
+          "endYear": {
+            "type": "number",
+            "nullable": true
+          },
+          "current": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "school",
+          "field",
+          "startYear",
+          "endYear",
+          "current"
         ]
       },
       "EnrolResponse": {
@@ -38329,6 +39872,242 @@
           "key"
         ]
       },
+      "TgifCardStats": {
+        "type": "object",
+        "properties": {
+          "card": {
+            "type": "string",
+            "enum": [
+              "verse",
+              "reality",
+              "remember",
+              "prayer",
+              "takeaway"
+            ]
+          },
+          "amen": {
+            "type": "number"
+          },
+          "amenByMe": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "card",
+          "amen",
+          "amenByMe"
+        ]
+      },
+      "TgifStats": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string"
+          },
+          "cards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TgifCardStats"
+            }
+          },
+          "readers": {
+            "type": "number"
+          },
+          "shares": {
+            "type": "number"
+          },
+          "readByMe": {
+            "type": "boolean"
+          },
+          "sharedByMe": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "date",
+          "cards",
+          "readers",
+          "shares",
+          "readByMe",
+          "sharedByMe"
+        ]
+      },
+      "TgifReactionState": {
+        "type": "object",
+        "properties": {
+          "card": {
+            "type": "string",
+            "enum": [
+              "verse",
+              "reality",
+              "remember",
+              "prayer",
+              "takeaway"
+            ]
+          },
+          "amen": {
+            "type": "number"
+          },
+          "amenByMe": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "card",
+          "amen",
+          "amenByMe"
+        ]
+      },
+      "TgifReadState": {
+        "type": "object",
+        "properties": {
+          "readers": {
+            "type": "number"
+          },
+          "counted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "readers",
+          "counted"
+        ]
+      },
+      "TgifShareState": {
+        "type": "object",
+        "properties": {
+          "shares": {
+            "type": "number"
+          },
+          "counted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "shares",
+          "counted"
+        ]
+      },
+      "LiveChatMessageEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "chat.message"
+            ]
+          },
+          "message": {
+            "$ref": "#/components/schemas/ChatMessage"
+          },
+          "cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "message",
+          "cursor"
+        ]
+      },
+      "LiveChatReadEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "chat.read"
+            ]
+          },
+          "chatId": {
+            "type": "string"
+          },
+          "readerWawuId": {
+            "type": "string"
+          },
+          "mine": {
+            "type": "boolean"
+          },
+          "lastReadAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastReadMessageId": {
+            "type": "string",
+            "nullable": true
+          },
+          "cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "chatId",
+          "readerWawuId",
+          "mine",
+          "lastReadAt",
+          "lastReadMessageId",
+          "cursor"
+        ]
+      },
+      "LiveCommunityMessageEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "community.message"
+            ]
+          },
+          "communityId": {
+            "type": "string"
+          },
+          "message": {
+            "$ref": "#/components/schemas/CommunityMessage"
+          },
+          "cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "communityId",
+          "message",
+          "cursor"
+        ]
+      },
+      "LiveCatchUp": {
+        "type": "object",
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/LiveChatMessageEvent"
+                },
+                {
+                  "$ref": "#/components/schemas/LiveChatReadEvent"
+                },
+                {
+                  "$ref": "#/components/schemas/LiveCommunityMessageEvent"
+                }
+              ]
+            }
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "hasMore": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "events",
+          "cursor",
+          "hasMore"
+        ]
+      },
       "AdCreativeView": {
         "type": "object",
         "properties": {
@@ -39206,40 +40985,6 @@
           "bankName",
           "accountNumber",
           "accountName"
-        ]
-      },
-      "RecipientView": {
-        "type": "object",
-        "properties": {
-          "wawuUserId": {
-            "type": "string"
-          },
-          "displayName": {
-            "type": "string"
-          },
-          "handle": {
-            "type": "string",
-            "nullable": true
-          },
-          "avatarUrl": {
-            "type": "string",
-            "nullable": true
-          },
-          "tick": {
-            "type": "string",
-            "enum": [
-              "creator",
-              "professional"
-            ],
-            "nullable": true
-          }
-        },
-        "required": [
-          "wawuUserId",
-          "displayName",
-          "handle",
-          "avatarUrl",
-          "tick"
         ]
       },
       "TransferTimelineEntry": {

@@ -313,6 +313,56 @@ model ProfileDetails {
   updatedAt     DateTime @updatedAt
 }
 
+/// One featured work on somebody's profile (ME-16): what M33 shows under
+/// "Featured works", M34 lists and M35 opens.
+///
+/// ITS OWN TABLE, WITH NO RELATION TO UserProfile, for the reason ProfileDetails
+/// gives: nothing here widens GET or PATCH /users/me or the public profile.
+/// `position` is the order the owner chose (0 first); a new work goes to 0 and
+/// the rest move down one, inside a per-person advisory lock, so two requests
+/// cannot take the same slot or push a person past the cap. `media` holds
+/// object KEYS (never signed URLs, which expire) of the owner's own uploads,
+/// first one is the cover; every read signs them fresh.
+model ProfileWork {
+  id          String   @id @default(uuid())
+  wawuUserId  String
+  title       String
+  /// What the person did on it ("Director"). Required: M36 draws it unmarked.
+  role        String
+  client      String?
+  /// The year it was made. A whole year, never a date.
+  year        Int
+  /// Where to see it elsewhere. Stored as inert text, never fetched.
+  link        String?
+  /// Free text; M34's filter chips are the distinct categories one person used.
+  category    String?
+  description String?
+  media       String[] @default([])
+  position    Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([wawuUserId, position])
+}
+
+/// One education entry on somebody's profile (ME-16): school, field of study,
+/// first and last year. A NULL `endYear` means still studying there (the same
+/// single-column rule ProfileExperience.endedOn follows). No relation to
+/// UserProfile, same reason as ProfileWork.
+model ProfileEducation {
+  id         String   @id @default(uuid())
+  wawuUserId String
+  school     String
+  /// "Mass Communication". Optional: M33 draws the line from whatever is there.
+  field      String?
+  startYear  Int
+  endYear    Int?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([wawuUserId, startYear])
+}
+
 /// One role on somebody's profile: what they did, where, and when.
 ///
 /// WHY A TABLE AND NOT A JSON COLUMN. Each row is independently editable and
@@ -3695,6 +3745,10 @@ model ChatParticipant {
   lastReadAt        DateTime?
   /// The message that mark points at.
   lastReadMessageId String?
+  /// When the mark last moved (INBOX-02). The live catch-up reads it to tell
+  /// which read marks changed since a cursor. Null on a row that has never
+  /// moved, and on every row from before this column.
+  readAt            DateTime?
   conversation      ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@id([conversationId, wawuUserId])
@@ -4114,6 +4168,73 @@ model LegalDocument {
   /// [{ heading, body }]; a body's paragraphs are separated by a blank line.
   sections      Json
   updatedAt     DateTime @updatedAt
+}
+
+/// One person's reaction to one TGIF card on one day (HOME-10). The unique
+/// (person, day, card) key is what makes a reaction count once: two taps at
+/// once race on the key and one row exists. Counts are always the number of
+/// rows (no counter column), so a count can never drift from its rows. `kind`
+/// is "amen" today; the migration holds it to that with a CHECK.
+model TgifReaction {
+  id         String   @id @default(uuid())
+  userWawuId String
+  /// The calendar day the card belongs to (a date, not an instant).
+  day        DateTime @db.Date
+  card       String
+  kind       String   @default("amen")
+  createdAt  DateTime @default(now())
+
+  @@unique([userWawuId, day, card])
+  @@index([day, card])
+}
+
+/// One person opened TGIF on one day (HOME-10). "Readers today" is the number
+/// of rows for the day: one person is one row however often they open it.
+model TgifRead {
+  id         String   @id @default(uuid())
+  userWawuId String
+  day        DateTime @db.Date
+  createdAt  DateTime @default(now())
+
+  @@unique([userWawuId, day])
+  @@index([day])
+}
+
+/// One person shared TGIF on one day (HOME-10). The share count for a day is
+/// the number of rows, as ContentShare's is for a piece.
+model TgifShare {
+  id         String   @id @default(uuid())
+  userWawuId String
+  day        DateTime @db.Date
+  createdAt  DateTime @default(now())
+
+  @@unique([userWawuId, day])
+  @@index([day])
+}
+
+/// HOME-11: whether this person wants TGIF on Today. One row per person, made
+/// the first time they change it; no row means the default (shown). Nothing
+/// else references it.
+model TgifPreference {
+  userWawuId String   @id
+  /// false = the person turned TGIF off on Today.
+  show       Boolean  @default(true)
+  updatedAt  DateTime @updatedAt
+}
+
+/// EXPLORE-03: a creator an admin has chosen to show in Explore's "Featured
+/// creators" rail. One row per featured creator; no row means not featured.
+/// `position` orders the rail (lowest first). Set only by the superadmin
+/// route PUT /admin/featured-creators/:wawuId and removed by DELETE.
+model FeaturedCreator {
+  wawuUserId        String   @id
+  position          Int      @default(0)
+  /// The admin who featured them (an audit record, kept when a creator goes).
+  featuredByAdminId String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([position])
 }
 
 // -----------------------------------------------------------------------------

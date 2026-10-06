@@ -1,4 +1,5 @@
 import type { AdCampaignStatus } from '../../../generated/prisma/enums';
+import { SERVED_STATUSES as SERVING_STATUSES } from '../../ads/ads-serving';
 
 /**
  * The life of an ad campaign, written once (ADS-06).
@@ -45,11 +46,11 @@ export const EDITABLE_STATUSES: readonly AdCampaignStatus[] = [
 /** Only a draft can be deleted: anything else has been, or could have been, on air. */
 export const DELETABLE_STATUSES: readonly AdCampaignStatus[] = ['draft'];
 
-/** The statuses ADS-04 serves, inside the window. */
-export const SERVED_STATUSES: readonly AdCampaignStatus[] = [
-  'scheduled',
-  'live',
-];
+/**
+ * The statuses ADS-04 serves, inside the window: the one list in
+ * `src/ads/ads-serving.ts`, imported so the two cannot drift apart.
+ */
+export const SERVED_STATUSES: readonly AdCampaignStatus[] = SERVING_STATUSES;
 
 /**
  * Where a campaign goes when it is put on air at `now`: `live` if its window
