@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import {
   FOLDER_CONTENT_TYPES,
+  FOLDER_MAX_BYTES,
   EXTENSION_FOR_CONTENT_TYPE,
   UPLOAD_FOLDERS,
   serveAs,
@@ -231,6 +232,13 @@ export class StorageService {
       );
     }
 
+    const folderCap = FOLDER_MAX_BYTES[folder];
+    if (folderCap !== undefined && contentLength > folderCap) {
+      throw new PayloadTooLargeException(
+        `A file in ${folder} can be at most ${formatBytes(folderCap)}.`,
+      );
+    }
+
     // The extension comes from the type we just VALIDATED, not from the
     // client's `extension` field — see EXTENSION_FOR_CONTENT_TYPE. The key is
     // what read URLs use to decide how to serve the bytes, so letting the
@@ -392,6 +400,46 @@ export class StorageService {
       );
       return stored;
     }
+  }
+
+  /**
+   * Whether the upload `row` describes has landed in the bucket, settling the
+   * row to `confirmed` when it has. Used by anything that is about to PUBLISH
+   * an object a person says they uploaded (a featured work's media): a key
+   * that was signed for but never PUT must not be shown.
+   *
+   * A `confirmed` row is settled already. A `pending` row is asked of the
+   * bucket; with no bucket configured nothing can be proven, so it is not
+   * accepted. Only a definite 404 or 403 means "not there"; any other
+   * failure is the bucket being unreachable and is a 503, never a guess.
+   */
+  async confirmUpload(row: {
+    id: string;
+    status: string;
+    key: string;
+  }): Promise<boolean> {
+    if (row.status === 'confirmed') return true;
+    if (row.status !== 'pending' || !this.client) return false;
+    try {
+      await this.client.send(
+        new HeadObjectCommand({ Bucket: this.bucket, Key: row.key }),
+      );
+    } catch (err) {
+      const status = (err as { $metadata?: { httpStatusCode?: number } })
+        .$metadata?.httpStatusCode;
+      if (status === 404 || status === 403) return false;
+      this.logger.warn(
+        `Could not confirm storage object ${row.key}: ${String(err)}`,
+      );
+      throw new ServiceUnavailableException(
+        'Could not check that upload right now. Try again in a moment.',
+      );
+    }
+    await this.prisma.storageObject.updateMany({
+      where: { id: row.id, status: 'pending' },
+      data: { status: 'confirmed', confirmedAt: new Date() },
+    });
+    return true;
   }
 
   /**
