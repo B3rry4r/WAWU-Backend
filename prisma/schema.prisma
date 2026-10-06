@@ -4128,9 +4128,14 @@ model LegalDocument {
 // per-viewer rows will, and classify themselves in that task.)
 //
 // CHECK constraints are in the migration, because Prisma does not model them:
-//   AdCampaign: endsAt > startsAt; weight between 1 and 100 (PROVISIONAL).
-//   AdCreative: advertiser, headline, CTA label and destination id are not
-//   blank; artworkUrl is empty or an http(s) link.
+//   AdCampaign: endsAt > startsAt; weight between 1 and 100 (the range
+//   is AD_WEIGHT_MIN and AD_WEIGHT_MAX in src/ads/ads-limits.ts); advertiser
+//   is not blank.
+//   AdCreative: headline, CTA label and destination id are not blank, and a
+//   subline is absent or not blank; artworkUrl is absent or an http(s) link.
+//   "Blank" means empty or only white space, control, zero-width or other
+//   invisible characters, spelled out in the migration so it does not depend
+//   on the server's locale.
 // -----------------------------------------------------------------------------
 
 /// Where a sponsored card shows: inside the TGIF reader before the takeaway
@@ -4179,7 +4184,7 @@ model AdCampaign {
   endsAt   DateTime
 
   /// Ranks bookings that overlap on one placement, so one is served: the
-  /// higher weight wins, and ADS-04 breaks a tie. 1 to 100, whole numbers. PROVISIONAL(ADS-WEIGHT-RANGE, owner=DEV2, why=no ruling names a weight range; the dashboard's schedule form shows it)
+  /// higher weight wins, and ADS-04 breaks a tie. 1 to 100, whole numbers. Range: src/ads/ads-limits.ts.
   weight Int @default(1)
 
   createdAt DateTime @default(now())

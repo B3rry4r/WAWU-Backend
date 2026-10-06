@@ -1,4 +1,5 @@
 import { Client } from 'pg';
+import { AD_WEIGHT_MAX, AD_WEIGHT_MIN } from '../ads-limits';
 import { PrismaService } from '../../common/prisma/prisma.service';
 
 /**
@@ -550,6 +551,132 @@ describe('Ads data model (ADS-03)', () => {
       );
       expect(status.code).toBe('22P02');
     });
+  });
+
+  describe('the weight range', () => {
+    it('is the same in ads-limits.ts and in the database CHECK', async () => {
+      const r = await db.query<{ def: string }>(
+        `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint
+          WHERE conname = 'AdCampaign_weight_check'`,
+      );
+      expect(r.rows).toHaveLength(1);
+      const def = r.rows[0].def;
+      const min = /weight"?\s*>=\s*(\d+)/.exec(def);
+      const max = /weight"?\s*<=\s*(\d+)/.exec(def);
+      expect(min && Number(min[1])).toBe(AD_WEIGHT_MIN);
+      expect(max && Number(max[1])).toBe(AD_WEIGHT_MAX);
+    });
+
+    it('accepts the constants and refuses one step outside them', async () => {
+      await campaign(`${PREFIX}wmin`, { weight: AD_WEIGHT_MIN });
+      await campaign(`${PREFIX}wmax`, { weight: AD_WEIGHT_MAX });
+      for (const weight of [AD_WEIGHT_MIN - 1, AD_WEIGHT_MAX + 1]) {
+        await campaign(`${PREFIX}wout`, { weight }).then(
+          () => {
+            throw new Error('accepted');
+          },
+          (e: { constraint?: string }) =>
+            expect(e.constraint).toBe('AdCampaign_weight_check'),
+        );
+      }
+    });
+  });
+
+  describe('text that draws as nothing is blank, in any locale (D2)', () => {
+    // Each of these alone, and in a run of itself, draws nothing.
+    const INVISIBLE: Array<[string, string]> = [
+      ['NBSP U+00A0', '\u00A0'],
+      ['ZWSP U+200B', '\u200B'],
+      ['ZWNJ U+200C', '\u200C'],
+      ['ZWJ U+200D', '\u200D'],
+      ['WORD JOINER U+2060', '\u2060'],
+      ['BOM U+FEFF', '\uFEFF'],
+      ['EM SPACE U+2003', '\u2003'],
+      ['IDEOGRAPHIC SPACE U+3000', '\u3000'],
+      ['NARROW NBSP U+202F', '\u202F'],
+      ['LINE SEPARATOR U+2028', '\u2028'],
+      ['LRM U+200E', '\u200E'],
+      ['SOFT HYPHEN U+00AD', '\u00AD'],
+      ['COMBINING GRAPHEME JOINER U+034F', '\u034F'],
+      ['MONGOLIAN VOWEL SEPARATOR U+180E', '\u180E'],
+      ['HANGUL FILLER U+3164', '\u3164'],
+      ['VARIATION SELECTOR U+FE0F', '\uFE0F'],
+      ['tab', '\t'],
+      ['newline', '\n'],
+      ['carriage return', '\r'],
+      ['space', ' '],
+      ['a lone control character U+0001', '\u0001'],
+      ['DEL U+007F', '\u007F'],
+      ['NEL U+0085', '\u0085'],
+      ['a mix of them', ' \u00A0\u200B\uFEFF\t\n\u3000 '],
+    ];
+    const cases: Array<[string, string]> = INVISIBLE.flatMap(([n, v]) => [
+      [n, v],
+      [`${n} repeated`, v.repeat(3)],
+    ]);
+
+    const columns: Array<[string, (value: string) => Promise<unknown>]> = [
+      ['advertiser', (v) => campaign(`${PREFIX}inv-adv`, { advertiser: v })],
+      ['headline', (v) => creativeWith(2, v)],
+      ['ctaLabel', (v) => creativeWith(4, v)],
+      ['ctaDestinationId', (v) => creativeWith(6, v)],
+      ['subline', (v) => creativeWith(3, v)],
+    ];
+
+    async function creativeWith(index: number, value: string): Promise<void> {
+      const id = `${PREFIX}inv-cr`;
+      await db.query(
+        `INSERT INTO "AdCampaign" (id, advertiser, placement, status, "startsAt", "endsAt", weight, "updatedAt")
+         VALUES ($1, 'Adv', 'tgif_card', 'draft', $2, $3, 1, now()) ON CONFLICT DO NOTHING`,
+        [id, NOW, LATER],
+      );
+      const args: unknown[] = [
+        `${id}-c`,
+        id,
+        'H',
+        'S',
+        'Go',
+        'event',
+        'e',
+        null,
+      ];
+      args[index] = value;
+      await db.query(CREATIVE_SQL, args);
+    }
+
+    it.each(columns)('refuses a %s of nothing visible', async (_c, write) => {
+      const failures: string[] = [];
+      for (const [name, value] of cases) {
+        await cleanUp();
+        try {
+          await write(value);
+          failures.push(name);
+        } catch (e) {
+          if ((e as { code?: string }).code !== '23514') failures.push(name);
+        }
+      }
+      // The names of every value the database accepted, so a failure says which.
+      expect(failures).toEqual([]);
+    });
+
+    it.each(columns)(
+      'still accepts a %s with a visible character among them',
+      async (_c, write) => {
+        for (const value of [
+          'Gospel\u00A0Night',
+          '\u200BA',
+          'A\uFEFF',
+          ' \u3000x\u2003 ',
+          'Zo\u200Dë',
+          'a',
+          '\u00E9',
+          '\u4E2D',
+        ]) {
+          await cleanUp();
+          await write(value);
+        }
+      },
+    );
   });
 
   describe('what it does not hold', () => {

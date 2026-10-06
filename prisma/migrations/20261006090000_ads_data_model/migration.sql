@@ -23,7 +23,7 @@
 --   `event`, which opens the event detail for "ctaDestinationId" (an Event id).
 --   A new destination is `ALTER TYPE "AdCtaDestination" ADD VALUE`, in the
 --   task that builds it. ADS-06 (admin routes) checks the value against the
---   enum in its DTO and, for `event`, that the Event exists and is approved,
+--   enum in its DTO and, for `event`, that the Event exists and is `published`,
 --   before it writes; ADS-04 (serving) checks the event is still open when it
 --   serves. There is no foreign key to Event: the id's table depends on the
 --   kind, and an FK would stop an event being deleted.
@@ -42,6 +42,8 @@
 -- Rollback: DROP TABLE "AdCreative"; DROP TABLE "AdCampaign";
 --           DROP TYPE "AdCtaDestination"; DROP TYPE "AdCampaignStatus";
 --           DROP TYPE "AdPlacement";
+--           DELETE FROM "_prisma_migrations"
+--            WHERE migration_name = '20261006090000_ads_data_model';
 
 
 -- CreateEnum
@@ -97,18 +99,30 @@ ALTER TABLE "AdCreative" ADD CONSTRAINT "AdCreative_campaignId_fkey" FOREIGN KEY
 -- A booking runs for a positive length of time.
 ALTER TABLE "AdCampaign" ADD CONSTRAINT "AdCampaign_window_check" CHECK ("endsAt" > "startsAt");
 
--- 1 to 100, whole numbers.
--- PROVISIONAL(ADS-WEIGHT-RANGE, owner=DEV2, why=no ruling names a weight range; ADS-06 and the dashboard's schedule form read 1 and 100 from here)
-ALTER TABLE "AdCampaign" ADD CONSTRAINT "AdCampaign_weight_check" CHECK ("weight" BETWEEN 1 AND 100);
+-- 1 to 100, whole numbers. The range is AD_WEIGHT_MIN and AD_WEIGHT_MAX in
+-- src/ads/ads-limits.ts (where it is marked provisional); a spec fails if the
+-- two differ.
+ALTER TABLE "AdCampaign" ADD CONSTRAINT "AdCampaign_weight_check" CHECK ("weight" >= 1 AND "weight" <= 100);
 
--- A card is never drawn with an empty name, headline, button or destination
--- (empty or only white space).
-ALTER TABLE "AdCampaign" ADD CONSTRAINT "AdCampaign_advertiser_check" CHECK ("advertiser" !~ '^\s*$');
+-- A card is never drawn with an empty name, headline, button or destination.
+-- "Empty" here means no character a person can see: the string is empty or
+-- made only of control characters, spaces (ASCII, U+00A0, U+1680, U+2000 to
+-- U+200A, U+202F, U+205F, U+3000), zero-width and direction marks (U+200B to
+-- U+200F, U+202A to U+202E, U+2060 to U+206F, U+061C, U+FEFF), the soft hyphen
+-- (U+00AD), the combining grapheme joiner (U+034F), the Mongolian free
+-- variation selectors and vowel separator (U+180B to U+180E), the Hangul
+-- fillers (U+115F, U+1160, U+3164, U+FFA0), the Khmer inherent vowels (U+17B4,
+-- U+17B5), the line and paragraph separators (U+2028, U+2029) and the
+-- variation selectors (U+FE00 to U+FE0F). Every code point is spelled as a
+-- \u escape, so the test is the same on a server built with any locale (the
+-- class \s is not: it follows the locale). A value with one visible character
+-- among them is accepted.
+ALTER TABLE "AdCampaign" ADD CONSTRAINT "AdCampaign_advertiser_check" CHECK ("advertiser" !~ '^[\u0001- \u007F- ­͏؜ᅟᅠ ឴឵᠋-᠎ -‏ -  -⁯　ㅤ︀-️﻿ﾠ]*$');
 ALTER TABLE "AdCreative" ADD CONSTRAINT "AdCreative_text_check" CHECK (
-    "headline" !~ '^\s*$'
-    AND "ctaLabel" !~ '^\s*$'
-    AND "ctaDestinationId" !~ '^\s*$'
-    AND ("subline" IS NULL OR "subline" !~ '^\s*$')
+    "headline" !~ '^[\u0001- \u007F- ­͏؜ᅟᅠ ឴឵᠋-᠎ -‏ -  -⁯　ㅤ︀-️﻿ﾠ]*$'
+    AND "ctaLabel" !~ '^[\u0001- \u007F- ­͏؜ᅟᅠ ឴឵᠋-᠎ -‏ -  -⁯　ㅤ︀-️﻿ﾠ]*$'
+    AND "ctaDestinationId" !~ '^[\u0001- \u007F- ­͏؜ᅟᅠ ឴឵᠋-᠎ -‏ -  -⁯　ㅤ︀-️﻿ﾠ]*$'
+    AND ("subline" IS NULL OR "subline" !~ '^[\u0001- \u007F- ­͏؜ᅟᅠ ឴឵᠋-᠎ -‏ -  -⁯　ㅤ︀-️﻿ﾠ]*$')
 );
 
 -- Artwork is a web link a client will load: http or https, never javascript: or data:.
