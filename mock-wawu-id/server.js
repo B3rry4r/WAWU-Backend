@@ -362,6 +362,37 @@ app.post("/internal/users/lookup", requireServiceKey, (req, res) => {
   res.json({ data });
 });
 
+// The data-export email (SETTINGS-04). Mirrors the route WAWU ID is to build
+// (BACKEND_GAPS G-131): POST /internal/users/:userId/data-export
+// { downloadUrl, expiresAt }. Like unpaid-warning, the Hub names the user and
+// the link; WAWU ID owns the address and the wording, so the mock records
+// "who was mailed what link" in an outbox the contract suite can read, and
+// sends nothing.
+const MAIL_OUTBOX = [];
+app.post("/internal/users/:userId/data-export", requireServiceKey, (req, res) => {
+  const user = Object.values(USERS).find((u) => u.sub === req.params.userId);
+  if (!user) return res.status(404).json({ message: "user not found" });
+  const { downloadUrl, expiresAt } = req.body ?? {};
+  if (typeof downloadUrl !== "string" || !/^https?:\/\//.test(downloadUrl)) {
+    return res.status(400).json({ message: "downloadUrl must be a URL" });
+  }
+  if (typeof expiresAt !== "string" || Number.isNaN(Date.parse(expiresAt))) {
+    return res.status(400).json({ message: "expiresAt must be an ISO date" });
+  }
+  MAIL_OUTBOX.push({
+    kind: "data-export",
+    userId: user.sub,
+    to: user.email,
+    downloadUrl,
+    expiresAt,
+    sentAt: new Date().toISOString(),
+  });
+  res.json({ data: { sent: true } });
+});
+app.get("/internal/mail-outbox", requireServiceKey, (_req, res) => {
+  res.json({ data: MAIL_OUTBOX });
+});
+
 app.get("/health", (_req, res) => res.json({ ok: true, service: "mock-wawu-id" }));
 
 console.log(

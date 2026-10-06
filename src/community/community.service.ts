@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { NotificationService } from '../notification/notification.service';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type {
@@ -59,6 +60,7 @@ export class CommunityService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationService,
+    private readonly blockedAccounts: BlockedAccountService,
   ) {}
 
   /** Start of "today" in UTC, per the task brief's derivation rule for `messagesToday`. */
@@ -88,14 +90,20 @@ export class CommunityService {
   async list(
     page: number,
     perPage: number,
+    viewerWawuId?: string,
   ): Promise<Paginated<CommunityResponse>> {
+    // SETTINGS-04: rooms hosted by somebody the caller blocked (or who
+    // blocked the caller) are not listed, and not counted.
+    const hidden = await this.blockedAccounts.hiddenFrom(viewerWawuId);
+    const where = { hostWawuId: { notIn: hidden } };
     const [items, total] = await this.prisma.$transaction([
       this.prisma.community.findMany({
+        where,
         orderBy: { name: 'asc' },
         skip: (page - 1) * perPage,
         take: perPage,
       }),
-      this.prisma.community.count(),
+      this.prisma.community.count({ where }),
     ]);
 
     const withDerived = await Promise.all(
@@ -106,11 +114,18 @@ export class CommunityService {
   }
 
   /** GET /communities/:id — 404s (via AllExceptionsFilter) when the id doesn't exist. */
-  async findOne(id: string): Promise<CommunityResponse> {
+  async findOne(id: string, viewerWawuId?: string): Promise<CommunityResponse> {
     const community = await this.prisma.community.findUnique({ where: { id } });
     if (!community) {
       throw new NotFoundException('Community not found');
     }
+    // SETTINGS-04: a room hosted by a hidden account is a 404, except for
+    // somebody already in it, who keeps the room they joined.
+    await this.blockedAccounts.assertRoomVisible(
+      viewerWawuId,
+      community.hostWawuId,
+      id,
+    );
     return this.withDerivedFields(community);
   }
 
@@ -138,11 +153,11 @@ export class CommunityService {
    * payment gate that was removed, not this one.
    *
    * NO CAP on communities hosted per creator, and this is unaffected by the
-   * teardown. Brief B2 caps LISTINGS at 5 per account (products, content and
-   * services); it says nothing about communities, and a community is not a
-   * listing. Inventing "3 per creator" here would be a product rule this
-   * backend made up and then enforced against people. If product wants one it
-   * belongs beside MAX_ITEMS_PER_ACCOUNT in src/common/creator-allowance.ts,
+   * teardown. R-7 limits UPLOADS (5, or 25 with a tick); it says nothing about
+   * communities, and a community is not an upload. Inventing "3 per creator"
+   * here would be a product rule this backend made up and then enforced
+   * against people. If product wants one it belongs beside FREE_UPLOADS and
+   * TICK_UPLOADS in src/common/creator-allowance.ts,
    * not hardcoded in this service.
    *
    * The host does NOT get a CommunityMembership row. Host-implies-member is
@@ -280,11 +295,16 @@ export class CommunityService {
   async join(id: string, userWawuId: string): Promise<CommunityMembership> {
     const community = await this.prisma.community.findUnique({
       where: { id },
-      select: { id: true, kind: true },
+      select: { id: true, kind: true, hostWawuId: true },
     });
     if (!community) {
       throw new NotFoundException('Community not found');
     }
+    await this.blockedAccounts.assertRoomVisible(
+      userWawuId,
+      community.hostWawuId,
+      id,
+    );
 
     const existing = await this.prisma.communityMembership.findUnique({
       where: { userWawuId_communityId: { userWawuId, communityId: id } },
@@ -377,7 +397,14 @@ export class CommunityService {
   ): Promise<Paginated<CommunityJoinRequest>> {
     await this.assertHost(id, hostWawuId, 'review join requests for');
 
-    const where = { communityId: id, status: 'pending' as const };
+    // SETTINGS-04: a host does not see requests from people they blocked
+    // or who blocked them.
+    const hidden = await this.blockedAccounts.hiddenFrom(hostWawuId);
+    const where = {
+      communityId: id,
+      status: 'pending' as const,
+      userWawuId: { notIn: hidden },
+    };
     const [items, total] = await this.prisma.$transaction([
       this.prisma.communityMembership.findMany({
         where,

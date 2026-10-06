@@ -1,7 +1,6 @@
 import { randomUUID } from 'crypto';
 import {
   BadRequestException,
-  ConflictException,
   ForbiddenException,
   Inject,
   Injectable,
@@ -18,6 +17,8 @@ import {
 } from './flutterwave-client.interface';
 import { NotificationService } from '../notification/notification.service';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
+import { DmReplyWriter } from './dm-reply-writer';
+import { PaidDmPauseService } from './paid-dm-pause.service';
 import type { SendDmDto } from './dto/send-dm.dto';
 import type { VerifyDmDto } from './dto/verify-dm.dto';
 import type { RespondDmDto } from './dto/respond-dm.dto';
@@ -136,6 +137,8 @@ export class DirectMessageService {
     private readonly notifications: NotificationService,
     private readonly blockedAccounts: BlockedAccountService,
     private readonly wawuId: WawuIdClient,
+    private readonly replyWriter: DmReplyWriter,
+    private readonly pause: PaidDmPauseService,
   ) {}
 
   /**
@@ -146,7 +149,7 @@ export class DirectMessageService {
    * merged by id. `inbox()`/`threads()` call this once per page (not once
    * per row), and `findOne()` calls it with a single id.
    */
-  private async lookupOtherParties(
+  async lookupOtherParties(
     otherPartyIds: string[],
   ): Promise<Map<string, DmOtherParty>> {
     const unique = [...new Set(otherPartyIds)];
@@ -249,6 +252,12 @@ export class DirectMessageService {
         'This creator has not enabled paid direct messages.',
       );
     }
+
+    // R-13: a creator whose paid questions went unanswered is paused for a
+    // while. Refused here, before the charge, for the same reason as the
+    // block above: by verify time the fan has already paid. A creator who is
+    // not paused takes exactly the path this route always took.
+    await this.pause.assertAccepting(creatorWawuId);
 
     const amount = creatorState.dmPrice;
     const responseWindowHours =
@@ -404,41 +413,15 @@ export class DirectMessageService {
     messageId: string,
     dto: RespondDmDto,
   ): Promise<DirectMessage> {
-    const dm = await this.prisma.directMessage.findUnique({
-      where: { id: messageId },
-    });
-    if (!dm) {
-      throw new NotFoundException('Direct message not found');
-    }
-    if (dm.creatorWawuId !== creatorWawuId) {
-      throw new ForbiddenException(
-        'You are not the creator this direct message was sent to.',
-      );
-    }
-    if (dm.status !== 'awaiting_response') {
-      throw new ConflictException(
-        `This direct message is already ${dm.status} and cannot be responded to.`,
-      );
-    }
-    if (dm.deadlineAt.getTime() < Date.now()) {
-      // Quote the window this message was actually sold under, not a
-      // hardcoded 24 — the creator may have been on a longer one, and
-      // telling them a number that does not match their own settings reads
-      // as a bug in the product rather than a missed deadline.
-      throw new ConflictException(
-        `The ${dm.responseWindowHours}-hour response window for this direct message has passed.`,
-      );
-    }
-
-    const responded = await this.prisma.directMessage.update({
-      where: { id: messageId },
-      data: {
-        status: 'responded',
-        respondedAt: new Date(),
-        responseText: dto.text,
-      },
-    });
-    return toWireDm(responded);
+    // The write, the first-reply flip and the reply bubble are one
+    // transaction in DmReplyWriter, shared with the INBOX-08 reply route.
+    const { message } = await this.replyWriter.post(
+      creatorWawuId,
+      messageId,
+      dto.text,
+      'first',
+    );
+    return toWireDm(message);
   }
 
   /**

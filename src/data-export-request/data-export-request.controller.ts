@@ -1,4 +1,12 @@
-import { Body, Controller, HttpCode, HttpStatus, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
@@ -24,5 +32,13 @@ export class DataExportRequestController {
     @Body() _body: CreateDataExportRequestDto,
   ): Promise<DataExportRequest> {
     return this.dataExportRequestService.create(user.sub);
+  }
+
+  /** The caller's own export requests and where each one is (pending, sent, failed). */
+  @Get('export')
+  async listMine(
+    @CurrentUser() user: WawuJwtClaims,
+  ): Promise<DataExportRequest[]> {
+    return this.dataExportRequestService.listMine(user.sub);
   }
 }

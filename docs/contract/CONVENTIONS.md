@@ -232,6 +232,9 @@ Every refusal is the envelope this backend already answers with
 | `account_not_opened` | 422 | Fintava refused the details sent (a validation or identity refusal, such as a blacklisted NIN), or the account has no email; nothing was created and the person may try again | |
 | `reset_codes_exhausted` | 429 | the person or the phone has had today's PIN reset texts (MONEY-14); nothing is sent | `retryAfterSeconds` |
 | `device_approval_refused` | 403 | `X-Device-Approval` not accepted: not the registered phone, a wrong signature, a used, expired or another person's challenge, or no phone registered; never uses a PIN try (MONEY-14) | |
+| `statement_rate_limited` | 429 | the person has asked for 5 statements in the last minute or 30 in the last hour (`STATEMENT_RATE_LIMITS`, PROVISIONAL), counted after the token is verified (WALLET-27) | `retryAfterSeconds` |
+| `statement_busy` | 503 | two statements are already being built and no place came free within 5 s (`STATEMENT_CONCURRENCY`, PROVISIONAL) (WALLET-27) | `retryAfterSeconds` |
+| `statement_too_large` | 400 | the period holds more movements than one statement lists (`STATEMENT_MAX_ROWS`, 50,000); counted before anything is written, and the person picks a shorter range (WALLET-27) | |
 | `phone_held_by_other_identity` | 409 | account opening where Fintava already has a customer for the person's phone whose record does not carry the checked BVN (or carries none): nothing is adopted or created, and the opening stops for review (MONEY-12, BACKEND_GAPS G-37) | |
 
 The same table is `MONEY_ERROR_STATUS` in `src/money/money-contract.ts`; each
@@ -608,10 +611,35 @@ still reads. Every answer is `Cache-Control: no-store`.
   of the BVN record's first and last name are kept as keyed hashes only
   (`bvnNameKeys`, section 10), so a payout account's name can be compared
   with the BVN name; the name itself is still never stored. The prefill is answered
-  once and not kept. The steps after this one take them from the app again:
-  MONEY-12's account opening checks the BVN and the NIN with
-  `WalletIdentityService.matchesCheckedIdentity` (the NIN is required);
-  KYC-02's selfie, sent the BVN only, uses `checkedBvn`.
+  once and not kept. The steps after this one need the numbers again
+  (Fintava takes them in full), and get them one of two ways: from the app
+  again (MONEY-12's opening checks the BVN and the NIN with
+  `checkedIdentity`, the NIN required; KYC-02's selfie, sent the BVN only,
+  uses `checkedBvn`), or from the check handle below (KYC-03), which the app
+  sends in their place so that nothing on the phone keeps the numbers.
+- **The check handle (KYC-03, mobile BACKEND_GAPS G-72).** A check that
+  passes also answers `checkHandle`: `v1.` and base64url of a 12-byte
+  nonce, the AES-256-GCM sealed JSON `{ sub, bvn, nin, checkId, iat, exp }`
+  and its 16-byte tag, with the label `wawu/kyc-check-handle/v1` as
+  associated data, under a key derived from `IDENTITY_HASH_KEY` with
+  HKDF-SHA256 and that label (`IdentityHasher.deriveKey`; no new setting:
+  wherever the check can run, the key exists). `checkId` is the
+  `BvnCheckAttempt` that passed; `exp` is 30 minutes after `iat`
+  (`CHECK_HANDLE_TTL_SECONDS`, Default (lead), owner may override). The
+  selfie match takes `checkHandle` in place of `bvn`, the opening in place
+  of `bvn` and `nin`; sending both is a 400. The server opens it and
+  requires all of: the seal (a changed byte, another key or another
+  version fails), `exp` not passed, `sub` the caller, `checkId` a
+  `verified` check of the caller's, and the sealed BVN and NIN the ones the
+  caller's current check was run with (`checkedByHandle`, then the same
+  one-read rules as the numbers). Any failure is one answer, `409
+  bvn_not_checked` "Check your BVN again to continue.", never a 500 and
+  never which part failed; a handle that is not a string or is over 1,024
+  characters is a 400 with one fixed sentence. The handle is never stored,
+  logged or echoed (`src/money/identity/tests/check-handle.contract.spec.ts`
+  scans logs, rows and answers). The app holds it in memory with the passed
+  check and drops it on every session end. The numbers sent again keep
+  working as before (additive).
 - **A14.** The BVN record's phone must be the account's phone (the token's
   `phone`, compared after both are normalised as in section 2). If it is
   not, or the record has none: `422 bvn_phone_mismatch` with A14's own
@@ -866,3 +894,134 @@ still reads. Every answer is `Cache-Control: no-store`.
   removes nothing and answers the same 200. A saved WAWU user whose wallet
   is gone (a deleted account) leaves the list, and `WalletView.beneficiaryCount`
   (W35) counts exactly the rows the list shows.
+
+## 11. The fee quote (WALLET-15)
+
+- **Route** (`src/money/fees/`): `GET /money/fees/quote?kind=&amountKobo=`
+  (and `&billCategory=` on a bill), behind the wallet gate, `no-store`.
+  Answers `FeeQuoteView`. It never calls Fintava and reads no balance: a
+  quote is the fee schedule applied to the amount. `amountKobo` is digits
+  only (`100.00`, `1e4`, `10,000` are a 400, never read as another amount).
+- **What each kind costs** (R-10, R-31; rates in the mobile repo's
+  `docs/fintava/fees.md`, final), each charge one entry in `parts`
+  (`code`, `source` `provider` or `wawu`, `amountKobo`), in this order:
+  - `wawu_transfer`: `balance_transfer` (Fintava, by band on the amount),
+    `wawu_fee` (₦10).
+  - `bank_transfer` (a send or a withdrawal): `bank_transfer` (Fintava,
+    ₦40), `wawu_fee` (₦25).
+  - `purchase` (unlock, tip, tick, ticket, paid DM, credits, course, legal
+    service): `balance_transfer` only; no WAWU fee, WAWU's share is the
+    85/15 split. The pay sheet itself is `GET /money/payments/quote`
+    (MONEY-17), which fills its `fee` from the same service.
+  - `bill` (`billCategory` electricity, cable, airtime or data, required):
+    `bill_charge` (Fintava, ₦100 electricity or cable, ₦0 airtime or data),
+    `wawu_fee` (WAWU's bill fee, ₦0), `balance_transfer` (Fintava's charge
+    on the payer's move into WAWU's merchant wallet, R-31). The payer moves
+    the bill's amount, its charge and WAWU's bill fee into WAWU's wallet in
+    one transfer, so that sum is what the band is read on. Default (agent),
+    owner may override.
+- **Bands** of the balance-transfer charge: below ₦5,000 ₦23.25, from
+  ₦5,000 ₦15.75 (₦4,999 pays ₦23.25, ₦5,000 pays ₦15.75).
+- **Config**: every figure is a setting with the ruled figure as its
+  default (`.env.example`, `src/money/fees/fee-config.ts`): a fee changed
+  by Fintava or the owner is changed there and in the dashboard's merchant
+  charges (OPS-09) together; MONEY-16 reports a difference. A setting that
+  is not a whole number of kobo stops the app at boot.
+- **Merchant cap**: a `purchase` or `bill` whose `totalKobo` is above
+  `MERCHANT_MAX_PER_TXN_KOBO` is `400 amount_out_of_range` with
+  `maximumKobo`, the largest `amountKobo` that fits. A send is not bound by
+  it; a total a JSON number cannot carry exactly is refused the same way.
+- **Daily limit**: no task holds it (mobile repo BACKEND_GAPS G-7), so
+  `withinDailyLimit` is `true` and `remainingTodayKobo` `null`.
+- **Short-lived and checkable**: `quoteToken` is the quote signed by the
+  server (HMAC-SHA256 under `FEE_QUOTE_KEY`: the person, kind, category,
+  amount, total and `expiresAt`, `FEE_QUOTE_SECONDS` after it was given,
+  300 by default, PROVISIONAL). Nothing is stored or reserved.
+  `FeeQuoteService.check(wawuUserId, input, expectedTotalKobo, quoteToken)`
+  is what a paying request calls (WALLET-07, WALLET-09, MONEY-17; their
+  request bodies add `quoteToken` beside `expectedTotalKobo`, mobile repo
+  BACKEND_GAPS G-64): it answers the quote as it stands now when the token
+  is this server's, for this person and this input, not expired, and both
+  its total and `expectedTotalKobo` equal today's total; otherwise `409
+  quote_changed` with the new quote in `reason.feeQuote`. An unset
+  `FEE_QUOTE_KEY` makes a key at boot (one warning): quotes given before a
+  restart are then re-quoted, never charged wrongly.
+
+## 12. Statements (WALLET-27)
+
+- **Route** (`src/money/statements/`): `GET /money/statements?from=&to=&format=csv`
+  answers `StatementView` in the usual envelope, with the file as text in
+  `content` and the name and type to save it under (`fileName`,
+  `contentType`). It runs MONEY-13's gate (`@RequireOpenWallet()`): no
+  wallet is `409 wallet_not_open` or `409 wallet_opening` before the query
+  is read. It takes no wallet id and no person: the statement is always the
+  caller's own, and a query that names anyone (`wawuUserId=`,
+  `accountNumber=`) is refused by validation. `no-store`. It reads the
+  ledger only and never calls Fintava.
+- **The period is two calendar days in Africa/Lagos time, both included.**
+  `from=2026-09-01&to=2026-09-30` is 00:00 on 1 September to 23:59:59.999
+  on 30 September, Lagos time (UTC+1): a movement at 23:30 UTC on 31 August
+  is in it (1 September in Lagos) and one at 23:30 UTC on 30 September is
+  not (1 October in Lagos). `from` equal to `to` is that one whole day. Each
+  line's date and time are Lagos time too.
+- **Refused with a plain 400:** a day not written `YYYY-MM-DD`, a day not on
+  the calendar (`2026-02-30`, year `0000`), `from` after `to`, `to` after
+  today in Lagos, a period longer than `STATEMENT_MAX_DAYS` (366, both days
+  counted; PROVISIONAL), and any `format` but `csv`.
+- **Rows are capped** (lead's ruling after the round-1 load run; Default
+  (agent/lead), owner may override). The day cap bounds days, not rows, so
+  the rows in the period are counted first (no further than one past the
+  cap) and a period with more than `STATEMENT_MAX_ROWS` (50,000) is `400
+  statement_too_large`, "pick a shorter range", before any row is read
+  into a file. The read itself stops one past the cap and is checked again,
+  so rows landing between the count and the read cannot pass it.
+- **Limits** (`src/money/statements/statement-config.ts`; rounds 3 and 4).
+  The route sets no throttler of its own: the app's global `short` and
+  `medium` limits apply per address exactly as on every route. On top:
+  - **Per person** (`StatementRateLimiter`, PROVISIONAL
+    `STATEMENT-RATE-LIMITS`): at most 5 statements a minute and 30 an hour,
+    each a fixed window that starts at the person's first request in it,
+    keyed by the verified wawuUserId. It is counted in the handler, after
+    WawuAuthGuard has verified the token and the wallet gate has found the
+    wallet, so a forged token, no token or no wallet never makes an entry.
+    Beyond either window is `429 statement_rate_limited` with
+    `retryAfterSeconds` (rounded up). The counts live in memory in one map,
+    swept at most once a minute of everyone whose windows have both ended;
+    no timer is kept per request.
+  - **What counts:** every request that reaches the build: a statement
+    served, and a `503 statement_busy`. **What does not:** the route's own
+    400s. The DTO's (a day not written `YYYY-MM-DD`, any `format` but `csv`,
+    an extra field) and the period's (a day not on the calendar, `from`
+    after `to`, `to` after today in Lagos, more than 366 days) are refused
+    before the person is counted, and `statement_too_large` gives its place
+    back. Nor do the gate's 409s and the token's 401.
+  - **Two at once** (`StatementSlots`, PROVISIONAL `STATEMENT-CONCURRENCY`):
+    at most 2 statements are built at once in the process (count, read and
+    file). Another waits in order, up to 5 s, for a place, then is `503
+    statement_busy`, "Statements are busy right now. Try again in a few
+    seconds.", with `retryAfterSeconds` (rounded up).
+- **What is listed:** every `completed` movement on the caller's own wallet
+  (the history's three keys: a person's wallet, the token's wawuUserId,
+  the wallet's account number) whose `occurredAt` is in the period, oldest
+  first, one line each (unlock earnings are never grouped). Pending, failed
+  and reversed movements are not listed: they are the rows the month
+  summary (section 6) leaves out, so a month's statement adds up to W26's
+  In and Out for that month. Default (agent), owner may override.
+- **No balance and no totals.** The only balance is Fintava's live one, and
+  Fintava gives none at a past moment, so a statement has no opening or
+  closing balance. It does not add its lines up either.
+- **The file** (RFC 4180): a byte-order mark, then the header `Date, Time,
+  Description, Counterparty, Reference, Note, Money in (₦), Money out (₦),
+  Of which fees (₦)`, one line per movement, lines ending CRLF. Money in is
+  what arrived; money out is what left, fees included, with the fee part
+  beside it (the receipt's `fee.totalFeeKobo`). Amounts are naira with two
+  decimals written from integer kobo (`25065.00`). The description, the
+  other side's name and the reference are the history's own (section 6,
+  `history-labels.ts`), so every line can be found on W26 and W27. A text
+  cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return is
+  written with a `'` first, so a spreadsheet never runs it (an `@handle`
+  shows as `'@handle`). Only the last four digits of a bank account ever
+  reach the history; the statement shows none.
+- **Not served:** a stamped PDF (Fintava issues no statement; mobile repo
+  BACKEND_GAPS G-68) and sending it by email (the backend has no email
+  sender; G-69).

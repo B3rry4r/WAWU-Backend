@@ -4,10 +4,9 @@ export type CreatorState = CreatorStateModel;
 
 /**
  * GET /creator/state wire response. `slotsTotal` (registry note: "derived")
- * is NOT a CreatorState column. It is the flat per-account cap from
- * creator-allowance.ts, computed by the service layer and never stored. It
- * used to derive from `tier`; there is no tier any more, so it is now the
- * same number for every creator.
+ * is NOT a CreatorState column. It is the per-account cap from
+ * creator-allowance.ts, computed by the service layer from the creator's tick
+ * (R-7: 5, or 25 with a tick) and never stored.
  */
 export type CreatorStateResponse = CreatorState & {
   slotsTotal: number;
