@@ -554,7 +554,29 @@ model CourseLesson {
   order         Int
   durationLabel String?
 
+  /// ME-10: who has finished this lesson (M29 "3 of 12 done").
+  progress CourseLessonProgress[]
+
   @@index([contentId])
+}
+
+/// ME-10. One person's finished lesson of a course piece: M29's
+/// "3 of 12 done" counts these against the piece's CourseLesson rows. Written
+/// only by the person themselves (PUT and DELETE /me/lessons/:lessonId/done),
+/// and only for a piece they may open (bought, free, or their own). One row
+/// per person per lesson; the lesson's piece is copied onto the row so a
+/// piece's count is one indexed read. Goes with the lesson (cascade).
+model CourseLessonProgress {
+  id         String       @id @default(uuid())
+  userWawuId String
+  lessonId   String
+  lesson     CourseLesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  contentId  String
+  doneAt     DateTime     @default(now())
+
+  @@unique([userWawuId, lessonId])
+  @@index([userWawuId, contentId])
+  @@index([lessonId])
 }
 
 model Comment {
@@ -1225,6 +1247,12 @@ model Notification {
   /// Null for every organically emitted notification.
   campaignId String?
 
+  /// ME-10: what this notification is about, when its event named a thing
+  /// (a piece, a paid question, a room, a person). A side table, not columns
+  /// here, so GET /notifications (protected, read by the web) returns exactly
+  /// the fields it always did. Rows written before ME-10 have none.
+  target NotificationTarget?
+
   @@index([userWawuId])
   @@index([userWawuId, read])
   @@index([createdAt])
@@ -1233,6 +1261,23 @@ model Notification {
   /// these", per user, per kind. Without this it is a sequential scan of the
   /// whole table on every run.
   @@index([userWawuId, kind, createdAt])
+}
+
+/// ME-10. What one notification is about, so opening it opens that thing
+/// (M31: Reply, See why, a piece, a person). Written by NotificationService.emit()
+/// in the same insert as its notification, from the event that caused it;
+/// never by a client. `targetKind` is content, paid_question, community or
+/// profile; `targetId` that thing's id. `actorWawuId` is the other person in
+/// the event (the buyer, tipper, follower, asker, rater), never the reader.
+model NotificationTarget {
+  notificationId String       @id
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  targetKind     String
+  targetId       String
+  actorWawuId    String?
+  createdAt      DateTime     @default(now())
+
+  @@index([actorWawuId])
 }
 
 model NotificationSettings {
@@ -2410,6 +2455,20 @@ model EventGoing {
 /// the unique constraint IS the idempotency, and a DELETE that matches
 /// nothing is still the correct end state. Private: nothing publishes who
 /// saved what, and the only count on the wire is the caller's own boolean.
+/// ME-10. One person's saved creator: the "Creators" tab of Saved (M30).
+/// A bookmark, not a follow: it sends nothing to the creator and changes no
+/// count they see. Written by PUT and DELETE /me/saved/creators/:wawuId.
+model SavedCreator {
+  id            String   @id @default(uuid())
+  userWawuId    String
+  creatorWawuId String
+  savedAt       DateTime @default(now())
+
+  @@unique([userWawuId, creatorWawuId])
+  @@index([userWawuId, savedAt])
+  @@index([creatorWawuId])
+}
+
 model EventSave {
   id         String   @id @default(uuid())
   eventId    String

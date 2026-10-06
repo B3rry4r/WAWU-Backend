@@ -247,6 +247,8 @@ export class DmRefundService {
       kind: 'dm_refunded',
       userWawuId: dm.senderWawuId,
       amount: dm.amount,
+      // ME-10: opens the question that was refunded.
+      about: { target: { kind: 'paid_question', id: dm.id } },
     });
   }
 
