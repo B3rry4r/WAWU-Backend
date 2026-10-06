@@ -12,6 +12,8 @@ import { AdminCreatorsModule } from './admin/creators/admin-creators.module';
 import { AdminFinanceModule } from './admin/finance/admin-finance.module';
 import { AdminEventsModule } from './admin/events/admin-events.module';
 import { AdminNotificationsModule } from './admin/notifications/admin-notifications.module';
+import { AdminFeaturedCreatorsModule } from './admin/featured-creators/admin-featured-creators.module';
+import { ExploreModule } from './explore/explore.module';
 import { AdminLegalDocumentsModule } from './admin/legal-documents/admin-legal-documents.module';
 import { AboutModule } from './about/about.module';
 import { AdsModule } from './ads/ads.module';
@@ -50,6 +52,7 @@ import { LearnEntitlementModule } from './learn-entitlement/learn-entitlement.mo
 import { MentorRequestModule } from './mentor-request/mentor-request.module';
 import { NotificationSettingsModule } from './notification-settings/notification-settings.module';
 import { PrivacySettingsModule } from './privacy-settings/privacy-settings.module';
+import { TgifPreferenceModule } from './tgif-preference/tgif-preference.module';
 import { UserProfileModule } from './user-profile/user-profile.module';
 import { CourseEnrollmentModule } from './course-enrollment/course-enrollment.module';
 import { SearchResponseModule } from './search-response/search-response.module';
@@ -72,6 +75,8 @@ import { AccountPurgeModule } from './account-purge/account-purge.module';
 import { WalletModule } from './wallet/wallet.module';
 import { MoneyModule } from './money/money.module';
 import { ChatModule } from './chat/chat.module';
+import { TgifModule } from './tgif/tgif.module';
+import { LiveModule } from './live/live.module';
 import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
 import { PaymentWebhookModule } from './payment-webhook/payment-webhook.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
@@ -292,6 +297,9 @@ import { AdsEventsModule } from './ads/ads-events.module';
     VerificationStateModule,
     VerificationSubmissionModule,
     CreatorDiscoveryModule,
+    // Explore's categories and featured creators (task EXPLORE-03): `explore`
+    // is a first segment nothing else declares.
+    ExploreModule,
     ProfessionalModule,
     FollowRelationshipModule,
     BlockedAccountModule,
@@ -306,6 +314,8 @@ import { AdsEventsModule } from './ads/ads-events.module';
     MentorRequestModule,
     NotificationSettingsModule,
     PrivacySettingsModule,
+    // HOME-11: GET/PATCH /settings/tgif (a new leaf under settings/).
+    TgifPreferenceModule,
     UserProfileModule,
     CourseEnrollmentModule,
     SearchResponseModule,
@@ -346,9 +356,17 @@ import { AdsEventsModule } from './ads/ads-events.module';
     // under `admin/policies`.
     AboutModule,
     AdminLegalDocumentsModule,
+    // EXPLORE-03: the superadmin write that features a creator, under
+    // `admin/featured-creators`.
+    AdminFeaturedCreatorsModule,
     // Free chat between two users (task INBOX-06). `@Controller('chats')` is a
     // first segment nothing else declares, so it cannot shadow or be shadowed.
     ChatModule,
+    // TGIF reactions, readers and shares (HOME-10): GET and POST under /tgif.
+    TgifModule,
+    // Live updates for chat (task INBOX-02): the WebSocket at `/api/hub/live`
+    // and `GET /live/catch-up`. `live` is a first segment nothing else declares.
+    LiveModule,
     // Fintava's webhooks (task MONEY-07): POST /webhooks/fintava, recorded
     // once, no money moved. `webhooks/fintava` is a fixed path no other
     // controller declares, beside the unchanged `webhooks/flutterwave`.

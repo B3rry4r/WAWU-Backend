@@ -73,6 +73,11 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'ContentLike', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'ContentView', column: 'viewerWawuId', disposition: 'OWNED' },
   { model: 'ContentShare', column: 'sharerWawuId', disposition: 'OWNED' },
+  // TGIF reactions, reads and shares (HOME-10): the person's own taps. Counts
+  // are computed from the rows, so no counter is left behind.
+  { model: 'TgifReaction', column: 'userWawuId', disposition: 'OWNED' },
+  { model: 'TgifRead', column: 'userWawuId', disposition: 'OWNED' },
+  { model: 'TgifShare', column: 'userWawuId', disposition: 'OWNED' },
   // A star rating of a piece (HOME-06) is this person's opinion, published
   // under their account and counted in an average other people read, so it
   // goes with them (AUTHORED, as ProfessionalReview is). The cached
@@ -95,6 +100,12 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // Location, skills, open-to chips, Threads handle and social-link order (ME-05).
   // Part of this person's profile and nothing else references it.
   { model: 'ProfileDetails', column: 'wawuUserId', disposition: 'OWNED' },
+  // Featured works and education (ME-16): part of this person's profile, shown
+  // under their name; nothing else references them. The works' pictures are
+  // storage objects, which the purge's storage step handles with the rest of
+  // this person's uploads.
+  { model: 'ProfileWork', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'ProfileEducation', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'CourseEnrollment', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CommunityMembership', column: 'userWawuId', disposition: 'OWNED' },
   // How far this person has read in each community (INBOX-01).
@@ -102,6 +113,8 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'Notification', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'NotificationSettings', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'PrivacySettings', column: 'userWawuId', disposition: 'OWNED' },
+  // Whether this person wants TGIF on Today (HOME-11): theirs alone.
+  { model: 'TgifPreference', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'DataExportRequest', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'BlockedAccount', column: 'userWawuId', disposition: 'OWNED' },
   // How far this person had read in each chat: theirs alone.
@@ -227,6 +240,10 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'AdEvent', column: 'viewerWawuId', disposition: 'OWNED' },
 
   // Last: everything above may reference these.
+  // An admin's choice to feature this creator in Explore (EXPLORE-03): a
+  // placement about the account, gone with it. The row's admin id is not a
+  // user reference and stays out of the map.
+  { model: 'FeaturedCreator', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'CreatorState', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'UserProfile', column: 'wawuUserId', disposition: 'OWNED' },
 
