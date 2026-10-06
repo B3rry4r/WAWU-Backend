@@ -49,6 +49,7 @@ import { LearnEntitlementModule } from './learn-entitlement/learn-entitlement.mo
 import { MentorRequestModule } from './mentor-request/mentor-request.module';
 import { NotificationSettingsModule } from './notification-settings/notification-settings.module';
 import { PrivacySettingsModule } from './privacy-settings/privacy-settings.module';
+import { TgifPreferenceModule } from './tgif-preference/tgif-preference.module';
 import { UserProfileModule } from './user-profile/user-profile.module';
 import { CourseEnrollmentModule } from './course-enrollment/course-enrollment.module';
 import { SearchResponseModule } from './search-response/search-response.module';
@@ -305,6 +306,8 @@ import { APP_GUARD } from '@nestjs/core';
     MentorRequestModule,
     NotificationSettingsModule,
     PrivacySettingsModule,
+    // HOME-11: GET/PATCH /settings/tgif (a new leaf under settings/).
+    TgifPreferenceModule,
     UserProfileModule,
     CourseEnrollmentModule,
     SearchResponseModule,

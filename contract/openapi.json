@@ -18812,6 +18812,56 @@
         ]
       }
     },
+    "/api/hub/settings/tgif": {
+      "get": {
+        "operationId": "TgifPreferenceController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TgifPreferenceView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "TgifPreference"
+        ]
+      },
+      "patch": {
+        "operationId": "TgifPreferenceController_update",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTgifPreferenceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TgifPreferenceView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "TgifPreference"
+        ]
+      }
+    },
     "/api/hub/users/me": {
       "get": {
         "operationId": "UserProfileController_getMe",
@@ -26893,6 +26943,18 @@
             "type": "boolean"
           }
         }
+      },
+      "UpdateTgifPreferenceDto": {
+        "type": "object",
+        "properties": {
+          "show": {
+            "type": "boolean",
+            "description": "false hides TGIF on Today for this account; true shows it again."
+          }
+        },
+        "required": [
+          "show"
+        ]
       },
       "UpdateUserProfileDto": {
         "type": "object",
@@ -36690,6 +36752,17 @@
           "refunds",
           "promotions",
           "communityDigest"
+        ]
+      },
+      "TgifPreferenceView": {
+        "type": "object",
+        "properties": {
+          "show": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "show"
         ]
       },
       "ProfileExperienceView": {

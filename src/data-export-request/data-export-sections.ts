@@ -242,6 +242,15 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    key: 'tgifPreference',
+    models: ['TgifPreference'],
+    load: (prisma, me) =>
+      prisma.tgifPreference.findUnique({
+        where: { userWawuId: me },
+        select: { show: true, updatedAt: true },
+      }),
+  },
+  {
     key: 'notificationSettings',
     models: ['NotificationSettings'],
     load: (prisma, me) =>
