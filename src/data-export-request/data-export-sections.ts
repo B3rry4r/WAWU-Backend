@@ -872,4 +872,9 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
       reason:
         'Legal matters may be privileged; whether they are emailed is the owner call.',
     },
+    {
+      model: 'LegalIntakeMessage',
+      reason:
+        'The chat that wrote a legal brief; legal matters may be privileged, so whether it is emailed is the owner call.',
+    },
   ];

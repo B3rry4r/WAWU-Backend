@@ -2956,6 +2956,251 @@
         ]
       }
     },
+    "/api/hub/legal/intake/assistant/options": {
+      "get": {
+        "operationId": "LegalIntakeController_assistantOptions",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalAssistantOptionsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The chat that writes the brief (LEGAL-01, R-14), which comes before any\npayment: the person describes the problem to the WAWU Legal Assistant, a\nbrief is written from the conversation, and sending it puts the matter in\na consultant's queue with nothing charged.\n\nEvery route is two or more segments, so none can be taken for `:id`; the\nliterals (`options`, `current`) are declared before `assistant/:id`.",
+        "tags": [
+          "LegalIntake"
+        ]
+      }
+    },
+    "/api/hub/legal/intake/assistant/current": {
+      "get": {
+        "operationId": "LegalIntakeController_assistantCurrent",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/LegalAssistantView"
+                    }
+                  ],
+                  "nullable": true
+                }
+              }
+            }
+          }
+        },
+        "summary": "The conversation this person has open, or null when they have none.",
+        "tags": [
+          "LegalIntake"
+        ]
+      }
+    },
+    "/api/hub/legal/intake/assistant": {
+      "post": {
+        "operationId": "LegalIntakeController_assistantStart",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartAssistantDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalAssistantView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Start, or pick up the open one.",
+        "tags": [
+          "LegalIntake"
+        ]
+      }
+    },
+    "/api/hub/legal/intake/assistant/{id}": {
+      "get": {
+        "operationId": "LegalIntakeController_assistantDetail",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalAssistantView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "LegalIntake"
+        ]
+      }
+    },
+    "/api/hub/legal/intake/assistant/{id}/messages": {
+      "post": {
+        "operationId": "LegalIntakeController_assistantSend",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendAssistantMessageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalAssistantView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Say something. The assistant answers unless a consultant has joined.",
+        "tags": [
+          "LegalIntake"
+        ]
+      }
+    },
+    "/api/hub/legal/intake/assistant/{id}/reply": {
+      "post": {
+        "operationId": "LegalIntakeController_assistantReply",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalAssistantView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Answer again, when the last message went unanswered.",
+        "tags": [
+          "LegalIntake"
+        ]
+      }
+    },
+    "/api/hub/legal/intake/assistant/{id}/brief": {
+      "post": {
+        "operationId": "LegalIntakeController_assistantBrief",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalAssistantView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Write the brief from the conversation, to be checked before it is sent.",
+        "tags": [
+          "LegalIntake"
+        ]
+      }
+    },
+    "/api/hub/legal/intake/assistant/{id}/send": {
+      "post": {
+        "operationId": "LegalIntakeController_assistantSendToConsultant",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalAssistantView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Send the checked brief to a consultant. Nothing is charged.",
+        "tags": [
+          "LegalIntake"
+        ]
+      }
+    },
     "/api/hub/legal/intake/mine": {
       "get": {
         "operationId": "LegalIntakeController_mine",
@@ -25649,6 +25894,63 @@
           "refundReference"
         ]
       },
+      "StartAssistantDto": {
+        "type": "object",
+        "properties": {
+          "matter": {
+            "type": "string",
+            "enum": [
+              "contract",
+              "business_registration",
+              "trademark",
+              "copyright_ip",
+              "partnership",
+              "employment",
+              "debt_recovery",
+              "consultation",
+              "property",
+              "tax",
+              "data_protection",
+              "creator",
+              "cross_border",
+              "other"
+            ]
+          }
+        }
+      },
+      "SendAssistantMessageDto": {
+        "type": "object",
+        "properties": {
+          "body": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "matter": {
+            "type": "string",
+            "description": "The matter a quick reply names. Only used while none is settled.",
+            "enum": [
+              "contract",
+              "business_registration",
+              "trademark",
+              "copyright_ip",
+              "partnership",
+              "employment",
+              "debt_recovery",
+              "consultation",
+              "property",
+              "tax",
+              "data_protection",
+              "creator",
+              "cross_border",
+              "other"
+            ]
+          }
+        },
+        "required": [
+          "body"
+        ]
+      },
       "StartIntakeDto": {
         "type": "object",
         "properties": {
@@ -38610,6 +38912,233 @@
           "userSaved"
         ]
       },
+      "LegalMatterOption": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "label"
+        ]
+      },
+      "LegalQuickReply": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "matter": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "matter"
+        ]
+      },
+      "LegalAssistantOptionsView": {
+        "type": "object",
+        "properties": {
+          "matters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LegalMatterOption"
+            }
+          },
+          "quickReplies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LegalQuickReply"
+            }
+          }
+        },
+        "required": [
+          "matters",
+          "quickReplies"
+        ]
+      },
+      "ChatMessageView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "authorRole": {
+            "type": "string",
+            "enum": [
+              "client",
+              "ai",
+              "consultant"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "authorRole",
+          "body",
+          "createdAt"
+        ]
+      },
+      "GeminiBrief": {
+        "type": "object",
+        "properties": {
+          "summary": {
+            "type": "string"
+          },
+          "keyIssues": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "questionsToClarify": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "risks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "summary",
+          "keyIssues",
+          "questionsToClarify",
+          "risks"
+        ]
+      },
+      "LegalBrief": {
+        "type": "object",
+        "properties": {
+          "matter": {
+            "type": "string"
+          },
+          "matterLabel": {
+            "type": "string"
+          },
+          "facts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "question": {
+                  "type": "string"
+                },
+                "answer": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "question",
+                "answer"
+              ]
+            }
+          },
+          "documentCount": {
+            "type": "number"
+          },
+          "analysis": {
+            "$ref": "#/components/schemas/GeminiBrief"
+          },
+          "generatedBy": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "matter",
+          "matterLabel",
+          "facts",
+          "documentCount",
+          "analysis",
+          "generatedBy",
+          "generatedAt"
+        ]
+      },
+      "LegalAssistantView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "matter": {
+            "type": "string"
+          },
+          "matterLabel": {
+            "type": "string"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatMessageView"
+            }
+          },
+          "briefReady": {
+            "type": "boolean"
+          },
+          "awaitingReply": {
+            "type": "boolean"
+          },
+          "brief": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LegalBrief"
+              }
+            ],
+            "nullable": true
+          },
+          "briefCurrent": {
+            "type": "boolean"
+          },
+          "legalRequestId": {
+            "type": "string",
+            "nullable": true
+          },
+          "consultantJoined": {
+            "type": "boolean"
+          },
+          "consultantName": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "matter",
+          "matterLabel",
+          "messages",
+          "briefReady",
+          "awaitingReply",
+          "brief",
+          "briefCurrent",
+          "legalRequestId",
+          "consultantJoined",
+          "consultantName"
+        ]
+      },
       "QuestionOption": {
         "type": "object",
         "properties": {
@@ -38701,88 +39230,6 @@
           "level"
         ]
       },
-      "GeminiBrief": {
-        "type": "object",
-        "properties": {
-          "summary": {
-            "type": "string"
-          },
-          "keyIssues": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "questionsToClarify": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "risks": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "required": [
-          "summary",
-          "keyIssues",
-          "questionsToClarify",
-          "risks"
-        ]
-      },
-      "LegalBrief": {
-        "type": "object",
-        "properties": {
-          "matter": {
-            "type": "string"
-          },
-          "matterLabel": {
-            "type": "string"
-          },
-          "facts": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "question": {
-                  "type": "string"
-                },
-                "answer": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "question",
-                "answer"
-              ]
-            }
-          },
-          "documentCount": {
-            "type": "number"
-          },
-          "analysis": {
-            "$ref": "#/components/schemas/GeminiBrief"
-          },
-          "generatedBy": {
-            "type": "string"
-          },
-          "generatedAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "matter",
-          "matterLabel",
-          "facts",
-          "documentCount",
-          "analysis",
-          "generatedBy",
-          "generatedAt"
-        ]
-      },
       "IntakeView": {
         "type": "object",
         "properties": {
@@ -38842,35 +39289,6 @@
           "legalRequestId"
         ]
       },
-      "ChatMessageView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "authorRole": {
-            "type": "string",
-            "enum": [
-              "client",
-              "ai",
-              "consultant"
-            ]
-          },
-          "body": {
-            "type": "string"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          }
-        },
-        "required": [
-          "id",
-          "authorRole",
-          "body",
-          "createdAt"
-        ]
-      },
       "ChatThreadView": {
         "type": "object",
         "properties": {
@@ -38886,6 +39304,10 @@
           "consultantJoined": {
             "type": "boolean"
           },
+          "consultantName": {
+            "type": "string",
+            "nullable": true
+          },
           "messages": {
             "type": "array",
             "items": {
@@ -38898,6 +39320,7 @@
           "serviceName",
           "status",
           "consultantJoined",
+          "consultantName",
           "messages"
         ]
       },

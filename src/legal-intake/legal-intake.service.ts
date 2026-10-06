@@ -92,7 +92,9 @@ export class LegalIntakeService {
     }
 
     const existing = await this.prisma.legalIntake.findFirst({
-      where: { wawuUserId, matter, status: 'in_progress' },
+      // `channel: null` is the question form. A chat intake (LEGAL-01) is
+      // never resumed here, or the web's form would open on somebody's chat.
+      where: { wawuUserId, matter, status: 'in_progress', channel: null },
       orderBy: { startedAt: 'desc' },
     });
     if (existing) return this.toView(existing);
@@ -106,7 +108,8 @@ export class LegalIntakeService {
   /** Everything this person has started or finished. */
   async listMine(wawuUserId: string): Promise<IntakeView[]> {
     const rows = await this.prisma.legalIntake.findMany({
-      where: { wawuUserId },
+      // The form's list. A chat intake is listed by its own route.
+      where: { wawuUserId, channel: null },
       orderBy: { startedAt: 'desc' },
     });
     return rows.map((r) => this.toView(r));
@@ -131,6 +134,7 @@ export class LegalIntakeService {
     dto: SaveAnswersDto,
   ): Promise<IntakeView> {
     const intake = await this.findOwned(wawuUserId, id);
+    this.refuseChatIntake(intake);
     if (intake.status !== 'in_progress') {
       throw new ConflictException(
         'This intake has already been completed and cannot be edited.',
@@ -172,6 +176,7 @@ export class LegalIntakeService {
    */
   async complete(wawuUserId: string, id: string): Promise<IntakeView> {
     const intake = await this.findOwned(wawuUserId, id);
+    this.refuseChatIntake(intake);
     if (intake.status !== 'in_progress') {
       throw new ConflictException(
         'This intake is already complete and has been sent to a consultant.',
@@ -222,23 +227,42 @@ export class LegalIntakeService {
       generatedAt: new Date().toISOString(),
     };
 
-    /**
-     * The profiling becomes a REQUEST, in one transaction with the brief.
-     *
-     * This is the join the whole feature turns on, and without it the intake
-     * was a survey that ended in a thank-you: a brief was written, the client
-     * was told a consultant would read it, and nothing entered the queue a
-     * consultant actually works. `legalRequestId` was a column nothing wrote.
-     *
-     * The matter maps to a catalogue service so the request lands in the
-     * existing lifecycle — pricing, engagement letter, delivery — rather than
-     * beside it. The consultant refines the exact service; a client should
-     * not have to know that "contract drafting or review" is two priced lines
-     * before anybody has heard their problem.
-     *
-     * The brief and the answers travel INTO the request's own `details`, so
-     * the matter carries its own context even if it is later reassigned.
-     */
+    const updated = await this.openRequest(intake, brief, answers);
+    return this.toView(updated);
+  }
+
+  /**
+   * The profiling becomes a REQUEST, in one transaction with the brief.
+   *
+   * This is the join the whole feature turns on, and without it the intake
+   * was a survey that ended in a thank-you: a brief was written, the client
+   * was told a consultant would read it, and nothing entered the queue a
+   * consultant actually works. `legalRequestId` was a column nothing wrote.
+   *
+   * The matter maps to a catalogue service so the request lands in the
+   * existing lifecycle (pricing, engagement letter, delivery) rather than
+   * beside it. The consultant refines the exact service; a client should
+   * not have to know that "contract drafting or review" is two priced lines
+   * before anybody has heard their problem.
+   *
+   * The brief and the answers travel INTO the request's own `details`, so
+   * the matter carries its own context even if it is later reassigned.
+   *
+   * Shared by the question form (`complete`) and the chat
+   * (`LegalAssistantService.sendToConsultant`): one way for a matter to enter
+   * the queue. The intake is claimed first, with a conditional update, so two
+   * sends racing each other open one matter, not two.
+   */
+  async openRequest(
+    intake: {
+      id: string;
+      wawuUserId: string;
+      matter: string;
+      documents: string[];
+    },
+    brief: LegalBrief,
+    answers: Record<string, unknown>,
+  ) {
     const serviceCode = MATTER_TO_SERVICE_CODE[intake.matter as LegalMatter];
     const service = legalService(serviceCode);
     if (!service) {
@@ -251,10 +275,23 @@ export class LegalIntakeService {
       );
     }
 
-    const [, updated] = await this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.legalIntake.updateMany({
+        where: { id: intake.id, status: 'in_progress' },
+        data: {
+          status: 'converted',
+          completedAt: new Date(),
+          brief: brief as never,
+        },
+      });
+      if (claimed.count === 0) {
+        throw new ConflictException(
+          'This intake is already complete and has been sent to a consultant.',
+        );
+      }
       const created = await tx.legalRequest.create({
         data: {
-          wawuUserId,
+          wawuUserId: intake.wawuUserId,
           serviceCode: service.code,
           serviceName: service.name,
           category: service.category,
@@ -263,24 +300,25 @@ export class LegalIntakeService {
           documents: intake.documents,
           // Always `awaiting_quote`, whatever the catalogue price says. The
           // point of profiling first is that nobody is quoted before a human
-          // has read what they need — starting a profiled matter at `quoted`
+          // has read what they need; starting a profiled matter at `quoted`
           // would put the price back in front of the understanding.
           status: 'awaiting_quote',
         },
       });
-      const intakeRow = await tx.legalIntake.update({
-        where: { id },
-        data: {
-          status: 'converted',
-          completedAt: new Date(),
-          brief: brief as never,
-          legalRequestId: created.id,
-        },
+      return tx.legalIntake.update({
+        where: { id: intake.id },
+        data: { legalRequestId: created.id },
       });
-      return [created, intakeRow] as const;
     });
+  }
 
-    return this.toView(updated);
+  /** The form routes do not touch a chat intake: it is sent from the chat. */
+  private refuseChatIntake(intake: { channel: string | null }) {
+    if (intake.channel !== null) {
+      throw new ConflictException(
+        'This conversation is sent from the chat, not the question form.',
+      );
+    }
   }
 
   /* ---------------------------------------------------------------- */

@@ -152,6 +152,9 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'PendingCharge', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'HealthSubscription', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'LegalRequest', column: 'wawuUserId', disposition: 'OWNED' },
+  // The chat that writes a legal brief (LEGAL-01): the person's own words and
+  // the assistant's replies. Before LegalIntake, which it points at.
+  { model: 'LegalIntakeMessage', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'LegalIntake', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'ProfessionalProfile', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'StorageObject', column: 'wawuUserId', disposition: 'OWNED' },

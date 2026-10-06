@@ -303,7 +303,7 @@ function buildObject(type, depth) {
  * keeps the null.
  *
  * Only for types declared under these folders (task MONEY-04's wallet
- * contract, and task INBOX-06's chat), so no schema a served route already publishes changes shape in
+ * contract, task INBOX-06's chat and task LEGAL-01's legal chat), so no schema a served route already publishes changes shape in
  * the contract. The eleven served fields still written the old way are listed
  * in docs/contract/WALLET.md, section 5.
  */
@@ -311,6 +311,9 @@ const NULLABLE_REF_AS_ALLOF_DIRS = [
   path.join(ROOT, 'src', 'money') + path.sep,
   // Free chat (task INBOX-06): new routes, so nothing published changes.
   path.join(ROOT, 'src', 'chat') + path.sep,
+  // The legal chat before payment (task LEGAL-01): new routes, so nothing
+  // published changes. The older legal-intake types stay as they are.
+  path.join(ROOT, 'src', 'legal-intake', 'assistant') + path.sep,
 ];
 
 function declaredIn(type, dirs) {
@@ -409,7 +412,12 @@ function main() {
 
         let inner = toSchema(returnType, 0);
         if (inner === null) continue; // void: no body to describe
-        if (route.startsWith(`${GLOBAL_PREFIX}/money/`)) inner = nullableRefAsAllOf(inner);
+        if (
+          route.startsWith(`${GLOBAL_PREFIX}/money/`) ||
+          route.startsWith(`${GLOBAL_PREFIX}/legal/intake/assistant`)
+        ) {
+          inner = nullableRefAsAllOf(inner);
+        }
         let schema = paginated ? { type: 'array', items: inner } : inner;
         // A list route that states its maximum (`@MaxItems(n)`, money
         // contract) carries it on the array.

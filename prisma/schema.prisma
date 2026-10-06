@@ -2685,11 +2685,47 @@ model LegalIntake {
   /// Set when this intake becomes a real request.
   legalRequestId String? @unique
 
+  /// How the intake is taken. Null is the question form the web uses today.
+  /// `assistant` is the chat on the app (LEGAL-01): the person describes the
+  /// problem to the WAWU Legal Assistant, which writes the brief. The two
+  /// never mix: the form routes ignore an `assistant` intake and the chat
+  /// routes ignore a form one.
+  channel String?
+
+  /// When the assistant said it had what a consultant needs. The app offers
+  /// the brief once this is set; the person can ask for it sooner.
+  assistantReadyAt DateTime?
+
   startedAt   DateTime  @default(now())
   completedAt DateTime?
 
+  messages LegalIntakeMessage[]
+
   @@index([wawuUserId, status])
   @@index([status, completedAt])
+}
+
+/// One message in the chat that writes an intake's brief, before any request
+/// exists. Same authors as `LegalChatMessage`, and the same rule: a message a
+/// model wrote is stored as written by a model.
+///
+/// Once the intake is sent to a consultant it becomes a `LegalRequest` and the
+/// conversation continues in `LegalChatMessage`; the thread the client and the
+/// consultant read is these rows followed by those, so nothing is copied and
+/// nobody repeats themselves. `wawuUserId` is the intake's owner, so an
+/// account purge finds these rows without walking through the intake.
+model LegalIntakeMessage {
+  id            String          @id @default(uuid())
+  legalIntakeId String
+  wawuUserId    String
+  authorRole    LegalChatAuthor
+  body          String
+  createdAt     DateTime        @default(now())
+
+  intake LegalIntake @relation(fields: [legalIntakeId], references: [id], onDelete: Cascade)
+
+  @@index([legalIntakeId, createdAt])
+  @@index([wawuUserId])
 }
 
 /// Who said it.

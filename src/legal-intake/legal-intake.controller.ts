@@ -14,10 +14,13 @@ import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { LegalIntakeService } from './legal-intake.service';
 import {
   SaveAnswersDto,
+  SendAssistantMessageDto,
   SendChatMessageDto,
+  StartAssistantDto,
   StartIntakeDto,
 } from './dto/legal-intake.dto';
 import { LegalChatService } from './legal-chat.service';
+import { LegalAssistantService } from './assistant/legal-assistant.service';
 import { LEGAL_MATTERS } from './legal-intake-questions';
 
 /**
@@ -43,12 +46,87 @@ export class LegalIntakeController {
   constructor(
     private readonly service: LegalIntakeService,
     private readonly chat: LegalChatService,
+    private readonly assistant: LegalAssistantService,
   ) {}
 
   /** The fourteen things somebody can say they need. Step one of the flow. */
   @Get('matters')
   matters() {
     return LEGAL_MATTERS;
+  }
+
+  /**
+   * The chat that writes the brief (LEGAL-01, R-14), which comes before any
+   * payment: the person describes the problem to the WAWU Legal Assistant, a
+   * brief is written from the conversation, and sending it puts the matter in
+   * a consultant's queue with nothing charged.
+   *
+   * Every route is two or more segments, so none can be taken for `:id`; the
+   * literals (`options`, `current`) are declared before `assistant/:id`.
+   */
+  @Get('assistant/options')
+  assistantOptions() {
+    return this.assistant.options();
+  }
+
+  /** The conversation this person has open, or null when they have none. */
+  @Get('assistant/current')
+  assistantCurrent(@CurrentUser() user: WawuJwtClaims) {
+    return this.assistant.current(user.sub);
+  }
+
+  /** Start, or pick up the open one. */
+  @Post('assistant')
+  assistantStart(
+    @CurrentUser() user: WawuJwtClaims,
+    @Body() dto: StartAssistantDto,
+  ) {
+    return this.assistant.start(user.sub, dto);
+  }
+
+  @Get('assistant/:id')
+  assistantDetail(
+    @CurrentUser() user: WawuJwtClaims,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.assistant.get(user.sub, id);
+  }
+
+  /** Say something. The assistant answers unless a consultant has joined. */
+  @Post('assistant/:id/messages')
+  assistantSend(
+    @CurrentUser() user: WawuJwtClaims,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SendAssistantMessageDto,
+  ) {
+    return this.assistant.send(user.sub, id, dto);
+  }
+
+  /** Answer again, when the last message went unanswered. */
+  @Post('assistant/:id/reply')
+  assistantReply(
+    @CurrentUser() user: WawuJwtClaims,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.assistant.retryReply(user.sub, id);
+  }
+
+  /** Write the brief from the conversation, to be checked before it is sent. */
+  @Post('assistant/:id/brief')
+  assistantBrief(
+    @CurrentUser() user: WawuJwtClaims,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.assistant.writeBrief(user.sub, id);
+  }
+
+  /** Send the checked brief to a consultant. Nothing is charged. */
+  @Post('assistant/:id/send')
+  assistantSendToConsultant(
+    @CurrentUser() user: WawuJwtClaims,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.assistant.sendToConsultant(user.sub, id);
   }
 
   @Get('mine')
