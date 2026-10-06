@@ -2,17 +2,20 @@ import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ADS_CLOCK, type AdsClock } from './ads-clock';
 import { utcDay } from './ads-day';
-import { SERVED_STATUSES } from './ads-serving';
+import { servableCampaigns } from './ads-serving';
+import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import type { AdEventTypeName } from './dto/ads-events.dto';
 
 /**
  * Task ADS-05. Records a view, tap or skip of a sponsored card.
  *
- * What counts: the campaign is being served at the server's clock, by the same
- * rule GET /ads uses for the campaign itself (ads-serving.ts: status
- * `scheduled` or `live`, startsAt <= now < endsAt, has a creative). There is no
- * grace after the end: a report that arrives late is not counted. Whether the
- * card's event is still open is not asked: the person saw the card.
+ * What counts: the campaign is one GET /ads could serve THIS viewer at the
+ * server's clock now, by the very same function (servableCampaigns in
+ * ads-serving.ts: all five rules, including that the card's event is open and
+ * its host is not blocked either way with the viewer). It need not be the
+ * heaviest booking for its placement: a heavier one may have been booked since
+ * the card was served. There is no grace: a report that arrives after the
+ * event closed, the window ended or the campaign was paused is not counted.
  *
  * One row per (campaign, person, kind, UTC day). The row and the day's total
  * are written by ONE statement, so they cannot disagree, and two requests for
@@ -23,6 +26,7 @@ import type { AdEventTypeName } from './dto/ads-events.dto';
 export class AdsEventsService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly blocked: BlockedAccountService,
     @Inject(ADS_CLOCK) private readonly clock: AdsClock,
   ) {}
 
@@ -35,17 +39,13 @@ export class AdsEventsService {
     // One reading of the clock decides both the check and the day.
     const now = this.clock();
 
-    const countable = await this.prisma.adCampaign.findFirst({
-      where: {
-        id: campaignId,
-        status: { in: [...SERVED_STATUSES] },
-        startsAt: { lte: now },
-        endsAt: { gt: now },
-        creative: { isNot: null },
-      },
-      select: { id: true },
-    });
-    if (!countable) throw new NotFoundException('Ad not found');
+    const countable = await servableCampaigns(
+      { prisma: this.prisma, blocked: this.blocked },
+      viewerWawuId,
+      now,
+      { campaignId },
+    );
+    if (countable.length === 0) throw new NotFoundException('Ad not found');
 
     const day = utcDay(now);
     // The instant goes in as text cast to a zone-less timestamp, so the stored

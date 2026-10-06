@@ -31,6 +31,7 @@ import { AdsModule } from '../ads.module';
 const MOCK_WAWU_ID_URL =
   process.env.WAWU_ID_BASE_URL ?? 'http://localhost:4001';
 const VIEWER_EMAIL = 'user@test.wawu.dev';
+const HOST_SUB = '00000000-0000-4000-8000-000000000003';
 
 const PREFIX = 'ad05ad05-0000-4000-8000-';
 const cid = (n: number) => PREFIX + String(n).padStart(12, '0');
@@ -110,6 +111,8 @@ describe('POST /ads/:id/events (ADS-05)', () => {
   let viewer: Login;
   let now = T0;
   let countsBefore: Record<string, number> = {};
+  /** Who a block row was made for, so cleanUp removes exactly those. */
+  const blockOwners: string[] = [];
 
   // Every app listens on a real port, so parallel requests share one server
   // instead of each opening its own.
@@ -185,11 +188,38 @@ describe('POST /ads/:id/events (ADS-05)', () => {
     await prisma.event.deleteMany({
       where: { id: { startsWith: 'ads05-spec-' } },
     });
+    await prisma.blockedAccount.deleteMany({
+      where: { userWawuId: { in: blockOwners } },
+    });
+    blockOwners.length = 0;
   }
 
   /** A campaign with its creative, countable unless overridden. */
+  async function makeEvent(
+    id: string,
+    over: Record<string, unknown> = {},
+  ): Promise<string> {
+    await prisma.event.create({
+      data: {
+        id,
+        hostWawuId: HOST_SUB,
+        name: 'Gospel Night Live',
+        description: 'A fixture event for the ads counting spec.',
+        hostOrg: 'Ads Spec Ltd',
+        format: 'in_person',
+        type: 'workshop',
+        location: 'Abuja',
+        startsAt: new Date('2027-01-15T18:00:00.000Z'),
+        status: 'published',
+        ...over,
+      },
+    });
+    return id;
+  }
+
   async function makeCampaign(o: CampaignOpts): Promise<string> {
     const id = cid(o.n);
+    const eventId = o.eventId ?? (await makeEvent(`ads05-spec-ev-${o.n}`));
     await prisma.adCampaign.create({
       data: {
         id,
@@ -206,7 +236,7 @@ describe('POST /ads/:id/events (ADS-05)', () => {
                   headline: `Headline ${o.n}`,
                   ctaLabel: 'Get tickets',
                   ctaDestination: 'event',
-                  ctaDestinationId: o.eventId ?? `ads05-spec-ev-${o.n}`,
+                  ctaDestinationId: eventId,
                 },
               },
             }),
@@ -786,6 +816,124 @@ describe('POST /ads/:id/events (ADS-05)', () => {
     });
   });
 
+  describe('only a card this person could be served counts (the event behind it must be open)', () => {
+    const closed: Array<[string, Record<string, unknown>]> = [
+      ['pending', { status: 'pending' }],
+      ['rejected', { status: 'rejected' }],
+      ['removed', { status: 'removed' }],
+      ['cancelled (status)', { status: 'cancelled' }],
+      ['cancelled (cancelledAt set)', { cancelledAt: ms(T0, -1000) }],
+      [
+        'already over (ends before now)',
+        { startsAt: ms(T0, -2 * DAY), endsAt: ms(T0, -1) },
+      ],
+      ['already over (no end, started before now)', { startsAt: ms(T0, -1) }],
+    ];
+
+    it.each(closed)(
+      'refuses every kind for a campaign whose event is %s (the same 404), and counts nothing',
+      async (_name, over) => {
+        const ev = await makeEvent('ads05-spec-closed', over);
+        const id = await makeCampaign({ n: 1, eventId: ev });
+        const unknown = await send(UNKNOWN_ID, 'view').expect(404);
+        for (const type of ['view', 'tap', 'skip']) {
+          const res = await send(id, type).expect(404);
+          expect(res.body).toEqual(unknown.body);
+          expect(res.headers['content-type']).toBe(
+            unknown.headers['content-type'],
+          );
+          expect(res.headers['cache-control']).toBe(
+            unknown.headers['cache-control'],
+          );
+        }
+        expect(await eventRows(id)).toBe(0);
+        expect(await totalsRow(id)).toEqual({ views: 0, taps: 0, skips: 0 });
+      },
+    );
+
+    it('refuses a campaign whose event never existed or was deleted', async () => {
+      const ghost = await makeCampaign({ n: 1, eventId: 'ads05-spec-ghost' });
+      await send(ghost, 'view').expect(404);
+      const ev = await makeEvent('ads05-spec-soon-gone');
+      const id = await makeCampaign({ n: 2, eventId: ev });
+      await send(id, 'view').expect(200);
+      await prisma.event.delete({ where: { id: ev } });
+      await send(id, 'tap').expect(404);
+      expect(await rawCounts(id)).toEqual({ views: 1, taps: 0, skips: 0 });
+    });
+
+    it('counts while the event is open, to the instant it ends', async () => {
+      const ev = await makeEvent('ads05-spec-edge', {
+        startsAt: ms(T0, -DAY),
+        endsAt: ms(T0, 1000),
+      });
+      const id = await makeCampaign({ n: 1, eventId: ev });
+      await send(id, 'view').expect(200);
+      now = ms(T0, 1000);
+      await send(id, 'tap').expect(200);
+      now = ms(T0, 1001);
+      await send(id, 'skip').expect(404);
+      expect(await rawCounts(id)).toEqual({ views: 1, taps: 1, skips: 0 });
+    });
+
+    it('an event with no end that has not started counts; one that has started does not', async () => {
+      const ev = await makeEvent('ads05-spec-noend', { startsAt: ms(T0, 1) });
+      const id = await makeCampaign({ n: 1, eventId: ev });
+      await send(id, 'view').expect(200);
+      now = ms(T0, 2);
+      await send(id, 'tap').expect(404);
+    });
+
+    it('a card that was served and then lost its event stops counting: the tap after the event closes is refused', async () => {
+      const ev = await makeEvent('ads05-spec-closes');
+      const id = await makeCampaign({ n: 1, eventId: ev });
+      await send(id, 'view').expect(200);
+      await prisma.event.update({
+        where: { id: ev },
+        data: { status: 'cancelled' },
+      });
+      await send(id, 'tap').expect(404);
+      await send(id, 'view').expect(404);
+      expect(await rawCounts(id)).toEqual({ views: 1, taps: 0, skips: 0 });
+    });
+
+    it('a host who blocked the person, or whom the person blocked, refuses only that person', async () => {
+      const other = await registerViewer('blk');
+      const id = await makeCampaign({ n: 1 });
+      await prisma.blockedAccount.create({
+        data: { userWawuId: HOST_SUB, blockedWawuId: viewer.sub },
+      });
+      blockOwners.push(HOST_SUB);
+      await send(id, 'view').expect(404);
+      await send(id, 'view', other).expect(200);
+      expect(await rawCounts(id)).toEqual({ views: 1, taps: 0, skips: 0 });
+
+      await prisma.blockedAccount.deleteMany({
+        where: { userWawuId: HOST_SUB },
+      });
+      await prisma.blockedAccount.create({
+        data: { userWawuId: viewer.sub, blockedWawuId: HOST_SUB },
+      });
+      blockOwners.push(viewer.sub);
+      await send(id, 'tap').expect(404);
+      await send(id, 'tap', other).expect(200);
+      expect(await rawCounts(id)).toEqual({ views: 1, taps: 1, skips: 0 });
+    });
+
+    it('counts a lighter booking under a heavier one: servable to this person is the rule, not winning the placement', async () => {
+      // The one rule: whatever GET /ads would return for somebody can be
+      // counted by them; a lighter booking under a heavier one still counts.
+      const heavy = await makeCampaign({ n: 1 });
+      await prisma.adCampaign.update({
+        where: { id: heavy },
+        data: { weight: 50 },
+      });
+      const light = await makeCampaign({ n: 2 });
+      await send(heavy, 'view').expect(200);
+      await send(light, 'view').expect(200);
+    });
+  });
+
   describe('the read helper', () => {
     it('answers zeros, no days and no rate for a campaign nobody has seen', async () => {
       const id = await makeCampaign({ n: 1 });
@@ -1014,20 +1162,7 @@ describe('POST /ads/:id/events (ADS-05)', () => {
     });
 
     it('GET /ads still serves the card and POST counts it, in one app, in either order', async () => {
-      const ev = await prisma.event.create({
-        data: {
-          id: 'ads05-spec-event',
-          hostWawuId: '00000000-0000-4000-8000-000000000003',
-          name: 'Gospel Night Live',
-          description: 'A fixture event for the ads counting spec.',
-          hostOrg: 'Ads Spec Ltd',
-          format: 'in_person',
-          type: 'workshop',
-          location: 'Abuja',
-          startsAt: new Date('2027-01-15T18:00:00.000Z'),
-          status: 'published',
-        },
-      });
+      const ev = { id: await makeEvent('ads05-spec-event') };
       const id = await makeCampaign({ n: 1, eventId: ev.id });
       const server = urlOf(both);
       await report(id, { type: 'view' }, viewer.token, server).expect(200);

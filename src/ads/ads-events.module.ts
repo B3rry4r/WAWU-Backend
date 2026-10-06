@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { ADS_CLOCK, systemClock } from './ads-clock';
 import { AdsCountsService } from './ads-counts.service';
@@ -12,7 +13,7 @@ import { AdsEventsService } from './ads-events.service';
  * to read the counts through AdsCountsService.
  */
 @Module({
-  imports: [WawuAuthModule],
+  imports: [WawuAuthModule, BlockedAccountModule],
   controllers: [AdsEventsController],
   providers: [
     AdsEventsService,
