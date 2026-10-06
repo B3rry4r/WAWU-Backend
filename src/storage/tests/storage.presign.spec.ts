@@ -37,6 +37,9 @@ function serviceWith(): StorageService {
       update: async () => ({}),
     },
     creatorState: { findUnique: async () => null },
+    // The storage allowance reads the account's tick (R-7); no profile row
+    // means no tick, the free allowance.
+    userProfile: { findUnique: () => Promise.resolve(null) },
   } as unknown as PrismaService;
   return new StorageService(config, prisma);
 }

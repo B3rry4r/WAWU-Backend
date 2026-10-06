@@ -31,6 +31,21 @@ const CONFIRM = '/api/hub/money/pin/reset/confirm';
 
 const t = new Money14App({});
 
+/**
+ * The PINs this file types, fresh each run (FIX-03). The harness never
+ * makes a phone, BVN or NIN that ends in one of them, so the leak scan at
+ * the end can only find a PIN where it was really written: before this, a
+ * masked phone (`+234 *** *** 1590`) whose random last four digits equalled
+ * a fixed test PIN failed the scan about once in 30 runs.
+ */
+const pins = t.reservePins(40);
+function pin(): string {
+  const next = pins.shift();
+  if (!next) throw new Error('the PIN pool is used up: reserve more');
+  secrets.add(next);
+  return next;
+}
+
 beforeAll(() => t.start());
 afterAll(() => t.stop());
 beforeEach(() => t.installDefaults());
@@ -61,12 +76,12 @@ function confirm(
 }
 
 /** A person whose BVN check proved their phone, with `pin` set. */
-async function holder(pin = '1357', phone?: string): Promise<Person> {
+async function holder(first: string = pin(), phone?: string): Promise<Person> {
   const who = t.person(phone);
-  secrets.add(pin);
+  secrets.add(first);
   await t.bvnChecked(who);
   await t.openWallet(who);
-  await t.setPin(who, pin);
+  await t.setPin(who, first);
   return who;
 }
 
@@ -92,13 +107,16 @@ async function age(resetId: string, ms: number): Promise<void> {
 
 describe('a user who forgot their PIN can reset it with a code and pay again', () => {
   it('locked out after five wrong PINs, a code to the proved phone sets a new PIN; the new one approves, the old one does not', async () => {
-    const who = await holder('1111');
+    const oldPin = pin();
+    const wrongPin = pin();
+    const newPin = pin();
+    const who = await holder(oldPin);
     for (let i = 0; i < 4; i++) {
-      await t.approveWithPin(who, '9999').expect(403);
+      await t.approveWithPin(who, wrongPin).expect(403);
     }
-    await t.approveWithPin(who, '9999').expect(423);
+    await t.approveWithPin(who, wrongPin).expect(423);
     // Even the right PIN is refused while locked.
-    await t.approveWithPin(who, '1111').expect(423);
+    await t.approveWithPin(who, oldPin).expect(423);
 
     const before = Date.now();
     const reset = await resetOf(who);
@@ -121,7 +139,7 @@ describe('a user who forgot their PIN can reset it with a code and pay again', (
     const res = await confirm(who, {
       resetId: reset.resetId,
       code,
-      newPin: '2468',
+      newPin,
     }).expect(200);
     const state = t.body<PinStateView>(res).data!;
     expect(state).toMatchObject({
@@ -131,8 +149,8 @@ describe('a user who forgot their PIN can reset it with a code and pay again', (
     });
 
     // The check every debit makes: the new PIN approves, the old one does not.
-    await t.approveWithPin(who, '2468').expect(200);
-    const old = await t.approveWithPin(who, '1111').expect(403);
+    await t.approveWithPin(who, newPin).expect(200);
+    const old = await t.approveWithPin(who, oldPin).expect(403);
     expect(t.body(old).reason).toMatchObject({
       code: 'pin_incorrect',
       triesLeft: 4,
@@ -153,7 +171,7 @@ describe('a user who forgot their PIN can reset it with a code and pay again', (
     const who = await holder();
     // The account's phone changes at WAWU ID after the BVN check: the token
     // now names another number, the proved one stays on file.
-    const moved = t.reissue(who, `+23481${digits(8)}`);
+    const moved = t.reissue(who, t.newPhone('81'));
     expect(moved.phone).not.toBe(who.phone);
     await resetOf(moved);
     expect(t.texts().map((x) => x.to)).toEqual([who.phone]);
@@ -166,8 +184,8 @@ describe('a user who forgot their PIN can reset it with a code and pay again', (
       await start(who),
       await confirm(who, {
         resetId: '00000000-0000-4000-8000-000000000000',
-        code: '123456',
-        newPin: '1234',
+        code: digits(6),
+        newPin: pin(),
       }),
     ]) {
       expect(res.status).toBe(409);
@@ -179,7 +197,7 @@ describe('a user who forgot their PIN can reset it with a code and pay again', (
   it('a wallet with no phone a BVN check proved (a row written outside the opening flow) gets no text', async () => {
     const who = t.person();
     await t.openWallet(who);
-    await t.setPin(who, '4321');
+    await t.setPin(who, pin());
     const res = await start(who).expect(409);
     expect(t.body(res).reason?.code).toBe('wallet_not_open');
     expect(t.texts()).toHaveLength(0);
@@ -237,7 +255,7 @@ describe('asking again', () => {
     const stale = await confirm(who, {
       resetId: first.resetId,
       code: firstCode,
-      newPin: '1122',
+      newPin: pin(),
     }).expect(400);
     expect(t.body(stale).reason).toMatchObject({
       code: 'reset_code_invalid',
@@ -246,14 +264,16 @@ describe('asking again', () => {
     await confirm(who, {
       resetId: second.resetId,
       code: secondCode,
-      newPin: '1122',
+      newPin: pin(),
     }).expect(200);
   });
 });
 
 describe('a code is not easier to guess than the PIN', () => {
   it('five wrong codes kill it: 4, 3, 2, 1 then 0 tries left, and the right code is refused after', async () => {
-    const who = await holder();
+    const first = pin();
+    const unused = pin();
+    const who = await holder(first);
     const reset = await resetOf(who);
     const code = t.lastCode(who.phone);
     secrets.add(code);
@@ -263,7 +283,7 @@ describe('a code is not easier to guess than the PIN', () => {
       const res = await confirm(who, {
         resetId: reset.resetId,
         code: wrong,
-        newPin: '5566',
+        newPin: unused,
       }).expect(400);
       expect(t.body(res).reason?.code).toBe('reset_code_invalid');
       left.push(t.body(res).reason!.triesLeft!);
@@ -272,7 +292,7 @@ describe('a code is not easier to guess than the PIN', () => {
     const late = await confirm(who, {
       resetId: reset.resetId,
       code,
-      newPin: '5566',
+      newPin: unused,
     }).expect(400);
     expect(t.body(late).reason).toMatchObject({
       code: 'reset_code_invalid',
@@ -281,7 +301,7 @@ describe('a code is not easier to guess than the PIN', () => {
     // The PIN is the old one, and wrong codes used none of its tries.
     const state = t.body<PinStateView>(await t.pinState(who)).data!;
     expect(state.triesLeft).toBe(5);
-    await t.approveWithPin(who, '1357').expect(200);
+    await t.approveWithPin(who, first).expect(200);
   });
 
   it('ten wrong codes at once get exactly five compared', async () => {
@@ -290,9 +310,10 @@ describe('a code is not easier to guess than the PIN', () => {
     const code = t.lastCode(who.phone);
     secrets.add(code);
     const wrong = code === '999999' ? '999998' : '999999';
+    const unused = pin();
     const answers = await Promise.all(
       Array.from({ length: 10 }, () =>
-        confirm(who, { resetId: reset.resetId, code: wrong, newPin: '5566' }),
+        confirm(who, { resetId: reset.resetId, code: wrong, newPin: unused }),
       ),
     );
     expect(answers.every((r) => r.status === 400)).toBe(true);
@@ -307,7 +328,7 @@ describe('a code is not easier to guess than the PIN', () => {
     await confirm(who, {
       resetId: reset.resetId,
       code,
-      newPin: '5566',
+      newPin: unused,
     }).expect(400);
   });
 
@@ -320,7 +341,7 @@ describe('a code is not easier to guess than the PIN', () => {
     const res = await confirm(who, {
       resetId: reset.resetId,
       code,
-      newPin: '7788',
+      newPin: pin(),
     }).expect(400);
     expect(t.body(res).reason).toMatchObject({
       code: 'reset_code_invalid',
@@ -333,40 +354,42 @@ describe('a code is not easier to guess than the PIN', () => {
     const reset = await resetOf(who);
     const code = t.lastCode(who.phone);
     secrets.add(code);
+    const [pinA, pinB] = [pin(), pin()];
     const answers = await Promise.all([
-      confirm(who, { resetId: reset.resetId, code, newPin: '1212' }),
-      confirm(who, { resetId: reset.resetId, code, newPin: '3434' }),
+      confirm(who, { resetId: reset.resetId, code, newPin: pinA }),
+      confirm(who, { resetId: reset.resetId, code, newPin: pinB }),
     ]);
     expect(answers.map((r) => r.status).sort()).toEqual([200, 400]);
-    const winner = answers[0].status === 200 ? '1212' : '3434';
-    const loser = winner === '1212' ? '3434' : '1212';
+    const winner = answers[0].status === 200 ? pinA : pinB;
+    const loser = winner === pinA ? pinB : pinA;
     await t.approveWithPin(who, winner).expect(200);
     await t.approveWithPin(who, loser).expect(403);
     await confirm(who, {
       resetId: reset.resetId,
       code,
-      newPin: '5656',
+      newPin: pin(),
     }).expect(400);
   });
 
   it("someone else's reset is refused like a wrong code, and changes nothing of theirs", async () => {
-    const owner = await holder('2580');
-    const other = await holder('0852');
+    const [ownerPin, otherPin] = [pin(), pin()];
+    const owner = await holder(ownerPin);
+    const other = await holder(otherPin);
     const reset = await resetOf(owner);
     const code = t.lastCode(owner.phone);
     secrets.add(code);
     const res = await confirm(other, {
       resetId: reset.resetId,
       code,
-      newPin: '1470',
+      newPin: pin(),
     }).expect(400);
     expect(t.body(res).reason?.code).toBe('reset_code_invalid');
     const row = await t.prisma.transactionPinReset.findUniqueOrThrow({
       where: { id: reset.resetId },
     });
     expect(row.failedTries).toBe(0);
-    await t.approveWithPin(owner, '2580').expect(200);
-    await t.approveWithPin(other, '0852').expect(200);
+    await t.approveWithPin(owner, ownerPin).expect(200);
+    await t.approveWithPin(other, otherPin).expect(200);
   });
 
   it('two different new PINs are 400 pin_mismatch and use no try of the code', async () => {
@@ -374,11 +397,12 @@ describe('a code is not easier to guess than the PIN', () => {
     const reset = await resetOf(who);
     const code = t.lastCode(who.phone);
     secrets.add(code);
+    const [newPin, typo] = [pin(), pin()];
     const res = await confirm(who, {
       resetId: reset.resetId,
       code,
-      newPin: '1234',
-      newPinConfirmation: '4321',
+      newPin,
+      newPinConfirmation: typo,
     }).expect(400);
     expect(t.body(res).reason?.code).toBe('pin_mismatch');
     const row = await t.prisma.transactionPinReset.findUniqueOrThrow({
@@ -388,18 +412,27 @@ describe('a code is not easier to guess than the PIN', () => {
     await confirm(who, {
       resetId: reset.resetId,
       code,
-      newPin: '1234',
+      newPin,
     }).expect(200);
   });
 
   it('a code or id in an unexpected format is a 400 from validation, using no try', async () => {
     const who = await holder();
     const reset = await resetOf(who);
+    const [junk, newPin] = [digits(6), pin()];
     for (const body of [
-      { resetId: reset.resetId, code: '123 456', newPin: '1234' },
-      { resetId: reset.resetId, code: '12a456', newPin: '1234' },
-      { resetId: 'not-a-uuid', code: '123456', newPin: '1234' },
-      { resetId: reset.resetId, code: '123456', newPin: '12345' },
+      {
+        resetId: reset.resetId,
+        code: `${junk.slice(0, 3)} ${junk.slice(3)}`,
+        newPin,
+      },
+      {
+        resetId: reset.resetId,
+        code: `${junk.slice(0, 2)}a${junk.slice(3)}`,
+        newPin,
+      },
+      { resetId: 'not-a-uuid', code: junk, newPin },
+      { resetId: reset.resetId, code: junk, newPin: `${newPin}5` },
     ]) {
       const res = await confirm(who, body).expect(400);
       expect(t.body(res).reason).toBeUndefined();
@@ -436,9 +469,9 @@ describe('texts are limited and paid for once', () => {
   });
 
   it('the limit is per phone too: a second account with the same proved phone shares it', async () => {
-    const phone = `+23480${digits(8)}`;
-    const a = await holder('1111', phone);
-    const b = await holder('2222', phone);
+    const phone = t.newPhone();
+    const a = await holder(pin(), phone);
+    const b = await holder(pin(), phone);
     for (let i = 0; i < 3; i++) await age((await resetOf(a)).resetId, 61_000);
     for (let i = 0; i < 2; i++) await age((await resetOf(b)).resetId, 61_000);
     const res = await start(b).expect(429);
@@ -472,7 +505,7 @@ describe('texts are limited and paid for once', () => {
     await confirm(who, {
       resetId: rows[0].id,
       code,
-      newPin: '1234',
+      newPin: pin(),
     }).expect(400);
 
     t.double.on('POST', '/sms/send', { status: 200, body: {} });
@@ -506,23 +539,25 @@ describe('texts are limited and paid for once', () => {
 
     const code = t.lastCode(who.phone);
     secrets.add(code);
+    const newPin = pin();
     await confirm(who, {
       resetId: row.id,
       code,
-      newPin: '8642',
+      newPin,
     }).expect(200);
-    await t.approveWithPin(who, '8642').expect(200);
+    await t.approveWithPin(who, newPin).expect(200);
   });
 });
 
 describe('a reset turns biometric approval off', () => {
   it('the phone registered before the reset no longer approves', async () => {
-    const who = await holder('1590');
+    const first = pin();
+    const who = await holder(first);
     await t
       .http()
       .put('/api/hub/money/device')
       .set('Authorization', who.auth)
-      .set('X-Transaction-Pin', '1590')
+      .set('X-Transaction-Pin', first)
       .send({ publicKey: phoneKey().publicKey, biometric: 'fingerprint' })
       .expect(200);
     const reset = await resetOf(who);
@@ -531,7 +566,7 @@ describe('a reset turns biometric approval off', () => {
     await confirm(who, {
       resetId: reset.resetId,
       code,
-      newPin: '0951',
+      newPin: pin(),
     }).expect(200);
     const device = await t
       .http()

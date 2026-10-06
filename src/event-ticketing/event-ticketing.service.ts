@@ -20,6 +20,7 @@ import {
 import type { BuyTicketsDto, VerifyOrderDto } from './dto/event-ticketing.dto';
 import { ticketTotals } from './ticket-counts';
 import type { TicketTier } from '../../generated/prisma/enums';
+import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 
 /**
  * A ticket code, and why it looks like this.
@@ -79,6 +80,7 @@ export class EventTicketingService {
   constructor(
     private readonly prisma: PrismaService,
     @Inject(FLUTTERWAVE_CLIENT) private readonly flutterwave: FlutterwaveClient,
+    private readonly blockedAccounts: BlockedAccountService,
   ) {}
 
   /* ------------------------------------------------------------------ *
@@ -158,7 +160,24 @@ export class EventTicketingService {
   }
 
   /** The tiers on sale, with what is left of each. */
-  async listTicketTypes(eventId: string) {
+  async listTicketTypes(eventId: string, viewerWawuId?: string) {
+    // SETTINGS-04: the tiers of an event hosted by a hidden account are a
+    // 404, like the event. A signed-out reader cannot be blocked.
+    const event = await this.prisma.event.findUnique({
+      where: { id: eventId },
+      select: { hostWawuId: true },
+    });
+    if (event) {
+      await this.blockedAccounts.assertVisible(
+        viewerWawuId,
+        event.hostWawuId,
+        'Event not found.',
+      );
+    } else if (viewerWawuId) {
+      // A signed-in caller gets the same 404 for a missing event as for a
+      // hidden one. The signed-out public page keeps its empty list.
+      throw new NotFoundException('Event not found.');
+    }
     const types = await this.prisma.eventTicketType.findMany({
       where: { eventId },
       orderBy: { priceNaira: 'asc' },
@@ -203,6 +222,11 @@ export class EventTicketingService {
     if (!ticketType) throw new NotFoundException('Ticket type not found');
 
     const event = ticketType.event;
+    await this.blockedAccounts.assertVisible(
+      buyerWawuId,
+      event.hostWawuId,
+      'Ticket type not found',
+    );
     if (event.status !== 'published') {
       throw new ConflictException('Tickets are not on sale for this event.');
     }

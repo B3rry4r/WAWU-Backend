@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { deriveVerificationState } from '../common/verification/verification-state';
 import {
   AccountType,
@@ -44,7 +45,10 @@ const CLOSEST_LIMIT = 10;
  */
 @Injectable()
 export class SearchResponseService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly blockedAccounts: BlockedAccountService,
+  ) {}
 
   // ---------------------------------------------------------------------
   // GET /search
@@ -63,12 +67,15 @@ export class SearchResponseService {
   ): Promise<SearchResults> {
     const wantContent = tab === 'all' || tab === 'content';
     const wantCreators = tab === 'all' || tab === 'creators';
+    // SETTINGS-04: nobody the caller blocked, or who blocked the caller,
+    // is a result, whichever tab asked.
+    const hidden = await this.blockedAccounts.hiddenFrom(requesterWawuId);
 
     const [content, creators] = await Promise.all([
       wantContent
-        ? this.searchContent(q, requesterWawuId)
+        ? this.searchContent(q, requesterWawuId, hidden)
         : Promise.resolve([]),
-      wantCreators ? this.searchCreators(q) : Promise.resolve([]),
+      wantCreators ? this.searchCreators(q, hidden) : Promise.resolve([]),
     ]);
 
     return {
@@ -91,10 +98,12 @@ export class SearchResponseService {
   private async searchContent(
     q: string,
     requesterWawuId: string | undefined,
+    hidden: string[],
   ): Promise<ContentPieceResponse[]> {
     const items = await this.prisma.contentPiece.findMany({
       where: {
         status: ContentStatus.live,
+        creatorWawuId: { notIn: hidden },
         OR: [
           { title: { contains: q, mode: 'insensitive' } },
           { description: { contains: q, mode: 'insensitive' } },
@@ -107,10 +116,14 @@ export class SearchResponseService {
     return this.toContentResponses(items, requesterWawuId);
   }
 
-  private async searchCreators(q: string): Promise<CreatorProfile[]> {
+  private async searchCreators(
+    q: string,
+    hidden: string[],
+  ): Promise<CreatorProfile[]> {
     const profiles = await this.prisma.userProfile.findMany({
       where: {
         accountType: AccountType.creator,
+        wawuUserId: { notIn: hidden },
         OR: [
           { handle: { contains: q, mode: 'insensitive' } },
           { bio: { contains: q, mode: 'insensitive' } },
@@ -139,10 +152,11 @@ export class SearchResponseService {
    * doesn't accept it today; wire it back in once search-history
    * persistence exists.
    */
-  async suggestions(): Promise<SearchSuggestions> {
+  async suggestions(requesterWawuId?: string): Promise<SearchSuggestions> {
+    const hidden = await this.blockedAccounts.hiddenFrom(requesterWawuId);
     const [popularSearches, suggestedCreatorIds] = await Promise.all([
-      this.popularSearches(),
-      this.topCreatorIdsByEvgScore(SUGGESTION_LIMIT),
+      this.popularSearches(hidden),
+      this.topCreatorIdsByEvgScore(SUGGESTION_LIMIT, hidden),
     ]);
     const suggestedCreators =
       await this.buildCreatorProfiles(suggestedCreatorIds);
@@ -169,9 +183,9 @@ export class SearchResponseService {
    * by view count, reduced to just their titles (a search suggestion is a
    * query string a user might type, not a full content object).
    */
-  private async popularSearches(): Promise<string[]> {
+  private async popularSearches(hidden: string[]): Promise<string[]> {
     const top = await this.prisma.contentPiece.findMany({
-      where: { status: ContentStatus.live },
+      where: { status: ContentStatus.live, creatorWawuId: { notIn: hidden } },
       orderBy: { views: 'desc' },
       take: SUGGESTION_LIMIT,
       select: { title: true },
@@ -194,7 +208,10 @@ export class SearchResponseService {
    * phrase never substring-matches. Honest tradeoff, documented per task
    * brief: this is broader substring matching, not similarity ranking.
    */
-  async closest(q: string): Promise<ClosestSearchResult> {
+  async closest(
+    q: string,
+    requesterWawuId?: string,
+  ): Promise<ClosestSearchResult> {
     const tokens = q
       .split(/\s+/)
       .map((t) => t.trim())
@@ -204,9 +221,11 @@ export class SearchResponseService {
       return { items: [] };
     }
 
+    const hidden = await this.blockedAccounts.hiddenFrom(requesterWawuId);
     const items = await this.prisma.contentPiece.findMany({
       where: {
         status: ContentStatus.live,
+        creatorWawuId: { notIn: hidden },
         OR: tokens.flatMap((token) => [
           { title: { contains: token, mode: 'insensitive' as const } },
           { description: { contains: token, mode: 'insensitive' as const } },
@@ -297,8 +316,12 @@ export class SearchResponseService {
     return [...scores.map((s) => s.creatorWawuId), ...unscored];
   }
 
-  private async topCreatorIdsByEvgScore(limit: number): Promise<string[]> {
+  private async topCreatorIdsByEvgScore(
+    limit: number,
+    hidden: string[],
+  ): Promise<string[]> {
     const top = await this.prisma.evgScore.findMany({
+      where: { creatorWawuId: { notIn: hidden } },
       orderBy: { score: 'desc' },
       take: limit,
       select: { creatorWawuId: true },

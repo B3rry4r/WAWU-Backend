@@ -347,7 +347,11 @@ describe('Blocking (contract)', () => {
       expect(after).toBe(before);
     });
 
-    it('reading is still allowed — a block gates interaction, not visibility', async () => {
+    // SETTINGS-04 replaced the old rule here ("a block gates interaction, not
+    // visibility", which asserted a 200). A block now hides people on every
+    // read surface too; block-hides-people.contract.spec.ts has one test per
+    // surface. This case keeps its place and says what is true now.
+    it('reading is hidden too — the blocker no longer reads the thread under the blocked creator\'s piece', async () => {
       await request(app.getHttpServer())
         .post('/settings/privacy/blocked')
         .set('Authorization', `Bearer ${plainToken}`)
@@ -356,7 +360,7 @@ describe('Blocking (contract)', () => {
       await request(app.getHttpServer())
         .get(`/content/${CONTENT_BY_PRO}/comments`)
         .set('Authorization', `Bearer ${plainToken}`)
-        .expect(200);
+        .expect(404);
     });
   });
 

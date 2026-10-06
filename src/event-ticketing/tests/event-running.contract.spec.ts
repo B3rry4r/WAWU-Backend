@@ -761,4 +761,86 @@ describe('Running an event: organiser numbers and door staff (EVENTS-05)', () =>
         .expect(409);
     });
   });
+  // ── fix round 1: blocks, labels, another event's staff row ─────────────
+
+  describe('door staff: blocks, unique labels, one event at a time', () => {
+    const post = (token: string, eventId: string, body: object) =>
+      http()
+        .post(`/api/hub/events/${eventId}/door-staff`)
+        .set(auth(token))
+        .send(body);
+
+    it('a host cannot add someone who has blocked them, or whom they blocked: a 404 like a missing account', async () => {
+      for (const [userWawuId, blockedWawuId] of [
+        [outsider.sub, HOST_SUB],
+        [HOST_SUB, outsider.sub],
+      ]) {
+        await prisma.blockedAccount.create({
+          data: { userWawuId, blockedWawuId },
+        });
+        try {
+          const byId = await post(hostToken, EV_EMPTY, {
+            wawuUserId: outsider.sub,
+          }).expect(404);
+          expect(JSON.stringify(byId.body)).toContain(
+            'We could not find that account.',
+          );
+          await post(hostToken, EV_EMPTY, {
+            handle: OUTSIDER_HANDLE,
+          }).expect(404);
+          expect(
+            await prisma.eventDoorStaff.count({
+              where: { eventId: EV_EMPTY, staffWawuId: outsider.sub },
+            }),
+          ).toBe(0);
+        } finally {
+          await prisma.blockedAccount.deleteMany({
+            where: { userWawuId, blockedWawuId },
+          });
+        }
+      }
+    });
+
+    it('people added at the same moment get different default labels', async () => {
+      const results = await Promise.all(
+        [STAFF_SUB, BUYER_SUB, outsider.sub].map((wawuUserId) =>
+          post(hostToken, EV_EMPTY, { wawuUserId }),
+        ),
+      );
+      for (const r of results) expect(r.status).toBe(201);
+      const labels = results.map((r) => data<DoorStaffView>(r).label);
+      expect(new Set(labels).size).toBe(3);
+    });
+
+    it('a label already used at the door is refused, whatever its case', async () => {
+      const active = await prisma.eventDoorStaff.findMany({
+        where: { eventId: EV_EMPTY, removedAt: null },
+        orderBy: { addedAt: 'asc' },
+      });
+      expect(active.length).toBe(3);
+      await http()
+        .delete(`/api/hub/events/${EV_EMPTY}/door-staff/${active[2].id}`)
+        .set(auth(hostToken))
+        .expect(200);
+      const res = await post(hostToken, EV_EMPTY, {
+        wawuUserId: active[2].staffWawuId,
+        label: active[0].label.toUpperCase(),
+      }).expect(409);
+      expect(JSON.stringify(res.body)).toContain('already has that name');
+    });
+
+    it("a staff row of another event cannot be removed through this event's path", async () => {
+      const mine = await prisma.eventDoorStaff.findFirstOrThrow({
+        where: { eventId: EV_EMPTY, removedAt: null },
+      });
+      await http()
+        .delete(`/api/hub/events/${EV_OTHER}/door-staff/${mine.id}`)
+        .set(auth(hostToken))
+        .expect(404);
+      const after = await prisma.eventDoorStaff.findUniqueOrThrow({
+        where: { id: mine.id },
+      });
+      expect(after.removedAt).toBeNull();
+    });
+  });
 });

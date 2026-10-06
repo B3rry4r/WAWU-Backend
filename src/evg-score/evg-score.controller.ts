@@ -1,4 +1,6 @@
 import { Controller, Get, Param, ParseUUIDPipe, UseGuards } from '@nestjs/common';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import type { EvgScore } from '../common/types';
 import { EvgScoreService } from './evg-score.service';
@@ -16,7 +18,8 @@ export class EvgScoreController {
   @Get(':wawuId/evg')
   getEvgScore(
     @Param('wawuId', new ParseUUIDPipe({ version: '4' })) wawuId: string,
+    @CurrentUser() user: WawuJwtClaims,
   ): Promise<EvgScore> {
-    return this.evgScoreService.getForCreator(wawuId);
+    return this.evgScoreService.getForCreator(wawuId, user.sub);
   }
 }

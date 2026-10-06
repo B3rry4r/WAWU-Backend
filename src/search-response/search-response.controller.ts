@@ -32,15 +32,18 @@ export class SearchResponseController {
   }
 
   @Get('suggestions')
-  suggestions() {
+  suggestions(@CurrentUser() user: WawuJwtClaims | undefined) {
     // OptionalWawuAuthGuard still runs here (controller-level @UseGuards)
     // so req.user is already populated for whenever recentSearches gains
     // persistence — see SearchResponseService.suggestions()'s doc comment.
-    return this.searchResponseService.suggestions();
+    return this.searchResponseService.suggestions(user?.sub);
   }
 
   @Get('closest')
-  closest(@Query() query: ClosestSearchQueryDto) {
-    return this.searchResponseService.closest(query.q);
+  closest(
+    @Query() query: ClosestSearchQueryDto,
+    @CurrentUser() user: WawuJwtClaims | undefined,
+  ) {
+    return this.searchResponseService.closest(query.q, user?.sub);
   }
 }

@@ -5,6 +5,7 @@ import { EventTicketingController } from './event-ticketing.controller';
 import { EventTicketingService } from './event-ticketing.service';
 import { EventRunningController } from './event-running.controller';
 import { EventRunningService } from './event-running.service';
+import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 
 /**
  * Event ticketing.
@@ -19,7 +20,7 @@ import { EventRunningService } from './event-running.service';
  * door staff; WawuAuthModule also gives it WawuIdClient for holder names.
  */
 @Module({
-  imports: [WawuAuthModule, DirectMessageModule],
+  imports: [WawuAuthModule, DirectMessageModule, BlockedAccountModule],
   controllers: [EventTicketingController, EventRunningController],
   providers: [EventTicketingService, EventRunningService],
   exports: [EventTicketingService],

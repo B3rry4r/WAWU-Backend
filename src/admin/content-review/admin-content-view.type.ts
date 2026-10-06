@@ -74,6 +74,11 @@ export interface AdminContentQueueItemView {
   durationLabel: string | null;
   pageCount: number | null;
   status: ContentStatus;
+  /**
+   * True when this was the creator's first piece, whether it is free or paid
+   * (R-8 removed the rule that a first upload must be free). The name is the
+   * old one and is kept because renaming it would break clients that read it.
+   */
   creatorFirstUploadFree: boolean;
   createdAt: Date;
   /** Whole hours since upload — how a queue is triaged when it is oldest-first. */

@@ -1,3 +1,4 @@
+import { BlockedAccountService } from '../../blocked-account/blocked-account.service';
 import {
   BadRequestException,
   ConflictException,
@@ -51,6 +52,7 @@ export class CommunityRoomsService {
     private readonly prisma: PrismaService,
     private readonly communities: CommunityService,
     private readonly messages: CommunityMessageService,
+    private readonly blockedAccounts: BlockedAccountService,
   ) {}
 
   /**
@@ -73,14 +75,22 @@ export class CommunityRoomsService {
   }
 
   /** GET /communities/:id/link. Any signed-in user may share any room. */
-  async linkFor(communityId: string): Promise<CommunityLinkView> {
+  async linkFor(
+    communityId: string,
+    viewerWawuId?: string,
+  ): Promise<CommunityLinkView> {
     const community = await this.prisma.community.findUnique({
       where: { id: communityId },
-      select: { id: true, name: true },
+      select: { id: true, name: true, hostWawuId: true },
     });
     if (!community) {
       throw new NotFoundException('Community not found');
     }
+    await this.blockedAccounts.assertRoomVisible(
+      viewerWawuId,
+      community.hostWawuId,
+      community.id,
+    );
     const slug = await this.ensureLink(community.id, community.name);
     return { communityId: community.id, slug, link: shareLink(slug) };
   }
@@ -90,7 +100,10 @@ export class CommunityRoomsService {
    * not: what the caller may then do (read, ask to join) is decided by the
    * room routes exactly as it is for a room found any other way.
    */
-  async resolve(rawSlug: string): Promise<CommunityRoom> {
+  async resolve(
+    rawSlug: string,
+    viewerWawuId?: string,
+  ): Promise<CommunityRoom> {
     const slug = normaliseSlug(rawSlug);
     const link = slug
       ? await this.prisma.communityLink.findUnique({
@@ -101,6 +114,12 @@ export class CommunityRoomsService {
     if (!link) {
       throw new NotFoundException('No community has this link.');
     }
+    await this.blockedAccounts.assertRoomVisible(
+      viewerWawuId,
+      link.community.hostWawuId,
+      link.community.id,
+      'No community has this link.',
+    );
     const community = await this.communities.withDerivedFields(link.community);
     return { ...community, slug: link.slug, link: shareLink(link.slug) };
   }
@@ -121,6 +140,11 @@ export class CommunityRoomsService {
     if (!community) {
       throw new NotFoundException('Community not found');
     }
+    await this.blockedAccounts.assertRoomVisible(
+      userWawuId,
+      community.hostWawuId,
+      community.id,
+    );
     if (community.hostWawuId !== userWawuId) {
       const membership = await this.prisma.communityMembership.findUnique({
         where: { userWawuId_communityId: { userWawuId, communityId } },
@@ -193,19 +217,25 @@ export class CommunityRoomsService {
     ]);
     const readUpTo = new Map(markers.map((m) => [m.communityId, m.lastReadAt]));
 
+    // SETTINGS-04: a room's preview line and unread count leave out what
+    // people the caller blocked (or who blocked the caller) wrote.
+    const hidden = await this.blockedAccounts.hiddenFrom(userWawuId);
     const ranked = await Promise.all(
       communities.map(async (community) => {
         const { role, joinedAt } = roles.get(community.id)!;
         const since = readUpTo.get(community.id) ?? joinedAt ?? null;
         const [last, unreadCount] = await this.prisma.$transaction([
           this.prisma.communityMessage.findFirst({
-            where: { communityId: community.id },
+            where: {
+              communityId: community.id,
+              senderWawuId: { notIn: hidden },
+            },
             orderBy: [{ sentAt: 'desc' }, { id: 'desc' }],
           }),
           this.prisma.communityMessage.count({
             where: {
               communityId: community.id,
-              senderWawuId: { not: userWawuId },
+              senderWawuId: { notIn: [userWawuId, ...hidden] },
               ...(since ? { sentAt: { gt: since } } : {}),
             },
           }),

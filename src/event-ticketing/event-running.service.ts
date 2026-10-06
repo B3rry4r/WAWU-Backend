@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
+import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import type { AddDoorStaffDto } from './dto/event-running.dto';
 import {
   SOLD_TICKET_STATUSES,
@@ -119,6 +120,7 @@ export class EventRunningService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly wawuId: WawuIdClient,
+    private readonly blocked: BlockedAccountService,
   ) {}
 
   /* ------------------------------------------------------------------ *
@@ -226,46 +228,68 @@ export class EventRunningService {
         'You can already check tickets in at your own event.',
       );
     }
-
-    const existing = await this.prisma.eventDoorStaff.findUnique({
-      where: { eventId_staffWawuId: { eventId, staffWawuId } },
-    });
-    if (existing && !existing.removedAt) {
-      throw new ConflictException('This person is already on your door staff.');
-    }
+    // A block hides the two people from each other (SETTINGS-04): the same
+    // 404 as an account that does not exist, in both directions.
+    await this.blocked.assertVisible(
+      hostWawuId,
+      staffWawuId,
+      'We could not find that account.',
+    );
 
     const given = dto.label?.trim();
     let row;
-    if (existing) {
-      row = await this.prisma.eventDoorStaff.update({
-        where: { id: existing.id },
-        data: {
-          removedAt: null,
-          addedAt: new Date(),
-          ...(given ? { label: given } : {}),
-        },
-      });
-    } else {
-      const everAdded = await this.prisma.eventDoorStaff.count({
-        where: { eventId },
-      });
-      try {
-        row = await this.prisma.eventDoorStaff.create({
-          data: {
-            eventId,
-            staffWawuId,
-            label: given || `Door ${everAdded + 1}`,
-          },
+    try {
+      // One add at a time per event, so a default "Door n" is never handed
+      // out twice and a label is unique among the event's active staff.
+      row = await this.prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`door-staff:${eventId}`}, 0))`;
+        const active = await tx.eventDoorStaff.findMany({
+          where: { eventId, removedAt: null },
+          select: { label: true },
         });
-      } catch (e) {
-        if ((e as { code?: unknown })?.code === 'P2002') {
-          // The host added the same person twice at the same moment.
+        const current = await tx.eventDoorStaff.findUnique({
+          where: { eventId_staffWawuId: { eventId, staffWawuId } },
+        });
+        if (current && !current.removedAt) {
           throw new ConflictException(
             'This person is already on your door staff.',
           );
         }
-        throw e;
+        const taken = new Set(active.map((r) => r.label.toLowerCase()));
+        // Someone put back keeps their old label when it is still free.
+        let label =
+          given ||
+          (current && !taken.has(current.label.toLowerCase())
+            ? current.label
+            : undefined);
+        if (label) {
+          if (taken.has(label.toLowerCase())) {
+            throw new ConflictException(
+              'Another person at this door already has that name. Pick a different one.',
+            );
+          }
+        } else {
+          let n = taken.size + 1;
+          while (taken.has(`door ${n}`)) n += 1;
+          label = `Door ${n}`;
+        }
+        if (current) {
+          return tx.eventDoorStaff.update({
+            where: { id: current.id },
+            data: { removedAt: null, addedAt: new Date(), label },
+          });
+        }
+        return tx.eventDoorStaff.create({
+          data: { eventId, staffWawuId, label },
+        });
+      });
+    } catch (e) {
+      if ((e as { code?: unknown })?.code === 'P2002') {
+        throw new ConflictException(
+          'This person is already on your door staff.',
+        );
       }
+      throw e;
     }
     return (await this.staffViews([row]))[0];
   }

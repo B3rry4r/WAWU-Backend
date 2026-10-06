@@ -29,6 +29,7 @@ import { ProfileExperienceService } from './profile-experience.service';
 import type { ProfileStatsView } from './profile-stats.type';
 import { objectKeyFrom, StorageService } from '../storage/storage.service';
 import { WalletService } from '../wallet/wallet.service';
+import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 
 /**
  * registry.json "UserProfile". Owns GET/PATCH /users/me and the public
@@ -43,6 +44,7 @@ export class UserProfileService {
     private readonly storage: StorageService,
     private readonly wallet: WalletService,
     private readonly profileExperience: ProfileExperienceService,
+    private readonly blockedAccounts: BlockedAccountService,
   ) {}
 
   /**
@@ -309,6 +311,14 @@ export class UserProfileService {
       throw new NotFoundException('User not found');
     }
     const wawuUserId = profile.wawuUserId;
+    // SETTINGS-04: somebody the caller blocked, or who blocked the caller,
+    // has no profile to open. Same 404 and wording as an unknown handle, so
+    // the answer never says who blocked whom.
+    await this.blockedAccounts.assertVisible(
+      viewerWawuId,
+      wawuUserId,
+      'User not found',
+    );
 
     const creatorState = await this.prisma.creatorState.findUnique({
       where: { wawuUserId },

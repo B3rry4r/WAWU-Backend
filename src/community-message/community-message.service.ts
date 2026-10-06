@@ -17,6 +17,7 @@ import type { Paginated } from '../common/interceptors/response.interceptor';
 import type { CommunityKind } from '../../generated/prisma/enums';
 import type { CommunityMessage, CommunityMessageSender } from '../common/types';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
+import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { NotificationService } from '../notification/notification.service';
 import type { CreateCommunityMessageDto } from './dto/create-community-message.dto';
 
@@ -147,6 +148,7 @@ export class CommunityMessageService {
     private readonly creditSpendService: CreditSpendService,
     private readonly notifications: NotificationService,
     private readonly wawuId: WawuIdClient,
+    private readonly blockedAccounts: BlockedAccountService,
   ) {}
 
   /**
@@ -291,16 +293,26 @@ export class CommunityMessageService {
     perPage: number,
   ): Promise<Paginated<CommunityMessage>> {
     const community = await this.assertCommunityExists(communityId);
+    await this.blockedAccounts.assertRoomVisible(
+      readerWawuId,
+      community.hostWawuId,
+      communityId,
+    );
     await this.assertMember(communityId, readerWawuId, community.hostWawuId);
 
+    // SETTINGS-04: what a blocked person wrote (or what somebody who blocked
+    // the reader wrote) is not shown to the reader in a shared room, and is
+    // not counted.
+    const hidden = await this.blockedAccounts.hiddenFrom(readerWawuId);
+    const where = { communityId, senderWawuId: { notIn: hidden } };
     const [items, total] = await this.prisma.$transaction([
       this.prisma.communityMessage.findMany({
-        where: { communityId },
+        where,
         orderBy: { sentAt: 'desc' },
         skip: (page - 1) * perPage,
         take: perPage,
       }),
-      this.prisma.communityMessage.count({ where: { communityId } }),
+      this.prisma.communityMessage.count({ where }),
     ]);
 
     const senders = await this.lookupSenders(items.map((m) => m.senderWawuId));
@@ -348,6 +360,11 @@ export class CommunityMessageService {
     }
 
     const community = await this.assertCommunityExists(communityId);
+    await this.blockedAccounts.assertRoomVisible(
+      senderWawuId,
+      community.hostWawuId,
+      communityId,
+    );
     await this.assertMember(communityId, senderWawuId, community.hostWawuId);
 
     const entitlement = await this.resolveEntitlement(community, senderWawuId);
