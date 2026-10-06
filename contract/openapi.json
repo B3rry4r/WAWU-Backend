@@ -15251,16 +15251,16 @@
                           "category": {
                             "type": "string"
                           },
-                          "tagline": {
-                            "type": "string"
-                          },
                           "handle": {
                             "type": "string"
                           },
-                          "field": {
+                          "bio": {
                             "type": "string"
                           },
-                          "bio": {
+                          "tagline": {
+                            "type": "string"
+                          },
+                          "field": {
                             "type": "string"
                           },
                           "topics": {
@@ -15294,10 +15294,10 @@
                           "name",
                           "id",
                           "category",
-                          "tagline",
                           "handle",
-                          "field",
                           "bio",
+                          "tagline",
+                          "field",
                           "topics",
                           "openForRequests",
                           "fullUntil",
@@ -15327,16 +15327,16 @@
                               "category": {
                                 "type": "string"
                               },
-                              "tagline": {
-                                "type": "string"
-                              },
                               "handle": {
                                 "type": "string"
                               },
-                              "field": {
+                              "bio": {
                                 "type": "string"
                               },
-                              "bio": {
+                              "tagline": {
+                                "type": "string"
+                              },
+                              "field": {
                                 "type": "string"
                               },
                               "topics": {
@@ -15370,10 +15370,10 @@
                               "name",
                               "id",
                               "category",
-                              "tagline",
                               "handle",
-                              "field",
                               "bio",
+                              "tagline",
+                              "field",
                               "topics",
                               "openForRequests",
                               "fullUntil",
@@ -15445,16 +15445,16 @@
                     "category": {
                       "type": "string"
                     },
-                    "tagline": {
-                      "type": "string"
-                    },
                     "handle": {
                       "type": "string"
                     },
-                    "field": {
+                    "bio": {
                       "type": "string"
                     },
-                    "bio": {
+                    "tagline": {
+                      "type": "string"
+                    },
+                    "field": {
                       "type": "string"
                     },
                     "topics": {
@@ -15488,10 +15488,10 @@
                     "name",
                     "id",
                     "category",
-                    "tagline",
                     "handle",
-                    "field",
                     "bio",
+                    "tagline",
+                    "field",
                     "topics",
                     "openForRequests",
                     "fullUntil",
@@ -17344,6 +17344,181 @@
         ]
       }
     },
+    "/api/hub/explore/categories": {
+      "get": {
+        "operationId": "ExploreController_categories",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "label"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Explore"
+        ]
+      }
+    },
+    "/api/hub/explore/creators": {
+      "get": {
+        "operationId": "ExploreController_creators",
+        "parameters": [
+          {
+            "name": "category",
+            "required": false,
+            "in": "query",
+            "description": "One of the ids from GET /explore/categories.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "music_audio",
+                "film_video",
+                "photography",
+                "fashion_beauty",
+                "business_finance",
+                "technology",
+                "food_lifestyle",
+                "faith_spirituality",
+                "art_design",
+                "writing_publishing",
+                "sports_fitness",
+                "gaming_esports"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 10000,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ExploreCreatorCard"
+                      }
+                    },
+                    "currentPage": {
+                      "type": "number"
+                    },
+                    "perPage": {
+                      "type": "number"
+                    },
+                    "total": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "currentPage",
+                    "perPage",
+                    "total"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Explore"
+        ]
+      }
+    },
+    "/api/hub/explore/featured-creators": {
+      "get": {
+        "operationId": "ExploreController_featured",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ExploreCreatorCard"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Explore"
+        ]
+      }
+    },
     "/api/hub/professionals/applications": {
       "post": {
         "operationId": "ProfessionalController_apply",
@@ -17394,6 +17569,9 @@
                     "wawuUserId": {
                       "type": "string"
                     },
+                    "headline": {
+                      "type": "string"
+                    },
                     "submittedAt": {
                       "type": "string",
                       "format": "date-time"
@@ -17401,9 +17579,6 @@
                     "rejectionReason": {
                       "type": "string",
                       "nullable": true
-                    },
-                    "headline": {
-                      "type": "string"
                     },
                     "about": {
                       "type": "string"
@@ -17441,9 +17616,9 @@
                     "category",
                     "documents",
                     "wawuUserId",
+                    "headline",
                     "submittedAt",
                     "rejectionReason",
-                    "headline",
                     "about",
                     "services",
                     "credentialKind",
@@ -17503,6 +17678,9 @@
                       "wawuUserId": {
                         "type": "string"
                       },
+                      "headline": {
+                        "type": "string"
+                      },
                       "submittedAt": {
                         "type": "string",
                         "format": "date-time"
@@ -17510,9 +17688,6 @@
                       "rejectionReason": {
                         "type": "string",
                         "nullable": true
-                      },
-                      "headline": {
-                        "type": "string"
                       },
                       "about": {
                         "type": "string"
@@ -17550,9 +17725,9 @@
                       "category",
                       "documents",
                       "wawuUserId",
+                      "headline",
                       "submittedAt",
                       "rejectionReason",
-                      "headline",
                       "about",
                       "services",
                       "credentialKind",
@@ -17630,6 +17805,9 @@
                     "wawuUserId": {
                       "type": "string"
                     },
+                    "headline": {
+                      "type": "string"
+                    },
                     "submittedAt": {
                       "type": "string",
                       "format": "date-time"
@@ -17637,9 +17815,6 @@
                     "rejectionReason": {
                       "type": "string",
                       "nullable": true
-                    },
-                    "headline": {
-                      "type": "string"
                     },
                     "about": {
                       "type": "string"
@@ -17677,9 +17852,9 @@
                     "category",
                     "documents",
                     "wawuUserId",
+                    "headline",
                     "submittedAt",
                     "rejectionReason",
-                    "headline",
                     "about",
                     "services",
                     "credentialKind",
@@ -18910,14 +19085,6 @@
                     "wawuUserId": {
                       "type": "string"
                     },
-                    "handle": {
-                      "type": "string",
-                      "nullable": true
-                    },
-                    "bio": {
-                      "type": "string",
-                      "nullable": true
-                    },
                     "accountType": {
                       "type": "string",
                       "enum": [
@@ -18935,6 +19102,14 @@
                       "nullable": true
                     },
                     "coverUrl": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "handle": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "bio": {
                       "type": "string",
                       "nullable": true
                     },
@@ -19008,12 +19183,12 @@
                   "required": [
                     "createdAt",
                     "wawuUserId",
-                    "handle",
-                    "bio",
                     "accountType",
                     "unpaidWarnedAt",
                     "avatarUrl",
                     "coverUrl",
+                    "handle",
+                    "bio",
                     "interests",
                     "instagramHandle",
                     "whatsappHandle",
@@ -23425,6 +23600,103 @@
         },
         "tags": [
           "AdminLegalDocuments"
+        ]
+      }
+    },
+    "/api/hub/admin/featured-creators/{wawuId}": {
+      "put": {
+        "operationId": "AdminFeaturedCreatorsController_put",
+        "parameters": [
+          {
+            "name": "wawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutFeaturedCreatorDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "wawuId": {
+                      "type": "string"
+                    },
+                    "featured": {
+                      "type": "boolean"
+                    },
+                    "position": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "wawuId",
+                    "featured",
+                    "position"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminFeaturedCreators"
+        ]
+      },
+      "delete": {
+        "operationId": "AdminFeaturedCreatorsController_remove",
+        "parameters": [
+          {
+            "name": "wawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "wawuId": {
+                      "type": "string"
+                    },
+                    "featured": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "wawuId",
+                    "featured"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "Idempotent: un-featuring a creator who is not featured is still 200.",
+        "tags": [
+          "AdminFeaturedCreators"
         ]
       }
     },
@@ -28169,6 +28441,17 @@
           "effectiveDate",
           "sections"
         ]
+      },
+      "PutFeaturedCreatorDto": {
+        "type": "object",
+        "properties": {
+          "position": {
+            "type": "number",
+            "description": "Rail order, lowest first. Default 0.",
+            "minimum": 0,
+            "maximum": 1000
+          }
+        }
       },
       "OpenChatDto": {
         "type": "object",
@@ -35856,6 +36139,48 @@
           "suppressedByPreference"
         ]
       },
+      "ExploreCreatorCard": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "field": {
+            "type": "string",
+            "nullable": true
+          },
+          "pieceCount": {
+            "type": "number"
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          },
+          "following": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "wawuId",
+          "name",
+          "handle",
+          "avatarUrl",
+          "field",
+          "pieceCount",
+          "verification",
+          "following"
+        ]
+      },
       "AboutView": {
         "type": "object",
         "properties": {
@@ -36817,14 +37142,6 @@
           "wawuUserId": {
             "type": "string"
           },
-          "handle": {
-            "type": "string",
-            "nullable": true
-          },
-          "bio": {
-            "type": "string",
-            "nullable": true
-          },
           "accountType": {
             "type": "string",
             "enum": [
@@ -36842,6 +37159,14 @@
             "nullable": true
           },
           "coverUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "bio": {
             "type": "string",
             "nullable": true
           },
@@ -36965,12 +37290,12 @@
         "required": [
           "createdAt",
           "wawuUserId",
-          "handle",
-          "bio",
           "accountType",
           "unpaidWarnedAt",
           "avatarUrl",
           "coverUrl",
+          "handle",
+          "bio",
           "interests",
           "instagramHandle",
           "whatsappHandle",
