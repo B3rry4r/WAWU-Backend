@@ -14,6 +14,7 @@ import { AdminEventsModule } from './admin/events/admin-events.module';
 import { AdminNotificationsModule } from './admin/notifications/admin-notifications.module';
 import { AdminLegalDocumentsModule } from './admin/legal-documents/admin-legal-documents.module';
 import { AboutModule } from './about/about.module';
+import { AdsModule } from './ads/ads.module';
 import { PrismaModule } from './common/prisma/prisma.module';
 import { AccountModule } from './account/account.module';
 import { CommentModule } from './comment/comment.module';
@@ -329,6 +330,11 @@ import { APP_GUARD } from '@nestjs/core';
     EventModule,
     EventTicketingModule,
     ShopModule,
+
+    // Sponsored cards (task ADS-04): `ads` is a first segment nothing else
+    // declares, so it cannot shadow or be shadowed wherever it sits.
+    AdsModule,
+
     // The Naira wallet's served routes (task MONEY-09 first: the transaction
     // PIN). `@Controller('money')` is a first segment nothing else declares,
     // so it can neither shadow nor be shadowed wherever it sits. The declared,

@@ -20695,6 +20695,43 @@
         ]
       }
     },
+    "/api/hub/ads": {
+      "get": {
+        "operationId": "AdsController_serve",
+        "parameters": [
+          {
+            "name": "placement",
+            "required": true,
+            "in": "query",
+            "description": "`tgif_card` (the TGIF reader) or `today_slot` (Today, TGIF off).",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "tgif_card",
+                "today_slot"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdCardView",
+                  "nullable": true
+                }
+              }
+            }
+          }
+        },
+        "summary": "The one live sponsored card for a placement, or `data: null` when nothing\nis eligible (the app draws no card and no empty frame). Never cached: a\ncard must stop the moment its window ends or an admin pauses it.",
+        "tags": [
+          "Ads"
+        ]
+      }
+    },
     "/api/hub/money/pin": {
       "get": {
         "operationId": "MoneyPinController_state",
@@ -35074,6 +35111,50 @@
           "title",
           "effectiveDate",
           "sections"
+        ]
+      },
+      "AdCardView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "advertiser": {
+            "type": "string"
+          },
+          "headline": {
+            "type": "string"
+          },
+          "subline": {
+            "type": "string",
+            "nullable": true
+          },
+          "ctaLabel": {
+            "type": "string"
+          },
+          "ctaDestination": {
+            "type": "string",
+            "enum": [
+              "event"
+            ]
+          },
+          "ctaDestinationId": {
+            "type": "string"
+          },
+          "artworkUrl": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "advertiser",
+          "headline",
+          "subline",
+          "ctaLabel",
+          "ctaDestination",
+          "ctaDestinationId",
+          "artworkUrl"
         ]
       },
       "AccountDeletionResponse": {
