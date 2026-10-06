@@ -280,6 +280,39 @@ model UserProfile {
   @@index([accountType])
 }
 
+/// The profile fields the Me screens show beyond UserProfile's own (ME-05):
+/// where the person is, their skills and what they are open to, their Threads
+/// handle and the order of their social links.
+///
+/// ITS OWN TABLE, NOT MORE COLUMNS ON UserProfile. GET /users/me and
+/// PATCH /users/me return the whole UserProfile row, so a column added there
+/// would widen two live responses the web reads. A table of its own widens
+/// nothing: these fields are served by their own routes
+/// (`/users/me/profile-fields`, `/users/:wawuId/profile-fields`), and an
+/// account that never sets one has no row here at all.
+///
+/// No relation to UserProfile on purpose: it is keyed by the same id and
+/// read together, but a row here must not depend on, or be created by, a
+/// profile row. Everything on it is public, as M33 draws it for a visitor.
+model ProfileDetails {
+  wawuUserId    String   @id
+  /// Where this person is, written the way they write it ("Lagos, Nigeria").
+  /// FREE TEXT: the product keeps no list of places.
+  location      String?
+  /// Skills and expertise chips, separate from UserProfile.interests (which
+  /// decide where somebody appears in Explore).
+  skills        String[] @default([])
+  /// What this person is open to ("Brand films", "Workshops"), as chips.
+  openTo        String[] @default([])
+  /// Threads handle, stored bare (no "@") like the other handles.
+  threadsHandle String?
+  /// The order the person wants their social links shown above the follower
+  /// count: platform keys, first to last. Empty means the default order.
+  socialOrder   String[] @default([])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
 /// One role on somebody's profile: what they did, where, and when.
 ///
 /// WHY A TABLE AND NOT A JSON COLUMN. Each row is independently editable and
@@ -331,9 +364,9 @@ model ProfileExperience {
 /// approved` still gates EARNING, and is untouched: KYC and payment were
 /// always independent gates and only the payment one was removed.
 ///
-/// `slotsTotal` remains deliberately NOT a column, but it no longer derives
-/// from a tier — it is the flat per-account cap in creator-tier-allowance.ts
-/// (brief B2: "Maximum 5 items per account. Hard cap, enforced server-side").
+/// `slotsTotal` remains deliberately NOT a column, and it does not derive from
+/// a tier: it is the upload cap in src/common/creator-allowance.ts, 5 without
+/// a verification tick and 25 with one (R-7).
 model CreatorState {
   wawuUserId      String       @id
   kycStatus       ReviewStatus @default(pending)
@@ -480,6 +513,8 @@ model ContentPiece {
   pageCount              Int?
   previewAssetUrl        String
   fullAssetUrl           String?
+  /// True for a creator's first piece, free or paid (R-8 removed the rule that
+  /// it must be free). Old name kept: renaming it would break clients.
   creatorFirstUploadFree Boolean       @default(false)
   status                 ContentStatus @default(pending)
   views                  Int           @default(0)
@@ -492,6 +527,12 @@ model ContentPiece {
   comments  Comment[]
   purchases Purchase[]
   savedBy   SavedItem[]
+  likedBy   ContentLike[]
+  frames    ContentFrame[]
+  viewedBy  ContentView[]
+  sharedBy  ContentShare[]
+  ratings   ContentRating[]
+  detail    ContentDetail?
 
   @@index([creatorWawuId])
   @@index([status])
@@ -604,6 +645,115 @@ model SavedItem {
   @@index([contentId])
 }
 
+/// One person's like on one piece of content (HOME-04). Mirrors CommentLike:
+/// a join row with a unique (user, content) pair, so "did THIS viewer like
+/// THIS piece" is answerable and a repeat POST is a no-op rather than a second
+/// count. `ContentPiece.likes` stays the counter every existing response and
+/// the ranking already read; it moves only when a row is really created or
+/// removed.
+model ContentLike {
+  id         String       @id @default(uuid())
+  userWawuId String
+  contentId  String
+  content    ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  likedAt    DateTime     @default(now())
+
+  @@unique([userWawuId, contentId])
+  @@index([userWawuId])
+  @@index([contentId])
+}
+
+/// One person opened one piece on one day (HOME-04). Same rule as
+/// ProfileView: one row per viewer per UTC day, which the unique key enforces,
+/// because a number that goes up on every refresh measures nothing. The
+/// owner's own opens and anonymous reads write nothing.
+/// `ContentPiece.views` is the counter; it moves only when a row is created.
+model ContentView {
+  id           String       @id @default(uuid())
+  contentId    String
+  content      ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  viewerWawuId String
+  viewedOn     DateTime     @db.Date
+  viewedAt     DateTime     @default(now())
+
+  @@unique([contentId, viewerWawuId, viewedOn])
+  @@index([viewerWawuId])
+}
+
+/// One picture of a photo set (HOME-05), in order. A set is a ContentPiece of
+/// type `image`; its frames live here, not in a column on ContentPiece, so no
+/// live content response gains a key (protected route registry, entry H-1). `position` is
+/// 1-based and unique per piece: reading in order is `ORDER BY position`.
+/// `url` is stored as uploaded and re-signed on read, like the piece's own
+/// asset urls.
+model ContentFrame {
+  id        String       @id @default(uuid())
+  contentId String
+  content   ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  position  Int
+  url       String
+  createdAt DateTime     @default(now())
+
+  @@unique([contentId, position])
+}
+
+/// One person shared one piece on one day (HOME-04). A share count is the
+/// number of rows; no counter column on ContentPiece, because a new column
+/// there would widen every live content response (protected route registry, entry H-1).
+model ContentShare {
+  id            String       @id @default(uuid())
+  contentId     String
+  content       ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  sharerWawuId  String
+  sharedOn      DateTime     @db.Date
+  sharedAt      DateTime     @default(now())
+
+  @@unique([contentId, sharerWawuId, sharedOn])
+  @@index([sharerWawuId])
+}
+
+/// One person's star rating of one piece (HOME-06). The unique (user, piece)
+/// key is what makes a rating fair: a second rating from the same person
+/// replaces the first instead of adding to it, and two taps at once cannot
+/// write two rows. The average and the count are always computed from these
+/// rows; `ContentPiece.ratingPct` is only a cache of that average (kept
+/// because the ranking and every existing response already read it), written
+/// in the same transaction as the row. The 1 to 5 range is also a CHECK in
+/// the migration, so no code path can store anything else.
+model ContentRating {
+  id         String       @id @default(uuid())
+  userWawuId String
+  contentId  String
+  content    ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  stars      Int
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @default(now()) @updatedAt
+
+  @@unique([userWawuId, contentId])
+  @@index([userWawuId])
+  @@index([contentId])
+}
+
+/// What the content detail screen shows that ContentPiece does not hold
+/// (HOME-06). A separate one-to-one row, not new columns on ContentPiece,
+/// because ContentPiece is spread into every existing content response and a
+/// new column there would widen GET /content and GET /content/:id (protected
+/// route registry, entry H-1). A piece with no row here has no free preview
+/// and reports its creation time as its last update.
+/// Exactly one `free*` column applies to a piece, chosen by its contentType:
+/// pages for a pdf, seconds for a video or audio file, lessons for a course
+/// (the first N lessons by order). They are the creator's declaration of what
+/// the free preview file holds; the server cannot open the file to check.
+model ContentDetail {
+  contentId          String       @id
+  content            ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  freePreviewPages   Int?
+  freePreviewSeconds Int?
+  freePreviewLessons Int?
+  /// Set when the creator changes the piece or its preview.
+  contentUpdatedAt   DateTime?
+}
+
 /// One person looked at one profile, on one day.
 ///
 /// The profile screen's "Profile Views / This month" needs a number, and the
@@ -690,11 +840,30 @@ model DirectMessage {
   refundLockedAt  DateTime?
 
   reports DmReport[]
+  /// Every creator reply bubble inside this question's window (INBOX-08).
+  /// `responseText` above stays the FIRST reply, for the web.
+  replies DmReply[]
 
   @@index([creatorWawuId])
   @@index([senderWawuId])
   @@index([status, deadlineAt])
+  @@index([creatorWawuId, status, deadlineAt])
+  @@index([senderWawuId, creatorWawuId, sentAt])
   @@index([refundStatus, refundLockedAt])
+}
+
+/// One creator reply bubble on a paid question (task INBOX-08). A question
+/// may carry several while its window is open. The first is also written to
+/// DirectMessage.responseText so the web's reading of that column is unchanged.
+model DmReply {
+  id            String        @id @default(uuid())
+  messageId     String
+  message       DirectMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  creatorWawuId String
+  text          String
+  createdAt     DateTime      @default(now())
+
+  @@index([messageId, createdAt])
 }
 
 /// Rolling per-creator stats maintained by the DM-deadline-sweep cron job
@@ -3765,6 +3934,37 @@ model FintavaLedgerReference {
 }
 
 /// ─────────────────────────────────────────────────────────────────────────
+/// RECEIPTS (task WALLET-18)
+///
+/// A receipt is one ledger row (FintavaLedgerEntry) its owner chose to
+/// share, under a short code anyone can check at wawu/r/<code> (W41 to W43,
+/// W12, W27). One code per row, made the first time the owner asks and the
+/// same every time after. The code is 12 characters drawn at random
+/// (60 bits, never sequential and never derived from an id), so the public
+/// page cannot be walked by guessing.
+///
+/// Nothing about the movement is copied here: the public page and the image
+/// and PDF read the ledger row when they are asked, so a status Fintava
+/// moves (pending to completed, a reversal) shows on the receipt as it
+/// stands. A row that is gone, or no longer on its owner's wallet, makes
+/// its code a plain miss.
+/// ─────────────────────────────────────────────────────────────────────────
+model MoneyReceipt {
+  id            String   @id @default(uuid())
+  /// The public code: 12 characters of Crockford base 32, upper case.
+  code          String   @unique
+  /// The ledger row this receipt shows (FintavaLedgerEntry.id).
+  entryId       String   @unique
+  /// Whose row it is: the wallet's owner, who made the code.
+  wawuUserId    String
+  /// The wallet (NUBAN) the row is on, as the row says.
+  accountNumber String
+  createdAt     DateTime @default(now())
+
+  @@index([wawuUserId])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
 /// SAVED BENEFICIARIES AND THE PAYOUT ACCOUNT (task WALLET-14)
 ///
 /// A beneficiary is a place this person sends money to again (W8, W12 "Save
@@ -3809,5 +4009,130 @@ model MoneyPayoutAccount {
   accountNumber String
   accountName   String
   createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+// -----------------------------------------------------------------------------
+// Schools (task SCHOOLS-01): schools, their courses and each course's dated
+// intakes with a seat limit. Added from the dashboard (SCHOOLS-02), read by the
+// app's SC1-SC3 and SC10 (SCHOOLS-04), enrolled into by SCHOOLS-07.
+//
+// Not the Learn tables above: LearnCourse / CourseEnrollment are WAWU's own
+// courses hosted elsewhere and their enrol gate references the removed
+// subscription. School enrolments never read them (SCHOOLS-07).
+//
+// No rating column on School: nothing writes a school rating and no screen
+// collects one, so it is left off at launch until the owner rules (R-32).
+// -----------------------------------------------------------------------------
+
+/// SC1's category chips, exactly: Tech, Business, Creative, Languages,
+/// Vocational. "All" is the absence of a filter, not a category.
+enum SchoolCategory {
+  tech
+  business
+  creative
+  languages
+  vocational
+}
+
+/// How a course is taught. SC2 lists it beside the length ("12 weeks ·
+/// Online"); where the classes meet is the intake's `location`.
+enum SchoolCourseMode {
+  online
+  in_person
+  hybrid
+}
+
+model School {
+  id          String         @id @default(uuid())
+  name        String
+  category    SchoolCategory
+  /// Display place, as SC2 prints it: "Yaba, Lagos". SC1 shows it on the card.
+  location    String
+  /// SC2's "Since 2016". Null when the school has not said.
+  foundedYear Int?
+  /// SC2's expertise chips, in the order the dashboard set them.
+  expertise   String[]
+  /// SC2's blurb.
+  about       String
+  /// The school's logo image (a storage URL). Null: the app draws initials.
+  logo        String?
+  /// The school's own application page, for "Or apply on the school's
+  /// website" (SC9, SCHOOLS-10). Null: the school takes no outside sign-ups.
+  applyUrl    String?
+  /// Where the enrolment report goes: the student's details, course and
+  /// intake (SCHOOLS-09). Never shown in the app.
+  reportEmail String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  courses SchoolCourse[]
+
+  @@index([category])
+  @@index([name])
+}
+
+model SchoolCourse {
+  id        String           @id @default(uuid())
+  schoolId  String
+  school    School           @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  title     String
+  /// SC3's "Length 12 weeks".
+  weeks     Int
+  mode      SchoolCourseMode
+  /// SC3's numbered syllabus, in order.
+  syllabus  String[]
+  /// SC3's "You get": "Certificate", "mentor", "portfolio".
+  outcomes  String[]
+  /// The course fee in integer kobo (docs/contract/CONVENTIONS.md section 1).
+  /// Int carries up to 21,474,836.47 naira, above the 10,000,000 naira
+  /// merchant cap any one payment is bounded by.
+  priceKobo Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  intakes CourseIntake[]
+
+  @@index([schoolId])
+}
+
+/// One dated class of a course. Seats are claimed by a CONDITIONAL write
+/// (seatsTaken < capacity) inside the enrolment transaction, the
+/// Product.stock pattern (SCHOOLS-07); the database also refuses a row whose
+/// seatsTaken is negative or above capacity.
+model CourseIntake {
+  id         String       @id @default(uuid())
+  courseId   String
+  course     SchoolCourse @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  /// The day classes start (SC3's "Starts Mon 3 November"). A calendar date,
+  /// not an instant, so no time zone moves it.
+  startDate  DateTime     @db.Date
+  /// SC4's "Weekend class", SC3's "Saturdays".
+  schedule   String
+  /// Where this intake meets ("Yaba"). Null for an online intake.
+  location   String?
+  capacity   Int
+  seatsTaken Int          @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([courseId, startDate])
+}
+
+/// SETTINGS-02: the owner's legal text, one row per document ("terms",
+/// "privacy"), served by GET /policies/:slug and written by the superadmin
+/// route PUT /admin/policies/:slug. No row means the owner has not filled it
+/// in yet, and the app says so; nothing here is ever seeded with wording.
+model LegalDocument {
+  /// "terms" or "privacy".
+  slug          String   @id
+  title         String
+  /// The date the owner gives the text. Shown as "Updated 1 September 2026".
+  effectiveDate DateTime @db.Date
+  /// [{ heading, body }]; a body's paragraphs are separated by a blank line.
+  sections      Json
   updatedAt     DateTime @updatedAt
 }

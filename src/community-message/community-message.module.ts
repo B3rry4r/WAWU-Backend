@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { CreditSpendModule } from '../credit-spend/credit-spend.module';
 import { CommunityMessageController } from './community-message.controller';
 import { CommunityMessageService } from './community-message.service';
+import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 import { NotificationModule } from '../notification/notification.module';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 
@@ -18,7 +19,12 @@ import { WawuAuthModule } from '../common/auth/wawu-auth.module';
  * sender identity (same source CreatorDiscoveryService already uses).
  */
 @Module({
-  imports: [NotificationModule, CreditSpendModule, WawuAuthModule],
+  imports: [
+    NotificationModule,
+    CreditSpendModule,
+    WawuAuthModule,
+    BlockedAccountModule,
+  ],
   controllers: [CommunityMessageController],
   providers: [CommunityMessageService],
   // CommunityModule's "my communities" (INBOX-01) reuses lookupSenders.

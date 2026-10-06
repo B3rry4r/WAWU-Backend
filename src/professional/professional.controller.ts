@@ -117,8 +117,9 @@ export class ProfessionalController {
   @Get('directory')
   directory(
     @Query() query: ListProfessionalDirectoryQueryDto,
+    @CurrentUser() user: WawuJwtClaims | undefined,
   ): Promise<ProfessionalDirectoryPage> {
-    return this.service.directory(query);
+    return this.service.directory(query, user?.sub);
   }
 
   /** One professional's profile, with city, usual reply time and price. */
@@ -126,22 +127,29 @@ export class ProfessionalController {
   @Get('directory/:id')
   directoryProfile(
     @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: WawuJwtClaims | undefined,
   ): Promise<ProfessionalDirectoryProfile> {
-    return this.service.directoryProfile(id);
+    return this.service.directoryProfile(id, user?.sub);
   }
 
   // ---- public: the directory ----------------------------------------------
 
   @UseGuards(OptionalWawuAuthGuard)
   @Get()
-  list(@Query() query: ListProfessionalsQueryDto) {
-    return this.service.list(query);
+  list(
+    @Query() query: ListProfessionalsQueryDto,
+    @CurrentUser() user: WawuJwtClaims | undefined,
+  ) {
+    return this.service.list(query, user?.sub);
   }
 
   @UseGuards(OptionalWawuAuthGuard)
   @Get(':id')
-  detail(@Param('id', ParseUUIDPipe) id: string) {
-    return this.service.detail(id);
+  detail(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: WawuJwtClaims | undefined,
+  ) {
+    return this.service.detail(id, user?.sub);
   }
 
   /**

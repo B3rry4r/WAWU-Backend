@@ -7,7 +7,7 @@ import {
 import { NotificationService } from '../../notification/notification.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { objectKeyFrom, StorageService } from '../../storage/storage.service';
-import { uploadAllowanceFor } from '../../common/creator-allowance';
+import { holdsTick, uploadAllowanceFor } from '../../common/creator-allowance';
 import type { Paginated } from '../../common/interceptors/response.interceptor';
 import type { ContentPieceModel } from '../../../generated/prisma/models';
 import type { AdminUserView } from '../auth/admin-user-view.type';
@@ -458,7 +458,9 @@ export class AdminContentReviewService {
                 : state.kycStatus
               : null,
             slotsUsed: state?.slotsUsed ?? null,
-            slotsTotal: state ? uploadAllowanceFor().total : null,
+            slotsTotal: state
+              ? uploadAllowanceFor(holdsTick(profile)).total
+              : null,
           },
         ];
       }),

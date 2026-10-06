@@ -12,6 +12,7 @@ import {
   type VerificationState,
 } from '../common/verification/verification-state';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
+import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import {
   AccountType,
   ContentStatus,
@@ -166,6 +167,7 @@ export class ProfessionalService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly wawuId: WawuIdClient,
+    private readonly blockedAccounts: BlockedAccountService,
   ) {}
 
   // -------------------------------------------------------------------
@@ -318,11 +320,12 @@ export class ProfessionalService {
    * and showing one would mean the badge on the card was granted by pressing
    * submit.
    */
-  async list(query: ListProfessionalsQueryDto) {
+  async list(query: ListProfessionalsQueryDto, viewerWawuId?: string) {
     return this.pageOf(
       query.category ? { category: query.category } : {},
       query.page ?? 1,
       query.perPage ?? DEFAULT_PER_PAGE,
+      viewerWawuId,
     );
   }
 
@@ -336,15 +339,20 @@ export class ProfessionalService {
     filter: Prisma.ProfessionalProfileWhereInput,
     page: number,
     perPage: number,
+    viewerWawuId?: string,
   ): Promise<{
     items: ProfessionalListItem[];
     currentPage: number;
     perPage: number;
     total: number;
   }> {
+    // SETTINGS-04: a professional the caller blocked, or who blocked the
+    // caller, is not listed, and not counted. Both directories share this.
+    const hidden = await this.blockedAccounts.hiddenFrom(viewerWawuId);
     const where: Prisma.ProfessionalProfileWhereInput = {
       status: 'approved',
       listed: true,
+      wawuUserId: { notIn: hidden },
       ...filter,
     };
 
@@ -458,11 +466,16 @@ export class ProfessionalService {
   }
 
   /** GET /professionals/:id — one listing, in full. */
-  async detail(id: string) {
+  async detail(id: string, viewerWawuId?: string) {
     const row = await this.prisma.professionalProfile.findFirst({
       where: { id, status: 'approved', listed: true },
     });
     if (!row) throw new NotFoundException('Professional profile not found');
+    await this.blockedAccounts.assertVisible(
+      viewerWawuId,
+      row.wawuUserId,
+      'Professional profile not found',
+    );
 
     const [identities, profile, state, pieceCount, rating] = await Promise.all([
       this.wawuId.lookupPublicIdentities([row.wawuUserId]),
@@ -538,12 +551,14 @@ export class ProfessionalService {
    */
   async directory(
     query: ListProfessionalDirectoryQueryDto,
+    viewerWawuId?: string,
   ): Promise<ProfessionalDirectoryPage> {
     const field = query.field ? findField(query.field) : undefined;
     const result = await this.pageOf(
       field ? { category: { in: [...field.categories] } } : {},
       query.page ?? 1,
       query.perPage ?? DEFAULT_PER_PAGE,
+      viewerWawuId,
     );
     const extras = await this.directoryExtras(
       result.items.map((i) => i.wawuId),
@@ -559,8 +574,11 @@ export class ProfessionalService {
    * serves it, with the same extras as the directory. Not found for a
    * pending, rejected or hidden listing, exactly like GET /professionals/:id.
    */
-  async directoryProfile(id: string): Promise<ProfessionalDirectoryProfile> {
-    const listing = await this.detail(id);
+  async directoryProfile(
+    id: string,
+    viewerWawuId?: string,
+  ): Promise<ProfessionalDirectoryProfile> {
+    const listing = await this.detail(id, viewerWawuId);
     const extras = await this.directoryExtras([listing.wawuId]);
     const { about, issuingBody, credentialKind, ...card } = listing;
     return {
@@ -672,6 +690,7 @@ export class ProfessionalService {
         WHERE "creatorWawuId" IN (${Prisma.join(wawuUserIds)})
           AND "status" = ${DmStatus.responded}::"DmStatus"
           AND "respondedAt" IS NOT NULL
+          AND "respondedAt" >= "sentAt"
       ) AS "answered"
       WHERE "rank" <= ${REPLY_TIME_DEFAULTS.sample}
       GROUP BY "creatorWawuId"`;
@@ -723,6 +742,11 @@ export class ProfessionalService {
     // temporarily unavailable should not be able to switch off the rating of
     // work they have already done.
     if (!listing) throw new NotFoundException('Professional profile not found');
+    await this.blockedAccounts.assertVisible(
+      authorWawuId,
+      listing.wawuUserId,
+      'Professional profile not found',
+    );
 
     if (listing.wawuUserId === authorWawuId) {
       throw new ForbiddenException('You cannot review your own listing.');

@@ -147,6 +147,11 @@ describe('Professional directory: fields, city, reply time, price (contract)', (
       });
       made.length = 0;
     }
+    await prisma.blockedAccount.deleteMany({
+      where: {
+        OR: [{ userWawuId: USER_PLAIN }, { blockedWawuId: USER_PLAIN }],
+      },
+    });
     await prisma.professionalLocation.deleteMany({
       where: { wawuUserId: { in: [USER_CREATOR_PRO, USER_PLAIN] } },
     });
@@ -645,6 +650,169 @@ describe('Professional directory: fields, city, reply time, price (contract)', (
         where: { wawuUserId: USER_CREATOR_PRO },
       }),
     ).toBeNull();
+  });
+
+  // ---- round 2: blocked people, impossible times, city text, test gaps -------
+
+  it('hides a professional the caller blocked, or who blocked the caller, from the directory and its profile', async () => {
+    const blockedByMe = await professional('finance');
+    const blockedMe = await professional('finance');
+    const other = await professional('finance');
+    await prisma.blockedAccount.create({
+      data: { userWawuId: USER_PLAIN, blockedWawuId: blockedByMe.wawuId },
+    });
+    await prisma.blockedAccount.create({
+      data: { userWawuId: blockedMe.wawuId, blockedWawuId: USER_PLAIN },
+    });
+    const auth = { Authorization: `Bearer ${plainToken}` };
+
+    const mine = await directory({ field: 'accounting_tax' }).set(auth);
+    const rows = bodyOf<DirectoryEntry[]>(mine).data;
+    expect(entryFor(rows, blockedByMe.wawuId)).toBeUndefined();
+    expect(entryFor(rows, blockedMe.wawuId)).toBeUndefined();
+    expect(entryFor(rows, other.wawuId)).toBeDefined();
+
+    // The total does not count them either.
+    const withViewer = await directory({
+      field: 'accounting_tax',
+      perPage: 1,
+    }).set(auth);
+    const without = await directory({ field: 'accounting_tax', perPage: 1 });
+    expect(bodyOf(withViewer).pagination?.total).toBe(
+      (bodyOf(without).pagination?.total ?? 0) - 2,
+    );
+
+    for (const gone of [blockedByMe, blockedMe]) {
+      await request(app.getHttpServer())
+        .get(`/professionals/directory/${gone.listingId}`)
+        .set(auth)
+        .expect(404);
+      // Without a token nobody is hidden.
+      await request(app.getHttpServer())
+        .get(`/professionals/directory/${gone.listingId}`)
+        .expect(200);
+    }
+    await request(app.getHttpServer())
+      .get(`/professionals/directory/${other.listingId}`)
+      .set(auth)
+      .expect(200);
+  });
+
+  it('a listing someone hid (listed false) is not in the directory and its profile is not found', async () => {
+    const p = await professional('finance');
+    await prisma.professionalProfile.update({
+      where: { id: p.listingId },
+      data: { listed: false },
+    });
+    expect(
+      entryFor(await allOf({ field: 'accounting_tax' }), p.wawuId),
+    ).toBeUndefined();
+    await request(app.getHttpServer())
+      .get(`/professionals/directory/${p.listingId}`)
+      .expect(404);
+  });
+
+  it('never reads a reply that is dated before its message as a fast one', async () => {
+    const p = await professional('finance');
+    for (let i = 0; i < 3; i++) {
+      // Answered 5 minutes BEFORE it was sent: not a reply time.
+      await answered(p.wawuId, -5);
+    }
+    const entry = entryFor(await allOf({ field: 'accounting_tax' }), p.wawuId);
+    expect(entry).toMatchObject({
+      usualReplyMinutes: null,
+      answeredMessageCount: 0,
+    });
+    // Real replies beside them are the only ones counted.
+    for (const m of [20, 40, 60]) await answered(p.wawuId, m);
+    const after = entryFor(await allOf({ field: 'accounting_tax' }), p.wawuId);
+    expect(after?.usualReplyMinutes).toBe(40);
+    expect(after?.answeredMessageCount).toBe(3);
+  });
+
+  it('needs three answered messages, rounds up past one minute, and counts each professional alone', async () => {
+    const two = await professional('finance');
+    const three = await professional('finance');
+    await answered(two.wawuId, 30);
+    await answered(two.wawuId, 30);
+    for (const m of [10.5, 10.5, 10.5]) await answered(three.wawuId, m);
+    const rows = await allOf({ field: 'accounting_tax' });
+    expect(entryFor(rows, two.wawuId)?.usualReplyMinutes).toBeNull();
+    // 10 minutes 30 seconds reads 11, and the other person's replies are not mixed in.
+    expect(entryFor(rows, three.wawuId)).toMatchObject({
+      usualReplyMinutes: 11,
+      answeredMessageCount: 3,
+    });
+    expect(REPLY_TIME_DEFAULTS.minimumAnswered).toBe(3);
+    expect(REPLY_TIME_DEFAULTS.sample).toBe(20);
+  });
+
+  it('a refunded message that carries a reply time is still not counted', async () => {
+    const p = await professional('finance');
+    for (const m of [10, 10, 10]) await answered(p.wawuId, m);
+    const sentAt = new Date(Date.now() - 600 * MINUTE);
+    await prisma.directMessage.create({
+      data: {
+        creatorWawuId: p.wawuId,
+        senderWawuId: USER_PLAIN,
+        text: 'Hello?',
+        amount: 5000,
+        status: 'refunded',
+        sentAt,
+        deadlineAt: new Date(sentAt.getTime() + 24 * 60 * MINUTE),
+        respondedAt: new Date(sentAt.getTime() + 500 * MINUTE),
+        flutterwaveTxRef: `pros02-${randomUUID()}`,
+      },
+    });
+    const entry = entryFor(await allOf({ field: 'accounting_tax' }), p.wawuId);
+    expect(entry).toMatchObject({
+      usualReplyMinutes: 10,
+      answeredMessageCount: 3,
+    });
+  });
+
+  it('two professionals with different cities on one page each show their own', async () => {
+    const a = await professional('finance');
+    const b = await professional('finance');
+    await prisma.professionalLocation.create({
+      data: { wawuUserId: a.wawuId, city: 'Ikeja' },
+    });
+    await prisma.professionalLocation.create({
+      data: { wawuUserId: b.wawuId, city: 'Enugu' },
+    });
+    const rows = await allOf({ field: 'accounting_tax' });
+    expect(entryFor(rows, a.wawuId)?.city).toBe('Ikeja');
+    expect(entryFor(rows, b.wawuId)?.city).toBe('Enugu');
+  });
+
+  it('refuses a city that is not a place name, and collapses inner spaces', async () => {
+    const put = (city: string) =>
+      request(app.getHttpServer())
+        .put('/professionals/location')
+        .set('Authorization', `Bearer ${creatorToken}`)
+        .send({ city });
+    for (const city of [
+      '​​',
+      'Ikeja​',
+      'Ikeja\n\nPay me directly on 0803',
+      'Ikeja\u0007',
+      '12345',
+      '<script>alert(1)</script>',
+      '-Ikeja',
+    ]) {
+      await put(city).expect(400);
+    }
+    expect(
+      await prisma.professionalLocation.findUnique({
+        where: { wawuUserId: USER_CREATOR_PRO },
+      }),
+    ).toBeNull();
+    const ok = await put('Port   Harcourt').expect(200);
+    expect(bodyOf(ok).data).toEqual({ city: 'Port Harcourt' });
+    const dotted = await put("St. John's-on-Sea").expect(200);
+    expect(bodyOf(dotted).data).toEqual({ city: "St. John's-on-Sea" });
+    const accented = await put('Ìbàdàn').expect(200);
+    expect(bodyOf(accented).data).toEqual({ city: 'Ìbàdàn' });
   });
 
   // ---- the web's routes keep their answers ------------------------------------

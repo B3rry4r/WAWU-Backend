@@ -40,7 +40,8 @@ import type {
  *
  * There were two gates. A paid subscription unlocked UPLOADING and manual KYC
  * unlocks EARNING; the first went with subscriptions, and uploading is now
- * bounded only by the flat per-account cap. KYC is untouched. There is still
+ * bounded only by the per-account cap (5 uploads, 25 with a tick, R-7). KYC
+ * is untouched. There is still
  * no `verified` boolean on this shape and there never will be one — collapsing
  * a KYC status into a single word is how a creator who cannot be paid gets
  * told everything is fine.
@@ -112,9 +113,9 @@ export interface AdminCreatorVerificationView {
 export interface AdminCreatorUploadsView {
   slotsUsed: number | null;
   /**
-   * The flat per-account cap, from the shared `uploadAllowanceFor()` helper,
-   * exactly as CreatorStateService derives it. There is no longer a free/paid
-   * sub-split, so the two sub-cap fields that used to sit here are gone.
+   * The per-account cap, from the shared `uploadAllowanceFor()` helper and
+   * the creator's tick (R-7: 5, or 25 with a tick), exactly as
+   * CreatorStateService derives it. There is no free/paid sub-split.
    */
   slotsTotal: number | null;
   /** Pieces currently waiting on a moderator — the other reason "I cannot see my upload". */

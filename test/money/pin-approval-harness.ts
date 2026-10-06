@@ -282,16 +282,56 @@ export class Money14App {
     return res.body as Envelope<T>;
   }
 
+  /**
+   * Last four digits no phone, BVN or NIN made here may end in: the PINs a
+   * spec types (reservePins). The app shows those numbers masked to their
+   * last four (`+234 *** *** 4412`, `bvnLast4`), so a person whose number
+   * ended in a test PIN made a leak scan find that PIN where nothing leaked
+   * (FIX-03).
+   */
+  private readonly reservedLast4 = new Set<string>();
+
+  /**
+   * `n` distinct random four-digit PINs for this run, reserved so that no
+   * number this harness makes ends in one. Round numbers and years are left
+   * out: they turn up as timeouts, amounts and dates.
+   */
+  reservePins(n: number): string[] {
+    const out: string[] = [];
+    while (out.length < n) {
+      const pin = String(randomInt(0, 10_000)).padStart(4, '0');
+      const value = Number(pin);
+      if (this.reservedLast4.has(pin)) continue;
+      if (pin.endsWith('00') || (value >= 1900 && value <= 2100)) continue;
+      this.reservedLast4.add(pin);
+      out.push(pin);
+    }
+    return out;
+  }
+
+  /** `n` random digits whose last four are not a reserved PIN. */
+  private unreserved(n: number): string {
+    for (;;) {
+      const d = digits(n);
+      if (!this.reservedLast4.has(d.slice(-4))) return d;
+    }
+  }
+
+  /** A Nigerian mobile, E.164, that does not end in a reserved PIN. */
+  newPhone(network = '80'): string {
+    return `+234${network}${this.unreserved(8)}`;
+  }
+
   person(phone?: string): Person {
     const id = randomUUID();
     this.users.push(id);
-    const e164 = phone ?? `+23480${digits(8)}`;
+    const e164 = phone ?? this.newPhone();
     return {
       id,
       auth: `Bearer ${mintToken(id, e164)}`,
       phone: e164,
-      bvn: digits(11),
-      nin: digits(11),
+      bvn: this.unreserved(11),
+      nin: this.unreserved(11),
     };
   }
 

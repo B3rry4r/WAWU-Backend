@@ -72,16 +72,20 @@ export class CommunityRoomsController {
    * are accepted. 404 "No community has this link." otherwise.
    */
   @Get('links/:slug')
-  resolve(@Param('slug') slug: string): Promise<CommunityRoom> {
-    return this.rooms.resolve(slug);
+  resolve(
+    @Param('slug') slug: string,
+    @CurrentUser() user: WawuJwtClaims,
+  ): Promise<CommunityRoom> {
+    return this.rooms.resolve(slug, user.sub);
   }
 
   /** The room's share link, made from its name the first time it is asked for. */
   @Get(':id/link')
   link(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @CurrentUser() user: WawuJwtClaims,
   ): Promise<CommunityLinkView> {
-    return this.rooms.linkFor(id);
+    return this.rooms.linkFor(id, user.sub);
   }
 
   /**

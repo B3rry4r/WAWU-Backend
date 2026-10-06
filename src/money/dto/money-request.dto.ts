@@ -19,6 +19,8 @@ import {
   type ApprovalBiometricKind,
   BENEFICIARY_KINDS,
   type BeneficiaryKind,
+  BILL_CATEGORIES,
+  type BillCategory,
   FEE_QUOTE_KINDS,
   type FeeQuoteKind,
   HOLD_ROLES,
@@ -218,19 +220,39 @@ export class PayoutAccountDto {
 /* Fee quotes and transfers                                            */
 /* ------------------------------------------------------------------ */
 
-/** GET /money/fees/quote?kind=&amountKobo= */
+const FEE_QUOTE_AMOUNT_MESSAGE =
+  'amountKobo must be a whole number of kobo, 1 or more, written in digits only.';
+
+/** GET /money/fees/quote?kind=&amountKobo=&billCategory= (WALLET-15) */
 export class FeeQuoteQueryDto {
   @ApiProperty({ enum: FEE_QUOTE_KINDS })
   @IsIn(FEE_QUOTE_KINDS)
   kind!: FeeQuoteKind;
 
-  /** What the recipient should get, in kobo. */
-  @Type(() => Number)
+  /**
+   * In kobo: what the recipient gets on a send, the price on a purchase,
+   * the bill's own amount on a bill. Fees are added on top, never taken
+   * out of it. Digits only: `100.00` (a naira decimal), `1e4` or `10,000`
+   * is a 400, never read as some other number of kobo.
+   */
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' && /^[0-9]{1,16}$/.test(value)
+      ? Number(value)
+      : value,
+  )
   @ApiProperty({ type: 'integer' })
-  @IsInt()
-  @Min(1)
-  @Max(MAX_EXACT_KOBO)
+  @IsInt({ message: FEE_QUOTE_AMOUNT_MESSAGE })
+  @Min(1, { message: FEE_QUOTE_AMOUNT_MESSAGE })
+  @Max(MAX_EXACT_KOBO, { message: FEE_QUOTE_AMOUNT_MESSAGE })
   amountKobo!: number;
+
+  /** Required when kind is `bill`; any other kind with it is a 400. */
+  @ApiPropertyOptional({ enum: BILL_CATEGORIES })
+  @ValidateIf(
+    (q: FeeQuoteQueryDto) => q.kind === 'bill' || q.billCategory !== undefined,
+  )
+  @IsIn(BILL_CATEGORIES)
+  billCategory?: BillCategory;
 }
 
 /** POST /money/transfers/wawu (W7 to W12). Headers: Idempotency-Key, X-Transaction-Pin. */

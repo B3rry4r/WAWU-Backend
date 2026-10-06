@@ -7,6 +7,7 @@ import {
   HttpStatus,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -21,6 +22,8 @@ import { ListContentQueryDto } from './dto/list-content-query.dto';
 import { CreateContentDto } from './dto/create-content.dto';
 import { VerifyUnlockDto } from './dto/verify-unlock.dto';
 import { RateContentDto } from './dto/rate-content.dto';
+import { UpdateContentDto } from './dto/update-content.dto';
+import { MyContentQueryDto } from './dto/my-content-query.dto';
 
 /**
  * registry.json "ContentPiece". Route order deliberately puts literal
@@ -60,6 +63,38 @@ export class ContentPieceController {
     );
   }
 
+  /** M28: my pieces with sales and the reviewer's reason. Literal paths stay above ':id'. */
+  @Get('mine/library')
+  @UseGuards(CreatorAccountGuard)
+  myLibrary(
+    @CurrentUser() user: WawuJwtClaims,
+    @Query() query: MyContentQueryDto,
+  ) {
+    return this.contentPieceService.listMyLibrary(
+      user.sub,
+      query.status,
+      query.page,
+      query.perPage,
+    );
+  }
+
+  /** The numbers on the M28 filter tabs. */
+  @Get('mine/library/counts')
+  @UseGuards(CreatorAccountGuard)
+  myLibraryCounts(@CurrentUser() user: WawuJwtClaims) {
+    return this.contentPieceService.myLibraryCounts(user.sub);
+  }
+
+  /** M26: one of my pieces, with its latest rejection reason. */
+  @Get('mine/library/:id')
+  @UseGuards(CreatorAccountGuard)
+  myPiece(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: WawuJwtClaims,
+  ) {
+    return this.contentPieceService.getMyPiece(id, user.sub);
+  }
+
   @Get('purchases')
   purchases(
     @CurrentUser() user: WawuJwtClaims,
@@ -93,6 +128,28 @@ export class ContentPieceController {
   @UseGuards(CreatorAccountGuard)
   create(@CurrentUser() user: WawuJwtClaims, @Body() dto: CreateContentDto) {
     return this.contentPieceService.create(user.sub, dto);
+  }
+
+  /** Edit the details or the file of a piece that is pending or rejected. */
+  @Patch(':id')
+  @UseGuards(CreatorAccountGuard)
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: WawuJwtClaims,
+    @Body() dto: UpdateContentDto,
+  ) {
+    return this.contentPieceService.updateMine(id, user.sub, dto);
+  }
+
+  /** Send a rejected piece for review again. */
+  @Post(':id/resubmit')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(CreatorAccountGuard)
+  resubmit(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: WawuJwtClaims,
+  ) {
+    return this.contentPieceService.resubmit(id, user.sub);
   }
 
   @Post(':id/unlock')
