@@ -866,8 +866,8 @@ describe('Admin ads contract (ADS-06)', () => {
             `A\nB`,
             `A ${U(0x0301)}B`,
             `A${U(0x202e)}B`,
-            `A — B`,
-            `A – B`,
+            `A \u2014 B`,
+            `A \u2013 B`,
           ]) {
             const res = await http().post(BASE).set(asSuper()).send(make(v));
             expect([field, JSON.stringify(v), res.status]).toEqual([
@@ -1046,7 +1046,7 @@ describe('Admin ads contract (ADS-06)', () => {
         expect(res.status).toBe(400);
         expect(res.body.data).toBeNull();
         expect(typeof res.body.message).toBe('string');
-        expect(res.body.message).not.toMatch(/—|–/);
+        expect(res.body.message).not.toMatch(/\u2014|\u2013/);
         expect(await prisma.adCampaign.count()).toBe(before);
         expect(await prisma.adminAdAudit.count()).toBe(audits);
       });
@@ -1182,7 +1182,7 @@ describe('Admin ads contract (ADS-06)', () => {
       );
     });
 
-    it('a campaign whose event closes later is left as it is and shows servingNow false', async () => {
+    it('a campaign whose event closes afterwards is left as it is and shows servingNow false', async () => {
       const c = await inStatus('live');
       expect(c.servingNow).toBe(true);
       await prisma.event.update({
@@ -1329,7 +1329,7 @@ describe('Admin ads contract (ADS-06)', () => {
         expect(res.body.statusCode).toBe(409);
         expect(res.body.data).toBeNull();
         expect(res.body.message).toMatch(new RegExp(`This one is ${status}`));
-        expect(res.body.message).not.toMatch(/—|–/);
+        expect(res.body.message).not.toMatch(/\u2014|\u2013/);
         expect(res.body.reason).toEqual({
           code: 'invalid_transition',
           action,
@@ -1565,7 +1565,7 @@ describe('Admin ads contract (ADS-06)', () => {
       const before = await rowOf(c.id);
       const bads: Json[] = [
         { advertiser: '⠀' },
-        { advertiser: `${TAG} — dash` },
+        { advertiser: `${TAG} \u2014 dash` },
         { placement: 'nowhere' },
         { startsAt: '2031-01-01T09:00:00+01:00' },
         { endsAt: iso(hoursFromNow(1)), startsAt: iso(hoursFromNow(2)) },
@@ -2318,7 +2318,7 @@ describe('Admin ads contract (ADS-06)', () => {
         await http()
           .patch(`${BASE}/${c.id}`)
           .set(asSuper())
-          .send({ advertiser: `${secret} —` });
+          .send({ advertiser: `${secret} \u2014` });
         await http()
           .post(BASE)
           .set(asSuper())

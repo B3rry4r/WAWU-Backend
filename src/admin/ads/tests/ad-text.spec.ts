@@ -93,8 +93,8 @@ describe('checkAdText: invisible text is refused', () => {
   });
 
   it('refuses an em dash and an en dash, and allows a hyphen', () => {
-    expect(text('Gospel — Night').ok).toBe(false);
-    expect(text('Gospel – Night').ok).toBe(false);
+    expect(text('Gospel \u2014 Night').ok).toBe(false);
+    expect(text('Gospel \u2013 Night').ok).toBe(false);
     expect(text('Gospel - Night').ok).toBe(true);
   });
 });
@@ -208,14 +208,14 @@ describe('checkAdText: messages carry no em dash', () => {
       u(0x0301),
       'a'.repeat(999),
       'a\nb',
-      'a—b',
+      'a\u2014b',
       `a${u(0x200d)}`,
     ];
     for (const value of cases) {
       const r = text(value);
       expect(r.ok).toBe(false);
       if (!r.ok) {
-        expect(r.message).not.toMatch(/—|–/);
+        expect(r.message).not.toMatch(/\u2014|\u2013/);
       }
     }
   });

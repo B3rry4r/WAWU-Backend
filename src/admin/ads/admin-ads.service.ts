@@ -546,7 +546,7 @@ export class AdminAdsService {
         if (row.endsAt.getTime() <= now.getTime()) {
           throw conflict(
             'window_over',
-            'This campaign’s window has already closed. Edit the dates first.',
+            'The window of this campaign has already closed. Edit the dates first.',
             { endsAt: row.endsAt },
           );
         }
@@ -660,7 +660,7 @@ export class AdminAdsService {
    * The card's button opens an Event: it must exist, be published, not be
    * called off and not be over (the test serving applies). Checked when a
    * campaign is created, when its event is changed, when it is scheduled and
-   * when it is resumed. If the event closes later the campaign is left alone
+   * when it is resumed. If the event closes after that, the campaign is left alone
    * and serving skips it (ADS-04); the admin views show `event.open: false`.
    *
    * A bad event named in a create or edit body is a 400 (the input is wrong);
