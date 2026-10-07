@@ -665,6 +665,15 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
         .expect(400);
     });
 
+    it('refuses a medium written with a NUL, a lone surrogate or odd text', async () => {
+      for (const odd of ['%00', '%ED%A0%80', 'zoom%00', '%FF', '%20', 'ZOOM']) {
+        await http()
+          .get(`/api/hub/legal/consultation/slots?medium=${odd}`)
+          .set(as(userToken))
+          .expect(400);
+      }
+    });
+
     it('offers the calendar at the length of the call, and never past closing', async () => {
       await priceAll();
       await setConsultation('phone', {
@@ -1383,6 +1392,14 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
         {
           files: [
             { fileName: 'a\u0000.pdf', url: 'https://files.example.com/a.pdf' },
+          ],
+        },
+      ],
+      [
+        'a name with a lone surrogate',
+        {
+          files: [
+            { fileName: 'a\ud800.pdf', url: 'https://files.example.com/a.pdf' },
           ],
         },
       ],

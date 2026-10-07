@@ -109,6 +109,10 @@ export class DeliveredFileDto {
   @Matches(/^[^\u0000-\u001f\u007f]+$/, {
     message: 'fileName cannot contain control characters.',
   })
+  // A lone surrogate is not text: it cannot be stored or sent as UTF-8.
+  @Matches(/^(?:[^\ud800-\udfff]|[\ud800-\udbff][\udc00-\udfff])+$/, {
+    message: 'fileName must be plain text.',
+  })
   fileName!: string;
 
   /** Object-storage URL from POST /uploads/presign. */
