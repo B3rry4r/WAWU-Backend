@@ -27689,7 +27689,8 @@
             "type": "string",
             "description": "Object-storage URL from POST /uploads/presign.",
             "maxLength": 600,
-            "format": "uri"
+            "format": "uri",
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
           },
           "pages": {
             "type": "number",
@@ -36481,6 +36482,645 @@
           "totals"
         ]
       },
+      "QuestionOption": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "label"
+        ]
+      },
+      "IntakeQuestion": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "step": {
+            "type": "number"
+          },
+          "stepTitle": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "text",
+              "documents",
+              "single",
+              "multi",
+              "date"
+            ]
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "required",
+              "optional"
+            ]
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuestionOption"
+            },
+            "nullable": true
+          },
+          "placeholder": {
+            "type": "string",
+            "nullable": true
+          },
+          "suggestions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "helper": {
+            "type": "string",
+            "nullable": true
+          },
+          "showIf": {
+            "type": "object",
+            "properties": {
+              "questionId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "questionId"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "step",
+          "stepTitle",
+          "prompt",
+          "kind",
+          "level"
+        ]
+      },
+      "GeminiBrief": {
+        "type": "object",
+        "properties": {
+          "summary": {
+            "type": "string"
+          },
+          "keyIssues": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "questionsToClarify": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "risks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "summary",
+          "keyIssues",
+          "questionsToClarify",
+          "risks"
+        ]
+      },
+      "LegalBrief": {
+        "type": "object",
+        "properties": {
+          "matter": {
+            "type": "string"
+          },
+          "matterLabel": {
+            "type": "string"
+          },
+          "facts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "question": {
+                  "type": "string"
+                },
+                "answer": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "question",
+                "answer"
+              ]
+            }
+          },
+          "documentCount": {
+            "type": "number"
+          },
+          "analysis": {
+            "$ref": "#/components/schemas/GeminiBrief"
+          },
+          "generatedBy": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "matter",
+          "matterLabel",
+          "facts",
+          "documentCount",
+          "analysis",
+          "generatedBy",
+          "generatedAt"
+        ]
+      },
+      "IntakeView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "matter": {
+            "type": "string"
+          },
+          "matterLabel": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "answers": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "documents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntakeQuestion"
+            }
+          },
+          "outstandingRequired": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "brief": {
+            "$ref": "#/components/schemas/LegalBrief",
+            "nullable": true
+          },
+          "legalRequestId": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "matter",
+          "matterLabel",
+          "status",
+          "answers",
+          "documents",
+          "questions",
+          "outstandingRequired",
+          "brief",
+          "legalRequestId"
+        ]
+      },
+      "ChatMessageView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "authorRole": {
+            "type": "string",
+            "enum": [
+              "client",
+              "ai",
+              "consultant"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "authorRole",
+          "body",
+          "createdAt"
+        ]
+      },
+      "ChatThreadView": {
+        "type": "object",
+        "properties": {
+          "legalRequestId": {
+            "type": "string"
+          },
+          "serviceName": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "consultantJoined": {
+            "type": "boolean"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatMessageView"
+            }
+          }
+        },
+        "required": [
+          "legalRequestId",
+          "serviceName",
+          "status",
+          "consultantJoined",
+          "messages"
+        ]
+      },
+      "IntakeQueueItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "wawuUserId": {
+            "type": "string"
+          },
+          "clientName": {
+            "type": "string"
+          },
+          "matter": {
+            "type": "string"
+          },
+          "matterLabel": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "documentCount": {
+            "type": "number"
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "waitingHours": {
+            "type": "number"
+          },
+          "urgency": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "wawuUserId",
+          "clientName",
+          "matter",
+          "matterLabel",
+          "status",
+          "summary",
+          "documentCount",
+          "completedAt",
+          "waitingHours",
+          "urgency"
+        ]
+      },
+      "IntakeDetailView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "wawuUserId": {
+            "type": "string"
+          },
+          "clientName": {
+            "type": "string"
+          },
+          "matter": {
+            "type": "string"
+          },
+          "matterLabel": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "documents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "brief": {
+            "$ref": "#/components/schemas/LegalBrief",
+            "nullable": true
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "legalRequestId": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "wawuUserId",
+          "clientName",
+          "matter",
+          "matterLabel",
+          "status",
+          "documents",
+          "brief",
+          "completedAt",
+          "legalRequestId"
+        ]
+      },
+      "LegalAssistantTopic": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "matter": {
+            "type": "string"
+          },
+          "matterLabel": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "matter",
+          "matterLabel"
+        ]
+      },
+      "LegalAssistantMessage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "authorRole": {
+            "type": "string",
+            "enum": [
+              "client",
+              "consultant",
+              "assistant"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "consultantName": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "authorRole",
+          "body",
+          "createdAt",
+          "consultantName"
+        ]
+      },
+      "LegalAssistantQuickReply": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ]
+      },
+      "LegalAssistantBriefRow": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "value"
+        ]
+      },
+      "LegalAssistantBrief": {
+        "type": "object",
+        "properties": {
+          "matter": {
+            "type": "string"
+          },
+          "matterLabel": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LegalAssistantBriefRow"
+            }
+          },
+          "ready": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "matter",
+          "matterLabel",
+          "rows",
+          "ready"
+        ]
+      },
+      "LegalAssistantConsultant": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "joinedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "name",
+          "joinedAt"
+        ]
+      },
+      "LegalAssistantThread": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "profiling",
+              "brief_ready",
+              "sent"
+            ]
+          },
+          "matter": {
+            "type": "string"
+          },
+          "matterLabel": {
+            "type": "string"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LegalAssistantMessage"
+            }
+          },
+          "quickReplies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LegalAssistantQuickReply"
+            }
+          },
+          "brief": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LegalAssistantBrief"
+              }
+            ],
+            "nullable": true
+          },
+          "awaitingReply": {
+            "type": "boolean"
+          },
+          "legalRequestId": {
+            "type": "string",
+            "nullable": true
+          },
+          "requestStatus": {
+            "type": "string",
+            "nullable": true
+          },
+          "consultant": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LegalAssistantConsultant"
+              }
+            ],
+            "nullable": true
+          },
+          "assistantStopped": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "stage",
+          "matter",
+          "matterLabel",
+          "messages",
+          "quickReplies",
+          "brief",
+          "awaitingReply",
+          "legalRequestId",
+          "requestStatus",
+          "consultant",
+          "assistantStopped"
+        ]
+      },
+      "LegalAssistantTranscript": {
+        "type": "object",
+        "properties": {
+          "intakeId": {
+            "type": "string"
+          },
+          "legalRequestId": {
+            "type": "string",
+            "nullable": true
+          },
+          "brief": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LegalAssistantBrief"
+              }
+            ],
+            "nullable": true
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LegalAssistantMessage"
+            }
+          }
+        },
+        "required": [
+          "intakeId",
+          "legalRequestId",
+          "brief",
+          "messages"
+        ]
+      },
       "DayAvailability": {
         "type": "object",
         "properties": {
@@ -36526,8 +37166,8 @@
           "path": {
             "type": "string",
             "enum": [
-              "simple",
-              "consultation"
+              "consultation",
+              "simple"
             ]
           },
           "blurb": {
@@ -38935,8 +39575,8 @@
             "enum": [
               "failed",
               "draft",
-              "sending",
-              "sent"
+              "sent",
+              "sending"
             ]
           },
           "recipientCount": {
@@ -41425,645 +42065,6 @@
         "required": [
           "eventId",
           "userSaved"
-        ]
-      },
-      "QuestionOption": {
-        "type": "object",
-        "properties": {
-          "value": {
-            "type": "string"
-          },
-          "label": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "value",
-          "label"
-        ]
-      },
-      "IntakeQuestion": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "step": {
-            "type": "number"
-          },
-          "stepTitle": {
-            "type": "string"
-          },
-          "prompt": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "text",
-              "documents",
-              "single",
-              "multi",
-              "date"
-            ]
-          },
-          "level": {
-            "type": "string",
-            "enum": [
-              "required",
-              "optional"
-            ]
-          },
-          "options": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/QuestionOption"
-            },
-            "nullable": true
-          },
-          "placeholder": {
-            "type": "string",
-            "nullable": true
-          },
-          "suggestions": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "nullable": true
-          },
-          "helper": {
-            "type": "string",
-            "nullable": true
-          },
-          "showIf": {
-            "type": "object",
-            "properties": {
-              "questionId": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "questionId"
-            ],
-            "nullable": true
-          }
-        },
-        "required": [
-          "id",
-          "step",
-          "stepTitle",
-          "prompt",
-          "kind",
-          "level"
-        ]
-      },
-      "GeminiBrief": {
-        "type": "object",
-        "properties": {
-          "summary": {
-            "type": "string"
-          },
-          "keyIssues": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "questionsToClarify": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "risks": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "required": [
-          "summary",
-          "keyIssues",
-          "questionsToClarify",
-          "risks"
-        ]
-      },
-      "LegalBrief": {
-        "type": "object",
-        "properties": {
-          "matter": {
-            "type": "string"
-          },
-          "matterLabel": {
-            "type": "string"
-          },
-          "facts": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "question": {
-                  "type": "string"
-                },
-                "answer": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "question",
-                "answer"
-              ]
-            }
-          },
-          "documentCount": {
-            "type": "number"
-          },
-          "analysis": {
-            "$ref": "#/components/schemas/GeminiBrief"
-          },
-          "generatedBy": {
-            "type": "string"
-          },
-          "generatedAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "matter",
-          "matterLabel",
-          "facts",
-          "documentCount",
-          "analysis",
-          "generatedBy",
-          "generatedAt"
-        ]
-      },
-      "IntakeView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "matter": {
-            "type": "string"
-          },
-          "matterLabel": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          },
-          "answers": {
-            "type": "object",
-            "additionalProperties": {}
-          },
-          "documents": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "questions": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/IntakeQuestion"
-            }
-          },
-          "outstandingRequired": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "brief": {
-            "$ref": "#/components/schemas/LegalBrief",
-            "nullable": true
-          },
-          "legalRequestId": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "id",
-          "matter",
-          "matterLabel",
-          "status",
-          "answers",
-          "documents",
-          "questions",
-          "outstandingRequired",
-          "brief",
-          "legalRequestId"
-        ]
-      },
-      "ChatMessageView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "authorRole": {
-            "type": "string",
-            "enum": [
-              "client",
-              "ai",
-              "consultant"
-            ]
-          },
-          "body": {
-            "type": "string"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          }
-        },
-        "required": [
-          "id",
-          "authorRole",
-          "body",
-          "createdAt"
-        ]
-      },
-      "ChatThreadView": {
-        "type": "object",
-        "properties": {
-          "legalRequestId": {
-            "type": "string"
-          },
-          "serviceName": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          },
-          "consultantJoined": {
-            "type": "boolean"
-          },
-          "messages": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ChatMessageView"
-            }
-          }
-        },
-        "required": [
-          "legalRequestId",
-          "serviceName",
-          "status",
-          "consultantJoined",
-          "messages"
-        ]
-      },
-      "IntakeQueueItem": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "wawuUserId": {
-            "type": "string"
-          },
-          "clientName": {
-            "type": "string"
-          },
-          "matter": {
-            "type": "string"
-          },
-          "matterLabel": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          },
-          "summary": {
-            "type": "string"
-          },
-          "documentCount": {
-            "type": "number"
-          },
-          "completedAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
-          },
-          "waitingHours": {
-            "type": "number"
-          },
-          "urgency": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "id",
-          "wawuUserId",
-          "clientName",
-          "matter",
-          "matterLabel",
-          "status",
-          "summary",
-          "documentCount",
-          "completedAt",
-          "waitingHours",
-          "urgency"
-        ]
-      },
-      "IntakeDetailView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "wawuUserId": {
-            "type": "string"
-          },
-          "clientName": {
-            "type": "string"
-          },
-          "matter": {
-            "type": "string"
-          },
-          "matterLabel": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          },
-          "documents": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "brief": {
-            "$ref": "#/components/schemas/LegalBrief",
-            "nullable": true
-          },
-          "completedAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
-          },
-          "legalRequestId": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "id",
-          "wawuUserId",
-          "clientName",
-          "matter",
-          "matterLabel",
-          "status",
-          "documents",
-          "brief",
-          "completedAt",
-          "legalRequestId"
-        ]
-      },
-      "LegalAssistantTopic": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "label": {
-            "type": "string"
-          },
-          "matter": {
-            "type": "string"
-          },
-          "matterLabel": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "label",
-          "matter",
-          "matterLabel"
-        ]
-      },
-      "LegalAssistantMessage": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "authorRole": {
-            "type": "string",
-            "enum": [
-              "client",
-              "consultant",
-              "assistant"
-            ]
-          },
-          "body": {
-            "type": "string"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "consultantName": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "id",
-          "authorRole",
-          "body",
-          "createdAt",
-          "consultantName"
-        ]
-      },
-      "LegalAssistantQuickReply": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "label": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "label"
-        ]
-      },
-      "LegalAssistantBriefRow": {
-        "type": "object",
-        "properties": {
-          "label": {
-            "type": "string"
-          },
-          "value": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "label",
-          "value"
-        ]
-      },
-      "LegalAssistantBrief": {
-        "type": "object",
-        "properties": {
-          "matter": {
-            "type": "string"
-          },
-          "matterLabel": {
-            "type": "string"
-          },
-          "rows": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/LegalAssistantBriefRow"
-            }
-          },
-          "ready": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "matter",
-          "matterLabel",
-          "rows",
-          "ready"
-        ]
-      },
-      "LegalAssistantConsultant": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "nullable": true
-          },
-          "joinedAt": {
-            "type": "string",
-            "format": "date-time"
-          }
-        },
-        "required": [
-          "name",
-          "joinedAt"
-        ]
-      },
-      "LegalAssistantThread": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "stage": {
-            "type": "string",
-            "enum": [
-              "sent",
-              "profiling",
-              "brief_ready"
-            ]
-          },
-          "matter": {
-            "type": "string"
-          },
-          "matterLabel": {
-            "type": "string"
-          },
-          "messages": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/LegalAssistantMessage"
-            }
-          },
-          "quickReplies": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/LegalAssistantQuickReply"
-            }
-          },
-          "brief": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/LegalAssistantBrief"
-              }
-            ],
-            "nullable": true
-          },
-          "awaitingReply": {
-            "type": "boolean"
-          },
-          "legalRequestId": {
-            "type": "string",
-            "nullable": true
-          },
-          "requestStatus": {
-            "type": "string",
-            "nullable": true
-          },
-          "consultant": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/LegalAssistantConsultant"
-              }
-            ],
-            "nullable": true
-          },
-          "assistantStopped": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "id",
-          "stage",
-          "matter",
-          "matterLabel",
-          "messages",
-          "quickReplies",
-          "brief",
-          "awaitingReply",
-          "legalRequestId",
-          "requestStatus",
-          "consultant",
-          "assistantStopped"
-        ]
-      },
-      "LegalAssistantTranscript": {
-        "type": "object",
-        "properties": {
-          "intakeId": {
-            "type": "string"
-          },
-          "legalRequestId": {
-            "type": "string",
-            "nullable": true
-          },
-          "brief": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/LegalAssistantBrief"
-              }
-            ],
-            "nullable": true
-          },
-          "messages": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/LegalAssistantMessage"
-            }
-          }
-        },
-        "required": [
-          "intakeId",
-          "legalRequestId",
-          "brief",
-          "messages"
         ]
       },
       "ChatPerson": {
