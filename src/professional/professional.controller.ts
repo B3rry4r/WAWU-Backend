@@ -1,11 +1,13 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -18,6 +20,14 @@ import { ApplyProfessionalDto } from './dto/apply-professional.dto';
 import { ListProfessionalsQueryDto } from './dto/list-professionals-query.dto';
 import { UpdateListingDto } from './dto/update-listing.dto';
 import { CreateProfessionalReviewDto } from './dto/create-professional-review.dto';
+import { ListProfessionalDirectoryQueryDto } from './dto/professional-directory.dto';
+import { UpdateProfessionalLocationDto } from './dto/update-professional-location.dto';
+import type {
+  ProfessionalDirectoryPage,
+  ProfessionalDirectoryProfile,
+  ProfessionalLocationView,
+} from './professional.service';
+import type { ProfessionalFieldView } from './professional-fields';
 
 /**
  * The professional directory — `/api/hub/professionals/*`.
@@ -60,6 +70,66 @@ export class ProfessionalController {
     @Body() dto: UpdateListingDto,
   ) {
     return this.service.setListed(user.sub, id, dto.listed);
+  }
+
+  // ---- authenticated: where you work (PROS-02) -----------------------------
+
+  @UseGuards(WawuAuthGuard)
+  @Get('location')
+  location(
+    @CurrentUser() user: WawuJwtClaims,
+  ): Promise<ProfessionalLocationView> {
+    return this.service.location(user.sub);
+  }
+
+  /** The city on your card and in the directory. A creator account only. */
+  @UseGuards(WawuAuthGuard)
+  @Put('location')
+  setLocation(
+    @CurrentUser() user: WawuJwtClaims,
+    @Body() dto: UpdateProfessionalLocationDto,
+  ): Promise<ProfessionalLocationView> {
+    return this.service.setLocation(user.sub, dto.city);
+  }
+
+  @UseGuards(WawuAuthGuard)
+  @Delete('location')
+  clearLocation(
+    @CurrentUser() user: WawuJwtClaims,
+  ): Promise<ProfessionalLocationView> {
+    return this.service.clearLocation(user.sub);
+  }
+
+  // ---- public: the mobile directory (PROS-02) ------------------------------
+  //
+  // New routes beside GET /professionals and GET /professionals/:id, which
+  // the web reads and which keep their answers. Declared before `:id` for the
+  // reason at the top of this file.
+
+  /** The fields the app filters by (P1) and applies in (P5), in the canvas's order. */
+  @Get('fields')
+  fields(): ProfessionalFieldView[] {
+    return this.service.fields();
+  }
+
+  /** The directory filtered by field, with city, usual reply time and price. */
+  @UseGuards(OptionalWawuAuthGuard)
+  @Get('directory')
+  directory(
+    @Query() query: ListProfessionalDirectoryQueryDto,
+    @CurrentUser() user: WawuJwtClaims | undefined,
+  ): Promise<ProfessionalDirectoryPage> {
+    return this.service.directory(query, user?.sub);
+  }
+
+  /** One professional's profile, with city, usual reply time and price. */
+  @UseGuards(OptionalWawuAuthGuard)
+  @Get('directory/:id')
+  directoryProfile(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: WawuJwtClaims | undefined,
+  ): Promise<ProfessionalDirectoryProfile> {
+    return this.service.directoryProfile(id, user?.sub);
   }
 
   // ---- public: the directory ----------------------------------------------

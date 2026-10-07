@@ -261,6 +261,14 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // with them, and each code then opens the plain "not found" page.
   { model: 'MoneyReceipt', column: 'wawuUserId', disposition: 'OWNED' },
 
+  // The city on this person's professional card (PROS-02). Theirs, and
+  // public only beside a listing that goes with them.
+  {
+    model: 'ProfessionalLocation',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
+
   // Which ads this person viewed, tapped or skipped on which day (ADS-05):
   // theirs, so the rows go with them. The daily totals the owner invoices from
   // (AdDailyTotal) name nobody, are not walked back, and stay.
