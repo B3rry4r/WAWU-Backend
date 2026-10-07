@@ -9,6 +9,8 @@ import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
 import { AllExceptionsFilter } from '../../common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../../common/interceptors/response.interceptor';
 import { EventModule } from '../../event/event.module';
+import { AdminAuthModule } from '../../admin/auth/admin-auth.module';
+import { AdminEventsModule } from '../../admin/events/admin-events.module';
 import { EventTicketingModule } from '../event-ticketing.module';
 import {
   FLUTTERWAVE_CLIENT,
@@ -35,6 +37,12 @@ import {
  * replaced at its seam (FLUTTERWAVE_CLIENT) by a stand-in that confirms
  * every charge, so no payment provider is called.
  *
+ * Round 5 (D3, O5, O6): a tier an order points at is RETIRED, not deleted,
+ * when a PUT drops or changes it. So an abandoned checkout no longer blocks
+ * the host, a checkout opening while a PUT replaces its tier is never a
+ * foreign-key 500, a retired tier cannot be bought ("This ticket has
+ * changed."), and a pending order on it still settles.
+ *
  * Fixture ids `ee11b0..`; the host's tick columns are snapshotted and
  * written back.
  */
@@ -44,6 +52,12 @@ const MOCK_WAWU_ID_URL =
 const HOST_EMAIL = 'creator-pro@test.wawu.dev';
 const HOST_SUB = '00000000-0000-4000-8000-000000000003';
 const BUYER_EMAIL = 'creator-basic@test.wawu.dev';
+const OTHER_BUYER_EMAIL = 'user@test.wawu.dev';
+const ADMIN_ID = 'ad11b000-0000-4000-8000-000000000001';
+const ADMIN_EMAIL = 'events11-purchase@admin.test.wawu.dev';
+const ADMIN_PASSWORD = 'events-eleven-purchase-password';
+const TIER_CHANGED = 'This ticket has changed. Please choose again.';
+const CHECKOUT_ROUNDS = 30;
 const EV = 'ee11b000-0000-4000-8000-000000000001';
 const FREE_ROUNDS = 40;
 const PAID_ROUNDS = 20;
@@ -86,27 +100,35 @@ const payments: FlutterwaveClient = {
     }),
 };
 
-describe('PUT /events/:id/tickets racing a ticket purchase (EVENTS-11 D2)', () => {
+describe('PUT /events/:id/tickets and ticket purchases (EVENTS-11 D2, D3, O5)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let hostToken: string;
   let buyerToken: string;
+  let otherBuyerToken: string;
+  let adminToken: string;
   let tickSnapshot: Record<string, Date | null> | null = null;
+  const envSnapshot: Record<string, string | undefined> = {};
 
   const http = () => request(app.getHttpServer() as Server);
   const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
+  type Tier = {
+    tier: 'free' | 'regular' | 'vip';
+    name: string;
+    priceNaira: number;
+  };
+  const FREE: Tier = { tier: 'free', name: 'Entry', priceNaira: 0 };
+  const PAID: Tier = { tier: 'regular', name: 'Regular', priceNaira: 5000 };
+
   async function sweep(): Promise<void> {
-    // Tickets and orders cascade from Event; tickets before tiers.
+    await prisma.adminEventReview.deleteMany({ where: { eventId: EV } });
+    // Tickets, orders and tiers cascade from Event.
     await prisma.event.deleteMany({ where: { id: EV } });
   }
 
-  /** A fresh published event with one tier; returns the tier's id. */
-  async function onSale(tier: {
-    tier: 'free' | 'regular';
-    name: string;
-    priceNaira: number;
-  }): Promise<string> {
+  /** A fresh published event with one tier of 1000; returns the tier's id. */
+  async function onSale(tier: Tier): Promise<string> {
     await sweep();
     await prisma.event.create({
       data: {
@@ -129,35 +151,75 @@ describe('PUT /events/:id/tickets racing a ticket purchase (EVENTS-11 D2)', () =
     return row.id;
   }
 
-  function put(
-    tier: { tier: 'free' | 'regular'; name: string; priceNaira: number },
-    quantity: number,
-  ) {
+  function put(types: Array<Tier & { quantity: number }>) {
     return http()
       .put(`/api/hub/events/${EV}/tickets`)
       .set(auth(hostToken))
-      .send({ types: [{ ...tier, quantity }] });
+      .send({ types });
+  }
+
+  function order(token: string, ticketTypeId: string) {
+    return http()
+      .post(`/api/hub/events/${EV}/orders`)
+      .set(auth(token))
+      .send({ ticketTypeId, quantity: 1 });
+  }
+
+  function verify(orderId: string, txRef: string, amount = 5000, n = 0) {
+    return http()
+      .post(`/api/hub/events/orders/${orderId}/verify`)
+      .set(auth(buyerToken))
+      .send({ transaction_id: `flwtx-${amount}-${n}`, tx_ref: txRef });
+  }
+
+  /** Opens a paid checkout and leaves it open (nothing ever verifies it). */
+  async function openCheckout(ticketTypeId: string) {
+    const res = await order(buyerToken, ticketTypeId).expect(201);
+    return (
+      res.body as {
+        data: { orderId: string; flutterwaveConfig: { txRef: string } };
+      }
+    ).data;
   }
 
   async function endState() {
     const [event, tiers, orders, tickets] = await Promise.all([
       prisma.event.findUniqueOrThrow({ where: { id: EV } }),
-      prisma.eventTicketType.findMany({ where: { eventId: EV } }),
+      prisma.eventTicketType.findMany({
+        where: { eventId: EV },
+        orderBy: { priceNaira: 'asc' },
+      }),
       prisma.eventOrder.findMany({ where: { eventId: EV } }),
       prisma.eventTicket.count({ where: { eventId: EV } }),
     ]);
-    return { event, tiers, orders, tickets };
+    return {
+      event,
+      tiers,
+      onSale: tiers.filter((t) => !t.retiredAt),
+      retired: tiers.filter((t) => !!t.retiredAt),
+      orders,
+      tickets,
+    };
   }
 
   beforeAll(async () => {
-    [hostToken, buyerToken] = await Promise.all([
+    for (const key of ['ADMIN_JWT_SECRET', 'ADMIN_JWT_REFRESH_SECRET']) {
+      envSnapshot[key] = process.env[key];
+    }
+    process.env.ADMIN_JWT_SECRET = 'events-eleven-buy-access-0123456789abcdef';
+    process.env.ADMIN_JWT_REFRESH_SECRET =
+      'events-eleven-buy-refresh-0123456789abcdef';
+    [hostToken, buyerToken, otherBuyerToken] = await Promise.all([
       login(HOST_EMAIL),
       login(BUYER_EMAIL),
+      login(OTHER_BUYER_EMAIL),
     ]);
     const moduleRef: TestingModule = await Test.createTestingModule({
       imports: [
         ConfigModule.forRoot({ isGlobal: true }),
         PrismaModule,
+        AdminAuthModule,
+        AdminEventsModule,
         WawuAuthModule,
         EventModule,
         EventTicketingModule,
@@ -181,6 +243,24 @@ describe('PUT /events/:id/tickets racing a ticket purchase (EVENTS-11 D2)', () =
     // One listening server for both requests of a race (see the D1 suite).
     await app.listen(Number(process.env.RACE_SPEC_PORT ?? 5354));
     prisma = moduleRef.get(PrismaService);
+
+    const argon2 = await import('argon2');
+    await prisma.adminUser.deleteMany({ where: { id: ADMIN_ID } });
+    await prisma.adminUser.create({
+      data: {
+        id: ADMIN_ID,
+        email: ADMIN_EMAIL,
+        name: 'EV11 Purchase',
+        role: 'superadmin',
+        passwordHash: await argon2.hash(ADMIN_PASSWORD),
+      },
+    });
+    const res = await http()
+      .post('/api/hub/admin/auth/login')
+      .send({ email: ADMIN_EMAIL, password: ADMIN_PASSWORD })
+      .expect(200);
+    adminToken = (res.body as { data: { accessToken: string } }).data
+      .accessToken;
 
     tickSnapshot = await prisma.userProfile.findUnique({
       where: { wawuUserId: HOST_SUB },
@@ -208,26 +288,28 @@ describe('PUT /events/:id/tickets racing a ticket purchase (EVENTS-11 D2)', () =
         data: tickSnapshot,
       });
     }
+    await prisma.adminUser.deleteMany({ where: { id: ADMIN_ID } });
     await app.close();
+    for (const [key, value] of Object.entries(envSnapshot)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   });
 
-  it(`a free purchase and a PUT on the same tier: no 500, and one of the right endings (${FREE_ROUNDS} rounds)`, async () => {
+  it(`D2: a free purchase and a PUT on the same tier: no 500, and one of the right endings (${FREE_ROUNDS} rounds)`, async () => {
     const wrong: string[] = [];
     const endings = new Map<string, number>();
-    const free = { tier: 'free' as const, name: 'Entry', priceNaira: 0 };
     for (let round = 0; round < FREE_ROUNDS; round++) {
-      const tierId = await onSale(free);
+      const tierId = await onSale(FREE);
       const [putRes, buyRes] = await Promise.all([
-        put(free, 1100 + round),
-        http()
-          .post(`/api/hub/events/${EV}/orders`)
-          .set(auth(buyerToken))
-          .send({ ticketTypeId: tierId, quantity: 1 }),
+        put([{ ...FREE, quantity: 1100 + round }]),
+        order(buyerToken, tierId),
       ]);
       const end = await endState();
       const key = `put ${putRes.status} buy ${buyRes.status} final ${end.event.status}`;
       endings.set(key, (endings.get(key) ?? 0) + 1);
 
+      // The purchase landed first: sold, and the PUT is the sold 409.
       const purchaseFirst =
         buyRes.status === 201 &&
         putRes.status === 409 &&
@@ -237,9 +319,14 @@ describe('PUT /events/:id/tickets racing a ticket purchase (EVENTS-11 D2)', () =
         end.tiers[0].sold === 1 &&
         end.orders.length === 1 &&
         end.tickets === 1;
+      // The PUT landed first: the old tier (no order) is gone, the new one
+      // is on sale in review, and the purchase was refused, never with the
+      // misleading "sold out" (O6).
       const putFirst =
         putRes.status === 200 &&
         [404, 409].includes(buyRes.status) &&
+        (buyRes.body as { message?: string }).message !==
+          'This ticket is sold out.' &&
         end.event.status === 'pending' &&
         end.tiers.length === 1 &&
         end.tiers[0].quantity === 1100 + round &&
@@ -248,86 +335,208 @@ describe('PUT /events/:id/tickets racing a ticket purchase (EVENTS-11 D2)', () =
         end.tickets === 0;
       if (!purchaseFirst && !putFirst) wrong.push(`round ${round}: ${key}`);
     }
-    // Which ending a round gets depends on timing. A 500 is never one of
-    // the right ones, so it lands in `wrong` with the rest.
     expect({ wrong, endings: Object.fromEntries(endings) }).toEqual({
       wrong: [],
       endings: expect.any(Object) as unknown,
     });
   }, 180_000);
 
-  it(`a paid purchase settling (verify, issueOrder) while a PUT lands: no 500, the buyer gets the ticket they paid for (${PAID_ROUNDS} rounds)`, async () => {
+  it(`D2: a paid order settling (verify, issueOrder) while a PUT reprices its tier: no 500, the buyer is seated on the tier they paid for (${PAID_ROUNDS} rounds)`, async () => {
     const wrong: string[] = [];
-    const paid = {
-      tier: 'regular' as const,
-      name: 'Regular',
-      priceNaira: 5000,
-    };
     for (let round = 0; round < PAID_ROUNDS; round++) {
-      const tierId = await onSale(paid);
-      const opened = await http()
-        .post(`/api/hub/events/${EV}/orders`)
-        .set(auth(buyerToken))
-        .send({ ticketTypeId: tierId, quantity: 1 })
-        .expect(201);
-      const { orderId, flutterwaveConfig } = (
-        opened.body as {
-          data: { orderId: string; flutterwaveConfig: { txRef: string } };
-        }
-      ).data;
-
+      const tierId = await onSale(PAID);
+      const { orderId, txRef } = await openCheckout(tierId).then((d) => ({
+        orderId: d.orderId,
+        txRef: d.flutterwaveConfig.txRef,
+      }));
       const [putRes, verifyRes] = await Promise.all([
-        put(paid, 1100 + round),
-        http()
-          .post(`/api/hub/events/orders/${orderId}/verify`)
-          .set(auth(buyerToken))
-          .send({
-            transaction_id: `flwtx-5000-${round}`,
-            tx_ref: flutterwaveConfig.txRef,
-          }),
+        put([{ ...PAID, priceNaira: 6000, quantity: 1000 }]),
+        verify(orderId, txRef, 5000, round),
       ]);
       const end = await endState();
-      // The order existed before the PUT, so its tier can never be replaced
-      // under it: the PUT is refused (a payment in progress, or sold), and
-      // the buyer is seated on the tier they paid for.
-      const ok =
+      const paidOrder = end.orders.find((o) => o.id === orderId);
+      const old = end.tiers.find((t) => t.id === tierId);
+      const common =
         verifyRes.status === 201 &&
+        paidOrder?.status === 'paid' &&
+        paidOrder.ticketTypeId === tierId &&
+        old?.sold === 1 &&
+        end.tickets === 1;
+      // Settled first: sold, so the PUT is the sold 409, nothing changed.
+      const settledFirst =
+        common &&
         putRes.status === 409 &&
         end.event.status === 'published' &&
         end.tiers.length === 1 &&
-        end.tiers[0].id === tierId &&
-        end.tiers[0].sold === 1 &&
-        end.orders.length === 1 &&
-        end.orders[0].status === 'paid' &&
-        end.tickets === 1;
-      if (!ok) {
+        !old.retiredAt;
+      // Repriced first: the old tier (a pending order on it) is retired,
+      // the new one is on sale with none of its seats taken, and the order
+      // still settles on the retired tier at ₦5,000.
+      const repricedFirst =
+        common &&
+        putRes.status === 200 &&
+        end.event.status === 'pending' &&
+        !!old.retiredAt &&
+        end.onSale.length === 1 &&
+        end.onSale[0].priceNaira === 6000 &&
+        end.onSale[0].sold === 0;
+      if (!settledFirst && !repricedFirst) {
         wrong.push(
-          `round ${round}: put ${putRes.status} verify ${verifyRes.status} final ${end.event.status}, tiers ${end.tiers.length}, sold ${end.tiers[0]?.sold}, order ${end.orders[0]?.status}`,
+          `round ${round}: put ${putRes.status} verify ${verifyRes.status} final ${end.event.status}, tiers ${end.tiers.length}, old sold ${old?.sold} retired ${Boolean(old?.retiredAt)}, order ${paidOrder?.status}`,
         );
       }
     }
     expect(wrong).toEqual([]);
   }, 180_000);
 
-  it('a PUT while a payment is open (not yet confirmed) is a 409 that names the tier, and writes nothing', async () => {
-    const paid = {
-      tier: 'regular' as const,
-      name: 'Regular',
-      priceNaira: 5000,
-    };
-    const tierId = await onSale(paid);
+  it(`O5: a paid checkout opening while a PUT replaces its tier: no 500, and one of the right endings (${CHECKOUT_ROUNDS} rounds)`, async () => {
+    const wrong: string[] = [];
+    const endings = new Map<string, number>();
+    for (let round = 0; round < CHECKOUT_ROUNDS; round++) {
+      const tierId = await onSale(PAID);
+      const [putRes, buyRes] = await Promise.all([
+        put([{ ...PAID, priceNaira: 6000 + round, quantity: 1000 }]),
+        order(buyerToken, tierId),
+      ]);
+      const end = await endState();
+      const key = `put ${putRes.status} checkout ${buyRes.status} final ${end.event.status}`;
+      endings.set(key, (endings.get(key) ?? 0) + 1);
+      const fresh =
+        end.onSale.length === 1 && end.onSale[0].priceNaira === 6000 + round;
+      // The checkout opened first: its tier is retired, not deleted.
+      const checkoutFirst =
+        buyRes.status === 201 &&
+        putRes.status === 200 &&
+        fresh &&
+        end.retired.length === 1 &&
+        end.retired[0].id === tierId &&
+        end.orders.length === 1 &&
+        end.orders[0].status === 'pending';
+      // The PUT replaced it first: the checkout is refused cleanly.
+      const putFirst =
+        putRes.status === 200 &&
+        [404, 409].includes(buyRes.status) &&
+        fresh &&
+        end.retired.length === 0 &&
+        end.orders.length === 0;
+      if (!checkoutFirst && !putFirst) wrong.push(`round ${round}: ${key}`);
+    }
+    expect({ wrong, endings: Object.fromEntries(endings) }).toEqual({
+      wrong: [],
+      endings: expect.any(Object) as unknown,
+    });
+  }, 180_000);
+
+  it('D3: an abandoned checkout no longer blocks the host: PUT 200, the old tier retired, the public sees only the new tiers, and the old checkout still settles', async () => {
+    const tierId = await onSale(PAID);
+    const abandoned = await openCheckout(tierId);
+
+    const res = await put([
+      { ...PAID, priceNaira: 6000, quantity: 1000 },
+      { tier: 'vip', name: 'VIP', priceNaira: 20000, quantity: 10 },
+    ]).expect(200);
+    const listed = (res.body as { data: { id: string; priceNaira: number }[] })
+      .data;
+    expect(listed.map((t) => t.priceNaira)).toEqual([6000, 20000]);
+    expect(listed.map((t) => t.id)).not.toContain(tierId);
+
+    let end = await endState();
+    expect(end.event.status).toBe('pending');
+    expect(end.retired.map((t) => t.id)).toEqual([tierId]);
+
+    // The reviewer sees only the tiers on sale; so does the public once
+    // approved, on the tiers route and in the event's "from" price.
+    const detail = await http()
+      .get(`/api/hub/admin/events/${EV}`)
+      .set(auth(adminToken))
+      .expect(200);
+    expect(
+      (
+        detail.body as { data: { ticketTypes: { priceNaira: number }[] } }
+      ).data.ticketTypes.map((t) => t.priceNaira),
+    ).toEqual([6000, 20000]);
     await http()
-      .post(`/api/hub/events/${EV}/orders`)
-      .set(auth(buyerToken))
-      .send({ ticketTypeId: tierId, quantity: 1 })
-      .expect(201);
-    const before = await endState();
-    const res = await put(paid, 2000).expect(409);
-    expect((res.body as { message: string }).message).toBe(
-      'A buyer is paying for "Regular" right now, so the tiers cannot be replaced yet. Add a new tier instead, or try again once that payment has finished.',
+      .post(`/api/hub/admin/events/${EV}/approve`)
+      .set(auth(adminToken))
+      .expect(200);
+    const pub = await http()
+      .get(`/api/hub/events/${EV}/tickets`)
+      .set(auth(otherBuyerToken))
+      .expect(200);
+    expect(
+      (pub.body as { data: { id: string; priceNaira: number }[] }).data.map(
+        (t) => t.priceNaira,
+      ),
+    ).toEqual([6000, 20000]);
+    const view = await http()
+      .get(`/api/hub/events/${EV}`)
+      .set(auth(otherBuyerToken))
+      .expect(200);
+    expect(
+      (view.body as { data: { priceFromNaira: number } }).data.priceFromNaira,
+    ).toBe(6000);
+
+    // The abandoned checkout comes back after all, and settles at the price
+    // its buyer saw, on the retired tier; the new tiers lose no seat.
+    await verify(abandoned.orderId, abandoned.flutterwaveConfig.txRef).expect(
+      201,
     );
-    // The same tiers sent again are still "no change", payment or not.
-    await put(paid, 1000).expect(200);
+    end = await endState();
+    expect(end.orders[0].status).toBe('paid');
+    expect(end.orders[0].amountNaira).toBe(5000);
+    expect(end.tickets).toBe(1);
+    expect(end.retired[0].sold).toBe(1);
+    expect(end.onSale.map((t) => t.sold)).toEqual([0, 0]);
+    const after = await http()
+      .get(`/api/hub/events/${EV}/tickets`)
+      .set(auth(otherBuyerToken))
+      .expect(200);
+    expect(
+      (after.body as { data: { remaining: number }[] }).data.map(
+        (t) => t.remaining,
+      ),
+    ).toEqual([1000, 10]);
+  });
+
+  it('D3, as the verifier found it: the host keeps the tier with an open checkout and adds another; the kept tier is untouched', async () => {
+    const tierId = await onSale(PAID);
+    await openCheckout(tierId);
+    await put([
+      { ...PAID, quantity: 1000 },
+      { tier: 'vip', name: 'VIP', priceNaira: 20000, quantity: 10 },
+    ]).expect(200);
+    const end = await endState();
+    expect(end.retired).toEqual([]);
+    expect(end.onSale.map((t) => t.id)).toContain(tierId);
+    expect(end.onSale).toHaveLength(2);
+  });
+
+  it('a retired tier cannot be bought: "This ticket has changed. Please choose again." (409), before and after the event is approved again', async () => {
+    const tierId = await onSale(PAID);
+    await openCheckout(tierId);
+    await put([{ ...PAID, priceNaira: 6000, quantity: 1000 }]).expect(200);
+    const before = await order(otherBuyerToken, tierId).expect(409);
+    expect((before.body as { message: string }).message).toBe(TIER_CHANGED);
+    await http()
+      .post(`/api/hub/admin/events/${EV}/approve`)
+      .set(auth(adminToken))
+      .expect(200);
+    const after = await order(otherBuyerToken, tierId).expect(409);
+    expect((after.body as { message: string }).message).toBe(TIER_CHANGED);
+    const end = await endState();
+    expect(end.orders).toHaveLength(1);
+  });
+
+  it('the sold rule stays: once a paid order is settled on a tier, a change is the sold 409 and writes nothing', async () => {
+    const tierId = await onSale(PAID);
+    const paid = await openCheckout(tierId);
+    await verify(paid.orderId, paid.flutterwaveConfig.txRef).expect(201);
+    const before = await endState();
+    const res = await put([{ ...PAID, priceNaira: 6000, quantity: 1000 }]);
+    expect(res.status).toBe(409);
+    expect((res.body as { message: string }).message).toBe(
+      'Tickets have already sold for "Regular". Add a new tier instead of editing one people have bought.',
+    );
     expect(await endState()).toEqual(before);
   });
 });

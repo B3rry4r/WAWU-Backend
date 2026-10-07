@@ -386,8 +386,9 @@ export class AdminEventsService {
   ): Promise<Map<string, AdminEventTicketTypeView[]>> {
     const out = new Map<string, AdminEventTicketTypeView[]>();
     if (eventIds.length === 0) return out;
+    // Retired tiers (EVENTS-11 round 5) are not on sale and not reviewed.
     const rows = await this.prisma.eventTicketType.findMany({
-      where: { eventId: { in: eventIds } },
+      where: { eventId: { in: eventIds }, retiredAt: null },
       orderBy: [{ priceNaira: 'asc' }, { name: 'asc' }],
       select: {
         id: true,

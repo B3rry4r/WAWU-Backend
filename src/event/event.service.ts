@@ -598,9 +598,10 @@ export class EventService {
       // The "from" price, DERIVED: the cheapest tier this event offers. One
       // grouped read for the whole page rather than a price column on Event
       // that would go stale the moment a tier is added or repriced.
+      // Retired tiers (EVENTS-11 round 5) are not on sale and set no price.
       this.prisma.eventTicketType.groupBy({
         by: ['eventId'],
-        where: { eventId: { in: ids } },
+        where: { eventId: { in: ids }, retiredAt: null },
         _min: { priceNaira: true },
       }),
       // One batched read for the whole page, not one per row.

@@ -173,19 +173,26 @@ export class EventTicketingService {
     // contend for and each takes them once, so one simply waits for the
     // other. A purchase that got there first has committed its `sold` by
     // the time this reads it (the sold 409); one that comes second finds its
-    // tier replaced and is refused ("sold out", 409), never sold a seat on a
-    // tier that no longer exists.
+    // tier changed and is refused (409), never sold a seat on a tier that is
+    // no longer on sale. Opening a paid checkout locks its tier row FOR
+    // SHARE first (buy), so it too waits for this edit or this edit waits
+    // for it, and an order that got in first makes its tier retired below
+    // rather than deleted.
     await this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT "id" FROM "Event" WHERE "id" = ${eventId} FOR NO KEY UPDATE`;
       await tx.$queryRaw`SELECT "id" FROM "EventTicketType" WHERE "eventId" = ${eventId} FOR UPDATE`;
       const event = await editableEvent(tx, eventId, organiserWawuId);
       await assertNoneSold(tx, eventId);
 
-      // The same tiers sent again change nothing: no rows rewritten, and the
+      // The tiers on sale now, matched against what was sent. A tier sent
+      // exactly as it is stays as it is (same row); the rest of the current
+      // ones are dropped, the rest of the sent ones created. Nothing to drop
+      // and nothing to create is "no change": nothing written, and the
       // event is not sent back to review for an edit that did not happen.
       const current = await tx.eventTicketType.findMany({
-        where: { eventId },
+        where: { eventId, retiredAt: null },
         select: {
+          id: true,
           tier: true,
           name: true,
           priceNaira: true,
@@ -194,24 +201,41 @@ export class EventTicketingService {
           salesEndAt: true,
         },
       });
-      if (sameTiers(current, rows)) return;
+      const plan = planTiers(current, rows);
+      if (plan.drop.length === 0 && plan.create.length === 0) return;
 
-      // A tier a buyer has started paying for cannot be replaced: the
-      // pending order points at it, and deleting it was a database error
-      // (a 500) before this check.
-      const paying = await tx.eventOrder.findMany({
-        where: { eventId, status: 'pending' },
-        select: { ticketType: { select: { name: true } } },
-        distinct: ['ticketTypeId'],
-      });
-      if (paying.length > 0) {
-        throw new ConflictException(
-          `A buyer is paying for ${paying.map((o) => `"${o.ticketType.name}"`).join(', ')} right now, so the tiers cannot be replaced yet. Add a new tier instead, or try again once that payment has finished.`,
-        );
+      // A dropped tier that any order points at (paid or still pending) is
+      // RETIRED, never deleted (EVENTS-11 round 5 ruling, D3): it leaves
+      // every public and admin read and cannot be bought, and a pending
+      // order on it can still settle at the price its buyer saw. Deleting it
+      // was a foreign-key 500 on main, and refusing the edit instead (round
+      // 4) let an abandoned checkout freeze the host's prices for good. A
+      // dropped tier no order points at is deleted, as before.
+      const referenced = new Set(
+        (
+          await tx.eventOrder.findMany({
+            where: { ticketTypeId: { in: plan.drop } },
+            select: { ticketTypeId: true },
+            distinct: ['ticketTypeId'],
+          })
+        ).map((o) => o.ticketTypeId),
+      );
+      const retire = plan.drop.filter((id) => referenced.has(id));
+      const remove = plan.drop.filter((id) => !referenced.has(id));
+      if (retire.length > 0) {
+        await tx.eventTicketType.updateMany({
+          where: { id: { in: retire } },
+          data: { retiredAt: new Date() },
+        });
       }
-
-      await tx.eventTicketType.deleteMany({ where: { eventId, sold: 0 } });
-      await tx.eventTicketType.createMany({ data: rows });
+      if (remove.length > 0) {
+        await tx.eventTicketType.deleteMany({
+          where: { id: { in: remove }, sold: 0 },
+        });
+      }
+      if (plan.create.length > 0) {
+        await tx.eventTicketType.createMany({ data: plan.create });
+      }
 
       // A change to a published (or rejected, or still pending) event puts
       // it in the queue, exactly as PATCH does. A `removed` event never gets
@@ -261,8 +285,9 @@ export class EventTicketingService {
       // hidden one. The signed-out public page keeps its empty list.
       throw new NotFoundException('Event not found.');
     }
+    // A retired tier (round 5) is not on sale and is not listed.
     const types = await this.prisma.eventTicketType.findMany({
-      where: { eventId },
+      where: { eventId, retiredAt: null },
       orderBy: { priceNaira: 'asc' },
     });
     return types.map((t) => ({
@@ -310,6 +335,9 @@ export class EventTicketingService {
       event.hostWawuId,
       'Ticket type not found',
     );
+    if (ticketType.retiredAt) {
+      throw new ConflictException(TIER_CHANGED);
+    }
     if (event.status !== 'published') {
       throw new ConflictException('Tickets are not on sale for this event.');
     }
@@ -373,18 +401,28 @@ export class EventTicketingService {
     // The pending order holds the price the SERVER calculated. Verification
     // compares against this, so a client that edits the amount it sends to
     // the inline SDK buys nothing.
-    const order = await this.prisma.eventOrder.create({
-      data: {
-        eventId: event.id,
-        ticketTypeId: ticketType.id,
-        buyerWawuId,
-        quantity: dto.quantity,
-        amountNaira: amount,
-        commissionRate,
-        status: 'pending',
-        flutterwaveTxRef: charge.txRef,
-        referralCode: dto.referralCode ?? null,
-      },
+    //
+    // Written with its tier row locked FOR SHARE and the tier and event
+    // checked again under that lock (EVENTS-11 O5): a host's PUT that is
+    // replacing the tier either finishes first, and this is refused with a
+    // plain 409, or waits for this order and then retires the tier instead
+    // of deleting it. Inserting against a tier the PUT had just deleted was
+    // a foreign-key 500.
+    const order = await this.prisma.$transaction(async (tx) => {
+      await assertStillOnSale(tx, ticketType.id, event.id);
+      return tx.eventOrder.create({
+        data: {
+          eventId: event.id,
+          ticketTypeId: ticketType.id,
+          buyerWawuId,
+          quantity: dto.quantity,
+          amountNaira: amount,
+          commissionRate,
+          status: 'pending',
+          flutterwaveTxRef: charge.txRef,
+          referralCode: dto.referralCode ?? null,
+        },
+      });
     });
 
     return {
@@ -476,16 +514,46 @@ export class EventTicketingService {
     txId: string | null;
     referralCode: string | null;
   }) {
+    const newOrder = !input.existingOrderId;
     return this.prisma.$transaction(async (tx) => {
       const claimed = await tx.eventTicketType.updateMany({
         where: {
           id: input.ticketTypeId,
           sold: { lte: 2_147_483_647 - input.quantity },
+          // A new order cannot claim a retired tier. A paid order settling
+          // (existingOrderId) can: its buyer paid the price they saw, and the
+          // seat is theirs whatever the host changed since (round 5).
+          ...(newOrder ? { retiredAt: null } : {}),
         },
         data: { sold: { increment: input.quantity } },
       });
       if (claimed.count === 0) {
-        throw new ConflictException('This ticket is sold out.');
+        const tier = await tx.eventTicketType.findUnique({
+          where: { id: input.ticketTypeId },
+          select: { retiredAt: true },
+        });
+        // Replaced or retired by the host since the buyer chose it (O6):
+        // say so, rather than "sold out".
+        throw new ConflictException(
+          !tier || tier.retiredAt ? TIER_CHANGED : 'This ticket is sold out.',
+        );
+      }
+      if (newOrder) {
+        // Read after the tier lock: an edit that sent the event back to
+        // review has committed by now, and a new seat is not sold on an
+        // event under review. Settling a paid order is not refused here.
+        const event = await tx.event.findUniqueOrThrow({
+          where: { id: input.eventId },
+          select: { status: true, cancelledAt: true },
+        });
+        if (event.status !== 'published') {
+          throw new ConflictException(
+            'Tickets are not on sale for this event.',
+          );
+        }
+        if (event.cancelledAt) {
+          throw new ConflictException('This event has been cancelled.');
+        }
       }
 
       const type = await tx.eventTicketType.findUniqueOrThrow({
@@ -857,12 +925,16 @@ interface TierKey {
 }
 
 /**
- * True when `incoming` is exactly the tiers the event already has, in any
- * order. Every field a host can send is compared, so a change to any of them
- * (a price, a name, a capacity, a sales window) is a change.
+ * Matches the tiers sent against the tiers on sale, as two multisets: a sent
+ * tier identical in every field a host can send (tier, name, price,
+ * capacity, sales window) to one on sale keeps that row. Whatever is left on
+ * sale is dropped; whatever is left of what was sent is created. Nothing in
+ * either is "no change".
  */
-function sameTiers(current: TierKey[], incoming: TierKey[]): boolean {
-  if (current.length !== incoming.length) return false;
+function planTiers<C extends TierKey & { id: string }, N extends TierKey>(
+  current: C[],
+  incoming: N[],
+): { drop: string[]; create: N[] } {
   // An unparseable date never matches, so it reaches the write as before.
   const at = (d: Date | null) =>
     d ? (Number.isNaN(d.getTime()) ? 'invalid' : d.getTime()) : null;
@@ -875,9 +947,48 @@ function sameTiers(current: TierKey[], incoming: TierKey[]): boolean {
       at(t.salesStartAt),
       at(t.salesEndAt),
     ]);
-  const a = current.map(key).sort();
-  const b = incoming.map(key).sort();
-  return a.every((k, i) => k === b[i]);
+  const onSale = new Map<string, string[]>();
+  for (const c of current) {
+    const k = key(c);
+    onSale.set(k, [...(onSale.get(k) ?? []), c.id]);
+  }
+  const create: N[] = [];
+  for (const n of incoming) {
+    const ids = onSale.get(key(n));
+    if (ids && ids.length > 0) ids.shift();
+    else create.push(n);
+  }
+  return { drop: [...onSale.values()].flat(), create };
+}
+
+/** The refusal for buying a tier the host has changed since it was chosen. */
+const TIER_CHANGED = 'This ticket has changed. Please choose again.';
+
+/**
+ * Locks a tier row FOR SHARE and checks, under the lock, that it and its
+ * event are still on sale: the tier exists and is not retired (409, "has
+ * changed"), the event is published and not cancelled (the answers buy
+ * already gives). Used before a new order is written.
+ */
+async function assertStillOnSale(
+  tx: Prisma.TransactionClient,
+  ticketTypeId: string,
+  eventId: string,
+): Promise<void> {
+  const [tier] = await tx.$queryRaw<
+    { retiredAt: Date | null }[]
+  >`SELECT "retiredAt" FROM "EventTicketType" WHERE "id" = ${ticketTypeId} FOR SHARE`;
+  if (!tier || tier.retiredAt) throw new ConflictException(TIER_CHANGED);
+  const event = await tx.event.findUnique({
+    where: { id: eventId },
+    select: { status: true, cancelledAt: true },
+  });
+  if (!event || event.status !== 'published') {
+    throw new ConflictException('Tickets are not on sale for this event.');
+  }
+  if (event.cancelledAt) {
+    throw new ConflictException('This event has been cancelled.');
+  }
 }
 
 type Db = PrismaService | Prisma.TransactionClient;
