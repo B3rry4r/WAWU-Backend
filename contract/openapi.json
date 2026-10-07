@@ -30929,6 +30929,12 @@
       "CreateCourseDto": {
         "type": "object",
         "properties": {
+          "priceKobo": {
+            "type": "integer",
+            "description": "Whole kobo (CONVENTIONS section 1).",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
           "title": {
             "type": "string",
             "maxLength": 160
@@ -30957,24 +30963,23 @@
             "items": {
               "type": "string"
             }
-          },
-          "priceKobo": {
-            "type": "number",
-            "description": "Whole kobo (CONVENTIONS section 1).",
-            "minimum": 0,
-            "maximum": 2147483647
           }
         },
         "required": [
+          "priceKobo",
           "title",
           "weeks",
-          "mode",
-          "priceKobo"
+          "mode"
         ]
       },
       "UpdateCourseDto": {
         "type": "object",
         "properties": {
+          "priceKobo": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
           "title": {
             "type": "string",
             "maxLength": 160
@@ -31003,11 +31008,6 @@
             "items": {
               "type": "string"
             }
-          },
-          "priceKobo": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 2147483647
           },
           "hidden": {
             "type": "boolean"

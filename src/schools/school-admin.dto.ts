@@ -1,3 +1,4 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -334,6 +335,7 @@ export class CreateCourseDto {
   outcomes?: string[];
 
   /** Whole kobo (CONVENTIONS section 1). */
+  @ApiProperty({ type: 'integer' })
   @IsInt()
   @Min(0)
   @Max(SCHOOL_LIMITS.priceKoboMax)
@@ -377,6 +379,7 @@ export class UpdateCourseDto {
   @NotNull()
   outcomes?: string[];
 
+  @ApiPropertyOptional({ type: 'integer' })
   @OptionalNotNull()
   @IsInt()
   @Min(0)
