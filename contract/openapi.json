@@ -28254,7 +28254,8 @@
           },
           "scheduledFor": {
             "type": "string",
-            "description": "The start of the hour the person picked, exactly as `GET\n/legal/consultation/slots` gave it. Required for a video or phone call;\nan in-person consultation is arranged directly and books no hour."
+            "description": "The start of the hour the person picked, exactly as `GET\n/legal/consultation/slots` gave it. Required for a video or phone call;\nan in-person consultation is arranged directly and books no hour.",
+            "pattern": "T\\d{2}(?::?\\d{2}(?::?\\d{2}(?:[.,]\\d+)?)?)?(?:Z|[+-]\\d{2}(?::?\\d{2})?)$"
           }
         },
         "required": [

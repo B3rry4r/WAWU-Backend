@@ -22,9 +22,6 @@ import {
 } from 'class-validator';
 import { DEFAULT_MERCHANT_MAX_PER_TXN_KOBO } from '../../money/fees/fee-config';
 
-const trim = ({ value }: { value: unknown }): unknown =>
-  typeof value === 'string' ? value.trim() : value;
-
 /**
  * The longest a consultation can run: the whole working day. A sanity bound on
  * what an admin can type, so a slip of a digit cannot make a consultation that
