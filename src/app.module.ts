@@ -12,8 +12,11 @@ import { AdminCreatorsModule } from './admin/creators/admin-creators.module';
 import { AdminFinanceModule } from './admin/finance/admin-finance.module';
 import { AdminEventsModule } from './admin/events/admin-events.module';
 import { AdminNotificationsModule } from './admin/notifications/admin-notifications.module';
+import { AdminFeaturedCreatorsModule } from './admin/featured-creators/admin-featured-creators.module';
+import { ExploreModule } from './explore/explore.module';
 import { AdminLegalDocumentsModule } from './admin/legal-documents/admin-legal-documents.module';
 import { AboutModule } from './about/about.module';
+import { AdsModule } from './ads/ads.module';
 import { PrismaModule } from './common/prisma/prisma.module';
 import { AccountModule } from './account/account.module';
 import { CommentModule } from './comment/comment.module';
@@ -49,6 +52,7 @@ import { LearnEntitlementModule } from './learn-entitlement/learn-entitlement.mo
 import { MentorRequestModule } from './mentor-request/mentor-request.module';
 import { NotificationSettingsModule } from './notification-settings/notification-settings.module';
 import { PrivacySettingsModule } from './privacy-settings/privacy-settings.module';
+import { TgifPreferenceModule } from './tgif-preference/tgif-preference.module';
 import { UserProfileModule } from './user-profile/user-profile.module';
 import { CourseEnrollmentModule } from './course-enrollment/course-enrollment.module';
 import { SearchResponseModule } from './search-response/search-response.module';
@@ -71,12 +75,18 @@ import { AccountPurgeModule } from './account-purge/account-purge.module';
 import { WalletModule } from './wallet/wallet.module';
 import { MoneyModule } from './money/money.module';
 import { ChatModule } from './chat/chat.module';
+import { TgifModule } from './tgif/tgif.module';
+import { LiveModule } from './live/live.module';
+import { InboxModule } from './inbox/inbox.module';
+import { MeModule } from './me/me.module';
 import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
 import { PaymentWebhookModule } from './payment-webhook/payment-webhook.module';
+import { AdminAdsModule } from './admin/ads/admin-ads.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { HUB_THROTTLERS } from './hub-throttlers';
 import { HUB_THROTTLER_STORAGE } from './hub-throttler-storage';
 import { APP_GUARD } from '@nestjs/core';
+import { AdsEventsModule } from './ads/ads-events.module';
 // Phase 5 build (waves 0-3, all 39 registry resources) is now complete.
 // The deferred Flutterwave webhook has now shipped as PaymentWebhookModule
 // (POST /api/hub/webhooks/flutterwave) alongside the scheduled-job cron pass,
@@ -290,6 +300,9 @@ import { APP_GUARD } from '@nestjs/core';
     VerificationStateModule,
     VerificationSubmissionModule,
     CreatorDiscoveryModule,
+    // Explore's categories and featured creators (task EXPLORE-03): `explore`
+    // is a first segment nothing else declares.
+    ExploreModule,
     ProfessionalModule,
     FollowRelationshipModule,
     BlockedAccountModule,
@@ -304,6 +317,8 @@ import { APP_GUARD } from '@nestjs/core';
     MentorRequestModule,
     NotificationSettingsModule,
     PrivacySettingsModule,
+    // HOME-11: GET/PATCH /settings/tgif (a new leaf under settings/).
+    TgifPreferenceModule,
     UserProfileModule,
     CourseEnrollmentModule,
     SearchResponseModule,
@@ -329,6 +344,11 @@ import { APP_GUARD } from '@nestjs/core';
     EventModule,
     EventTicketingModule,
     ShopModule,
+
+    // Sponsored cards (task ADS-04): `ads` is a first segment nothing else
+    // declares, so it cannot shadow or be shadowed wherever it sits.
+    AdsModule,
+
     // The Naira wallet's served routes (task MONEY-09 first: the transaction
     // PIN). `@Controller('money')` is a first segment nothing else declares,
     // so it can neither shadow nor be shadowed wherever it sits. The declared,
@@ -339,13 +359,37 @@ import { APP_GUARD } from '@nestjs/core';
     // under `admin/policies`.
     AboutModule,
     AdminLegalDocumentsModule,
+    // EXPLORE-03: the superadmin write that features a creator, under
+    // `admin/featured-creators`.
+    AdminFeaturedCreatorsModule,
     // Free chat between two users (task INBOX-06). `@Controller('chats')` is a
     // first segment nothing else declares, so it cannot shadow or be shadowed.
     ChatModule,
+    // TGIF reactions, readers and shares (HOME-10): GET and POST under /tgif.
+    TgifModule,
+    // Live updates for chat (task INBOX-02): the WebSocket at `/api/hub/live`
+    // and `GET /live/catch-up`. `live` is a first segment nothing else declares.
+    LiveModule,
+    // The inbox (task INBOX-07). `@Controller('inbox')` is a first segment nothing
+    // else declares, so it cannot shadow or be shadowed.
+    InboxModule,
+    // The caller's own lists (task ME-10): counts, saved, purchases, the app's
+    // notifications and this month's earnings. `me` is a first segment nothing
+    // else declares.
+    MeModule,
     // Fintava's webhooks (task MONEY-07): POST /webhooks/fintava, recorded
     // once, no money moved. `webhooks/fintava` is a fixed path no other
     // controller declares, beside the unchanged `webhooks/flutterwave`.
     FintavaWebhookModule,
+    // Admin ad management (task ADS-06): `admin/ads`, a second segment no other
+    // controller declares, so it cannot shadow or be shadowed wherever it sits.
+    AdminAdsModule,
+
+    // Counting views, taps and skips of sponsored cards (task ADS-05):
+    // POST /ads/:id/events. Same `ads` first segment as AdsModule, with a
+    // literal tail after the id, so it cannot shadow GET /ads.
+    AdsEventsModule,
+
     // LAST on purpose. PaymentWebhookModule imports every money module so it
     // can reuse their /verify settlement, and every one of them is already
     // registered above — Nest dedupes, so the load-bearing controller order

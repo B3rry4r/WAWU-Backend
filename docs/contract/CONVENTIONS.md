@@ -234,6 +234,7 @@ Every refusal is the envelope this backend already answers with
 | `device_approval_refused` | 403 | `X-Device-Approval` not accepted: not the registered phone, a wrong signature, a used, expired or another person's challenge, or no phone registered; never uses a PIN try (MONEY-14) | |
 | `statement_rate_limited` | 429 | the person has asked for 5 statements in the last minute or 30 in the last hour (`STATEMENT_RATE_LIMITS`, PROVISIONAL), counted after the token is verified (WALLET-27) | `retryAfterSeconds` |
 | `statement_busy` | 503 | two statements are already being built and no place came free within 5 s (`STATEMENT_CONCURRENCY`, PROVISIONAL) (WALLET-27) | `retryAfterSeconds` |
+| `recipient_search_rate_limited` | 429 | the person has searched for recipients 20 times in the last minute, 120 in the last hour or 500 in the last day (`RECIPIENT_SEARCH_PERSON_LIMITS`, PROVISIONAL), counted after the token is verified (WALLET-08); also sent as the `Retry-After` header | `retryAfterSeconds` |
 | `statement_too_large` | 400 | the period holds more movements than one statement lists (`STATEMENT_MAX_ROWS`, 50,000); counted before anything is written, and the person picks a shorter range (WALLET-27) | |
 | `phone_held_by_other_identity` | 409 | account opening where Fintava already has a customer for the person's phone whose record does not carry the checked BVN (or carries none): nothing is adopted or created, and the opening stops for review (MONEY-12, BACKEND_GAPS G-37) | |
 
@@ -1025,3 +1026,77 @@ still reads. Every answer is `Cache-Control: no-store`.
 - **Not served:** a stamped PDF (Fintava issues no statement; mobile repo
   BACKEND_GAPS G-68) and sending it by email (the backend has no email
   sender; G-69).
+
+---
+
+## 13. Finding a recipient (WALLET-08)
+
+`src/money/recipients/`. `GET /money/recipients?q=` and `GET
+/money/recipients/recent` answer `RecipientView[]` (plain arrays, at most 20
+and 10, no paging: section 6 keeps recipients a short list, and a search is
+narrowed by typing more). Both run MONEY-13's gate (`@RequireOpenWallet()`),
+send `Cache-Control: no-store`, read our database only and never call Fintava.
+
+- **Who can be found, on both routes.** Only a person with an OPEN wallet (a
+  `FintavaWallet` row; R-6). Never the caller. Never a person blocked either
+  way: the one list `BlockedAccountService.hiddenFrom` (SETTINGS-04), read
+  once per request. A blocked person, a person with no wallet and a person
+  who does not exist all answer the same way: nothing.
+- **What a result is.** `wawuUserId`, `displayName`, `handle`, `avatarUrl`,
+  `tick`, and nothing else. Never a phone number (not even masked), an
+  account number, an email, a BVN or a NIN: the queries select none of them.
+  A person found by phone is shown exactly like one found by name. The name
+  is WAWU ID's, else the name on their wallet, else the handle; one with
+  none of the three is left out.
+- **A phone is matched in full, as a phone, and as nothing else.** The text
+  is a phone when it is a whole Nigerian mobile after normalising
+  (`08031234567`, `8031234567`, `2348031234567`, `+2348031234567`, spaces,
+  dashes and brackets ignored; section 2). It is compared with the phone the
+  person's wallet was opened with (`FintavaWalletOpening.phone`, and
+  `WalletIdentity.verifiedPhone`, E.164). Digits that are not a whole mobile
+  are read as text: they can match the beginning of a name or handle, never
+  part of a phone. A handle written like a number never stands in for that
+  number. The Hub holds no other phone: a person who changed the phone on
+  their WAWU account since opening the wallet is found by the one they opened
+  it with.
+- **A name or @handle is matched by its beginning**, case ignored: the
+  beginning of the handle, or of the name on the wallet or any word of it
+  (`okoro` finds `ADAEZE OKORO`). `@text` searches handles only. `%`, `_` and
+  `\` are the characters they are, never wildcards. At least 2 characters
+  after trimming (and after a leading `@`), at most 60; anything else, a
+  missing `q`, a repeated `q` or another query field is a plain 400 in the
+  one error shape (no `reason`: it is a malformed field, section 3). Names
+  live in WAWU ID, which has no search, so a name search reads the name on
+  the wallet and the handle (BACKEND_GAPS G-132).
+- **Order and size.** Search: name order, then id, the first 20. Recent:
+  the caller's own completed outgoing ledger rows (`direction out`, `status
+  completed`, `counterpartyKind wawu_user`, category `transfer` or
+  `purchase`), one person once at the time of their latest send, newest
+  first, the first 10 after blocked people and people with no open wallet are
+  taken out. A pending, failed or reversed send is not a person sent to.
+- **Limits** (PROVISIONAL `RECIPIENT-SEARCH-RATE`,
+  `src/money/recipients/recipient-config.ts`; lead's figures after the
+  round-1 verifier walked 6,000 holders at about 3 requests a person). Two
+  kinds, both kept:
+  - **Per address**, on the app's named throttlers, tighter than the global
+    ones (which stay): at most 20 a minute and 120 an hour from one address.
+    A refusal is the guard's own `429` with no `reason`, before the token is
+    read. The recent list sets none of its own.
+  - **Per person** (`RecipientSearchLimiter`, the shared
+    `PersonWindowLimiter` that statements use too): at most 20 a minute, 120
+    an hour and 500 a day, each a fixed window that starts at the person's
+    first search in it, keyed by the verified wawuUserId. It is counted in
+    the handler, after `WawuAuthGuard` has verified the token and the wallet
+    gate has found the wallet, so a forged or missing token never makes an
+    entry and a person with no wallet is refused by the gate first. A search
+    the route refuses with a 400 is read before it is counted and does not
+    count. Beyond any window: `429 recipient_search_rate_limited`, "You have
+    searched a lot in a short time. Try again in a little while.", with
+    `retryAfterSeconds` (seconds to the end of the longest full window,
+    rounded up, at least 1) and the same number in a `Retry-After` header.
+    One account cannot get round it by changing address (a whole IPv6 /64 is
+    one caller's), and two accounts on one address each keep their own
+    budget while the address limit still holds for the address.
+- **Contract.** The search declares its plain `400` (a malformed `q`, no
+  `reason`) and `429` (`recipient_search_rate_limited`; the per-address 429
+  has no `reason`); both lists carry `maxItems` (20 and 10).
