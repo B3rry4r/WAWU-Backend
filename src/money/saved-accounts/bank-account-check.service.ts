@@ -1,11 +1,14 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { FintavaClient } from '../../fintava/fintava-client';
-import { FINTAVA_DEFAULTS } from '../../fintava/fintava-config';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
-  FintavaError,
-  type FintavaErrorKind,
-} from '../../fintava/fintava-error';
-import type { FintavaBank } from '../../fintava/fintava.interface';
+  type ProviderAccountName,
+  type ProviderBank,
+  WALLET_PROVIDER,
+  type WalletProvider,
+} from '../../wallet-provider/wallet-provider.interface';
+import {
+  WalletProviderError,
+  type WalletProviderErrorKind,
+} from '../../wallet-provider/wallet-provider-error';
 import { MoneyError } from '../money-error';
 import type { BankAccountView } from '../money-view.type';
 
@@ -32,7 +35,7 @@ export const BANK_LIST_TTL_MS = 60 * 60_000;
  * (no answer, a 5xx, a key or merchant problem, a rate limit, an unreadable
  * answer) is Fintava being unavailable, answered 503 with nothing saved.
  */
-const ACCOUNT_REFUSED: readonly FintavaErrorKind[] = [
+const ACCOUNT_REFUSED: readonly WalletProviderErrorKind[] = [
   'refused',
   'validation',
   'not_found',
@@ -47,28 +50,39 @@ const ACCOUNT_REFUSED: readonly FintavaErrorKind[] = [
  *
  * Nothing here is logged with the account number or the name: the MONEY-06
  * client logs no URL or body, and this file logs nothing of its own.
+ *
+ * Both calls go through the wallet provider seam (MONEY-20): the bank list
+ * and the name check are `WalletProvider.listBanks` and `checkAccountName`
+ * (Fintava's `GET /banks` and `GET /name/enquiry`; Nuvion's bank codes and
+ * `POST /counterparty-lookups`).
  */
 @Injectable()
 export class BankAccountCheckService {
   private readonly logger = new Logger(BankAccountCheckService.name);
-  private banks: { at: number; byCode: Map<string, FintavaBank> } | null = null;
-  private fetching: Promise<Map<string, FintavaBank>> | null = null;
+  private banks: { at: number; byCode: Map<string, ProviderBank> } | null =
+    null;
+  private fetching: Promise<Map<string, ProviderBank>> | null = null;
 
-  constructor(private readonly fintava: FintavaClient) {}
+  constructor(
+    @Inject(WALLET_PROVIDER) private readonly provider: WalletProvider,
+  ) {}
 
   /** The account as the bank names it, or a refusal in the contract's shape. */
   async check(
     bankCode: string,
     accountNumber: string,
   ): Promise<BankAccountView> {
-    if (this.fintava.environment === 'unconfigured') throw this.unreachable();
+    if (!this.provider.configured) throw this.unreachable();
     const bank = (await this.bankList()).get(bankCode);
     if (!bank) {
       throw new MoneyError('name_check_failed', NAME_CHECK_FAILED_MESSAGE);
     }
-    let answer: Awaited<ReturnType<FintavaClient['bankNameEnquiry']>>;
+    let answer: ProviderAccountName;
     try {
-      answer = await this.fintava.bankNameEnquiry(accountNumber, bankCode);
+      answer = await this.provider.checkAccountName({
+        accountNumber,
+        bankCode,
+      });
     } catch (e) {
       throw this.refusal(e);
     }
@@ -88,7 +102,7 @@ export class BankAccountCheckService {
    * that arrive while it is being fetched wait for that same answer rather
    * than each asking Fintava (single flight). A failed fetch is not kept.
    */
-  private bankList(): Promise<Map<string, FintavaBank>> {
+  private bankList(): Promise<Map<string, ProviderBank>> {
     if (this.banks && Date.now() - this.banks.at < BANK_LIST_TTL_MS) {
       return Promise.resolve(this.banks.byCode);
     }
@@ -98,10 +112,10 @@ export class BankAccountCheckService {
     return this.fetching;
   }
 
-  private async fetchBanks(): Promise<Map<string, FintavaBank>> {
-    let list: FintavaBank[];
+  private async fetchBanks(): Promise<Map<string, ProviderBank>> {
+    let list: ProviderBank[];
     try {
-      list = await this.fintava.listBanks();
+      list = await this.provider.listBanks();
     } catch (e) {
       throw this.refusal(e, true);
     }
@@ -110,14 +124,14 @@ export class BankAccountCheckService {
     return byCode;
   }
 
-  /** A failed Fintava call, in the contract's shape. Fintava's text never reaches the app. */
+  /** A failed provider call, in the contract's shape. The provider's text never reaches the app. */
   private refusal(e: unknown, listing = false): unknown {
-    if (!(e instanceof FintavaError)) return e;
+    if (!(e instanceof WalletProviderError)) return e;
     if (!listing && ACCOUNT_REFUSED.includes(e.kind)) {
       return new MoneyError('name_check_failed', NAME_CHECK_FAILED_MESSAGE);
     }
     this.logger.warn(
-      `${listing ? 'bank list' : 'name check'}: Fintava ${e.kind}${
+      `${listing ? 'bank list' : 'name check'}: ${this.provider.label} ${e.kind}${
         e.httpStatus === null ? '' : ` HTTP ${e.httpStatus}`
       }`,
     );
@@ -126,7 +140,7 @@ export class BankAccountCheckService {
 
   private unreachable(): MoneyError {
     return new MoneyError('provider_unreachable', BANK_UNREACHABLE_MESSAGE, {
-      retryAfterSeconds: FINTAVA_DEFAULTS.retryAfterSeconds,
+      retryAfterSeconds: this.provider.timings.retryAfterSeconds,
     });
   }
 }

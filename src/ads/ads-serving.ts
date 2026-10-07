@@ -1,3 +1,7 @@
+import type { PrismaService } from '../common/prisma/prisma.service';
+import type { BlockedAccountService } from '../blocked-account/blocked-account.service';
+import type { AdPlacementName } from './dto/ads.dto';
+
 /**
  * How a sponsored card is picked (task ADS-04, R-15). One place, so the
  * service, the tests and ADS-05 and ADS-06 read the same rule.
@@ -28,3 +32,115 @@ export const AD_TIE_BREAK = [
   { createdAt: 'asc' },
   { id: 'asc' },
 ] as const;
+
+/** What a serving check needs: the database and the block list. */
+export interface ServingDeps {
+  prisma: PrismaService;
+  blocked: BlockedAccountService;
+}
+
+/** A campaign that passed every rule above, with the fields a card carries. */
+export interface ServableCampaign {
+  id: string;
+  advertiser: string;
+  creative: {
+    headline: string;
+    subline: string | null;
+    ctaLabel: string;
+    ctaDestination: 'event';
+    ctaDestinationId: string;
+    artworkUrl: string | null;
+  };
+}
+
+/**
+ * THE ONE ELIGIBILITY RULE, rules 1 to 5 above, in the order of AD_TIE_BREAK.
+ * GET /ads (ADS-04) serves the first of the answer; counting a view, tap or
+ * skip (ADS-05) accepts a campaign only if it is in the answer for that
+ * viewer at that instant. Both call this, so they cannot disagree.
+ * `placement` and `campaignId` narrow the search; neither changes the rule.
+ */
+export async function servableCampaigns(
+  deps: ServingDeps,
+  viewerWawuId: string,
+  now: Date,
+  narrow: { placement?: AdPlacementName; campaignId?: string },
+): Promise<ServableCampaign[]> {
+  const candidates = await deps.prisma.adCampaign.findMany({
+    where: {
+      ...(narrow.placement ? { placement: narrow.placement } : {}),
+      ...(narrow.campaignId ? { id: narrow.campaignId } : {}),
+      status: { in: [...SERVED_STATUSES] },
+      startsAt: { lte: now },
+      endsAt: { gt: now },
+      creative: { isNot: null },
+    },
+    orderBy: [...AD_TIE_BREAK],
+    select: {
+      id: true,
+      advertiser: true,
+      creative: {
+        select: {
+          headline: true,
+          subline: true,
+          ctaLabel: true,
+          ctaDestination: true,
+          ctaDestinationId: true,
+          artworkUrl: true,
+        },
+      },
+    },
+  });
+  if (candidates.length === 0) return [];
+
+  const open = await openEventIds(
+    deps,
+    viewerWawuId,
+    candidates.flatMap((c) =>
+      c.creative?.ctaDestination === 'event'
+        ? [c.creative.ctaDestinationId]
+        : [],
+    ),
+    now,
+  );
+
+  const out: ServableCampaign[] = [];
+  for (const c of candidates) {
+    const creative = c.creative;
+    // Anything this code cannot check is not served.
+    if (!creative || creative.ctaDestination !== 'event') continue;
+    if (!open.has(creative.ctaDestinationId)) continue;
+    out.push({
+      id: c.id,
+      advertiser: c.advertiser,
+      creative: { ...creative, ctaDestination: 'event' },
+    });
+  }
+  return out;
+}
+
+/**
+ * Of these Event ids, the ones a person can still open: published, not
+ * cancelled, not finished (`endsAt ?? startsAt` not before now, as in
+ * GET /events upcoming) and not hosted by somebody hidden from the viewer.
+ */
+async function openEventIds(
+  deps: ServingDeps,
+  viewerWawuId: string,
+  ids: string[],
+  now: Date,
+): Promise<Set<string>> {
+  if (ids.length === 0) return new Set();
+  const hidden = await deps.blocked.hiddenFrom(viewerWawuId);
+  const rows = await deps.prisma.event.findMany({
+    where: {
+      id: { in: ids },
+      status: 'published',
+      cancelledAt: null,
+      hostWawuId: { notIn: hidden },
+      OR: [{ endsAt: { gte: now } }, { endsAt: null, startsAt: { gte: now } }],
+    },
+    select: { id: true },
+  });
+  return new Set(rows.map((r) => r.id));
+}

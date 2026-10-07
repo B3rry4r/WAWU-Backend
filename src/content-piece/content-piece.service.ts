@@ -1082,6 +1082,11 @@ export class ContentPieceService {
         userWawuId: purchase.creatorWawuId,
         contentTitle: content.title,
         netAmount: netOfCommission(purchase.amount, purchase.commissionRate),
+        // ME-10: opening it opens the piece sold; the buyer is the other person.
+        about: {
+          target: { kind: 'content', id: content.id },
+          actorWawuId: purchase.buyerWawuId,
+        },
       });
     }
 
