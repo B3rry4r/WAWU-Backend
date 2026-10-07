@@ -192,15 +192,15 @@ describe('TGIF share card (units)', () => {
     });
     const sizeOf = (svg: string) =>
       Number(
-        /font-size="(\d+)" font-weight="700" letter-spacing="-/.exec(svg)![1],
+        /font-size="(\d+(?:\.\d+)?)" font-weight="700" fill=/.exec(svg)![1],
       );
-    expect(sizeOf(short.svg)).toBe(20);
-    expect(sizeOf(long.svg)).toBeLessThan(20);
+    expect(sizeOf(short.svg)).toBe(19);
+    expect(sizeOf(long.svg)).toBeLessThan(19);
     expect(long.height).toBeGreaterThanOrEqual(short.height);
   });
 
   it('breaks between words, and inside a word too long for a line', () => {
-    const measure = (s: string) => bold.width(s, 20);
+    const measure = (s: string) => bold.width(s, 19);
     const inner = CARD_WIDTH - 44;
     const lines = wrapLines(
       `${'W'.repeat(80)} and some words after it`,

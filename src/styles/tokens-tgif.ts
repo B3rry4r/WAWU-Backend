@@ -11,7 +11,7 @@ export const TGIF_TOKENS = {
   /** --accent: the glow in the top right corner. */
   glow: '#9411C9',
   /** The glow's strength at its centre. */
-  glowOpacity: 0.7,
+  glowOpacity: 0.8,
   /** Text on the card. */
   ink: '#FFFFFF',
   /** The date label and the reference line. */

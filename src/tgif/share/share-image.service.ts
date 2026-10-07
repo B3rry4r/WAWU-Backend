@@ -12,20 +12,22 @@ export const SHARE_IMAGE_BUSY_MESSAGE =
 /** The card's width in points, as H35 draws the preview, and the pixels drawn per point. */
 export const CARD_WIDTH = 350;
 export const IMAGE_SCALE = 3;
-const PAD_X = 22;
-const PAD_TOP = 22;
-const PAD_BOTTOM = 22;
+/** H35's preview card (design/_gen/home.js): 22 inside, 220 high, the date at the top, the verse between, the reference at the bottom. */
+const PAD = 22;
 const MIN_HEIGHT = 220;
 const LABEL_SIZE = 11;
-const LABEL_SPACING_EM = 0.14;
-const VERSE_LEADING = 1.25;
-const VERSE_TRACKING_EM = -0.02;
-const FOOTER_SIZE = 14;
-/** The verse is set at the largest of these that fits in VERSE_MAX_HEIGHT. */
-const VERSE_SIZES = [20, 18, 16, 14];
-const VERSE_MAX_HEIGHT = 230;
-const LABEL_TO_VERSE = 34;
-const VERSE_TO_FOOTER = 28;
+const LABEL_SPACING_EM = 0.12;
+const VERSE_LEADING = 1.3;
+const FOOTER_SIZE = 12;
+/** Alan Sans: the line box is the font's ascent and descent, 0.99 and 0.31 of the size. */
+const ASCENT = 0.99;
+const LINE_BOX = 1.3;
+/** The verse is set at the largest of these that fits in VERSE_MAX_LINES. */
+const VERSE_SIZES = [19, 17, 15, 13.5];
+const VERSE_MAX_LINES = 9;
+/** The glow in the corner: a 220 circle, 60 past the right and top edges, clear at 70% of its far corner. */
+const GLOW_CENTER = { x: CARD_WIDTH + 60 - 110, y: -60 + 110 };
+const GLOW_RADIUS = 0.7 * 110 * Math.SQRT2;
 
 /** Pictures kept, newest last: the card is the same for everyone on the same day of the year. */
 const KEEP = 64;
@@ -133,57 +135,68 @@ export function shareCardSvg(input: ShareCardInput): {
 } {
   const { bold, semibold } = fonts();
   const month = MONTHS[Number(input.date.slice(5, 7)) - 1] ?? '';
-  const label = `TGIF · ${Number(input.date.slice(8, 10))} ${month}`;
-  const quote = `“${input.verse}”`;
-  const inner = CARD_WIDTH - 2 * PAD_X;
+  const label = `TGIF \u00b7 ${Number(input.date.slice(8, 10))} ${month}`;
+  const quote = `\u201c${input.verse}\u201d`;
+  const inner = CARD_WIDTH - 2 * PAD;
 
   let size = VERSE_SIZES[VERSE_SIZES.length - 1];
   let lines: string[] = [];
   for (const candidate of VERSE_SIZES) {
-    const tracking = VERSE_TRACKING_EM * candidate;
-    const tried = wrapLines(quote, inner, (s) =>
-      bold.width(s, candidate, tracking),
-    );
+    const tried = wrapLines(quote, inner, (s) => bold.width(s, candidate));
     size = candidate;
     lines = tried;
-    if (tried.length * candidate * VERSE_LEADING <= VERSE_MAX_HEIGHT) break;
+    if (tried.length <= VERSE_MAX_LINES) break;
   }
-  const lineHeight = size * VERSE_LEADING;
-  const verseTop = PAD_TOP + LABEL_SIZE + LABEL_TO_VERSE;
-  const verseBottom = verseTop + lines.length * lineHeight;
-  const footerBase = verseBottom + VERSE_TO_FOOTER + FOOTER_SIZE;
-  const height = Math.max(MIN_HEIGHT, Math.ceil(footerBase + PAD_BOTTOM));
-  const base = height - PAD_BOTTOM;
+  // Three blocks spaced evenly down the card, as the canvas's `space-between`.
+  const labelBox = LABEL_SIZE * LINE_BOX;
+  const lineBox = size * VERSE_LEADING;
+  const verseBox = lines.length * lineBox;
+  const footerBox = FOOTER_SIZE * LINE_BOX;
+  const height = Math.max(
+    MIN_HEIGHT,
+    Math.ceil(2 * PAD + labelBox + verseBox + footerBox + 2 * 24),
+  );
+  const gap = (height - 2 * PAD - labelBox - verseBox - footerBox) / 2;
+  const verseTop = PAD + labelBox + gap;
+  const footerTop = verseTop + verseBox + gap;
 
   // The footer is one line: the link, if it fits beside the reference, else the reference alone.
   const reference = xml(input.reference);
-  const link = input.link
-    ? semibold.width(input.link, FOOTER_SIZE) +
-        semibold.width(input.reference, FOOTER_SIZE) +
-        16 <=
+  const link =
+    input.link &&
+    semibold.width(input.link, FOOTER_SIZE) +
+      semibold.width(input.reference, FOOTER_SIZE) +
+      16 <=
       inner
       ? input.link
-      : null
-    : null;
+      : null;
 
+  const ink = `fill="${TGIF_TOKENS.ink}"`;
+  const soft = `${ink} fill-opacity="${TGIF_TOKENS.inkSoft}"`;
   const verse = lines
-    .map(
-      (l, i) =>
-        `<text x="${PAD_X}" y="${(verseTop + size * 0.9 + i * lineHeight).toFixed(2)}" font-family="${FAMILY}" font-size="${size}" font-weight="700" letter-spacing="${(VERSE_TRACKING_EM * size).toFixed(3)}" fill="${TGIF_TOKENS.ink}">${xml(l)}</text>`,
-    )
+    .map((l, i) => {
+      // The text sits in the middle of its line box, as CSS places it.
+      const y =
+        verseTop +
+        i * lineBox +
+        (lineBox - size * LINE_BOX) / 2 +
+        size * ASCENT;
+      return `<text x="${PAD}" y="${y.toFixed(2)}" font-family="${FAMILY}" font-size="${size}" font-weight="700" ${ink}>${xml(l)}</text>`;
+    })
     .join('');
+  const footerY = (footerTop + FOOTER_SIZE * ASCENT).toFixed(2);
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" width="${CARD_WIDTH}" height="${height}" viewBox="0 0 ${CARD_WIDTH} ${height}">` +
-    `<defs><radialGradient id="glow" gradientUnits="userSpaceOnUse" cx="${CARD_WIDTH - 80}" cy="${Math.round(height * 0.2)}" r="168">` +
+    `<defs><radialGradient id="glow" gradientUnits="userSpaceOnUse" cx="${GLOW_CENTER.x}" cy="${GLOW_CENTER.y}" r="${GLOW_RADIUS.toFixed(2)}">` +
     `<stop offset="0" stop-color="${TGIF_TOKENS.glow}" stop-opacity="${TGIF_TOKENS.glowOpacity}"/>` +
     `<stop offset="1" stop-color="${TGIF_TOKENS.glow}" stop-opacity="0"/></radialGradient></defs>` +
     `<rect width="100%" height="100%" fill="${TGIF_TOKENS.ground}"/>` +
     `<rect width="100%" height="100%" fill="url(#glow)"/>` +
-    `<text x="${PAD_X}" y="${PAD_TOP + LABEL_SIZE}" font-family="${FAMILY}" font-size="${LABEL_SIZE}" font-weight="700" letter-spacing="${(LABEL_SPACING_EM * LABEL_SIZE).toFixed(3)}" fill="${TGIF_TOKENS.ink}" fill-opacity="${TGIF_TOKENS.inkSoft}">${xml(label)}</text>` +
+    `<text x="${PAD}" y="${(PAD + LABEL_SIZE * ASCENT).toFixed(2)}" font-family="${FAMILY}" font-size="${LABEL_SIZE}" font-weight="700" letter-spacing="${(LABEL_SPACING_EM * LABEL_SIZE).toFixed(3)}" ${soft}>${xml(label)}</text>` +
     verse +
-    `<text x="${PAD_X}" y="${base}" font-family="${FAMILY}" font-size="${FOOTER_SIZE}" font-weight="600" fill="${TGIF_TOKENS.ink}" fill-opacity="${TGIF_TOKENS.inkSoft}">${reference}</text>` +
+    `<text x="${PAD}" y="${footerY}" font-family="${FAMILY}" font-size="${FOOTER_SIZE}" font-weight="600" ${soft}>${reference}</text>` +
     (link
-      ? `<text x="${CARD_WIDTH - PAD_X}" y="${base}" text-anchor="end" font-family="${FAMILY}" font-size="${FOOTER_SIZE}" font-weight="600" fill="${TGIF_TOKENS.ink}" fill-opacity="${TGIF_TOKENS.inkSoft}">${xml(link)}</text>`
+      ? `<text x="${CARD_WIDTH - PAD}" y="${footerY}" text-anchor="end" font-family="${FAMILY}" font-size="${FOOTER_SIZE}" font-weight="600" ${soft}>${xml(link)}</text>`
       : '') +
     `</svg>`;
   return { svg, height };
