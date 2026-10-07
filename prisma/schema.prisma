@@ -313,6 +313,56 @@ model ProfileDetails {
   updatedAt     DateTime @updatedAt
 }
 
+/// One featured work on somebody's profile (ME-16): what M33 shows under
+/// "Featured works", M34 lists and M35 opens.
+///
+/// ITS OWN TABLE, WITH NO RELATION TO UserProfile, for the reason ProfileDetails
+/// gives: nothing here widens GET or PATCH /users/me or the public profile.
+/// `position` is the order the owner chose (0 first); a new work goes to 0 and
+/// the rest move down one, inside a per-person advisory lock, so two requests
+/// cannot take the same slot or push a person past the cap. `media` holds
+/// object KEYS (never signed URLs, which expire) of the owner's own uploads,
+/// first one is the cover; every read signs them fresh.
+model ProfileWork {
+  id          String   @id @default(uuid())
+  wawuUserId  String
+  title       String
+  /// What the person did on it ("Director"). Required: M36 draws it unmarked.
+  role        String
+  client      String?
+  /// The year it was made. A whole year, never a date.
+  year        Int
+  /// Where to see it elsewhere. Stored as inert text, never fetched.
+  link        String?
+  /// Free text; M34's filter chips are the distinct categories one person used.
+  category    String?
+  description String?
+  media       String[] @default([])
+  position    Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([wawuUserId, position])
+}
+
+/// One education entry on somebody's profile (ME-16): school, field of study,
+/// first and last year. A NULL `endYear` means still studying there (the same
+/// single-column rule ProfileExperience.endedOn follows). No relation to
+/// UserProfile, same reason as ProfileWork.
+model ProfileEducation {
+  id         String   @id @default(uuid())
+  wawuUserId String
+  school     String
+  /// "Mass Communication". Optional: M33 draws the line from whatever is there.
+  field      String?
+  startYear  Int
+  endYear    Int?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([wawuUserId, startYear])
+}
+
 /// One role on somebody's profile: what they did, where, and when.
 ///
 /// WHY A TABLE AND NOT A JSON COLUMN. Each row is independently editable and
@@ -3745,6 +3795,10 @@ model ChatParticipant {
   lastReadAt        DateTime?
   /// The message that mark points at.
   lastReadMessageId String?
+  /// When the mark last moved (INBOX-02). The live catch-up reads it to tell
+  /// which read marks changed since a cursor. Null on a row that has never
+  /// moved, and on every row from before this column.
+  readAt            DateTime?
   conversation      ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@id([conversationId, wawuUserId])
@@ -4164,4 +4218,188 @@ model LegalDocument {
   /// [{ heading, body }]; a body's paragraphs are separated by a blank line.
   sections      Json
   updatedAt     DateTime @updatedAt
+}
+
+/// One person's reaction to one TGIF card on one day (HOME-10). The unique
+/// (person, day, card) key is what makes a reaction count once: two taps at
+/// once race on the key and one row exists. Counts are always the number of
+/// rows (no counter column), so a count can never drift from its rows. `kind`
+/// is "amen" today; the migration holds it to that with a CHECK.
+model TgifReaction {
+  id         String   @id @default(uuid())
+  userWawuId String
+  /// The calendar day the card belongs to (a date, not an instant).
+  day        DateTime @db.Date
+  card       String
+  kind       String   @default("amen")
+  createdAt  DateTime @default(now())
+
+  @@unique([userWawuId, day, card])
+  @@index([day, card])
+}
+
+/// One person opened TGIF on one day (HOME-10). "Readers today" is the number
+/// of rows for the day: one person is one row however often they open it.
+model TgifRead {
+  id         String   @id @default(uuid())
+  userWawuId String
+  day        DateTime @db.Date
+  createdAt  DateTime @default(now())
+
+  @@unique([userWawuId, day])
+  @@index([day])
+}
+
+/// One person shared TGIF on one day (HOME-10). The share count for a day is
+/// the number of rows, as ContentShare's is for a piece.
+model TgifShare {
+  id         String   @id @default(uuid())
+  userWawuId String
+  day        DateTime @db.Date
+  createdAt  DateTime @default(now())
+
+  @@unique([userWawuId, day])
+  @@index([day])
+}
+
+/// HOME-11: whether this person wants TGIF on Today. One row per person, made
+/// the first time they change it; no row means the default (shown). Nothing
+/// else references it.
+model TgifPreference {
+  userWawuId String   @id
+  /// false = the person turned TGIF off on Today.
+  show       Boolean  @default(true)
+  updatedAt  DateTime @updatedAt
+}
+
+/// EXPLORE-03: a creator an admin has chosen to show in Explore's "Featured
+/// creators" rail. One row per featured creator; no row means not featured.
+/// `position` orders the rail (lowest first). Set only by the superadmin
+/// route PUT /admin/featured-creators/:wawuId and removed by DELETE.
+model FeaturedCreator {
+  wawuUserId        String   @id
+  position          Int      @default(0)
+  /// The admin who featured them (an audit record, kept when a creator goes).
+  featuredByAdminId String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([position])
+}
+
+// -----------------------------------------------------------------------------
+// Sponsored cards (ADS-03, R-15)
+//
+// Ads at launch are booked by the WAWU team and invoiced by hand, so nothing
+// here records a price, an advertiser account or a payment. Money lives in the
+// team's invoices, not in this schema.
+//
+// Holds no personal data: no column names a WAWU user, so
+// src/account-purge/account-data-map.ts has nothing to classify here. (ADS-05's
+// per-viewer rows will, and classify themselves in that task.)
+//
+// CHECK constraints are in the migration, because Prisma does not model them:
+//   AdCampaign: endsAt > startsAt; weight between 1 and 100 (the range
+//   is AD_WEIGHT_MIN and AD_WEIGHT_MAX in src/ads/ads-limits.ts); advertiser
+//   is not blank.
+//   AdCreative: headline, CTA label and destination id are not blank, and a
+//   subline is absent or not blank; artworkUrl is absent or an http(s) link.
+//   "Blank" means empty or only white space, control, zero-width or other
+//   invisible characters, spelled out in the migration so it does not depend
+//   on the server's locale.
+// -----------------------------------------------------------------------------
+
+/// Where a sponsored card shows: inside the TGIF reader before the takeaway
+/// (`tgif_card`), or in TGIF's place on Today when the person has TGIF off
+/// (`today_slot`). Adding a placement is an `ALTER TYPE ... ADD VALUE`.
+enum AdPlacement {
+  tgif_card
+  today_slot
+}
+
+/// Where the team has put a campaign. The window (`startsAt`, `endsAt`) decides
+/// when it may run; this decides whether it may run at all. Only `scheduled`
+/// and `live` are ever served; `draft`, `paused` and `ended` never are.
+enum AdCampaignStatus {
+  draft
+  scheduled
+  live
+  paused
+  ended
+}
+
+/// What the card's button opens. THE ALLOW-LIST: a card can only open one of
+/// these, so a destination outside it cannot be stored. `event` opens the event
+/// detail screen for `AdCreative.ctaDestinationId` (H33 "Get tickets", H36
+/// "Tickets"). The only destination the design draws is the event; a new kind
+/// is an additive `ALTER TYPE ... ADD VALUE` that the task needing it names.
+enum AdCtaDestination {
+  event
+}
+
+/// One booking: who it is for, where it shows, when, and how it ranks against
+/// another booking for the same placement. The card itself is the AdCreative.
+model AdCampaign {
+  id String @id @default(uuid())
+
+  /// The advertiser's name as the card shows it ("SPONSORED · <advertiser>").
+  /// A name, not an account: advertisers have no accounts (R-15).
+  advertiser String
+
+  placement AdPlacement
+  status    AdCampaignStatus @default(draft)
+
+  /// The window the card may be served in: startsAt <= now < endsAt. Instants
+  /// (UTC); the dashboard turns "Saturday 18 October" into instants.
+  startsAt DateTime
+  endsAt   DateTime
+
+  /// Ranks bookings that overlap on one placement, so one is served: the
+  /// higher weight wins, and ADS-04 breaks a tie. 1 to 100, whole numbers. Range: src/ads/ads-limits.ts.
+  weight Int @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// At most one (AdCreative.campaignId is unique). Removing a campaign
+  /// removes its card.
+  creative AdCreative?
+
+  /// The serving query (ADS-04): one placement, a servable status, a window
+  /// that contains now.
+  @@index([placement, status, startsAt, endsAt])
+}
+
+/// The card a campaign shows. Everything on H33 and H36 is here and nothing
+/// else: the advertiser's name is the campaign's, the "SPONSORED" label and
+/// "Ads keep TGIF free" are the app's own words, and the event's date and
+/// price are typed into `subline` by the team (the app never invents them).
+model AdCreative {
+  id String @id @default(uuid())
+
+  campaignId String     @unique
+  campaign   AdCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  /// "Gospel Night Live".
+  headline String
+  /// "Abuja · Sat 18 October", exactly as the team wrote it, price and all.
+  /// Optional: a card with only a headline is allowed.
+  subline  String?
+
+  /// The button's words ("Get tickets", "Tickets").
+  ctaLabel         String
+  /// What the button opens: a kind from the allow-list (AdCtaDestination) and
+  /// the id of the thing of that kind. For `event`, an Event id. No foreign
+  /// key: the id's table depends on the kind, and an FK onto Event would stop
+  /// an event being deleted. Serving checks the target is still open.
+  ctaDestination   AdCtaDestination
+  ctaDestinationId String
+
+  /// The picture. An http(s) URL from POST /uploads/presign, the same as
+  /// Event.bannerUrl and NotificationCampaign.imageUrl. Null: the card is drawn
+  /// without a picture.
+  artworkUrl String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }

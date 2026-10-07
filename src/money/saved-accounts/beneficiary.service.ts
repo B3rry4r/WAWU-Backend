@@ -1,9 +1,9 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { WawuIdClient } from '../../common/auth/wawu-id.client';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { deriveVerificationState } from '../../common/verification/verification-state';
 import type { CreateBeneficiaryDto } from '../dto/money-request.dto';
 import { MoneyError } from '../money-error';
+import { loadMoneyParties } from '../money-party';
 import type {
   BankAccountView,
   BeneficiaryView,
@@ -130,10 +130,7 @@ export class BeneficiaryService {
     }
     // SETTINGS-04: a hidden person answers as a person who is not found.
     if (await this.blockedAccounts.isBlockedEitherWay(owner, recipient)) {
-      throw new MoneyError(
-        'recipient_not_found',
-        RECIPIENT_NOT_FOUND_MESSAGE,
-      );
+      throw new MoneyError('recipient_not_found', RECIPIENT_NOT_FOUND_MESSAGE);
     }
     const [wallet, profile] = await Promise.all([
       this.prisma.fintavaWallet.findUnique({
@@ -309,52 +306,12 @@ export class BeneficiaryService {
   }
 
   /**
-   * Name, handle, avatar and tick per person, the way chats read people
-   * (ChatService.people): the name from WAWU ID, the rest from the profile.
-   * WAWU ID being unreachable degrades the name to the handle, never drops
-   * the row. MoneyPartyView carries one tick; a person holding both shows
-   * the purple creator one. Default (agent), owner may override.
+   * Name, handle, avatar and tick per person (`loadMoneyParties`, shared
+   * with the recipient search, WALLET-08): the name from WAWU ID, degrading
+   * to the handle, never dropping the row.
    */
-  private async parties(ids: string[]): Promise<Map<string, MoneyPartyView>> {
-    const out = new Map<string, MoneyPartyView>();
-    if (ids.length === 0) return out;
-    const [identities, profiles] = await Promise.all([
-      this.wawuId.lookupPublicIdentities(ids),
-      this.prisma.userProfile.findMany({
-        where: { wawuUserId: { in: ids } },
-        select: {
-          wawuUserId: true,
-          handle: true,
-          avatarUrl: true,
-          creatorVerifiedAt: true,
-          creatorVerifiedUntil: true,
-          professionalVerifiedAt: true,
-          professionalVerifiedUntil: true,
-        },
-      }),
-    ]);
-    const profileBy = new Map(profiles.map((p) => [p.wawuUserId, p]));
-    for (const id of ids) {
-      const identity = identities.get(id);
-      const profile = profileBy.get(id);
-      const name = [identity?.firstName, identity?.lastName]
-        .filter(Boolean)
-        .join(' ')
-        .trim();
-      const ticks = deriveVerificationState(profile ?? null);
-      out.set(id, {
-        wawuUserId: id,
-        displayName: name || profile?.handle || '',
-        handle: profile?.handle ?? null,
-        avatarUrl: profile?.avatarUrl ?? null,
-        tick: ticks.creator.verified
-          ? 'creator'
-          : ticks.professional.verified
-            ? 'professional'
-            : null,
-      });
-    }
-    return out;
+  private parties(ids: string[]): Promise<Map<string, MoneyPartyView>> {
+    return loadMoneyParties(this.prisma, this.wawuId, ids);
   }
 }
 
