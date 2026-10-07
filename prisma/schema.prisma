@@ -2332,17 +2332,24 @@ model AdminOpsAudit {
 enum EventFormat {
   in_person
   online
+  /// In a room and streamed at once (the host wizard's third format, task
+  /// EVENTS-02). Added after the first two, so a client that only knows
+  /// in_person and online has never been sent it for an event it already had.
+  hybrid
 }
 
-/// Exactly the five the public filter row offers (old EVENT_FILTERS, minus the
-/// two format chips and the "All" chip). A sixth kind would be a chip nobody
-/// can tap, i.e. an event nobody can find.
+/// The kinds the filter rows offer. The first five are the web's chips (old
+/// EVENT_FILTERS, minus the two format chips and the "All" chip); `conference`
+/// and `concert` are the app's Kind chips (task EVENTS-02). A kind no filter
+/// offers would be a chip nobody can tap, i.e. an event nobody can find.
 enum EventType {
   workshop
   summit
   webinar
   meetup
   competition
+  conference
+  concert
 }
 
 /// Every state here has an exit, and that is a hard requirement rather than a
@@ -2406,6 +2413,10 @@ model Event {
   timezone  String?
 
   /// City or venue name (always shown), and the street address (detail only).
+  /// Optional on a submit since EVENTS-02 (the app's host wizard asks only
+  /// for the street address): when a host leaves it out it is filled from
+  /// `address`, and is the empty string when there is no address either, so
+  /// the column and its wire type stay a string for every client.
   location String
   address  String?
 
@@ -2452,6 +2463,8 @@ model Event {
   orders      EventOrder[]
   tickets     EventTicket[]
   referrals   EventReferral[]
+  /// People the host lets scan tickets in at the door (EVENTS-05).
+  doorStaff   EventDoorStaff[]
 
   /// Banner image. Object-storage URL from POST /uploads/presign.
   bannerUrl    String?
@@ -3033,6 +3046,27 @@ model EventReferral {
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
   @@index([eventId])
+}
+
+/// Someone the host lets check tickets in at the door (EVENTS-05, E19 to E24).
+///
+/// One row per (event, person). Removing someone sets `removedAt` rather than
+/// deleting the row, so a ticket they already let in still reads "by Door 1"
+/// (E23) after they stop working the door. Adding them again clears it.
+/// `label` is what the door result prints after "by": the host's own name for
+/// the door, "Door 1" by default.
+model EventDoorStaff {
+  id          String    @id @default(uuid())
+  eventId     String
+  staffWawuId String
+  label       String
+  addedAt     DateTime  @default(now())
+  removedAt   DateTime?
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, staffWawuId])
+  @@index([staffWawuId])
 }
 
 // -----------------------------------------------------------------------------

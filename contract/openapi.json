@@ -12580,6 +12580,38 @@
         "tags": [
           "EventTicketing"
         ]
+      },
+      "get": {
+        "operationId": "EventRunningController_referrals",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EventReferralSalesView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "The host's shared links, each with its tickets sold (E18).",
+        "tags": [
+          "EventRunning"
+        ]
       }
     },
     "/api/hub/events/{id}/cancel": {
@@ -12636,6 +12668,211 @@
         "summary": "Call it off. Voids every ticket and refunds every buyer — a real\nFlutterwave refund per order, not a status flip.",
         "tags": [
           "EventTicketing"
+        ]
+      }
+    },
+    "/api/hub/events/mine/sold": {
+      "get": {
+        "operationId": "EventRunningController_mySold",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostSoldCounts"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Sold per event for every event the caller hosts (E17).",
+        "tags": [
+          "EventRunning"
+        ]
+      }
+    },
+    "/api/hub/events/door/mine": {
+      "get": {
+        "operationId": "EventRunningController_myDoorEvents",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoorEventList"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The events the caller works the door at.",
+        "tags": [
+          "EventRunning"
+        ]
+      }
+    },
+    "/api/hub/events/{id}/door-staff": {
+      "get": {
+        "operationId": "EventRunningController_listDoorStaff",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DoorStaffView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "Who the host lets check tickets in.",
+        "tags": [
+          "EventRunning"
+        ]
+      },
+      "post": {
+        "operationId": "EventRunningController_addDoorStaff",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddDoorStaffDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoorStaffView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Add someone to the door, by WAWU id or handle.",
+        "tags": [
+          "EventRunning"
+        ]
+      }
+    },
+    "/api/hub/events/{id}/door-staff/{staffId}": {
+      "delete": {
+        "operationId": "EventRunningController_removeDoorStaff",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "staffId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "removed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "removed"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "Take someone off the door.",
+        "tags": [
+          "EventRunning"
+        ]
+      }
+    },
+    "/api/hub/events/{id}/door/check-in": {
+      "post": {
+        "operationId": "EventRunningController_checkIn",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScanTicketDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoorCheckInResult"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Scan at the door, as the host or their door staff. Let them in (E20)\nwith the holder's name, already used (E23) with when and by whom, or\nnot valid (E24), with the live counts.",
+        "tags": [
+          "EventRunning"
         ]
       }
     },
@@ -21244,7 +21481,8 @@
               "type": "string",
               "enum": [
                 "in_person",
-                "online"
+                "online",
+                "hybrid"
               ]
             }
           },
@@ -21259,7 +21497,9 @@
                 "summit",
                 "webinar",
                 "meetup",
-                "competition"
+                "competition",
+                "conference",
+                "concert"
               ]
             }
           },
@@ -21271,10 +21511,10 @@
             "schema": {
               "type": "string",
               "enum": [
+                "conference",
                 "music",
                 "business",
                 "training",
-                "conference",
                 "church",
                 "entertainment",
                 "fashion",
@@ -21412,6 +21652,28 @@
           }
         },
         "summary": "The host's own submissions at every status, with the reason for the last\nrejection or takedown. Any authenticated user can have submitted an event,\nso there is no creator gate here.",
+        "tags": [
+          "Event"
+        ]
+      }
+    },
+    "/api/hub/events/options": {
+      "get": {
+        "operationId": "EventController_options",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventOptionsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The label to show for each category, format and kind, beside the value to\nsend (EVENTS-02): \"Business & Finance\" is `business`. Declared before\n`:id` for the same reason `mine` is.",
         "tags": [
           "Event"
         ]
@@ -27655,6 +27917,26 @@
           "reason"
         ]
       },
+      "AddDoorStaffDto": {
+        "type": "object",
+        "properties": {
+          "wawuUserId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "handle": {
+            "type": "string",
+            "description": "With or without the \"@\". Same characters a handle may hold.",
+            "maxLength": 31,
+            "pattern": "^@?[a-zA-Z0-9_.]+$"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 30
+          }
+        }
+      },
       "EventDecisionReasonDto": {
         "type": "object",
         "properties": {
@@ -28765,6 +29047,45 @@
           "name"
         ]
       },
+      "NewEventTicketTypeDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 60,
+            "pattern": "\\S"
+          },
+          "priceNaira": {
+            "type": "number",
+            "description": "Naira, like every ticket price this backend stores. 0 is a free ticket.",
+            "minimum": 0,
+            "maximum": 10000000
+          },
+          "quantity": {
+            "type": "number",
+            "description": "How many exist. A venue has a capacity, so there is no unlimited option.",
+            "minimum": 1,
+            "maximum": 1000000
+          },
+          "tier": {
+            "type": "string",
+            "enum": [
+              "free",
+              "regular",
+              "vip",
+              "vvip",
+              "early_bird",
+              "group"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "priceNaira",
+          "quantity"
+        ]
+      },
       "CreateEventDto": {
         "type": "object",
         "properties": {
@@ -28792,7 +29113,8 @@
             "type": "string",
             "enum": [
               "in_person",
-              "online"
+              "online",
+              "hybrid"
             ]
           },
           "type": {
@@ -28802,7 +29124,9 @@
               "summit",
               "webinar",
               "meetup",
-              "competition"
+              "competition",
+              "conference",
+              "concert"
             ]
           },
           "startsAt": {
@@ -28824,6 +29148,7 @@
           },
           "location": {
             "type": "string",
+            "description": "The city or venue line the card shows. Optional (EVENTS-02): the app's\nhost wizard asks only for the street address, so when this is left out\nthe server fills it from `address`, and leaves it empty when there is no\naddress either. A value sent here is stored as sent, as before.",
             "maxLength": 160,
             "pattern": "\\S"
           },
@@ -28851,10 +29176,10 @@
             "type": "string",
             "description": "What the event is about. Defaults to `other` when not stated.",
             "enum": [
+              "conference",
               "music",
               "business",
               "training",
-              "conference",
               "church",
               "entertainment",
               "fashion",
@@ -28877,6 +29202,13 @@
             "items": {
               "$ref": "#/components/schemas/EventSpeakerDto"
             }
+          },
+          "ticketTypes": {
+            "description": "The ticket types, sent with the event in the same submit (EVENTS-02), so\nthe event and its tickets go to review together. Omitted or empty, the\nevent sells nothing, exactly as before. The tiers can still be replaced\nafterwards through PUT /events/:id/tickets.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NewEventTicketTypeDto"
+            }
           }
         },
         "required": [
@@ -28885,8 +29217,7 @@
           "hostOrg",
           "format",
           "type",
-          "startsAt",
-          "location"
+          "startsAt"
         ]
       },
       "UpdateEventDto": {
@@ -28915,7 +29246,8 @@
             "type": "string",
             "enum": [
               "in_person",
-              "online"
+              "online",
+              "hybrid"
             ]
           },
           "type": {
@@ -28925,7 +29257,9 @@
               "summit",
               "webinar",
               "meetup",
-              "competition"
+              "competition",
+              "conference",
+              "concert"
             ]
           },
           "startsAt": {
@@ -28970,10 +29304,10 @@
             "type": "string",
             "description": "What the event is about. Defaults to `other` when not stated.",
             "enum": [
+              "conference",
               "music",
               "business",
               "training",
-              "conference",
               "church",
               "entertainment",
               "fashion",
@@ -35039,6 +35373,256 @@
           "outcome"
         ]
       },
+      "HostSoldCount": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string"
+          },
+          "ticketsSold": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "eventId",
+          "ticketsSold"
+        ]
+      },
+      "HostSoldCounts": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HostSoldCount"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "DoorEventView": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string"
+          },
+          "eventName": {
+            "type": "string"
+          },
+          "startsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "location": {
+            "type": "string"
+          },
+          "venueName": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "cancelledAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "eventId",
+          "eventName",
+          "startsAt",
+          "location",
+          "venueName",
+          "status",
+          "cancelledAt",
+          "label"
+        ]
+      },
+      "DoorEventList": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DoorEventView"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "EventReferralSalesView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "ticketsSold": {
+            "type": "number"
+          },
+          "revenueNaira": {
+            "type": "number"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "label",
+          "ticketsSold",
+          "revenueNaira",
+          "createdAt"
+        ]
+      },
+      "DoorStaffView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "wawuUserId": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string",
+            "nullable": true
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "addedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "wawuUserId",
+          "label",
+          "displayName",
+          "handle",
+          "avatarUrl",
+          "addedAt"
+        ]
+      },
+      "CheckedInByView": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "host",
+              "door_staff"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "role",
+          "label"
+        ]
+      },
+      "DoorCheckInResult": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "valid",
+              "already_used",
+              "invalid"
+            ]
+          },
+          "ticket": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "tierName": {
+                "type": "string"
+              },
+              "holderName": {
+                "type": "string",
+                "nullable": true
+              },
+              "checkedInAt": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              },
+              "checkedInBy": {
+                "$ref": "#/components/schemas/CheckedInByView",
+                "nullable": true
+              }
+            },
+            "required": [
+              "code",
+              "tierName",
+              "holderName",
+              "checkedInAt",
+              "checkedInBy"
+            ],
+            "nullable": true
+          },
+          "totals": {
+            "type": "object",
+            "properties": {
+              "sold": {
+                "type": "number"
+              },
+              "checkedIn": {
+                "type": "number"
+              },
+              "stillToArrive": {
+                "type": "number"
+              },
+              "remaining": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "sold",
+              "checkedIn",
+              "stillToArrive",
+              "remaining"
+            ]
+          }
+        },
+        "required": [
+          "outcome",
+          "ticket",
+          "totals"
+        ]
+      },
       "DayAvailability": {
         "type": "object",
         "properties": {
@@ -37039,7 +37623,8 @@
             "type": "string",
             "enum": [
               "in_person",
-              "online"
+              "online",
+              "hybrid"
             ]
           },
           "type": {
@@ -37049,7 +37634,9 @@
               "summit",
               "webinar",
               "meetup",
-              "competition"
+              "competition",
+              "conference",
+              "concert"
             ]
           },
           "startsAt": {
@@ -37271,7 +37858,8 @@
             "type": "string",
             "enum": [
               "in_person",
-              "online"
+              "online",
+              "hybrid"
             ]
           },
           "type": {
@@ -37281,7 +37869,9 @@
               "summit",
               "webinar",
               "meetup",
-              "competition"
+              "competition",
+              "conference",
+              "concert"
             ]
           },
           "startsAt": {
@@ -39677,7 +40267,8 @@
             "type": "string",
             "enum": [
               "in_person",
-              "online"
+              "online",
+              "hybrid"
             ]
           },
           "type": {
@@ -39687,7 +40278,9 @@
               "summit",
               "webinar",
               "meetup",
-              "competition"
+              "competition",
+              "conference",
+              "concert"
             ]
           },
           "startsAt": {
@@ -39730,10 +40323,10 @@
             "type": "string",
             "enum": [
               "community",
+              "conference",
               "music",
               "business",
               "training",
-              "conference",
               "church",
               "entertainment",
               "fashion",
@@ -39850,6 +40443,96 @@
           "speakers",
           "createdAt",
           "lastDecisionReason"
+        ]
+      },
+      "EventOptionsView": {
+        "type": "object",
+        "properties": {
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "string",
+                  "enum": [
+                    "community",
+                    "conference",
+                    "music",
+                    "business",
+                    "training",
+                    "church",
+                    "entertainment",
+                    "fashion",
+                    "lifestyle",
+                    "other"
+                  ]
+                },
+                "label": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "value",
+                "label"
+              ]
+            }
+          },
+          "formats": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "string",
+                  "enum": [
+                    "in_person",
+                    "online",
+                    "hybrid"
+                  ]
+                },
+                "label": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "value",
+                "label"
+              ]
+            }
+          },
+          "types": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "string",
+                  "enum": [
+                    "workshop",
+                    "summit",
+                    "webinar",
+                    "meetup",
+                    "competition",
+                    "conference",
+                    "concert"
+                  ]
+                },
+                "label": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "value",
+                "label"
+              ]
+            }
+          }
+        },
+        "required": [
+          "categories",
+          "formats",
+          "types"
         ]
       },
       "EventGoingView": {
