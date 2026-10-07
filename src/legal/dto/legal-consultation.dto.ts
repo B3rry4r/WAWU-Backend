@@ -50,6 +50,14 @@ export class BookConsultationSlotDto {
    */
   @IsOptional()
   @IsISO8601({ strict: true })
+  // A time with no zone would be read in the server's zone, which is a
+  // different hour on a different host.
+  @Matches(
+    /T\d{2}(?::?\d{2}(?::?\d{2}(?:[.,]\d+)?)?)?(?:Z|[+-]\d{2}(?::?\d{2})?)$/i,
+    {
+      message: 'scheduledFor must end with Z or a +hh:mm offset.',
+    },
+  )
   scheduledFor?: string;
 }
 
@@ -112,6 +120,18 @@ export class DeliveredFileDto {
   // A lone surrogate is not text: it cannot be stored or sent as UTF-8.
   @Matches(/^(?:[^\ud800-\udfff]|[\ud800-\udbff][\udc00-\udfff])+$/, {
     message: 'fileName must be plain text.',
+  })
+  // No path: a name is a name, never a place to save to.
+  @Matches(/^[^/\\]+$/, { message: 'fileName cannot contain / or \\.' })
+  @Matches(/^(?!\.{1,2}$)/, { message: 'fileName cannot be . or ..' })
+  // Bidirectional controls, line and paragraph separators, NEL and the BOM
+  // change how a name reads, not what it is.
+  @Matches(/^[^\u202a-\u202e\u2066-\u2069\u2028\u2029\u0085\ufeff]+$/, {
+    message: 'fileName cannot contain direction or line-break characters.',
+  })
+  // Something must be left once format and whitespace characters are gone.
+  @Matches(/[^\p{Cf}\p{Z}\s]/u, {
+    message: 'fileName must have visible characters.',
   })
   fileName!: string;
 

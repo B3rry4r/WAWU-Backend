@@ -10,6 +10,7 @@ import { LegalController } from './legal.controller';
 import { LegalOpsController } from './legal-ops.controller';
 import { LegalConsultationController } from './legal-consultation.controller';
 import { LegalPricesOpsController } from './legal-prices-ops.controller';
+import { StorageModule } from '../storage/storage.module';
 import { LegalDeliverablesOpsController } from './legal-deliverables-ops.controller';
 import { LegalConsultationService } from './legal-consultation.service';
 import { LegalDeliverablesService } from './legal-deliverables.service';
@@ -33,6 +34,7 @@ import { LegalPricesService } from './legal-prices.service';
     AdminAuthModule,
     AdminOpsAuditModule,
     NotificationModule,
+    StorageModule,
     // The consultant's chat line goes through LEGAL-01's allowance lock.
     LegalIntakeModule,
   ],

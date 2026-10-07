@@ -8,6 +8,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { type AdminActor } from '../common/audit/admin-ops-audit.service';
 import { LegalAssistantAllowance } from '../legal-intake/assistant/legal-assistant-allowance';
 import { NotificationService } from '../notification/notification.service';
+import { StorageService, objectKeyFrom } from '../storage/storage.service';
 import type {
   DeliverFilesResultView,
   LegalDeliverableView,
@@ -31,6 +32,7 @@ export class LegalDeliverablesService {
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationService,
     private readonly allowance: LegalAssistantAllowance,
+    private readonly storage: StorageService,
   ) {}
 
   /**
@@ -72,11 +74,12 @@ export class LegalDeliverablesService {
                 where: { legalRequestId: requestId },
                 select: { url: true },
               })
-            ).map((d) => d.url),
+            ).map((d) => objectKeyFrom(d.url)),
           );
           const fresh = dto.files.filter((f) => {
-            if (have.has(f.url)) return false;
-            have.add(f.url);
+            const key = objectKeyFrom(f.url);
+            if (have.has(key)) return false;
+            have.add(key);
             return true;
           });
 
@@ -99,7 +102,10 @@ export class LegalDeliverablesService {
                 legalRequestId: requestId,
                 wawuUserId: request.wawuUserId,
                 fileName: file.fileName,
-                url: file.url,
+                // The object key, never the signed link ops posted: a link
+                // dies in 7 days and is a bearer token. The list signs a
+                // fresh 15-minute link for the owner on every read.
+                url: objectKeyFrom(file.url),
                 pages: file.pages ?? null,
                 chatMessageId: message.id,
                 postedByAdminId: admin.id,
@@ -125,7 +131,7 @@ export class LegalDeliverablesService {
           }
           const files = fresh.map((f) => ({
             fileName: f.fileName,
-            url: f.url,
+            url: objectKeyFrom(f.url),
           }));
           if (files.length > 0) {
             await tx.adminOpsAudit.create({
@@ -193,6 +199,18 @@ export class LegalDeliverablesService {
   }
 
   /**
+   * A fresh read link, valid 15 minutes. A row that still holds a signed link
+   * from before has its object key derived from it here (`objectKeyFrom`); a
+   * value that is not one of this bucket's is returned as it is.
+   */
+  private readLink(stored: string): Promise<string> {
+    return this.storage.signedReadUrl(
+      objectKeyFrom(stored),
+      DELIVERABLE_LINK_SECONDS,
+    );
+  }
+
+  /**
    * The files of a request, oldest first. A file delivered through the
    * single-file route has no row and no chat message, so it is read from
    * `deliverableUrl` and listed first, unless a row already carries it. That
@@ -207,20 +225,27 @@ export class LegalDeliverablesService {
       where: { legalRequestId: request.id },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
-    const items: LegalDeliverableView[] = rows.map((r) => ({
-      id: r.id,
-      fileName: r.fileName,
-      url: r.url,
-      pages: r.pages,
-      chatMessageId: r.chatMessageId,
-      postedAt: r.createdAt.toISOString(),
-    }));
+    // Called only after the ownership check (or for the operator's own
+    // answer): a link is signed for the reader the API has already accepted.
+    const items: LegalDeliverableView[] = await Promise.all(
+      rows.map(async (r) => ({
+        id: r.id,
+        fileName: r.fileName,
+        url: await this.readLink(r.url),
+        pages: r.pages,
+        chatMessageId: r.chatMessageId,
+        postedAt: r.createdAt.toISOString(),
+      })),
+    );
     const legacy = request.deliverableUrl;
-    if (legacy && !rows.some((r) => r.url === legacy)) {
+    if (
+      legacy &&
+      !rows.some((r) => objectKeyFrom(r.url) === objectKeyFrom(legacy))
+    ) {
       items.unshift({
         id: `${request.id}:deliverable`,
         fileName: fileNameFromUrl(legacy),
-        url: legacy,
+        url: await this.readLink(legacy),
         pages: null,
         chatMessageId: null,
         postedAt: (request.deliveredAt ?? new Date(0)).toISOString(),
@@ -229,6 +254,9 @@ export class LegalDeliverablesService {
     return items;
   }
 }
+
+/** How long a delivered file's link lives. */
+export const DELIVERABLE_LINK_SECONDS = 900;
 
 /** The last path segment of a link, decoded, for a file delivered without a name. */
 export function fileNameFromUrl(url: string): string {

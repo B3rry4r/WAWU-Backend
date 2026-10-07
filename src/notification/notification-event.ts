@@ -570,7 +570,11 @@ export function composeNotification(
       return {
         ...base,
         title: one ? 'Your document is ready' : 'Your documents are ready',
-        body: `${event.fileCount} ${one ? 'document' : 'documents'} for “${event.serviceName}” ${one ? 'is' : 'are'} in your legal chat.`,
+        // No matter or service name: a lock screen must not show what kind
+        // of legal matter someone has.
+        body: one
+          ? 'Your consultant has sent you a document. It is in your legal chat.'
+          : `Your consultant has sent you ${event.fileCount} documents. They are in your legal chat.`,
         tone: 'success',
         amount: null,
         creditsCount: null,
