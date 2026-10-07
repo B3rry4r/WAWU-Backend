@@ -6,7 +6,7 @@
 --
 -- Rollback:
 --   DROP TABLE "EventDoorStaff";
---   DELETE FROM "_prisma_migrations" WHERE "migration_name" = '20261006110000_event_door_staff';
+--   DELETE FROM "_prisma_migrations" WHERE "migration_name" = '20261007100000_event_door_staff';
 
 -- CreateTable
 CREATE TABLE "EventDoorStaff" (

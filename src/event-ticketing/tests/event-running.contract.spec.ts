@@ -862,5 +862,60 @@ describe('Running an event: organiser numbers and door staff (EVENTS-05)', () =>
         .expect(200);
       expect((await add(outsider.sub)).label).toBe('Door 1');
     });
+
+    it('someone put back whose old label another person now holds gets a free one, never a shared one', async () => {
+      // From the test above: Door 1 (the outsider) and Door 2 are active;
+      // the first person, once Door 1, is removed and their old label is taken.
+      const back = data<DoorStaffView>(
+        await post(hostToken, EV_EMPTY, { wawuUserId: STAFF_SUB }).expect(201),
+      );
+      expect(back.label).toBe('Door 3');
+      const active = await prisma.eventDoorStaff.findMany({
+        where: { eventId: EV_EMPTY, removedAt: null },
+        select: { label: true },
+      });
+      const labels = active.map((r) => r.label.toLowerCase());
+      expect(active.length).toBe(3);
+      expect(new Set(labels).size).toBe(3);
+    });
+
+    it('a custom label is stored without the spaces around it, and then collides with the same name', async () => {
+      const outsiderRow = await prisma.eventDoorStaff.findUniqueOrThrow({
+        where: {
+          eventId_staffWawuId: { eventId: EV_EMPTY, staffWawuId: outsider.sub },
+        },
+      });
+      await http()
+        .delete(`/api/hub/events/${EV_EMPTY}/door-staff/${outsiderRow.id}`)
+        .set(auth(hostToken))
+        .expect(200);
+      const gate = data<DoorStaffView>(
+        await post(hostToken, EV_EMPTY, {
+          wawuUserId: outsider.sub,
+          label: '  Gate  ',
+        }).expect(201),
+      );
+      expect(gate.label).toBe('Gate');
+      const stored = await prisma.eventDoorStaff.findUniqueOrThrow({
+        where: { id: outsiderRow.id },
+      });
+      expect(stored.label).toBe('Gate');
+
+      // Another person named "Gate" with spaces of their own is refused.
+      const buyerRow = await prisma.eventDoorStaff.findUniqueOrThrow({
+        where: {
+          eventId_staffWawuId: { eventId: EV_EMPTY, staffWawuId: BUYER_SUB },
+        },
+      });
+      await http()
+        .delete(`/api/hub/events/${EV_EMPTY}/door-staff/${buyerRow.id}`)
+        .set(auth(hostToken))
+        .expect(200);
+      const res = await post(hostToken, EV_EMPTY, {
+        wawuUserId: BUYER_SUB,
+        label: ' Gate',
+      }).expect(409);
+      expect(JSON.stringify(res.body)).toContain('already has that name');
+    });
   });
 });
