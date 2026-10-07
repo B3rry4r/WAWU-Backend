@@ -2438,6 +2438,8 @@ model Event {
   orders      EventOrder[]
   tickets     EventTicket[]
   referrals   EventReferral[]
+  /// People the host lets scan tickets in at the door (EVENTS-05).
+  doorStaff   EventDoorStaff[]
 
   /// Banner image. Object-storage URL from POST /uploads/presign.
   bannerUrl    String?
@@ -2962,6 +2964,27 @@ model EventReferral {
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
   @@index([eventId])
+}
+
+/// Someone the host lets check tickets in at the door (EVENTS-05, E19 to E24).
+///
+/// One row per (event, person). Removing someone sets `removedAt` rather than
+/// deleting the row, so a ticket they already let in still reads "by Door 1"
+/// (E23) after they stop working the door. Adding them again clears it.
+/// `label` is what the door result prints after "by": the host's own name for
+/// the door, "Door 1" by default.
+model EventDoorStaff {
+  id          String    @id @default(uuid())
+  eventId     String
+  staffWawuId String
+  label       String
+  addedAt     DateTime  @default(now())
+  removedAt   DateTime?
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, staffWawuId])
+  @@index([staffWawuId])
 }
 
 // -----------------------------------------------------------------------------
