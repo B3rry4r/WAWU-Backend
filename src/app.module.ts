@@ -86,6 +86,7 @@ import { HUB_THROTTLERS } from './hub-throttlers';
 import { HUB_THROTTLER_STORAGE } from './hub-throttler-storage';
 import { APP_GUARD } from '@nestjs/core';
 import { AdsEventsModule } from './ads/ads-events.module';
+import { PushModule } from './push/push.module';
 // Phase 5 build (waves 0-3, all 39 registry resources) is now complete.
 // The deferred Flutterwave webhook has now shipped as PaymentWebhookModule
 // (POST /api/hub/webhooks/flutterwave) alongside the scheduled-job cron pass,
@@ -385,6 +386,11 @@ import { AdsEventsModule } from './ads/ads-events.module';
     // POST /ads/:id/events. Same `ads` first segment as AdsModule, with a
     // literal tail after the id, so it cannot shadow GET /ads.
     AdsEventsModule,
+
+    // Phone push (task INBOX-03): POST and DELETE /push-tokens, and the sender
+    // behind NotificationService. `push-tokens` is a first segment nothing else
+    // declares.
+    PushModule,
 
     // LAST on purpose. PaymentWebhookModule imports every money module so it
     // can reuse their /verify settlement, and every one of them is already

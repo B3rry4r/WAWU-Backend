@@ -496,6 +496,18 @@ person, so the app can render "here is what you need to do" instead of a wall.
 An exception without a `reason` produces exactly the envelope this filter has
 always produced.
 
+## Phone push (INBOX-03)
+
+`POST` and `DELETE /api/hub/push-tokens` register a phone; a sender behind
+`NotificationService` pushes each notification the service wrote, through Expo,
+when the person's Z3 switch allows. Routes, payload, the per-kind decisions and
+how two instances stay safe are in [`docs/contract/PUSH.md`](docs/contract/PUSH.md).
+
+It is **off unless `PUSH_ENABLED=true`**. `EXPO_ACCESS_TOKEN` (only for an Expo
+project with enhanced push security) and `EXPO_PUSH_BASE_URL` (default
+`https://exp.host`) are optional; both are listed in `deploy/README.md` and
+`.env.example`. Android needs the owner's FCM credentials uploaded to Expo.
+
 ## Blocking and data export (SETTINGS-04)
 
 **A block hides people from each other, both ways.** `BlockedAccountService`

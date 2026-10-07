@@ -250,6 +250,12 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // (AdDailyTotal) name nobody, are not walked back, and stay.
   { model: 'AdEvent', column: 'viewerWawuId', disposition: 'OWNED' },
 
+  // This person's phones for push (INBOX-03): the address of each phone, and
+  // the log of what was sent to it. Both are theirs alone and go with them.
+  // The deliveries go first; they also go with their token (cascade).
+  { model: 'PushDelivery', column: 'userWawuId', disposition: 'OWNED' },
+  { model: 'PushToken', column: 'userWawuId', disposition: 'OWNED' },
+
   // Last: everything above may reference these.
   // An admin's choice to feature this creator in Explore (EXPLORE-03): a
   // placement about the account, gone with it. The row's admin id is not a

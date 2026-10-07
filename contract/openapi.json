@@ -25192,6 +25192,68 @@
         ]
       }
     },
+    "/api/hub/push-tokens": {
+      "post": {
+        "operationId": "PushTokenController_register",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterPushTokenDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushTokenRegistered"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Register this phone for the signed-in person. Idempotent: call it on every start.",
+        "tags": [
+          "PushToken"
+        ]
+      },
+      "delete": {
+        "operationId": "PushTokenController_remove",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemovePushTokenDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushTokenRemoved"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Remove this phone (sign-out). Removing a token twice, or one that is not yours, is a 200 with `removed: false`.",
+        "tags": [
+          "PushToken"
+        ]
+      }
+    },
     "/api/hub/money/banks": {
       "get": {
         "operationId": "MoneyTransferController_banks",
@@ -29577,6 +29639,49 @@
         },
         "required": [
           "type"
+        ]
+      },
+      "RegisterPushTokenDto": {
+        "type": "object",
+        "properties": {
+          "expoPushToken": {
+            "type": "string",
+            "description": "The phone's Expo push token, `ExponentPushToken[...]` or `ExpoPushToken[...]`, exactly as the app got it.",
+            "maxLength": 300
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "android",
+              "ios"
+            ]
+          },
+          "deviceId": {
+            "type": "string",
+            "description": "The phone's own id, if the app has one.",
+            "maxLength": 200
+          },
+          "deviceLabel": {
+            "type": "string",
+            "description": "A name for the phone (\"Pixel 8\"), if the app has one.",
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "expoPushToken",
+          "platform"
+        ]
+      },
+      "RemovePushTokenDto": {
+        "type": "object",
+        "properties": {
+          "expoPushToken": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "expoPushToken"
         ]
       },
       "NameCheckDto": {
@@ -41563,6 +41668,28 @@
           "month",
           "items",
           "nextCursor"
+        ]
+      },
+      "PushTokenRegistered": {
+        "type": "object",
+        "properties": {
+          "registered": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "registered"
+        ]
+      },
+      "PushTokenRemoved": {
+        "type": "object",
+        "properties": {
+          "removed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "removed"
         ]
       },
       "PaymentQuoteView": {
