@@ -73,6 +73,11 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'ContentLike', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'ContentView', column: 'viewerWawuId', disposition: 'OWNED' },
   { model: 'ContentShare', column: 'sharerWawuId', disposition: 'OWNED' },
+  // TGIF reactions, reads and shares (HOME-10): the person's own taps. Counts
+  // are computed from the rows, so no counter is left behind.
+  { model: 'TgifReaction', column: 'userWawuId', disposition: 'OWNED' },
+  { model: 'TgifRead', column: 'userWawuId', disposition: 'OWNED' },
+  { model: 'TgifShare', column: 'userWawuId', disposition: 'OWNED' },
   // A star rating of a piece (HOME-06) is this person's opinion, published
   // under their account and counted in an average other people read, so it
   // goes with them (AUTHORED, as ProfessionalReview is). The cached
@@ -84,6 +89,14 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'CartItem', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'EventGoing', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'EventSave', column: 'userWawuId', disposition: 'OWNED' },
+  // This person's saved creators and finished course lessons (ME-10): their
+  // own bookmarks and their own progress. Both go with them.
+  { model: 'SavedCreator', column: 'userWawuId', disposition: 'OWNED' },
+  {
+    model: 'CourseLessonProgress',
+    column: 'userWawuId',
+    disposition: 'OWNED',
+  },
   // The views OF this profile. A statistic about the account, so it goes with
   // the account. The other column on this table is somebody else's, below.
   { model: 'ProfileView', column: 'profileWawuId', disposition: 'OWNED' },
@@ -95,6 +108,12 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // Location, skills, open-to chips, Threads handle and social-link order (ME-05).
   // Part of this person's profile and nothing else references it.
   { model: 'ProfileDetails', column: 'wawuUserId', disposition: 'OWNED' },
+  // Featured works and education (ME-16): part of this person's profile, shown
+  // under their name; nothing else references them. The works' pictures are
+  // storage objects, which the purge's storage step handles with the rest of
+  // this person's uploads.
+  { model: 'ProfileWork', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'ProfileEducation', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'CourseEnrollment', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CommunityMembership', column: 'userWawuId', disposition: 'OWNED' },
   // How far this person has read in each community (INBOX-01).
@@ -102,6 +121,8 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'Notification', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'NotificationSettings', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'PrivacySettings', column: 'userWawuId', disposition: 'OWNED' },
+  // Whether this person wants TGIF on Today (HOME-11): theirs alone.
+  { model: 'TgifPreference', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'DataExportRequest', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'BlockedAccount', column: 'userWawuId', disposition: 'OWNED' },
   // How far this person had read in each chat: theirs alone.
@@ -221,7 +242,16 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // with them, and each code then opens the plain "not found" page.
   { model: 'MoneyReceipt', column: 'wawuUserId', disposition: 'OWNED' },
 
+  // Which ads this person viewed, tapped or skipped on which day (ADS-05):
+  // theirs, so the rows go with them. The daily totals the owner invoices from
+  // (AdDailyTotal) name nobody, are not walked back, and stay.
+  { model: 'AdEvent', column: 'viewerWawuId', disposition: 'OWNED' },
+
   // Last: everything above may reference these.
+  // An admin's choice to feature this creator in Explore (EXPLORE-03): a
+  // placement about the account, gone with it. The row's admin id is not a
+  // user reference and stays out of the map.
+  { model: 'FeaturedCreator', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'CreatorState', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'UserProfile', column: 'wawuUserId', disposition: 'OWNED' },
 
@@ -251,6 +281,24 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   {
     model: 'BlockedAccount',
     column: 'blockedWawuId',
+    disposition: 'COUNTERPARTY',
+  },
+  // Somebody else's saved creator that names this account (ME-10): their
+  // bookmark. It stays; their Saved list stops showing it once this account's
+  // profile is gone (the list joins UserProfile).
+  {
+    model: 'SavedCreator',
+    column: 'creatorWawuId',
+    disposition: 'COUNTERPARTY',
+  },
+  // The other person named on somebody else's notification (ME-10: the
+  // buyer, tipper, follower, asker or rater). The notification is the
+  // reader's; it stays, and this id is scrubbed by WAWU ID's anonymize. The
+  // reader's own notifications (and their targets, by cascade) go with the
+  // reader under Notification above.
+  {
+    model: 'NotificationTarget',
+    column: 'actorWawuId',
     disposition: 'COUNTERPARTY',
   },
   // A chat is shared by two people. Deleting the row would delete the other

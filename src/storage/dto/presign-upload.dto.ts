@@ -46,6 +46,10 @@ export const UPLOAD_FOLDERS = [
   // shown publicly once the event is approved, same visibility as the
   // banner image.
   'event/speaker',
+  // A picture or a video on a featured work (ME-16), shown publicly on the
+  // owner's profile. Its own prefix: only the owner may attach a key under
+  // their own id, and the work routes check exactly that.
+  'profile/work',
 ] as const;
 
 /** The folders a client may name on POST /uploads/presign. */
@@ -106,7 +110,21 @@ export const FOLDER_CONTENT_TYPES: Record<UploadFolder, readonly string[]> = {
   'community/image': IMAGE,
   'community/message': IMAGE,
   'event/speaker': IMAGE,
+  // Photos, and a video for a showreel. No document types: this is drawn in
+  // place on a public profile.
+  'profile/work': [...IMAGE, 'video/mp4'],
   ...CHAT_FOLDER_CONTENT_TYPES,
+};
+
+/**
+ * A per-file ceiling for a folder that the R-7 storage allowance does not
+ * count, so one file cannot be as large as the 512MB the DTO allows.
+ * PROVISIONAL(WORK-MEDIA-MAX-BYTES, owner=YOU, why=the allowance counts only
+ * content/preview and content/full and no ruling sizes a featured work's
+ * media): 100MB.
+ */
+export const FOLDER_MAX_BYTES: Partial<Record<UploadFolder, number>> = {
+  'profile/work': 100 * 1024 * 1024,
 };
 
 /**

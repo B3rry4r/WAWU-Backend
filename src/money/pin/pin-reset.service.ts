@@ -1,13 +1,15 @@
 import { randomInt } from 'node:crypto';
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { FintavaClient } from '../../fintava/fintava-client';
-import { FINTAVA_DEFAULTS } from '../../fintava/fintava-config';
 import {
-  FintavaError,
-  FINTAVA_UNKNOWN_OUTCOMES,
-} from '../../fintava/fintava-error';
+  OTP_SENDER,
+  type OtpSender,
+} from '../../wallet-provider/wallet-provider.interface';
+import {
+  WALLET_PROVIDER_UNKNOWN_OUTCOMES,
+  WalletProviderError,
+} from '../../wallet-provider/wallet-provider-error';
 import type { ConfirmPinResetDto } from '../dto/money-request.dto';
 import { MoneyError } from '../money-error';
 import type { PinResetView, PinStateView } from '../money-view.type';
@@ -101,13 +103,15 @@ function invalidCode(triesLeft: number): MoneyError {
  * - Asking again before Resend opens answers the same reset and sends
  *   nothing: a double tap is one text.
  * - A text whose answer was lost may have arrived: its code stays usable
- *   and it counts, and it is never sent again blindly. A text Fintava
+ *   and it counts, and it is never sent again blindly. A text the sender
  *   refused, or that never left, does not count and its code never works.
  * - The right code sets the new PIN, clears the wrong-try count and the
  *   lock, and turns off biometric approval on every phone (the person
  *   proves themselves afresh, and a lost phone stops approving). All in one
  *   transaction with marking the code used.
  * - The code and the PINs never reach a log, an error or a response.
+ * - The text goes through the OTP_SENDER seam (MONEY-20): Fintava's SMS
+ *   today; never a provider's client.
  */
 @Injectable()
 export class PinResetService {
@@ -115,7 +119,7 @@ export class PinResetService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly fintava: FintavaClient,
+    @Inject(OTP_SENDER) private readonly otp: OtpSender,
     private readonly settings: PinResetSettings,
   ) {}
 
@@ -203,14 +207,14 @@ export class PinResetService {
     const row = claim.row;
     const minutes = Math.max(1, Math.round(this.settings.codeMs / 60_000));
     try {
-      await this.fintava.sendSms(phone, resetCodeText(code, minutes));
+      await this.otp.sendText(phone, resetCodeText(code, minutes));
     } catch (err) {
-      if (!(err instanceof FintavaError)) throw err;
+      if (!(err instanceof WalletProviderError)) throw err;
       const resendIn = Math.max(
         1,
         Math.ceil((row.resendAvailableAt.getTime() - Date.now()) / 1000),
       );
-      if (FINTAVA_UNKNOWN_OUTCOMES.includes(err.kind)) {
+      if (WALLET_PROVIDER_UNKNOWN_OUTCOMES.includes(err.kind)) {
         // It may have arrived: keep the code, count the text, send nothing
         // more until Resend opens. Asking again meanwhile answers this reset.
         await this.prisma.transactionPinReset.update({
@@ -233,7 +237,7 @@ export class PinResetService {
         `pin reset ${row.id}: the text was not sent (${err.kind})`,
       );
       throw new MoneyError('provider_unreachable', NOT_SENT_MESSAGE, {
-        retryAfterSeconds: FINTAVA_DEFAULTS.retryAfterSeconds,
+        retryAfterSeconds: err.retryAfterSeconds,
       });
     }
     await this.prisma.transactionPinReset.updateMany({

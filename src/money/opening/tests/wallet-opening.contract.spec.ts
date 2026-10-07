@@ -1912,7 +1912,7 @@ describe('Opening the Fintava account (MONEY-12) over HTTP', () => {
       const parts = opening as unknown as Record<string, never>;
       const other = new WalletOpeningService(
         prisma,
-        client,
+        parts.provider,
         parts.hasher,
         identity,
         parts.selfie,

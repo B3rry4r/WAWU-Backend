@@ -264,6 +264,10 @@ CARDEX_SIGNING_SECRET=
 CARDEX_WEBHOOK_SECRET=
 ```
 
+`WALLET_PROVIDER` picks the wallet provider's adapter (MONEY-20): leave it
+empty (or `fintava`) locally. `nuvion` stops the server at boot until the
+Nuvion adapter is built; switching back is changing it and restarting.
+
 Put the **sandbox** values in `wawu-backend/.env` and restart. Never the live
 ones: local testing is sandbox only, and `up.sh` refuses any Fintava URL but the sandbox
 and any Cardex key that is not `cdx_test_`.
