@@ -70,6 +70,7 @@ import type {
   FintavaWalletState,
   FintavaWalletTransferInput,
 } from './fintava.interface';
+import { toLocalNigerianPhone } from '../wallet-provider/nigerian-phone';
 
 // ---------------------------------------------------------------------------
 // Reading Fintava's bodies from `unknown`
@@ -265,9 +266,8 @@ const DIGITS = /^\d+$/;
  * section 2).
  */
 export function toFintavaLocalPhone(phone: string): string | null {
-  const d = phone.replace(/[\s\-()]/g, '');
-  const m = /^(?:\+?234|0)?([789][01]\d{8})$/.exec(d);
-  return m ? `0${m[1]}` : null;
+  // The rule is provider-neutral and lives with the seam (MONEY-20).
+  return toLocalNigerianPhone(phone);
 }
 
 // ---------------------------------------------------------------------------
