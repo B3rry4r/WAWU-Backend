@@ -24622,6 +24622,69 @@
         ]
       }
     },
+    "/api/hub/tgif/{date}": {
+      "get": {
+        "operationId": "TgifController_day",
+        "parameters": [
+          {
+            "name": "date",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TgifDayView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The five cards of the day, addressed to the caller by first name.",
+        "tags": [
+          "Tgif"
+        ]
+      }
+    },
+    "/api/hub/tgif/{date}/share-image": {
+      "get": {
+        "operationId": "TgifController_shareImage",
+        "parameters": [
+          {
+            "name": "date",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The day's verse on the TGIF card, as a PNG image.",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The verse of the day on the shared card, as a PNG (H35).",
+        "tags": [
+          "Tgif"
+        ]
+      }
+    },
     "/api/hub/tgif/{date}/stats": {
       "get": {
         "operationId": "TgifController_stats",
@@ -41590,6 +41653,54 @@
         "required": [
           "uploadUrl",
           "key"
+        ]
+      },
+      "TgifDayView": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string"
+          },
+          "series": {
+            "type": "string"
+          },
+          "seriesTheme": {
+            "type": "string"
+          },
+          "verse": {
+            "type": "string"
+          },
+          "verseReference": {
+            "type": "string"
+          },
+          "reality": {
+            "type": "string"
+          },
+          "remember": {
+            "type": "string"
+          },
+          "prayer": {
+            "type": "string"
+          },
+          "takeaway": {
+            "type": "string"
+          },
+          "shareLink": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "date",
+          "series",
+          "seriesTheme",
+          "verse",
+          "verseReference",
+          "reality",
+          "remember",
+          "prayer",
+          "takeaway",
+          "shareLink"
         ]
       },
       "TgifCardStats": {
