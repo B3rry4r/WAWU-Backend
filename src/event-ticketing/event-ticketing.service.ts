@@ -21,6 +21,7 @@ import type { BuyTicketsDto, VerifyOrderDto } from './dto/event-ticketing.dto';
 import { ticketTotals } from './ticket-counts';
 import type { TicketTier } from '../../generated/prisma/enums';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
+import { BACK_TO_REVIEW, EventService } from '../event/event.service';
 
 /**
  * A ticket code, and why it looks like this.
@@ -81,6 +82,7 @@ export class EventTicketingService {
     private readonly prisma: PrismaService,
     @Inject(FLUTTERWAVE_CLIENT) private readonly flutterwave: FlutterwaveClient,
     private readonly blockedAccounts: BlockedAccountService,
+    private readonly events: EventService,
   ) {}
 
   /* ------------------------------------------------------------------ *
@@ -94,6 +96,16 @@ export class EventTicketingService {
    * snapshotted on each order, so an edit would not change what anybody paid
    * — but it would change what the ticket they are holding claims to be, and
    * silently deleting a tier somebody bought would orphan their seat.
+   *
+   * R-40 (owner, 7 Oct 2026): this is a host's edit like PATCH /events/:id,
+   * so it follows the same two rules. The host must still hold a current
+   * tick (EventService.assertMayHost, the gate POST and PATCH use, with the
+   * same 403s), and a tier change sends the event back to review
+   * (BACK_TO_REVIEW, the data PATCH writes). Without them, a host could get
+   * an event approved at one price and then reprice it, or keep repricing it
+   * after their tick lapsed, with nobody looking again. The existing checks,
+   * the 409 for sold tickets included, run first and answer exactly as
+   * before. Sending the tiers the event already has writes nothing.
    */
   async setTicketTypes(
     organiserWawuId: string,
@@ -109,7 +121,7 @@ export class EventTicketingService {
   ) {
     const event = await this.prisma.event.findUnique({
       where: { id: eventId },
-      select: { hostWawuId: true, cancelledAt: true },
+      select: { hostWawuId: true, cancelledAt: true, status: true },
     });
     if (!event) throw new NotFoundException('Event not found');
     if (event.hostWawuId !== organiserWawuId) {
@@ -141,19 +153,56 @@ export class EventTicketingService {
       );
     }
 
+    // R-40: hosting is verified-only, and repricing is hosting. Before any
+    // write, and before the no-change answer below, so a host without a
+    // current tick gets the same 403 here as on POST and PATCH /events.
+    await this.events.assertMayHost(organiserWawuId);
+
+    const rows = types.map((t) => ({
+      eventId,
+      tier: t.tier,
+      name: t.name,
+      priceNaira: t.priceNaira,
+      quantity: t.quantity,
+      salesStartAt: t.salesStartAt ? new Date(t.salesStartAt) : null,
+      salesEndAt: t.salesEndAt ? new Date(t.salesEndAt) : null,
+    }));
+
+    // The same tiers sent again change nothing: no rows rewritten, and the
+    // event is not sent back to review for an edit that did not happen.
+    const current = await this.prisma.eventTicketType.findMany({
+      where: { eventId },
+      select: {
+        tier: true,
+        name: true,
+        priceNaira: true,
+        quantity: true,
+        salesStartAt: true,
+        salesEndAt: true,
+      },
+    });
+    if (sameTiers(current, rows)) return this.listTicketTypes(eventId);
+
+    // A change to a published (or rejected, or still pending) event puts it
+    // in the queue, exactly as PATCH does. A `removed` event is left as it
+    // is: sending it to `pending` would let a host edit their way out of an
+    // admin's takedown, which PATCH refuses outright.
+    const backToReview =
+      event.status === 'published' ||
+      event.status === 'rejected' ||
+      event.status === 'pending';
+
     await this.prisma.$transaction([
       this.prisma.eventTicketType.deleteMany({ where: { eventId, sold: 0 } }),
-      this.prisma.eventTicketType.createMany({
-        data: types.map((t) => ({
-          eventId,
-          tier: t.tier,
-          name: t.name,
-          priceNaira: t.priceNaira,
-          quantity: t.quantity,
-          salesStartAt: t.salesStartAt ? new Date(t.salesStartAt) : null,
-          salesEndAt: t.salesEndAt ? new Date(t.salesEndAt) : null,
-        })),
-      }),
+      this.prisma.eventTicketType.createMany({ data: rows }),
+      ...(backToReview
+        ? [
+            this.prisma.event.update({
+              where: { id: eventId },
+              data: BACK_TO_REVIEW,
+            }),
+          ]
+        : []),
     ]);
 
     return this.listTicketTypes(eventId);
@@ -761,4 +810,38 @@ export class EventTicketingService {
       refundsNeedingAttention: failed,
     };
   }
+}
+
+/** One tier as compared for "did anything change" (R-40). */
+interface TierKey {
+  tier: TicketTier;
+  name: string;
+  priceNaira: number;
+  quantity: number;
+  salesStartAt: Date | null;
+  salesEndAt: Date | null;
+}
+
+/**
+ * True when `incoming` is exactly the tiers the event already has, in any
+ * order. Every field a host can send is compared, so a change to any of them
+ * (a price, a name, a capacity, a sales window) is a change.
+ */
+function sameTiers(current: TierKey[], incoming: TierKey[]): boolean {
+  if (current.length !== incoming.length) return false;
+  // An unparseable date never matches, so it reaches the write as before.
+  const at = (d: Date | null) =>
+    d ? (Number.isNaN(d.getTime()) ? 'invalid' : d.getTime()) : null;
+  const key = (t: TierKey) =>
+    JSON.stringify([
+      t.tier,
+      t.name,
+      t.priceNaira,
+      t.quantity,
+      at(t.salesStartAt),
+      at(t.salesEndAt),
+    ]);
+  const a = current.map(key).sort();
+  const b = incoming.map(key).sort();
+  return a.every((k, i) => k === b[i]);
 }

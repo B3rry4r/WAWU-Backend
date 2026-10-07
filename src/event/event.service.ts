@@ -90,8 +90,13 @@ export class EventService {
    * Being refused for want of a NGN 4,999 purchase and being refused because
    * you are on the wrong kind of account are different problems with
    * different remedies, and a single 403 string cannot tell them apart.
+   *
+   * Public, and the ONE copy of the rule: PUT /events/:id/tickets
+   * (EventTicketingService.setTicketTypes) calls this too (R-40, owner,
+   * 7 Oct 2026), so repricing an approved event's tickets needs the same
+   * current tick as creating or editing the event, with the same 403s.
    */
-  private async assertMayHost(userWawuId: string): Promise<void> {
+  async assertMayHost(userWawuId: string): Promise<void> {
     const state: VerificationState = await this.verification.forOne(userWawuId);
     if (holdsAnyTick(state)) return;
 
@@ -420,8 +425,7 @@ export class EventService {
           // Every edit re-enters review, and the old decision reason goes with
           // it — a rejection note still attached to a resubmission tells the
           // host they were rejected for something they have just fixed.
-          status: 'pending',
-          lastDecisionReason: null,
+          ...BACK_TO_REVIEW,
         },
         include: { speakers: { orderBy: { order: 'asc' } } },
       });
@@ -646,6 +650,17 @@ export class EventService {
     }));
   }
 }
+
+/**
+ * What sending an event back to review writes: `pending`, and the old
+ * decision reason cleared. PATCH /events/:id writes it on every edit, and
+ * PUT /events/:id/tickets on a tier change (R-40), from this one place, so
+ * the two can never disagree about what "back to review" means.
+ */
+export const BACK_TO_REVIEW = {
+  status: 'pending',
+  lastDecisionReason: null,
+} as const;
 
 /**
  * upcoming / past, decided on `endsAt ?? startsAt`.
