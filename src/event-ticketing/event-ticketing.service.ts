@@ -19,7 +19,8 @@ import {
 } from './event-ticketing.constants';
 import type { BuyTicketsDto, VerifyOrderDto } from './dto/event-ticketing.dto';
 import { ticketTotals } from './ticket-counts';
-import type { TicketTier } from '../../generated/prisma/enums';
+import type { EventStatus, TicketTier } from '../../generated/prisma/enums';
+import type { Prisma } from '../../generated/prisma/client';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { BACK_TO_REVIEW, EventService } from '../event/event.service';
 
@@ -119,17 +120,7 @@ export class EventTicketingService {
       salesEndAt?: string;
     }>,
   ) {
-    const event = await this.prisma.event.findUnique({
-      where: { id: eventId },
-      select: { hostWawuId: true, cancelledAt: true, status: true },
-    });
-    if (!event) throw new NotFoundException('Event not found');
-    if (event.hostWawuId !== organiserWawuId) {
-      throw new ForbiddenException('This event is not yours.');
-    }
-    if (event.cancelledAt) {
-      throw new ConflictException('This event has been cancelled.');
-    }
+    await editableEvent(this.prisma, eventId, organiserWawuId);
 
     for (const t of types) {
       // A paid tier at ₦0 is a mistake nobody notices until it sells out.
@@ -143,15 +134,7 @@ export class EventTicketingService {
       }
     }
 
-    const sold = await this.prisma.eventTicketType.findMany({
-      where: { eventId, sold: { gt: 0 } },
-      select: { id: true, name: true, sold: true },
-    });
-    if (sold.length > 0) {
-      throw new ConflictException(
-        `Tickets have already sold for ${sold.map((s) => `"${s.name}"`).join(', ')}. Add a new tier instead of editing one people have bought.`,
-      );
-    }
+    await assertNoneSold(this.prisma, eventId);
 
     // R-40: hosting is verified-only, and repricing is hosting. Before any
     // write, and before the no-change answer below, so a host without a
@@ -168,43 +151,53 @@ export class EventTicketingService {
       salesEndAt: t.salesEndAt ? new Date(t.salesEndAt) : null,
     }));
 
-    // The same tiers sent again change nothing: no rows rewritten, and the
-    // event is not sent back to review for an edit that did not happen.
-    const current = await this.prisma.eventTicketType.findMany({
-      where: { eventId },
-      select: {
-        tier: true,
-        name: true,
-        priceNaira: true,
-        quantity: true,
-        salesStartAt: true,
-        salesEndAt: true,
-      },
+    // Everything that depends on the event's state is decided again here,
+    // under a lock on the event row, and written in the same transaction
+    // (EVENTS-11 D1). An admin's remove, approve or cancel that lands
+    // between the checks above and this write either commits first, and
+    // this request then answers as it would for that state, or waits for
+    // this one and finds the state it changed. Without the lock a takedown
+    // that landed in between was overwritten with `pending`. Two PUTs to one
+    // event also run one after the other, so their tier rows never mix.
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "Event" WHERE "id" = ${eventId} FOR UPDATE`;
+      const event = await editableEvent(tx, eventId, organiserWawuId);
+      await assertNoneSold(tx, eventId);
+
+      // The same tiers sent again change nothing: no rows rewritten, and the
+      // event is not sent back to review for an edit that did not happen.
+      const current = await tx.eventTicketType.findMany({
+        where: { eventId },
+        select: {
+          tier: true,
+          name: true,
+          priceNaira: true,
+          quantity: true,
+          salesStartAt: true,
+          salesEndAt: true,
+        },
+      });
+      if (sameTiers(current, rows)) return;
+
+      await tx.eventTicketType.deleteMany({ where: { eventId, sold: 0 } });
+      await tx.eventTicketType.createMany({ data: rows });
+
+      // A change to a published (or rejected, or still pending) event puts
+      // it in the queue, exactly as PATCH does. A `removed` event is left as
+      // it is: sending it to `pending` would let a host edit their way out
+      // of an admin's takedown, which PATCH refuses outright. The write is
+      // also conditional on the status it was decided from.
+      if (
+        event.status === 'published' ||
+        event.status === 'rejected' ||
+        event.status === 'pending'
+      ) {
+        await tx.event.updateMany({
+          where: { id: eventId, status: event.status },
+          data: BACK_TO_REVIEW,
+        });
+      }
     });
-    if (sameTiers(current, rows))
-      return this.listTicketTypes(eventId, organiserWawuId);
-
-    // A change to a published (or rejected, or still pending) event puts it
-    // in the queue, exactly as PATCH does. A `removed` event is left as it
-    // is: sending it to `pending` would let a host edit their way out of an
-    // admin's takedown, which PATCH refuses outright.
-    const backToReview =
-      event.status === 'published' ||
-      event.status === 'rejected' ||
-      event.status === 'pending';
-
-    await this.prisma.$transaction([
-      this.prisma.eventTicketType.deleteMany({ where: { eventId, sold: 0 } }),
-      this.prisma.eventTicketType.createMany({ data: rows }),
-      ...(backToReview
-        ? [
-            this.prisma.event.update({
-              where: { id: eventId },
-              data: BACK_TO_REVIEW,
-            }),
-          ]
-        : []),
-    ]);
 
     // The host's own read: the event may be `pending` now, and the host
     // still sees what they just saved.
@@ -855,4 +848,43 @@ function sameTiers(current: TierKey[], incoming: TierKey[]): boolean {
   const a = current.map(key).sort();
   const b = incoming.map(key).sort();
   return a.every((k, i) => k === b[i]);
+}
+
+type Db = PrismaService | Prisma.TransactionClient;
+
+/**
+ * The event a host may set tiers on: it exists (404), it is theirs (403)
+ * and it is not cancelled (409). Run once before the gate and again under
+ * the row lock, with the same answers.
+ */
+async function editableEvent(
+  db: Db,
+  eventId: string,
+  organiserWawuId: string,
+): Promise<{ status: EventStatus }> {
+  const event = await db.event.findUnique({
+    where: { id: eventId },
+    select: { hostWawuId: true, cancelledAt: true, status: true },
+  });
+  if (!event) throw new NotFoundException('Event not found');
+  if (event.hostWawuId !== organiserWawuId) {
+    throw new ForbiddenException('This event is not yours.');
+  }
+  if (event.cancelledAt) {
+    throw new ConflictException('This event has been cancelled.');
+  }
+  return { status: event.status };
+}
+
+/** Once a ticket is sold the tiers are locked: 409, naming the sold tiers. */
+async function assertNoneSold(db: Db, eventId: string): Promise<void> {
+  const sold = await db.eventTicketType.findMany({
+    where: { eventId, sold: { gt: 0 } },
+    select: { id: true, name: true, sold: true },
+  });
+  if (sold.length > 0) {
+    throw new ConflictException(
+      `Tickets have already sold for ${sold.map((s) => `"${s.name}"`).join(', ')}. Add a new tier instead of editing one people have bought.`,
+    );
+  }
 }

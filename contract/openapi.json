@@ -42359,6 +42359,7 @@
           "category": {
             "type": "string",
             "enum": [
+              "community",
               "conference",
               "music",
               "business",
@@ -42366,7 +42367,6 @@
               "church",
               "entertainment",
               "fashion",
-              "community",
               "lifestyle",
               "other"
             ]
@@ -42493,6 +42493,7 @@
                 "value": {
                   "type": "string",
                   "enum": [
+                    "community",
                     "conference",
                     "music",
                     "business",
@@ -42500,7 +42501,6 @@
                     "church",
                     "entertainment",
                     "fashion",
-                    "community",
                     "lifestyle",
                     "other"
                   ]

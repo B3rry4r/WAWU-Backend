@@ -355,23 +355,33 @@ export class EventService {
     // create path refuses, and every edit re-enters the moderation queue
     // anyway, so an edit IS a submission.
     await this.assertMayHost(userWawuId);
-    const existing = await this.prisma.event.findUnique({ where: { id } });
-    if (!existing || existing.hostWawuId !== userWawuId) {
-      // Same 404-not-403 reasoning as findOne: an event that is not yours is
-      // an event you are not told about.
-      throw new NotFoundException('Event not found.');
-    }
-    if (existing.status === 'removed') {
-      throw new ForbiddenException(
-        'This event was taken down by an admin and cannot be edited. Submit a new one, or contact support.',
-      );
-    }
 
-    const startsAt = dto.startsAt ? new Date(dto.startsAt) : existing.startsAt;
-    const endsAt = dto.endsAt ? new Date(dto.endsAt) : existing.endsAt;
-    assertWindowOrdered(startsAt, endsAt);
-
+    // The event is read, checked and written under a lock on its row, in one
+    // transaction (EVENTS-11 D1). An admin's remove that lands while this
+    // edit is in flight either commits first, and this edit then gets the
+    // takedown's 403, or waits for this edit and finds the event `pending`.
+    // Read before the lock, a takedown in between was overwritten with
+    // `pending` and an approve would then have published it.
     const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "Event" WHERE "id" = ${id} FOR UPDATE`;
+      const existing = await tx.event.findUnique({ where: { id } });
+      if (!existing || existing.hostWawuId !== userWawuId) {
+        // Same 404-not-403 reasoning as findOne: an event that is not yours
+        // is an event you are not told about.
+        throw new NotFoundException('Event not found.');
+      }
+      if (existing.status === 'removed') {
+        throw new ForbiddenException(
+          'This event was taken down by an admin and cannot be edited. Submit a new one, or contact support.',
+        );
+      }
+
+      const startsAt = dto.startsAt
+        ? new Date(dto.startsAt)
+        : existing.startsAt;
+      const endsAt = dto.endsAt ? new Date(dto.endsAt) : existing.endsAt;
+      assertWindowOrdered(startsAt, endsAt);
+
       if (dto.speakers) {
         // Wholesale replacement — see UpdateEventDto. Both halves are in the
         // same transaction so an event is never briefly speakerless.
