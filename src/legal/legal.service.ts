@@ -12,14 +12,15 @@ import {
 } from '../common/audit/admin-ops-audit.service';
 import { FlutterwaveCheckoutVerifier } from '../common/flutterwave/checkout-verifier';
 import {
-  CONSULTATION_FEES,
+  CATALOGUE_LABELS,
   LEGAL_CATEGORIES,
   LEGAL_SERVICES,
   legalService,
-  type ConsultationMediumId,
 } from './legal-catalogue';
 import { renderContract } from './contract-template';
-import { CONSULTATION_HOURS, buildAvailability } from './availability';
+import { CONSULTATION_HOURS } from './availability';
+import { buildSlotDays, overlaps, appointmentMinutes } from './consultation-slots';
+import { LegalPricesService, isBookable } from './legal-prices.service';
 import type {
   BookConsultationDto,
   CancelLegalRequestDto,
@@ -47,7 +48,7 @@ const SLOT_HOLDING_STATUSES = [
  * hour off the calendar permanently. Paid bookings are held indefinitely —
  * they are real appointments.
  */
-const UNPAID_HOLD_MINUTES = 30;
+export const UNPAID_HOLD_MINUTES = 30;
 
 /**
  * WAWU Legal.
@@ -69,6 +70,7 @@ export class LegalRequestsService {
     private readonly prisma: PrismaService,
     private readonly verifier: FlutterwaveCheckoutVerifier,
     private readonly audit: AdminOpsAuditService,
+    private readonly prices: LegalPricesService,
   ) {}
 
   /**
@@ -76,19 +78,23 @@ export class LegalRequestsService {
    * marked unavailable so nobody pays for an hour someone else has.
    */
   async availability() {
+    const now = new Date();
     const booked = await this.prisma.legalRequest.findMany({
-      where: this.heldSlotsWhere(new Date()),
-      select: { scheduledFor: true },
+      where: this.heldSlotsWhere(now),
+      select: { scheduledFor: true, consultationMinutes: true },
     });
-    const taken = new Set(
-      booked
-        .map((b) => b.scheduledFor?.toISOString())
-        .filter((v): v is string => Boolean(v)),
+    // A held hour blocks every slot it overlaps, so a longer booked call
+    // (LEGAL-03) takes the next slot too. A booking made before lengths were
+    // recorded is one slot, which blocks exactly its own start, as before.
+    const held = booked.flatMap((b) =>
+      b.scheduledFor
+        ? [{ scheduledFor: b.scheduledFor, minutes: b.consultationMinutes }]
+        : [],
     );
     return {
       timeZone: CONSULTATION_HOURS.timeZone,
       slotMinutes: CONSULTATION_HOURS.slotMinutes,
-      days: buildAvailability(taken, new Date()),
+      days: buildSlotDays(held, CONSULTATION_HOURS.slotMinutes, now),
     };
   }
 
@@ -100,7 +106,7 @@ export class LegalRequestsService {
    * came back — kept a lawyer's hour blocked forever, with nothing anywhere
    * able to release it.
    */
-  private heldSlotsWhere(now: Date) {
+  heldSlotsWhere(now: Date) {
     return {
       scheduledFor: { not: null },
       status: { in: [...SLOT_HOLDING_STATUSES] },
@@ -127,7 +133,7 @@ export class LegalRequestsService {
    * written on the assumption that "a cancelled request releases it by
    * clearing scheduledFor", and nothing ever cleared it.
    */
-  private deadHoldWhere(now: Date) {
+  deadHoldWhere(now: Date) {
     return {
       scheduledFor: { not: null },
       OR: [
@@ -141,18 +147,37 @@ export class LegalRequestsService {
   }
 
   /** Hands back an hour nobody is really holding, so it can be booked again. */
-  private async releaseDeadHold(scheduledFor: Date, now: Date) {
+  async releaseDeadHold(scheduledFor: Date, now: Date) {
     await this.prisma.legalRequest.updateMany({
       where: { ...this.deadHoldWhere(now), scheduledFor },
       data: { scheduledFor: null },
     });
   }
 
-  catalogue() {
+  /**
+   * The catalogue the web reads. Prices come from what WAWU set in admin
+   * (R-14): a consultation kind that is not priced and switched on is left
+   * out, and a service with a fixed price carries it in `priceNaira`.
+   */
+  async catalogue() {
+    const [options, servicePrices] = await Promise.all([
+      this.prices.consultationOptions(),
+      this.prices.servicePrices(),
+    ]);
     return {
       categories: LEGAL_CATEGORIES,
-      consultationOptions: Object.values(CONSULTATION_FEES),
-      services: LEGAL_SERVICES,
+      consultationOptions: options
+        .filter((o) => o.medium !== 'phone' && isBookable(o))
+        .map((o) => ({
+          medium: o.medium,
+          label: CATALOGUE_LABELS[o.medium as keyof typeof CATALOGUE_LABELS],
+          minutes: o.minutes,
+          feeNaira: LegalPricesService.toNaira(o.priceKobo),
+        })),
+      services: LEGAL_SERVICES.map((s) => ({
+        ...s,
+        priceNaira: LegalPricesService.toNaira(servicePrices.get(s.code) ?? null),
+      })),
     };
   }
 
@@ -166,6 +191,8 @@ export class LegalRequestsService {
         `${service.name} needs supporting documents before it can be submitted.`,
       );
     }
+    // The fixed price WAWU set in admin, if there is one (R-14).
+    const fixedPriceNaira = await this.prices.servicePriceNaira(service.code);
 
     const record = await this.prisma.legalRequest.create({
       data: {
@@ -188,10 +215,10 @@ export class LegalRequestsService {
         status:
           service.path !== 'simple'
             ? 'draft'
-            : service.priceNaira
+            : fixedPriceNaira
               ? 'quoted'
               : 'awaiting_quote',
-        quoteAmount: service.path === 'simple' ? service.priceNaira : null,
+        quoteAmount: service.path === 'simple' ? fixedPriceNaira : null,
       },
     });
     return this.toResponse(record);
@@ -217,7 +244,16 @@ export class LegalRequestsService {
       throw new ConflictException('A consultation has already been paid for.');
     }
 
-    const option = CONSULTATION_FEES[dto.medium as ConsultationMediumId];
+    const row = await this.prices.consultationOption(dto.medium);
+    if (!isBookable(row)) {
+      throw new BadRequestException(
+        'That kind of consultation is not available right now.',
+      );
+    }
+    const option = {
+      minutes: row.minutes,
+      feeNaira: LegalPricesService.toNaira(row.priceKobo),
+    };
 
     // Chat and Zoom happen at a specific hour, so one has to be chosen. A
     // physical consultation is arranged directly and books no slot.
@@ -233,14 +269,32 @@ export class LegalRequestsService {
       }
       const now = new Date();
       await this.releaseDeadHold(scheduledFor, now);
-      const clash = await this.prisma.legalRequest.findFirst({
+      // Another appointment clashes if it shares any minute with this one. For
+      // a booking made before lengths were recorded that is the same start, as
+      // it always was; a longer booked call (LEGAL-03) also blocks the hour
+      // it runs into.
+      const held = await this.prisma.legalRequest.findMany({
         where: {
           ...this.heldSlotsWhere(now),
-          scheduledFor,
           id: { not: record.id },
         },
-        select: { id: true },
+        select: { scheduledFor: true, consultationMinutes: true },
       });
+      const wanted = scheduledFor;
+      const slotMinutes = option.minutes ?? CONSULTATION_HOURS.slotMinutes;
+      const clash = held.some(
+        (h) =>
+          h.scheduledFor &&
+          overlaps(
+            wanted,
+            slotMinutes,
+            h.scheduledFor,
+            appointmentMinutes({
+              scheduledFor: h.scheduledFor,
+              minutes: h.consultationMinutes,
+            }),
+          ),
+      );
       if (clash) {
         throw new ConflictException('That time has just been taken. Pick another.');
       }
@@ -282,6 +336,7 @@ export class LegalRequestsService {
         data: {
           consultationMedium: dto.medium,
           consultationFee: option.feeNaira,
+          consultationMinutes: option.minutes,
           consultationTxRef: txRef,
           // The picked hour was validated, clash-checked — and then never
           // written, so the response came back with `scheduledFor: null`, the

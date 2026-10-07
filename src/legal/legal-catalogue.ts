@@ -11,10 +11,12 @@
  *                     talks to a lawyer, and only then does WAWU quote the
  *                     work. Nothing is delivered until a contract is signed.
  *
- * Prices: consultation fees are fixed and set here. Simple-service prices are
- * `null` until WAWU sets them — an unset price falls back to being quoted
- * rather than being guessed at, because inventing a fee for a CAC filing would
- * be worse than asking.
+ * Prices: WAWU sets them in admin (R-14), never here. A consultation's price
+ * and length live in `LegalConsultationOption`, a fixed-price service's price
+ * in `LegalServicePrice`. `priceNaira` below is therefore `null` on every
+ * service; the served catalogue fills it from admin. An unset price falls back
+ * to being quoted rather than being guessed at, because inventing a fee for a
+ * CAC filing would be worse than asking.
  */
 
 export type LegalPathId = 'simple' | 'consultation';
@@ -25,7 +27,11 @@ export interface LegalService {
   category: string;
   path: LegalPathId;
   blurb: string;
-  /** Naira. `null` means WAWU bills after reviewing the request. */
+  /**
+   * Always `null` in code (R-14). The price WAWU set in admin is read from
+   * `LegalServicePrice` when the catalogue is served or a request is created;
+   * no price means WAWU bills after reviewing the request.
+   */
   priceNaira: number | null;
   /**
    * This service needs supporting documents.
@@ -52,24 +58,32 @@ export interface LegalService {
   applyHref?: string;
 }
 
-export const CONSULTATION_FEES = {
-  chat: { medium: 'chat' as const, label: 'Chat', minutes: 60, feeNaira: 25_000 },
-  zoom: { medium: 'zoom' as const, label: 'Zoom call', minutes: 60, feeNaira: 45_000 },
-  /**
-   * Physical consultations are arranged directly and the fee is negotiated per
-   * matter, so there is no number to charge up front. The request is recorded
-   * and WAWU makes contact rather than opening a checkout that cannot price
-   * itself.
-   */
-  physical: {
-    medium: 'physical' as const,
-    label: 'In person',
-    minutes: null,
-    feeNaira: null,
-  },
+/**
+ * The kinds of consultation. Their prices and lengths are NOT here: WAWU sets
+ * them in admin (R-14, `LegalConsultationOption`), so a price is never a
+ * number in this code.
+ */
+export const CONSULTATION_MEDIA = ['chat', 'zoom', 'phone', 'physical'] as const;
+
+export type ConsultationMediumId = (typeof CONSULTATION_MEDIA)[number];
+
+/**
+ * What the web's catalogue calls each kind (`GET /legal/catalogue`). Frozen
+ * with that route; `phone` is not part of it.
+ */
+export const CATALOGUE_LABELS = {
+  chat: 'Chat',
+  zoom: 'Zoom call',
+  physical: 'In person',
 } as const;
 
-export type ConsultationMediumId = keyof typeof CONSULTATION_FEES;
+/** What the app calls each kind. A zoom consultation is a video call. */
+export const APP_LABELS: Record<ConsultationMediumId, string> = {
+  chat: 'Chat',
+  zoom: 'Video call',
+  phone: 'Phone call',
+  physical: 'In person',
+};
 
 export const LEGAL_CATEGORIES = [
   'Business Services',

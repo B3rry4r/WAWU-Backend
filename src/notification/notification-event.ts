@@ -55,7 +55,10 @@ export type NotificationKind =
   /** Too many paid questions went unanswered: the first warning. */
   | 'paid_dm_warning'
   /** Paid messages are switched off for a while. */
-  | 'paid_dm_paused';
+  | 'paid_dm_paused'
+  // LEGAL-03: documents WAWU delivered on a legal request.
+  /** Documents were delivered on a legal request. Recipient: the client. */
+  | 'legal_delivered';
 
 /** Exactly the union in WAWU-Web/src/types/notification.ts. */
 export type NotificationTone =
@@ -177,6 +180,18 @@ export type NotificationEvent =
       kind: 'community_join_declined';
       userWawuId: string;
       communityName: string;
+    }
+  /**
+   * LEGAL-03. WAWU delivered documents on a legal request (S23). Recipient:
+   * the client, never the consultant. `fileCount` is how many arrived in this
+   * delivery.
+   */
+  | {
+      kind: 'legal_delivered';
+      userWawuId: string;
+      requestId: string;
+      serviceName: string;
+      fileCount: number;
     };
 
 /** The row `emit()` will write, before it reaches Prisma. */
@@ -532,5 +547,26 @@ export function composeNotification(
         actionLabel: null,
         ...NO_RICH_MEDIA,
       };
+
+    /**
+     * LEGAL-03 (S23). The documents are in the matter's conversation, so the
+     * notification opens that matter: `/legal/requests/<id>`, built here from
+     * the id and never from input.
+     */
+    case 'legal_delivered': {
+      const one = event.fileCount === 1;
+      return {
+        ...base,
+        title: one ? 'Your document is ready' : 'Your documents are ready',
+        body: `${event.fileCount} ${one ? 'document' : 'documents'} for “${event.serviceName}” ${one ? 'is' : 'are'} in your legal chat.`,
+        tone: 'success',
+        amount: null,
+        creditsCount: null,
+        actionLabel: 'Open documents',
+        imageUrl: null,
+        actionHref: `/legal/requests/${event.requestId}`,
+        campaignId: null,
+      };
+    }
   }
 }

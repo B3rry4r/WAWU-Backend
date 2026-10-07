@@ -151,6 +151,8 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'KycSubmission', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'PendingCharge', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'HealthSubscription', column: 'wawuUserId', disposition: 'OWNED' },
+  // The files WAWU delivered on this person's legal requests (LEGAL-03).
+  { model: 'LegalDeliverable', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'LegalRequest', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'LegalIntake', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'ProfessionalProfile', column: 'wawuUserId', disposition: 'OWNED' },
