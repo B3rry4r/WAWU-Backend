@@ -22,9 +22,9 @@ import { EventTicketingModule } from '../event-ticketing.module';
  *
  *  - the edit commits first: the event is `pending` and the remove, which
  *    only works from `published`, is refused (400);
- *  - the remove commits first: the event is `removed`, and the edit either
- *    answers as it does for a removed event (PATCH 403; PUT 200, tiers
- *    saved, status left `removed`) or does not touch the status.
+ *  - the remove commits first: the event is `removed`, and the edit
+ *    answers as it does for a removed event (403 for both, nothing
+ *    written).
  *
  * The wrong ending is the one this guards: the remove answered 200 and the
  * event ended `pending`, the takedown undone. Before the fix (6ea8612 for
@@ -249,7 +249,7 @@ describe('A host edit racing an admin takedown (EVENTS-11 D1)', () => {
     expect(wrong).toEqual([]);
   }, 120_000);
 
-  it('a PUT that lands after the takedown answers as for a removed event and leaves it removed', async () => {
+  it('a PUT that lands after the takedown answers as for a removed event (403) and leaves it removed', async () => {
     await published();
     await remove().expect(200);
     await http()
@@ -260,7 +260,7 @@ describe('A host edit racing an admin takedown (EVENTS-11 D1)', () => {
           { tier: 'regular', name: 'Regular', priceNaira: 6500, quantity: 100 },
         ],
       })
-      .expect(200);
+      .expect(403);
     await http()
       .patch(`/api/hub/events/${EV}`)
       .set(auth(hostToken))

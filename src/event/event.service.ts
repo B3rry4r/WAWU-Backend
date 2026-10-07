@@ -362,8 +362,15 @@ export class EventService {
     // takedown's 403, or waits for this edit and finds the event `pending`.
     // Read before the lock, a takedown in between was overwritten with
     // `pending` and an approve would then have published it.
+    //
+    // FOR NO KEY UPDATE, not FOR UPDATE (EVENTS-11 D2): it conflicts with
+    // every other update of the event row (an admin's decision, another
+    // edit) but not with the FOR KEY SHARE lock Postgres takes on the event
+    // for each row inserted that points at it (an order, a ticket, a going
+    // mark), so none of those waits on an edit and none can deadlock with
+    // one.
     const updated = await this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT "id" FROM "Event" WHERE "id" = ${id} FOR UPDATE`;
+      await tx.$queryRaw`SELECT "id" FROM "Event" WHERE "id" = ${id} FOR NO KEY UPDATE`;
       const existing = await tx.event.findUnique({ where: { id } });
       if (!existing || existing.hostWawuId !== userWawuId) {
         // Same 404-not-403 reasoning as findOne: an event that is not yours
@@ -371,9 +378,7 @@ export class EventService {
         throw new NotFoundException('Event not found.');
       }
       if (existing.status === 'removed') {
-        throw new ForbiddenException(
-          'This event was taken down by an admin and cannot be edited. Submit a new one, or contact support.',
-        );
+        throw new ForbiddenException(TAKEN_DOWN_MESSAGE);
       }
 
       const startsAt = dto.startsAt
@@ -661,6 +666,16 @@ export class EventService {
     }));
   }
 }
+
+/**
+ * The refusal for an edit to an event an admin took down (`removed`). PATCH
+ * /events/:id and PUT /events/:id/tickets (R-40 round 4 ruling) both answer
+ * it, as a 403 with this message, and write nothing: the way back from a
+ * takedown is an admin's restore, and a restore must not publish anything
+ * the host changed after the takedown.
+ */
+export const TAKEN_DOWN_MESSAGE =
+  'This event was taken down by an admin and cannot be edited. Submit a new one, or contact support.';
 
 /**
  * What sending an event back to review writes: `pending`, and the old

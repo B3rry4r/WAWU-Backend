@@ -22,7 +22,11 @@ import { ticketTotals } from './ticket-counts';
 import type { EventStatus, TicketTier } from '../../generated/prisma/enums';
 import type { Prisma } from '../../generated/prisma/client';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
-import { BACK_TO_REVIEW, EventService } from '../event/event.service';
+import {
+  BACK_TO_REVIEW,
+  EventService,
+  TAKEN_DOWN_MESSAGE,
+} from '../event/event.service';
 
 /**
  * A ticket code, and why it looks like this.
@@ -152,15 +156,28 @@ export class EventTicketingService {
     }));
 
     // Everything that depends on the event's state is decided again here,
-    // under a lock on the event row, and written in the same transaction
-    // (EVENTS-11 D1). An admin's remove, approve or cancel that lands
-    // between the checks above and this write either commits first, and
-    // this request then answers as it would for that state, or waits for
-    // this one and finds the state it changed. Without the lock a takedown
-    // that landed in between was overwritten with `pending`. Two PUTs to one
-    // event also run one after the other, so their tier rows never mix.
+    // under locks, and written in the same transaction (EVENTS-11 D1). An
+    // admin's remove, approve or cancel that lands between the checks above
+    // and this write either commits first, and this request then answers as
+    // it would for that state, or waits for this one and finds the state it
+    // changed. Two PUTs to one event run one after the other, so their tier
+    // rows never mix.
+    //
+    // The locks, and why they cannot deadlock with a purchase (EVENTS-11
+    // D2). First the event row, FOR NO KEY UPDATE: it serialises this edit
+    // against an admin's decision and another edit, but not against the FOR
+    // KEY SHARE lock a purchase takes on the event when it inserts its order
+    // and tickets. Then the event's tier rows, FOR UPDATE, before reading
+    // `sold`: a purchase (issueOrder) locks its tier row first by
+    // incrementing `sold`. The tier rows are the only locks the two
+    // contend for and each takes them once, so one simply waits for the
+    // other. A purchase that got there first has committed its `sold` by
+    // the time this reads it (the sold 409); one that comes second finds its
+    // tier replaced and is refused ("sold out", 409), never sold a seat on a
+    // tier that no longer exists.
     await this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT "id" FROM "Event" WHERE "id" = ${eventId} FOR UPDATE`;
+      await tx.$queryRaw`SELECT "id" FROM "Event" WHERE "id" = ${eventId} FOR NO KEY UPDATE`;
+      await tx.$queryRaw`SELECT "id" FROM "EventTicketType" WHERE "eventId" = ${eventId} FOR UPDATE`;
       const event = await editableEvent(tx, eventId, organiserWawuId);
       await assertNoneSold(tx, eventId);
 
@@ -179,14 +196,27 @@ export class EventTicketingService {
       });
       if (sameTiers(current, rows)) return;
 
+      // A tier a buyer has started paying for cannot be replaced: the
+      // pending order points at it, and deleting it was a database error
+      // (a 500) before this check.
+      const paying = await tx.eventOrder.findMany({
+        where: { eventId, status: 'pending' },
+        select: { ticketType: { select: { name: true } } },
+        distinct: ['ticketTypeId'],
+      });
+      if (paying.length > 0) {
+        throw new ConflictException(
+          `A buyer is paying for ${paying.map((o) => `"${o.ticketType.name}"`).join(', ')} right now, so the tiers cannot be replaced yet. Add a new tier instead, or try again once that payment has finished.`,
+        );
+      }
+
       await tx.eventTicketType.deleteMany({ where: { eventId, sold: 0 } });
       await tx.eventTicketType.createMany({ data: rows });
 
       // A change to a published (or rejected, or still pending) event puts
-      // it in the queue, exactly as PATCH does. A `removed` event is left as
-      // it is: sending it to `pending` would let a host edit their way out
-      // of an admin's takedown, which PATCH refuses outright. The write is
-      // also conditional on the status it was decided from.
+      // it in the queue, exactly as PATCH does. A `removed` event never gets
+      // here (editableEvent's 403). The write is also conditional on the
+      // status it was decided from.
       if (
         event.status === 'published' ||
         event.status === 'rejected' ||
@@ -853,9 +883,11 @@ function sameTiers(current: TierKey[], incoming: TierKey[]): boolean {
 type Db = PrismaService | Prisma.TransactionClient;
 
 /**
- * The event a host may set tiers on: it exists (404), it is theirs (403)
- * and it is not cancelled (409). Run once before the gate and again under
- * the row lock, with the same answers.
+ * The event a host may set tiers on: it exists (404), it is theirs (403),
+ * an admin has not taken it down (403, PATCH's takedown answer: round 4
+ * ruling, so a restore never publishes tiers changed after a takedown) and
+ * it is not cancelled (409). Run once before the gate and again under the
+ * locks, with the same answers.
  */
 async function editableEvent(
   db: Db,
@@ -869,6 +901,9 @@ async function editableEvent(
   if (!event) throw new NotFoundException('Event not found');
   if (event.hostWawuId !== organiserWawuId) {
     throw new ForbiddenException('This event is not yours.');
+  }
+  if (event.status === 'removed') {
+    throw new ForbiddenException(TAKEN_DOWN_MESSAGE);
   }
   if (event.cancelledAt) {
     throw new ConflictException('This event has been cancelled.');

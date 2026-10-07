@@ -483,13 +483,35 @@ describe('PUT /events/:id/tickets: the hosting gate and re-review (EVENTS-11, R-
     }
   });
 
-  it('a removed event stays removed: a tier edit is not a way out of a takedown', async () => {
+  it('a removed event: 403 with the takedown body PATCH gives, nothing written, so a restore publishes nothing unseen (round 4 ruling)', async () => {
     await fixture(EV_REMOVED, HOST_SUB, 'removed');
-    await put(hostToken, EV_REMOVED).expect(200);
-    const row = await prisma.event.findUniqueOrThrow({
-      where: { id: EV_REMOVED },
-    });
-    expect(row.status).toBe('removed');
+    const before = await snapshot(EV_REMOVED);
+    const res = await put(hostToken, EV_REMOVED).expect(403);
+    const patch = await http()
+      .patch(`/api/hub/events/${EV_REMOVED}`)
+      .set(auth(hostToken))
+      .send({ name: 'EV11 renamed' })
+      .expect(403);
+    expect(res.body).toEqual(patch.body);
+    expect((res.body as ErrorBody).message).toBe(
+      'This event was taken down by an admin and cannot be edited. Submit a new one, or contact support.',
+    );
+    // The same tiers sent again are refused too: a takedown is not editable.
+    await put(hostToken, EV_REMOVED, [OLD_TIER]).expect(403);
+    expect(await snapshot(EV_REMOVED)).toEqual(before);
+
+    // After a restore the public reads the tiers it read before the takedown.
+    await http()
+      .post(`/api/hub/admin/events/${EV_REMOVED}/restore`)
+      .set(auth(adminToken))
+      .expect(200);
+    const pub = await http()
+      .get(`/api/hub/events/${EV_REMOVED}/tickets`)
+      .set(auth(buyerToken))
+      .expect(200);
+    expect(
+      (pub.body as { data: { name: string; priceNaira: number }[] }).data,
+    ).toMatchObject([{ name: 'Regular', priceNaira: 5000 }]);
   });
 
   it('keeps the checks that ran before: not yours 403, cancelled 409, a ₦0 paid tier 400, each before the gate', async () => {
