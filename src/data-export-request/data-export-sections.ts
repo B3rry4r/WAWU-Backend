@@ -837,6 +837,11 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
         'Who looked at a profile is those people browsing, not this account data.',
     },
     {
+      model: 'AdEvent',
+      reason:
+        'Which sponsored cards were opened, tapped or skipped on which day: an advertising count kept so each is counted once a day, not something the person made (BACKEND_GAPS G-199).',
+    },
+    {
       model: 'DmReport',
       reason: 'A report about somebody else is a moderation record.',
     },

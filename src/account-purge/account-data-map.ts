@@ -234,6 +234,11 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // with them, and each code then opens the plain "not found" page.
   { model: 'MoneyReceipt', column: 'wawuUserId', disposition: 'OWNED' },
 
+  // Which ads this person viewed, tapped or skipped on which day (ADS-05):
+  // theirs, so the rows go with them. The daily totals the owner invoices from
+  // (AdDailyTotal) name nobody, are not walked back, and stay.
+  { model: 'AdEvent', column: 'viewerWawuId', disposition: 'OWNED' },
+
   // Last: everything above may reference these.
   // An admin's choice to feature this creator in Explore (EXPLORE-03): a
   // placement about the account, gone with it. The row's admin id is not a
