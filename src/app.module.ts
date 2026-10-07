@@ -78,6 +78,7 @@ import { ChatModule } from './chat/chat.module';
 import { TgifModule } from './tgif/tgif.module';
 import { LiveModule } from './live/live.module';
 import { InboxModule } from './inbox/inbox.module';
+import { MeModule } from './me/me.module';
 import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
 import { PaymentWebhookModule } from './payment-webhook/payment-webhook.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
@@ -371,6 +372,10 @@ import { AdsEventsModule } from './ads/ads-events.module';
     // The inbox (task INBOX-07). `@Controller('inbox')` is a first segment nothing
     // else declares, so it cannot shadow or be shadowed.
     InboxModule,
+    // The caller's own lists (task ME-10): counts, saved, purchases, the app's
+    // notifications and this month's earnings. `me` is a first segment nothing
+    // else declares.
+    MeModule,
     // Fintava's webhooks (task MONEY-07): POST /webhooks/fintava, recorded
     // once, no money moved. `webhooks/fintava` is a fixed path no other
     // controller declares, beside the unchanged `webhooks/flutterwave`.
