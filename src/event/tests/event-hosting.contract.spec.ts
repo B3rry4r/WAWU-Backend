@@ -373,6 +373,45 @@ describe('Event hosting, one submit (EVENTS-02)', () => {
       expect(await submitted(name)).toHaveLength(0);
     });
 
+    it('400s a ticket type that is not an object (an array, null, a string, a number), and saves nothing', async () => {
+      const name = `${PREFIX}Not objects`;
+      for (const element of [
+        [],
+        [[]],
+        [{ name: 'Regular', priceNaira: 5000, quantity: 10 }],
+        null,
+        'Regular',
+        '',
+        5000,
+        0,
+        true,
+      ]) {
+        const res = await http()
+          .post('/api/hub/events')
+          .set(auth(hostToken))
+          .send(wizardBody({ name, ticketTypes: [element] }));
+        expect(res.status).toBe(400);
+        // The message names the field: "each ticket type must be an object",
+        // or class-validator's nested-property line for a primitive.
+        expect(JSON.stringify(bodyOf(res).message)).toMatch(/ticket ?types?/i);
+      }
+      // Beside a good one, it still refuses the lot.
+      await http()
+        .post('/api/hub/events')
+        .set(auth(hostToken))
+        .send(
+          wizardBody({
+            name,
+            ticketTypes: [
+              { name: 'Regular', priceNaira: 5000, quantity: 10 },
+              [],
+            ],
+          }),
+        )
+        .expect(400);
+      expect(await submitted(name)).toHaveLength(0);
+    });
+
     it('400s a price or quantity that is not a JSON integer, as PUT /events/:id/tickets does, and saves nothing', async () => {
       const name = `${PREFIX}Not integers`;
       const bad: Array<[string, unknown, unknown]> = [

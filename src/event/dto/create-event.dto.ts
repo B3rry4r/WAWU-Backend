@@ -6,6 +6,7 @@ import {
   IsEmail,
   IsEnum,
   IsInt,
+  IsObject,
   IsOptional,
   IsString,
   IsUrl,
@@ -237,6 +238,11 @@ export class CreateEventDto {
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(MAX_TICKET_TYPES_PER_EVENT)
+  // `@ValidateNested` lets an element that is an array (`[[]]`) through, and
+  // the service then failed on it with a 500. Every element that is not a
+  // plain object (an array, null, a string, a number) is a 400 here, before
+  // anything is written.
+  @IsObject({ each: true, message: 'each ticket type must be an object' })
   @ValidateNested({ each: true })
   @Type(() => NewEventTicketTypeDto)
   ticketTypes?: NewEventTicketTypeDto[];
