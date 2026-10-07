@@ -12,6 +12,11 @@ import {
   GEMINI_CLIENT,
   type GeminiClient,
 } from '../common/ai/gemini-client.interface';
+import { cleanAiText, withoutEmDash } from './ai-text';
+import {
+  LegalAssistantAllowance,
+  consultantHasWritten,
+} from './assistant/legal-assistant-allowance';
 import type { LegalBrief } from './legal-brief';
 
 export interface ChatMessageView {
@@ -76,6 +81,7 @@ export class LegalChatService {
   constructor(
     private readonly prisma: PrismaService,
     @Inject(GEMINI_CLIENT) private readonly gemini: GeminiClient,
+    private readonly allowance: LegalAssistantAllowance,
   ) {}
 
   /**
@@ -135,35 +141,73 @@ export class LegalChatService {
       );
     }
 
-    await this.prisma.legalChatMessage.create({
-      data: {
-        legalRequestId: requestId,
-        authorRole: 'client',
-        body: body.trim(),
-      },
-    });
+    // The message is counted and written in one step under the person's
+    // lock, the same reservation `POST /legal/assistant/{id}/messages` uses
+    // after Send, so both routes draw on ONE hourly allowance and parallel
+    // posts cannot all pass the check before any is counted (LEGAL-01, D8).
+    // Over the limit this is the same 429 `assistant_rate_limited` with
+    // `retryAfterSeconds`. A request under the limit answers as it always did.
+    // Once a consultant has written in this thread the message is for them:
+    // it is neither counted nor refused (decided inside the same lock).
+    await this.allowance.reserveMatterMessage(
+      wawuUserId,
+      requestId,
+      (tx, createdAt) =>
+        tx.legalChatMessage.create({
+          data: {
+            legalRequestId: requestId,
+            authorRole: 'client',
+            body: body.trim(),
+            createdAt,
+          },
+        }),
+    );
 
-    const history = await this.prisma.legalChatMessage.findMany({
-      where: { legalRequestId: requestId },
-      orderBy: { createdAt: 'asc' },
-      take: 40,
-    });
+    await this.answerWaiting(wawuUserId, requestId);
+    return this.getThread(wawuUserId, requestId);
+  }
+
+  /**
+   * The assistant answers the client's newest message, unless the matter's
+   * conversation is not open yet or a consultant has already written (the
+   * AI's turn is over for good then). The message itself is already saved:
+   * the caller writes it, so a caller that has to count it first (LEGAL-01's
+   * hourly limit) can do both in one step. A provider failure is a 503 that
+   * says the message was kept.
+   */
+  async answerWaiting(wawuUserId: string, requestId: string): Promise<void> {
+    const request = await this.findOwned(wawuUserId, requestId);
+    if (!LegalChatService.OPEN_FROM.has(request.status)) return;
 
     // Handover is one-way and permanent. Once a consultant has written here,
-    // every later client message is for them.
-    if (history.some((m) => m.authorRole === 'consultant')) {
-      return this.getThread(wawuUserId, requestId);
-    }
+    // every later client message is for them. Asked of the WHOLE thread, by
+    // the same query the reservation uses (a window of rows would miss a
+    // consultant line past it, and the message would be free yet answered).
+    if (await consultantHasWritten(this.prisma, requestId)) return;
+
+    // The model sees the NEWEST 40 rows, in the order they were written.
+    const history = (
+      await this.prisma.legalChatMessage.findMany({
+        where: { legalRequestId: requestId },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: 40,
+      })
+    ).reverse();
 
     try {
-      const reply = await this.gemini.chat({
-        instruction: this.instructionWithBrief(request.details),
-        history: history.map((m) => ({
-          role:
-            m.authorRole === 'client' ? ('user' as const) : ('model' as const),
-          text: m.body,
-        })),
-      });
+      const reply = cleanAiText(
+        await this.gemini.chat({
+          instruction: this.instructionWithBrief(request.details),
+          history: history.map((m) => ({
+            role:
+              m.authorRole === 'client'
+                ? ('user' as const)
+                : ('model' as const),
+            text: m.body,
+          })),
+        }),
+      );
+      if (!reply) throw new Error('The assistant answer was empty');
       await this.prisma.legalChatMessage.create({
         data: { legalRequestId: requestId, authorRole: 'ai', body: reply },
       });
@@ -180,8 +224,6 @@ export class LegalChatService {
         'Your message was saved and your consultant will see it. The assistant could not reply just now.',
       );
     }
-
-    return this.getThread(wawuUserId, requestId);
   }
 
   /** A consultant replying from the dashboard. This is what ends the AI's turn. */
@@ -195,14 +237,21 @@ export class LegalChatService {
     });
     if (!request) throw new NotFoundException('Legal request not found');
 
-    await this.prisma.legalChatMessage.create({
-      data: {
-        legalRequestId: requestId,
-        authorRole: 'consultant',
-        authorAdminId: adminId,
-        body: body.trim(),
-      },
-    });
+    // Under the client's lock, so the handover is ordered against their
+    // messages (see `LegalAssistantAllowance.writeAsConsultant`).
+    await this.allowance.writeAsConsultant(
+      request.wawuUserId,
+      (tx, createdAt) =>
+        tx.legalChatMessage.create({
+          data: {
+            legalRequestId: requestId,
+            authorRole: 'consultant',
+            authorAdminId: adminId,
+            body: body.trim(),
+            createdAt,
+          },
+        }),
+    );
     return this.threadFor(request);
   }
 
@@ -237,7 +286,7 @@ export class LegalChatService {
 
   private async openThread(request: { id: string; details: unknown }) {
     try {
-      const reply = await this.gemini.chat({
+      const raw = await this.gemini.chat({
         instruction: this.instructionWithBrief(request.details),
         history: [
           {
@@ -246,6 +295,8 @@ export class LegalChatService {
           },
         ],
       });
+      const reply = cleanAiText(raw);
+      if (!reply) throw new Error('The assistant opener was empty');
       const created = await this.prisma.legalChatMessage.create({
         data: { legalRequestId: request.id, authorRole: 'ai', body: reply },
       });
@@ -306,7 +357,9 @@ function toView(m: {
   return {
     id: m.id,
     authorRole: m.authorRole,
-    body: m.body,
+    // A line the AI wrote before em-dashes were stripped on the way in is
+    // still read without them.
+    body: m.authorRole === 'ai' ? withoutEmDash(m.body) : m.body,
     createdAt: m.createdAt,
   };
 }
