@@ -99,6 +99,13 @@ FLUTTERWAVE_SECRET_KEY=
 FLUTTERWAVE_PUBLIC_KEY=
 FLUTTERWAVE_WEBHOOK_HASH=
 
+# Which company holds the naira wallets (MONEY-20): fintava, or empty for
+# fintava. `nuvion` is reserved and stops the server at boot with a clear
+# message until its adapter task lands; any other value stops it too.
+# ROLLBACK between providers = change this one value, then
+# `sudo systemctl restart wawu-hub-api`. Nothing else is edited, no migration
+# runs, and the FINTAVA_* values below stay in place either way.
+WALLET_PROVIDER=fintava
 # Fintava (naira wallets; src/fintava/, MONEY-06). Production must name the
 # live base URL here: the client never assumes live, and refuses any host
 # other than Fintava's. The timeouts may stay empty (defaults in

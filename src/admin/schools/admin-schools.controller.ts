@@ -19,6 +19,7 @@ import {
   UpdateIntakeDto,
   UpdateSchoolDto,
 } from '../../schools/school-admin.dto';
+import { PlainObjectBodyPipe } from '../../schools/plain-object-body.pipe';
 import { SchoolAdminService } from '../../schools/school-admin.service';
 import { AdminRoles } from '../auth/decorators/admin-roles.decorator';
 import { AdminAuthGuard } from '../auth/guards/admin-auth.guard';
@@ -53,13 +54,16 @@ export class AdminSchoolsController {
 
   @AdminRoles(AdminRole.superadmin, AdminRole.reviewer)
   @Post('schools')
-  create(@Body() dto: CreateSchoolDto) {
+  create(@Body(PlainObjectBodyPipe) dto: CreateSchoolDto) {
     return this.service.createSchool(dto);
   }
 
   @AdminRoles(AdminRole.superadmin, AdminRole.reviewer)
   @Patch('schools/:id')
-  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateSchoolDto) {
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(PlainObjectBodyPipe) dto: UpdateSchoolDto,
+  ) {
     return this.service.updateSchool(id, dto);
   }
 
@@ -67,7 +71,7 @@ export class AdminSchoolsController {
   @Post('schools/:id/courses')
   createCourse(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: CreateCourseDto,
+    @Body(PlainObjectBodyPipe) dto: CreateCourseDto,
   ) {
     return this.service.createCourse(id, dto);
   }
@@ -82,7 +86,7 @@ export class AdminSchoolsController {
   @Patch('school-courses/:id')
   updateCourse(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: UpdateCourseDto,
+    @Body(PlainObjectBodyPipe) dto: UpdateCourseDto,
   ) {
     return this.service.updateCourse(id, dto);
   }
@@ -91,7 +95,7 @@ export class AdminSchoolsController {
   @Post('school-courses/:id/intakes')
   createIntake(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: CreateIntakeDto,
+    @Body(PlainObjectBodyPipe) dto: CreateIntakeDto,
   ) {
     return this.service.createIntake(id, dto);
   }
@@ -106,7 +110,7 @@ export class AdminSchoolsController {
   @Patch('school-intakes/:id')
   updateIntake(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: UpdateIntakeDto,
+    @Body(PlainObjectBodyPipe) dto: UpdateIntakeDto,
   ) {
     return this.service.updateIntake(id, dto);
   }

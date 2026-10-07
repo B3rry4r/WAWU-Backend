@@ -3,12 +3,12 @@ import {
   ArrayMaxSize,
   IsArray,
   IsBoolean,
-  IsEmail,
   IsIn,
   IsInt,
   IsOptional,
   IsString,
-  IsUrl,
+  isEmail,
+  isURL,
   IsUUID,
   Max,
   MaxLength,
@@ -133,6 +133,23 @@ const emptyToNull = ({ value }: { value: unknown }) =>
 
 const URL_OPTIONS = { protocols: ['https'], require_protocol: true };
 
+/**
+ * `@IsEmail` and `@IsUrl` run the validator library on whatever string they
+ * are given, and it throws (a `URIError` on a lone surrogate) or lets a NUL
+ * through to Postgres, which refuses it: a 500 where a 400 belongs. These two
+ * look for a NUL or a lone surrogate first and answer `false` for it.
+ */
+const IsSafeEmail = decorate(
+  'isEmail',
+  (v) => isCleanText(v) && isEmail(v),
+  '$property must be an email, with no null characters or broken characters',
+);
+const IsSafeUrl = decorate(
+  'isUrl',
+  (v) => isCleanText(v) && isURL(v as string, URL_OPTIONS),
+  '$property must be a URL address (https), with no null characters or broken characters',
+);
+
 // ---- school ---------------------------------------------------------------
 
 export class CreateSchoolDto {
@@ -173,18 +190,18 @@ export class CreateSchoolDto {
   /** A storage URL. Empty or null clears it. */
   @IsOptional()
   @Transform(emptyToNull)
-  @IsUrl(URL_OPTIONS)
+  @IsSafeUrl()
   @MaxLength(2000)
   logo?: string | null;
 
   @IsOptional()
   @Transform(emptyToNull)
-  @IsUrl(URL_OPTIONS)
+  @IsSafeUrl()
   @MaxLength(2000)
   applyUrl?: string | null;
 
   @Transform(trimmed)
-  @IsEmail()
+  @IsSafeEmail()
   @MaxLength(254)
   reportEmail!: string;
 }
@@ -236,19 +253,19 @@ export class UpdateSchoolDto {
 
   @IsOptional()
   @Transform(emptyToNull)
-  @IsUrl(URL_OPTIONS)
+  @IsSafeUrl()
   @MaxLength(2000)
   logo?: string | null;
 
   @IsOptional()
   @Transform(emptyToNull)
-  @IsUrl(URL_OPTIONS)
+  @IsSafeUrl()
   @MaxLength(2000)
   applyUrl?: string | null;
 
   @OptionalNotNull()
   @Transform(trimmed)
-  @IsEmail()
+  @IsSafeEmail()
   @MaxLength(254)
   @NotNull()
   reportEmail?: string;

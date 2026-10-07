@@ -4,3 +4,5 @@
 ALTER TABLE "School" ADD COLUMN "hiddenAt" TIMESTAMP(3);
 ALTER TABLE "SchoolCourse" ADD COLUMN "hiddenAt" TIMESTAMP(3);
 ALTER TABLE "CourseIntake" ADD COLUMN "hiddenAt" TIMESTAMP(3);
+
+-- Rollback: ALTER TABLE "School" DROP COLUMN "hiddenAt"; ALTER TABLE "SchoolCourse" DROP COLUMN "hiddenAt"; ALTER TABLE "CourseIntake" DROP COLUMN "hiddenAt";

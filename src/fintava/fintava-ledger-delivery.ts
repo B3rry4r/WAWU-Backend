@@ -3,6 +3,13 @@
  * MONEY-10). Pure: no database, no Fintava call, so every rule here is
  * unit-tested on its own.
  *
+ * Moved here from `src/money/ledger/ledger-webhook.ts` by MONEY-20: it is
+ * Fintava's payload format, so it sits with the Fintava adapter, and the
+ * ledger consumer reads it through the wallet provider
+ * (`WalletProvider.deliveries`). The reading's types are the seam's own
+ * (wallet-provider.interface.ts); a party at a Fintava wallet is
+ * `provider_wallet` there.
+ *
  * The payloads are Fintava's documented examples (mobile repo
  * `docs/fintava/reference/webhook-events.md`); no real delivery has been
  * received (no tunnel, R-25). Wherever the docs leave a field's meaning
@@ -13,12 +20,19 @@
  * (`fintavaAmountToKobo`): decimal text, never float arithmetic, and a
  * value with more than 2 decimals is refused, not rounded.
  */
+import type { TransferStatus } from '../money/money-view.type';
+import type {
+  LedgerParty,
+  LedgerPartyWhere,
+  LedgerWebhookMovement,
+  LedgerWebhookReading,
+  LedgerWebhookReversal,
+} from '../wallet-provider/wallet-provider.interface';
 import {
   FintavaAmountError,
   fintavaAmountToKobo,
   fintavaAmountToKoboOrNull,
-} from '../../fintava/fintava-amount';
-import type { TransactionCategory, TransferStatus } from '../money-view.type';
+} from './fintava-amount';
 
 /** The events whose consumers include the ledger (FINTAVA_WEBHOOK_EVENTS). */
 export const LEDGER_WEBHOOK_EVENTS = [
@@ -29,80 +43,6 @@ export const LEDGER_WEBHOOK_EVENTS = [
   'debit_transfer_reversal',
 ] as const;
 export type LedgerWebhookEvent = (typeof LEDGER_WEBHOOK_EVENTS)[number];
-
-/**
- * Where a party's account is, as the event defines it:
- * - `fintava_wallet`: a wallet at Fintava (Loma Bank), by the event's
- *   meaning (both sides of a wallet-to-wallet send, the sender of a
- *   customer's bank send, the account `account_funded` funds);
- * - `bank_account`: an account at a bank, named with that bank's code (the
- *   destination of a bank send, the sender of `account_funded`). A NUBAN is
- *   unique only within its bank, so this is a WAWU wallet only when the bank
- *   is Fintava's own (FINTAVA_WALLET_BANK_CODE), never by number alone;
- * - `merchant`: WAWU's merchant wallet by definition (a virtual wallet's
- *   payment lands there).
- */
-export type LedgerPartyWhere = 'fintava_wallet' | 'bank_account' | 'merchant';
-
-/**
- * One party to a movement, as a delivery names it. The consumer decides
- * whether it is one of WAWU's wallets: a person's (FintavaWallet: by
- * Fintava's customerId when the delivery names one, else by account
- * number) or WAWU's merchant wallet.
- */
-export interface LedgerParty {
-  where: LedgerPartyWhere;
-  /** Every account number the delivery gives for this party, in order. */
-  accountNumbers: string[];
-  /** Fintava's customerId, when the delivery names one. */
-  customerId: string | null;
-  name: string | null;
-  /** The bank's code, for a `bank_account`. */
-  bankCode: string | null;
-}
-
-export interface LedgerWebhookMovement {
-  kind: 'movement';
-  event: LedgerWebhookEvent;
-  /** null: the delivery reported no status we know. */
-  status: TransferStatus | null;
-  amountKobo: number;
-  feeKobo: number;
-  totalKobo: number;
-  /** Every reference field the delivery carried (meaning unconfirmed, G-19). */
-  references: string[];
-  sessionId: string | null;
-  from: LedgerParty | null;
-  to: LedgerParty | null;
-  category: TransactionCategory;
-  narration: string | null;
-  /**
-   * True when nothing else can confirm the delivery: money in from a bank
-   * or into a temporary account never appears in Fintava's history (debits
-   * only, `sandbox/09-`, `10-`), so the signed delivery is the record.
-   */
-  trustAlone: boolean;
-}
-
-export interface LedgerWebhookReversal {
-  kind: 'reversal';
-  status: TransferStatus | null;
-  /** References that may name the reversed debit. */
-  references: string[];
-  reversalReference: string | null;
-  customerId: string | null;
-  amountKobo: number | null;
-  chargesKobo: number | null;
-  totalKobo: number | null;
-}
-
-export interface LedgerWebhookUnreadable {
-  kind: 'unreadable';
-  why: string;
-}
-
-export type LedgerWebhookReading =
-  LedgerWebhookMovement | LedgerWebhookReversal | LedgerWebhookUnreadable;
 
 type Obj = Record<string, unknown>;
 
@@ -285,12 +225,12 @@ function walletToWallet(d: Obj, eventReference: string): LedgerWebhookMovement {
     ],
     sessionId: text(d, 'sessionID', 'sessionId'),
     from: party(
-      'fintava_wallet',
+      'provider_wallet',
       [text(d, 'source_customer_accno'), text(d, 'source_customer_wallet')],
       { name: text(d, 'source_customer_accname') },
     ),
     to: party(
-      'fintava_wallet',
+      'provider_wallet',
       [text(d, 'target_customer_accno'), text(d, 'target_customer_wallet')],
       { name: text(d, 'target_customer_accname') },
     ),
@@ -326,7 +266,7 @@ function accountFunded(d: Obj, eventReference: string): LedgerWebhookMovement {
       name: text(d, 'accountName'),
       bankCode: text(d, 'senderBankSortcode'),
     }),
-    to: party('fintava_wallet', [text(d, 'beneficiaryAccountNumber')], {
+    to: party('provider_wallet', [text(d, 'beneficiaryAccountNumber')], {
       customerId: text(d, 'userId', 'customerId'),
       name: text(d, 'beneficiaryAccountName'),
     }),
@@ -366,7 +306,7 @@ function customerBankTransfer(
       eventReference,
     ],
     sessionId: text(d, 'sessionID', 'sessionId'),
-    from: party('fintava_wallet', [text(d, 'senderAccountNumber')], {
+    from: party('provider_wallet', [text(d, 'senderAccountNumber')], {
       customerId: text(d, 'customerId'),
       name: text(d, 'senderName'),
     }),
