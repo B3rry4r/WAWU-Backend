@@ -27,6 +27,25 @@ export const TX_OPTIONS = { maxWait: 15_000, timeout: 15_000 };
  */
 export type Spend = 'message' | 'reply' | 'brief';
 
+/**
+ * Has a consultant written anywhere in this matter's thread? ONE question,
+ * asked of the whole thread, by both sides of the handover: the reservation
+ * (is this client message counted?) and the assistant (does it answer?). If
+ * they ever asked it differently (a window of rows, a different query) a
+ * message could be free for one and answered by the other, an uncounted AI
+ * call (LEGAL-01, D9). `db` is the transaction or the client.
+ */
+export async function consultantHasWritten(
+  db: Pick<Prisma.TransactionClient, 'legalChatMessage'>,
+  requestId: string,
+): Promise<boolean> {
+  const row = await db.legalChatMessage.findFirst({
+    where: { legalRequestId: requestId, authorRole: 'consultant' },
+    select: { id: true },
+  });
+  return row !== null;
+}
+
 /** A refusal the app can switch on (`reason.code`), never a bare sentence. */
 export function refusal(
   status: HttpStatus,
@@ -121,11 +140,7 @@ export class LegalAssistantAllowance {
   ): Promise<T> {
     return this.prisma.$transaction(async (tx) => {
       await this.lockPerson(tx, wawuUserId);
-      const consultant = await tx.legalChatMessage.findFirst({
-        where: { legalRequestId: requestId, authorRole: 'consultant' },
-        select: { id: true },
-      });
-      if (!consultant) {
+      if (!(await consultantHasWritten(tx, requestId))) {
         await this.checkLimits(tx, wawuUserId, null, 'matter_message');
       }
       return write(tx, new Date());

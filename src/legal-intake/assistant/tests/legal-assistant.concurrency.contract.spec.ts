@@ -4,6 +4,7 @@ process.env.DATABASE_URL =
   'postgresql://postgres:postgres@localhost:5432/wawu_hub_test?schema=public';
 
 import { ChildProcess, spawn } from 'child_process';
+import { Client } from 'pg';
 import * as path from 'path';
 import {
   INestApplication,
@@ -146,6 +147,36 @@ async function login(identifier: string): Promise<string> {
   });
   if (!res.ok) throw new Error(`login failed for ${identifier}: ${res.status}`);
   return ((await res.json()) as { accessToken: string }).accessToken;
+}
+
+/**
+ * A throwaway WAWU ID account for a test that deletes or rewrites an
+ * account's data. A per-run-unique email and phone keep the mock's
+ * 409-on-taken from firing when the mock is reused across runs.
+ */
+let throwawayNonce = 0;
+async function registerThrowawayIdentity(): Promise<{
+  sub: string;
+  accessToken: string;
+}> {
+  const nonce = `${Date.now().toString().slice(-8)}${(throwawayNonce += 1)}`;
+  const res = await fetch(`${MOCK_WAWU_ID_BASE}/auth/register`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      fullName: 'Legal Spec Throwaway',
+      email: `legal-spec-${nonce}@test.wawu.dev`,
+      phone: `+2349${nonce}`,
+      country: 'NG',
+      password: 'not-a-real-password',
+    }),
+  });
+  if (!res.ok) throw new Error(`mock-wawu-id register failed: ${res.status}`);
+  const body = (await res.json()) as {
+    accessToken: string;
+    user: { id: string };
+  };
+  return { sub: body.user.id, accessToken: body.accessToken };
 }
 
 interface ThreadView {
@@ -311,9 +342,18 @@ describe('Legal assistant under parallel requests (LEGAL-01 round 2, contract)',
       where: { wawuUserId: { in: [ME, OTHER] } },
       select: { legalRequestId: true },
     });
-    const requestIds = intakes
-      .map((i) => i.legalRequestId)
-      .filter((v): v is string => Boolean(v));
+    const direct = await prisma.legalRequest.findMany({
+      where: { wawuUserId: { in: [ME, OTHER] } },
+      select: { id: true },
+    });
+    const requestIds = [
+      ...new Set([
+        ...intakes
+          .map((i) => i.legalRequestId)
+          .filter((v): v is string => Boolean(v)),
+        ...direct.map((r) => r.id),
+      ]),
+    ];
     await prisma.legalAssistantCall.deleteMany({
       where: { wawuUserId: { in: [ME, OTHER] } },
     });
@@ -1038,6 +1078,231 @@ describe('Legal assistant under parallel requests (LEGAL-01 round 2, contract)',
     );
   });
 
+  describe('D9 (round 4 verifier): "has a consultant written" is asked of the whole thread, by both sides', () => {
+    type Route = 'old' | 'new';
+    const matterRow = (
+      requestId: string,
+      authorRole: 'client' | 'ai',
+      body: string,
+      createdAt: Date,
+    ) => ({ legalRequestId: requestId, authorRole, body, createdAt });
+    /** `rows` earlier lines (client, ai, client, ai ...), over an hour old so none is counted. */
+    const seedThread = (requestId: string, rows: number) =>
+      prisma.legalChatMessage.createMany({
+        data: Array.from({ length: rows }, (_, i) =>
+          matterRow(
+            requestId,
+            i % 2 === 0 ? 'client' : 'ai',
+            `h${String(i).padStart(3, '0')}`,
+            new Date(Date.now() - 3 * HOUR + i),
+          ),
+        ),
+      });
+    const post = (
+      route: Route,
+      m: { t: { id: string }; requestId: string },
+      body: string,
+    ) => (route === 'old' ? sayOld(m.requestId, body) : say(m.t.id, { body }));
+    const aiAfterConsultant = async (requestId: string) => {
+      const joined = await prisma.legalChatMessage.findFirstOrThrow({
+        where: { legalRequestId: requestId, authorRole: 'consultant' },
+      });
+      return prisma.legalChatMessage.count({
+        where: {
+          legalRequestId: requestId,
+          authorRole: 'ai',
+          createdAt: { gt: joined.createdAt },
+        },
+      });
+    };
+    /** A matter at the paid stage straight in the database: it spends nothing of the allowance. */
+    const bareMatter = () =>
+      prisma.legalRequest.create({
+        data: {
+          wawuUserId: ME,
+          serviceCode: 'tenancy-dispute',
+          serviceName: 'Tenancy dispute',
+          category: 'property',
+          path: 'consultation',
+          status: 'consultation_scheduled',
+          details: { summary: 's' },
+        },
+      });
+
+    describe.each<[Route, 'live' | 'seeded', number]>([
+      ['old', 'live', 20],
+      ['new', 'live', 20],
+      ['old', 'seeded', 60],
+      ['new', 'seeded', 60],
+    ])('on the %s route, %s, %i earlier client messages', (route, how, n) => {
+      it('after the consultant writes, 40 client posts are all 201 and the assistant answers none of them', async () => {
+        const m = await paidMatter();
+        ai.answer = 'Thanks. What is the lease length?';
+        if (how === 'live') {
+          for (let i = 0; i < n; i++) {
+            expect((await post(route, m, `before ${i}`)).status).toBe(201);
+          }
+        } else {
+          await seedThread(m.requestId, n * 2);
+        }
+        // The consultant's line will be the 41st row or later, past the 40
+        // rows the assistant used to read.
+        expect(
+          await prisma.legalChatMessage.count({
+            where: { legalRequestId: m.requestId },
+          }),
+        ).toBeGreaterThanOrEqual(40);
+        await consultantWrites(m.requestId);
+        const calls = ai.chats.length;
+        const used = await spent();
+        for (let i = 0; i < 40; i++) {
+          expect((await post(route, m, `after ${i}`)).status).toBe(201);
+        }
+        expect(ai.chats.length).toBe(calls);
+        expect(await aiAfterConsultant(m.requestId)).toBe(0);
+        expect(await spent()).toBe(used);
+      }, 90000);
+    });
+
+    it('100 parallel posts after the consultant, on a thread of 120 rows: all 201, no AI call', async () => {
+      const m = await paidMatter();
+      await seedThread(m.requestId, 120);
+      await consultantWrites(m.requestId);
+      ai.delayMs = 150;
+      const calls = ai.chats.length;
+      const rs = await par(100, (i) => sayOld(m.requestId, `p${i}`));
+      expect(tally(rs)).toEqual({ '201': 100 });
+      expect(ai.chats.length).toBe(calls);
+      expect(await aiAfterConsultant(m.requestId)).toBe(0);
+    }, 90000);
+
+    it('the model is given the NEWEST 40 rows, oldest of them first', async () => {
+      const m = await paidMatter();
+      await seedThread(m.requestId, 60);
+      ai.answer = 'Noted.';
+      const calls = ai.chats.length;
+      expect((await sayOld(m.requestId, 'the newest question')).status).toBe(
+        201,
+      );
+      expect(ai.chats.length).toBe(calls + 1);
+      const texts = ai.chats[calls].history.map((h) => h.text);
+      expect(texts).toHaveLength(40);
+      expect(texts.at(-1)).toBe('the newest question');
+      // The 39 before it are the last 39 earlier rows (h021 to h059) in order.
+      expect(texts.slice(0, 39)).toEqual(
+        Array.from(
+          { length: 39 },
+          (_, i) => `h${String(21 + i).padStart(3, '0')}`,
+        ),
+      );
+    }, 60000);
+
+    it.each([0, 40, 100, 200])(
+      'a consultant who writes (after %i ms) on a thread already past 40 rows while 50 posts are in flight: no more AI calls than were counted',
+      async (afterMs) => {
+        const { requestId } = await paidMatter();
+        await seedThread(requestId, 90);
+        ai.answer = 'Noted.';
+        ai.delayMs = 150;
+        const before = ai.chats.length;
+        const left = 30 - (await spent());
+        const consultant = (async () => {
+          await sleep(afterMs);
+          await app
+            .get(LegalChatService)
+            .sendAsConsultant(requestId, 'admin-race', 'Joining now.');
+        })();
+        const [rs] = await Promise.all([
+          par(50, (i) => sayOld(requestId, `race${i}`)),
+          consultant,
+        ]);
+        const t = tally(rs);
+        expect((t['201'] ?? 0) + (t['429:assistant_rate_limited'] ?? 0)).toBe(
+          50,
+        );
+        const joined = await prisma.legalChatMessage.findFirstOrThrow({
+          where: { legalRequestId: requestId, authorRole: 'consultant' },
+        });
+        const early = await prisma.legalChatMessage.count({
+          where: {
+            legalRequestId: requestId,
+            authorRole: 'client',
+            createdAt: { lt: joined.createdAt },
+            // the seeded history is not part of the race
+            body: { startsWith: 'race' },
+          },
+        });
+        expect(early).toBeLessThanOrEqual(left);
+        // (An answer already on its way when the consultant wrote may land
+        // after the consultant's line; it was counted, so it is in `early`.)
+        expect(ai.chats.length - before).toBeLessThanOrEqual(early);
+      },
+      60000,
+    );
+
+    it('with two consultant lines, the client messages between them stay free (the FIRST line decides)', async () => {
+      const a = await bareMatter();
+      await consultantWrites(a.id, 'line one');
+      for (let i = 0; i < 40; i++) {
+        expect((await sayOld(a.id, `between ${i}`)).status).toBe(201);
+      }
+      await consultantWrites(a.id, 'line two');
+      for (let i = 0; i < 5; i++) {
+        expect((await sayOld(a.id, `after two ${i}`)).status).toBe(201);
+      }
+      // Nothing above was counted, so a fresh matter has the whole allowance.
+      const b = await bareMatter();
+      ai.delayMs = 150;
+      const before = ai.chats.length;
+      const rs = await par(40, (i) => sayOld(b.id, `fresh${i}`));
+      expect(tally(rs)).toEqual({
+        '201': ASSISTANT_CLIENT_MESSAGES_PER_HOUR,
+        '429:assistant_rate_limited': 40 - ASSISTANT_CLIENT_MESSAGES_PER_HOUR,
+      });
+      expect(ai.chats.length - before).toBe(ASSISTANT_CLIENT_MESSAGES_PER_HOUR);
+    }, 90000);
+
+    it('the consultant write takes the client lock: held elsewhere, it waits, and so does a client post', async () => {
+      const m = await paidMatter();
+      const db = new Client({ connectionString: process.env.DATABASE_URL });
+      await db.connect();
+      let consultantDone = false;
+      let clientDone = false;
+      let consultantWrite: Promise<unknown> = Promise.resolve();
+      let clientPost: Promise<unknown> = Promise.resolve();
+      try {
+        await db.query('BEGIN');
+        await db.query(
+          'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+          [`legal-assistant:${ME}`],
+        );
+        consultantWrite = app
+          .get(LegalChatService)
+          .sendAsConsultant(m.requestId, 'admin-lock', 'I have your file.')
+          .then(() => {
+            consultantDone = true;
+          });
+        clientPost = sayOld(m.requestId, 'control').then(() => {
+          clientDone = true;
+        });
+        await sleep(1500);
+        expect(clientDone).toBe(false);
+        expect(consultantDone).toBe(false);
+        expect(
+          await prisma.legalChatMessage.count({
+            where: { legalRequestId: m.requestId, authorRole: 'consultant' },
+          }),
+        ).toBe(0);
+      } finally {
+        await db.query('COMMIT').catch(() => undefined);
+        await db.end();
+      }
+      await Promise.all([consultantWrite, clientPost]);
+      expect(consultantDone).toBe(true);
+      expect(clientDone).toBe(true);
+    }, 30000);
+  });
+
   describe('a release clears only its own lease', () => {
     const lease = async (id: string) =>
       (
@@ -1264,19 +1529,57 @@ describe('Legal assistant under parallel requests (LEGAL-01 round 2, contract)',
   });
 
   describe('the bookkeeping table is owned and purged with the account', () => {
+    /**
+     * The purge really deletes: the account's profile, content, comments and
+     * everything else it owns. So it runs on a throwaway account this spec
+     * registers for itself, never on a seeded one (purging the seeded creator
+     * removes his content for every suite that runs after this one).
+     */
     it('deleting an account removes its LegalAssistantCall rows', async () => {
-      const t = await start();
-      ai.queue(READY);
-      await say(t.id, { body: 'My landlord raised my rent.' });
-      await sendBrief(t.id);
-      expect(
-        await prisma.legalAssistantCall.count({ where: { wawuUserId: ME } }),
-      ).toBe(1);
-      const purge = await new AccountPurgeService(prisma).purge(ME);
-      expect(purge.deleted['LegalAssistantCall.wawuUserId']).toBe(1);
-      expect(
-        await prisma.legalAssistantCall.count({ where: { wawuUserId: ME } }),
-      ).toBe(0);
+      const own = await registerThrowawayIdentity();
+      expect([ME, OTHER]).not.toContain(own.sub);
+      const asOwn = as(own.accessToken);
+      const ownCalls = () =>
+        prisma.legalAssistantCall.count({ where: { wawuUserId: own.sub } });
+      try {
+        // A seeded account's call, to show the purge takes only its own.
+        const mine = await start();
+        ai.queue(READY);
+        await say(mine.id, { body: 'My landlord raised my rent.' });
+        await sendBrief(mine.id);
+        expect(
+          await prisma.legalAssistantCall.count({ where: { wawuUserId: ME } }),
+        ).toBe(1);
+
+        const t = data(
+          await http().post('/api/hub/legal/assistant').set(asOwn).expect(201),
+        );
+        ai.queue(READY);
+        await http()
+          .post(`/api/hub/legal/assistant/${t.id}/messages`)
+          .set(asOwn)
+          .send({ body: 'My landlord raised my rent.' })
+          .expect(201);
+        await http()
+          .post(`/api/hub/legal/assistant/${t.id}/send`)
+          .set(asOwn)
+          .expect(201);
+        expect(await ownCalls()).toBe(1);
+
+        const purge = await new AccountPurgeService(prisma).purge(own.sub);
+        expect(purge.deleted['LegalAssistantCall.wawuUserId']).toBe(1);
+        expect(await ownCalls()).toBe(0);
+        // Nothing of the seeded account went with it.
+        expect(
+          await prisma.legalAssistantCall.count({ where: { wawuUserId: ME } }),
+        ).toBe(1);
+        expect(
+          await prisma.legalIntake.count({ where: { wawuUserId: ME } }),
+        ).toBe(1);
+      } finally {
+        // Idempotent: a failed run must not leave the throwaway's rows behind.
+        await new AccountPurgeService(prisma).purge(own.sub);
+      }
     });
   });
 });

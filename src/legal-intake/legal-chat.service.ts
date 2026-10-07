@@ -13,7 +13,10 @@ import {
   type GeminiClient,
 } from '../common/ai/gemini-client.interface';
 import { cleanAiText, withoutEmDash } from './ai-text';
-import { LegalAssistantAllowance } from './assistant/legal-assistant-allowance';
+import {
+  LegalAssistantAllowance,
+  consultantHasWritten,
+} from './assistant/legal-assistant-allowance';
 import type { LegalBrief } from './legal-brief';
 
 export interface ChatMessageView {
@@ -176,15 +179,20 @@ export class LegalChatService {
     const request = await this.findOwned(wawuUserId, requestId);
     if (!LegalChatService.OPEN_FROM.has(request.status)) return;
 
-    const history = await this.prisma.legalChatMessage.findMany({
-      where: { legalRequestId: requestId },
-      orderBy: { createdAt: 'asc' },
-      take: 40,
-    });
-
     // Handover is one-way and permanent. Once a consultant has written here,
-    // every later client message is for them.
-    if (history.some((m) => m.authorRole === 'consultant')) return;
+    // every later client message is for them. Asked of the WHOLE thread, by
+    // the same query the reservation uses (a window of rows would miss a
+    // consultant line past it, and the message would be free yet answered).
+    if (await consultantHasWritten(this.prisma, requestId)) return;
+
+    // The model sees the NEWEST 40 rows, in the order they were written.
+    const history = (
+      await this.prisma.legalChatMessage.findMany({
+        where: { legalRequestId: requestId },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: 40,
+      })
+    ).reverse();
 
     try {
       const reply = cleanAiText(
