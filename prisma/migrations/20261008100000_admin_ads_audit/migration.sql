@@ -10,7 +10,7 @@
 --
 -- Rollback: DROP TABLE "AdminAdAudit"; DROP TYPE "AdminAdAction";
 --           DELETE FROM "_prisma_migrations"
---            WHERE migration_name = '20261006130000_admin_ads_audit';
+--            WHERE migration_name = '20261008100000_admin_ads_audit';
 
 -- CreateEnum
 CREATE TYPE "AdminAdAction" AS ENUM ('created', 'updated', 'scheduled', 'paused', 'resumed', 'ended', 'deleted');

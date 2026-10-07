@@ -21,6 +21,7 @@ import {
 } from '../../auth/admin-token.service';
 import { AdminAdsModule } from '../admin-ads.module';
 import { AdsModule } from '../../../ads/ads.module';
+import { AdsCountsService } from '../../../ads/ads-counts.service';
 import { SERVED_STATUSES as SERVING_STATUSES } from '../../../ads/ads-serving';
 import { SERVED_STATUSES } from '../ad-campaign-state';
 import { AD_WEIGHT_MAX, AD_WEIGHT_MIN } from '../../../ads/ads-limits';
@@ -92,6 +93,7 @@ const CAMPAIGN_KEYS = [
   'advertiser',
   'createdAt',
   'creative',
+  'delivery',
   'endsAt',
   'event',
   'id',
@@ -152,6 +154,7 @@ describe('Admin ads contract (ADS-06)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let userToken: string;
+  let user2Token: string;
   const tokens = {} as Record<keyof typeof ADMIN, string>;
   const envSnapshot: Record<string, string | undefined> = {};
   let countsBefore: Record<string, number>;
@@ -174,13 +177,26 @@ describe('Admin ads contract (ADS-06)', () => {
     return out;
   }
 
+  /** Counts restrict deletion, so a campaign's counts go before it. */
+  async function sweepCampaigns(): Promise<void> {
+    const ids = (
+      await prisma.adCampaign.findMany({
+        where: { advertiser: { startsWith: TAG } },
+        select: { id: true },
+      })
+    ).map((c) => c.id);
+    await prisma.adEvent.deleteMany({ where: { campaignId: { in: ids } } });
+    await prisma.adDailyTotal.deleteMany({
+      where: { campaignId: { in: ids } },
+    });
+    await prisma.adCampaign.deleteMany({ where: { id: { in: ids } } });
+  }
+
   async function sweep(): Promise<void> {
     await prisma.adminAdAudit.deleteMany({
       where: { adminId: { in: ADMIN_IDS } },
     });
-    await prisma.adCampaign.deleteMany({
-      where: { advertiser: { startsWith: TAG } },
-    });
+    await sweepCampaigns();
     await prisma.event.deleteMany({ where: { id: { in: EVENT_IDS } } });
   }
 
@@ -373,6 +389,12 @@ describe('Admin ads contract (ADS-06)', () => {
     if (!login.ok)
       throw new Error(`mock-wawu-id login failed: ${login.status}`);
     userToken = ((await login.json()) as { accessToken: string }).accessToken;
+    const login2 = await fetch(`${MOCK_WAWU_ID_URL}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: 'creator-basic@test.wawu.dev' }),
+    });
+    user2Token = ((await login2.json()) as { accessToken: string }).accessToken;
 
     const moduleRef: TestingModule = await Test.createTestingModule({
       imports: [
@@ -436,9 +458,7 @@ describe('Admin ads contract (ADS-06)', () => {
     await prisma.adminAdAudit.deleteMany({
       where: { adminId: { in: ADMIN_IDS } },
     });
-    await prisma.adCampaign.deleteMany({
-      where: { advertiser: { startsWith: TAG } },
-    });
+    await sweepCampaigns();
     await resetEvents();
   });
 
@@ -2149,6 +2169,9 @@ describe('Admin ads contract (ADS-06)', () => {
       expect(Object.keys(res.body.data).sort()).toEqual([
         'activity',
         'campaign',
+        'days',
+        'delivery',
+        'range',
         'timing',
       ]);
       expect(Object.keys(res.body.data.campaign).sort()).toEqual(
@@ -2196,18 +2219,6 @@ describe('Admin ads contract (ADS-06)', () => {
       });
     });
 
-    it('the report carries no counter ADS-05 has not built: no views, taps, skips or CTR', async () => {
-      const c = await create();
-      const text = JSON.stringify([
-        (await http().get(`${BASE}/${c.id}/report`).set(asSuper())).body,
-        (await http().get(`${BASE}/report`).set(asSuper())).body,
-        (await http().get(`${BASE}/${c.id}`).set(asSuper())).body,
-      ]);
-      expect(text).not.toMatch(
-        /"(views?|impressions?|taps?|clicks?|skips?|ctr)"/i,
-      );
-    });
-
     it('GET /admin/ads/report counts by status, placement and phase, and every key is present', async () => {
       const w = {
         startsAt: '2033-06-01T00:00:00Z',
@@ -2239,6 +2250,9 @@ describe('Admin ads contract (ADS-06)', () => {
         'byPlacement',
         'byStatus',
         'campaigns',
+        'delivery',
+        'deliveryByPlacement',
+        'deliveryByStatus',
         'filters',
         'generatedAt',
         'servingNow',
@@ -2301,6 +2315,475 @@ describe('Admin ads contract (ADS-06)', () => {
       expect(after.today_slot).toBe(before.today_slot);
       await act(c.id, 'pause');
       expect(await read()).toEqual(before);
+    });
+  });
+
+  // ── delivery: ADS-05's counts in the admin views ─────────────────────────
+
+  describe('delivery (views, taps, skips) comes from the counts ADS-05 records', () => {
+    const ZERO = { views: 0, taps: 0, skips: 0, ctr: null };
+    const DELIVERY_KEYS = ['ctr', 'skips', 'taps', 'views'];
+    const record = (token: string, id: string, type: string) =>
+      http()
+        .post(`/api/hub/ads/${id}/events`)
+        .set(bearer(token))
+        .send({ type });
+    const today = () => new Date().toISOString().slice(0, 10);
+    const counts = () => app.get(AdsCountsService, { strict: false });
+    const report = (id: string, q: Json = {}) =>
+      http().get(`${BASE}/${id}/report`).query(q).set(asSuper());
+    const listFor = (q: Json) =>
+      http()
+        .get(BASE)
+        .query({ perPage: 100, ...q })
+        .set(asSuper());
+
+    /** A row of counts straight into the daily totals, for days that are not today. */
+    async function seedDay(
+      campaignId: string,
+      day: string,
+      views: number,
+      taps: number,
+      skips: number,
+    ) {
+      await prisma.adDailyTotal.create({
+        data: {
+          campaignId,
+          day: new Date(`${day}T00:00:00.000Z`),
+          views,
+          taps,
+          skips,
+        },
+      });
+    }
+
+    it('a campaign nothing was counted for is zeros and a null rate, everywhere, never an error or NaN', async () => {
+      const c = await create();
+      expect(c.delivery).toEqual(ZERO);
+      const detail = (await http().get(`${BASE}/${c.id}`).set(asSuper())).body
+        .data;
+      expect(detail.delivery).toEqual(ZERO);
+      const r = (await report(c.id)).body.data;
+      expect(r.delivery).toEqual(ZERO);
+      expect(r.days).toEqual([]);
+      expect(r.campaign.delivery).toEqual(ZERO);
+      expect(r.range).toEqual({
+        from: null,
+        to: null,
+        fromDay: null,
+        toDay: null,
+      });
+      const row = (await listFor({})).body.data.find(
+        (x: Json) => x.id === c.id,
+      );
+      expect(row.delivery).toEqual(ZERO);
+      expect(JSON.stringify(r)).not.toMatch(/NaN|Infinity/);
+    });
+
+    it('the numbers equal what POST /ads/:id/events recorded, and list, detail, report and the change responses agree', async () => {
+      const c = await inStatus('live');
+      for (const [tok, type, expected] of [
+        [userToken, 'view', 200],
+        [userToken, 'view', 200], // a repeat the same day: not counted twice
+        [user2Token, 'view', 200],
+        [userToken, 'tap', 200],
+        [userToken, 'tap', 200], // repeat
+        [user2Token, 'skip', 200],
+      ] as Array<[string, string, number]>) {
+        expect((await record(tok, c.id, type)).status).toBe(expected);
+      }
+      const want = { views: 2, taps: 1, skips: 1, ctr: 0.5 };
+
+      const detail = (await http().get(`${BASE}/${c.id}`).set(asSuper())).body
+        .data;
+      expect(detail.delivery).toEqual(want);
+      const r = (await report(c.id)).body.data;
+      expect(r.delivery).toEqual(want);
+      expect(r.campaign.delivery).toEqual(want);
+      expect(r.days).toEqual([{ day: today(), views: 2, taps: 1, skips: 1 }]);
+      expect(Object.keys(r.days[0]).sort()).toEqual([
+        'day',
+        'skips',
+        'taps',
+        'views',
+      ]);
+      const row = (await listFor({ placement: c.placement })).body.data.find(
+        (x: Json) => x.id === c.id,
+      );
+      expect(row.delivery).toEqual(want);
+      // The raw events say the same, and the stored totals reconcile with them.
+      expect(await prisma.adEvent.count({ where: { campaignId: c.id } })).toBe(
+        4,
+      );
+      expect(await counts().reconcile(c.id)).toEqual([]);
+      expect(await counts().forCampaign(c.id)).toEqual({
+        campaignId: c.id,
+        delivery: r.delivery,
+        days: r.days,
+      });
+
+      // A pause keeps the counts, and a report after it is refused (404): nothing more is counted.
+      const paused = await act(c.id, 'pause');
+      expect(paused.body.data.campaign.delivery).toEqual(want);
+      expect((await record(userToken, c.id, 'skip')).status).toBe(404);
+      expect(
+        (await http().get(`${BASE}/${c.id}`).set(asSuper())).body.data.delivery,
+      ).toEqual(want);
+    });
+
+    it('ctr is a fraction when there are views and null when there are taps but no views', async () => {
+      const a = await create({ advertiser: `${TAG} ctr1` });
+      const b = await create({ advertiser: `${TAG} ctr2` });
+      await seedDay(a.id, '2031-01-05', 8, 2, 0);
+      await seedDay(b.id, '2031-01-05', 0, 3, 1);
+      const ra = (await report(a.id)).body.data;
+      expect(ra.delivery).toEqual({ views: 8, taps: 2, skips: 0, ctr: 0.25 });
+      const rb = (await report(b.id)).body.data;
+      expect(rb.delivery).toEqual({ views: 0, taps: 3, skips: 1, ctr: null });
+    });
+
+    describe('from and to choose UTC days', () => {
+      let id: string;
+      beforeEach(async () => {
+        const c = await create({
+          startsAt: '2031-03-01T00:00:00Z',
+          endsAt: '2031-03-20T00:00:00Z',
+        });
+        id = c.id;
+        await seedDay(id, '2031-03-09', 1, 0, 0);
+        await seedDay(id, '2031-03-10', 10, 1, 0);
+        await seedDay(id, '2031-03-11', 100, 10, 1);
+      });
+      const days = async (q: Json) =>
+        (await report(id, q)).body.data.days.map((d: Json) => d.day);
+
+      it('the day of from is in, from any hour of it', async () => {
+        expect(await days({ from: '2031-03-10T00:00:00Z' })).toEqual([
+          '2031-03-10',
+          '2031-03-11',
+        ]);
+        expect(await days({ from: '2031-03-10T23:59:59.999Z' })).toEqual([
+          '2031-03-10',
+          '2031-03-11',
+        ]);
+        expect(await days({ from: '2031-03-11T00:00:00Z' })).toEqual([
+          '2031-03-11',
+        ]);
+      });
+
+      it('to is exclusive: a to at exactly midnight leaves that day out, one millisecond later puts it in', async () => {
+        expect(await days({ to: '2031-03-11T00:00:00Z' })).toEqual([
+          '2031-03-09',
+          '2031-03-10',
+        ]);
+        expect(await days({ to: '2031-03-11T00:00:00.001Z' })).toEqual([
+          '2031-03-09',
+          '2031-03-10',
+          '2031-03-11',
+        ]);
+        expect(await days({ to: '2031-03-10T09:00:00Z' })).toEqual([
+          '2031-03-09',
+          '2031-03-10',
+        ]);
+      });
+
+      it('from and to together, and the echo says which days they became', async () => {
+        const res = (
+          await report(id, {
+            from: '2031-03-09T18:00:00Z',
+            to: '2031-03-10T06:00:00Z',
+          })
+        ).body.data;
+        expect(res.days.map((d: Json) => d.day)).toEqual([
+          '2031-03-09',
+          '2031-03-10',
+        ]);
+        expect(res.delivery).toEqual({
+          views: 11,
+          taps: 1,
+          skips: 0,
+          ctr: 1 / 11,
+        });
+        expect(res.range).toEqual({
+          from: '2031-03-09T18:00:00.000Z',
+          to: '2031-03-10T06:00:00.000Z',
+          fromDay: '2031-03-09',
+          toDay: '2031-03-10',
+        });
+        const same = (
+          await report(id, {
+            from: '2031-03-10T01:00:00Z',
+            to: '2031-03-10T02:00:00Z',
+          })
+        ).body.data;
+        expect(same.range).toMatchObject({
+          fromDay: '2031-03-10',
+          toDay: '2031-03-10',
+        });
+        expect(same.delivery.views).toBe(10);
+      });
+
+      it('a range that excludes every counted day is zeros and a null rate', async () => {
+        for (const q of [
+          { from: '2031-03-12T00:00:00Z' },
+          { to: '2031-03-09T00:00:00Z' },
+          { from: '2031-04-01T00:00:00Z', to: '2031-04-02T00:00:00Z' },
+        ]) {
+          const res = (await report(id, q)).body.data;
+          expect([JSON.stringify(q), res.delivery, res.days]).toEqual([
+            JSON.stringify(q),
+            ZERO,
+            [],
+          ]);
+        }
+      });
+
+      it('the list row uses the same days as the report for the same from and to', async () => {
+        const q = { from: '2031-03-10T05:00:00Z', to: '2031-03-11T00:00:00Z' };
+        const row = (await listFor(q)).body.data.find((x: Json) => x.id === id);
+        expect(row.delivery).toEqual({
+          views: 10,
+          taps: 1,
+          skips: 0,
+          ctr: 0.1,
+        });
+        expect(row.delivery).toEqual((await report(id, q)).body.data.delivery);
+      });
+
+      it('the first and last instants the database holds are accepted and count nothing', async () => {
+        for (const q of [
+          { to: '0001-01-01T00:00:00Z' },
+          { from: '9999-12-31T23:59:59.999Z' },
+          { from: '0001-01-01T00:00:00Z', to: '9999-12-31T23:59:59.999Z' },
+        ]) {
+          const res = await report(id, q);
+          expect([JSON.stringify(q), res.status]).toEqual([
+            JSON.stringify(q),
+            200,
+          ]);
+        }
+        expect(
+          (
+            await report(id, {
+              from: '0001-01-01T00:00:00Z',
+              to: '9999-12-31T23:59:59.999Z',
+            })
+          ).body.data.delivery.views,
+        ).toBe(111);
+        expect(
+          (await report(id, { to: '0001-01-01T00:00:00Z' })).body.data.delivery,
+        ).toEqual(ZERO);
+      });
+
+      it('refuses a bad range on the report with the same 400 as the list', async () => {
+        for (const q of [
+          { from: '2031-03-10' },
+          { to: '2031-03-10T09:00:00+01:00' },
+          { from: '0000-01-01T00:00:00Z' },
+          { from: '2031-03-11T00:00:00Z', to: '2031-03-10T00:00:00Z' },
+          { from: '2031-03-10T00:00:00Z', to: '2031-03-10T00:00:00Z' },
+          { page: 2 },
+        ]) {
+          const res = await report(id, q);
+          expect([JSON.stringify(q), res.status]).toEqual([
+            JSON.stringify(q),
+            400,
+          ]);
+        }
+      });
+    });
+
+    it('the summary adds up the counts of the campaigns it counts, overall and by placement and status', async () => {
+      const w = {
+        startsAt: '2032-06-01T00:00:00Z',
+        endsAt: '2032-06-05T00:00:00Z',
+      };
+      const a = await create({ ...w, advertiser: `${TAG} d1` });
+      const b = await create({
+        ...w,
+        advertiser: `${TAG} d2`,
+        placement: 'today_slot',
+      });
+      await act(b.id, 'schedule');
+      await seedDay(a.id, '2032-06-02', 10, 5, 1);
+      await seedDay(b.id, '2032-06-02', 30, 3, 2);
+      await seedDay(b.id, '2032-06-03', 10, 2, 0);
+      const range = {
+        from: '2032-05-01T00:00:00Z',
+        to: '2032-07-01T00:00:00Z',
+      };
+      const res = await http()
+        .get(`${BASE}/report`)
+        .query(range)
+        .set(bearer(tokens.finance));
+      expect(res.status).toBe(200);
+      const r = res.body.data;
+      expect(r.delivery).toEqual({ views: 50, taps: 10, skips: 3, ctr: 0.2 });
+      expect(r.deliveryByPlacement).toEqual({
+        tgif_card: { views: 10, taps: 5, skips: 1, ctr: 0.5 },
+        today_slot: { views: 40, taps: 5, skips: 2, ctr: 0.125 },
+      });
+      expect(r.deliveryByStatus).toEqual({
+        draft: { views: 10, taps: 5, skips: 1, ctr: 0.5 },
+        scheduled: { views: 40, taps: 5, skips: 2, ctr: 0.125 },
+        live: ZERO,
+        paused: ZERO,
+        ended: ZERO,
+      });
+      for (const d of [
+        r.delivery,
+        ...Object.values(r.deliveryByPlacement),
+        ...Object.values(r.deliveryByStatus),
+      ] as Json[]) {
+        expect(Object.keys(d).sort()).toEqual(DELIVERY_KEYS);
+      }
+      // A filter narrows the counts with the campaigns.
+      const only = await http()
+        .get(`${BASE}/report`)
+        .query({ ...range, placement: 'today_slot' })
+        .set(asSuper());
+      expect(only.body.data.delivery).toEqual({
+        views: 40,
+        taps: 5,
+        skips: 2,
+        ctr: 0.125,
+      });
+      expect(only.body.data.deliveryByPlacement.tgif_card).toEqual(ZERO);
+      // The days of the range narrow them too: only 2032-06-03.
+      const oneDay = await http()
+        .get(`${BASE}/report`)
+        .query({ from: '2032-06-03T00:00:00Z', to: '2032-06-04T00:00:00Z' })
+        .set(asSuper());
+      expect(oneDay.body.data.delivery.views).toBeGreaterThanOrEqual(10);
+      // A range with nothing counted.
+      const none = await http()
+        .get(`${BASE}/report`)
+        .query({ from: '2033-01-01T00:00:00Z', to: '2033-02-01T00:00:00Z' })
+        .set(asSuper());
+      expect(none.body.data.delivery).toEqual(ZERO);
+      expect(none.body.data.campaigns).toBe(0);
+    });
+
+    it("a list page reads every row's counts in one set-based query, for 3 rows and for 50", async () => {
+      const make = async (n: number, tag: string) => {
+        for (let i = 0; i < n; i += 1) {
+          await prisma.adCampaign.create({
+            data: {
+              advertiser: `${TAG} ${tag}${i}`,
+              placement: 'tgif_card',
+              startsAt: new Date('2034-01-01T00:00:00Z'),
+              endsAt: new Date('2034-02-01T00:00:00Z'),
+              creative: {
+                create: {
+                  headline: 'h',
+                  ctaLabel: 'c',
+                  ctaDestination: 'event',
+                  ctaDestinationId: EV.open,
+                },
+              },
+            },
+          });
+        }
+      };
+      await make(3, 'few');
+      const probe = async (perPage: number) => {
+        const grouped = jest.spyOn(prisma.adDailyTotal, 'groupBy');
+        const plain = jest.spyOn(prisma.adDailyTotal, 'findMany');
+        const agg = jest.spyOn(prisma.adDailyTotal, 'aggregate');
+        const events = jest.spyOn(prisma.event, 'findMany');
+        try {
+          const res = await listFor({
+            perPage,
+            from: '2034-01-01T00:00:00Z',
+            to: '2034-03-01T00:00:00Z',
+          });
+          expect(res.status).toBe(200);
+          return {
+            rows: res.body.data.length,
+            grouped: grouped.mock.calls.length,
+            plain: plain.mock.calls.length,
+            agg: agg.mock.calls.length,
+            events: events.mock.calls.length,
+          };
+        } finally {
+          grouped.mockRestore();
+          plain.mockRestore();
+          agg.mockRestore();
+          events.mockRestore();
+        }
+      };
+      expect(await probe(100)).toEqual({
+        rows: 3,
+        grouped: 1,
+        plain: 0,
+        agg: 0,
+        events: 1,
+      });
+      await make(47, 'many');
+      expect(await probe(100)).toEqual({
+        rows: 50,
+        grouped: 1,
+        plain: 0,
+        agg: 0,
+        events: 1,
+      });
+    });
+
+    it('all four admin roles can read it and a user token cannot', async () => {
+      const c = await create();
+      await seedDay(c.id, '2031-05-05', 4, 1, 0);
+      for (const t of [
+        tokens.super,
+        tokens.reviewer,
+        tokens.support,
+        tokens.finance,
+      ]) {
+        const res = await http()
+          .get(`${BASE}/${c.id}/report`)
+          .query({ from: '2031-05-05T00:00:00Z' })
+          .set(bearer(t));
+        expect(res.status).toBe(200);
+        expect(res.body.data.delivery).toEqual({
+          views: 4,
+          taps: 1,
+          skips: 0,
+          ctr: 0.25,
+        });
+        expect(
+          (await http().get(`${BASE}/${c.id}`).set(bearer(t))).body.data
+            .delivery.views,
+        ).toBe(4);
+        expect((await http().get(`${BASE}/report`).set(bearer(t))).status).toBe(
+          200,
+        );
+      }
+      const asUser = await http()
+        .get(`${BASE}/${c.id}/report`)
+        .query({ from: '2031-05-05T00:00:00Z' })
+        .set(bearer(userToken));
+      expect(asUser.status).toBe(401);
+      expect(JSON.stringify(asUser.body)).not.toMatch(/views|taps/);
+    });
+
+    it('the exact key sets of the report and its range', async () => {
+      const c = await create();
+      const r = (await report(c.id)).body.data;
+      expect(Object.keys(r).sort()).toEqual([
+        'activity',
+        'campaign',
+        'days',
+        'delivery',
+        'range',
+        'timing',
+      ]);
+      expect(Object.keys(r.range).sort()).toEqual([
+        'from',
+        'fromDay',
+        'to',
+        'toDay',
+      ]);
+      expect(Object.keys(r.delivery).sort()).toEqual(DELIVERY_KEYS);
+      expect(Object.keys(r.campaign.delivery).sort()).toEqual(DELIVERY_KEYS);
     });
   });
 

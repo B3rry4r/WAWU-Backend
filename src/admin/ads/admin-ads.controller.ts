@@ -22,6 +22,7 @@ import { AdminAdsService } from './admin-ads.service';
 import {
   AdCampaignFilterDto,
   AdCampaignListQueryDto,
+  AdReportRangeDto,
   CreateAdCampaignDto,
   UpdateAdCampaignDto,
 } from './dto/admin-ad.dto';
@@ -104,7 +105,7 @@ export class AdminAdsController {
     return this.service.detail(id);
   }
 
-  /** One campaign's report: its window, how much of it has run, what was done to it. */
+  /** One campaign's report: its window, how much of it has run, what was done to it, and its views, taps and skips by day. */
   @AdminRoles(
     AdminRole.superadmin,
     AdminRole.reviewer,
@@ -112,8 +113,11 @@ export class AdminAdsController {
     AdminRole.finance,
   )
   @Get(':id/report')
-  report(@Param('id', ParseUUIDPipe) id: string) {
-    return this.service.report(id);
+  report(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: AdReportRangeDto,
+  ) {
+    return this.service.report(id, query);
   }
 
   /** Edit a draft or a paused campaign. */

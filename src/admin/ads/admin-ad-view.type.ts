@@ -8,15 +8,15 @@ import type {
   EventStatus,
 } from '../../../generated/prisma/enums';
 import type { AdPhase } from './ad-campaign-state';
+import type { AdCounts, AdDayCounts } from '../../ads/ads-counts.type';
 
 /**
  * The wire shapes for the admin ads surface. DECLARED views, not Prisma
  * re-exports, as in src/admin/events/admin-event-view.type.ts. Nothing here is
  * a price, an advertiser account or a payment: ads are invoiced by hand (R-15).
  *
- * Views, taps and skips are not here. ADS-05 counts them in tables that do not
- * exist yet, and a field nothing writes is never shipped; ADS-05 adds them to
- * the report views when it adds the tables (BACKEND_GAPS.md).
+ * Views, taps and skips are `delivery`, read from ADS-05's counts through
+ * AdsCountsService; nothing here recounts them.
  */
 
 /** The card, as the app draws it. */
@@ -64,6 +64,13 @@ export interface AdCampaignView {
    * scheduled or live, the window holds now, and its event is open.
    */
   servingNow: boolean;
+  /**
+   * Views, taps and skips counted by ADS-05, and `ctr` (taps over views as a
+   * fraction, null when there are no views). Zeros for a campaign nothing was
+   * counted for. All days on a detail or a write; the days asked for on a
+   * list row or a report.
+   */
+  delivery: AdCounts;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -119,6 +126,17 @@ export interface AdCampaignDeletedView {
 /** GET /admin/ads/:id/report. */
 export interface AdCampaignReportView {
   campaign: AdCampaignView;
+  /** What `from` and `to` asked for and the UTC days they became. All null: every day. */
+  range: {
+    from: Date | null;
+    to: Date | null;
+    fromDay: string | null;
+    toDay: string | null;
+  };
+  /** The counts over the range: the sum of `days`. */
+  delivery: AdCounts;
+  /** Oldest first. A day nothing was counted on has no entry. */
+  days: AdDayCounts[];
   timing: {
     /** Whole minutes in the window. */
     windowMinutes: number;
@@ -145,6 +163,10 @@ export interface AdSummaryReportView {
     to: Date | null;
   };
   campaigns: number;
+  /** Views, taps and skips of the campaigns counted above, over the range's UTC days. */
+  delivery: AdCounts;
+  deliveryByStatus: Record<AdCampaignStatus, AdCounts>;
+  deliveryByPlacement: Record<AdPlacement, AdCounts>;
   byStatus: Record<AdCampaignStatus, number>;
   byPlacement: Record<AdPlacement, number>;
   byPhase: Record<AdPhase, number>;

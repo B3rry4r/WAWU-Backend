@@ -1,17 +1,18 @@
-import { HttpException, Injectable, Logger } from '@nestjs/common';
+import { HttpException, Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { FintavaClient } from '../../fintava/fintava-client';
-import { FINTAVA_DEFAULTS } from '../../fintava/fintava-config';
 import {
-  FINTAVA_UNKNOWN_OUTCOMES,
-  FintavaError,
-  type FintavaErrorKind,
-} from '../../fintava/fintava-error';
-import type {
-  FintavaCustomer,
-  FintavaCustomerMatch,
-} from '../../fintava/fintava.interface';
+  type ProviderCustomer,
+  type ProviderCustomerMatch,
+  type ProviderOpenedWallet,
+  WALLET_PROVIDER,
+  type WalletProvider,
+} from '../../wallet-provider/wallet-provider.interface';
+import {
+  WALLET_PROVIDER_UNKNOWN_OUTCOMES,
+  WalletProviderError,
+  type WalletProviderErrorKind,
+} from '../../wallet-provider/wallet-provider-error';
 import { IdentityHasher } from '../identity/identity-config';
 import { SelfieMatchService } from '../identity/selfie-match.service';
 import {
@@ -19,7 +20,6 @@ import {
   WalletIdentityService,
 } from '../identity/wallet-identity.service';
 import { walletStateOf } from '../gate/wallet-gate';
-import { FINTAVA_WALLET_BANK_CODE } from '../ledger/ledger-config';
 import { MoneyError } from '../money-error';
 import type { WalletState, WalletView } from '../money-view.type';
 import { TransactionPinService } from '../pin/transaction-pin.service';
@@ -77,7 +77,7 @@ const OPENING_SELECT = {
 const SAYS_IT_EXISTS = /exist|duplicate|already/i;
 
 /** Kinds after which Fintava's answer is about the details sent (A5's or the address). */
-const ABOUT_THE_DETAILS: readonly FintavaErrorKind[] = [
+const ABOUT_THE_DETAILS: readonly WalletProviderErrorKind[] = [
   'validation',
   'identity_refused',
 ];
@@ -160,6 +160,12 @@ function uniqueTarget(e: UniqueViolation): string {
  * hash, in memory). Stored: the keyed BVN
  * hash and the proved phone (to find a lost answer), and the three ids and
  * account name Fintava answered with (FintavaWallet).
+ *
+ * MONEY-20: every call goes through the wallet provider seam
+ * (`WALLET_PROVIDER`: `findCustomerByPhone`, `getCustomerMatch`,
+ * `listCustomerSightings`, `openWallet`), never a provider's client. A
+ * provider that issues the account number later answers `provisioning`,
+ * which is left `unknown` and found again by phone, never created twice.
  */
 @Injectable()
 export class WalletOpeningService {
@@ -168,7 +174,7 @@ export class WalletOpeningService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly fintava: FintavaClient,
+    @Inject(WALLET_PROVIDER) private readonly provider: WalletProvider,
     private readonly hasher: IdentityHasher,
     private readonly identity: WalletIdentityService,
     private readonly selfie: SelfieMatchService,
@@ -203,7 +209,7 @@ export class WalletOpeningService {
             accountNumber: wallet.accountNumber,
             accountName: wallet.accountName ?? '',
             bankName: this.settings.bankName,
-            bankCode: FINTAVA_WALLET_BANK_CODE,
+            bankCode: this.provider.walletBankCode,
             licenceLine: this.settings.licenceLine,
             depositInsuranceLine: this.settings.depositInsuranceLine,
             openedAt: wallet.createdAt.toISOString(),
@@ -236,10 +242,7 @@ export class WalletOpeningService {
     email: string | null | undefined,
     input: OpenNairaWalletDto,
   ): Promise<WalletView> {
-    if (
-      !this.hasher.configured ||
-      this.fintava.environment === 'unconfigured'
-    ) {
+    if (!this.hasher.configured || !this.provider.configured) {
       throw this.unavailable();
     }
     if (await this.hasWallet(wawuUserId)) return this.view(wawuUserId);
@@ -281,10 +284,10 @@ export class WalletOpeningService {
     // that was lost before it was recorded, or a WAWU account deleted
     // since): that one is theirs, never a second. But only if its record
     // carries this person's BVN: the phone alone proves nothing.
-    let existing: FintavaCustomerMatch | null = null;
+    let existing: ProviderCustomerMatch | null = null;
     let answered = false;
     try {
-      const lookup = await this.fintava.lookupCustomerByPhone(
+      const lookup = await this.provider.findCustomerByPhone(
         check.verifiedPhone,
         this.bvnDigest,
       );
@@ -327,9 +330,9 @@ export class WalletOpeningService {
     });
     if (still.count !== 1) return this.view(wawuUserId);
 
-    let customer: FintavaCustomer;
+    let opened: ProviderOpenedWallet;
     try {
-      customer = await this.fintava.createCustomer({
+      opened = await this.provider.openWallet({
         firstName: input.firstName,
         lastName: input.lastName,
         phone: check.verifiedPhone,
@@ -340,15 +343,23 @@ export class WalletOpeningService {
         nin: proven.nin,
       });
     } catch (e) {
-      if (!(e instanceof FintavaError) || this.mayHaveOpened(e)) {
+      if (!(e instanceof WalletProviderError) || this.mayHaveOpened(e)) {
         await this.lost(wawuUserId, attempt);
-        if (!(e instanceof FintavaError)) throw e;
+        if (!(e instanceof WalletProviderError)) throw e;
         return this.view(wawuUserId);
       }
       await this.fail(wawuUserId, attempt, `refused_${e.kind}`);
       throw this.refusal(e);
     }
-    await this.record(wawuUserId, attempt, customer);
+    if (opened.state === 'provisioning') {
+      // A provider that issues the account number later (Nuvion): the
+      // customer exists but there is no account to record yet. Left
+      // `unknown`, so it is found by phone and recorded once its account
+      // is there, never created twice. Fintava always answers `open`.
+      await this.lost(wawuUserId, attempt);
+      return this.view(wawuUserId);
+    }
+    await this.record(wawuUserId, attempt, opened.customer);
     return this.view(wawuUserId);
   }
 
@@ -371,7 +382,7 @@ export class WalletOpeningService {
       wait: 0,
       nothing_to_do: 0,
     };
-    if (this.sweeping || this.fintava.environment === 'unconfigured') {
+    if (this.sweeping || !this.provider.configured) {
       return counts;
     }
     this.sweeping = true;
@@ -446,10 +457,10 @@ export class WalletOpeningService {
     });
     if (asking.count !== 1) return 'nothing_to_do';
 
-    let seen: FintavaCustomerMatch | null = null;
+    let seen: ProviderCustomerMatch | null = null;
     let detailsSaidAbsent = false;
     try {
-      const lookup = await this.fintava.lookupCustomerByPhone(
+      const lookup = await this.provider.findCustomerByPhone(
         row.phone,
         this.bvnDigest,
       );
@@ -463,7 +474,7 @@ export class WalletOpeningService {
       if (listed === 'unknown') return 'wait';
       if (listed !== 'not_listed') {
         try {
-          seen = await this.fintava.getCustomerMatch(
+          seen = await this.provider.getCustomerMatch(
             listed.customerId,
             this.bvnDigest,
           );
@@ -500,7 +511,7 @@ export class WalletOpeningService {
           data: { state: 'conflict', failure: 'held_by_another_account' },
         });
         this.logger.error(
-          'wallet opening: Fintava has an account for this phone that another WAWU account holds; it needs review',
+          `wallet opening: ${this.provider.label} has an account for this phone that another WAWU account holds; it needs review`,
         );
         return 'conflict';
       }
@@ -537,10 +548,8 @@ export class WalletOpeningService {
 
   /** No resend sooner than this after a create was sent (MONEY-06's rule). */
   private resendAfterMs(): number {
-    return (
-      this.fintava.settings.moneyTimeoutMs +
-      this.fintava.settings.resendSafetyMs
-    );
+    const t = this.provider.timings;
+    return t.moneyTimeoutMs + t.resendSafetyMs;
   }
 
   /**
@@ -548,7 +557,7 @@ export class WalletOpeningService {
    * lookup and the create each end at their own timeout well before it.
    */
   private stuckBefore(now: Date): Date {
-    const s = this.fintava.settings;
+    const s = this.provider.timings;
     return new Date(
       now.getTime() -
         (2 * s.readTimeoutMs +
@@ -641,7 +650,7 @@ export class WalletOpeningService {
   private async record(
     wawuUserId: string,
     attempt: number,
-    customer: FintavaCustomer,
+    customer: ProviderCustomer,
   ): Promise<'recorded' | 'taken' | 'conflict'> {
     try {
       await this.prisma.$transaction(async (tx) => {
@@ -701,7 +710,7 @@ export class WalletOpeningService {
    * must not be adopted.
    */
   private identityStop(
-    found: FintavaCustomerMatch,
+    found: ProviderCustomerMatch,
     bvnHash: string,
   ): IdentityStop | null {
     if (found.bvnDigest === null) return 'phone_holder_bvn_unreadable';
@@ -725,7 +734,7 @@ export class WalletOpeningService {
     });
     if (stopped.count === 1) {
       this.logger.error(
-        `wallet opening: Fintava's customer for this phone is not shown to be this person (${why}); nothing adopted or created, it needs review`,
+        `wallet opening: ${this.provider.label}'s customer for this phone is not shown to be this person (${why}); nothing adopted or created, it needs review`,
       );
     }
     return stopped.count === 1;
@@ -773,7 +782,7 @@ export class WalletOpeningService {
     for (let page = 1; page <= WALLET_OPENING_DEFAULTS.listPages; page += 1) {
       let rows;
       try {
-        rows = await this.fintava.listCustomerSightings({
+        rows = await this.provider.listCustomerSightings({
           page,
           take: WALLET_OPENING_DEFAULTS.listTake,
         });
@@ -793,15 +802,15 @@ export class WalletOpeningService {
     if (newestFirst && reachedAttempt) return 'not_listed';
     if (!newestFirst) {
       this.logger.warn(
-        "wallet opening: Fintava's customer list is longer than we read and not newest first; a lost answer waits",
+        `wallet opening: ${this.provider.label}'s customer list is longer than we read and not newest first; a lost answer waits`,
       );
     }
     return 'unknown';
   }
 
   /** Fintava may have made the customer although the call failed. */
-  private mayHaveOpened(e: FintavaError): boolean {
-    if (e.recordMayExist || FINTAVA_UNKNOWN_OUTCOMES.includes(e.kind)) {
+  private mayHaveOpened(e: WalletProviderError): boolean {
+    if (e.recordMayExist || WALLET_PROVIDER_UNKNOWN_OUTCOMES.includes(e.kind)) {
       return true;
     }
     if (['not_configured', 'auth', 'merchant_inactive'].includes(e.kind)) {
@@ -810,7 +819,7 @@ export class WalletOpeningService {
     return e.messages.some((m) => SAYS_IT_EXISTS.test(m));
   }
 
-  private refusal(e: FintavaError): HttpException {
+  private refusal(e: WalletProviderError): HttpException {
     if (ABOUT_THE_DETAILS.includes(e.kind)) {
       return new MoneyError('account_not_opened', ACCOUNT_NOT_OPENED_MESSAGE);
     }
@@ -823,7 +832,7 @@ export class WalletOpeningService {
 
   private unavailable(): HttpException {
     return new MoneyError('provider_unreachable', OPENING_UNAVAILABLE_MESSAGE, {
-      retryAfterSeconds: FINTAVA_DEFAULTS.retryAfterSeconds,
+      retryAfterSeconds: this.provider.timings.retryAfterSeconds,
     });
   }
 }

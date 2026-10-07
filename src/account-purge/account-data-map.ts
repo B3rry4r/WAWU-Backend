@@ -89,6 +89,14 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'CartItem', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'EventGoing', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'EventSave', column: 'userWawuId', disposition: 'OWNED' },
+  // This person's saved creators and finished course lessons (ME-10): their
+  // own bookmarks and their own progress. Both go with them.
+  { model: 'SavedCreator', column: 'userWawuId', disposition: 'OWNED' },
+  {
+    model: 'CourseLessonProgress',
+    column: 'userWawuId',
+    disposition: 'OWNED',
+  },
   // The views OF this profile. A statistic about the account, so it goes with
   // the account. The other column on this table is somebody else's, below.
   { model: 'ProfileView', column: 'profileWawuId', disposition: 'OWNED' },
@@ -157,6 +165,9 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'StorageObject', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'DittoOptIn', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'EventReferral', column: 'ownerWawuId', disposition: 'OWNED' },
+  // Working someone's door (EVENTS-05) is this person's role on that event;
+  // it goes with them. A ticket they let in stays let in.
+  { model: 'EventDoorStaff', column: 'staffWawuId', disposition: 'OWNED' },
   {
     model: 'CreatorNoResponseTracker',
     column: 'creatorWawuId',
@@ -234,6 +245,11 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // with them, and each code then opens the plain "not found" page.
   { model: 'MoneyReceipt', column: 'wawuUserId', disposition: 'OWNED' },
 
+  // Which ads this person viewed, tapped or skipped on which day (ADS-05):
+  // theirs, so the rows go with them. The daily totals the owner invoices from
+  // (AdDailyTotal) name nobody, are not walked back, and stay.
+  { model: 'AdEvent', column: 'viewerWawuId', disposition: 'OWNED' },
+
   // Last: everything above may reference these.
   // An admin's choice to feature this creator in Explore (EXPLORE-03): a
   // placement about the account, gone with it. The row's admin id is not a
@@ -268,6 +284,24 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   {
     model: 'BlockedAccount',
     column: 'blockedWawuId',
+    disposition: 'COUNTERPARTY',
+  },
+  // Somebody else's saved creator that names this account (ME-10): their
+  // bookmark. It stays; their Saved list stops showing it once this account's
+  // profile is gone (the list joins UserProfile).
+  {
+    model: 'SavedCreator',
+    column: 'creatorWawuId',
+    disposition: 'COUNTERPARTY',
+  },
+  // The other person named on somebody else's notification (ME-10: the
+  // buyer, tipper, follower, asker or rater). The notification is the
+  // reader's; it stays, and this id is scrubbed by WAWU ID's anonymize. The
+  // reader's own notifications (and their targets, by cascade) go with the
+  // reader under Notification above.
+  {
+    model: 'NotificationTarget',
+    column: 'actorWawuId',
     disposition: 'COUNTERPARTY',
   },
   // A chat is shared by two people. Deleting the row would delete the other

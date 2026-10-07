@@ -16,6 +16,9 @@ import {
   type AdminAdAction,
 } from '../../../generated/prisma/enums';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { AdsCountsService } from '../../ads/ads-counts.service';
+import type { AdCounts, AdDayRange } from '../../ads/ads-counts.type';
+import { utcDay } from '../../ads/ads-day';
 import type { Paginated } from '../../common/interceptors/response.interceptor';
 import type { AdminUserView } from '../auth/admin-user-view.type';
 import {
@@ -44,6 +47,7 @@ import {
 import type {
   AdCampaignFilterDto,
   AdCampaignListQueryDto,
+  AdReportRangeDto,
   CreateAdCampaignDto,
   UpdateAdCampaignDto,
 } from './dto/admin-ad.dto';
@@ -157,7 +161,10 @@ function isOpen(event: EventRow, now: Date): boolean {
  */
 @Injectable()
 export class AdminAdsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly counts: AdsCountsService,
+  ) {}
 
   // ── reads ─────────────────────────────────────────────────────────────────
 
@@ -178,8 +185,14 @@ export class AdminAdsService {
       }),
       this.prisma.adCampaign.count({ where }),
     ]);
+    const items = await this.toViews(
+      this.prisma,
+      rows,
+      now,
+      this.dayRange(this.range(query)),
+    );
     return {
-      items: await this.toViews(this.prisma, rows, now),
+      items,
       currentPage: query.page,
       perPage: query.perPage,
       total,
@@ -192,20 +205,26 @@ export class AdminAdsService {
   }
 
   /** GET /admin/ads/:id/report. */
-  async report(id: string): Promise<AdCampaignReportView> {
+  async report(
+    id: string,
+    query: AdReportRangeDto = {},
+  ): Promise<AdCampaignReportView> {
     const now = new Date();
+    const range = this.range(query);
+    const days = this.dayRange(range);
     const row = await this.prisma.adCampaign.findUnique({
       where: { id },
       include: { creative: true },
     });
     if (!row) throw new NotFoundException('Campaign not found.');
-    const [[campaign], history] = await Promise.all([
-      this.toViews(this.prisma, [row], now),
+    const [[campaign], history, counted] = await Promise.all([
+      this.toViews(this.prisma, [row], now, days),
       this.prisma.adminAdAudit.findMany({
         where: { campaignId: id },
         orderBy: { seq: 'desc' },
         select: { action: true, createdAt: true },
       }),
+      this.counts.forCampaign(id, days),
     ]);
     const window = row.endsAt.getTime() - row.startsAt.getTime();
     const elapsed = Math.min(
@@ -216,6 +235,14 @@ export class AdminAdsService {
     const elapsedMinutes = Math.floor(elapsed / MS_PER_MINUTE);
     return {
       campaign,
+      range: {
+        from: range.from ?? null,
+        to: range.to ?? null,
+        fromDay: days.from ?? null,
+        toDay: days.to ?? null,
+      },
+      delivery: counted.delivery,
+      days: counted.days,
       timing: {
         windowMinutes,
         elapsedMinutes,
@@ -269,7 +296,30 @@ export class AdminAdsService {
       },
       include: { creative: true },
     });
-    const servableViews = await this.toViews(this.prisma, servable, now);
+    const servableViews = await this.toViews(this.prisma, servable, now, {});
+
+    const days = this.dayRange(this.range(query));
+    const matching = await this.prisma.adCampaign.findMany({
+      where,
+      select: { id: true, status: true, placement: true },
+    });
+    const ids = matching.map((m) => m.id);
+    const [overall, perCampaign] = await Promise.all([
+      this.counts.summary(days, ids),
+      this.counts.totalsFor(ids, days),
+    ]);
+    const byStatusDelivery = this.groupDelivery(
+      statuses,
+      matching,
+      (m) => m.status,
+      perCampaign,
+    );
+    const byPlacementDelivery = this.groupDelivery(
+      placements,
+      matching,
+      (m) => m.placement,
+      perCampaign,
+    );
 
     return {
       generatedAt: now,
@@ -281,6 +331,9 @@ export class AdminAdsService {
         to: query.to ? new Date(query.to) : null,
       },
       campaigns,
+      delivery: overall,
+      deliveryByStatus: byStatusDelivery,
+      deliveryByPlacement: byPlacementDelivery,
       byStatus: Object.fromEntries(
         statuses.map((st, i) => [st, byStatus[i]]),
       ) as AdSummaryReportView['byStatus'],
@@ -697,15 +750,73 @@ export class AdminAdsService {
       : conflict('event_not_open', message, { eventId });
   }
 
-  private filterWhere(
-    f: AdCampaignFilterDto,
-    now: Date,
-  ): Prisma.AdCampaignWhereInput {
+  /**
+   * The instants a request asked for, as given. `from` and `to` are UTC
+   * instants, `to` exclusive, as for the window filter.
+   */
+  private range(f: { from?: string; to?: string }): {
+    from?: Date;
+    to?: Date;
+  } {
     const from = f.from ? this.instant(f.from, 'from') : undefined;
     const to = f.to ? this.instant(f.to, 'to') : undefined;
     if (from && to && to.getTime() <= from.getTime()) {
       throw refuse('bad_range', 'to must be after from.');
     }
+    return { from, to };
+  }
+
+  /**
+   * Counts are kept by UTC day (ADS-05), so an instant range becomes the UTC
+   * days that have any part inside [from, to): from the day of `from` to the
+   * day of the last millisecond before `to`, both ends inclusive. A range that
+   * starts at 09:00 counts that whole day; a `to` at exactly midnight leaves
+   * that midnight's day out. The last day is never earlier than 0001-01-01,
+   * the first day the database holds (nothing is counted before it).
+   */
+  private dayRange(r: { from?: Date; to?: Date }): AdDayRange {
+    const out: AdDayRange = {};
+    if (r.from) out.from = utcDay(r.from);
+    if (r.to) {
+      const last = utcDay(new Date(r.to.getTime() - 1));
+      out.to = last < '0001-01-01' ? '0001-01-01' : last;
+    }
+    return out;
+  }
+
+  /** Counts summed per key (status or placement), every key present. */
+  private groupDelivery<K extends string, T extends { id: string }>(
+    keys: K[],
+    rows: T[],
+    keyOf: (row: T) => K,
+    perCampaign: Record<string, AdCounts>,
+  ): Record<K, AdCounts> {
+    const sums = Object.fromEntries(
+      keys.map((k) => [k, { views: 0, taps: 0, skips: 0 }]),
+    ) as Record<K, { views: number; taps: number; skips: number }>;
+    for (const row of rows) {
+      const c = perCampaign[row.id];
+      const t = sums[keyOf(row)];
+      t.views += c.views;
+      t.taps += c.taps;
+      t.skips += c.skips;
+    }
+    return Object.fromEntries(
+      keys.map((k) => [
+        k,
+        {
+          ...sums[k],
+          ctr: sums[k].views === 0 ? null : sums[k].taps / sums[k].views,
+        },
+      ]),
+    ) as Record<K, AdCounts>;
+  }
+
+  private filterWhere(
+    f: AdCampaignFilterDto,
+    now: Date,
+  ): Prisma.AdCampaignWhereInput {
+    const { from, to } = this.range(f);
     const and: Prisma.AdCampaignWhereInput[] = [];
     if (f.status) and.push({ status: f.status });
     if (f.placement) and.push({ placement: f.placement });
@@ -733,7 +844,7 @@ export class AdminAdsService {
     });
     if (!row) throw new NotFoundException('Campaign not found.');
     const [[view], overlaps, history] = await Promise.all([
-      this.toViews(db, [row], now),
+      this.toViews(db, [row], now, {}),
       db.adCampaign.findMany({
         where: {
           id: { not: id },
@@ -768,7 +879,13 @@ export class AdminAdsService {
     db: Db,
     rows: CampaignRow[],
     now: Date,
+    days: AdDayRange,
   ): Promise<AdCampaignView[]> {
+    // One set-based read of every row's counts, whatever the page size.
+    const delivery = await this.counts.totalsFor(
+      rows.map((r) => r.id),
+      days,
+    );
     const eventIds = [
       ...new Set(
         rows.flatMap((r) =>
@@ -830,6 +947,7 @@ export class AdminAdsService {
             }
           : null,
         event: eventView,
+        delivery: delivery[row.id],
         servingNow:
           SERVED_STATUSES.includes(row.status) &&
           phase === 'running' &&

@@ -278,10 +278,10 @@ writes to `superadmin` and `reviewer`.
 | Route | Notes |
 | --- | --- |
 | `GET /admin/ads` | Filters `status`, `placement`, `phase` (`upcoming`, `running`, `over`), `from` and `to` (campaigns whose window overlaps the range); `sort` `latest` or `soonest` by window start, ties by id; `page` and `perPage` like the other admin lists. |
-| `GET /admin/ads/report` | Campaigns in a range counted by status, placement and phase, plus how many serving would show right now per placement. |
+| `GET /admin/ads/report` | Campaigns in a range counted by status, placement and phase, how many serving would show right now per placement, and `delivery` (views, taps, skips, ctr) overall, `deliveryByStatus` and `deliveryByPlacement` for those campaigns over the range's UTC days. |
 | `POST /admin/ads` | A draft with its card. Nothing is served until it is scheduled. |
 | `GET /admin/ads/:id` | Campaign, card, its event, overlapping bookings on the placement and the whole audit history. |
-| `GET /admin/ads/:id/report` | Window, how much of it has run, what was done to it. |
+| `GET /admin/ads/:id/report` | Window, how much of it has run, what was done to it, and `delivery` plus `days` (`{ day, views, taps, skips }`, oldest first, empty days omitted) over `from` and `to`; `range` echoes what they became. |
 | `PATCH /admin/ads/:id` | Edit a draft or a paused campaign; the audit row records each changed field's before and after. |
 | `DELETE /admin/ads/:id` | A draft only. Its audit rows stay. |
 | `POST /admin/ads/:id/schedule`, `/pause`, `/resume`, `/end` | The state machine in `src/admin/ads/ad-campaign-state.ts`. An illegal move, or a repeat, is a 409 whose `reason` names the code and the statuses allowed. |
@@ -294,8 +294,23 @@ Nothing moves a campaign to `live` or `ended` on a timer: serving checks the
 window itself. Times are UTC, written `2026-10-18T09:00:00Z`; the picture is an
 `https` link the admin supplies (there is no admin upload route). Text is
 checked by Unicode category and capped by `src/ads/ads-text-limits.ts`
-(provisional). The report carries no views, taps or skips until ADS-05 counts
-them.
+(provisional).
+
+**Views, taps and skips** are ADS-05's counts, read through `AdsCountsService`
+(`AdminAdsModule` imports `AdsEventsModule`; nothing is recounted). Every
+campaign view (list row, detail, write response, report) has
+`delivery { views, taps, skips, ctr }`: `ctr` is taps over views as a fraction,
+`null` when there are no views, and a campaign with nothing counted is zeros,
+not an error. The list reads every row's counts in one grouped query. `from`
+and `to` are UTC instants with `to` exclusive; for counts they become the UTC
+days with any part inside them (the day of `from` through the day of the last
+millisecond before `to`, both inclusive), so a `to` at exactly midnight leaves
+that day out. On the list and the summary the same `from` and `to` also choose
+which campaigns (window overlap). **For the dashboard (ADS-02):** a campaign's
+page calls `GET /admin/ads/:id/report?from=&to=` and draws `delivery` and
+`days`; the table calls `GET /admin/ads?...` and reads `delivery` on each row;
+the overview calls `GET /admin/ads/report`. Counts survive a pause or an end.
+A counted campaign cannot be deleted (end it instead).
 
 ### Environment
 

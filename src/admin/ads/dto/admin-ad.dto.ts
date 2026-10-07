@@ -225,3 +225,18 @@ export class AdCampaignListQueryDto extends PaginationQueryDto {
   @IsIn(['latest', 'soonest'])
   sort: 'latest' | 'soonest' = 'latest';
 }
+
+/**
+ * GET /admin/ads/:id/report. `from` and `to` choose which days of counts are
+ * added up: the UTC days with any part inside [from, to), `to` exclusive. They
+ * do not filter the campaign, which is the one in the path.
+ */
+export class AdReportRangeDto {
+  @IsOptional()
+  @IsUtcInstant('from')
+  from?: string;
+
+  @IsOptional()
+  @IsUtcInstant('to')
+  to?: string;
+}

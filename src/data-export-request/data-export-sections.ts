@@ -371,6 +371,28 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    // ME-10: the creators this person saved (M30).
+    key: 'savedCreators',
+    models: ['SavedCreator'],
+    load: (prisma, me) =>
+      prisma.savedCreator.findMany({
+        where: { userWawuId: me },
+        select: { creatorWawuId: true, savedAt: true },
+        orderBy: { savedAt: 'desc' },
+      }),
+  },
+  {
+    // ME-10: the course lessons this person marked finished (M29).
+    key: 'lessonsFinished',
+    models: ['CourseLessonProgress'],
+    load: (prisma, me) =>
+      prisma.courseLessonProgress.findMany({
+        where: { userWawuId: me },
+        select: { contentId: true, lessonId: true, doneAt: true },
+        orderBy: { doneAt: 'desc' },
+      }),
+  },
+  {
     key: 'eventsGoing',
     models: ['EventGoing'],
     load: (prisma, me) =>
@@ -757,6 +779,10 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
         'An admin choice to show the creator in Explore, with the admin id; the person wrote none of it.',
     },
     // Secrets and identity records: never in an email.
+    {
+      model: 'EventDoorStaff',
+      reason: 'A door role the organiser gave, not data the person gave.',
+    },
     { model: 'TransactionPin', reason: 'A PIN hash is a secret.' },
     { model: 'TransactionPinReset', reason: 'A reset code hash is a secret.' },
     { model: 'ApprovalDevice', reason: 'A device key is a secret.' },
@@ -835,6 +861,11 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
       model: 'ProfileView',
       reason:
         'Who looked at a profile is those people browsing, not this account data.',
+    },
+    {
+      model: 'AdEvent',
+      reason:
+        'Which sponsored cards were opened, tapped or skipped on which day: an advertising count kept so each is counted once a day, not something the person made (BACKEND_GAPS G-199).',
     },
     {
       model: 'DmReport',

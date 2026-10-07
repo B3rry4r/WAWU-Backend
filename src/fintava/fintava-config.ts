@@ -14,6 +14,16 @@ const LIVE_HOST = 'live.fintavapay.com';
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 /**
+ * The bank code of every Fintava wallet: Loma Bank, `090620` in Fintava's
+ * own bank list (mobile repo `docs/fintava/naira-api.md`, "Banks";
+ * `sandbox/01-bank-list.md`). A party named at a bank is a WAWU wallet only
+ * at this bank, since a NUBAN is unique only within its bank. Moved here
+ * from src/money/ledger/ledger-config.ts by MONEY-20; the money code reads
+ * it as `WalletProvider.walletBankCode`.
+ */
+export const FINTAVA_WALLET_BANK_CODE = '090620';
+
+/**
  * PROVISIONAL(FINTAVA-TIMEOUTS, owner=YOU, why=Fintava publishes no timeout or retry guidance; sandbox answers took 0.2 to 5.5 s)
  *
  * How long the client waits for Fintava before giving up, in milliseconds,

@@ -12325,6 +12325,38 @@
         "tags": [
           "EventTicketing"
         ]
+      },
+      "get": {
+        "operationId": "EventRunningController_referrals",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EventReferralSalesView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "The host's shared links, each with its tickets sold (E18).",
+        "tags": [
+          "EventRunning"
+        ]
       }
     },
     "/api/hub/events/{id}/cancel": {
@@ -12381,6 +12413,211 @@
         "summary": "Call it off. Voids every ticket and refunds every buyer — a real\nFlutterwave refund per order, not a status flip.",
         "tags": [
           "EventTicketing"
+        ]
+      }
+    },
+    "/api/hub/events/mine/sold": {
+      "get": {
+        "operationId": "EventRunningController_mySold",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostSoldCounts"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Sold per event for every event the caller hosts (E17).",
+        "tags": [
+          "EventRunning"
+        ]
+      }
+    },
+    "/api/hub/events/door/mine": {
+      "get": {
+        "operationId": "EventRunningController_myDoorEvents",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoorEventList"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The events the caller works the door at.",
+        "tags": [
+          "EventRunning"
+        ]
+      }
+    },
+    "/api/hub/events/{id}/door-staff": {
+      "get": {
+        "operationId": "EventRunningController_listDoorStaff",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DoorStaffView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "Who the host lets check tickets in.",
+        "tags": [
+          "EventRunning"
+        ]
+      },
+      "post": {
+        "operationId": "EventRunningController_addDoorStaff",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddDoorStaffDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoorStaffView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Add someone to the door, by WAWU id or handle.",
+        "tags": [
+          "EventRunning"
+        ]
+      }
+    },
+    "/api/hub/events/{id}/door-staff/{staffId}": {
+      "delete": {
+        "operationId": "EventRunningController_removeDoorStaff",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "staffId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "removed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "removed"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "Take someone off the door.",
+        "tags": [
+          "EventRunning"
+        ]
+      }
+    },
+    "/api/hub/events/{id}/door/check-in": {
+      "post": {
+        "operationId": "EventRunningController_checkIn",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScanTicketDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoorCheckInResult"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Scan at the door, as the host or their door staff. Let them in (E20)\nwith the holder's name, already used (E23) with when and by whom, or\nnot valid (E24), with the live counts.",
+        "tags": [
+          "EventRunning"
         ]
       }
     },
@@ -20989,7 +21226,8 @@
               "type": "string",
               "enum": [
                 "in_person",
-                "online"
+                "online",
+                "hybrid"
               ]
             }
           },
@@ -21004,7 +21242,9 @@
                 "summit",
                 "webinar",
                 "meetup",
-                "competition"
+                "competition",
+                "conference",
+                "concert"
               ]
             }
           },
@@ -21016,10 +21256,10 @@
             "schema": {
               "type": "string",
               "enum": [
+                "conference",
                 "music",
                 "business",
                 "training",
-                "conference",
                 "church",
                 "entertainment",
                 "fashion",
@@ -21157,6 +21397,28 @@
           }
         },
         "summary": "The host's own submissions at every status, with the reason for the last\nrejection or takedown. Any authenticated user can have submitted an event,\nso there is no creator gate here.",
+        "tags": [
+          "Event"
+        ]
+      }
+    },
+    "/api/hub/events/options": {
+      "get": {
+        "operationId": "EventController_options",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventOptionsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The label to show for each category, format and kind, beside the value to\nsend (EVENTS-02): \"Business & Finance\" is `business`. Declared before\n`:id` for the same reason `mine` is.",
         "tags": [
           "Event"
         ]
@@ -24369,6 +24631,496 @@
         ]
       }
     },
+    "/api/hub/inbox": {
+      "get": {
+        "operationId": "InboxController_list",
+        "parameters": [
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "Opaque: send back the `nextCursor` of the previous page as given.",
+            "schema": {
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "1 to 100, 20 when left out.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "kind",
+            "required": false,
+            "in": "query",
+            "description": "Only rows of this kind (the Paid DMs and Communities chips). All kinds when left out.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "chat",
+                "paid_dm",
+                "community"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxPage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Chats, paid questions and communities in one list, latest activity first.",
+        "tags": [
+          "Inbox"
+        ]
+      }
+    },
+    "/api/hub/inbox/unread": {
+      "get": {
+        "operationId": "InboxController_unread",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxUnread"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The Inbox tab's badge: the sum of every row's unread count.",
+        "tags": [
+          "Inbox"
+        ]
+      }
+    },
+    "/api/hub/me/counts": {
+      "get": {
+        "operationId": "MeController_counts",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeCountsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "M7's figures in one read: purchases, saved, unread notifications.",
+        "tags": [
+          "Me"
+        ]
+      }
+    },
+    "/api/hub/me/saved": {
+      "get": {
+        "operationId": "MeController_savedList",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Rows per page, 1 to 100.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "type",
+            "required": false,
+            "in": "query",
+            "description": "M30's tab: everything, or one kind. Default `all`.",
+            "schema": {
+              "default": "all",
+              "type": "string",
+              "enum": [
+                "all",
+                "content",
+                "events",
+                "creators"
+              ]
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "`nextCursor` from the previous page. Opaque: send it back as given. Absent for the first page.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedPage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Saved (M30): content, events and creators, newest first, by tab.",
+        "tags": [
+          "Me"
+        ]
+      }
+    },
+    "/api/hub/me/saved/creators/{wawuId}": {
+      "put": {
+        "operationId": "MeController_saveCreator",
+        "parameters": [
+          {
+            "name": "wawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedCreatorState"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Save a creator (M30's Creators tab). Idempotent.",
+        "tags": [
+          "Me"
+        ]
+      },
+      "delete": {
+        "operationId": "MeController_unsaveCreator",
+        "parameters": [
+          {
+            "name": "wawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedCreatorState"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Remove a saved creator. Idempotent.",
+        "tags": [
+          "Me"
+        ]
+      }
+    },
+    "/api/hub/me/purchases": {
+      "get": {
+        "operationId": "MeController_purchaseList",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Rows per page, 1 to 100.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "q",
+            "required": false,
+            "in": "query",
+            "description": "\"Search what you've bought\": trimmed, then 2 to 60 characters. Matches\npart of a piece's title or its creator's handle, ignoring case.",
+            "schema": {
+              "minLength": 2,
+              "maxLength": 60,
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "`nextCursor` from the previous page. Opaque: send it back as given. Absent for the first page.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PurchasePage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "My purchases (M29): pieces bought, newest first, searchable, with course progress.",
+        "tags": [
+          "Me"
+        ]
+      }
+    },
+    "/api/hub/me/lessons/{lessonId}/done": {
+      "put": {
+        "operationId": "MeController_lessonDone",
+        "parameters": [
+          {
+            "name": "lessonId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LessonDoneState"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Mark a lesson of a course piece finished (M29 \"3 of 12 done\"). Idempotent.",
+        "tags": [
+          "Me"
+        ]
+      },
+      "delete": {
+        "operationId": "MeController_lessonNotDone",
+        "parameters": [
+          {
+            "name": "lessonId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LessonDoneState"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Mark a lesson not finished. Idempotent.",
+        "tags": [
+          "Me"
+        ]
+      }
+    },
+    "/api/hub/me/notifications": {
+      "get": {
+        "operationId": "MeController_notificationList",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Rows per page, 1 to 100.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "category",
+            "required": false,
+            "in": "query",
+            "description": "M31's chip. Default `all`.",
+            "schema": {
+              "default": "all",
+              "type": "string",
+              "enum": [
+                "all",
+                "money",
+                "messages",
+                "content"
+              ]
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "`nextCursor` from the previous page. Opaque: send it back as given. Absent for the first page.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationFeedPage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Notifications (M31, M32), by chip, each with what opening it opens.",
+        "tags": [
+          "Me"
+        ]
+      }
+    },
+    "/api/hub/me/earnings": {
+      "get": {
+        "operationId": "MeController_earningsSummary",
+        "parameters": [
+          {
+            "name": "month",
+            "required": false,
+            "in": "query",
+            "description": "YYYY-MM in Africa/Lagos time, 2000-01 to 2099-12. Default: this month.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyEarningsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "A month's earnings from the caller's completed sales (M7, M18). Never a balance.",
+        "tags": [
+          "Me"
+        ]
+      }
+    },
+    "/api/hub/me/earnings/sales": {
+      "get": {
+        "operationId": "MeController_earningSales",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Rows per page, 1 to 100.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "month",
+            "required": false,
+            "in": "query",
+            "description": "YYYY-MM in Africa/Lagos time, 2000-01 to 2099-12. Default: this month.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "`nextCursor` from the previous page. Opaque: send it back as given. Absent for the first page.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EarningSalePage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The completed sales behind a month's earnings, newest first.",
+        "tags": [
+          "Me"
+        ]
+      }
+    },
     "/api/hub/webhooks/fintava": {
       "post": {
         "operationId": "FintavaWebhookController_receive",
@@ -24729,6 +25481,22 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -24743,7 +25511,7 @@
             }
           }
         },
-        "summary": "One campaign's report: its window, how much of it has run, what was done to it.",
+        "summary": "One campaign's report: its window, how much of it has run, what was done to it, and its views, taps and skips by day.",
         "tags": [
           "AdminAds"
         ]
@@ -24870,6 +25638,55 @@
         "summary": "End early, from any status but ended. Final.",
         "tags": [
           "AdminAds"
+        ]
+      }
+    },
+    "/api/hub/ads/{id}/events": {
+      "post": {
+        "operationId": "AdsEventsController_record",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordAdEventDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accepted": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "accepted"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "The app reports that this person viewed, tapped or skipped the card of a\ncampaign (the id GET /ads returned). Counted once per person, kind and\nUTC day: a repeat answers the same as the first and changes nothing, so\nthe app may retry freely and the answer says nothing about earlier counts.\nA campaign that is not being served (unknown, draft, paused, ended, outside\nits window) is a plain 404, the same for all of them.",
+        "tags": [
+          "AdsEvents"
         ]
       }
     },
@@ -27237,6 +28054,26 @@
           "reason"
         ]
       },
+      "AddDoorStaffDto": {
+        "type": "object",
+        "properties": {
+          "wawuUserId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "handle": {
+            "type": "string",
+            "description": "With or without the \"@\". Same characters a handle may hold.",
+            "maxLength": 31,
+            "pattern": "^@?[a-zA-Z0-9_.]+$"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 30
+          }
+        }
+      },
       "EventDecisionReasonDto": {
         "type": "object",
         "properties": {
@@ -28347,6 +29184,45 @@
           "name"
         ]
       },
+      "NewEventTicketTypeDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 60,
+            "pattern": "\\S"
+          },
+          "priceNaira": {
+            "type": "number",
+            "description": "Naira, like every ticket price this backend stores. 0 is a free ticket.",
+            "minimum": 0,
+            "maximum": 10000000
+          },
+          "quantity": {
+            "type": "number",
+            "description": "How many exist. A venue has a capacity, so there is no unlimited option.",
+            "minimum": 1,
+            "maximum": 1000000
+          },
+          "tier": {
+            "type": "string",
+            "enum": [
+              "free",
+              "regular",
+              "vip",
+              "vvip",
+              "early_bird",
+              "group"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "priceNaira",
+          "quantity"
+        ]
+      },
       "CreateEventDto": {
         "type": "object",
         "properties": {
@@ -28374,7 +29250,8 @@
             "type": "string",
             "enum": [
               "in_person",
-              "online"
+              "online",
+              "hybrid"
             ]
           },
           "type": {
@@ -28384,7 +29261,9 @@
               "summit",
               "webinar",
               "meetup",
-              "competition"
+              "competition",
+              "conference",
+              "concert"
             ]
           },
           "startsAt": {
@@ -28406,6 +29285,7 @@
           },
           "location": {
             "type": "string",
+            "description": "The city or venue line the card shows. Optional (EVENTS-02): the app's\nhost wizard asks only for the street address, so when this is left out\nthe server fills it from `address`, and leaves it empty when there is no\naddress either. A value sent here is stored as sent, as before.",
             "maxLength": 160,
             "pattern": "\\S"
           },
@@ -28433,10 +29313,10 @@
             "type": "string",
             "description": "What the event is about. Defaults to `other` when not stated.",
             "enum": [
+              "conference",
               "music",
               "business",
               "training",
-              "conference",
               "church",
               "entertainment",
               "fashion",
@@ -28459,6 +29339,13 @@
             "items": {
               "$ref": "#/components/schemas/EventSpeakerDto"
             }
+          },
+          "ticketTypes": {
+            "description": "The ticket types, sent with the event in the same submit (EVENTS-02), so\nthe event and its tickets go to review together. Omitted or empty, the\nevent sells nothing, exactly as before. The tiers can still be replaced\nafterwards through PUT /events/:id/tickets.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NewEventTicketTypeDto"
+            }
           }
         },
         "required": [
@@ -28467,8 +29354,7 @@
           "hostOrg",
           "format",
           "type",
-          "startsAt",
-          "location"
+          "startsAt"
         ]
       },
       "UpdateEventDto": {
@@ -28497,7 +29383,8 @@
             "type": "string",
             "enum": [
               "in_person",
-              "online"
+              "online",
+              "hybrid"
             ]
           },
           "type": {
@@ -28507,7 +29394,9 @@
               "summit",
               "webinar",
               "meetup",
-              "competition"
+              "competition",
+              "conference",
+              "concert"
             ]
           },
           "startsAt": {
@@ -28552,10 +29441,10 @@
             "type": "string",
             "description": "What the event is about. Defaults to `other` when not stated.",
             "enum": [
+              "conference",
               "music",
               "business",
               "training",
-              "conference",
               "church",
               "entertainment",
               "fashion",
@@ -29305,6 +30194,22 @@
             "$ref": "#/components/schemas/UpdateAdCreativeDto"
           }
         }
+      },
+      "RecordAdEventDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "view",
+              "tap",
+              "skip"
+            ]
+          }
+        },
+        "required": [
+          "type"
+        ]
       },
       "NameCheckDto": {
         "type": "object",
@@ -34739,6 +35644,256 @@
           "outcome"
         ]
       },
+      "HostSoldCount": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string"
+          },
+          "ticketsSold": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "eventId",
+          "ticketsSold"
+        ]
+      },
+      "HostSoldCounts": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HostSoldCount"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "DoorEventView": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string"
+          },
+          "eventName": {
+            "type": "string"
+          },
+          "startsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "location": {
+            "type": "string"
+          },
+          "venueName": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "cancelledAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "eventId",
+          "eventName",
+          "startsAt",
+          "location",
+          "venueName",
+          "status",
+          "cancelledAt",
+          "label"
+        ]
+      },
+      "DoorEventList": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DoorEventView"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "EventReferralSalesView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "ticketsSold": {
+            "type": "number"
+          },
+          "revenueNaira": {
+            "type": "number"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "label",
+          "ticketsSold",
+          "revenueNaira",
+          "createdAt"
+        ]
+      },
+      "DoorStaffView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "wawuUserId": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string",
+            "nullable": true
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "addedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "wawuUserId",
+          "label",
+          "displayName",
+          "handle",
+          "avatarUrl",
+          "addedAt"
+        ]
+      },
+      "CheckedInByView": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "host",
+              "door_staff"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "role",
+          "label"
+        ]
+      },
+      "DoorCheckInResult": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "valid",
+              "already_used",
+              "invalid"
+            ]
+          },
+          "ticket": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "tierName": {
+                "type": "string"
+              },
+              "holderName": {
+                "type": "string",
+                "nullable": true
+              },
+              "checkedInAt": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              },
+              "checkedInBy": {
+                "$ref": "#/components/schemas/CheckedInByView",
+                "nullable": true
+              }
+            },
+            "required": [
+              "code",
+              "tierName",
+              "holderName",
+              "checkedInAt",
+              "checkedInBy"
+            ],
+            "nullable": true
+          },
+          "totals": {
+            "type": "object",
+            "properties": {
+              "sold": {
+                "type": "number"
+              },
+              "checkedIn": {
+                "type": "number"
+              },
+              "stillToArrive": {
+                "type": "number"
+              },
+              "remaining": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "sold",
+              "checkedIn",
+              "stillToArrive",
+              "remaining"
+            ]
+          }
+        },
+        "required": [
+          "outcome",
+          "ticket",
+          "totals"
+        ]
+      },
       "DayAvailability": {
         "type": "object",
         "properties": {
@@ -36379,7 +37534,8 @@
             "type": "string",
             "enum": [
               "in_person",
-              "online"
+              "online",
+              "hybrid"
             ]
           },
           "type": {
@@ -36389,7 +37545,9 @@
               "summit",
               "webinar",
               "meetup",
-              "competition"
+              "competition",
+              "conference",
+              "concert"
             ]
           },
           "startsAt": {
@@ -36611,7 +37769,8 @@
             "type": "string",
             "enum": [
               "in_person",
-              "online"
+              "online",
+              "hybrid"
             ]
           },
           "type": {
@@ -36621,7 +37780,9 @@
               "summit",
               "webinar",
               "meetup",
-              "competition"
+              "competition",
+              "conference",
+              "concert"
             ]
           },
           "startsAt": {
@@ -39017,7 +40178,8 @@
             "type": "string",
             "enum": [
               "in_person",
-              "online"
+              "online",
+              "hybrid"
             ]
           },
           "type": {
@@ -39027,7 +40189,9 @@
               "summit",
               "webinar",
               "meetup",
-              "competition"
+              "competition",
+              "conference",
+              "concert"
             ]
           },
           "startsAt": {
@@ -39070,10 +40234,10 @@
             "type": "string",
             "enum": [
               "community",
+              "conference",
               "music",
               "business",
               "training",
-              "conference",
               "church",
               "entertainment",
               "fashion",
@@ -39190,6 +40354,96 @@
           "speakers",
           "createdAt",
           "lastDecisionReason"
+        ]
+      },
+      "EventOptionsView": {
+        "type": "object",
+        "properties": {
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "string",
+                  "enum": [
+                    "community",
+                    "conference",
+                    "music",
+                    "business",
+                    "training",
+                    "church",
+                    "entertainment",
+                    "fashion",
+                    "lifestyle",
+                    "other"
+                  ]
+                },
+                "label": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "value",
+                "label"
+              ]
+            }
+          },
+          "formats": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "string",
+                  "enum": [
+                    "in_person",
+                    "online",
+                    "hybrid"
+                  ]
+                },
+                "label": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "value",
+                "label"
+              ]
+            }
+          },
+          "types": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "string",
+                  "enum": [
+                    "workshop",
+                    "summit",
+                    "webinar",
+                    "meetup",
+                    "competition",
+                    "conference",
+                    "concert"
+                  ]
+                },
+                "label": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "value",
+                "label"
+              ]
+            }
+          }
+        },
+        "required": [
+          "categories",
+          "formats",
+          "types"
         ]
       },
       "EventGoingView": {
@@ -40108,6 +41362,841 @@
           "hasMore"
         ]
       },
+      "InboxPreview": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "nullable": true
+          },
+          "attachment": {
+            "type": "string",
+            "enum": [
+              "video",
+              "image",
+              "file"
+            ],
+            "nullable": true
+          },
+          "mine": {
+            "type": "boolean"
+          },
+          "senderName": {
+            "type": "string",
+            "nullable": true
+          },
+          "sentAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "attachment",
+          "mine",
+          "senderName",
+          "sentAt"
+        ]
+      },
+      "InboxPerson": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          }
+        },
+        "required": [
+          "wawuId",
+          "name",
+          "handle",
+          "avatarUrl",
+          "verification"
+        ]
+      },
+      "InboxChat": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string"
+          },
+          "other": {
+            "$ref": "#/components/schemas/InboxPerson"
+          },
+          "canMessage": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "chatId",
+          "other",
+          "canMessage"
+        ]
+      },
+      "InboxPaidDm": {
+        "type": "object",
+        "properties": {
+          "side": {
+            "type": "string",
+            "enum": [
+              "creator",
+              "fan"
+            ]
+          },
+          "other": {
+            "$ref": "#/components/schemas/InboxPerson"
+          },
+          "questionCount": {
+            "type": "number"
+          },
+          "waitingCount": {
+            "type": "number"
+          },
+          "nextDeadlineAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "side",
+          "other",
+          "questionCount",
+          "waitingCount",
+          "nextDeadlineAt"
+        ]
+      },
+      "InboxCommunity": {
+        "type": "object",
+        "properties": {
+          "communityId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "imageUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "open",
+              "private"
+            ]
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "host",
+              "member"
+            ]
+          }
+        },
+        "required": [
+          "communityId",
+          "name",
+          "imageUrl",
+          "kind",
+          "role"
+        ]
+      },
+      "InboxItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "paid_dm",
+              "community",
+              "chat"
+            ]
+          },
+          "lastActivityAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "unreadCount": {
+            "type": "number"
+          },
+          "preview": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/InboxPreview"
+              }
+            ],
+            "nullable": true
+          },
+          "chat": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/InboxChat"
+              }
+            ],
+            "nullable": true
+          },
+          "paidDm": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/InboxPaidDm"
+              }
+            ],
+            "nullable": true
+          },
+          "community": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/InboxCommunity"
+              }
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "lastActivityAt",
+          "unreadCount",
+          "preview",
+          "chat",
+          "paidDm",
+          "community"
+        ]
+      },
+      "InboxPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InboxItem"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "InboxUnread": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number"
+          },
+          "chats": {
+            "type": "number"
+          },
+          "paidDms": {
+            "type": "number"
+          },
+          "communities": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "total",
+          "chats",
+          "paidDms",
+          "communities"
+        ]
+      },
+      "MeCountsView": {
+        "type": "object",
+        "properties": {
+          "purchases": {
+            "type": "number"
+          },
+          "saved": {
+            "type": "number"
+          },
+          "unreadNotifications": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "purchases",
+          "saved",
+          "unreadNotifications"
+        ]
+      },
+      "SavedContentView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string",
+            "enum": [
+              "video",
+              "course",
+              "audio",
+              "pdf",
+              "image",
+              "template"
+            ]
+          },
+          "accessType": {
+            "type": "string",
+            "enum": [
+              "free",
+              "paid"
+            ]
+          },
+          "priceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "thumbnailUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "bought": {
+            "type": "boolean"
+          },
+          "creator": {
+            "$ref": "#/components/schemas/FeedCreator"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "contentType",
+          "accessType",
+          "priceKobo",
+          "thumbnailUrl",
+          "bought",
+          "creator"
+        ]
+      },
+      "SavedEventView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "startsAt": {
+            "type": "string"
+          },
+          "endsAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "location": {
+            "type": "string"
+          },
+          "bannerUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "cancelled",
+              "published"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "startsAt",
+          "endsAt",
+          "location",
+          "bannerUrl",
+          "status"
+        ]
+      },
+      "SavedEntryView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "creator",
+              "content",
+              "event"
+            ]
+          },
+          "savedAt": {
+            "type": "string"
+          },
+          "content": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedContentView"
+              }
+            ],
+            "nullable": true
+          },
+          "event": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedEventView"
+              }
+            ],
+            "nullable": true
+          },
+          "creator": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FeedCreator"
+              }
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "savedAt",
+          "content",
+          "event",
+          "creator"
+        ]
+      },
+      "SavedPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedEntryView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "SavedCreatorState": {
+        "type": "object",
+        "properties": {
+          "creatorWawuId": {
+            "type": "string"
+          },
+          "saved": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "creatorWawuId",
+          "saved"
+        ]
+      },
+      "PurchasedPieceView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string",
+            "enum": [
+              "video",
+              "course",
+              "audio",
+              "pdf",
+              "image",
+              "template"
+            ]
+          },
+          "thumbnailUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "creator": {
+            "$ref": "#/components/schemas/FeedCreator"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "contentType",
+          "thumbnailUrl",
+          "creator"
+        ]
+      },
+      "LessonProgressView": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number"
+          },
+          "done": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "total",
+          "done"
+        ]
+      },
+      "PurchaseEntryView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "purchasedAt": {
+            "type": "string"
+          },
+          "content": {
+            "$ref": "#/components/schemas/PurchasedPieceView"
+          },
+          "lessons": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LessonProgressView"
+              }
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "purchasedAt",
+          "content",
+          "lessons"
+        ]
+      },
+      "PurchasePage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PurchaseEntryView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "LessonDoneState": {
+        "type": "object",
+        "properties": {
+          "lessonId": {
+            "type": "string"
+          },
+          "contentId": {
+            "type": "string"
+          },
+          "done": {
+            "type": "boolean"
+          },
+          "lessons": {
+            "$ref": "#/components/schemas/LessonProgressView"
+          }
+        },
+        "required": [
+          "lessonId",
+          "contentId",
+          "done",
+          "lessons"
+        ]
+      },
+      "NotificationTargetView": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "content",
+              "community",
+              "paid_question",
+              "profile"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "deadlineAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "title",
+          "deadlineAt"
+        ]
+      },
+      "NotificationFeedItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "content",
+              "other",
+              "money",
+              "messages"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "tone": {
+            "type": "string"
+          },
+          "amountKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "creditsCount": {
+            "type": "number",
+            "nullable": true
+          },
+          "actionLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "imageUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "actionHref": {
+            "type": "string",
+            "nullable": true
+          },
+          "read": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "target": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NotificationTargetView"
+              }
+            ],
+            "nullable": true
+          },
+          "actor": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FeedCreator"
+              }
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "category",
+          "title",
+          "body",
+          "tone",
+          "amountKobo",
+          "creditsCount",
+          "actionLabel",
+          "imageUrl",
+          "actionHref",
+          "read",
+          "createdAt",
+          "target",
+          "actor"
+        ]
+      },
+      "NotificationFeedPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationFeedItem"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          },
+          "unreadCount": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor",
+          "unreadCount"
+        ]
+      },
+      "EarningsMonthView": {
+        "type": "object",
+        "properties": {
+          "month": {
+            "type": "string"
+          },
+          "earnedKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "month",
+          "earnedKobo"
+        ]
+      },
+      "MyEarningsView": {
+        "type": "object",
+        "properties": {
+          "month": {
+            "type": "string"
+          },
+          "earnedKobo": {
+            "type": "integer"
+          },
+          "salesCount": {
+            "type": "number"
+          },
+          "previousMonth": {
+            "type": "string"
+          },
+          "previousEarnedKobo": {
+            "type": "integer"
+          },
+          "changePct": {
+            "type": "number",
+            "nullable": true
+          },
+          "months": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EarningsMonthView"
+            }
+          }
+        },
+        "required": [
+          "month",
+          "earnedKobo",
+          "salesCount",
+          "previousMonth",
+          "previousEarnedKobo",
+          "changePct",
+          "months"
+        ]
+      },
+      "EarningSaleView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "stream": {
+            "type": "string",
+            "enum": [
+              "tip",
+              "content",
+              "community_credits",
+              "paid_question"
+            ]
+          },
+          "earnedKobo": {
+            "type": "integer"
+          },
+          "occurredAt": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "contentId": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "stream",
+          "earnedKobo",
+          "occurredAt",
+          "title",
+          "contentId"
+        ]
+      },
+      "EarningSalePage": {
+        "type": "object",
+        "properties": {
+          "month": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EarningSaleView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "month",
+          "items",
+          "nextCursor"
+        ]
+      },
       "AdCreativeView": {
         "type": "object",
         "properties": {
@@ -40185,6 +42274,30 @@
           "open"
         ]
       },
+      "AdCounts": {
+        "type": "object",
+        "properties": {
+          "views": {
+            "type": "number"
+          },
+          "taps": {
+            "type": "number"
+          },
+          "skips": {
+            "type": "number"
+          },
+          "ctr": {
+            "type": "number",
+            "nullable": true
+          }
+        },
+        "required": [
+          "views",
+          "taps",
+          "skips",
+          "ctr"
+        ]
+      },
       "AdCampaignView": {
         "type": "object",
         "properties": {
@@ -40241,6 +42354,9 @@
           "servingNow": {
             "type": "boolean"
           },
+          "delivery": {
+            "$ref": "#/components/schemas/AdCounts"
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
@@ -40262,6 +42378,7 @@
           "creative",
           "event",
           "servingNow",
+          "delivery",
           "createdAt",
           "updatedAt"
         ]
@@ -40326,6 +42443,37 @@
           "campaigns": {
             "type": "number"
           },
+          "delivery": {
+            "$ref": "#/components/schemas/AdCounts"
+          },
+          "deliveryByStatus": {
+            "type": "object",
+            "properties": {
+              "live": {},
+              "paused": {},
+              "draft": {},
+              "scheduled": {},
+              "ended": {}
+            },
+            "required": [
+              "live",
+              "paused",
+              "draft",
+              "scheduled",
+              "ended"
+            ]
+          },
+          "deliveryByPlacement": {
+            "type": "object",
+            "properties": {
+              "tgif_card": {},
+              "today_slot": {}
+            },
+            "required": [
+              "tgif_card",
+              "today_slot"
+            ]
+          },
           "byStatus": {
             "type": "object",
             "properties": {
@@ -40383,6 +42531,9 @@
           "generatedAt",
           "filters",
           "campaigns",
+          "delivery",
+          "deliveryByStatus",
+          "deliveryByPlacement",
           "byStatus",
           "byPlacement",
           "byPhase",
@@ -40584,6 +42735,9 @@
           "servingNow": {
             "type": "boolean"
           },
+          "delivery": {
+            "$ref": "#/components/schemas/AdCounts"
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
@@ -40607,6 +42761,7 @@
           "creative",
           "event",
           "servingNow",
+          "delivery",
           "createdAt",
           "updatedAt"
         ]
@@ -40626,11 +42781,72 @@
           "audit"
         ]
       },
+      "AdDayCounts": {
+        "type": "object",
+        "properties": {
+          "day": {
+            "type": "string"
+          },
+          "views": {
+            "type": "number"
+          },
+          "taps": {
+            "type": "number"
+          },
+          "skips": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "day",
+          "views",
+          "taps",
+          "skips"
+        ]
+      },
       "AdCampaignReportView": {
         "type": "object",
         "properties": {
           "campaign": {
             "$ref": "#/components/schemas/AdCampaignView"
+          },
+          "range": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              },
+              "fromDay": {
+                "type": "string",
+                "nullable": true
+              },
+              "toDay": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "from",
+              "to",
+              "fromDay",
+              "toDay"
+            ]
+          },
+          "delivery": {
+            "$ref": "#/components/schemas/AdCounts"
+          },
+          "days": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdDayCounts"
+            }
           },
           "timing": {
             "type": "object",
@@ -40675,6 +42891,9 @@
         },
         "required": [
           "campaign",
+          "range",
+          "delivery",
+          "days",
           "timing",
           "activity"
         ]

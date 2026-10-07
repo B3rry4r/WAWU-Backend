@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { FintavaModule } from '../../fintava/fintava.module';
+import { WalletProviderModule } from '../../wallet-provider/wallet-provider.module';
 import { LedgerConsumerService } from './ledger-consumer.service';
 import { LedgerStatusService } from './ledger-status.service';
 import { LedgerService } from './ledger.service';
@@ -22,9 +22,12 @@ import { LedgerService } from './ledger.service';
  * Fintava how `pending` rows older than two minutes ended, when their
  * webhook has not said, and settles them; it never sends money. Exported
  * for the sending features (WALLET-09) to check a send before any retry.
+ *
+ * MONEY-20: the provider is reached through WalletProviderModule
+ * (`WALLET_PROVIDER`), never a provider's module or client.
  */
 @Module({
-  imports: [ConfigModule, FintavaModule],
+  imports: [ConfigModule, WalletProviderModule],
   providers: [LedgerService, LedgerConsumerService, LedgerStatusService],
   exports: [LedgerService, LedgerConsumerService, LedgerStatusService],
 })
