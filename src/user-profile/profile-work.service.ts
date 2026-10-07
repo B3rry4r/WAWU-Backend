@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { WawuIdClient } from '../common/auth/wawu-id.client';
 import { objectKeyFrom, StorageService } from '../storage/storage.service';
 import type {
   CreateProfileWorkDto,
@@ -36,6 +37,8 @@ import {
 } from './profile-audience.service';
 import type {
   ProfileWorkCategoryView,
+  ProfileWorkDetailView,
+  ProfileWorkOwnerView,
   ProfileWorkView,
   ProfileWorksView,
 } from './profile-work.type';
@@ -87,7 +90,35 @@ export class ProfileWorkService {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly audience: ProfileAudienceService,
+    private readonly wawuId: WawuIdClient,
   ) {}
+
+  /**
+   * Whose works these are (ME-11): the name from WAWU ID, the handle and the
+   * picture from the profile. Public-safe fields only, the same four the feed's
+   * creator line serves. An identity service that does not answer degrades the
+   * name to the handle (`lookupPublicIdentities` returns nothing, never throws).
+   */
+  private async ownerView(owner: string): Promise<ProfileWorkOwnerView> {
+    const [profile, identities] = await Promise.all([
+      this.prisma.userProfile.findUnique({
+        where: { wawuUserId: owner },
+        select: { handle: true, avatarUrl: true },
+      }),
+      this.wawuId.lookupPublicIdentities([owner]),
+    ]);
+    const identity = identities.get(owner);
+    const name = [identity?.firstName, identity?.lastName]
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+    return {
+      wawuId: owner,
+      displayName: name || profile?.handle || null,
+      handle: profile?.handle ?? null,
+      avatarUrl: await this.storage.freshUrlFor(profile?.avatarUrl ?? null),
+    };
+  }
 
   /** One person at a time on their own list. */
   private async lock(
@@ -185,6 +216,7 @@ export class ProfileWorkService {
       : rows;
     if (query.limit !== undefined) shown = shown.slice(0, query.limit);
     return {
+      owner: await this.ownerView(owner),
       count: rows.length,
       categories: this.categoriesOf(rows),
       works: await Promise.all(shown.map((r) => this.toView(r))),
@@ -206,9 +238,13 @@ export class ProfileWorkService {
     idOrHandle: string,
     workId: string,
     viewer: string,
-  ): Promise<ProfileWorkView> {
+  ): Promise<ProfileWorkDetailView> {
     const owner = await this.audience.resolveVisible(idOrHandle, viewer);
-    return this.getOne(owner, workId);
+    const [work, who] = await Promise.all([
+      this.getOne(owner, workId),
+      this.ownerView(owner),
+    ]);
+    return { ...work, owner: who };
   }
 
   private async getOne(
