@@ -107,19 +107,27 @@ export class SchedulerService {
         status: 'awaiting_response',
         deadlineAt: { gte: from, lt: to },
       },
-      select: { creatorWawuId: true, deadlineAt: true },
+      select: {
+        id: true,
+        creatorWawuId: true,
+        senderWawuId: true,
+        deadlineAt: true,
+      },
       take: 500,
     });
     if (due.length === 0) return;
 
     const written = await this.notifications.emitMany(
-      due.map(
-        (dm): NotificationEvent => ({
-          kind: 'dm_deadline',
-          userWawuId: dm.creatorWawuId,
-          hoursLeft: (dm.deadlineAt.getTime() - now) / (60 * 60 * 1000),
-        }),
-      ),
+      due.map((dm): NotificationEvent => ({
+        kind: 'dm_deadline',
+        userWawuId: dm.creatorWawuId,
+        hoursLeft: (dm.deadlineAt.getTime() - now) / (60 * 60 * 1000),
+        // ME-10: Reply opens the question that is running out of time.
+        about: {
+          target: { kind: 'paid_question', id: dm.id },
+          actorWawuId: dm.senderWawuId,
+        },
+      })),
     );
     this.logger.log(`Reminded ${written} creator(s) of a closing paid-DM deadline.`);
   }
