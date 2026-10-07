@@ -106,6 +106,45 @@ export interface UploadAllowanceView {
 }
 
 /**
+ * Why a link's path cannot become an object key, or null when it can. Checks
+ * the path after decoding (twice, so a double-encoded `%252e%252e` or `%2500`
+ * is seen for what it becomes): a NUL (Postgres refuses it, 22021), a lone
+ * surrogate, malformed percent-encoding, a `.` or `..` segment, or a key over
+ * the 1024 bytes S3 allows. Only http(s) links are looked at; anything else is
+ * a key already and is not this function's business.
+ */
+export function storedKeyProblem(stored: unknown): string | null {
+  if (typeof stored !== 'string') return 'must be text';
+  if (!stored.startsWith('http://') && !stored.startsWith('https://'))
+    return null;
+  try {
+    new URL(stored);
+  } catch {
+    return 'must be a full link';
+  }
+  // The path as written: `new URL` resolves `/%2e%2e/` away, which would hide it.
+  const path = /^https?:\/\/[^/?#]*([^?#]*)/i.exec(stored)?.[1] ?? '';
+  let decoded = path;
+  for (let pass = 0; pass < 2; pass++) {
+    try {
+      decoded = decodeURIComponent(decoded);
+    } catch {
+      return 'has invalid percent-encoding in its path';
+    }
+    // eslint-disable-next-line no-control-regex -- the NUL and other controls are what is refused
+    if (/[\u0000-\u001f\u007f]/.test(decoded))
+      return 'cannot have control characters in its path';
+    if (!/^(?:[^\ud800-\udfff]|[\ud800-\udbff][\udc00-\udfff])*$/.test(decoded))
+      return 'cannot have a broken character in its path';
+    if (decoded.split(/[/\\]/).some((seg) => seg === '.' || seg === '..'))
+      return 'cannot have . or .. in its path';
+    if (Buffer.byteLength(decoded, 'utf8') > 1024)
+      return 'has a path too long to be an object key';
+  }
+  return null;
+}
+
+/**
  * Recovers the object key from whatever is stored on a row.
  *
  * `presignUpload().fileUrl` is `readUrlFor(key)` — an absolute,
@@ -120,6 +159,7 @@ export interface UploadAllowanceView {
  * passed through unchanged; nothing stored is ever rewritten.
  */
 export function objectKeyFrom(stored: string): string {
+  if (typeof stored !== 'string') return '';
   if (!stored.startsWith('http://') && !stored.startsWith('https://'))
     return stored;
 
@@ -129,6 +169,11 @@ export function objectKeyFrom(stored: string): string {
   } catch {
     return stored;
   }
+  // A path that decodes to something a key cannot be (a NUL, a lone
+  // surrogate, a `..` segment, too long) is not one of ours: pass it through
+  // unchanged, as for any link that does not match, rather than derive a key
+  // from it. Reading a bad stored row must never throw.
+  if (storedKeyProblem(stored) !== null) return stored;
 
   for (const folder of UPLOAD_FOLDERS) {
     const marker = `/${folder}/`;

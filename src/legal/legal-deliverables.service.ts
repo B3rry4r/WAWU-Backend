@@ -263,7 +263,8 @@ export function fileNameFromUrl(url: string): string {
   try {
     const last = new URL(url).pathname.split('/').filter(Boolean).pop();
     const name = last ? decodeURIComponent(last) : '';
-    return name || 'Document';
+    // eslint-disable-next-line no-control-regex -- a name with a NUL or control is not a name
+    return name && !/[\u0000-\u001f\u007f]/.test(name) ? name : 'Document';
   } catch {
     return 'Document';
   }

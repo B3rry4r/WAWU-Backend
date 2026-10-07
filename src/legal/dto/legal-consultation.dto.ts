@@ -17,9 +17,11 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateBy,
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
+import { storedKeyProblem } from '../../storage/storage.service';
 import { DEFAULT_MERCHANT_MAX_PER_TXN_KOBO } from '../../money/fees/fee-config';
 
 /**
@@ -159,6 +161,15 @@ export class DeliveredFileDto {
   @Matches(/^(?:[^\ud800-\udfff]|[\ud800-\udbff][\udc00-\udfff])+$/, {
     message: 'url must be plain text.',
   })
+  // The path, once decoded, must be storable as an object key.
+  @ValidateBy({
+    name: 'urlKey',
+    validator: {
+      validate: (v: unknown) => storedKeyProblem(v) === null,
+      defaultMessage: (a) =>
+        `url ${storedKeyProblem(a?.value) ?? 'cannot be used'}.`,
+    },
+  })
   url!: string;
 
   /** Page count, when it is known. */
@@ -173,6 +184,19 @@ export class DeliverFilesDto {
   @IsArray()
   @ArrayMinSize(1)
   @ArrayMaxSize(MAX_DELIVERED_FILES)
+  // Every element must be an object (not null, a string, a number or an array).
+  @ValidateBy({
+    name: 'filesAreObjects',
+    validator: {
+      validate: (v: unknown) =>
+        Array.isArray(v) &&
+        v.every(
+          (f) => typeof f === 'object' && f !== null && !Array.isArray(f),
+        ),
+      defaultMessage: () =>
+        'files must each be an object with fileName and url.',
+    },
+  })
   @ValidateNested({ each: true })
   @Type(() => DeliveredFileDto)
   files!: DeliveredFileDto[];
