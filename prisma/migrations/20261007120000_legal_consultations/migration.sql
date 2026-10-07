@@ -6,6 +6,12 @@
 -- shows or takes changes when this lands. From here on WAWU sets them in admin
 -- (R-14). There is no row for a phone call: nobody has set a price for one, so
 -- it is not offered until WAWU does.
+--
+-- Rollback: DROP TABLE "LegalDeliverable", "LegalServicePrice",
+-- "LegalConsultationOption"; ALTER TABLE "LegalRequest" DROP COLUMN
+-- "consultationMinutes". The added enum values (phone, legal_price,
+-- legal_price_set) stay: Postgres cannot drop an enum value, and an unused one
+-- changes nothing.
 
 -- AlterEnum
 ALTER TYPE "AdminOpsAction" ADD VALUE 'legal_price_set';
