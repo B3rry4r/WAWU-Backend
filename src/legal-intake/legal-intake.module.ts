@@ -39,6 +39,6 @@ import { LegalAssistantAllowance } from './assistant/legal-assistant-allowance';
     LegalAssistantAllowance,
     LegalAssistantService,
   ],
-  exports: [LegalIntakeService, LegalChatService],
+  exports: [LegalIntakeService, LegalChatService, LegalAssistantAllowance],
 })
 export class LegalIntakeModule {}

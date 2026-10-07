@@ -3,6 +3,7 @@ import { PrismaModule } from '../common/prisma/prisma.module';
 import { AdminAuthModule } from '../admin/auth/admin-auth.module';
 import { AdminOpsAuditModule } from '../common/audit/admin-ops-audit.module';
 import { NotificationModule } from '../notification/notification.module';
+import { LegalIntakeModule } from '../legal-intake/legal-intake.module';
 import { FlutterwaveCheckoutVerifier } from '../common/flutterwave/checkout-verifier';
 import { LegalRequestsService } from './legal.service';
 import { LegalController } from './legal.controller';
@@ -32,6 +33,8 @@ import { LegalPricesService } from './legal-prices.service';
     AdminAuthModule,
     AdminOpsAuditModule,
     NotificationModule,
+    // The consultant's chat line goes through LEGAL-01's allowance lock.
+    LegalIntakeModule,
   ],
   controllers: [
     LegalController,

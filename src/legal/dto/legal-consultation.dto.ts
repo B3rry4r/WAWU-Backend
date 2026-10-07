@@ -121,6 +121,14 @@ export class DeliveredFileDto {
     { message: 'url must be a full link' },
   )
   @MaxLength(600)
+  // eslint-disable-next-line no-control-regex -- these ranges ARE the control characters being refused
+  @Matches(/^[^\u0000-\u001f\u007f]+$/, {
+    message: 'url cannot contain control characters.',
+  })
+  // A lone surrogate is not text: it would be stored as U+FFFD, a different link.
+  @Matches(/^(?:[^\ud800-\udfff]|[\ud800-\udbff][\udc00-\udfff])+$/, {
+    message: 'url must be plain text.',
+  })
   url!: string;
 
   /** Page count, when it is known. */

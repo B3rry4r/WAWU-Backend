@@ -5,10 +5,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
-import {
-  AdminOpsAuditService,
-  type AdminActor,
-} from '../common/audit/admin-ops-audit.service';
+import { type AdminActor } from '../common/audit/admin-ops-audit.service';
+import { LegalAssistantAllowance } from '../legal-intake/assistant/legal-assistant-allowance';
 import { NotificationService } from '../notification/notification.service';
 import type {
   DeliverFilesResultView,
@@ -31,8 +29,8 @@ import type { DeliverFilesDto } from './dto/legal-consultation.dto';
 export class LegalDeliverablesService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly audit: AdminOpsAuditService,
     private readonly notifications: NotificationService,
+    private readonly allowance: LegalAssistantAllowance,
   ) {}
 
   /**
@@ -61,66 +59,91 @@ export class LegalDeliverablesService {
 
     let posted: { fileName: string; url: string }[] = [];
     try {
-      posted = await this.prisma.$transaction(async (tx) => {
-        const have = new Set(
-          (
-            await tx.legalDeliverable.findMany({
-              where: { legalRequestId: requestId },
-              select: { url: true },
-            })
-          ).map((d) => d.url),
-        );
-        const fresh = dto.files.filter((f) => {
-          if (have.has(f.url)) return false;
-          have.add(f.url);
-          return true;
-        });
+      // Under the client's lock (LEGAL-01), so each handover to the consultant
+      // is ordered against the client's own messages. The files, the chat
+      // lines, the status change and the audit row are one transaction: all of
+      // it happens, or none of it, and the client is told only after.
+      posted = await this.allowance.writeAsConsultant(
+        request.wawuUserId,
+        async (tx, lockedAt) => {
+          const have = new Set(
+            (
+              await tx.legalDeliverable.findMany({
+                where: { legalRequestId: requestId },
+                select: { url: true },
+              })
+            ).map((d) => d.url),
+          );
+          const fresh = dto.files.filter((f) => {
+            if (have.has(f.url)) return false;
+            have.add(f.url);
+            return true;
+          });
 
-        // One millisecond apart, so the messages keep the order they were
-        // sent in whatever sorts them.
-        const base = Date.now();
-        for (const [i, file] of fresh.entries()) {
-          const createdAt = new Date(base + i);
-          const message = await tx.legalChatMessage.create({
-            data: {
-              legalRequestId: requestId,
-              authorRole: 'consultant',
-              authorAdminId: admin.id,
-              body: file.fileName,
-              createdAt,
-            },
-          });
-          await tx.legalDeliverable.create({
-            data: {
-              legalRequestId: requestId,
-              wawuUserId: request.wawuUserId,
-              fileName: file.fileName,
-              url: file.url,
-              pages: file.pages ?? null,
-              chatMessageId: message.id,
-              postedByAdminId: admin.id,
-              createdAt,
-            },
-          });
-        }
-
-        if (request.status === 'in_progress') {
-          const flipped = await tx.legalRequest.updateMany({
-            where: { id: requestId, status: 'in_progress' },
-            data: {
-              status: 'delivered',
-              deliverableUrl: fresh[0]?.url ?? dto.files[0].url,
-              deliveredAt: new Date(),
-            },
-          });
-          if (flipped.count === 0) {
-            throw new ConflictException(
-              'This request has just been delivered.',
-            );
+          // One millisecond apart, so the messages keep the order they were
+          // sent in whatever sorts them.
+          const base = lockedAt.getTime();
+          for (const [i, file] of fresh.entries()) {
+            const createdAt = new Date(base + i);
+            const message = await tx.legalChatMessage.create({
+              data: {
+                legalRequestId: requestId,
+                authorRole: 'consultant',
+                authorAdminId: admin.id,
+                body: file.fileName,
+                createdAt,
+              },
+            });
+            await tx.legalDeliverable.create({
+              data: {
+                legalRequestId: requestId,
+                wawuUserId: request.wawuUserId,
+                fileName: file.fileName,
+                url: file.url,
+                pages: file.pages ?? null,
+                chatMessageId: message.id,
+                postedByAdminId: admin.id,
+                createdAt,
+              },
+            });
           }
-        }
-        return fresh.map((f) => ({ fileName: f.fileName, url: f.url }));
-      });
+
+          if (request.status === 'in_progress') {
+            const flipped = await tx.legalRequest.updateMany({
+              where: { id: requestId, status: 'in_progress' },
+              data: {
+                status: 'delivered',
+                deliverableUrl: fresh[0]?.url ?? dto.files[0].url,
+                deliveredAt: new Date(),
+              },
+            });
+            if (flipped.count === 0) {
+              throw new ConflictException(
+                'This request has just been delivered.',
+              );
+            }
+          }
+          const files = fresh.map((f) => ({
+            fileName: f.fileName,
+            url: f.url,
+          }));
+          if (files.length > 0) {
+            await tx.adminOpsAudit.create({
+              data: {
+                resource: 'legal_request',
+                resourceId: requestId,
+                subjectWawuId: request.wawuUserId,
+                action: 'legal_delivered',
+                detail: { fileCount: files.length, files },
+                actedByAdminId: admin.id,
+                actedByAdminEmail: admin.email,
+                actedByAdminRole: admin.role,
+              },
+            });
+          }
+          return files;
+        },
+      );
     } catch (e) {
       // Two deliveries of the same file at the same moment: the unique index
       // keeps one copy, and the loser is told rather than answered with a 500.
@@ -131,13 +154,6 @@ export class LegalDeliverablesService {
     }
 
     if (posted.length > 0) {
-      await this.audit.record(admin, {
-        resource: 'legal_request',
-        resourceId: requestId,
-        subjectWawuId: request.wawuUserId,
-        action: 'legal_delivered',
-        detail: { fileCount: posted.length, files: posted },
-      });
       await this.notifications.emit({
         kind: 'legal_delivered',
         userWawuId: request.wawuUserId,

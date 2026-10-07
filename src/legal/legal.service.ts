@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import type { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import {
   AdminOpsAuditService,
@@ -54,6 +55,15 @@ const SLOT_HOLDING_STATUSES = [
  * they are real appointments.
  */
 export const UNPAID_HOLD_MINUTES = 30;
+
+/**
+ * Takes every booking decision one at a time, on the app's route and the
+ * web's alike. A booking looks at what is held and then writes; two people
+ * picking overlapping hours at the same moment would both pass the look. The
+ * unique index on `scheduledFor` stops two identical starts but not two
+ * different starts that overlap, so the check and the write share one lock.
+ */
+export const BOOKING_LOCK_KEY = 726_384_511;
 
 /**
  * One kind of consultation in the web's catalogue (`GET /legal/catalogue`).
@@ -169,12 +179,47 @@ export class LegalRequestsService {
     };
   }
 
-  /** Hands back an hour nobody is really holding, so it can be booked again. */
-  async releaseDeadHold(scheduledFor: Date, now: Date) {
-    await this.prisma.legalRequest.updateMany({
-      where: { ...this.deadHoldWhere(now), scheduledFor },
+  /**
+   * The one booking check, for the app's route and the web's. Call it inside a
+   * transaction, immediately before writing the booking: it takes the booking
+   * lock (held to the end of that transaction), lets go of a dead hold on this
+   * start, and refuses with 409 if any other appointment shares a minute with
+   * a call of `minutes` from `start`.
+   */
+  async holdHour(
+    tx: Prisma.TransactionClient,
+    requestId: string,
+    start: Date,
+    minutes: number,
+  ): Promise<void> {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(${BOOKING_LOCK_KEY})`;
+    const now = new Date();
+    await tx.legalRequest.updateMany({
+      where: { ...this.deadHoldWhere(now), scheduledFor: start },
       data: { scheduledFor: null },
     });
+    const held = await tx.legalRequest.findMany({
+      where: { ...this.heldSlotsWhere(now), id: { not: requestId } },
+      select: { scheduledFor: true, consultationMinutes: true },
+    });
+    const clash = held.some(
+      (h) =>
+        h.scheduledFor &&
+        overlaps(
+          start,
+          minutes,
+          h.scheduledFor,
+          appointmentMinutes({
+            scheduledFor: h.scheduledFor,
+            minutes: h.consultationMinutes,
+          }),
+        ),
+    );
+    if (clash) {
+      throw new ConflictException(
+        'That time has just been taken. Pick another.',
+      );
+    }
   }
 
   /**
@@ -321,39 +366,7 @@ export class LegalRequestsService {
       ) {
         throw new BadRequestException('Pick a time in the future.');
       }
-      const now = new Date();
-      await this.releaseDeadHold(scheduledFor, now);
-      // Another appointment clashes if it shares any minute with this one. For
-      // a booking made before lengths were recorded that is the same start, as
-      // it always was; a longer booked call (LEGAL-03) also blocks the hour
-      // it runs into.
-      const held = await this.prisma.legalRequest.findMany({
-        where: {
-          ...this.heldSlotsWhere(now),
-          id: { not: record.id },
-        },
-        select: { scheduledFor: true, consultationMinutes: true },
-      });
-      const wanted = scheduledFor;
-      const slotMinutes = option.minutes ?? CONSULTATION_HOURS.slotMinutes;
-      const clash = held.some(
-        (h) =>
-          h.scheduledFor &&
-          overlaps(
-            wanted,
-            slotMinutes,
-            h.scheduledFor,
-            appointmentMinutes({
-              scheduledFor: h.scheduledFor,
-              minutes: h.consultationMinutes,
-            }),
-          ),
-      );
-      if (clash) {
-        throw new ConflictException(
-          'That time has just been taken. Pick another.',
-        );
-      }
+      // The clash check itself runs under the booking lock, with the write.
     } else if (dto.scheduledFor) {
       throw new BadRequestException(
         'In-person consultations are arranged directly, so they cannot be booked to a slot here.',
@@ -385,27 +398,31 @@ export class LegalRequestsService {
     }
 
     const txRef = `wawu-legal-consult-${randomUUID()}`;
+    const hourMinutes = option.minutes ?? CONSULTATION_HOURS.slotMinutes;
     let updated;
     try {
-      updated = await this.prisma.legalRequest.update({
-        where: { id: record.id },
-        data: {
-          consultationMedium: dto.medium,
-          consultationFee: option.feeNaira,
-          consultationMinutes: option.minutes,
-          consultationTxRef: txRef,
-          // The picked hour was validated, clash-checked — and then never
-          // written, so the response came back with `scheduledFor: null`, the
-          // calendar never showed the slot as taken, and two people could pay
-          // for the same hour.
-          scheduledFor,
-          status: 'awaiting_consultation_payment',
-        },
+      updated = await this.prisma.$transaction(async (tx) => {
+        // The same lock and the same check as the app's booking, so an app
+        // booking and a web booking cannot both take overlapping hours.
+        await this.holdHour(tx, record.id, scheduledFor as Date, hourMinutes);
+        return tx.legalRequest.update({
+          where: { id: record.id },
+          data: {
+            consultationMedium: dto.medium,
+            consultationFee: option.feeNaira,
+            consultationMinutes: option.minutes,
+            consultationTxRef: txRef,
+            // The picked hour was validated, clash-checked, and is written
+            // here, so the calendar shows it taken.
+            scheduledFor,
+            status: 'awaiting_consultation_payment',
+          },
+        });
       });
     } catch (e) {
-      // The partial unique index on `scheduledFor` is the real guard against
-      // two clients being sold the same hour; the check above is only the
-      // friendly version of it. Losing the race is a conflict, not a 500.
+      // The partial unique index on `scheduledFor` stays the last guard; the
+      // lock above is what makes the check reliable. Losing is a conflict,
+      // not a 500.
       if ((e as { code?: string }).code === 'P2002') {
         throw new ConflictException(
           'That time has just been taken. Pick another.',

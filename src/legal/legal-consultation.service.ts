@@ -7,12 +7,7 @@ import {
 import { PrismaService } from '../common/prisma/prisma.service';
 import { APP_LABELS, type ConsultationMediumId } from './legal-catalogue';
 import { CONSULTATION_HOURS } from './availability';
-import {
-  appointmentMinutes,
-  buildSlotDays,
-  isOfferedStart,
-  overlaps,
-} from './consultation-slots';
+import { buildSlotDays, isOfferedStart } from './consultation-slots';
 import { LegalPricesService, isBookable } from './legal-prices.service';
 import { LegalRequestsService, UNPAID_HOLD_MINUTES } from './legal.service';
 import type {
@@ -36,15 +31,6 @@ const BOOKABLE_FROM = new Set([
   'awaiting_quote',
   'awaiting_consultation_payment',
 ]);
-
-/**
- * Takes every booking decision one at a time. A booking looks at what is held
- * and then writes; two people picking overlapping hours at the same moment
- * would both pass the look. The unique index on `scheduledFor` stops two
- * identical starts but not two different starts that overlap, so the check and
- * the write share one lock.
- */
-const BOOKING_LOCK_KEY = 726_384_511;
 
 /** `LegalRequest.consultationFee` is whole naira, as the web reads it. */
 const KOBO_PER_NAIRA = 100;
@@ -177,33 +163,7 @@ export class LegalConsultationService {
 
     try {
       const updated = await this.prisma.$transaction(async (tx) => {
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(${BOOKING_LOCK_KEY})`;
-        await tx.legalRequest.updateMany({
-          where: { ...this.legal.deadHoldWhere(now), scheduledFor: start },
-          data: { scheduledFor: null },
-        });
-        const held = await tx.legalRequest.findMany({
-          where: { ...this.legal.heldSlotsWhere(now), id: { not: record.id } },
-          select: { scheduledFor: true, consultationMinutes: true },
-        });
-        const clash = held.some(
-          (h) =>
-            h.scheduledFor &&
-            overlaps(
-              start,
-              minutes,
-              h.scheduledFor,
-              appointmentMinutes({
-                scheduledFor: h.scheduledFor,
-                minutes: h.consultationMinutes,
-              }),
-            ),
-        );
-        if (clash) {
-          throw new ConflictException(
-            'That time has just been taken. Pick another.',
-          );
-        }
+        await this.legal.holdHour(tx, record.id, start, minutes);
         return tx.legalRequest.update({
           where: { id: record.id },
           data: {
