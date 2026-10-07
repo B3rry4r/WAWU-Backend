@@ -26,6 +26,7 @@ import {
   type GeminiClient,
 } from '../../../common/ai/gemini-client.interface';
 import { AccountPurgeService } from '../../../account-purge/account-purge.service';
+import { LegalChatService } from '../../legal-chat.service';
 import { LegalIntakeModule } from '../../legal-intake.module';
 import {
   ASSISTANT_BRIEF_ATTEMPTS_PER_HOUR,
@@ -257,15 +258,44 @@ describe('Legal assistant under parallel requests (LEGAL-01 round 2, contract)',
       (await prisma.legalAssistantCall.count({
         where: { wawuUserId: ME, createdAt: { gte: since } },
       })) +
-      (await prisma.legalChatMessage.count({
-        where: {
-          legalRequestId: { in: requests.map((r) => r.id) },
-          authorRole: 'client',
-          createdAt: { gte: since },
-        },
-      }))
+      (await countedMatterMessages(
+        requests.map((r) => r.id),
+        since,
+      ))
     );
   };
+  /**
+   * Client messages on matter threads that spent an AI call or could have:
+   * every one except those written AFTER a consultant had written in the
+   * same thread (those are for the consultant and are never counted).
+   */
+  const countedMatterMessages = async (requestIds: string[], since: Date) => {
+    const rows = await prisma.legalChatMessage.findMany({
+      where: {
+        legalRequestId: { in: requestIds },
+        authorRole: 'client',
+        createdAt: { gte: since },
+      },
+      select: { legalRequestId: true, createdAt: true },
+    });
+    const joined = await prisma.legalChatMessage.groupBy({
+      by: ['legalRequestId'],
+      where: { legalRequestId: { in: requestIds }, authorRole: 'consultant' },
+      _min: { createdAt: true },
+    });
+    const first = new Map(
+      joined.map((j) => [j.legalRequestId, j._min.createdAt]),
+    );
+    return rows.filter((r) => {
+      const at = first.get(r.legalRequestId);
+      return !(at && at.getTime() < r.createdAt.getTime());
+    }).length;
+  };
+  /** A consultant writing in a matter's thread (from the dashboard). */
+  const consultantWrites = (requestId: string, body = 'I have your file.') =>
+    prisma.legalChatMessage.create({
+      data: { legalRequestId: requestId, authorRole: 'consultant', body },
+    });
   const earlierIntake = () =>
     prisma.legalIntake.create({
       data: {
@@ -868,6 +898,144 @@ describe('Legal assistant under parallel requests (LEGAL-01 round 2, contract)',
       expect(res.status).toBe(409);
       expect(await spent()).toBe(used);
     });
+  });
+
+  describe('D9: once a consultant has written, the client is never counted or refused in that thread', () => {
+    const storedClient = (requestId: string) =>
+      prisma.legalChatMessage.count({
+        where: { legalRequestId: requestId, authorRole: 'client' },
+      });
+
+    it('after a consultant has written, 40 sequential client messages on the old route are all 201, call no AI and are all stored', async () => {
+      const { requestId } = await paidMatter();
+      await consultantWrites(requestId);
+      ai.answer = 'Noted.';
+      const calls = ai.chats.length;
+      const used = await spent();
+      for (let i = 0; i < 40; i++) {
+        const res = await sayOld(requestId, `to my consultant ${i}`);
+        expect(res.status).toBe(201);
+      }
+      expect(ai.chats.length).toBe(calls);
+      expect(await storedClient(requestId)).toBe(40);
+      expect(await spent()).toBe(used);
+    }, 60000);
+
+    it('they do not use up the allowance: a later thread without a consultant still gets all that was left', async () => {
+      const first = await paidMatter();
+      await consultantWrites(first.requestId);
+      ai.answer = 'Noted.';
+      for (let i = 0; i < 40; i++) {
+        expect((await sayOld(first.requestId, `c${i}`)).status).toBe(201);
+      }
+      // Two spent so far (the first message and the brief); the second
+      // matter spends two more, so 26 of the 30 are left for its thread.
+      const second = await paidMatter();
+      expect(await spent()).toBe(4);
+      ai.delayMs = 150;
+      const before = ai.chats.length;
+      const rs = await par(60, (i) => sayOld(second.requestId, `later${i}`));
+      expect(tally(rs)).toEqual({
+        '201': 26,
+        '429:assistant_rate_limited': 34,
+      });
+      expect(ai.chats.length - before).toBe(26);
+    }, 60000);
+
+    it('messages written before the consultant still count; only the later ones are free', async () => {
+      const { requestId } = await paidMatter();
+      ai.answer = 'Noted.';
+      for (let i = 0; i < 5; i++) {
+        expect((await sayOld(requestId, `before${i}`)).status).toBe(201);
+      }
+      const used = await spent();
+      expect(used).toBe(7);
+      await consultantWrites(requestId);
+      for (let i = 0; i < 40; i++) {
+        expect((await sayOld(requestId, `after${i}`)).status).toBe(201);
+      }
+      expect(await spent()).toBe(7);
+      expect(await storedClient(requestId)).toBe(45);
+    }, 60000);
+
+    it('the same holds on the assistant route after Send: 40 messages, all 201, no AI call', async () => {
+      const { t, requestId } = await paidMatter();
+      await consultantWrites(requestId);
+      const calls = ai.chats.length;
+      const used = await spent();
+      for (let i = 0; i < 40; i++) {
+        expect((await say(t.id, { body: `after send ${i}` })).status).toBe(201);
+      }
+      expect(ai.chats.length).toBe(calls);
+      expect(await storedClient(requestId)).toBe(40);
+      expect(await spent()).toBe(used);
+    }, 60000);
+
+    it('a person who is over the limit is still refused in a thread with no consultant, and free in the one with a consultant', async () => {
+      const joined = await paidMatter();
+      await consultantWrites(joined.requestId);
+      const open = await paidMatter();
+      ai.answer = 'Noted.';
+      const left = 30 - (await spent());
+      for (let i = 0; i < left; i++) {
+        expect((await sayOld(open.requestId, `o${i}`)).status).toBe(201);
+      }
+      expect((await sayOld(open.requestId, 'one too many')).status).toBe(429);
+      expect((await sayOld(joined.requestId, 'still free')).status).toBe(201);
+      expect((await say(joined.t.id, { body: 'free here too' })).status).toBe(
+        201,
+      );
+    }, 60000);
+
+    it.each([0, 40, 100, 200])(
+      'a consultant who writes while 50 client posts are in flight (after %i ms): no more AI calls than the allowance allows',
+      async (afterMs) => {
+        const { requestId } = await paidMatter();
+        ai.answer = 'Noted.';
+        ai.delayMs = 150;
+        const before = ai.chats.length;
+        const left = 30 - (await spent());
+        // The consultant's line goes in through the service the dashboard
+        // route calls, landing somewhere inside the batch.
+        const consultant = (async () => {
+          await sleep(afterMs);
+          await app
+            .get(LegalChatService)
+            .sendAsConsultant(requestId, 'admin-race', 'Joining now.');
+        })();
+        const [rs] = await Promise.all([
+          par(50, (i) => sayOld(requestId, `race${i}`)),
+          consultant,
+        ]);
+        const t = tally(rs);
+        const accepted = t['201'] ?? 0;
+        expect(accepted + (t['429:assistant_rate_limited'] ?? 0)).toBe(50);
+        expect(await storedClient(requestId)).toBe(accepted);
+
+        const joined = await prisma.legalChatMessage.findFirstOrThrow({
+          where: { legalRequestId: requestId, authorRole: 'consultant' },
+        });
+        const stored = await prisma.legalChatMessage.findMany({
+          where: { legalRequestId: requestId, authorRole: 'client' },
+          select: { createdAt: true },
+        });
+        const early = stored.filter(
+          (m) => m.createdAt.getTime() < joined.createdAt.getTime(),
+        ).length;
+        // Everything stamped before the consultant was counted, so it fits
+        // in what was left; everything after it was free (never a 429).
+        expect(early).toBeLessThanOrEqual(left);
+        expect(accepted).toBeGreaterThanOrEqual(early);
+        expect(ai.chats.length - before).toBeLessThanOrEqual(early);
+        expect(ai.chats.length - before).toBeLessThanOrEqual(left);
+        expect(await spent()).toBeLessThanOrEqual(30);
+        // A 429 only ever came before the consultant: once the handover
+        // is in, the thread takes every message.
+        const after = await sayOld(requestId, 'and one more');
+        expect(after.status).toBe(201);
+      },
+      60000,
+    );
   });
 
   describe('a release clears only its own lease', () => {

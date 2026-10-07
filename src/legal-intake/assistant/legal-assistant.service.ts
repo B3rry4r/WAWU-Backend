@@ -686,7 +686,9 @@ export class LegalAssistantService {
 
   /**
    * A client message once the brief is sent. Counted against the same hourly
-   * allowance as every other message, in one step with the write. Before
+   * allowance as every other message, in one step with the write, unless a
+   * consultant has already written in the thread (then it is not counted and
+   * never refused: `reserveMatterMessage`). Before
    * payment it waits for the consultant on the matter's thread (the
    * assistant has stopped); after payment the existing conversation rules
    * apply unchanged (LegalChatService.answerWaiting: the assistant answers
@@ -697,10 +699,18 @@ export class LegalAssistantService {
     requestId: string,
     body: string,
   ): Promise<void> {
-    await this.reserve(wawuUserId, null, 'matter_message', (tx) =>
-      tx.legalChatMessage.create({
-        data: { legalRequestId: requestId, authorRole: 'client', body },
-      }),
+    await this.allowance.reserveMatterMessage(
+      wawuUserId,
+      requestId,
+      (tx, createdAt) =>
+        tx.legalChatMessage.create({
+          data: {
+            legalRequestId: requestId,
+            authorRole: 'client',
+            body,
+            createdAt,
+          },
+        }),
     );
     await this.chat.answerWaiting(wawuUserId, requestId);
   }

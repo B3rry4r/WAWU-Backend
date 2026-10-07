@@ -144,14 +144,20 @@ export class LegalChatService {
     // posts cannot all pass the check before any is counted (LEGAL-01, D8).
     // Over the limit this is the same 429 `assistant_rate_limited` with
     // `retryAfterSeconds`. A request under the limit answers as it always did.
-    await this.allowance.reserve(wawuUserId, null, 'matter_message', (tx) =>
-      tx.legalChatMessage.create({
-        data: {
-          legalRequestId: requestId,
-          authorRole: 'client',
-          body: body.trim(),
-        },
-      }),
+    // Once a consultant has written in this thread the message is for them:
+    // it is neither counted nor refused (decided inside the same lock).
+    await this.allowance.reserveMatterMessage(
+      wawuUserId,
+      requestId,
+      (tx, createdAt) =>
+        tx.legalChatMessage.create({
+          data: {
+            legalRequestId: requestId,
+            authorRole: 'client',
+            body: body.trim(),
+            createdAt,
+          },
+        }),
     );
 
     await this.answerWaiting(wawuUserId, requestId);
@@ -223,14 +229,21 @@ export class LegalChatService {
     });
     if (!request) throw new NotFoundException('Legal request not found');
 
-    await this.prisma.legalChatMessage.create({
-      data: {
-        legalRequestId: requestId,
-        authorRole: 'consultant',
-        authorAdminId: adminId,
-        body: body.trim(),
-      },
-    });
+    // Under the client's lock, so the handover is ordered against their
+    // messages (see `LegalAssistantAllowance.writeAsConsultant`).
+    await this.allowance.writeAsConsultant(
+      request.wawuUserId,
+      (tx, createdAt) =>
+        tx.legalChatMessage.create({
+          data: {
+            legalRequestId: requestId,
+            authorRole: 'consultant',
+            authorAdminId: adminId,
+            body: body.trim(),
+            createdAt,
+          },
+        }),
+    );
     return this.threadFor(request);
   }
 
