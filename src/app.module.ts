@@ -81,6 +81,7 @@ import { InboxModule } from './inbox/inbox.module';
 import { MeModule } from './me/me.module';
 import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
 import { PaymentWebhookModule } from './payment-webhook/payment-webhook.module';
+import { AdminAdsModule } from './admin/ads/admin-ads.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { HUB_THROTTLERS } from './hub-throttlers';
 import { HUB_THROTTLER_STORAGE } from './hub-throttler-storage';
@@ -380,6 +381,9 @@ import { AdsEventsModule } from './ads/ads-events.module';
     // once, no money moved. `webhooks/fintava` is a fixed path no other
     // controller declares, beside the unchanged `webhooks/flutterwave`.
     FintavaWebhookModule,
+    // Admin ad management (task ADS-06): `admin/ads`, a second segment no other
+    // controller declares, so it cannot shadow or be shadowed wherever it sits.
+    AdminAdsModule,
 
     // Counting views, taps and skips of sponsored cards (task ADS-05):
     // POST /ads/:id/events. Same `ads` first segment as AdsModule, with a

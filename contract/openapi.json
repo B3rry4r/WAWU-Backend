@@ -25353,6 +25353,504 @@
         ]
       }
     },
+    "/api/hub/admin/ads": {
+      "get": {
+        "operationId": "AdminAdsController_list",
+        "parameters": [
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "draft",
+                "scheduled",
+                "live",
+                "paused",
+                "ended"
+              ]
+            }
+          },
+          {
+            "name": "placement",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "tgif_card",
+                "today_slot"
+              ]
+            }
+          },
+          {
+            "name": "phase",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "upcoming",
+                "running",
+                "over"
+              ]
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "required": true,
+            "in": "query",
+            "description": "By window start: `latest` (newest first, the default) or `soonest`. Ties break on id.",
+            "schema": {
+              "default": "latest",
+              "type": "string",
+              "enum": [
+                "latest",
+                "soonest"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdCampaignView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "Campaigns, filtered by status, placement, phase and window, in a fixed order.",
+        "tags": [
+          "AdminAds"
+        ]
+      },
+      "post": {
+        "operationId": "AdminAdsController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAdCampaignDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdCampaignChangeView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create a draft campaign with its card. Nothing is served until it is scheduled.",
+        "tags": [
+          "AdminAds"
+        ]
+      }
+    },
+    "/api/hub/admin/ads/report": {
+      "get": {
+        "operationId": "AdminAdsController_summary",
+        "parameters": [
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "draft",
+                "scheduled",
+                "live",
+                "paused",
+                "ended"
+              ]
+            }
+          },
+          {
+            "name": "placement",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "tgif_card",
+                "today_slot"
+              ]
+            }
+          },
+          {
+            "name": "phase",
+            "required": false,
+            "in": "query",
+            "description": "What the window is doing now: `upcoming`, `running` or `over`.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "upcoming",
+                "running",
+                "over"
+              ]
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdSummaryReportView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The bookings in a range, counted by status, placement and phase.",
+        "tags": [
+          "AdminAds"
+        ]
+      }
+    },
+    "/api/hub/admin/ads/{id}": {
+      "get": {
+        "operationId": "AdminAdsController_detail",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdCampaignDetailView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "One campaign in full: card, event, overlaps and history.",
+        "tags": [
+          "AdminAds"
+        ]
+      },
+      "patch": {
+        "operationId": "AdminAdsController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAdCampaignDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdCampaignChangeView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Edit a draft or a paused campaign.",
+        "tags": [
+          "AdminAds"
+        ]
+      },
+      "delete": {
+        "operationId": "AdminAdsController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdCampaignDeletedView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Delete a draft. Anything else is ended, not deleted.",
+        "tags": [
+          "AdminAds"
+        ]
+      }
+    },
+    "/api/hub/admin/ads/{id}/report": {
+      "get": {
+        "operationId": "AdminAdsController_report",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdCampaignReportView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "One campaign's report: its window, how much of it has run, what was done to it, and its views, taps and skips by day.",
+        "tags": [
+          "AdminAds"
+        ]
+      }
+    },
+    "/api/hub/admin/ads/{id}/schedule": {
+      "post": {
+        "operationId": "AdminAdsController_schedule",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdCampaignChangeView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "draft to scheduled (or live, if its window has started). The booking is approved by being scheduled.",
+        "tags": [
+          "AdminAds"
+        ]
+      }
+    },
+    "/api/hub/admin/ads/{id}/pause": {
+      "post": {
+        "operationId": "AdminAdsController_pause",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdCampaignChangeView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "scheduled or live to paused. The card stops being served on the next request.",
+        "tags": [
+          "AdminAds"
+        ]
+      }
+    },
+    "/api/hub/admin/ads/{id}/resume": {
+      "post": {
+        "operationId": "AdminAdsController_resume",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdCampaignChangeView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "paused back on air, while its window and its event are still open.",
+        "tags": [
+          "AdminAds"
+        ]
+      }
+    },
+    "/api/hub/admin/ads/{id}/end": {
+      "post": {
+        "operationId": "AdminAdsController_end",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdCampaignChangeView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "End early, from any status but ended. Final.",
+        "tags": [
+          "AdminAds"
+        ]
+      }
+    },
     "/api/hub/ads/{id}/events": {
       "post": {
         "operationId": "AdsEventsController_record",
@@ -29788,6 +30286,140 @@
         "required": [
           "card"
         ]
+      },
+      "CreateAdCreativeDto": {
+        "type": "object",
+        "properties": {
+          "headline": {
+            "type": "string"
+          },
+          "subline": {
+            "type": "string",
+            "nullable": true,
+            "description": "Place, date and price as the team types them. Leave it out for no second line."
+          },
+          "ctaLabel": {
+            "type": "string"
+          },
+          "ctaDestination": {
+            "type": "string",
+            "description": "What the button opens. The allow-list is the AdCtaDestination enum: `event` today.",
+            "enum": [
+              "event"
+            ]
+          },
+          "ctaDestinationId": {
+            "type": "string",
+            "description": "For `event`, an Event id. The event must be published and not over."
+          },
+          "artworkUrl": {
+            "type": "string",
+            "nullable": true,
+            "description": "An https link to the picture. Leave it out for a card without one."
+          }
+        },
+        "required": [
+          "headline",
+          "ctaLabel",
+          "ctaDestination",
+          "ctaDestinationId"
+        ]
+      },
+      "CreateAdCampaignDto": {
+        "type": "object",
+        "properties": {
+          "advertiser": {
+            "type": "string"
+          },
+          "placement": {
+            "type": "string",
+            "enum": [
+              "tgif_card",
+              "today_slot"
+            ]
+          },
+          "startsAt": {
+            "type": "string",
+            "description": "UTC, ISO 8601 ending in Z. It may be in the past: the card then starts when scheduled."
+          },
+          "endsAt": {
+            "type": "string",
+            "description": "UTC. Must come after startsAt, and must not have passed yet."
+          },
+          "weight": {
+            "type": "number",
+            "description": "Ranks bookings that overlap on one placement. Range: src/ads/ads-limits.ts.",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "creative": {
+            "$ref": "#/components/schemas/CreateAdCreativeDto"
+          }
+        },
+        "required": [
+          "advertiser",
+          "placement",
+          "startsAt",
+          "endsAt",
+          "creative"
+        ]
+      },
+      "UpdateAdCreativeDto": {
+        "type": "object",
+        "properties": {
+          "headline": {
+            "type": "string"
+          },
+          "subline": {
+            "type": "string",
+            "nullable": true
+          },
+          "ctaLabel": {
+            "type": "string"
+          },
+          "ctaDestination": {
+            "type": "string",
+            "enum": [
+              "event"
+            ]
+          },
+          "ctaDestinationId": {
+            "type": "string"
+          },
+          "artworkUrl": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "UpdateAdCampaignDto": {
+        "type": "object",
+        "properties": {
+          "advertiser": {
+            "type": "string"
+          },
+          "placement": {
+            "type": "string",
+            "enum": [
+              "tgif_card",
+              "today_slot"
+            ]
+          },
+          "startsAt": {
+            "type": "string"
+          },
+          "endsAt": {
+            "type": "string"
+          },
+          "weight": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "creative": {
+            "$ref": "#/components/schemas/UpdateAdCreativeDto"
+          }
+        }
       },
       "RecordAdEventDto": {
         "type": "object",
@@ -42029,6 +42661,722 @@
           "month",
           "items",
           "nextCursor"
+        ]
+      },
+      "AdCreativeView": {
+        "type": "object",
+        "properties": {
+          "headline": {
+            "type": "string"
+          },
+          "subline": {
+            "type": "string",
+            "nullable": true
+          },
+          "ctaLabel": {
+            "type": "string"
+          },
+          "ctaDestination": {
+            "type": "string",
+            "enum": [
+              "event"
+            ]
+          },
+          "ctaDestinationId": {
+            "type": "string"
+          },
+          "artworkUrl": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "headline",
+          "subline",
+          "ctaLabel",
+          "ctaDestination",
+          "ctaDestinationId",
+          "artworkUrl"
+        ]
+      },
+      "AdEventView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "rejected",
+              "removed",
+              "cancelled",
+              "published"
+            ]
+          },
+          "startsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endsAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "open": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status",
+          "startsAt",
+          "endsAt",
+          "open"
+        ]
+      },
+      "AdCounts": {
+        "type": "object",
+        "properties": {
+          "views": {
+            "type": "number"
+          },
+          "taps": {
+            "type": "number"
+          },
+          "skips": {
+            "type": "number"
+          },
+          "ctr": {
+            "type": "number",
+            "nullable": true
+          }
+        },
+        "required": [
+          "views",
+          "taps",
+          "skips",
+          "ctr"
+        ]
+      },
+      "AdCampaignView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "advertiser": {
+            "type": "string"
+          },
+          "placement": {
+            "type": "string",
+            "enum": [
+              "tgif_card",
+              "today_slot"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "live",
+              "paused",
+              "draft",
+              "scheduled",
+              "ended"
+            ]
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "upcoming",
+              "running",
+              "over"
+            ]
+          },
+          "startsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "weight": {
+            "type": "number"
+          },
+          "creative": {
+            "$ref": "#/components/schemas/AdCreativeView",
+            "nullable": true
+          },
+          "event": {
+            "$ref": "#/components/schemas/AdEventView",
+            "nullable": true
+          },
+          "servingNow": {
+            "type": "boolean"
+          },
+          "delivery": {
+            "$ref": "#/components/schemas/AdCounts"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "advertiser",
+          "placement",
+          "status",
+          "phase",
+          "startsAt",
+          "endsAt",
+          "weight",
+          "creative",
+          "event",
+          "servingNow",
+          "delivery",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "AdSummaryReportView": {
+        "type": "object",
+        "properties": {
+          "generatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "placement": {
+                "type": "string",
+                "enum": [
+                  "tgif_card",
+                  "today_slot"
+                ],
+                "nullable": true
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "live",
+                  "paused",
+                  "draft",
+                  "scheduled",
+                  "ended"
+                ],
+                "nullable": true
+              },
+              "phase": {
+                "type": "string",
+                "enum": [
+                  "upcoming",
+                  "running",
+                  "over"
+                ],
+                "nullable": true
+              },
+              "from": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              }
+            },
+            "required": [
+              "placement",
+              "status",
+              "phase",
+              "from",
+              "to"
+            ]
+          },
+          "campaigns": {
+            "type": "number"
+          },
+          "delivery": {
+            "$ref": "#/components/schemas/AdCounts"
+          },
+          "deliveryByStatus": {
+            "type": "object",
+            "properties": {
+              "live": {},
+              "paused": {},
+              "draft": {},
+              "scheduled": {},
+              "ended": {}
+            },
+            "required": [
+              "live",
+              "paused",
+              "draft",
+              "scheduled",
+              "ended"
+            ]
+          },
+          "deliveryByPlacement": {
+            "type": "object",
+            "properties": {
+              "tgif_card": {},
+              "today_slot": {}
+            },
+            "required": [
+              "tgif_card",
+              "today_slot"
+            ]
+          },
+          "byStatus": {
+            "type": "object",
+            "properties": {
+              "live": {},
+              "paused": {},
+              "draft": {},
+              "scheduled": {},
+              "ended": {}
+            },
+            "required": [
+              "live",
+              "paused",
+              "draft",
+              "scheduled",
+              "ended"
+            ]
+          },
+          "byPlacement": {
+            "type": "object",
+            "properties": {
+              "tgif_card": {},
+              "today_slot": {}
+            },
+            "required": [
+              "tgif_card",
+              "today_slot"
+            ]
+          },
+          "byPhase": {
+            "type": "object",
+            "properties": {
+              "upcoming": {},
+              "running": {},
+              "over": {}
+            },
+            "required": [
+              "upcoming",
+              "running",
+              "over"
+            ]
+          },
+          "servingNow": {
+            "type": "object",
+            "properties": {
+              "tgif_card": {},
+              "today_slot": {}
+            },
+            "required": [
+              "tgif_card",
+              "today_slot"
+            ]
+          }
+        },
+        "required": [
+          "generatedAt",
+          "filters",
+          "campaigns",
+          "delivery",
+          "deliveryByStatus",
+          "deliveryByPlacement",
+          "byStatus",
+          "byPlacement",
+          "byPhase",
+          "servingNow"
+        ]
+      },
+      "AdOverlapView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "advertiser": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "live",
+              "paused",
+              "draft",
+              "scheduled",
+              "ended"
+            ]
+          },
+          "startsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "weight": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "advertiser",
+          "status",
+          "startsAt",
+          "endsAt",
+          "weight"
+        ]
+      },
+      "AdAuditEntryView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "paused",
+              "updated",
+              "scheduled",
+              "ended",
+              "created",
+              "resumed",
+              "deleted"
+            ]
+          },
+          "previousStatus": {
+            "type": "string",
+            "enum": [
+              "live",
+              "paused",
+              "draft",
+              "scheduled",
+              "ended"
+            ],
+            "nullable": true
+          },
+          "newStatus": {
+            "type": "string",
+            "enum": [
+              "live",
+              "paused",
+              "draft",
+              "scheduled",
+              "ended"
+            ],
+            "nullable": true
+          },
+          "changes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "from": {},
+                "to": {}
+              },
+              "required": [
+                "from",
+                "to"
+              ]
+            },
+            "nullable": true
+          },
+          "adminId": {
+            "type": "string"
+          },
+          "adminEmail": {
+            "type": "string"
+          },
+          "adminRole": {
+            "type": "string",
+            "enum": [
+              "superadmin",
+              "reviewer",
+              "support",
+              "finance"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "action",
+          "previousStatus",
+          "newStatus",
+          "changes",
+          "adminId",
+          "adminEmail",
+          "adminRole",
+          "createdAt"
+        ]
+      },
+      "AdCampaignDetailView": {
+        "type": "object",
+        "properties": {
+          "overlapping": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdOverlapView"
+            }
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdAuditEntryView"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "advertiser": {
+            "type": "string"
+          },
+          "placement": {
+            "type": "string",
+            "enum": [
+              "tgif_card",
+              "today_slot"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "live",
+              "paused",
+              "draft",
+              "scheduled",
+              "ended"
+            ]
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "upcoming",
+              "running",
+              "over"
+            ]
+          },
+          "startsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "weight": {
+            "type": "number"
+          },
+          "creative": {
+            "$ref": "#/components/schemas/AdCreativeView",
+            "nullable": true
+          },
+          "event": {
+            "$ref": "#/components/schemas/AdEventView",
+            "nullable": true
+          },
+          "servingNow": {
+            "type": "boolean"
+          },
+          "delivery": {
+            "$ref": "#/components/schemas/AdCounts"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "overlapping",
+          "history",
+          "id",
+          "advertiser",
+          "placement",
+          "status",
+          "phase",
+          "startsAt",
+          "endsAt",
+          "weight",
+          "creative",
+          "event",
+          "servingNow",
+          "delivery",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "AdCampaignChangeView": {
+        "type": "object",
+        "properties": {
+          "campaign": {
+            "$ref": "#/components/schemas/AdCampaignDetailView"
+          },
+          "audit": {
+            "$ref": "#/components/schemas/AdAuditEntryView"
+          }
+        },
+        "required": [
+          "campaign",
+          "audit"
+        ]
+      },
+      "AdDayCounts": {
+        "type": "object",
+        "properties": {
+          "day": {
+            "type": "string"
+          },
+          "views": {
+            "type": "number"
+          },
+          "taps": {
+            "type": "number"
+          },
+          "skips": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "day",
+          "views",
+          "taps",
+          "skips"
+        ]
+      },
+      "AdCampaignReportView": {
+        "type": "object",
+        "properties": {
+          "campaign": {
+            "$ref": "#/components/schemas/AdCampaignView"
+          },
+          "range": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              },
+              "fromDay": {
+                "type": "string",
+                "nullable": true
+              },
+              "toDay": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "from",
+              "to",
+              "fromDay",
+              "toDay"
+            ]
+          },
+          "delivery": {
+            "$ref": "#/components/schemas/AdCounts"
+          },
+          "days": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdDayCounts"
+            }
+          },
+          "timing": {
+            "type": "object",
+            "properties": {
+              "windowMinutes": {
+                "type": "number"
+              },
+              "elapsedMinutes": {
+                "type": "number"
+              },
+              "remainingMinutes": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "windowMinutes",
+              "elapsedMinutes",
+              "remainingMinutes"
+            ]
+          },
+          "activity": {
+            "type": "object",
+            "properties": {
+              "changes": {
+                "type": "number"
+              },
+              "pauses": {
+                "type": "number"
+              },
+              "lastActionAt": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              }
+            },
+            "required": [
+              "changes",
+              "pauses",
+              "lastActionAt"
+            ]
+          }
+        },
+        "required": [
+          "campaign",
+          "range",
+          "delivery",
+          "days",
+          "timing",
+          "activity"
+        ]
+      },
+      "AdCampaignDeletedView": {
+        "type": "object",
+        "properties": {
+          "campaignId": {
+            "type": "string"
+          },
+          "audit": {
+            "$ref": "#/components/schemas/AdAuditEntryView"
+          }
+        },
+        "required": [
+          "campaignId",
+          "audit"
         ]
       },
       "PaymentQuoteView": {
