@@ -53,6 +53,13 @@ const ME_EMAIL = 'creator-basic@test.wawu.dev';
 const OTHER = '00000000-0000-4000-8000-000000000003';
 const HOUR = 3_600_000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+async function waitFor(check: () => boolean, timeoutMs = 5000) {
+  const until = Date.now() + timeoutMs;
+  while (!check()) {
+    if (Date.now() > until) throw new Error('waitFor timed out');
+    await sleep(20);
+  }
+}
 
 const TURN = {
   reply: 'Where is the property?',
@@ -74,6 +81,8 @@ class SlowStandIn implements GeminiClient {
   answer: string | ((req: GeminiChatRequest) => string) = JSON.stringify(TURN);
   private once: Array<string | Error> = [];
   briefAnswer: Error | null = null;
+  /** One hook per brief call, in order: it may wait, and may throw. */
+  briefHooks: Array<() => Promise<void>> = [];
 
   reset() {
     this.chats = [];
@@ -83,6 +92,7 @@ class SlowStandIn implements GeminiClient {
     this.answer = JSON.stringify(TURN);
     this.once = [];
     this.briefAnswer = null;
+    this.briefHooks = [];
   }
   queue(...a: Array<string | Error | Record<string, unknown>>) {
     for (const x of a) {
@@ -101,6 +111,8 @@ class SlowStandIn implements GeminiClient {
   }
   async generateBrief(req: GeminiBriefRequest) {
     this.briefs.push(req);
+    const hook = this.briefHooks.shift();
+    if (hook) await hook();
     if (this.briefDelayMs) await sleep(this.briefDelayMs);
     if (this.briefAnswer) throw this.briefAnswer;
     return {
@@ -176,6 +188,26 @@ describe('Legal assistant under parallel requests (LEGAL-01 round 2, contract)',
       .set(as(token))
       .send(body)
       .then((r) => ({ status: r.status, body: r.body as unknown }));
+  /** The older matter-chat route the web calls (after Send and payment). */
+  const sayOld = (requestId: string, body: string): Promise<Res> =>
+    http()
+      .post(`/api/hub/legal/intake/chat/${requestId}`)
+      .set(as(token))
+      .send({ body })
+      .then((r) => ({ status: r.status, body: r.body as unknown }));
+  /** An intake sent to a consultant, its matter paid for. */
+  const paidMatter = async () => {
+    const t = await start();
+    ai.queue(READY);
+    await say(t.id, { body: 'My landlord raised my rent.' });
+    const sent = data(await sendBrief(t.id));
+    const requestId = sent.legalRequestId ?? '';
+    await prisma.legalRequest.update({
+      where: { id: requestId },
+      data: { status: 'consultation_scheduled' },
+    });
+    return { t, requestId };
+  };
   const reply = (id: string): Promise<Res> =>
     http()
       .post(`/api/hub/legal/assistant/${id}/reply`)
@@ -727,6 +759,273 @@ describe('Legal assistant under parallel requests (LEGAL-01 round 2, contract)',
       expect((await say(t.id, { body: 'the last one' })).status).toBe(201);
       await sendBrief(t.id);
       expect((await say(t.id, { body: 'one more' })).status).toBe(429);
+    });
+  });
+
+  describe('D8: the older matter-chat route draws on the same allowance', () => {
+    const storedClient = (requestId: string) =>
+      prisma.legalChatMessage.count({
+        where: { legalRequestId: requestId, authorRole: 'client' },
+      });
+
+    it('after payment, 100 parallel posts on /legal/intake/chat give at most the allowance in 201s and AI calls', async () => {
+      const { requestId } = await paidMatter();
+      const before = ai.chats.length;
+      const left = 30 - (await spent());
+      expect(left).toBeGreaterThan(0);
+      ai.answer = 'Noted.';
+      ai.delayMs = 150;
+      const rs = await par(100, (i) => sayOld(requestId, `old${i}`));
+      expect(tally(rs)).toEqual({
+        '201': left,
+        '429:assistant_rate_limited': 100 - left,
+      });
+      expect(ai.chats.length - before).toBe(left);
+      expect(await storedClient(requestId)).toBe(left);
+      const refused = rs.find((r) => r.status === 429) as Res;
+      const reason = (
+        refused.body as { reason: { retryAfterSeconds?: number } }
+      ).reason;
+      expect(reason.retryAfterSeconds).toBeGreaterThan(0);
+      expect(reason.retryAfterSeconds).toBeLessThanOrEqual(3600);
+    }, 60000);
+
+    it('old and new routes mixed share one allowance', async () => {
+      const { t, requestId } = await paidMatter();
+      const before = ai.chats.length;
+      const left = 30 - (await spent());
+      ai.answer = 'Noted.';
+      ai.delayMs = 150;
+      const rs = await par(100, (i) =>
+        i % 2 === 0
+          ? sayOld(requestId, `old${i}`)
+          : say(t.id, { body: `new${i}` }),
+      );
+      expect(tally(rs)).toEqual({
+        '201': left,
+        '429:assistant_rate_limited': 100 - left,
+      });
+      expect(ai.chats.length - before).toBe(left);
+      expect(await storedClient(requestId)).toBe(left);
+      expect(await spent()).toBe(30);
+    }, 60000);
+
+    it('messages already counted on the new route use up the old route too, and the other way round', async () => {
+      const { t, requestId } = await paidMatter();
+      ai.answer = 'Noted.';
+      const left = 30 - (await spent());
+      for (let i = 0; i < left - 1; i++) {
+        expect((await say(t.id, { body: `n${i}` })).status).toBe(201);
+      }
+      expect((await sayOld(requestId, 'the last one')).status).toBe(201);
+      expect((await sayOld(requestId, 'one too many')).status).toBe(429);
+      expect((await say(t.id, { body: 'and here' })).status).toBe(429);
+    });
+
+    it('under the limit the answer keeps its shape: the thread, as before', async () => {
+      const { requestId } = await paidMatter();
+      ai.answer = 'Noted.';
+      const res = await sayOld(requestId, 'Here is the lease.');
+      expect(res.status).toBe(201);
+      const view = (
+        res.body as {
+          data: {
+            legalRequestId: string;
+            serviceName: string;
+            status: string;
+            consultantJoined: boolean;
+            messages: Array<Record<string, unknown>>;
+          };
+        }
+      ).data;
+      expect(Object.keys(view).sort()).toEqual([
+        'consultantJoined',
+        'legalRequestId',
+        'messages',
+        'serviceName',
+        'status',
+      ]);
+      expect(view.legalRequestId).toBe(requestId);
+      expect(view.consultantJoined).toBe(false);
+      const last = view.messages.slice(-2);
+      expect(last.map((m) => m.authorRole)).toEqual(['client', 'ai']);
+      expect(last[0].body).toBe('Here is the lease.');
+      expect(Object.keys(last[1]).sort()).toEqual([
+        'authorRole',
+        'body',
+        'createdAt',
+        'id',
+      ]);
+    });
+
+    it('before payment the route still refuses with 409, and counts nothing', async () => {
+      const t = await start();
+      ai.queue(READY);
+      await say(t.id, { body: 'My landlord raised my rent.' });
+      const sent = data(await sendBrief(t.id));
+      const used = await spent();
+      const res = await sayOld(sent.legalRequestId ?? '', 'too early');
+      expect(res.status).toBe(409);
+      expect(await spent()).toBe(used);
+    });
+  });
+
+  describe('a release clears only its own lease', () => {
+    const lease = async (id: string) =>
+      (
+        await prisma.legalIntake.findUniqueOrThrow({
+          where: { id },
+          select: { assistantBusyUntil: true },
+        })
+      ).assistantBusyUntil;
+
+    async function ready() {
+      const t = await start();
+      ai.queue(READY);
+      await say(t.id, {
+        body: 'My landlord raised my rent by 60 percent.',
+      }).then((r) => expect(r.status).toBe(201));
+      return t;
+    }
+
+    it('a first holder that fails late does not free the second holder claim: no third call starts', async () => {
+      const t = await ready();
+      let failFirst: () => void = () => undefined;
+      let finishSecond: () => void = () => undefined;
+      ai.briefHooks = [
+        // First holder: hangs, then fails after its lease has lapsed.
+        () =>
+          new Promise<void>((_, reject) => {
+            failFirst = () => reject(new Error('provider timed out'));
+          }),
+        // Second holder: hangs until released, then succeeds.
+        () =>
+          new Promise<void>((resolve) => {
+            finishSecond = resolve;
+          }),
+      ];
+
+      const first = sendBrief(t.id);
+      await waitFor(() => ai.briefs.length === 1);
+      // Time passes: the first lease lapses (the claim is 60 s).
+      await prisma.legalIntake.update({
+        where: { id: t.id },
+        data: { assistantBusyUntil: new Date(Date.now() - 1000) },
+      });
+      const second = sendBrief(t.id);
+      await waitFor(() => ai.briefs.length === 2);
+      const secondLease = await lease(t.id);
+      expect(secondLease).not.toBeNull();
+      expect(secondLease?.getTime()).toBeGreaterThan(Date.now());
+
+      // The first call fails now. Its release must leave the second lease.
+      failFirst();
+      const firstRes = await first;
+      expect(firstRes.status).toBe(503);
+      expect(await lease(t.id)).toEqual(secondLease);
+
+      // A third send does not start a call: the second holder still holds.
+      const third = sendBrief(t.id);
+      await sleep(300);
+      expect(ai.briefs).toHaveLength(2);
+      finishSecond();
+      const [secondRes, thirdRes] = await Promise.all([second, third]);
+      expect(secondRes.status).toBe(201);
+      expect(thirdRes.status).toBe(201);
+      expect(ai.briefs).toHaveLength(2);
+      expect(
+        await prisma.legalRequest.count({ where: { wawuUserId: ME } }),
+      ).toBe(1);
+    }, 30000);
+
+    it('a holder that fails while its lease is still its own does free it', async () => {
+      const t = await ready();
+      ai.briefAnswer = new Error('provider down');
+      expect((await sendBrief(t.id)).status).toBe(503);
+      expect(await lease(t.id)).toBeNull();
+      ai.briefAnswer = null;
+      expect((await sendBrief(t.id)).status).toBe(201);
+    });
+
+    it('a lease that has lapsed lets the next holder in', async () => {
+      const t = await ready();
+      await prisma.legalIntake.update({
+        where: { id: t.id },
+        data: { assistantBusyUntil: new Date(Date.now() - 1000) },
+      });
+      expect((await sendBrief(t.id)).status).toBe(201);
+      expect(ai.briefs).toHaveLength(1);
+    });
+  });
+
+  describe('the limits are the numbers the brief names (literals, not the constants)', () => {
+    it('the constants are 30 an hour, 40 a conversation and 5 brief tries', () => {
+      expect(ASSISTANT_CLIENT_MESSAGES_PER_HOUR).toBe(30);
+      expect(ASSISTANT_CLIENT_MESSAGES_PER_INTAKE).toBe(40);
+      expect(ASSISTANT_BRIEF_ATTEMPTS_PER_HOUR).toBe(5);
+    });
+
+    it('60 parallel sends: exactly 30 are accepted and 30 refused', async () => {
+      const t = await start();
+      ai.delayMs = 150;
+      const rs = await par(60, (i) => say(t.id, { body: `p${i}` }));
+      expect(tally(rs)).toEqual({
+        '201': 30,
+        '429:assistant_rate_limited': 30,
+      });
+      expect(await clientCount(t.id)).toBe(30);
+      expect(ai.chats).toHaveLength(30);
+    }, 60000);
+
+    it('one conversation holds 40: 36 old plus 20 parallel store exactly 40', async () => {
+      const t = await start();
+      await seedClient(t.id, 36, new Date(Date.now() - 2 * HOUR));
+      ai.delayMs = 150;
+      const rs = await par(20, (i) => say(t.id, { body: `q${i}` }));
+      expect(tally(rs)).toEqual({
+        '201': 4,
+        '409:assistant_conversation_full': 16,
+      });
+      expect(await clientCount(t.id)).toBe(40);
+    }, 60000);
+
+    it('a reply is held to the 40 as well', async () => {
+      const t = await start();
+      // Newer than the opening lines, so a client message is the one waiting.
+      await seedClient(t.id, 40, new Date(Date.now() + 5_000));
+      const res = await reply(t.id);
+      expect(res.status).toBe(409);
+      expect(code(res)).toBe('assistant_conversation_full');
+      expect(ai.chats).toHaveLength(0);
+    });
+
+    it('the brief is tried 5 times an hour: the 6th is a 429 with no AI call', async () => {
+      const t = await start();
+      ai.queue(READY);
+      await say(t.id, { body: 'My landlord raised my rent.' });
+      ai.briefAnswer = new Error('provider down');
+      const statuses: number[] = [];
+      for (let i = 0; i < 6; i++) statuses.push((await sendBrief(t.id)).status);
+      expect(statuses).toEqual([503, 503, 503, 503, 503, 429]);
+      expect(ai.briefs).toHaveLength(5);
+    });
+
+    it('the hour is a full hour: 30 messages 45 minutes ago still count, 61 minutes ago do not', async () => {
+      const earlier = await earlierIntake();
+      await seedClient(earlier.id, 30, new Date(Date.now() - 45 * 60_000));
+      const t = await start();
+      const refused = await say(t.id, { body: 'too soon' });
+      expect(refused.status).toBe(429);
+      const retry = (refused.body as { reason: { retryAfterSeconds: number } })
+        .reason.retryAfterSeconds;
+      expect(retry).toBeGreaterThan(14 * 60);
+      expect(retry).toBeLessThanOrEqual(15 * 60);
+
+      await prisma.legalIntakeMessage.updateMany({
+        where: { legalIntakeId: earlier.id },
+        data: { createdAt: new Date(Date.now() - 61 * 60_000) },
+      });
+      expect((await say(t.id, { body: 'now fine' })).status).toBe(201);
     });
   });
 
