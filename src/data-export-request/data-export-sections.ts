@@ -692,6 +692,16 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    key: 'professionalLocation',
+    models: ['ProfessionalLocation'],
+    // The city the person wrote for their professional card.
+    load: (prisma, me) =>
+      prisma.professionalLocation.findMany({
+        where: { wawuUserId: me },
+        select: { city: true, createdAt: true, updatedAt: true },
+      }),
+  },
+  {
     key: 'billPayments',
     models: ['BillPayment'],
     load: (prisma, me) =>
