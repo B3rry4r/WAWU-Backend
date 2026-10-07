@@ -2764,8 +2764,85 @@ model LegalIntake {
   startedAt   DateTime  @default(now())
   completedAt DateTime?
 
+  /// How the intake is being filled. Null: the question form (the web's
+  /// `/legal/intake` routes, every row written before LEGAL-01).
+  /// `assistant`: the chat-first flow (`/legal/assistant`, LEGAL-01), where
+  /// the assistant profiles the problem in conversation before any payment.
+  channel String?
+
+  /// The assistant's working brief while the conversation runs (LEGAL-01):
+  /// `{ headline, facts: [{ label, value }], ready }`. Only what the client
+  /// said, as the client is shown it to confirm. On "Send to a consultant"
+  /// it becomes `brief` above, in the same shape the form writes.
+  draftBrief Json?
+
+  /// A short claim while one paid AI call is running for this conversation
+  /// (a retry of the assistant's reply, or preparing the brief on Send), so
+  /// a second one cannot start. Expires on its own if the process dies.
+  assistantBusyUntil DateTime?
+
   @@index([wawuUserId, status])
   @@index([status, completedAt])
+  // Also in the database, and NOT expressible here (Prisma has no partial
+  // index): UNIQUE ("wawuUserId") WHERE "channel" = 'assistant' AND "status" =
+  // 'in_progress', so a person has at most one open assistant conversation.
+  // See migration 20261007200000_legal_assistant. `prisma migrate diff` does
+  // not list it, so the schema and the migrations still agree.
+}
+
+/// Who wrote a message in the assistant conversation on an intake.
+enum LegalIntakeAuthor {
+  client
+  /// The WAWU Legal assistant: Gemini, or a line the server writes itself
+  /// (`scripted`). Never a person.
+  assistant
+}
+
+/// One message in the assistant conversation on an UNPAID legal intake
+/// (LEGAL-01: legal starts as a chat).
+///
+/// Kept apart from LegalChatMessage on purpose: that thread belongs to a
+/// LegalRequest, which only exists once the client sends the brief to a
+/// consultant. Everything said before that lives here; everything after it
+/// (the consultant joining, the client's replies) lives on the request's
+/// own thread, so the dashboard's consultant routes read it unchanged.
+///
+/// `wawuUserId` is carried so the account purge can delete these rows by
+/// owner (account-data-map.ts), like the intake itself.
+model LegalIntakeMessage {
+  id            String            @id @default(uuid())
+  legalIntakeId String
+  wawuUserId    String
+  authorRole    LegalIntakeAuthor
+  /// Written by the server, not the model: the opener (which carries the
+  /// client's first name) and the "sent to a consultant" line. Never sent to
+  /// the model.
+  scripted      Boolean           @default(false)
+  body          String
+  /// The answers offered as taps under this message: `[{ id, label }]`.
+  /// Only the newest assistant message's are live.
+  quickReplies  Json?
+  createdAt     DateTime          @default(now())
+
+  @@index([legalIntakeId, createdAt])
+  @@index([wawuUserId, createdAt])
+}
+
+/// One paid AI call the assistant made that no new client message paid for:
+/// asking again after a failed reply (`reply`) or preparing the brief on Send
+/// (`brief`). Written in the same step that checks the limits, so the hourly
+/// and per-conversation counts (client messages plus these) cannot be beaten
+/// by parallel requests. Carries no words of the conversation.
+model LegalAssistantCall {
+  id            String   @id @default(uuid())
+  legalIntakeId String
+  wawuUserId    String
+  /// `reply` or `brief`.
+  kind          String
+  createdAt     DateTime @default(now())
+
+  @@index([legalIntakeId, createdAt])
+  @@index([wawuUserId, createdAt])
 }
 
 /// Who said it.
@@ -4453,6 +4530,63 @@ model AdCreative {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// -----------------------------------------------------------------------------
+// Admin ad management audit (ADS-06, R-15)
+//
+// One row for every change an admin makes to an ad campaign, written in the
+// same transaction as the change. Same side-table idiom as AdminEventReview:
+// no foreign key to AdCampaign (a deleted draft keeps its history) or to
+// AdminUser (the admin's email and role are snapshots, so "who paused this"
+// stays answerable after that admin is renamed or removed).
+//
+// No column names a WAWU user, so src/account-purge/account-data-map.ts has
+// nothing to classify here. `changes` can hold the advertiser's name, which
+// may be a named person who is not a user; erasing it is a manual job, as for
+// AdCampaign itself.
+// -----------------------------------------------------------------------------
+
+enum AdminAdAction {
+  created
+  updated
+  scheduled
+  paused
+  resumed
+  ended
+  deleted
+}
+
+/// What an admin did to a campaign, who did it, and the before and after.
+model AdminAdAudit {
+  id String @id @default(uuid())
+
+  /// Gives the history one exact order even when two rows share a timestamp.
+  seq Int @default(autoincrement())
+
+  /// The campaign. Not a foreign key: a deleted draft keeps its rows.
+  campaignId String
+
+  action AdminAdAction
+
+  /// The campaign's status before and after. `previousStatus` is null on
+  /// `created`; `newStatus` is null on `deleted`.
+  previousStatus AdCampaignStatus?
+  newStatus      AdCampaignStatus?
+
+  /// `{ field: { from, to } }` for the fields the action changed. On `created`
+  /// and `deleted` every field, with `from` or `to` null.
+  changes Json?
+
+  /// Snapshots of who acted.
+  adminId    String
+  adminEmail String
+  adminRole  AdminRole
+
+  createdAt DateTime @default(now())
+
+  @@index([campaignId, seq])
+  @@index([adminId])
 }
 
 // -----------------------------------------------------------------------------

@@ -160,6 +160,20 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'PendingCharge', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'HealthSubscription', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'LegalRequest', column: 'wawuUserId', disposition: 'OWNED' },
+  // The assistant conversation on an intake (LEGAL-01): the client's own
+  // words and the assistant's replies to them, removed before the intake.
+  {
+    model: 'LegalIntakeMessage',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
+  // One row per paid AI call no message paid for (a retried reply, a brief),
+  // kept to enforce the hourly limit; holds no words of the conversation.
+  {
+    model: 'LegalAssistantCall',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
   { model: 'LegalIntake', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'ProfessionalProfile', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'StorageObject', column: 'wawuUserId', disposition: 'OWNED' },

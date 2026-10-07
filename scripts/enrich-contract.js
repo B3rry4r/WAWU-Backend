@@ -311,6 +311,9 @@ const NULLABLE_REF_AS_ALLOF_DIRS = [
   path.join(ROOT, 'src', 'money') + path.sep,
   // Free chat (task INBOX-06): new routes, so nothing published changes.
   path.join(ROOT, 'src', 'chat') + path.sep,
+  // Legal starts as a chat (task LEGAL-01): new routes, so nothing published
+  // changes.
+  path.join(ROOT, 'src', 'legal-intake', 'assistant') + path.sep,
   // The inbox (task INBOX-07): new routes, so nothing published changes.
   path.join(ROOT, 'src', 'inbox') + path.sep,
   // The caller's own lists (task ME-10): new routes, so nothing published changes.

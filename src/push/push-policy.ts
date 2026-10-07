@@ -16,7 +16,7 @@ import { SETTINGS_GATE } from '../notification/notification.service';
  *         kind has no Z3 switch the owner has agreed covers it, so pushing it
  *         would send something the person cannot turn off.
  *
- * Default (agent), owner may override: BACKEND_GAPS G-233 lists every held
+ * Default (agent), owner may override: BACKEND_GAPS G-265 lists every held
  * kind and the question for each. Changing a kind is one line here.
  */
 export type PushRule = 'send' | 'hold';
@@ -39,7 +39,7 @@ export const PUSH_RULE: Record<NotificationKind, PushRule> = {
   community_join_approved: 'send',
   community_join_declined: 'send',
   // The state of the person's own account or a marketing send, with no switch
-  // that is agreed to cover them. Held until the owner answers (G-233).
+  // that is agreed to cover them. Held until the owner answers (G-265).
   paid_dm_warning: 'hold',
   paid_dm_paused: 'hold',
   credits_low: 'hold',

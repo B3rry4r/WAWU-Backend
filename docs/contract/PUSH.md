@@ -59,7 +59,7 @@ decides nothing about categories by itself:
 
 **Held, not pushed** (they stay in the in-app list): `paid_dm_warning`,
 `paid_dm_paused`, `credits_low`, `kyc_verified`, `verify_reminder`, `campaign`.
-No agreed switch covers them. BACKEND_GAPS G-233 asks the owner for each.
+No agreed switch covers them. BACKEND_GAPS G-265 asks the owner for each.
 
 ## 3. The push
 
