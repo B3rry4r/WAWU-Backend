@@ -6582,7 +6582,8 @@
                 "insurance_pensions",
                 "sports_fitness",
                 "government_public",
-                "social_impact"
+                "social_impact",
+                "engineering"
               ]
             }
           },
@@ -18319,6 +18320,191 @@
         ]
       }
     },
+    "/api/hub/professionals/location": {
+      "get": {
+        "operationId": "ProfessionalController_location",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfessionalLocationView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Professional"
+        ]
+      },
+      "put": {
+        "operationId": "ProfessionalController_setLocation",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProfessionalLocationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfessionalLocationView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The city on your card and in the directory. A creator account only.",
+        "tags": [
+          "Professional"
+        ]
+      },
+      "delete": {
+        "operationId": "ProfessionalController_clearLocation",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfessionalLocationView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Professional"
+        ]
+      }
+    },
+    "/api/hub/professionals/fields": {
+      "get": {
+        "operationId": "ProfessionalController_fields",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProfessionalFieldView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Professional"
+        ]
+      }
+    },
+    "/api/hub/professionals/directory": {
+      "get": {
+        "operationId": "ProfessionalController_directory",
+        "parameters": [
+          {
+            "name": "field",
+            "required": false,
+            "in": "query",
+            "description": "A field id from GET /professionals/fields, for example `accounting_tax`.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "accounting_tax",
+                "legal_compliance",
+                "design_creative",
+                "technology_it",
+                "engineering",
+                "healthcare",
+                "business_consulting"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfessionalDirectoryPage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The directory filtered by field, with city, usual reply time and price.",
+        "tags": [
+          "Professional"
+        ]
+      }
+    },
+    "/api/hub/professionals/directory/{id}": {
+      "get": {
+        "operationId": "ProfessionalController_directoryProfile",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfessionalDirectoryProfile"
+                }
+              }
+            }
+          }
+        },
+        "summary": "One professional's profile, with city, usual reply time and price.",
+        "tags": [
+          "Professional"
+        ]
+      }
+    },
     "/api/hub/professionals": {
       "get": {
         "operationId": "ProfessionalController_list",
@@ -18354,7 +18540,8 @@
                 "insurance_pensions",
                 "sports_fitness",
                 "government_public",
-                "social_impact"
+                "social_impact",
+                "engineering"
               ]
             }
           },
@@ -28596,7 +28783,8 @@
               "insurance_pensions",
               "sports_fitness",
               "government_public",
-              "social_impact"
+              "social_impact",
+              "engineering"
             ]
           },
           "headline": {
@@ -28657,6 +28845,20 @@
         },
         "required": [
           "listed"
+        ]
+      },
+      "UpdateProfessionalLocationDto": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string",
+            "description": "Where you work, as people will read it: \"Ikeja\", \"Port Harcourt\".",
+            "minLength": 2,
+            "maxLength": 60
+          }
+        },
+        "required": [
+          "city"
         ]
       },
       "CreateProfessionalReviewDto": {
@@ -39094,6 +39296,288 @@
           "pieceCount",
           "verification",
           "following"
+        ]
+      },
+      "ProfessionalLocationView": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "city"
+        ]
+      },
+      "ProfessionalFieldView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "applyCategory": {
+            "type": "string"
+          },
+          "regulated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "categories",
+          "applyCategory",
+          "regulated"
+        ]
+      },
+      "ProfessionalFieldRef": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ]
+      },
+      "ProfessionalDirectoryEntry": {
+        "type": "object",
+        "properties": {
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          },
+          "name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "dmEnabled": {
+            "type": "boolean"
+          },
+          "dmResponseHours": {
+            "type": "number"
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "headline": {
+            "type": "string"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "wawuId": {
+            "type": "string"
+          },
+          "pieceCount": {
+            "type": "number"
+          },
+          "ratingAvg": {
+            "type": "number",
+            "nullable": true
+          },
+          "reviewCount": {
+            "type": "number"
+          },
+          "field": {
+            "$ref": "#/components/schemas/ProfessionalFieldRef",
+            "nullable": true
+          },
+          "city": {
+            "type": "string",
+            "nullable": true
+          },
+          "usualReplyMinutes": {
+            "type": "number",
+            "nullable": true
+          },
+          "answeredMessageCount": {
+            "type": "number"
+          },
+          "messagePriceKobo": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "verification",
+          "name",
+          "id",
+          "category",
+          "dmEnabled",
+          "dmResponseHours",
+          "avatarUrl",
+          "handle",
+          "headline",
+          "services",
+          "wawuId",
+          "pieceCount",
+          "ratingAvg",
+          "reviewCount",
+          "field",
+          "city",
+          "usualReplyMinutes",
+          "answeredMessageCount",
+          "messagePriceKobo"
+        ]
+      },
+      "ProfessionalDirectoryPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProfessionalDirectoryEntry"
+            }
+          },
+          "currentPage": {
+            "type": "number"
+          },
+          "perPage": {
+            "type": "number"
+          },
+          "total": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "items",
+          "currentPage",
+          "perPage",
+          "total"
+        ]
+      },
+      "ProfessionalDirectoryProfile": {
+        "type": "object",
+        "properties": {
+          "about": {
+            "type": "string"
+          },
+          "issuingBody": {
+            "type": "string",
+            "nullable": true
+          },
+          "credentialKind": {
+            "type": "string"
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          },
+          "name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "dmEnabled": {
+            "type": "boolean"
+          },
+          "dmResponseHours": {
+            "type": "number"
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "headline": {
+            "type": "string"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "wawuId": {
+            "type": "string"
+          },
+          "pieceCount": {
+            "type": "number"
+          },
+          "ratingAvg": {
+            "type": "number",
+            "nullable": true
+          },
+          "reviewCount": {
+            "type": "number"
+          },
+          "field": {
+            "$ref": "#/components/schemas/ProfessionalFieldRef",
+            "nullable": true
+          },
+          "city": {
+            "type": "string",
+            "nullable": true
+          },
+          "usualReplyMinutes": {
+            "type": "number",
+            "nullable": true
+          },
+          "answeredMessageCount": {
+            "type": "number"
+          },
+          "messagePriceKobo": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "about",
+          "issuingBody",
+          "credentialKind",
+          "verification",
+          "name",
+          "id",
+          "category",
+          "dmEnabled",
+          "dmResponseHours",
+          "avatarUrl",
+          "handle",
+          "headline",
+          "services",
+          "wawuId",
+          "pieceCount",
+          "ratingAvg",
+          "reviewCount",
+          "field",
+          "city",
+          "usualReplyMinutes",
+          "answeredMessageCount",
+          "messagePriceKobo"
         ]
       },
       "ProfessionalListItem": {

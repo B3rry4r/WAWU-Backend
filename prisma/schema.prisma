@@ -2672,6 +2672,27 @@ model ProfessionalProfile {
   @@index([status])
 }
 
+/// Where a professional works: the city on their card ("Chartered
+/// accountant · Ikeja", H10) and in the directory (PROS-02).
+///
+/// A SIDE TABLE, NOT A COLUMN. ProfessionalProfile rows go out whole on
+/// routes the web calls today (POST /professionals/applications, GET
+/// /professionals/applications/mine, PATCH .../listing), so a column there
+/// would add a key to each of those answers (the protected route list,
+/// hazard H-1).
+///
+/// One row per PERSON, not per listing: somebody listed in two fields works
+/// from one place. Written by its owner through PUT /professionals/location
+/// and read only by the professional directory routes. No row means the card
+/// shows no city, never a guessed one.
+model ProfessionalLocation {
+  wawuUserId String   @id
+  /// As the professional wrote it, trimmed: "Ikeja", "Port Harcourt".
+  city       String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
 /// One client's rating of one professional listing.
 ///
 /// The directory card draws stars and a review count next to a Book button,
