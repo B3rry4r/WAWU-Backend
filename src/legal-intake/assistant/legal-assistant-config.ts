@@ -30,7 +30,9 @@ export const ASSISTANT_BRIEF_ATTEMPTS_PER_HOUR = 5;
 /**
  * How long a claim on a conversation (a retry of the reply, or preparing the
  * brief) holds if the process holding it dies, in milliseconds. The provider
- * call is shorter than this, so a live claim is never stolen.
+ * adapter sets no timeout of its own, so a call that hangs longer than this
+ * lets one more claim start; every call is still counted against the hourly
+ * limits, so the cost stays capped either way.
  */
 export const ASSISTANT_CLAIM_MS = 60_000;
 
