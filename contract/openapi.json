@@ -20530,7 +20530,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProfileWorkView"
+                  "$ref": "#/components/schemas/ProfileWorkDetailView"
                 }
               }
             }
@@ -41214,6 +41214,32 @@
           "communityCount"
         ]
       },
+      "ProfileWorkOwnerView": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string",
+            "nullable": true
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "wawuId",
+          "displayName",
+          "handle",
+          "avatarUrl"
+        ]
+      },
       "ProfileWorkCategoryView": {
         "type": "object",
         "properties": {
@@ -41310,6 +41336,9 @@
       "ProfileWorksView": {
         "type": "object",
         "properties": {
+          "owner": {
+            "$ref": "#/components/schemas/ProfileWorkOwnerView"
+          },
           "count": {
             "type": "number"
           },
@@ -41327,6 +41356,7 @@
           }
         },
         "required": [
+          "owner",
           "count",
           "categories",
           "works"
@@ -41363,6 +41393,68 @@
           "startYear",
           "endYear",
           "current"
+        ]
+      },
+      "ProfileWorkDetailView": {
+        "type": "object",
+        "properties": {
+          "owner": {
+            "$ref": "#/components/schemas/ProfileWorkOwnerView"
+          },
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "client": {
+            "type": "string",
+            "nullable": true
+          },
+          "year": {
+            "type": "number"
+          },
+          "link": {
+            "type": "string",
+            "nullable": true
+          },
+          "category": {
+            "type": "string",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "media": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProfileWorkMediaView"
+            }
+          },
+          "position": {
+            "type": "number"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "id",
+          "title",
+          "role",
+          "client",
+          "year",
+          "link",
+          "category",
+          "description",
+          "media",
+          "position",
+          "createdAt"
         ]
       },
       "EnrolResponse": {
