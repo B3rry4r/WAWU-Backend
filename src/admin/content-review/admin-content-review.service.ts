@@ -332,6 +332,8 @@ export class AdminContentReviewService {
         userWawuId: content.creatorWawuId,
         contentTitle: content.title,
         reason,
+        // ME-10: "See why" opens the piece, where the reason is shown (M26).
+        about: { target: { kind: 'content', id: content.id } },
       });
     }
 

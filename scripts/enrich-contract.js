@@ -303,7 +303,7 @@ function buildObject(type, depth) {
  * keeps the null.
  *
  * Only for types declared under these folders (task MONEY-04's wallet
- * contract, and task INBOX-06's chat), so no schema a served route already publishes changes shape in
+ * contract, task INBOX-06's chat and task INBOX-07's inbox), so no schema a served route already publishes changes shape in
  * the contract. The eleven served fields still written the old way are listed
  * in docs/contract/WALLET.md, section 5.
  */
@@ -311,6 +311,10 @@ const NULLABLE_REF_AS_ALLOF_DIRS = [
   path.join(ROOT, 'src', 'money') + path.sep,
   // Free chat (task INBOX-06): new routes, so nothing published changes.
   path.join(ROOT, 'src', 'chat') + path.sep,
+  // The inbox (task INBOX-07): new routes, so nothing published changes.
+  path.join(ROOT, 'src', 'inbox') + path.sep,
+  // The caller's own lists (task ME-10): new routes, so nothing published changes.
+  path.join(ROOT, 'src', 'me') + path.sep,
 ];
 
 function declaredIn(type, dirs) {
