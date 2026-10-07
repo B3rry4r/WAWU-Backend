@@ -2786,7 +2786,7 @@ model LegalIntake {
   // Also in the database, and NOT expressible here (Prisma has no partial
   // index): UNIQUE ("wawuUserId") WHERE "channel" = 'assistant' AND "status" =
   // 'in_progress', so a person has at most one open assistant conversation.
-  // See migration 20261007120000_legal_assistant. `prisma migrate diff` does
+  // See migration 20261007200000_legal_assistant. `prisma migrate diff` does
   // not list it, so the schema and the migrations still agree.
 }
 

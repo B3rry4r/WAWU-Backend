@@ -10,6 +10,7 @@ import { LegalChatService } from './legal-chat.service';
 import { LegalAssistantController } from './assistant/legal-assistant.controller';
 import { LegalAssistantOpsController } from './assistant/legal-assistant-ops.controller';
 import { LegalAssistantService } from './assistant/legal-assistant.service';
+import { LegalAssistantAllowance } from './assistant/legal-assistant-allowance';
 
 /**
  * Legal profiling. AiModule supplies the Gemini client that writes the brief;
@@ -35,6 +36,7 @@ import { LegalAssistantService } from './assistant/legal-assistant.service';
     LegalIntakeService,
     LegalIntakeOpsService,
     LegalChatService,
+    LegalAssistantAllowance,
     LegalAssistantService,
   ],
   exports: [LegalIntakeService, LegalChatService],

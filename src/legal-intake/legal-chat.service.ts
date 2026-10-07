@@ -13,6 +13,7 @@ import {
   type GeminiClient,
 } from '../common/ai/gemini-client.interface';
 import { cleanAiText, withoutEmDash } from './ai-text';
+import { LegalAssistantAllowance } from './assistant/legal-assistant-allowance';
 import type { LegalBrief } from './legal-brief';
 
 export interface ChatMessageView {
@@ -77,6 +78,7 @@ export class LegalChatService {
   constructor(
     private readonly prisma: PrismaService,
     @Inject(GEMINI_CLIENT) private readonly gemini: GeminiClient,
+    private readonly allowance: LegalAssistantAllowance,
   ) {}
 
   /**
@@ -136,13 +138,21 @@ export class LegalChatService {
       );
     }
 
-    await this.prisma.legalChatMessage.create({
-      data: {
-        legalRequestId: requestId,
-        authorRole: 'client',
-        body: body.trim(),
-      },
-    });
+    // The message is counted and written in one step under the person's
+    // lock, the same reservation `POST /legal/assistant/{id}/messages` uses
+    // after Send, so both routes draw on ONE hourly allowance and parallel
+    // posts cannot all pass the check before any is counted (LEGAL-01, D8).
+    // Over the limit this is the same 429 `assistant_rate_limited` with
+    // `retryAfterSeconds`. A request under the limit answers as it always did.
+    await this.allowance.reserve(wawuUserId, null, 'matter_message', (tx) =>
+      tx.legalChatMessage.create({
+        data: {
+          legalRequestId: requestId,
+          authorRole: 'client',
+          body: body.trim(),
+        },
+      }),
+    );
 
     await this.answerWaiting(wawuUserId, requestId);
     return this.getThread(wawuUserId, requestId);
