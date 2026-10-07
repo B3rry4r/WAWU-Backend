@@ -28854,8 +28854,7 @@
             "type": "string",
             "description": "Where you work, as people will read it: \"Ikeja\", \"Port Harcourt\".",
             "minLength": 2,
-            "maxLength": 60,
-            "pattern": "^\\p{L}[\\p{L}\\p{M}'’. -]*$"
+            "maxLength": 60
           }
         },
         "required": [

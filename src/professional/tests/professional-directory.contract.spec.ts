@@ -815,6 +815,59 @@ describe('Professional directory: fields, city, reply time, price (contract)', (
     expect(bodyOf(accented).data).toEqual({ city: 'Ìbàdàn' });
   });
 
+  it('refuses a city that draws nothing: fillers, ignorable letters, smeared marks, one letter', async () => {
+    const put = (city: string) =>
+      request(app.getHttpServer())
+        .put('/professionals/location')
+        .set('Authorization', `Bearer ${creatorToken}`)
+        .send({ city });
+    for (const city of [
+      '\u3164\u3164', // Hangul filler
+      '\uFFA0\uFFA0', // half-width Hangul filler
+      '\u115F\u1160', // Hangul choseong and jungseong fillers
+      'A' + '\u0301'.repeat(40), // a letter smeared with 40 marks
+      'Ik' + '\u0301'.repeat(4) + 'eja', // 4 marks on one letter
+      'Ikeja\u034F', // combining grapheme joiner
+      'Ik\u3164eja', // a filler inside a real name
+      'A', // one letter
+      'A.', // one letter and a stop
+      "A'", // one letter and an apostrophe
+    ]) {
+      await put(city).expect(400);
+    }
+    expect(
+      await prisma.professionalLocation.findUnique({
+        where: { wawuUserId: USER_CREATOR_PRO },
+      }),
+    ).toBeNull();
+  });
+
+  it('accepts every real Nigerian city name, accented, decomposed, with an apostrophe', async () => {
+    const put = (city: string) =>
+      request(app.getHttpServer())
+        .put('/professionals/location')
+        .set('Authorization', `Bearer ${creatorToken}`)
+        .send({ city });
+    for (const [sent, saved] of [
+      ['Ikeja', 'Ikeja'],
+      ['Port Harcourt', 'Port Harcourt'],
+      ['Port  Harcourt', 'Port Harcourt'],
+      ['Ado-Ekiti', 'Ado-Ekiti'],
+      ['Ile-Ife', 'Ile-Ife'],
+      ['Abuja FCT', 'Abuja FCT'],
+      ['\u00CCb\u00E0d\u00E0n', '\u00CCb\u00E0d\u00E0n'],
+      ['I\u0300ba\u0300da\u0300n', 'I\u0300ba\u0300da\u0300n'],
+      ['\u1ECC\u0300y\u1ECD\u0301', '\u1ECC\u0300y\u1ECD\u0301'],
+      ['O\u0323\u0300y\u1ECD\u0301', 'O\u0323\u0300y\u1ECD\u0301'],
+      ["N'Djamena", "N'Djamena"],
+      ['N\u2019Djamena', 'N\u2019Djamena'],
+      ['Yola', 'Yola'],
+    ]) {
+      const res = await put(sent).expect(200);
+      expect(bodyOf(res).data).toEqual({ city: saved });
+    }
+  });
+
   // ---- the web's routes keep their answers ------------------------------------
 
   it('GET /professionals and GET /professionals/:id answer exactly the keys they did', async () => {
