@@ -26650,7 +26650,7 @@
         "type": "object",
         "properties": {
           "priceKobo": {
-            "type": "number",
+            "type": "integer",
             "nullable": true,
             "description": "The price in kobo, whole naira only (a multiple of 100), or null to leave\nthe kind unpriced so the app does not offer it. Always null for an\nin-person consultation.",
             "minimum": 100,
@@ -26678,7 +26678,7 @@
         "type": "object",
         "properties": {
           "priceKobo": {
-            "type": "number",
+            "type": "integer",
             "nullable": true,
             "description": "The price in kobo, whole naira only, or null to quote the service instead.",
             "minimum": 100,

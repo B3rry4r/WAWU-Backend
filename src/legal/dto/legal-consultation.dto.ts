@@ -1,3 +1,4 @@
+import { ApiProperty } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -65,6 +66,7 @@ export class SetConsultationPriceDto {
    * the kind unpriced so the app does not offer it. Always null for an
    * in-person consultation.
    */
+  @ApiProperty({ type: 'integer', nullable: true })
   @ValidateIf((_, value) => value !== null)
   @IsInt()
   @Min(100)
@@ -88,6 +90,7 @@ export class SetConsultationPriceDto {
 /** Admin: set or clear a fixed-price service. */
 export class SetServicePriceDto {
   /** The price in kobo, whole naira only, or null to quote the service instead. */
+  @ApiProperty({ type: 'integer', nullable: true })
   @ValidateIf((_, value) => value !== null)
   @IsInt()
   @Min(100)
