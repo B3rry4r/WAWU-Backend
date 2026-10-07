@@ -19,7 +19,11 @@ import {
 } from './legal-catalogue';
 import { renderContract } from './contract-template';
 import { CONSULTATION_HOURS } from './availability';
-import { buildSlotDays, overlaps, appointmentMinutes } from './consultation-slots';
+import {
+  buildSlotDays,
+  overlaps,
+  appointmentMinutes,
+} from './consultation-slots';
 import { LegalPricesService, isBookable } from './legal-prices.service';
 import type {
   BookConsultationDto,
@@ -116,7 +120,9 @@ export class LegalRequestsService {
         // Unpaid: a short hold while the payer is in checkout.
         {
           consultationPaidAt: null,
-          updatedAt: { gte: new Date(now.getTime() - UNPAID_HOLD_MINUTES * 60_000) },
+          updatedAt: {
+            gte: new Date(now.getTime() - UNPAID_HOLD_MINUTES * 60_000),
+          },
         },
       ],
     };
@@ -140,7 +146,9 @@ export class LegalRequestsService {
         { status: { notIn: [...SLOT_HOLDING_STATUSES] } },
         {
           consultationPaidAt: null,
-          updatedAt: { lt: new Date(now.getTime() - UNPAID_HOLD_MINUTES * 60_000) },
+          updatedAt: {
+            lt: new Date(now.getTime() - UNPAID_HOLD_MINUTES * 60_000),
+          },
         },
       ],
     };
@@ -168,15 +176,30 @@ export class LegalRequestsService {
       categories: LEGAL_CATEGORIES,
       consultationOptions: options
         .filter((o) => o.medium !== 'phone' && isBookable(o))
-        .map((o) => ({
-          medium: o.medium,
-          label: CATALOGUE_LABELS[o.medium as keyof typeof CATALOGUE_LABELS],
-          minutes: o.minutes,
-          feeNaira: LegalPricesService.toNaira(o.priceKobo),
-        })),
+        .map((o) =>
+          // The web books an in-person consultation without a slot or a
+          // checkout, so it is listed unpriced as it always was, whatever the
+          // app shows for it (LEGAL-03).
+          o.medium === 'physical'
+            ? {
+                medium: o.medium,
+                label: CATALOGUE_LABELS.physical,
+                minutes: null,
+                feeNaira: null,
+              }
+            : {
+                medium: o.medium,
+                label:
+                  CATALOGUE_LABELS[o.medium as keyof typeof CATALOGUE_LABELS],
+                minutes: o.minutes,
+                feeNaira: LegalPricesService.toNaira(o.priceKobo),
+              },
+        ),
       services: LEGAL_SERVICES.map((s) => ({
         ...s,
-        priceNaira: LegalPricesService.toNaira(servicePrices.get(s.code) ?? null),
+        priceNaira: LegalPricesService.toNaira(
+          servicePrices.get(s.code) ?? null,
+        ),
       })),
     };
   }
@@ -250,9 +273,12 @@ export class LegalRequestsService {
         'That kind of consultation is not available right now.',
       );
     }
+    // The web's in-person path records a request and charges nothing up
+    // front, as it always has, so it never reads an in-person price.
+    const inPerson = dto.medium === 'physical';
     const option = {
-      minutes: row.minutes,
-      feeNaira: LegalPricesService.toNaira(row.priceKobo),
+      minutes: inPerson ? null : row.minutes,
+      feeNaira: inPerson ? null : LegalPricesService.toNaira(row.priceKobo),
     };
 
     // Chat and Zoom happen at a specific hour, so one has to be chosen. A
@@ -264,7 +290,10 @@ export class LegalRequestsService {
         throw new BadRequestException('Pick a time for your consultation.');
       }
       scheduledFor = new Date(dto.scheduledFor);
-      if (Number.isNaN(scheduledFor.getTime()) || scheduledFor.getTime() <= Date.now()) {
+      if (
+        Number.isNaN(scheduledFor.getTime()) ||
+        scheduledFor.getTime() <= Date.now()
+      ) {
         throw new BadRequestException('Pick a time in the future.');
       }
       const now = new Date();
@@ -296,7 +325,9 @@ export class LegalRequestsService {
           ),
       );
       if (clash) {
-        throw new ConflictException('That time has just been taken. Pick another.');
+        throw new ConflictException(
+          'That time has just been taken. Pick another.',
+        );
       }
     } else if (dto.scheduledFor) {
       throw new BadRequestException(
@@ -351,7 +382,9 @@ export class LegalRequestsService {
       // two clients being sold the same hour; the check above is only the
       // friendly version of it. Losing the race is a conflict, not a 500.
       if ((e as { code?: string }).code === 'P2002') {
-        throw new ConflictException('That time has just been taken. Pick another.');
+        throw new ConflictException(
+          'That time has just been taken. Pick another.',
+        );
       }
       throw e;
     }
@@ -376,7 +409,9 @@ export class LegalRequestsService {
     const record = await this.owned(wawuUserId, id);
     if (record.consultationPaidAt) return this.toResponse(record);
     if (!record.consultationTxRef || record.consultationFee == null) {
-      throw new BadRequestException('No consultation has been booked on this request.');
+      throw new BadRequestException(
+        'No consultation has been booked on this request.',
+      );
     }
 
     await this.verifier.verify({
@@ -389,7 +424,10 @@ export class LegalRequestsService {
     // the Flutterwave webhook can settle this alongside the browser's /verify.
     await this.prisma.legalRequest.updateMany({
       where: { id: record.id, consultationPaidAt: null },
-      data: { consultationPaidAt: new Date(), status: 'consultation_scheduled' },
+      data: {
+        consultationPaidAt: new Date(),
+        status: 'consultation_scheduled',
+      },
     });
     const updated = await this.prisma.legalRequest.findUniqueOrThrow({
       where: { id: record.id },
@@ -652,7 +690,8 @@ export class LegalRequestsService {
         'You need to read and sign the engagement letter before paying for this work.',
       );
     }
-    if (record.servicePaidAt) throw new ConflictException('This work is already paid for.');
+    if (record.servicePaidAt)
+      throw new ConflictException('This work is already paid for.');
 
     const txRef = record.serviceTxRef ?? `wawu-legal-${randomUUID()}`;
     const updated = await this.prisma.legalRequest.update({
@@ -682,7 +721,9 @@ export class LegalRequestsService {
       throw new BadRequestException('This request is not ready for payment.');
     }
     if (!record.contractSignedAt) {
-      throw new BadRequestException('The engagement letter has not been signed.');
+      throw new BadRequestException(
+        'The engagement letter has not been signed.',
+      );
     }
 
     await this.verifier.verify({

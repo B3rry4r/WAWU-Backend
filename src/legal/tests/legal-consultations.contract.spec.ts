@@ -78,7 +78,7 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
   const http = () => request(app.getHttpServer());
   const as = (token: string) => ({ Authorization: `Bearer ${token}` });
 
-  async function setConsultation(
+  function setConsultation(
     medium: string,
     body: Record<string, unknown>,
     role: 'superadmin' | 'finance' = 'finance',
@@ -294,9 +294,41 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
       }
     });
 
-    it('gives an in-person consultation no price or length', async () => {
-      await setConsultation('physical', { priceKobo: 1_500_000, minutes: null }).expect(400);
-      await setConsultation('physical', { priceKobo: null, minutes: 30 }).expect(400);
+    it('lets WAWU price an in-person consultation, which the app shows and the web never charges', async () => {
+      await priceAll();
+      await setConsultation('physical', { priceKobo: 2_000_000, minutes: 90 }).expect(200);
+      const offered = await http()
+        .get('/api/hub/legal/consultation/options')
+        .set(as(userToken))
+        .expect(200);
+      expect(offered.body.data.options).toContainEqual({
+        medium: 'physical',
+        label: 'In person',
+        minutes: 90,
+        priceKobo: 2_000_000,
+        onRequest: true,
+      });
+      const catalogue = await http().get('/api/hub/legal/catalogue').set(as(userToken)).expect(200);
+      expect(catalogue.body.data.consultationOptions).toContainEqual({
+        medium: 'physical',
+        label: 'In person',
+        minutes: null,
+        feeNaira: null,
+      });
+      const mine = await newRequest(userToken);
+      const web = await http()
+        .post(`/api/hub/legal/requests/${mine.id}/consultation`)
+        .set(as(userToken))
+        .send({ medium: 'physical' })
+        .expect(200);
+      expect(web.body.data.flutterwaveConfig).toBeNull();
+      expect(web.body.data.request.consultationFee).toBeNull();
+      const app = await http()
+        .post(`/api/hub/legal/requests/${mine.id}/booking`)
+        .set(as(userToken))
+        .send({ medium: 'physical' })
+        .expect(200);
+      expect(app.body.data).toMatchObject({ minutes: 90, priceKobo: 2_000_000, scheduledFor: null });
       await setConsultation('physical', { priceKobo: null, minutes: null }).expect(200);
     });
 
@@ -997,6 +1029,14 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
         pages: null,
         chatMessageId: null,
       });
+
+      // More files added later sit after it; the first file stays listed.
+      await deliver(work.id, { files: [FILES[1]] }).expect(200);
+      const after = await http().get(`/api/hub/legal/requests/${work.id}/deliverables`).set(as(userToken)).expect(200);
+      expect(after.body.data.items.map((i: { url: string }) => i.url)).toEqual([
+        'https://files.example.com/Final%20agreement.pdf',
+        FILES[1].url,
+      ]);
     });
 
     it('lists nothing before anything is delivered', async () => {

@@ -75,7 +75,8 @@ export function buildSlotDays(
     const closes = closingTime(day.date);
     const slots = day.slots
       .filter(
-        (slot) => new Date(slot.startsAt).getTime() + minutes * MINUTE_MS <= closes,
+        (slot) =>
+          new Date(slot.startsAt).getTime() + minutes * MINUTE_MS <= closes,
       )
       .map((slot) => {
         const start = new Date(slot.startsAt);
@@ -90,7 +91,11 @@ export function buildSlotDays(
 }
 
 /** Whether `start` is one of the starts the calendar offers for a call of `minutes`. */
-export function isOfferedStart(start: Date, minutes: number, now: Date): boolean {
+export function isOfferedStart(
+  start: Date,
+  minutes: number,
+  now: Date,
+): boolean {
   const iso = start.toISOString();
   return buildSlotDays([], minutes, now).some((day) =>
     day.slots.some((slot) => slot.startsAt === iso),

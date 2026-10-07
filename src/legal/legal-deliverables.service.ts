@@ -114,7 +114,9 @@ export class LegalDeliverablesService {
             },
           });
           if (flipped.count === 0) {
-            throw new ConflictException('This request has just been delivered.');
+            throw new ConflictException(
+              'This request has just been delivered.',
+            );
           }
         }
         return fresh.map((f) => ({ fileName: f.fileName, url: f.url }));
@@ -157,7 +159,10 @@ export class LegalDeliverablesService {
   }
 
   /** The client's own delivered files. */
-  async list(wawuUserId: string, requestId: string): Promise<LegalDeliverablesView> {
+  async list(
+    wawuUserId: string,
+    requestId: string,
+  ): Promise<LegalDeliverablesView> {
     const request = await this.prisma.legalRequest.findUnique({
       where: { id: requestId },
     });
@@ -172,9 +177,10 @@ export class LegalDeliverablesService {
   }
 
   /**
-   * The files of a request, oldest first. A request delivered through the
-   * single-file route has no rows, so its one file is read from
-   * `deliverableUrl` and has no chat message.
+   * The files of a request, oldest first. A file delivered through the
+   * single-file route has no row and no chat message, so it is read from
+   * `deliverableUrl` and listed first, unless a row already carries it. That
+   * keeps it listed when more files are added to the same request later.
    */
   private async items(request: {
     id: string;
@@ -185,29 +191,26 @@ export class LegalDeliverablesService {
       where: { legalRequestId: request.id },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
-    if (rows.length > 0) {
-      return rows.map((r) => ({
-        id: r.id,
-        fileName: r.fileName,
-        url: r.url,
-        pages: r.pages,
-        chatMessageId: r.chatMessageId,
-        postedAt: r.createdAt.toISOString(),
-      }));
+    const items: LegalDeliverableView[] = rows.map((r) => ({
+      id: r.id,
+      fileName: r.fileName,
+      url: r.url,
+      pages: r.pages,
+      chatMessageId: r.chatMessageId,
+      postedAt: r.createdAt.toISOString(),
+    }));
+    const legacy = request.deliverableUrl;
+    if (legacy && !rows.some((r) => r.url === legacy)) {
+      items.unshift({
+        id: `${request.id}:deliverable`,
+        fileName: fileNameFromUrl(legacy),
+        url: legacy,
+        pages: null,
+        chatMessageId: null,
+        postedAt: (request.deliveredAt ?? new Date(0)).toISOString(),
+      });
     }
-    if (request.deliverableUrl) {
-      return [
-        {
-          id: `${request.id}:deliverable`,
-          fileName: fileNameFromUrl(request.deliverableUrl),
-          url: request.deliverableUrl,
-          pages: null,
-          chatMessageId: null,
-          postedAt: (request.deliveredAt ?? new Date(0)).toISOString(),
-        },
-      ];
-    }
-    return [];
+    return items;
   }
 }
 

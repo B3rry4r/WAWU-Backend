@@ -37,10 +37,11 @@ export interface ConsultationOptionRow {
 /**
  * Whether a kind can be booked now (R-14).
  *
- * An in-person consultation is arranged directly, so it needs no price or
- * length, only the switch. Every other kind needs both, because a call with no
- * price has nothing to charge and a call with no length has no place in the
- * calendar.
+ * An in-person consultation is arranged with the client directly and books no
+ * hour, so it needs only the switch: a price and a length are shown when WAWU
+ * set them, and "on request" when it did not. Every other kind needs both,
+ * because a call with no price has nothing to charge and a call with no length
+ * has no place in the calendar.
  */
 export function isBookable(row: ConsultationOptionRow): boolean {
   if (!row.enabled) return false;
@@ -139,11 +140,6 @@ export class LegalPricesService {
     medium: ConsultationMediumId,
     dto: SetConsultationPriceDto,
   ): Promise<AdminConsultationPriceView> {
-    if (medium === 'physical' && (dto.priceKobo !== null || dto.minutes !== null)) {
-      throw new BadRequestException(
-        'An in-person consultation is arranged directly and priced per matter, so it has no price or length here.',
-      );
-    }
     const before = await this.consultationOption(medium);
     const enabled = dto.enabled ?? true;
     const saved = await this.prisma.legalConsultationOption.upsert({
@@ -204,7 +200,9 @@ export class LegalPricesService {
     });
     let updatedAt: Date | null = null;
     if (dto.priceKobo === null) {
-      await this.prisma.legalServicePrice.deleteMany({ where: { serviceCode } });
+      await this.prisma.legalServicePrice.deleteMany({
+        where: { serviceCode },
+      });
     } else {
       const saved = await this.prisma.legalServicePrice.upsert({
         where: { serviceCode },
@@ -239,7 +237,9 @@ export class LegalPricesService {
   }
 }
 
-function toAdminConsultation(row: ConsultationOptionRow): AdminConsultationPriceView {
+function toAdminConsultation(
+  row: ConsultationOptionRow,
+): AdminConsultationPriceView {
   return {
     medium: row.medium,
     label: APP_LABELS[row.medium],

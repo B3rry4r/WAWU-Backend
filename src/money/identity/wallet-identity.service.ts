@@ -1,15 +1,15 @@
-import { HttpException, Injectable, Logger } from '@nestjs/common';
+import { HttpException, Inject, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { toLocalNigerianPhone } from '../../wallet-provider/nigerian-phone';
 import {
-  FintavaClient,
-  toFintavaLocalPhone,
-} from '../../fintava/fintava-client';
-import { FINTAVA_DEFAULTS } from '../../fintava/fintava-config';
+  type ProviderIdentity,
+  WALLET_PROVIDER,
+  type WalletProvider,
+} from '../../wallet-provider/wallet-provider.interface';
 import {
-  FintavaError,
-  type FintavaErrorKind,
-} from '../../fintava/fintava-error';
-import type { FintavaBvnIdentity } from '../../fintava/fintava.interface';
+  WalletProviderError,
+  type WalletProviderErrorKind,
+} from '../../wallet-provider/wallet-provider-error';
 import { Prisma } from '../../../generated/prisma/client';
 import { MoneyError } from '../money-error';
 import { bvnNameKeys } from './bvn-name';
@@ -54,10 +54,12 @@ export const CHECK_AGAIN_MESSAGE = 'Check your BVN again to continue.';
  * all), a key Fintava refused, or the merchant gate (a 403 there was not
  * charged, `sandbox/04-bvn-check.md` in the mobile repo).
  */
-const NOT_CHARGED: readonly FintavaErrorKind[] = [
+const NOT_CHARGED: readonly WalletProviderErrorKind[] = [
   'not_configured',
   'auth',
   'merchant_inactive',
+  // MONEY-20: a provider with no BVN lookup sends nothing.
+  'not_supported',
 ];
 
 const MONTHS = [
@@ -118,7 +120,7 @@ function name(raw: string | null): string | null {
 }
 
 /** A5's card, from Fintava's answer. The photo is never passed on. */
-export function bvnPrefill(identity: FintavaBvnIdentity): BvnPrefillView {
+export function bvnPrefill(identity: ProviderIdentity): BvnPrefillView {
   return {
     firstName: name(identity.firstName),
     middleName: name(identity.middleName),
@@ -175,7 +177,7 @@ export class WalletIdentityService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly fintava: FintavaClient,
+    @Inject(WALLET_PROVIDER) private readonly provider: WalletProvider,
     private readonly hasher: IdentityHasher,
   ) {
     this.sealer = new CheckHandleSealer(hasher);
@@ -194,10 +196,7 @@ export class WalletIdentityService {
     accountPhone: string | null | undefined,
     input: BvnCheckDto,
   ): Promise<BvnCheckView> {
-    if (
-      !this.hasher.configured ||
-      this.fintava.environment === 'unconfigured'
-    ) {
+    if (!this.hasher.configured || !this.provider.configured) {
       throw this.unavailable();
     }
     // Hashed first: from here on only hashes and last 4 digits are handled.
@@ -213,17 +212,17 @@ export class WalletIdentityService {
     if (wallet) {
       throw new MoneyError('wallet_already_open', WALLET_ALREADY_OPEN_MESSAGE);
     }
-    const ownPhone = toFintavaLocalPhone(accountPhone ?? '');
+    const ownPhone = toLocalNigerianPhone(accountPhone ?? '');
     if (!ownPhone) {
       throw new MoneyError('phone_not_nigerian', PHONE_NOT_NIGERIAN_MESSAGE);
     }
 
     const attempt = await this.reserve(wawuUserId);
-    let identity: FintavaBvnIdentity;
+    let identity: ProviderIdentity;
     try {
-      identity = await this.fintava.verifyBvn(input.bvn);
+      identity = await this.provider.checkIdentity(input.bvn);
     } catch (e) {
-      if (!(e instanceof FintavaError)) {
+      if (!(e instanceof WalletProviderError)) {
         await this.settle(attempt.id, 'unavailable');
         throw e;
       }
@@ -244,7 +243,7 @@ export class WalletIdentityService {
     // A14: the BVN's phone must be the account's. A BVN record without a
     // phone cannot match, so it is refused the same way. The BVN's phone
     // itself is never stored, logged or answered, in any form.
-    const bvnPhone = toFintavaLocalPhone(identity.phone ?? '');
+    const bvnPhone = toLocalNigerianPhone(identity.phone ?? '');
     if (bvnPhone !== ownPhone) {
       await this.settle(attempt.id, 'phone_mismatch');
       throw new MoneyError('bvn_phone_mismatch', BVN_PHONE_MISMATCH_MESSAGE, {
@@ -585,7 +584,7 @@ export class WalletIdentityService {
       'provider_unreachable',
       IDENTITY_UNAVAILABLE_MESSAGE,
       {
-        retryAfterSeconds: FINTAVA_DEFAULTS.retryAfterSeconds,
+        retryAfterSeconds: this.provider.timings.retryAfterSeconds,
       },
     );
   }

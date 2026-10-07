@@ -25,6 +25,7 @@ import { ResponseInterceptor } from '../../../common/interceptors/response.inter
 import { PrismaModule } from '../../../common/prisma/prisma.module';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { FintavaClient } from '../../../fintava/fintava-client';
+import { FintavaWalletProvider } from '../../../fintava/fintava-wallet-provider';
 import type { MoneyErrorReason } from '../../dto/money-error.dto';
 import { MoneyModule } from '../../money.module';
 import { IdentityConfigError, IdentityHasher } from '../identity-config';
@@ -734,7 +735,11 @@ describe('Open your wallet identity step (KYC-01) over HTTP', () => {
         new ConfigService({ IDENTITY_HASH_KEY: '' }),
       );
       expect(hasher.configured).toBe(false);
-      const bare = new WalletIdentityService(prisma, fintava, hasher);
+      const bare = new WalletIdentityService(
+        prisma,
+        new FintavaWalletProvider(fintava),
+        hasher,
+      );
       const user = person();
       await expect(
         bare.checkBvn(user.id, ACCOUNT_PHONE, { bvn: BVNS.good, nin: NIN }),

@@ -27,7 +27,12 @@ import { LegalPricesService } from './legal-prices.service';
  * documents at length as load-bearing — is therefore untouched.
  */
 @Module({
-  imports: [PrismaModule, AdminAuthModule, AdminOpsAuditModule, NotificationModule],
+  imports: [
+    PrismaModule,
+    AdminAuthModule,
+    AdminOpsAuditModule,
+    NotificationModule,
+  ],
   controllers: [
     LegalController,
     LegalOpsController,

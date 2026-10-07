@@ -49,7 +49,9 @@ export class LegalConsultationController {
 
   /** The calendar for a video or phone call, at that call's length. */
   @Get('consultation/slots')
-  slots(@Query() query: ConsultationSlotsQueryDto): Promise<ConsultationSlotsView> {
+  slots(
+    @Query() query: ConsultationSlotsQueryDto,
+  ): Promise<ConsultationSlotsView> {
     return this.consultation.slots(query.medium);
   }
 

@@ -18,13 +18,16 @@ export interface ConsultationOptionView {
   medium: BookableMedium;
   /** What the app calls it: "Video call", "Phone call", "In person". */
   label: string;
-  /** How long it runs. Null for an in-person consultation. */
+  /** How long it runs. Null for an in-person consultation WAWU gave no length. */
   minutes: number | null;
-  /** The price WAWU set in admin. Null for an in-person consultation. */
+  /**
+   * The price WAWU set in admin. Null only for an in-person consultation WAWU
+   * left unpriced, which the app shows as "On request".
+   */
   priceKobo: number | null;
   /**
-   * True when there is no price to charge up front: the consultation is
-   * arranged directly and priced per matter (in person).
+   * True for an in-person consultation: it books no hour, and the team
+   * arranges the time with the client directly.
    */
   onRequest: boolean;
 }
@@ -64,7 +67,7 @@ export interface ConsultationBookingView {
   medium: 'chat' | 'zoom' | 'phone' | 'physical' | null;
   label: string | null;
   minutes: number | null;
-  /** The price held when the hour was booked. Null for an in-person one. */
+  /** The price held when the booking was made. Null for an unpriced in-person one. */
   priceKobo: number | null;
   /** ISO start of the held hour. Null for an in-person consultation. */
   scheduledFor: string | null;
@@ -110,7 +113,7 @@ export interface AdminConsultationPriceView {
   priceKobo: number | null;
   minutes: number | null;
   enabled: boolean;
-  /** Whether the app offers it now: switched on and fully priced. */
+  /** Whether the app offers it now: switched on and, for a call, priced with a length. */
   offered: boolean;
   updatedAt: string | null;
 }

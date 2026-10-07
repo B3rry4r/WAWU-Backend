@@ -63,7 +63,12 @@ export interface LegalService {
  * them in admin (R-14, `LegalConsultationOption`), so a price is never a
  * number in this code.
  */
-export const CONSULTATION_MEDIA = ['chat', 'zoom', 'phone', 'physical'] as const;
+export const CONSULTATION_MEDIA = [
+  'chat',
+  'zoom',
+  'phone',
+  'physical',
+] as const;
 
 export type ConsultationMediumId = (typeof CONSULTATION_MEDIA)[number];
 

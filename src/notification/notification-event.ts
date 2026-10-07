@@ -30,7 +30,7 @@
  * The web's union (WAWU-Web/src/types/notification.ts) plus the two INBOX-01
  * kinds at the end.
  */
-export type NotificationKind =
+type CoreNotificationKind =
   | 'dm_deadline'
   | 'sale'
   | 'dm_received'
@@ -69,7 +69,7 @@ export type NotificationTone =
  * RECIPIENT, not the actor — because the single most common way to get a
  * notification wrong is to write it to the person who caused it.
  */
-export type NotificationEvent =
+type NotificationEventCore =
   /** Paid content unlocked. Recipient: the creator. `netAmount` is what the creator earned after commission. */
   | {
       kind: 'sale';
@@ -548,6 +548,18 @@ export function composeNotification(
         ...NO_RICH_MEDIA,
       };
 
+    case 'review_received':
+      return {
+        ...base,
+        title: 'New review',
+        body: `Someone rated “${event.contentTitle}” ${event.stars} out of 5.`,
+        tone: 'info',
+        amount: null,
+        creditsCount: null,
+        actionLabel: 'View content',
+        ...NO_RICH_MEDIA,
+      };
+
     /**
      * LEGAL-03 (S23). The documents are in the matter's conversation, so the
      * notification opens that matter: `/legal/requests/<id>`, built here from
@@ -569,4 +581,118 @@ export function composeNotification(
       };
     }
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* ME-10: reviews, and what a notification is about                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Every kind that can be written: the union above (the web's list plus the
+ * INBOX kinds) and ME-10's `review_received`. M31 and M32 list reviews
+ * ("Sales, tips, paid questions and reviews show up here").
+ */
+export type NotificationKind = CoreNotificationKind | 'review_received';
+
+/**
+ * ME-10. Somebody rated a piece for the first time (a changed rating is not
+ * news). Recipient: the creator. Stars only; who rated is the target's
+ * actor, never written into the copy.
+ */
+interface ReviewReceivedEvent {
+  kind: 'review_received';
+  userWawuId: string;
+  contentTitle: string;
+  stars: number;
+}
+
+/**
+ * ME-10. What a notification can be about: the thing opening it opens (M31).
+ * `content` a piece, `paid_question` a paid question (DirectMessage),
+ * `community` a room, `profile` a person.
+ */
+export type NotificationTargetKind =
+  'content' | 'paid_question' | 'community' | 'profile';
+
+/**
+ * ME-10. Optional on every event: the thing it is about and the other person
+ * in it. The caller passes ids it already holds from the event it is
+ * reporting; nothing here is read from a request. Stored beside the
+ * notification (NotificationTarget), never on it, so GET /notifications is
+ * unchanged.
+ */
+export interface NotificationAbout {
+  target?: { kind: NotificationTargetKind; id: string } | null;
+  /** The other person in the event (buyer, tipper, follower, asker, rater). Never the recipient. */
+  actorWawuId?: string | null;
+}
+
+/**
+ * Every event `emit()` takes: one variant per real event (see
+ * NotificationEventCore: `userWawuId` is always the RECIPIENT), each of
+ * which may also say what it is about (ME-10).
+ */
+export type NotificationEvent = (
+  NotificationEventCore | ReviewReceivedEvent
+) & {
+  about?: NotificationAbout;
+};
+
+/**
+ * ME-10. M31's filter chips: which chip each kind shows under. A Record over
+ * the union, so a kind added later does not compile until it is placed. A
+ * stored kind outside the union (nothing writes one) reads as `other`.
+ */
+export const NOTIFICATION_CATEGORY: Record<
+  NotificationKind,
+  'money' | 'messages' | 'content' | 'other'
+> = {
+  sale: 'money',
+  tip_received: 'money',
+  dm_refunded: 'money',
+  credits_low: 'money',
+  dm_received: 'messages',
+  dm_deadline: 'messages',
+  paid_dm_warning: 'messages',
+  paid_dm_paused: 'messages',
+  community_join_approved: 'messages',
+  community_join_declined: 'messages',
+  content_published: 'content',
+  content_rejected: 'content',
+  review_received: 'content',
+  new_follower: 'other',
+  kyc_verified: 'other',
+  campaign: 'other',
+  verify_reminder: 'other',
+  legal_delivered: 'other',
+};
+
+/** The NotificationTarget row emit() writes beside a notification, minus its id. */
+export interface NotificationTargetDraft {
+  targetKind: NotificationTargetKind;
+  targetId: string;
+  actorWawuId: string | null;
+}
+
+/**
+ * ME-10. What a notification is about, from its event. A join approval names
+ * its room by itself; every other kind says so through `about`. An actor who
+ * is the recipient is dropped (nobody is "the other person" to themselves).
+ * Null when the event names nothing, which leaves the row routed by `kind`.
+ */
+export function targetFor(
+  event: NotificationEvent,
+): NotificationTargetDraft | null {
+  const target =
+    event.about?.target ??
+    (event.kind === 'community_join_approved'
+      ? { kind: 'community' as const, id: event.communityId }
+      : null);
+  if (!target || !target.id) return null;
+  const actor = event.about?.actorWawuId ?? null;
+  return {
+    targetKind: target.kind,
+    targetId: target.id,
+    actorWawuId: actor && actor !== event.userWawuId ? actor : null,
+  };
 }

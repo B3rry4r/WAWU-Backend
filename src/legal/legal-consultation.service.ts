@@ -46,6 +46,9 @@ const BOOKABLE_FROM = new Set([
  */
 const BOOKING_LOCK_KEY = 726_384_511;
 
+/** `LegalRequest.consultationFee` is whole naira, as the web reads it. */
+const KOBO_PER_NAIRA = 100;
+
 /**
  * Booking a legal consultation (LEGAL-03, R-14): video, phone or in person,
  * each at the price and length WAWU set in admin, in an hour nobody else holds.
@@ -139,8 +142,11 @@ export class LegalConsultationService {
         where: { id: record.id },
         data: {
           consultationMedium: 'physical',
-          consultationFee: null,
-          consultationMinutes: null,
+          // What WAWU set for an in-person consultation, if it set anything;
+          // otherwise it is priced per matter (LEGAL-07 sets it).
+          consultationFee:
+            row.priceKobo === null ? null : row.priceKobo / KOBO_PER_NAIRA,
+          consultationMinutes: row.minutes,
           consultationTxRef: null,
           // An earlier hold on this request lets go of its hour.
           scheduledFor: null,
@@ -202,7 +208,7 @@ export class LegalConsultationService {
           where: { id: record.id },
           data: {
             consultationMedium: dto.medium,
-            consultationFee: priceKobo / 100,
+            consultationFee: priceKobo / KOBO_PER_NAIRA,
             consultationMinutes: minutes,
             // A new booking retires any checkout an earlier one started.
             consultationTxRef: null,
@@ -214,7 +220,9 @@ export class LegalConsultationService {
       return toBooking(updated);
     } catch (e) {
       if ((e as { code?: string }).code === 'P2002') {
-        throw new ConflictException('That time has just been taken. Pick another.');
+        throw new ConflictException(
+          'That time has just been taken. Pick another.',
+        );
       }
       throw e;
     }
@@ -269,11 +277,14 @@ function toBooking(r: {
     medium,
     label: medium ? APP_LABELS[medium] : null,
     minutes: r.consultationMinutes,
-    priceKobo: r.consultationFee === null ? null : r.consultationFee * 100,
+    priceKobo:
+      r.consultationFee === null ? null : r.consultationFee * KOBO_PER_NAIRA,
     scheduledFor: r.scheduledFor?.toISOString() ?? null,
     holdExpiresAt:
       !paid && r.scheduledFor
-        ? new Date(r.updatedAt.getTime() + UNPAID_HOLD_MINUTES * 60_000).toISOString()
+        ? new Date(
+            r.updatedAt.getTime() + UNPAID_HOLD_MINUTES * 60_000,
+          ).toISOString()
         : null,
     paid,
     paidAt: r.consultationPaidAt?.toISOString() ?? null,

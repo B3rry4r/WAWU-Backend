@@ -604,7 +604,29 @@ model CourseLesson {
   order         Int
   durationLabel String?
 
+  /// ME-10: who has finished this lesson (M29 "3 of 12 done").
+  progress CourseLessonProgress[]
+
   @@index([contentId])
+}
+
+/// ME-10. One person's finished lesson of a course piece: M29's
+/// "3 of 12 done" counts these against the piece's CourseLesson rows. Written
+/// only by the person themselves (PUT and DELETE /me/lessons/:lessonId/done),
+/// and only for a piece they may open (bought, free, or their own). One row
+/// per person per lesson; the lesson's piece is copied onto the row so a
+/// piece's count is one indexed read. Goes with the lesson (cascade).
+model CourseLessonProgress {
+  id         String       @id @default(uuid())
+  userWawuId String
+  lessonId   String
+  lesson     CourseLesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  contentId  String
+  doneAt     DateTime     @default(now())
+
+  @@unique([userWawuId, lessonId])
+  @@index([userWawuId, contentId])
+  @@index([lessonId])
 }
 
 model Comment {
@@ -1040,6 +1062,10 @@ model CommunityMessage {
 
   @@index([communityId])
   @@index([senderWawuId])
+  /// INBOX-07. The inbox ranks every room a person is in by its newest
+  /// message and counts the messages after a read mark: both walk one room's
+  /// messages in time order, and this index serves them without a sort.
+  @@index([communityId, sentAt])
 }
 
 model CreditsState {
@@ -1275,6 +1301,12 @@ model Notification {
   /// Null for every organically emitted notification.
   campaignId String?
 
+  /// ME-10: what this notification is about, when its event named a thing
+  /// (a piece, a paid question, a room, a person). A side table, not columns
+  /// here, so GET /notifications (protected, read by the web) returns exactly
+  /// the fields it always did. Rows written before ME-10 have none.
+  target NotificationTarget?
+
   @@index([userWawuId])
   @@index([userWawuId, read])
   @@index([createdAt])
@@ -1283,6 +1315,23 @@ model Notification {
   /// these", per user, per kind. Without this it is a sequential scan of the
   /// whole table on every run.
   @@index([userWawuId, kind, createdAt])
+}
+
+/// ME-10. What one notification is about, so opening it opens that thing
+/// (M31: Reply, See why, a piece, a person). Written by NotificationService.emit()
+/// in the same insert as its notification, from the event that caused it;
+/// never by a client. `targetKind` is content, paid_question, community or
+/// profile; `targetId` that thing's id. `actorWawuId` is the other person in
+/// the event (the buyer, tipper, follower, asker, rater), never the reader.
+model NotificationTarget {
+  notificationId String       @id
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  targetKind     String
+  targetId       String
+  actorWawuId    String?
+  createdAt      DateTime     @default(now())
+
+  @@index([actorWawuId])
 }
 
 model NotificationSettings {
@@ -2474,6 +2523,20 @@ model EventGoing {
 /// the unique constraint IS the idempotency, and a DELETE that matches
 /// nothing is still the correct end state. Private: nothing publishes who
 /// saved what, and the only count on the wire is the caller's own boolean.
+/// ME-10. One person's saved creator: the "Creators" tab of Saved (M30).
+/// A bookmark, not a follow: it sends nothing to the creator and changes no
+/// count they see. Written by PUT and DELETE /me/saved/creators/:wawuId.
+model SavedCreator {
+  id            String   @id @default(uuid())
+  userWawuId    String
+  creatorWawuId String
+  savedAt       DateTime @default(now())
+
+  @@unique([userWawuId, creatorWawuId])
+  @@index([userWawuId, savedAt])
+  @@index([creatorWawuId])
+}
+
 model EventSave {
   id         String   @id @default(uuid())
   eventId    String
@@ -4386,6 +4449,10 @@ model AdCampaign {
   /// removes its card.
   creative AdCreative?
 
+  /// Counts (ADS-05). Back-relations only; no column is added.
+  events      AdEvent[]
+  dailyTotals AdDailyTotal[]
+
   /// The serving query (ADS-04): one placement, a servable status, a window
   /// that contains now.
   @@index([placement, status, startsAt, endsAt])
@@ -4423,4 +4490,65 @@ model AdCreative {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// -----------------------------------------------------------------------------
+// Counting ad views, taps and skips (ADS-05, R-15)
+//
+// Ads are invoiced by hand, so these are reporting figures, not a ledger of
+// money. Two tables, one rule: a person's view, tap or skip of a campaign is
+// counted ONCE per UTC day.
+//
+//   AdEvent       the raw record: one row per (campaign, person, kind, day).
+//                 Its primary key IS the dedupe rule, so a double tap, a
+//                 retry or fifty parallel requests leave one row.
+//   AdDailyTotal  the daily totals: one row per (campaign, day). Moved in the
+//                 same SQL statement that creates an AdEvent row, and only
+//                 when that row was new, so the totals equal the raw rows.
+//
+// The totals hold no person, so they outlive a purged account; the raw rows
+// name a person (viewerWawuId) and are classified in
+// src/account-purge/account-data-map.ts.
+//
+// Both tables reference AdCampaign with ON DELETE RESTRICT: a campaign that
+// has been counted cannot be deleted, because its counts are what the owner
+// invoices from. A campaign is ended or paused, never deleted, once it ran.
+// CHECK constraints (counts are not negative) are in the migration.
+// -----------------------------------------------------------------------------
+
+/// What a person did with a sponsored card.
+enum AdEventType {
+  view
+  tap
+  skip
+}
+
+/// One person, one kind of action, one campaign, one UTC day. Never updated.
+model AdEvent {
+  campaignId   String
+  campaign     AdCampaign  @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  viewerWawuId String
+  type         AdEventType
+  /// The UTC calendar day of `createdAt`.
+  day          DateTime    @db.Date
+  createdAt    DateTime    @default(now())
+
+  @@id([campaignId, viewerWawuId, type, day])
+  /// The report: one campaign over a span of days.
+  @@index([campaignId, day])
+  /// Removing an account's rows.
+  @@index([viewerWawuId])
+}
+
+/// A campaign's counts for one UTC day. Written only by the statement that
+/// also writes the AdEvent row it counts.
+model AdDailyTotal {
+  campaignId String
+  campaign   AdCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  day        DateTime   @db.Date
+  views      Int        @default(0)
+  taps       Int        @default(0)
+  skips      Int        @default(0)
+
+  @@id([campaignId, day])
 }
