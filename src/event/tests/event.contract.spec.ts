@@ -1221,6 +1221,99 @@ describe('Events contract (app-facing)', () => {
       expect(res.body.data.priceFromNaira).toBeNull();
     });
 
+    it('GET /events/from-prices skips a tier that sold out or ended, and says null when none can be bought', async () => {
+      const day = 24 * 3600 * 1000;
+      await prisma.eventTicketType.createMany({
+        data: [
+          {
+            eventId: EV_PUBLISHED,
+            tier: 'early_bird',
+            name: 'Early bird',
+            priceNaira: 5000,
+            quantity: 10,
+            sold: 10,
+          },
+          {
+            eventId: EV_PUBLISHED,
+            tier: 'regular',
+            name: 'Ended',
+            priceNaira: 6000,
+            quantity: 10,
+            salesEndAt: new Date(Date.now() - day),
+          },
+          {
+            eventId: EV_PUBLISHED,
+            tier: 'regular',
+            name: 'Not yet',
+            priceNaira: 6500,
+            quantity: 10,
+            salesStartAt: new Date(Date.now() + day),
+          },
+          {
+            eventId: EV_PUBLISHED,
+            tier: 'regular',
+            name: 'Regular',
+            priceNaira: 7500,
+            quantity: 10,
+          },
+          {
+            eventId: EV_PUBLISHED,
+            tier: 'vip',
+            name: 'VIP',
+            priceNaira: 12000,
+            quantity: 10,
+          },
+        ],
+      });
+
+      const list = await http()
+        .get(`/api/hub/events/${EV_PUBLISHED}`)
+        .set(auth(strangerToken))
+        .expect(200);
+      // The Hub's own field is unchanged: every tier counts.
+      expect(list.body.data.priceFromNaira).toBe(5000);
+
+      const res = await http()
+        .get(`/api/hub/events/from-prices?ids=${EV_PUBLISHED}`)
+        .set(auth(strangerToken))
+        .expect(200);
+      expect(res.body.data.prices).toEqual([
+        { eventId: EV_PUBLISHED, priceFromNaira: 7500 },
+      ]);
+
+      await prisma.eventTicketType.updateMany({
+        where: { eventId: EV_PUBLISHED, name: { in: ['Regular', 'VIP'] } },
+        data: { sold: 10 },
+      });
+      const none = await http()
+        .get(`/api/hub/events/from-prices?ids=${EV_PUBLISHED}`)
+        .set(auth(strangerToken))
+        .expect(200);
+      expect(none.body.data.prices).toEqual([
+        { eventId: EV_PUBLISHED, priceFromNaira: null },
+      ]);
+    });
+
+    it('GET /events/from-prices needs a sign-in, refuses a bad id, and leaves a submission still in the queue out', async () => {
+      await http()
+        .get(`/api/hub/events/from-prices?ids=${EV_PUBLISHED}`)
+        .expect(401);
+      await http()
+        .get('/api/hub/events/from-prices?ids=nope')
+        .set(auth(strangerToken))
+        .expect(400);
+      const empty = await http()
+        .get('/api/hub/events/from-prices')
+        .set(auth(strangerToken))
+        .expect(200);
+      expect(empty.body.data.prices).toEqual([]);
+      const queued = await http()
+        .get(`/api/hub/events/from-prices?ids=${EV_PENDING}`)
+        .set(auth(strangerToken))
+        .expect(200);
+      expect(queued.body.data.prices).toEqual([]);
+    });
+
     it('refuses a price on the event itself — tickets are their own resource', async () => {
       await http()
         .post('/api/hub/events')

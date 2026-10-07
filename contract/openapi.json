@@ -21634,6 +21634,43 @@
         ]
       }
     },
+    "/api/hub/events/from-prices": {
+      "get": {
+        "operationId": "EventController_fromPrices",
+        "parameters": [
+          {
+            "name": "ids",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "maxItems": 50,
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventFromPricesView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The \"from\" price a person can actually pay, for a page of events at once\n(EVENTS-01, G-271): the cheapest tier on sale now and not sold out, null\nwhen none can be bought. `priceFromNaira` on the event keeps counting\nevery tier, because the web reads it that way. Declared before `:id`.",
+        "tags": [
+          "Event"
+        ]
+      }
+    },
     "/api/hub/events/{id}": {
       "get": {
         "operationId": "EventController_findOne",
@@ -40670,6 +40707,33 @@
           "categories",
           "formats",
           "types"
+        ]
+      },
+      "EventFromPricesView": {
+        "type": "object",
+        "properties": {
+          "prices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "eventId": {
+                  "type": "string"
+                },
+                "priceFromNaira": {
+                  "type": "number",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "eventId",
+                "priceFromNaira"
+              ]
+            }
+          }
+        },
+        "required": [
+          "prices"
         ]
       },
       "EventGoingView": {
