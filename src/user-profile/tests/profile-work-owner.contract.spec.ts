@@ -1,6 +1,7 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
+import { createServer, Server, Socket } from 'node:net';
 import request from 'supertest';
 import { AllExceptionsFilter } from '../../common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../../common/interceptors/response.interceptor';
@@ -8,6 +9,7 @@ import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
 import { WawuIdClient } from '../../common/auth/wawu-id.client';
+import { StorageService } from '../../storage/storage.service';
 import { UserProfileModule } from '../user-profile.module';
 
 /**
@@ -33,6 +35,7 @@ const OWNER_EMAIL = 'creator-pro@test.wawu.dev';
 const OWNER_SUB = '00000000-0000-4000-8000-000000000003';
 const OWNER_NAME = 'Zainab Bello';
 const VISITOR_EMAIL = 'creator-basic@test.wawu.dev';
+const VISITOR_SUB = '00000000-0000-4000-8000-000000000002';
 /** A seeded account with a profile and no creator state: nobody can visit it. */
 const PLAIN_SUB = '00000000-0000-4000-8000-000000000001';
 
@@ -58,6 +61,7 @@ describe('Featured works: whose they are (ME-11)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let wawuId: WawuIdClient;
+  let storage: StorageService;
   let baseUrl = '';
   let ownerToken: string;
   let visitorToken: string;
@@ -107,6 +111,7 @@ describe('Featured works: whose they are (ME-11)', () => {
     baseUrl = await app.getUrl();
     prisma = moduleRef.get(PrismaService);
     wawuId = moduleRef.get(WawuIdClient, { strict: false });
+    storage = moduleRef.get(StorageService, { strict: false });
     const profile = await prisma.userProfile.findUnique({
       where: { wawuUserId: OWNER_SUB },
       select: { handle: true, avatarUrl: true },
@@ -155,6 +160,68 @@ describe('Featured works: whose they are (ME-11)', () => {
     }
   });
 
+  it('the picture is a fresh signed link made from the stored one, never the stored value itself', async () => {
+    await addWork();
+    const stored = `profile/avatar/${OWNER_SUB}/stored-value.jpg`;
+    const spy = jest
+      .spyOn(storage, 'freshUrlFor')
+      .mockImplementation((value: string | null) =>
+        Promise.resolve(
+          value ? `https://signed.example/${value}?sig=fresh` : value,
+        ),
+      );
+    await prisma.userProfile.update({
+      where: { wawuUserId: OWNER_SUB },
+      data: { avatarUrl: stored },
+    });
+    try {
+      const res = await http()
+        .get(`/users/${OWNER_SUB}/featured-works`)
+        .set(auth(visitorToken))
+        .expect(200);
+      expect(data<{ owner: OwnerJson }>(res).owner.avatarUrl).toBe(
+        `https://signed.example/${stored}?sig=fresh`,
+      );
+      expect(spy).toHaveBeenCalledWith(stored);
+    } finally {
+      // Put the seeded row back exactly as it was.
+      await prisma.userProfile.update({
+        where: { wawuUserId: OWNER_SUB },
+        data: { avatarUrl: ownerAvatar },
+      });
+    }
+  });
+
+  it("a work is only ever opened under its own owner: someone else's id with this work id is a 404, both ways", async () => {
+    const id = await addWork();
+    // Another visible creator's page, this person's work id.
+    const wrongOwner = await http()
+      .get(`/users/${VISITOR_SUB}/featured-works/${id}`)
+      .set(auth(ownerToken))
+      .expect(404);
+    expect((wrongOwner.body as { message: string }).message).toBe(
+      'Work not found',
+    );
+    expect(JSON.stringify(wrongOwner.body)).not.toContain('Owner view');
+    // And the right owner still opens it.
+    await http()
+      .get(`/users/${OWNER_SUB}/featured-works/${id}`)
+      .set(auth(visitorToken))
+      .expect(200);
+    // A person cannot reach it through their own routes either.
+    await http()
+      .patch(`/users/me/featured-works/${id}`)
+      .set(auth(visitorToken))
+      .send({ title: 'Taken' })
+      .expect(404);
+    await http()
+      .delete(`/users/me/featured-works/${id}`)
+      .set(auth(visitorToken))
+      .expect(404);
+    const still = await prisma.profileWork.findUnique({ where: { id } });
+    expect(still?.title).toBe('Owner view');
+  });
+
   it('a visitor opening one work gets the same owner beside it', async () => {
     const id = await addWork();
     const res = await http()
@@ -189,6 +256,87 @@ describe('Featured works: whose they are (ME-11)', () => {
       .set(auth(visitorToken))
       .expect(200);
     expect(data<{ owner: OwnerJson }>(res).owner.displayName).toBe(ownerHandle);
+  });
+
+  describe('when WAWU ID accepts the call and never answers (D1)', () => {
+    let stall: Server;
+    let stallUrl = '';
+    const held = new Set<Socket>();
+    let realBase = '';
+
+    beforeAll(async () => {
+      // A stand-in that takes the connection, reads nothing back, answers nothing.
+      stall = createServer((socket) => {
+        held.add(socket);
+        socket.on('error', () => undefined);
+        socket.on('close', () => held.delete(socket));
+      });
+      await new Promise<void>((resolve) =>
+        stall.listen(0, '127.0.0.1', resolve),
+      );
+      const addr = stall.address();
+      if (addr === null || typeof addr === 'string')
+        throw new Error('no stall port');
+      stallUrl = `http://127.0.0.1:${addr.port}`;
+    });
+
+    afterAll(async () => {
+      for (const socket of held) socket.destroy();
+      await new Promise<void>((resolve) => stall.close(() => resolve()));
+    });
+
+    beforeEach(() => {
+      realBase = (wawuId as unknown as { baseUrl: string }).baseUrl;
+      Object.assign(wawuId, { baseUrl: stallUrl });
+    });
+
+    afterEach(() => {
+      Object.assign(wawuId, { baseUrl: realBase });
+    });
+
+    it("a visitor's list answers inside 3 seconds, with the handle as the name", async () => {
+      await addWork();
+      const started = Date.now();
+      const res = await http()
+        .get(`/users/${OWNER_SUB}/featured-works`)
+        .set(auth(visitorToken))
+        .timeout({ response: 8000, deadline: 8000 })
+        .expect(200);
+      expect(Date.now() - started).toBeLessThan(3000);
+      const owner = data<{ owner: OwnerJson }>(res).owner;
+      expect(owner.displayName).toBe(ownerHandle);
+      expect(owner.handle).toBe(ownerHandle);
+      expect(owner.wawuId).toBe(OWNER_SUB);
+      expect(held.size).toBeGreaterThan(0);
+    }, 15000);
+
+    it("one work's detail answers inside 3 seconds, with the handle as the name", async () => {
+      const id = await addWork();
+      const started = Date.now();
+      const res = await http()
+        .get(`/users/${OWNER_SUB}/featured-works/${id}`)
+        .set(auth(visitorToken))
+        .timeout({ response: 8000, deadline: 8000 })
+        .expect(200);
+      expect(Date.now() - started).toBeLessThan(3000);
+      const body = data<Json & { owner: OwnerJson }>(res);
+      expect(body.id).toBe(id);
+      expect(body.owner.displayName).toBe(ownerHandle);
+    }, 15000);
+
+    it('the owner reading their own list is not held either', async () => {
+      await addWork();
+      const started = Date.now();
+      const res = await http()
+        .get('/users/me/featured-works')
+        .set(auth(ownerToken))
+        .timeout({ response: 8000, deadline: 8000 })
+        .expect(200);
+      expect(Date.now() - started).toBeLessThan(3000);
+      expect(data<{ owner: OwnerJson }>(res).owner.displayName).toBe(
+        ownerHandle,
+      );
+    }, 15000);
   });
 
   it('a page nobody can visit has no owner to read: the same 404 as before', async () => {

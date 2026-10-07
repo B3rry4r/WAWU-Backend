@@ -44,6 +44,14 @@ import type {
 } from './profile-work.type';
 
 const WORK_NOT_FOUND = 'Work not found';
+/**
+ * How long a works list or a work waits for WAWU ID's name lookup (ME-11, D1).
+ * The lookup has no timeout of its own (the client is fenced), and a service
+ * that accepts a connection and never answers would hold the page for as long
+ * as the socket lives. Past this the name is the handle, exactly as when WAWU
+ * ID is down.
+ */
+export const OWNER_LOOKUP_TIMEOUT_MS = 2000;
 const MEDIA_REFUSED = 'Every picture or video must be one you uploaded.';
 
 type WorkRow = {
@@ -94,10 +102,37 @@ export class ProfileWorkService {
   ) {}
 
   /**
+   * The identity lookup, but never for longer than OWNER_LOOKUP_TIMEOUT_MS.
+   * Nothing and "WAWU ID down" are the same answer to the caller: an empty map.
+   * (The lookup itself cannot be cancelled from here; it ends when its own
+   * connection does, and what it returns after the deadline is dropped.)
+   */
+  private async identitiesWithin(
+    owner: string,
+  ): Promise<Awaited<ReturnType<WawuIdClient['lookupPublicIdentities']>>> {
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<'late'>((resolve) => {
+      timer = setTimeout(() => resolve('late'), OWNER_LOOKUP_TIMEOUT_MS);
+    });
+    try {
+      const got = await Promise.race([
+        this.wawuId.lookupPublicIdentities([owner]),
+        deadline,
+      ]);
+      return got === 'late' ? new Map() : got;
+    } catch {
+      return new Map();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
    * Whose works these are (ME-11): the name from WAWU ID, the handle and the
    * picture from the profile. Public-safe fields only, the same four the feed's
-   * creator line serves. An identity service that does not answer degrades the
-   * name to the handle (`lookupPublicIdentities` returns nothing, never throws).
+   * creator line serves. An identity service that does not answer, or answers
+   * too slowly, degrades the name to the handle (never throws, never waits
+   * past OWNER_LOOKUP_TIMEOUT_MS).
    */
   private async ownerView(owner: string): Promise<ProfileWorkOwnerView> {
     const [profile, identities] = await Promise.all([
@@ -105,7 +140,7 @@ export class ProfileWorkService {
         where: { wawuUserId: owner },
         select: { handle: true, avatarUrl: true },
       }),
-      this.wawuId.lookupPublicIdentities([owner]),
+      this.identitiesWithin(owner),
     ]);
     const identity = identities.get(owner);
     const name = [identity?.firstName, identity?.lastName]
