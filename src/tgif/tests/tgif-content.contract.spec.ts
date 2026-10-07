@@ -149,7 +149,7 @@ describe('TGIF book (units)', () => {
     expect(personalise('{Name}, hope is for what is coming.', null)).toBe(
       'Hope is for what is coming.',
     );
-    expect(personalise('Be well, {Name}.', null)).toBe('Be well, you.');
+    expect(personalise('Be well, {Name}.', null)).toBe('Be well.');
     // A name that looks like a replacement pattern is written as it is.
     expect(personalise('{Name}!', "$&-$'")).toBe("$&-$'!");
   });

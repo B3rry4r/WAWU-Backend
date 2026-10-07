@@ -79,10 +79,13 @@ export function readBookMonth(month: number, dir = BOOK_DIR): BookMonth {
 /**
  * The part of a name a person is called by: the first word, with anything
  * that is not a letter, mark, digit, hyphen or apostrophe dropped, at most 40
- * characters. Null when nothing is left.
+ * characters. Null when nothing is left, and for anything that is not a
+ * string: a token claim is whatever the identity service signed, and a number
+ * or an object is no name (never an error).
  */
-export function callName(raw: string | null | undefined): string | null {
-  const first = (raw ?? '').trim().split(/\s+/)[0] ?? '';
+export function callName(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const first = raw.trim().split(/\s+/)[0] ?? '';
   const clean = [...first.replace(/[^\p{L}\p{M}\p{N}'’-]/gu, '')]
     .slice(0, 40)
     .join('');
@@ -91,15 +94,27 @@ export function callName(raw: string | null | undefined): string | null {
 
 /**
  * Puts the reader's name where the book leaves a slot for it. The book is
- * written in the second person and marks each personal address `{Name}`. With
- * no name to use the sentence still has to read as English: "{Name}, your sins
- * are gone" becomes "Your sins are gone", never "friend, your sins are gone".
+ * written in the second person and marks each personal address `{Name}`: at
+ * the start of the card ("{Name}, your sins are gone") or, in a few places,
+ * at the end of a short sentence ("Breathe, {Name}. It's done."). With no name
+ * to use the sentence still has to read as a sentence: the address is dropped
+ * and the first letter that is left starts the card in capitals ("Your sins
+ * are gone", "Christ IS your life", "\"Consider\" means choose to believe
+ * it"), never "friend, your sins are gone" or "you, Christ IS your life".
  */
 export function personalise(text: string, firstName: string | null): string {
   if (firstName) return text.replaceAll('{Name}', () => firstName);
-  return text
-    .replaceAll(/\{Name\}, ([a-z])/g, (_m, c: string) => c.toUpperCase())
-    .replaceAll('{Name}', 'you');
+  return (
+    text
+      // The address at the start of the text: gone, and what follows is capitalised.
+      .replace(
+        /^\{Name\}[,:] ?(["'“‘]?)(\p{L})/u,
+        (_m, quote: string, letter: string) => quote + letter.toUpperCase(),
+      )
+      // The address closing a sentence ("Breathe, {Name}. It's done."): the sentence ends where it was addressed.
+      .replaceAll(/, \{Name\}(?=[.!?;:])/g, '')
+      .replaceAll('{Name}', 'you')
+  );
 }
 
 /** `YYYY-MM-DD` (already validated by TgifDatePipe) as the book's month and day. */
