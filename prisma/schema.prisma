@@ -2700,8 +2700,18 @@ model LegalIntake {
   /// it becomes `brief` above, in the same shape the form writes.
   draftBrief Json?
 
+  /// A short claim while one paid AI call is running for this conversation
+  /// (a retry of the assistant's reply, or preparing the brief on Send), so
+  /// a second one cannot start. Expires on its own if the process dies.
+  assistantBusyUntil DateTime?
+
   @@index([wawuUserId, status])
   @@index([status, completedAt])
+  // Also in the database, and NOT expressible here (Prisma has no partial
+  // index): UNIQUE ("wawuUserId") WHERE "channel" = 'assistant' AND "status" =
+  // 'in_progress', so a person has at most one open assistant conversation.
+  // See migration 20261007120000_legal_assistant. `prisma migrate diff` does
+  // not list it, so the schema and the migrations still agree.
 }
 
 /// Who wrote a message in the assistant conversation on an intake.
@@ -2737,6 +2747,23 @@ model LegalIntakeMessage {
   /// Only the newest assistant message's are live.
   quickReplies  Json?
   createdAt     DateTime          @default(now())
+
+  @@index([legalIntakeId, createdAt])
+  @@index([wawuUserId, createdAt])
+}
+
+/// One paid AI call the assistant made that no new client message paid for:
+/// asking again after a failed reply (`reply`) or preparing the brief on Send
+/// (`brief`). Written in the same step that checks the limits, so the hourly
+/// and per-conversation counts (client messages plus these) cannot be beaten
+/// by parallel requests. Carries no words of the conversation.
+model LegalAssistantCall {
+  id            String   @id @default(uuid())
+  legalIntakeId String
+  wawuUserId    String
+  /// `reply` or `brief`.
+  kind          String
+  createdAt     DateTime @default(now())
 
   @@index([legalIntakeId, createdAt])
   @@index([wawuUserId, createdAt])

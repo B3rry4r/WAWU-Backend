@@ -877,4 +877,9 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
       reason:
         'Legal matters may be privileged; whether they are emailed is the owner call.',
     },
+    {
+      model: 'LegalAssistantCall',
+      reason:
+        'A bookkeeping row for the assistant hourly limit (when a paid AI call was made, never what was said); nothing the person wrote.',
+    },
   ];

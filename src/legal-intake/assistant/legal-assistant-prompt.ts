@@ -5,6 +5,7 @@ import {
   questionsForMatter,
   type IntakeQuestion,
 } from '../legal-intake-questions';
+import { cleanAiText } from '../ai-text';
 import { ASSISTANT_LIMITS } from './legal-assistant-config';
 
 /**
@@ -156,14 +157,11 @@ export function buildHistory(
   return out;
 }
 
-/** Anything a person reads loses its em-dashes (product rule). */
-export function withoutEmDash(text: string): string {
-  return text.replace(/\s*—\s*/g, ', ').trim();
-}
+export { withoutEmDash } from '../ai-text';
 
 function cleanText(value: unknown, max: number): string | null {
   if (typeof value !== 'string') return null;
-  const text = withoutEmDash(value).replace(/\s+/g, ' ').trim();
+  const text = cleanAiText(value).replace(/\s+/g, ' ').trim();
   if (!text) return null;
   return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
 }
@@ -171,7 +169,7 @@ function cleanText(value: unknown, max: number): string | null {
 /** The reply keeps its paragraphs; only runs of spaces are folded. */
 function cleanReply(value: unknown): string | null {
   if (typeof value !== 'string') return null;
-  const text = withoutEmDash(value)
+  const text = cleanAiText(value)
     .split('\n')
     .map((line) => line.replace(/[ \t]+/g, ' ').trim())
     .join('\n')

@@ -9,6 +9,7 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import type { Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
   GEMINI_CLIENT,
@@ -29,8 +30,11 @@ import {
   validQuestionIds,
   type LegalMatter,
 } from '../legal-intake-questions';
+import { withoutEmDash } from '../ai-text';
 import {
   ASSISTANT_BRIEF_AFTER_CLIENT_MESSAGES,
+  ASSISTANT_BRIEF_ATTEMPTS_PER_HOUR,
+  ASSISTANT_CLAIM_MS,
   ASSISTANT_CLIENT_MESSAGES_PER_HOUR,
   ASSISTANT_CLIENT_MESSAGES_PER_INTAKE,
   ASSISTANT_HISTORY_MESSAGES,
@@ -74,6 +78,18 @@ export const NOT_CHARGED_LINE =
 export const SENT_LINE = "I've sent your brief to a consultant.";
 
 const ONE_HOUR_MS = 3_600_000;
+
+/** How long a caller that lost a claim waits for the winner to finish. */
+const CLAIM_WAIT_MS = 20_000;
+const CLAIM_POLL_MS = 50;
+
+/** The interactive transactions below are short; this only covers a queue. */
+const TX_OPTIONS = { maxWait: 15_000, timeout: 15_000 };
+
+/** What a limit check is for (see `reserve`). */
+type Spend = 'message' | 'reply' | 'brief' | 'matter_message';
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 type IntakeRow = {
   id: string;
@@ -175,57 +191,80 @@ export class LegalAssistantService {
    * read by its id.
    */
   async startOrResume(user: WawuJwtClaims): Promise<LegalAssistantThread> {
-    const open = await this.prisma.legalIntake.findFirst({
-      where: {
-        wawuUserId: user.sub,
-        channel: ASSISTANT_CHANNEL,
-        status: 'in_progress',
-      },
-      orderBy: { startedAt: 'desc' },
-    });
+    const findOpen = () =>
+      this.prisma.legalIntake.findFirst({
+        where: {
+          wawuUserId: user.sub,
+          channel: ASSISTANT_CHANNEL,
+          status: 'in_progress',
+        },
+        orderBy: { startedAt: 'desc' },
+      });
+    const open = await findOpen();
     if (open) return this.thread(open);
 
     const firstName = (user.firstName ?? '').trim();
     // Both lines get their time from here, a millisecond apart, so they
     // always read in this order.
     const at = Date.now();
-    const created = await this.prisma.$transaction(async (tx) => {
-      const intake = await tx.legalIntake.create({
-        data: {
-          wawuUserId: user.sub,
-          // `other` until a topic is tapped or the assistant works it out.
-          matter: 'other',
-          channel: ASSISTANT_CHANNEL,
-          answers: {},
-          documents: [],
-        },
-      });
-      await tx.legalIntakeMessage.create({
-        data: {
-          legalIntakeId: intake.id,
-          wawuUserId: user.sub,
-          authorRole: 'assistant',
-          scripted: true,
-          body: OPENER_LINE(firstName),
-          createdAt: new Date(at),
-        },
-      });
-      await tx.legalIntakeMessage.create({
-        data: {
-          legalIntakeId: intake.id,
-          wawuUserId: user.sub,
-          authorRole: 'assistant',
-          scripted: true,
-          body: NOT_CHARGED_LINE,
-          quickReplies: ASSISTANT_TOPICS.map((t) => ({
-            id: t.id,
-            label: t.label,
-          })),
-          createdAt: new Date(at + 1),
-        },
-      });
-      return intake;
-    });
+    let created: IntakeRow;
+    try {
+      created = await this.prisma.$transaction(async (tx) => {
+        // Opening is idempotent per person: the lock makes parallel opens
+        // queue, and the first one's conversation is the one the rest find.
+        // The database's partial unique index is the backstop behind it.
+        await this.lockPerson(tx, user.sub);
+        const existing = await tx.legalIntake.findFirst({
+          where: {
+            wawuUserId: user.sub,
+            channel: ASSISTANT_CHANNEL,
+            status: 'in_progress',
+          },
+          orderBy: { startedAt: 'desc' },
+        });
+        if (existing) return existing;
+        const intake = await tx.legalIntake.create({
+          data: {
+            wawuUserId: user.sub,
+            // `other` until a topic is tapped or the assistant works it out.
+            matter: 'other',
+            channel: ASSISTANT_CHANNEL,
+            answers: {},
+            documents: [],
+          },
+        });
+        await tx.legalIntakeMessage.create({
+          data: {
+            legalIntakeId: intake.id,
+            wawuUserId: user.sub,
+            authorRole: 'assistant',
+            scripted: true,
+            body: OPENER_LINE(firstName),
+            createdAt: new Date(at),
+          },
+        });
+        await tx.legalIntakeMessage.create({
+          data: {
+            legalIntakeId: intake.id,
+            wawuUserId: user.sub,
+            authorRole: 'assistant',
+            scripted: true,
+            body: NOT_CHARGED_LINE,
+            quickReplies: ASSISTANT_TOPICS.map((t) => ({
+              id: t.id,
+              label: t.label,
+            })),
+            createdAt: new Date(at + 1),
+          },
+        });
+        return intake;
+      }, TX_OPTIONS);
+    } catch (error) {
+      if ((error as { code?: unknown })?.code !== 'P2002') throw error;
+      const winner = await findOpen();
+      if (!winner) throw error;
+      created = winner;
+    }
     return this.thread(created);
   }
 
@@ -239,7 +278,17 @@ export class LegalAssistantService {
     dto: SendAssistantMessageDto,
   ): Promise<LegalAssistantThread> {
     const intake = await this.owned(wawuUserId, id);
-    const typed = dto.body?.trim() ?? '';
+    const rawBody = dto.body ?? '';
+    // Postgres cannot store U+0000 in text. Refused here, with a reason the
+    // app can show, rather than failing at the write as a 500.
+    if (rawBody.includes('\u0000')) {
+      throw refusal(
+        HttpStatus.BAD_REQUEST,
+        'message_invalid_characters',
+        'That message has a character we cannot keep. Remove it and send again.',
+      );
+    }
+    const typed = rawBody.trim();
     const tapped = dto.quickReplyId ?? '';
     if ((typed === '') === (tapped === '')) {
       throw refusal(
@@ -257,54 +306,109 @@ export class LegalAssistantService {
     }
     if (intake.status !== 'in_progress') throw this.notFound();
 
-    await this.checkLimits(wawuUserId, intake.id);
-
-    let body = typed;
-    if (tapped) {
-      const live = await this.liveQuickReplies(intake.id);
-      const reply = live.find((q) => q.id === tapped);
-      if (!reply) throw this.unknownQuickReply();
-      body = reply.label;
-      const topic = tapped.startsWith(TOPIC_ID_PREFIX)
-        ? topicById(tapped)
-        : undefined;
-      if (topic && topic.matter !== intake.matter) {
-        const updated = await this.prisma.legalIntake.update({
-          where: { id: intake.id },
-          data: {
-            matter: topic.matter,
-            answers: this.keepAnswersFor(topic.matter, intake.answers) as never,
-          },
-        });
-        intake.matter = updated.matter;
-        intake.answers = updated.answers;
+    // The limits are checked and the message written in ONE step under the
+    // person's lock, so parallel sends cannot all pass the check before any
+    // of them is counted. A tap is resolved in the same step, so a double
+    // tap is one message and the second is "no longer on offer".
+    await this.reserve(wawuUserId, intake.id, 'message', async (tx) => {
+      const current = await tx.legalIntake.findUnique({
+        where: { id: intake.id },
+      });
+      if (
+        !current ||
+        current.status !== 'in_progress' ||
+        current.legalRequestId
+      ) {
+        throw this.busy();
       }
-    }
-
-    await this.prisma.legalIntakeMessage.create({
-      data: {
-        legalIntakeId: intake.id,
-        wawuUserId,
-        authorRole: 'client',
-        body,
-      },
+      let body = typed;
+      if (tapped) {
+        const last = await tx.legalIntakeMessage.findFirst({
+          where: { legalIntakeId: intake.id },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        });
+        const live =
+          last && last.authorRole === 'assistant'
+            ? readQuickReplies(last.quickReplies)
+            : [];
+        const reply = live.find((q) => q.id === tapped);
+        if (!reply) throw this.unknownQuickReply();
+        body = reply.label;
+        const topic = tapped.startsWith(TOPIC_ID_PREFIX)
+          ? topicById(tapped)
+          : undefined;
+        if (topic && topic.matter !== current.matter) {
+          await tx.legalIntake.update({
+            where: { id: intake.id },
+            data: {
+              matter: topic.matter,
+              answers: this.keepAnswersFor(
+                topic.matter,
+                current.answers,
+              ) as never,
+            },
+          });
+        }
+      }
+      return tx.legalIntakeMessage.create({
+        data: {
+          legalIntakeId: intake.id,
+          wawuUserId,
+          authorRole: 'client',
+          body,
+        },
+      });
     });
-    await this.turn(intake);
+    await this.turn(await this.owned(wawuUserId, id));
     return this.thread(await this.owned(wawuUserId, id));
   }
 
-  /** Ask the assistant again when its last answer failed. */
+  /**
+   * Ask the assistant again when its last answer failed. It is a paid call
+   * like a message, so it is counted against the same limits, and only one
+   * can run for a conversation at a time (409 `assistant_busy`).
+   */
   async retry(wawuUserId: string, id: string): Promise<LegalAssistantThread> {
     const intake = await this.owned(wawuUserId, id);
     if (intake.legalRequestId || intake.status !== 'in_progress') {
       throw this.nothingToAnswer();
     }
-    const last = await this.prisma.legalIntakeMessage.findFirst({
-      where: { legalIntakeId: intake.id },
-      orderBy: { createdAt: 'desc' },
-    });
+    const waiting = () =>
+      this.prisma.legalIntakeMessage.findFirst({
+        where: { legalIntakeId: intake.id },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      });
+    const last = await waiting();
     if (!last || last.authorRole !== 'client') throw this.nothingToAnswer();
-    await this.turn(intake);
+
+    if (!(await this.claim(intake.id))) throw this.busy();
+    try {
+      await this.reserve(wawuUserId, intake.id, 'reply', async (tx) => {
+        // Checked again under the lock: another reply may just have answered.
+        const newest = await tx.legalIntakeMessage.findFirst({
+          where: { legalIntakeId: intake.id },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        });
+        const current = await tx.legalIntake.findUnique({
+          where: { id: intake.id },
+        });
+        if (
+          !newest ||
+          newest.authorRole !== 'client' ||
+          !current ||
+          current.status !== 'in_progress' ||
+          current.legalRequestId
+        ) {
+          throw this.nothingToAnswer();
+        }
+        await tx.legalAssistantCall.create({
+          data: { legalIntakeId: intake.id, wawuUserId, kind: 'reply' },
+        });
+      });
+      await this.turn(await this.owned(wawuUserId, id));
+    } finally {
+      await this.release(intake.id);
+    }
     return this.thread(await this.owned(wawuUserId, id));
   }
 
@@ -313,6 +417,12 @@ export class LegalAssistantService {
    * form's shape, and opens the matter at `awaiting_quote`, where a
    * consultant reads it before anything is priced or paid. Sending twice
    * opens one matter.
+   *
+   * Preparing the brief is a paid AI call, so the intake is CLAIMED first and
+   * the call made only by the claim's holder: 20 parallel sends make one
+   * call, and the others wait for it and answer with the sent thread. A
+   * failed brief releases the claim, so it can be sent again, but each try is
+   * counted (`ASSISTANT_BRIEF_ATTEMPTS_PER_HOUR`, and the hourly limit).
    */
   async sendToConsultant(
     wawuUserId: string,
@@ -330,6 +440,32 @@ export class LegalAssistantService {
         'The assistant needs a little more before this can go to a consultant.',
       );
     }
+
+    if (!(await this.claim(intake.id))) {
+      return this.afterLostClaim(wawuUserId, id);
+    }
+    try {
+      await this.makeAndSend(wawuUserId, intake, draft);
+    } finally {
+      await this.release(intake.id);
+    }
+    return this.thread(await this.owned(wawuUserId, id));
+  }
+
+  private async makeAndSend(
+    wawuUserId: string,
+    intake: IntakeRow,
+    draft: AssistantDraft,
+  ): Promise<void> {
+    await this.reserve(wawuUserId, intake.id, 'brief', async (tx) => {
+      const current = await tx.legalIntake.findUnique({
+        where: { id: intake.id },
+      });
+      if (!current || current.status !== 'in_progress') throw this.notFound();
+      await tx.legalAssistantCall.create({
+        data: { legalIntakeId: intake.id, wawuUserId, kind: 'brief' },
+      });
+    });
 
     const matter = intake.matter;
     const facts = [
@@ -372,13 +508,15 @@ export class LegalAssistantService {
     };
 
     const sent = await this.prisma.$transaction(async (tx) => {
-      // The claim: only one send converts the intake, however many arrive.
+      // The conversion: only one send converts the intake, however many
+      // arrive (the claim above already keeps them out; this is the backstop).
       const claim = await tx.legalIntake.updateMany({
         where: { id: intake.id, status: 'in_progress', legalRequestId: null },
         data: {
           status: 'converted',
           completedAt: new Date(),
           brief: brief as never,
+          assistantBusyUntil: null,
         },
       });
       if (claim.count === 0) return false;
@@ -414,11 +552,35 @@ export class LegalAssistantService {
         },
       });
       return true;
-    });
+    }, TX_OPTIONS);
     if (!sent) {
       this.logger.log(`Intake ${intake.id} was already sent`);
     }
-    return this.thread(await this.owned(wawuUserId, id));
+  }
+
+  /**
+   * A caller whose claim was refused: another send is preparing the brief
+   * (or a reply is being asked for). Wait for it. If the brief went, so did
+   * this caller's; if the claim is released without one, say the assistant is
+   * busy and let the client try again.
+   */
+  private async afterLostClaim(
+    wawuUserId: string,
+    id: string,
+  ): Promise<LegalAssistantThread> {
+    const deadline = Date.now() + CLAIM_WAIT_MS;
+    for (;;) {
+      // One read for both facts, so "sent" and "released" cannot be seen
+      // from two different moments.
+      const row = await this.prisma.legalIntake.findUnique({ where: { id } });
+      if (!row || row.wawuUserId !== wawuUserId) throw this.notFound();
+      if (row.legalRequestId) return this.thread(row);
+      if (row.status !== 'in_progress') throw this.notFound();
+      const stillHeld =
+        row.assistantBusyUntil !== null && row.assistantBusyUntil > new Date();
+      if (!stillHeld || Date.now() >= deadline) throw this.busy();
+      await sleep(CLAIM_POLL_MS);
+    }
   }
 
   /** The conversation before the brief was sent, for the consultant. */
@@ -442,9 +604,18 @@ export class LegalAssistantService {
    * One profiling turn: the model reads the conversation and answers with a
    * reply, its working brief and any intake answers; the server keeps only
    * what passes its checks. A failure keeps the client's message and says so.
+   *
+   * The reply is written only if the message it answers is still the newest
+   * in the conversation (checked under the lock, in the write itself). Two
+   * messages sent at once each start a turn; the one that read the newest
+   * message answers it, and the other finds it answered or superseded and
+   * writes nothing, so a conversation never gets two replies to one message.
    */
   private async turn(intake: IntakeRow): Promise<void> {
     const messages = await this.intakeMessages(intake.id);
+    const newest = messages[messages.length - 1];
+    // Already answered (by a turn that started with the same message).
+    if (!newest || newest.authorRole !== 'client') return;
     const history = buildHistory(messages, ASSISTANT_HISTORY_MESSAGES);
     const last = history[history.length - 1];
     if (!last || last.role !== 'user') throw this.nothingToAnswer();
@@ -499,8 +670,29 @@ export class LegalAssistantService {
       ? []
       : turn.quickReplies.map((label, i) => ({ id: `answer:${i + 1}`, label }));
 
-    await this.prisma.$transaction([
-      this.prisma.legalIntakeMessage.create({
+    await this.prisma.$transaction(async (tx) => {
+      await this.lockPerson(tx, intake.wawuUserId);
+      const [latest, current] = await Promise.all([
+        tx.legalIntakeMessage.findFirst({
+          where: { legalIntakeId: intake.id },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          select: { id: true },
+        }),
+        tx.legalIntake.findUnique({
+          where: { id: intake.id },
+          select: { status: true, legalRequestId: true },
+        }),
+      ]);
+      if (
+        !latest ||
+        latest.id !== newest.id ||
+        !current ||
+        current.status !== 'in_progress' ||
+        current.legalRequestId
+      ) {
+        return;
+      }
+      await tx.legalIntakeMessage.create({
         data: {
           legalIntakeId: intake.id,
           wawuUserId: intake.wawuUserId,
@@ -508,74 +700,186 @@ export class LegalAssistantService {
           body: turn.reply,
           quickReplies: quickReplies.length > 0 ? quickReplies : undefined,
         },
-      }),
-      this.prisma.legalIntake.update({
+      });
+      await tx.legalIntake.update({
         where: { id: intake.id },
         data: {
           matter,
           answers: nextAnswers as never,
           draftBrief: nextDraft as never,
         },
-      }),
-    ]);
+      });
+    }, TX_OPTIONS);
   }
 
   /**
-   * A client message once the brief is sent. Before payment it waits for the
-   * consultant on the matter's thread (the assistant has stopped); after
-   * payment the existing conversation rules apply unchanged
-   * (LegalChatService.send: the assistant answers until a consultant has
-   * written).
+   * A client message once the brief is sent. Counted against the same hourly
+   * allowance as every other message, in one step with the write. Before
+   * payment it waits for the consultant on the matter's thread (the
+   * assistant has stopped); after payment the existing conversation rules
+   * apply unchanged (LegalChatService.answerWaiting: the assistant answers
+   * until a consultant has written).
    */
   private async sendOnMatter(
     wawuUserId: string,
     requestId: string,
     body: string,
   ): Promise<void> {
-    try {
-      await this.chat.send(wawuUserId, requestId, body);
-    } catch (error) {
-      if (!(error instanceof ConflictException)) throw error;
-      // Not paid for yet: LegalChatService.send refuses before writing
-      // anything, so the message is written here, for the consultant.
-      await this.prisma.legalChatMessage.create({
+    await this.reserve(wawuUserId, null, 'matter_message', (tx) =>
+      tx.legalChatMessage.create({
         data: { legalRequestId: requestId, authorRole: 'client', body },
-      });
+      }),
+    );
+    await this.chat.answerWaiting(wawuUserId, requestId);
+  }
+
+  /**
+   * Serializes everything that spends a person's allowance. Held to the end
+   * of the transaction, so a check and the write it allows are one step.
+   */
+  private async lockPerson(
+    tx: Prisma.TransactionClient,
+    wawuUserId: string,
+  ): Promise<void> {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`legal-assistant:${wawuUserId}`}, 0))`;
+  }
+
+  /**
+   * Check the limits and write what they allow in ONE transaction under the
+   * person's lock. The count of what is already spent and the write that
+   * spends one more cannot be pulled apart by a parallel request, so the
+   * limits hold however many arrive at once. The provider is called after
+   * this returns, never inside it.
+   *
+   * What counts: a client message, a reply asked for again and a brief
+   * prepared (`LegalAssistantCall`), and a client message written after Send.
+   */
+  private async reserve<T>(
+    wawuUserId: string,
+    intakeId: string | null,
+    spend: Spend,
+    write: (tx: Prisma.TransactionClient) => Promise<T>,
+  ): Promise<T> {
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockPerson(tx, wawuUserId);
+      await this.checkLimits(tx, wawuUserId, intakeId, spend);
+      return write(tx);
+    }, TX_OPTIONS);
+  }
+
+  private async checkLimits(
+    tx: Prisma.TransactionClient,
+    wawuUserId: string,
+    intakeId: string | null,
+    spend: Spend,
+  ) {
+    if (intakeId && (spend === 'message' || spend === 'reply')) {
+      const [messages, calls] = await Promise.all([
+        tx.legalIntakeMessage.count({
+          where: { legalIntakeId: intakeId, authorRole: 'client' },
+        }),
+        tx.legalAssistantCall.count({ where: { legalIntakeId: intakeId } }),
+      ]);
+      if (messages + calls >= ASSISTANT_CLIENT_MESSAGES_PER_INTAKE) {
+        throw refusal(
+          HttpStatus.CONFLICT,
+          'assistant_conversation_full',
+          'This conversation is long enough for a consultant to pick up. Send your brief to a consultant.',
+        );
+      }
+    }
+
+    const since = new Date(Date.now() - ONE_HOUR_MS);
+    const requestIds = (
+      await tx.legalRequest.findMany({
+        where: { wawuUserId },
+        select: { id: true },
+      })
+    ).map((r) => r.id);
+    const [clientRows, callRows, matterRows] = await Promise.all([
+      tx.legalIntakeMessage.findMany({
+        where: { wawuUserId, authorRole: 'client', createdAt: { gte: since } },
+        select: { createdAt: true },
+      }),
+      tx.legalAssistantCall.findMany({
+        where: { wawuUserId, createdAt: { gte: since } },
+        select: { createdAt: true, kind: true },
+      }),
+      requestIds.length === 0
+        ? Promise.resolve([] as Array<{ createdAt: Date }>)
+        : tx.legalChatMessage.findMany({
+            where: {
+              legalRequestId: { in: requestIds },
+              authorRole: 'client',
+              createdAt: { gte: since },
+            },
+            select: { createdAt: true },
+          }),
+    ]);
+
+    const stamps = [...clientRows, ...callRows, ...matterRows]
+      .map((r) => r.createdAt.getTime())
+      .sort((a, b) => a - b);
+    if (stamps.length >= ASSISTANT_CLIENT_MESSAGES_PER_HOUR) {
+      throw this.rateLimited(
+        stamps[stamps.length - ASSISTANT_CLIENT_MESSAGES_PER_HOUR],
+        'You have sent a lot of messages in the last hour. Try again a little later.',
+      );
+    }
+
+    if (spend === 'brief') {
+      const briefs = callRows
+        .filter((c) => c.kind === 'brief')
+        .map((c) => c.createdAt.getTime())
+        .sort((a, b) => a - b);
+      if (briefs.length >= ASSISTANT_BRIEF_ATTEMPTS_PER_HOUR) {
+        throw this.rateLimited(
+          briefs[briefs.length - ASSISTANT_BRIEF_ATTEMPTS_PER_HOUR],
+          'The brief could not be prepared a few times just now. Try again a little later.',
+        );
+      }
     }
   }
 
-  private async checkLimits(wawuUserId: string, intakeId: string) {
-    const inThisOne = await this.prisma.legalIntakeMessage.count({
-      where: { legalIntakeId: intakeId, authorRole: 'client' },
+  private rateLimited(oldestCountedMs: number, message: string) {
+    const retryAfterSeconds = Math.max(
+      1,
+      Math.ceil((oldestCountedMs + ONE_HOUR_MS - Date.now()) / 1000),
+    );
+    return refusal(
+      HttpStatus.TOO_MANY_REQUESTS,
+      'assistant_rate_limited',
+      message,
+      { retryAfterSeconds },
+    );
+  }
+
+  /**
+   * Claim the conversation for one paid call that no message pays for (a
+   * retry of the reply, preparing the brief). One holder at a time; the claim
+   * lapses by itself if the process holding it dies.
+   */
+  private async claim(intakeId: string): Promise<boolean> {
+    const now = new Date();
+    const won = await this.prisma.legalIntake.updateMany({
+      where: {
+        id: intakeId,
+        status: 'in_progress',
+        legalRequestId: null,
+        OR: [{ assistantBusyUntil: null }, { assistantBusyUntil: { lt: now } }],
+      },
+      data: {
+        assistantBusyUntil: new Date(now.getTime() + ASSISTANT_CLAIM_MS),
+      },
     });
-    if (inThisOne >= ASSISTANT_CLIENT_MESSAGES_PER_INTAKE) {
-      throw refusal(
-        HttpStatus.CONFLICT,
-        'assistant_conversation_full',
-        'This conversation is long enough for a consultant to pick up. Send your brief to a consultant.',
-      );
-    }
-    const since = new Date(Date.now() - ONE_HOUR_MS);
-    const recent = await this.prisma.legalIntakeMessage.findMany({
-      where: { wawuUserId, authorRole: 'client', createdAt: { gte: since } },
-      orderBy: { createdAt: 'asc' },
-      select: { createdAt: true },
-      take: ASSISTANT_CLIENT_MESSAGES_PER_HOUR,
+    return won.count === 1;
+  }
+
+  private async release(intakeId: string): Promise<void> {
+    await this.prisma.legalIntake.updateMany({
+      where: { id: intakeId },
+      data: { assistantBusyUntil: null },
     });
-    if (recent.length >= ASSISTANT_CLIENT_MESSAGES_PER_HOUR) {
-      const retryAfterSeconds = Math.max(
-        1,
-        Math.ceil(
-          (recent[0].createdAt.getTime() + ONE_HOUR_MS - Date.now()) / 1000,
-        ),
-      );
-      throw refusal(
-        HttpStatus.TOO_MANY_REQUESTS,
-        'assistant_rate_limited',
-        'You have sent a lot of messages in the last hour. Try again a little later.',
-        { retryAfterSeconds },
-      );
-    }
   }
 
   /** Answers that are still questions of `matter`; the rest are dropped. */
@@ -610,17 +914,6 @@ export class LegalAssistantService {
       where: { legalIntakeId: intakeId },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
-  }
-
-  private async liveQuickReplies(
-    intakeId: string,
-  ): Promise<LegalAssistantQuickReply[]> {
-    const last = await this.prisma.legalIntakeMessage.findFirst({
-      where: { legalIntakeId: intakeId },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-    });
-    if (!last || last.authorRole !== 'assistant') return [];
-    return readQuickReplies(last.quickReplies);
   }
 
   private stageOf(intake: IntakeRow): LegalAssistantStage {
@@ -658,7 +951,8 @@ export class LegalAssistantService {
     return {
       id: m.id,
       authorRole: m.authorRole,
-      body: m.body,
+      // The assistant's lines carry no em-dash, whatever was stored.
+      body: m.authorRole === 'assistant' ? withoutEmDash(m.body) : m.body,
       createdAt: m.createdAt,
       consultantName: null,
     };
@@ -707,7 +1001,7 @@ export class LegalAssistantService {
         messages.push({
           id: r.id,
           authorRole: r.authorRole === 'ai' ? 'assistant' : r.authorRole,
-          body: r.body,
+          body: r.authorRole === 'ai' ? withoutEmDash(r.body) : r.body,
           createdAt: r.createdAt,
           consultantName,
         });
@@ -742,6 +1036,14 @@ export class LegalAssistantService {
       HttpStatus.NOT_FOUND,
       'not_found',
       'This conversation could not be found.',
+    );
+  }
+
+  private busy() {
+    return refusal(
+      HttpStatus.CONFLICT,
+      'assistant_busy',
+      'The assistant is already working on this conversation. Wait a moment, then try again.',
     );
   }
 

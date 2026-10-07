@@ -29,11 +29,18 @@ import type {
  * another person's conversation answers 404 like one that does not exist.
  * The literal `topics` is declared before `:id`.
  *
- * Refusals carry `reason.code`: `message_empty` (400), `quick_reply_unknown`
+ * Refusals carry `reason.code`: `message_empty` (400),
+ * `message_invalid_characters` (400, a NUL in the text), `quick_reply_unknown`
  * (400), `not_found` (404), `brief_not_ready` (409), `nothing_to_answer`
- * (409), `assistant_conversation_full` (409), `assistant_rate_limited` (429,
- * `retryAfterSeconds`), `assistant_unavailable` (503; a client message is
- * kept, and `POST {id}/reply` asks again).
+ * (409), `assistant_busy` (409, another paid call for this conversation is
+ * running), `assistant_conversation_full` (409), `assistant_rate_limited`
+ * (429, `retryAfterSeconds`), `assistant_unavailable` (503; a client message
+ * is kept, and `POST {id}/reply` asks again).
+ *
+ * Limits, per person and checked together with the write so parallel requests
+ * cannot beat them: 30 paid calls an hour (a client message, before or after
+ * Send, a reply asked for again, a brief prepared) and 40 per conversation
+ * before Send; the brief at most 5 tries an hour.
  */
 @UseGuards(WawuAuthGuard)
 @Controller('legal/assistant')
@@ -77,7 +84,10 @@ export class LegalAssistantController {
     return this.service.send(user.sub, id, dto);
   }
 
-  /** Ask the assistant again after `503 assistant_unavailable`. */
+  /**
+   * Ask the assistant again after `503 assistant_unavailable`. Counted like a
+   * message, and one at a time per conversation (409 `assistant_busy`).
+   */
   @Post(':id/reply')
   reply(
     @CurrentUser() user: WawuJwtClaims,

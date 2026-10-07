@@ -159,6 +159,13 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'wawuUserId',
     disposition: 'OWNED',
   },
+  // One row per paid AI call no message paid for (a retried reply, a brief),
+  // kept to enforce the hourly limit; holds no words of the conversation.
+  {
+    model: 'LegalAssistantCall',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
   { model: 'LegalIntake', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'ProfessionalProfile', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'StorageObject', column: 'wawuUserId', disposition: 'OWNED' },

@@ -230,6 +230,9 @@ describe('Legal assistant: legal starts as a chat (LEGAL-01, contract)', () => {
     const requestIds = intakes
       .map((i) => i.legalRequestId)
       .filter((v): v is string => Boolean(v));
+    await prisma.legalAssistantCall.deleteMany({
+      where: { wawuUserId: { in: [ME, OTHER] } },
+    });
     await prisma.legalIntakeMessage.deleteMany({
       where: { wawuUserId: { in: [ME, OTHER] } },
     });

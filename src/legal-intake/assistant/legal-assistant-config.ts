@@ -19,6 +19,22 @@ export const ASSISTANT_CLIENT_MESSAGES_PER_HOUR = 30;
 export const ASSISTANT_CLIENT_MESSAGES_PER_INTAKE = 40;
 
 /**
+ * Preparing the brief on Send is a paid AI call a client message did not pay
+ * for, so a failed one can be tried again, but only this often. These also
+ * count toward the hourly limit above.
+ *
+ * PROVISIONAL(LEGAL-ASSISTANT-BRIEF-ATTEMPTS-PER-HOUR, owner=YOU, why=no ruling names one; the brief should take one call, so five tries an hour covers a bad few minutes at the provider without letting a client multiply paid calls)
+ */
+export const ASSISTANT_BRIEF_ATTEMPTS_PER_HOUR = 5;
+
+/**
+ * How long a claim on a conversation (a retry of the reply, or preparing the
+ * brief) holds if the process holding it dies, in milliseconds. The provider
+ * call is shorter than this, so a live claim is never stolen.
+ */
+export const ASSISTANT_CLAIM_MS = 60_000;
+
+/**
  * After this many client messages the brief is offered even if the assistant
  * has not said it is ready, so a conversation that keeps asking can always be
  * sent to a person.

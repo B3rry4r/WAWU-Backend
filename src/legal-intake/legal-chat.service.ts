@@ -12,6 +12,7 @@ import {
   GEMINI_CLIENT,
   type GeminiClient,
 } from '../common/ai/gemini-client.interface';
+import { cleanAiText, withoutEmDash } from './ai-text';
 import type { LegalBrief } from './legal-brief';
 
 export interface ChatMessageView {
@@ -143,6 +144,22 @@ export class LegalChatService {
       },
     });
 
+    await this.answerWaiting(wawuUserId, requestId);
+    return this.getThread(wawuUserId, requestId);
+  }
+
+  /**
+   * The assistant answers the client's newest message, unless the matter's
+   * conversation is not open yet or a consultant has already written (the
+   * AI's turn is over for good then). The message itself is already saved:
+   * the caller writes it, so a caller that has to count it first (LEGAL-01's
+   * hourly limit) can do both in one step. A provider failure is a 503 that
+   * says the message was kept.
+   */
+  async answerWaiting(wawuUserId: string, requestId: string): Promise<void> {
+    const request = await this.findOwned(wawuUserId, requestId);
+    if (!LegalChatService.OPEN_FROM.has(request.status)) return;
+
     const history = await this.prisma.legalChatMessage.findMany({
       where: { legalRequestId: requestId },
       orderBy: { createdAt: 'asc' },
@@ -151,19 +168,22 @@ export class LegalChatService {
 
     // Handover is one-way and permanent. Once a consultant has written here,
     // every later client message is for them.
-    if (history.some((m) => m.authorRole === 'consultant')) {
-      return this.getThread(wawuUserId, requestId);
-    }
+    if (history.some((m) => m.authorRole === 'consultant')) return;
 
     try {
-      const reply = await this.gemini.chat({
-        instruction: this.instructionWithBrief(request.details),
-        history: history.map((m) => ({
-          role:
-            m.authorRole === 'client' ? ('user' as const) : ('model' as const),
-          text: m.body,
-        })),
-      });
+      const reply = cleanAiText(
+        await this.gemini.chat({
+          instruction: this.instructionWithBrief(request.details),
+          history: history.map((m) => ({
+            role:
+              m.authorRole === 'client'
+                ? ('user' as const)
+                : ('model' as const),
+            text: m.body,
+          })),
+        }),
+      );
+      if (!reply) throw new Error('The assistant answer was empty');
       await this.prisma.legalChatMessage.create({
         data: { legalRequestId: requestId, authorRole: 'ai', body: reply },
       });
@@ -180,8 +200,6 @@ export class LegalChatService {
         'Your message was saved and your consultant will see it. The assistant could not reply just now.',
       );
     }
-
-    return this.getThread(wawuUserId, requestId);
   }
 
   /** A consultant replying from the dashboard. This is what ends the AI's turn. */
@@ -237,7 +255,7 @@ export class LegalChatService {
 
   private async openThread(request: { id: string; details: unknown }) {
     try {
-      const reply = await this.gemini.chat({
+      const raw = await this.gemini.chat({
         instruction: this.instructionWithBrief(request.details),
         history: [
           {
@@ -246,6 +264,8 @@ export class LegalChatService {
           },
         ],
       });
+      const reply = cleanAiText(raw);
+      if (!reply) throw new Error('The assistant opener was empty');
       const created = await this.prisma.legalChatMessage.create({
         data: { legalRequestId: request.id, authorRole: 'ai', body: reply },
       });
@@ -306,7 +326,9 @@ function toView(m: {
   return {
     id: m.id,
     authorRole: m.authorRole,
-    body: m.body,
+    // A line the AI wrote before em-dashes were stripped on the way in is
+    // still read without them.
+    body: m.authorRole === 'ai' ? withoutEmDash(m.body) : m.body,
     createdAt: m.createdAt,
   };
 }

@@ -3465,7 +3465,7 @@
             }
           }
         },
-        "summary": "Ask the assistant again after `503 assistant_unavailable`.",
+        "summary": "Ask the assistant again after `503 assistant_unavailable`. Counted like a\nmessage, and one at a time per conversation (409 `assistant_busy`).",
         "tags": [
           "LegalAssistant"
         ]
