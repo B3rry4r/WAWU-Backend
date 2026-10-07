@@ -33,6 +33,7 @@ import type {
   NewEventTicketTypeDto,
 } from './dto/create-event.dto';
 import { eventOptions, type EventOptionsView } from './event-options';
+import type { EventFromPricesView } from './event-view.type';
 import type { UpdateEventDto } from './dto/update-event.dto';
 import type { ListEventsQueryDto } from './dto/list-events-query.dto';
 
@@ -268,6 +269,51 @@ export class EventService {
   async findOne(id: string, userWawuId: string): Promise<EventView> {
     const event = await this.loadVisible(id, userWawuId);
     return (await this.toViews([event], userWawuId))[0];
+  }
+
+  /**
+   * GET /events/from-prices: for each published event asked about, the cheapest
+   * tier a person can buy right now. A tier counts when its sales have opened,
+   * have not closed (a null end means "until the event begins", as `buy`
+   * decides) and it has stock left. `buy` is the rule; this mirrors it.
+   * Events that are not published, or are called off, are left out, so the
+   * route says nothing about a submission still in the queue.
+   */
+  async fromPrices(ids: string[]): Promise<EventFromPricesView> {
+    if (ids.length === 0) return { prices: [] };
+    const now = new Date();
+    const events = await this.prisma.event.findMany({
+      where: { id: { in: ids }, status: 'published', cancelledAt: null },
+      select: {
+        id: true,
+        startsAt: true,
+        ticketTypes: {
+          select: {
+            priceNaira: true,
+            quantity: true,
+            sold: true,
+            salesStartAt: true,
+            salesEndAt: true,
+          },
+        },
+      },
+    });
+    return {
+      prices: events.map((e) => {
+        const buyable = e.ticketTypes.filter(
+          (t) =>
+            t.sold < t.quantity &&
+            (!t.salesStartAt || now >= t.salesStartAt) &&
+            now <= (t.salesEndAt ?? e.startsAt),
+        );
+        return {
+          eventId: e.id,
+          priceFromNaira: buyable.length
+            ? Math.min(...buyable.map((t) => t.priceNaira))
+            : null,
+        };
+      }),
+    };
   }
 
   /** GET /events/options: the label for every category, format and kind. */

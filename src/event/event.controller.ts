@@ -20,6 +20,7 @@ import { EventService } from './event.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
 import { ListEventsQueryDto } from './dto/list-events-query.dto';
+import { EventFromPricesQueryDto } from './dto/event-from-prices-query.dto';
 import type { EventOptionsView } from './event-options';
 
 /**
@@ -76,6 +77,17 @@ export class EventController {
   @Get('options')
   options(): EventOptionsView {
     return this.eventService.options();
+  }
+
+  /**
+   * The "from" price a person can actually pay, for a page of events at once
+   * (EVENTS-01, G-271): the cheapest tier on sale now and not sold out, null
+   * when none can be bought. `priceFromNaira` on the event keeps counting
+   * every tier, because the web reads it that way. Declared before `:id`.
+   */
+  @Get('from-prices')
+  fromPrices(@Query() query: EventFromPricesQueryDto) {
+    return this.eventService.fromPrices(query.ids);
   }
 
   @Get(':id')
