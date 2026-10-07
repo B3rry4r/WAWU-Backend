@@ -4,6 +4,7 @@ import type {
   EventFormat,
   EventStatus,
   EventType,
+  TicketTier,
 } from '../../../generated/prisma/enums';
 import type { EventSpeakerView } from '../../event/event-view.type';
 
@@ -80,6 +81,31 @@ export interface AdminEventReviewEntryView {
 export interface AdminEventDetailView extends AdminEventListItemView {
   /** Newest decision first. Empty until this event has been moderated. */
   reviewHistory: AdminEventReviewEntryView[];
+}
+
+/**
+ * One ticket type as a reviewer sees it (R-42, F2): the tier, its name, its
+ * price in naira (the same whole-naira figure the public tiers carry) and
+ * how many there are and have sold. A reviewer approving an event approves
+ * what it charges, so the prices are on the screen they decide from.
+ */
+export interface AdminEventTicketTypeView {
+  id: string;
+  tier: TicketTier;
+  name: string;
+  priceNaira: number;
+  quantity: number;
+  sold: number;
+}
+
+/** GET /admin/events/queue: a queue row, with the event's ticket types. */
+export interface AdminEventQueueItemView extends AdminEventListItemView {
+  ticketTypes: AdminEventTicketTypeView[];
+}
+
+/** GET /admin/events/:id: the detail, with the event's ticket types. */
+export interface AdminEventReviewDetailView extends AdminEventDetailView {
+  ticketTypes: AdminEventTicketTypeView[];
 }
 
 /** What every write endpoint on this surface returns. */

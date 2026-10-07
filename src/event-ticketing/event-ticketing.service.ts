@@ -181,7 +181,8 @@ export class EventTicketingService {
         salesEndAt: true,
       },
     });
-    if (sameTiers(current, rows)) return this.listTicketTypes(eventId);
+    if (sameTiers(current, rows))
+      return this.listTicketTypes(eventId, organiserWawuId);
 
     // A change to a published (or rejected, or still pending) event puts it
     // in the queue, exactly as PATCH does. A `removed` event is left as it
@@ -205,7 +206,9 @@ export class EventTicketingService {
         : []),
     ]);
 
-    return this.listTicketTypes(eventId);
+    // The host's own read: the event may be `pending` now, and the host
+    // still sees what they just saved.
+    return this.listTicketTypes(eventId, organiserWawuId);
   }
 
   /** The tiers on sale, with what is left of each. */
@@ -214,9 +217,17 @@ export class EventTicketingService {
     // 404, like the event. A signed-out reader cannot be blocked.
     const event = await this.prisma.event.findUnique({
       where: { id: eventId },
-      select: { hostWawuId: true },
+      select: { hostWawuId: true, status: true },
     });
     if (event) {
+      // R-42 (F3): the tiers of an event that is not `published` are a 404
+      // to everyone but its host, exactly as GET /events/:id answers for the
+      // event itself. Prices waiting for review, or rejected, or taken down,
+      // are not public before the event is. Admins read them on the admin
+      // routes, which do not come through here.
+      if (event.status !== 'published' && event.hostWawuId !== viewerWawuId) {
+        throw new NotFoundException('Event not found.');
+      }
       await this.blockedAccounts.assertVisible(
         viewerWawuId,
         event.hostWawuId,

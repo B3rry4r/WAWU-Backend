@@ -13518,7 +13518,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/AdminEventListItemView"
+                    "$ref": "#/components/schemas/AdminEventQueueItemView"
                   }
                 }
               }
@@ -13550,7 +13550,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AdminEventDetailView"
+                  "$ref": "#/components/schemas/AdminEventReviewDetailView"
                 }
               }
             }
@@ -38789,6 +38789,200 @@
           "host"
         ]
       },
+      "AdminEventTicketTypeView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "tier": {
+            "type": "string",
+            "enum": [
+              "free",
+              "regular",
+              "vip",
+              "vvip",
+              "early_bird",
+              "group"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "priceNaira": {
+            "type": "number"
+          },
+          "quantity": {
+            "type": "number"
+          },
+          "sold": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "tier",
+          "name",
+          "priceNaira",
+          "quantity",
+          "sold"
+        ]
+      },
+      "AdminEventQueueItemView": {
+        "type": "object",
+        "properties": {
+          "ticketTypes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminEventTicketTypeView"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "hostOrg": {
+            "type": "string"
+          },
+          "hostOrgBio": {
+            "type": "string",
+            "nullable": true
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "in_person",
+              "online",
+              "hybrid"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "workshop",
+              "summit",
+              "webinar",
+              "meetup",
+              "competition",
+              "conference",
+              "concert"
+            ]
+          },
+          "startsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endsAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "timeLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "timezone": {
+            "type": "string",
+            "nullable": true
+          },
+          "location": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string",
+            "nullable": true
+          },
+          "externalUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "hasRecap": {
+            "type": "boolean"
+          },
+          "recapUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "recapText": {
+            "type": "string",
+            "nullable": true
+          },
+          "featured": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "rejected",
+              "removed",
+              "cancelled",
+              "published"
+            ]
+          },
+          "lastDecisionReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "goingCount": {
+            "type": "number"
+          },
+          "speakers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventSpeakerView"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "waitingHours": {
+            "type": "number"
+          },
+          "host": {
+            "$ref": "#/components/schemas/AdminEventHostView"
+          }
+        },
+        "required": [
+          "ticketTypes",
+          "id",
+          "name",
+          "description",
+          "hostOrg",
+          "hostOrgBio",
+          "format",
+          "type",
+          "startsAt",
+          "endsAt",
+          "timeLabel",
+          "timezone",
+          "location",
+          "address",
+          "externalUrl",
+          "hasRecap",
+          "recapUrl",
+          "recapText",
+          "featured",
+          "status",
+          "lastDecisionReason",
+          "goingCount",
+          "speakers",
+          "createdAt",
+          "updatedAt",
+          "waitingHours",
+          "host"
+        ]
+      },
       "AdminEventReviewEntryView": {
         "type": "object",
         "properties": {
@@ -38868,6 +39062,168 @@
           "reviewedByAdminEmail",
           "reviewedByAdminRole",
           "reviewedAt"
+        ]
+      },
+      "AdminEventReviewDetailView": {
+        "type": "object",
+        "properties": {
+          "ticketTypes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminEventTicketTypeView"
+            }
+          },
+          "reviewHistory": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminEventReviewEntryView"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "hostOrg": {
+            "type": "string"
+          },
+          "hostOrgBio": {
+            "type": "string",
+            "nullable": true
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "in_person",
+              "online",
+              "hybrid"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "workshop",
+              "summit",
+              "webinar",
+              "meetup",
+              "competition",
+              "conference",
+              "concert"
+            ]
+          },
+          "startsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endsAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "timeLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "timezone": {
+            "type": "string",
+            "nullable": true
+          },
+          "location": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string",
+            "nullable": true
+          },
+          "externalUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "hasRecap": {
+            "type": "boolean"
+          },
+          "recapUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "recapText": {
+            "type": "string",
+            "nullable": true
+          },
+          "featured": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "rejected",
+              "removed",
+              "cancelled",
+              "published"
+            ]
+          },
+          "lastDecisionReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "goingCount": {
+            "type": "number"
+          },
+          "speakers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventSpeakerView"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "waitingHours": {
+            "type": "number"
+          },
+          "host": {
+            "$ref": "#/components/schemas/AdminEventHostView"
+          }
+        },
+        "required": [
+          "ticketTypes",
+          "reviewHistory",
+          "id",
+          "name",
+          "description",
+          "hostOrg",
+          "hostOrgBio",
+          "format",
+          "type",
+          "startsAt",
+          "endsAt",
+          "timeLabel",
+          "timezone",
+          "location",
+          "address",
+          "externalUrl",
+          "hasRecap",
+          "recapUrl",
+          "recapText",
+          "featured",
+          "status",
+          "lastDecisionReason",
+          "goingCount",
+          "speakers",
+          "createdAt",
+          "updatedAt",
+          "waitingHours",
+          "host"
         ]
       },
       "AdminEventDetailView": {
@@ -42003,7 +42359,6 @@
           "category": {
             "type": "string",
             "enum": [
-              "community",
               "conference",
               "music",
               "business",
@@ -42011,6 +42366,7 @@
               "church",
               "entertainment",
               "fashion",
+              "community",
               "lifestyle",
               "other"
             ]
@@ -42137,7 +42493,6 @@
                 "value": {
                   "type": "string",
                   "enum": [
-                    "community",
                     "conference",
                     "music",
                     "business",
@@ -42145,6 +42500,7 @@
                     "church",
                     "entertainment",
                     "fashion",
+                    "community",
                     "lifestyle",
                     "other"
                   ]

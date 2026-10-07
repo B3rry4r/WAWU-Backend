@@ -286,7 +286,8 @@ export class EventService {
    *
    * The ticket types, when sent, are created in the same write as the event
    * (EVENTS-02), so a host never has an event in the queue whose tickets
-   * failed to save, and the reviewer sees both at once.
+   * failed to save. The reviewer reads both: the admin queue and the admin
+   * event detail carry the event's ticket types (R-42, EVENTS-11).
    */
   async create(userWawuId: string, dto: CreateEventDto): Promise<EventView> {
     await this.assertMayHost(userWawuId);

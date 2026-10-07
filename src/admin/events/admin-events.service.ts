@@ -21,6 +21,9 @@ import {
   type AdminEventDetailView,
   type AdminEventHostView,
   type AdminEventListItemView,
+  type AdminEventQueueItemView,
+  type AdminEventReviewDetailView,
+  type AdminEventTicketTypeView,
 } from './admin-event-view.type';
 import type {
   AdminEventListQueryDto,
@@ -97,7 +100,7 @@ export class AdminEventsService {
    */
   async queue(
     query: AdminEventQueueQueryDto,
-  ): Promise<Paginated<AdminEventListItemView>> {
+  ): Promise<Paginated<AdminEventQueueItemView>> {
     const where = { status: 'pending' as const };
     const [rows, total] = await this.prisma.$transaction([
       this.prisma.event.findMany({
@@ -109,8 +112,16 @@ export class AdminEventsService {
       }),
       this.prisma.event.count({ where }),
     ]);
+    // R-42 (F2): the reviewer sees the prices they are approving.
+    const [items, tiers] = await Promise.all([
+      this.toListItems(rows),
+      this.ticketTypesOf(rows.map((r) => r.id)),
+    ]);
     return {
-      items: await this.toListItems(rows),
+      items: items.map((item) => ({
+        ...item,
+        ticketTypes: tiers.get(item.id) ?? [],
+      })),
       currentPage: query.page,
       perPage: query.perPage,
       total,
@@ -147,13 +158,19 @@ export class AdminEventsService {
   }
 
   /** GET /admin/events/:id — any status, plus every decision ever made on it. */
-  async detail(id: string): Promise<AdminEventDetailView> {
+  async detail(id: string): Promise<AdminEventReviewDetailView> {
     const event = await this.prisma.event.findUnique({
       where: { id },
       include: { speakers: { orderBy: { order: 'asc' } } },
     });
     if (!event) throw new NotFoundException('Event not found.');
-    return this.toDetail(event);
+    // R-42 (F2): and the event's ticket types, so the prices are reviewed
+    // with the event.
+    const [detail, tiers] = await Promise.all([
+      this.toDetail(event),
+      this.ticketTypesOf([event.id]),
+    ]);
+    return { ...detail, ticketTypes: tiers.get(event.id) ?? [] };
   }
 
   /** pending → published. From here the event is on every public read path. */
@@ -358,6 +375,37 @@ export class AdminEventsService {
   }
 
   // ── views ─────────────────────────────────────────────────────────────────
+
+  /**
+   * The ticket types of these events, cheapest first (the public order), in
+   * one read. Only the queue and the detail carry them (R-42, F2); the browse
+   * list and the decision answers keep the shape they had.
+   */
+  private async ticketTypesOf(
+    eventIds: string[],
+  ): Promise<Map<string, AdminEventTicketTypeView[]>> {
+    const out = new Map<string, AdminEventTicketTypeView[]>();
+    if (eventIds.length === 0) return out;
+    const rows = await this.prisma.eventTicketType.findMany({
+      where: { eventId: { in: eventIds } },
+      orderBy: [{ priceNaira: 'asc' }, { name: 'asc' }],
+      select: {
+        id: true,
+        eventId: true,
+        tier: true,
+        name: true,
+        priceNaira: true,
+        quantity: true,
+        sold: true,
+      },
+    });
+    for (const { eventId, ...tier } of rows) {
+      const list = out.get(eventId) ?? [];
+      list.push(tier);
+      out.set(eventId, list);
+    }
+    return out;
+  }
 
   private async toDetail(
     event: EventWithSpeakers,

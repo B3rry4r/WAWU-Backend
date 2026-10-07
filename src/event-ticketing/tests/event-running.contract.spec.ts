@@ -241,27 +241,26 @@ describe('Running an event: organiser numbers and door staff (EVENTS-05)', () =>
       },
     });
 
+    // The tiers are written directly. Setting them through PUT
+    // /events/:id/tickets needs a verified host and sends a published event
+    // back to review (R-40, EVENTS-11); this suite tests running an event
+    // that is on sale, not setting its tiers, so its fixtures are seeded
+    // on sale, as the events above are.
     for (const eventId of [EV_MAIN, EV_OTHER]) {
-      const res = await http()
-        .put(`/api/hub/events/${eventId}/tickets`)
-        .set(auth(hostToken))
-        .send({
-          types: [
-            { tier: 'free', name: 'Free', priceNaira: 0, quantity: 50 },
-            {
-              tier: 'regular',
-              name: 'Regular',
-              priceNaira: 7500,
-              quantity: 70,
-            },
-          ],
-        })
-        .expect(200);
-      for (const t of data<unknown>(res) as Array<{
-        id: string;
-        tier: string;
-      }>) {
-        tiers[`${eventId}:${t.tier}`] = t.id;
+      for (const t of [
+        { tier: 'free' as const, name: 'Free', priceNaira: 0, quantity: 50 },
+        {
+          tier: 'regular' as const,
+          name: 'Regular',
+          priceNaira: 7500,
+          quantity: 70,
+        },
+      ]) {
+        const row = await prisma.eventTicketType.create({
+          data: { eventId, ...t },
+          select: { id: true },
+        });
+        tiers[`${eventId}:${t.tier}`] = row.id;
       }
     }
 

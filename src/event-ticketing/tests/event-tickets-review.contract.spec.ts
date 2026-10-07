@@ -149,7 +149,7 @@ describe('PUT /events/:id/tickets: the hosting gate and re-review (EVENTS-11, R-
   async function fixture(
     id: string,
     host: string,
-    status: 'published' | 'pending' | 'rejected' | 'removed',
+    status: 'published' | 'pending' | 'rejected' | 'removed' | 'cancelled',
     extra: { cancelledAt?: Date } = {},
   ): Promise<void> {
     await prisma.event.create({
@@ -515,5 +515,148 @@ describe('PUT /events/:id/tickets: the hosting gate and re-review (EVENTS-11, R-
     expect(String((zero.body as ErrorBody).message)).toContain(
       '"VIP" is a paid tier',
     );
+  });
+
+  // ── R-42: who reads the tiers ─────────────────────────────────────────────
+
+  it('F3: the tiers of an event that is not published are a 404 to everyone but its host, as GET /events/:id is', async () => {
+    await fixture(EV_PENDING, HOST_SUB, 'pending');
+    await fixture(EV_REJECTED, HOST_SUB, 'rejected');
+    await fixture(EV_REMOVED, HOST_SUB, 'removed');
+    await fixture(EV_CANCELLED, HOST_SUB, 'cancelled', {
+      cancelledAt: new Date('2026-09-01T00:00:00.000Z'),
+    });
+    for (const id of [EV_PENDING, EV_REJECTED, EV_REMOVED, EV_CANCELLED]) {
+      // A stranger, a signed-out reader: 404, the same answer the event gets.
+      const tiers = await http()
+        .get(`/api/hub/events/${id}/tickets`)
+        .set(auth(buyerToken))
+        .expect(404);
+      const event = await http()
+        .get(`/api/hub/events/${id}`)
+        .set(auth(buyerToken))
+        .expect(404);
+      expect(tiers.body).toEqual(event.body);
+      await http().get(`/api/hub/events/${id}/tickets`).expect(404);
+      // The host reads their own tiers at any status.
+      const own = await http()
+        .get(`/api/hub/events/${id}/tickets`)
+        .set(auth(hostToken))
+        .expect(200);
+      expect(
+        (own.body as { data: { priceNaira: number }[] }).data.map(
+          (t) => t.priceNaira,
+        ),
+      ).toEqual([5000]);
+    }
+  });
+
+  it("F3: a published event's tiers are public as before, signed in or out, and a missing event keeps its answers", async () => {
+    for (const token of [buyerToken, null]) {
+      const req = http().get(`/api/hub/events/${EV_LIVE}/tickets`);
+      const res = await (token ? req.set(auth(token)) : req).expect(200);
+      expect(
+        (res.body as { data: { name: string; priceNaira: number }[] }).data,
+      ).toMatchObject([{ name: 'Regular', priceNaira: 5000 }]);
+    }
+    const missing = 'ee110000-0000-4000-8000-0000000000ff';
+    await http()
+      .get(`/api/hub/events/${missing}/tickets`)
+      .set(auth(buyerToken))
+      .expect(404);
+    const anon = await http()
+      .get(`/api/hub/events/${missing}/tickets`)
+      .expect(200);
+    expect((anon.body as { data: unknown[] }).data).toEqual([]);
+  });
+
+  it('F3: the moment a repriced event goes back to review, its new tiers are hidden too; the host still reads them', async () => {
+    await put(hostToken, EV_LIVE).expect(200);
+    await http()
+      .get(`/api/hub/events/${EV_LIVE}/tickets`)
+      .set(auth(buyerToken))
+      .expect(404);
+    await http().get(`/api/hub/events/${EV_LIVE}/tickets`).expect(404);
+    await http()
+      .get(`/api/hub/events/${EV_LIVE}/tickets`)
+      .set(auth(hostToken))
+      .expect(200);
+  });
+
+  it('F2: the admin queue and the admin event detail carry the ticket types the reviewer approves', async () => {
+    await put(hostToken, EV_LIVE, [
+      { tier: 'vip', name: 'VIP', priceNaira: 20000, quantity: 10 },
+      ...NEW_TIERS,
+    ]).expect(200);
+    const want = [
+      {
+        tier: 'regular',
+        name: 'Regular',
+        priceNaira: 7500,
+        quantity: 100,
+        sold: 0,
+      },
+      { tier: 'vip', name: 'VIP', priceNaira: 20000, quantity: 10, sold: 0 },
+    ];
+    type Tier = (typeof want)[number] & { id: string };
+
+    const queue = await http()
+      .get('/api/hub/admin/events/queue')
+      .query({ perPage: 100 })
+      .set(auth(adminToken))
+      .expect(200);
+    const row = (
+      queue.body as { data: { id: string; ticketTypes: Tier[] }[] }
+    ).data.find((e) => e.id === EV_LIVE);
+    expect(row?.ticketTypes).toMatchObject(want);
+    expect(Object.keys(row!.ticketTypes[0]).sort()).toEqual(
+      ['id', 'name', 'priceNaira', 'quantity', 'sold', 'tier'].sort(),
+    );
+
+    const detail = await http()
+      .get(`/api/hub/admin/events/${EV_LIVE}`)
+      .set(auth(adminToken))
+      .expect(200);
+    const tiers = (detail.body as { data: { ticketTypes: Tier[] } }).data
+      .ticketTypes;
+    expect(tiers).toMatchObject(want);
+    const rows = await prisma.eventTicketType.findMany({
+      where: { eventId: EV_LIVE },
+      orderBy: { priceNaira: 'asc' },
+    });
+    expect(tiers.map((t) => t.id)).toEqual(rows.map((r) => r.id));
+
+    // An event with no ticket types: an empty list, not a missing field.
+    await prisma.eventTicketType.deleteMany({ where: { eventId: EV_LIVE } });
+    const bare = await http()
+      .get(`/api/hub/admin/events/${EV_LIVE}`)
+      .set(auth(adminToken))
+      .expect(200);
+    expect(
+      (bare.body as { data: { ticketTypes: Tier[] } }).data.ticketTypes,
+    ).toEqual([]);
+  });
+
+  it('F2: the admin browse list and the decision answers keep the shape they had (no ticketTypes)', async () => {
+    const list = await http()
+      .get('/api/hub/admin/events')
+      .query({ perPage: 100 })
+      .set(auth(adminToken))
+      .expect(200);
+    const row = (list.body as { data: Record<string, unknown>[] }).data.find(
+      (e) => e.id === EV_LIVE,
+    );
+    expect(row).toBeDefined();
+    expect(row).not.toHaveProperty('ticketTypes');
+
+    await put(hostToken, EV_LIVE).expect(200);
+    const approved = await http()
+      .post(`/api/hub/admin/events/${EV_LIVE}/approve`)
+      .set(auth(adminToken))
+      .expect(200);
+    expect(
+      (approved.body as { data: { event: Record<string, unknown> } }).data
+        .event,
+    ).not.toHaveProperty('ticketTypes');
   });
 });
