@@ -30,7 +30,8 @@ import { LegalIntakeModule } from '../../legal-intake/legal-intake.module';
  * written in the code or assumed from the database.
  */
 
-const MOCK_WAWU_ID_URL = process.env.WAWU_ID_BASE_URL ?? 'http://localhost:4001';
+const MOCK_WAWU_ID_URL =
+  process.env.WAWU_ID_BASE_URL ?? 'http://localhost:4001';
 const REPO_ROOT = path.resolve(__dirname, '../../../');
 
 const ADMINS = adminFixtures('1e110003', 'legal-consult');
@@ -71,8 +72,12 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
   let userId: string;
   let otherId: string;
   const envSnapshot: Record<string, string | undefined> = {};
-  let optionRows: Awaited<ReturnType<PrismaService['legalConsultationOption']['findMany']>>;
-  let priceRows: Awaited<ReturnType<PrismaService['legalServicePrice']['findMany']>>;
+  let optionRows: Awaited<
+    ReturnType<PrismaService['legalConsultationOption']['findMany']>
+  >;
+  let priceRows: Awaited<
+    ReturnType<PrismaService['legalServicePrice']['findMany']>
+  >;
   let createdIds: string[] = [];
 
   const http = () => request(app.getHttpServer());
@@ -90,9 +95,17 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
   }
 
   async function priceAll() {
-    await setConsultation('zoom', { priceKobo: 1_500_000, minutes: 30 }).expect(200);
-    await setConsultation('phone', { priceKobo: 1_000_000, minutes: 20 }).expect(200);
-    await setConsultation('physical', { priceKobo: null, minutes: null }).expect(200);
+    await setConsultation('zoom', { priceKobo: 1_500_000, minutes: 30 }).expect(
+      200,
+    );
+    await setConsultation('phone', {
+      priceKobo: 1_000_000,
+      minutes: 20,
+    }).expect(200);
+    await setConsultation('physical', {
+      priceKobo: null,
+      minutes: null,
+    }).expect(200);
   }
 
   /** A consultation request owned by `who`, created through the real route. */
@@ -115,7 +128,10 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
     return res.body.data as {
       minutes: number;
       horizonDays: number;
-      days: { date: string; slots: { startsAt: string; available: boolean }[] }[];
+      days: {
+        date: string;
+        slots: { startsAt: string; available: boolean }[];
+      }[];
     };
   }
 
@@ -162,7 +178,11 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
     app = moduleRef.createNestApplication();
     app.setGlobalPrefix('api/hub');
     app.useGlobalPipes(
-      new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
+      new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
     );
     app.useGlobalFilters(new AllExceptionsFilter());
     app.useGlobalInterceptors(new ResponseInterceptor());
@@ -177,10 +197,18 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
 
   afterEach(async () => {
     if (createdIds.length) {
-      await prisma.legalDeliverable.deleteMany({ where: { legalRequestId: { in: createdIds } } });
-      await prisma.legalChatMessage.deleteMany({ where: { legalRequestId: { in: createdIds } } });
-      await prisma.adminOpsAudit.deleteMany({ where: { resourceId: { in: createdIds } } });
-      await prisma.legalRequest.deleteMany({ where: { id: { in: createdIds } } });
+      await prisma.legalDeliverable.deleteMany({
+        where: { legalRequestId: { in: createdIds } },
+      });
+      await prisma.legalChatMessage.deleteMany({
+        where: { legalRequestId: { in: createdIds } },
+      });
+      await prisma.adminOpsAudit.deleteMany({
+        where: { resourceId: { in: createdIds } },
+      });
+      await prisma.legalRequest.deleteMany({
+        where: { id: { in: createdIds } },
+      });
       createdIds = [];
     }
     await prisma.notification.deleteMany({
@@ -202,7 +230,10 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
       await prisma.adminOpsAudit.deleteMany({
         where: {
           OR: [
-            { resource: 'legal_price', actedByAdminId: { in: ADMINS.map((a) => a.id) } },
+            {
+              resource: 'legal_price',
+              actedByAdminId: { in: ADMINS.map((a) => a.id) },
+            },
           ],
         },
       });
@@ -223,54 +254,103 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
         ['put', '/api/hub/legal/ops/prices/consultations/zoom'],
         ['put', '/api/hub/legal/ops/prices/services/cac-registration'],
       ] as const) {
-        await http()[verb](url).send({ priceKobo: 1_000_000, minutes: 30 }).expect(401);
-        await http()[verb](url).set(as(userToken)).send({ priceKobo: 1_000_000, minutes: 30 }).expect(401);
-        await http()[verb](url).set('Authorization', 'Bearer not-a-jwt').send({}).expect(401);
+        await http()
+          [verb](url)
+          .send({ priceKobo: 1_000_000, minutes: 30 })
+          .expect(401);
+        await http()
+          [verb](url)
+          .set(as(userToken))
+          .send({ priceKobo: 1_000_000, minutes: 30 })
+          .expect(401);
+        await http()
+          [verb](url)
+          .set('Authorization', 'Bearer not-a-jwt')
+          .send({})
+          .expect(401);
       }
     });
 
     it.each(READ_ROLES)('%s can read the prices', async (role) => {
-      const res = await http().get('/api/hub/legal/ops/prices').set(bearer(tokens[role])).expect(200);
-      expect(res.body.data.consultations.map((c: { medium: string }) => c.medium)).toEqual([
-        'chat',
-        'zoom',
-        'phone',
-        'physical',
-      ]);
-      expect(
-        res.body.data.services.map((s: { serviceCode: string }) => s.serviceCode).sort(),
-      ).toEqual(['cac-registration', 'data-protection-filing', 'tax-registration']);
-    });
-
-    it.each(rolesOtherThan(READ_ROLES))('%s cannot read the prices', async (role) => {
-      await http().get('/api/hub/legal/ops/prices').set(bearer(tokens[role])).expect(403);
-    });
-
-    it.each(rolesOtherThan(PRICE_ROLES))('%s cannot set a price, and none is written', async (role) => {
-      const before = await prisma.legalConsultationOption.findUnique({ where: { medium: 'phone' } });
-      await setConsultation('phone', { priceKobo: 5_000_000, minutes: 45 }, role as never).expect(403);
-      await http()
-        .put('/api/hub/legal/ops/prices/services/cac-registration')
+      const res = await http()
+        .get('/api/hub/legal/ops/prices')
         .set(bearer(tokens[role]))
-        .send({ priceKobo: 5_000_000 })
-        .expect(403);
-      expect(await prisma.legalConsultationOption.findUnique({ where: { medium: 'phone' } })).toEqual(before);
-      expect(await prisma.legalServicePrice.findUnique({ where: { serviceCode: 'cac-registration' } })).toBeNull();
+        .expect(200);
+      expect(
+        res.body.data.consultations.map((c: { medium: string }) => c.medium),
+      ).toEqual(['chat', 'zoom', 'phone', 'physical']);
+      expect(
+        res.body.data.services
+          .map((s: { serviceCode: string }) => s.serviceCode)
+          .sort(),
+      ).toEqual([
+        'cac-registration',
+        'data-protection-filing',
+        'tax-registration',
+      ]);
     });
+
+    it.each(rolesOtherThan(READ_ROLES))(
+      '%s cannot read the prices',
+      async (role) => {
+        await http()
+          .get('/api/hub/legal/ops/prices')
+          .set(bearer(tokens[role]))
+          .expect(403);
+      },
+    );
+
+    it.each(rolesOtherThan(PRICE_ROLES))(
+      '%s cannot set a price, and none is written',
+      async (role) => {
+        const before = await prisma.legalConsultationOption.findUnique({
+          where: { medium: 'phone' },
+        });
+        await setConsultation(
+          'phone',
+          { priceKobo: 5_000_000, minutes: 45 },
+          role as never,
+        ).expect(403);
+        await http()
+          .put('/api/hub/legal/ops/prices/services/cac-registration')
+          .set(bearer(tokens[role]))
+          .send({ priceKobo: 5_000_000 })
+          .expect(403);
+        expect(
+          await prisma.legalConsultationOption.findUnique({
+            where: { medium: 'phone' },
+          }),
+        ).toEqual(before);
+        expect(
+          await prisma.legalServicePrice.findUnique({
+            where: { serviceCode: 'cac-registration' },
+          }),
+        ).toBeNull();
+      },
+    );
 
     it.each([
       ['a string price', { priceKobo: '1500000', minutes: 30 }],
       ['a decimal price', { priceKobo: 1500000.5, minutes: 30 }],
-      ['a price that is not whole naira', { priceKobo: 1_500_050, minutes: 30 }],
+      [
+        'a price that is not whole naira',
+        { priceKobo: 1_500_050, minutes: 30 },
+      ],
       ['a price under one naira', { priceKobo: 50, minutes: 30 }],
       ['a negative price', { priceKobo: -100, minutes: 30 }],
-      ['a price over the merchant cap', { priceKobo: 1_000_000_100, minutes: 30 }],
+      [
+        'a price over the merchant cap',
+        { priceKobo: 1_000_000_100, minutes: 30 },
+      ],
       ['no price at all', { minutes: 30 }],
       ['a string length', { priceKobo: 1_500_000, minutes: '30' }],
       ['a length of zero', { priceKobo: 1_500_000, minutes: 0 }],
       ['a length past the working day', { priceKobo: 1_500_000, minutes: 481 }],
       ['no length at all', { priceKobo: 1_500_000 }],
-      ['enabled as a string', { priceKobo: 1_500_000, minutes: 30, enabled: 'yes' }],
+      [
+        'enabled as a string',
+        { priceKobo: 1_500_000, minutes: 30, enabled: 'yes' },
+      ],
       ['an unknown field', { priceKobo: 1_500_000, minutes: 30, free: true }],
       ['an empty body', {}],
     ])('refuses %s with a 400, never a 500', async (_label, body) => {
@@ -290,13 +370,19 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
 
     it('refuses a medium that does not exist, in any spelling', async () => {
       for (const medium of ['video', 'ZOOM', 'zoom%20', 'in_person', '0']) {
-        await setConsultation(medium, { priceKobo: 1_500_000, minutes: 30 }).expect(400);
+        await setConsultation(medium, {
+          priceKobo: 1_500_000,
+          minutes: 30,
+        }).expect(400);
       }
     });
 
     it('lets WAWU price an in-person consultation, which the app shows and the web never charges', async () => {
       await priceAll();
-      await setConsultation('physical', { priceKobo: 2_000_000, minutes: 90 }).expect(200);
+      await setConsultation('physical', {
+        priceKobo: 2_000_000,
+        minutes: 90,
+      }).expect(200);
       const offered = await http()
         .get('/api/hub/legal/consultation/options')
         .set(as(userToken))
@@ -308,7 +394,10 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
         priceKobo: 2_000_000,
         onRequest: true,
       });
-      const catalogue = await http().get('/api/hub/legal/catalogue').set(as(userToken)).expect(200);
+      const catalogue = await http()
+        .get('/api/hub/legal/catalogue')
+        .set(as(userToken))
+        .expect(200);
       expect(catalogue.body.data.consultationOptions).toContainEqual({
         medium: 'physical',
         label: 'In person',
@@ -328,12 +417,23 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
         .set(as(userToken))
         .send({ medium: 'physical' })
         .expect(200);
-      expect(app.body.data).toMatchObject({ minutes: 90, priceKobo: 2_000_000, scheduledFor: null });
-      await setConsultation('physical', { priceKobo: null, minutes: null }).expect(200);
+      expect(app.body.data).toMatchObject({
+        minutes: 90,
+        priceKobo: 2_000_000,
+        scheduledFor: null,
+      });
+      await setConsultation('physical', {
+        priceKobo: null,
+        minutes: null,
+      }).expect(200);
     });
 
     it('records who set a price, with the old and the new value', async () => {
-      const res = await setConsultation('zoom', { priceKobo: 1_500_000, minutes: 30 }, 'superadmin').expect(200);
+      const res = await setConsultation(
+        'zoom',
+        { priceKobo: 1_500_000, minutes: 30 },
+        'superadmin',
+      ).expect(200);
       expect(res.body.data).toMatchObject({
         medium: 'zoom',
         label: 'Video call',
@@ -343,11 +443,19 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
         offered: true,
       });
       const audit = await prisma.adminOpsAudit.findFirst({
-        where: { resource: 'legal_price', resourceId: 'consultation:zoom', action: 'legal_price_set' },
+        where: {
+          resource: 'legal_price',
+          resourceId: 'consultation:zoom',
+          action: 'legal_price_set',
+        },
         orderBy: { actedAt: 'desc' },
       });
-      expect(audit?.actedByAdminEmail).toBe(ADMINS.find((a) => a.role === 'superadmin')!.email);
-      expect(audit?.detail).toMatchObject({ to: { priceKobo: 1_500_000, minutes: 30, enabled: true } });
+      expect(audit?.actedByAdminEmail).toBe(
+        ADMINS.find((a) => a.role === 'superadmin')!.email,
+      );
+      expect(audit?.detail).toMatchObject({
+        to: { priceKobo: 1_500_000, minutes: 30, enabled: true },
+      });
     });
 
     it('prices a fixed-price service, and clears it back to a quote', async () => {
@@ -361,7 +469,12 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
         .set(bearer(tokens.finance))
         .send({ priceKobo: 1_000_000 })
         .expect(400);
-      for (const bad of [{ priceKobo: 'free' }, { priceKobo: 12_345 }, {}, { priceKobo: 1_000_000, extra: 1 }]) {
+      for (const bad of [
+        { priceKobo: 'free' },
+        { priceKobo: 12_345 },
+        {},
+        { priceKobo: 1_000_000, extra: 1 },
+      ]) {
         await http()
           .put('/api/hub/legal/ops/prices/services/cac-registration')
           .set(bearer(tokens.finance))
@@ -377,16 +490,27 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
 
       // The web's catalogue carries it, in whole naira, and a new request
       // starts quoted at it.
-      const catalogue = await http().get('/api/hub/legal/catalogue').set(as(userToken)).expect(200);
-      const cac = catalogue.body.data.services.find((s: { code: string }) => s.code === 'cac-registration');
+      const catalogue = await http()
+        .get('/api/hub/legal/catalogue')
+        .set(as(userToken))
+        .expect(200);
+      const cac = catalogue.body.data.services.find(
+        (s: { code: string }) => s.code === 'cac-registration',
+      );
       expect(cac.priceNaira).toBe(35_000);
       const created = await http()
         .post('/api/hub/legal/requests')
         .set(as(userToken))
-        .send({ serviceCode: 'cac-registration', documents: ['https://files.example.com/id.pdf'] })
+        .send({
+          serviceCode: 'cac-registration',
+          documents: ['https://files.example.com/id.pdf'],
+        })
         .expect(201);
       createdIds.push(created.body.data.id);
-      expect(created.body.data).toMatchObject({ status: 'quoted', quoteAmount: 35_000 });
+      expect(created.body.data).toMatchObject({
+        status: 'quoted',
+        quoteAmount: 35_000,
+      });
 
       await http()
         .put('/api/hub/legal/ops/prices/services/cac-registration')
@@ -396,10 +520,16 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
       const cleared = await http()
         .post('/api/hub/legal/requests')
         .set(as(userToken))
-        .send({ serviceCode: 'cac-registration', documents: ['https://files.example.com/id.pdf'] })
+        .send({
+          serviceCode: 'cac-registration',
+          documents: ['https://files.example.com/id.pdf'],
+        })
         .expect(201);
       createdIds.push(cleared.body.data.id);
-      expect(cleared.body.data).toMatchObject({ status: 'awaiting_quote', quoteAmount: null });
+      expect(cleared.body.data).toMatchObject({
+        status: 'awaiting_quote',
+        quoteAmount: null,
+      });
     });
   });
 
@@ -407,43 +537,104 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
   describe('what the app offers', () => {
     it('offers video, phone and in person at the length and price set in admin', async () => {
       await priceAll();
-      const res = await http().get('/api/hub/legal/consultation/options').set(as(userToken)).expect(200);
+      const res = await http()
+        .get('/api/hub/legal/consultation/options')
+        .set(as(userToken))
+        .expect(200);
       expect(res.body.data.timeZone).toBe('Africa/Lagos');
       expect(res.body.data.options).toEqual([
-        { medium: 'zoom', label: 'Video call', minutes: 30, priceKobo: 1_500_000, onRequest: false },
-        { medium: 'phone', label: 'Phone call', minutes: 20, priceKobo: 1_000_000, onRequest: false },
-        { medium: 'physical', label: 'In person', minutes: null, priceKobo: null, onRequest: true },
+        {
+          medium: 'zoom',
+          label: 'Video call',
+          minutes: 30,
+          priceKobo: 1_500_000,
+          onRequest: false,
+        },
+        {
+          medium: 'phone',
+          label: 'Phone call',
+          minutes: 20,
+          priceKobo: 1_000_000,
+          onRequest: false,
+        },
+        {
+          medium: 'physical',
+          label: 'In person',
+          minutes: null,
+          priceKobo: null,
+          onRequest: true,
+        },
       ]);
     });
 
     it('refuses it without a sign-in', async () => {
       await http().get('/api/hub/legal/consultation/options').expect(401);
-      await http().get('/api/hub/legal/consultation/slots').query({ medium: 'zoom' }).expect(401);
+      await http()
+        .get('/api/hub/legal/consultation/slots')
+        .query({ medium: 'zoom' })
+        .expect(401);
     });
 
     it('does not offer a call nobody has priced, or one switched off', async () => {
       await priceAll();
-      await setConsultation('phone', { priceKobo: null, minutes: null }).expect(200);
-      let res = await http().get('/api/hub/legal/consultation/options').set(as(userToken)).expect(200);
-      expect(res.body.data.options.map((o: { medium: string }) => o.medium)).toEqual(['zoom', 'physical']);
+      await setConsultation('phone', { priceKobo: null, minutes: null }).expect(
+        200,
+      );
+      let res = await http()
+        .get('/api/hub/legal/consultation/options')
+        .set(as(userToken))
+        .expect(200);
+      expect(
+        res.body.data.options.map((o: { medium: string }) => o.medium),
+      ).toEqual(['zoom', 'physical']);
 
-      await setConsultation('phone', { priceKobo: 1_000_000, minutes: 20, enabled: false }).expect(200);
-      res = await http().get('/api/hub/legal/consultation/options').set(as(userToken)).expect(200);
-      expect(res.body.data.options.map((o: { medium: string }) => o.medium)).toEqual(['zoom', 'physical']);
+      await setConsultation('phone', {
+        priceKobo: 1_000_000,
+        minutes: 20,
+        enabled: false,
+      }).expect(200);
+      res = await http()
+        .get('/api/hub/legal/consultation/options')
+        .set(as(userToken))
+        .expect(200);
+      expect(
+        res.body.data.options.map((o: { medium: string }) => o.medium),
+      ).toEqual(['zoom', 'physical']);
       // Switching it off keeps the price.
-      const row = await prisma.legalConsultationOption.findUnique({ where: { medium: 'phone' } });
-      expect(row).toMatchObject({ priceKobo: 1_000_000, minutes: 20, enabled: false });
-      await http().get('/api/hub/legal/consultation/slots').query({ medium: 'phone' }).set(as(userToken)).expect(400);
+      const row = await prisma.legalConsultationOption.findUnique({
+        where: { medium: 'phone' },
+      });
+      expect(row).toMatchObject({
+        priceKobo: 1_000_000,
+        minutes: 20,
+        enabled: false,
+      });
+      await http()
+        .get('/api/hub/legal/consultation/slots')
+        .query({ medium: 'phone' })
+        .set(as(userToken))
+        .expect(400);
     });
 
     it('moves the web catalogue with the same prices, and never lists a phone call there', async () => {
       await priceAll();
-      await setConsultation('chat', { priceKobo: 2_000_000, minutes: 45 }).expect(200);
-      const res = await http().get('/api/hub/legal/catalogue').set(as(userToken)).expect(200);
+      await setConsultation('chat', {
+        priceKobo: 2_000_000,
+        minutes: 45,
+      }).expect(200);
+      const res = await http()
+        .get('/api/hub/legal/catalogue')
+        .set(as(userToken))
+        .expect(200);
       expect(res.body.data.consultationOptions).toEqual([
         { medium: 'chat', label: 'Chat', minutes: 45, feeNaira: 20_000 },
         { medium: 'zoom', label: 'Zoom call', minutes: 30, feeNaira: 15_000 },
-        { medium: 'physical', label: 'In person', minutes: null, feeNaira: null },
+        {
+          medium: 'physical',
+          label: 'In person',
+          minutes: null,
+          feeNaira: null,
+        },
       ]);
     });
 
@@ -451,19 +642,35 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
       'refuses the slots for medium %j with a 400',
       async (medium) => {
         await priceAll();
-        await http().get('/api/hub/legal/consultation/slots').query({ medium }).set(as(userToken)).expect(400);
+        await http()
+          .get('/api/hub/legal/consultation/slots')
+          .query({ medium })
+          .set(as(userToken))
+          .expect(400);
       },
     );
 
     it('refuses slots with no medium, a repeated medium or a stray query field', async () => {
-      await http().get('/api/hub/legal/consultation/slots').set(as(userToken)).expect(400);
-      await http().get('/api/hub/legal/consultation/slots?medium=zoom&medium=phone').set(as(userToken)).expect(400);
-      await http().get('/api/hub/legal/consultation/slots?medium=zoom&day=1').set(as(userToken)).expect(400);
+      await http()
+        .get('/api/hub/legal/consultation/slots')
+        .set(as(userToken))
+        .expect(400);
+      await http()
+        .get('/api/hub/legal/consultation/slots?medium=zoom&medium=phone')
+        .set(as(userToken))
+        .expect(400);
+      await http()
+        .get('/api/hub/legal/consultation/slots?medium=zoom&day=1')
+        .set(as(userToken))
+        .expect(400);
     });
 
     it('offers the calendar at the length of the call, and never past closing', async () => {
       await priceAll();
-      await setConsultation('phone', { priceKobo: 1_000_000, minutes: 90 }).expect(200);
+      await setConsultation('phone', {
+        priceKobo: 1_000_000,
+        minutes: 90,
+      }).expect(200);
       const zoom = await slotsFor('zoom');
       const phone = await slotsFor('phone');
       expect(zoom).toMatchObject({ minutes: 30, horizonDays: 21 });
@@ -506,7 +713,10 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
 
       // Another person sees it gone, and cannot book it.
       const seen = await slotsFor('zoom', otherToken);
-      expect(seen.days[0].slots[1]).toEqual({ startsAt: start, available: false });
+      expect(seen.days[0].slots[1]).toEqual({
+        startsAt: start,
+        available: false,
+      });
       expect(seen.days[0].slots[0].available).toBe(true);
       const refused = await http()
         .post(`/api/hub/legal/requests/${theirs.id}/booking`)
@@ -515,9 +725,16 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
         .expect(409);
       expect(refused.body.message).toMatch(/taken/i);
       // The web's calendar and the web's booking agree.
-      const legacy = await http().get('/api/hub/legal/availability').set(as(otherToken)).expect(200);
+      const legacy = await http()
+        .get('/api/hub/legal/availability')
+        .set(as(otherToken))
+        .expect(200);
       expect(
-        legacy.body.data.days.flatMap((d: { slots: { startsAt: string; available: boolean }[] }) => d.slots)
+        legacy.body.data.days
+          .flatMap(
+            (d: { slots: { startsAt: string; available: boolean }[] }) =>
+              d.slots,
+          )
           .find((s: { startsAt: string }) => s.startsAt === start).available,
       ).toBe(false);
       await http()
@@ -525,11 +742,21 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
         .set(as(otherToken))
         .send({ medium: 'zoom', scheduledFor: start })
         .expect(409);
-      expect((await prisma.legalRequest.findUnique({ where: { id: theirs.id } }))?.scheduledFor).toBeNull();
+      expect(
+        (await prisma.legalRequest.findUnique({ where: { id: theirs.id } }))
+          ?.scheduledFor,
+      ).toBeNull();
 
       // The person's own booking reads back.
-      const read = await http().get(`/api/hub/legal/requests/${mine.id}/booking`).set(as(userToken)).expect(200);
-      expect(read.body.data).toMatchObject({ scheduledFor: start, medium: 'zoom', minutes: 30 });
+      const read = await http()
+        .get(`/api/hub/legal/requests/${mine.id}/booking`)
+        .set(as(userToken))
+        .expect(200);
+      expect(read.body.data).toMatchObject({
+        scheduledFor: start,
+        medium: 'zoom',
+        minutes: 30,
+      });
     });
 
     it('lets a person move their own booking, which frees the old hour', async () => {
@@ -558,7 +785,10 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
 
     it('takes every hour a longer call runs into, and only those', async () => {
       await priceAll();
-      await setConsultation('phone', { priceKobo: 1_000_000, minutes: 90 }).expect(200);
+      await setConsultation('phone', {
+        priceKobo: 1_000_000,
+        minutes: 90,
+      }).expect(200);
       const mine = await newRequest(userToken);
       const theirs = await newRequest(otherToken);
       const cal = await slotsFor('phone');
@@ -598,21 +828,36 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
       const theirs = await newRequest(otherToken);
       const start = pick(await slotsFor('zoom'), 3, 1);
       const results = await Promise.all([
-        http().post(`/api/hub/legal/requests/${mine.id}/booking`).set(as(userToken)).send({ medium: 'zoom', scheduledFor: start }),
-        http().post(`/api/hub/legal/requests/${theirs.id}/booking`).set(as(otherToken)).send({ medium: 'zoom', scheduledFor: start }),
+        http()
+          .post(`/api/hub/legal/requests/${mine.id}/booking`)
+          .set(as(userToken))
+          .send({ medium: 'zoom', scheduledFor: start }),
+        http()
+          .post(`/api/hub/legal/requests/${theirs.id}/booking`)
+          .set(as(otherToken))
+          .send({ medium: 'zoom', scheduledFor: start }),
       ]);
       expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
     });
 
     it('lets exactly one of two overlapping calls at different starts have the time', async () => {
       await priceAll();
-      await setConsultation('phone', { priceKobo: 1_000_000, minutes: 90 }).expect(200);
+      await setConsultation('phone', {
+        priceKobo: 1_000_000,
+        minutes: 90,
+      }).expect(200);
       const mine = await newRequest(userToken);
       const theirs = await newRequest(otherToken);
       const cal = await slotsFor('phone');
       const results = await Promise.all([
-        http().post(`/api/hub/legal/requests/${mine.id}/booking`).set(as(userToken)).send({ medium: 'phone', scheduledFor: pick(cal, 4, 1) }),
-        http().post(`/api/hub/legal/requests/${theirs.id}/booking`).set(as(otherToken)).send({ medium: 'zoom', scheduledFor: pick(cal, 4, 2) }),
+        http()
+          .post(`/api/hub/legal/requests/${mine.id}/booking`)
+          .set(as(userToken))
+          .send({ medium: 'phone', scheduledFor: pick(cal, 4, 1) }),
+        http()
+          .post(`/api/hub/legal/requests/${theirs.id}/booking`)
+          .set(as(otherToken))
+          .send({ medium: 'zoom', scheduledFor: pick(cal, 4, 2) }),
       ]);
       expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
     });
@@ -628,7 +873,9 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
         .send({ medium: 'zoom', scheduledFor: start })
         .expect(200);
       await prisma.$executeRaw`UPDATE "LegalRequest" SET "updatedAt" = now() - interval '31 minutes' WHERE id = ${mine.id}`;
-      expect((await slotsFor('zoom', otherToken)).days[5].slots[1].available).toBe(true);
+      expect(
+        (await slotsFor('zoom', otherToken)).days[5].slots[1].available,
+      ).toBe(true);
       await http()
         .post(`/api/hub/legal/requests/${theirs.id}/booking`)
         .set(as(otherToken))
@@ -648,12 +895,20 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
         .expect(200);
       await prisma.legalRequest.update({
         where: { id: mine.id },
-        data: { consultationPaidAt: new Date(), status: 'consultation_scheduled' },
+        data: {
+          consultationPaidAt: new Date(),
+          status: 'consultation_scheduled',
+        },
       });
       await prisma.$executeRaw`UPDATE "LegalRequest" SET "updatedAt" = now() - interval '5 days' WHERE id = ${mine.id}`;
-      const paid = await http().get(`/api/hub/legal/requests/${mine.id}/booking`).set(as(userToken)).expect(200);
+      const paid = await http()
+        .get(`/api/hub/legal/requests/${mine.id}/booking`)
+        .set(as(userToken))
+        .expect(200);
       expect(paid.body.data).toMatchObject({ paid: true, holdExpiresAt: null });
-      expect((await slotsFor('zoom', otherToken)).days[6].slots[1].available).toBe(false);
+      expect(
+        (await slotsFor('zoom', otherToken)).days[6].slots[1].available,
+      ).toBe(false);
       await http()
         .post(`/api/hub/legal/requests/${theirs.id}/booking`)
         .set(as(otherToken))
@@ -663,7 +918,10 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
       await http()
         .post(`/api/hub/legal/requests/${mine.id}/booking`)
         .set(as(userToken))
-        .send({ medium: 'zoom', scheduledFor: pick(await slotsFor('zoom'), 6, 2) })
+        .send({
+          medium: 'zoom',
+          scheduledFor: pick(await slotsFor('zoom'), 6, 2),
+        })
         .expect(409);
     });
 
@@ -690,7 +948,9 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
         scheduledFor: null,
         holdExpiresAt: null,
       });
-      expect((await slotsFor('zoom', otherToken)).days[7].slots[1].available).toBe(true);
+      expect(
+        (await slotsFor('zoom', otherToken)).days[7].slots[1].available,
+      ).toBe(true);
       await http()
         .post(`/api/hub/legal/requests/${mine.id}/booking`)
         .set(as(userToken))
@@ -703,10 +963,13 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
       const mine = await newRequest(userToken);
       const cal = await slotsFor('zoom');
       const real = pick(cal, 8, 1);
-      const halfPast = new Date(new Date(real).getTime() + 30 * 60_000).toISOString();
+      const halfPast = new Date(
+        new Date(real).getTime() + 30 * 60_000,
+      ).toISOString();
       const weekendDay = (() => {
         const d = new Date(real);
-        while (![0, 6].includes(d.getUTCDay())) d.setUTCDate(d.getUTCDate() + 1);
+        while (![0, 6].includes(d.getUTCDay()))
+          d.setUTCDate(d.getUTCDate() + 1);
         return d.toISOString();
       })();
       for (const body of [
@@ -735,7 +998,10 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
           .send(body);
         expect({ body, status: res.status }).toEqual({ body, status: 400 });
       }
-      expect((await prisma.legalRequest.findUnique({ where: { id: mine.id } }))?.scheduledFor).toBeNull();
+      expect(
+        (await prisma.legalRequest.findUnique({ where: { id: mine.id } }))
+          ?.scheduledFor,
+      ).toBeNull();
     });
 
     it('refuses a body that is not an object with a 400', async () => {
@@ -751,20 +1017,50 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
       }
     });
 
-    it('answers a request that is not the caller\'s, or does not exist, or is not an id, correctly', async () => {
+    it("answers a request that is not the caller's, or does not exist, or is not an id, correctly", async () => {
       await priceAll();
       const mine = await newRequest(userToken);
       const start = pick(await slotsFor('zoom'), 9, 1);
       // Somebody else's request is a 404, never a 403, so ids cannot be probed.
-      await http().post(`/api/hub/legal/requests/${mine.id}/booking`).set(as(otherToken)).send({ medium: 'zoom', scheduledFor: start }).expect(404);
-      await http().get(`/api/hub/legal/requests/${mine.id}/booking`).set(as(otherToken)).expect(404);
-      await http().get(`/api/hub/legal/requests/${mine.id}/deliverables`).set(as(otherToken)).expect(404);
-      await http().post(`/api/hub/legal/requests/${crypto.randomUUID()}/booking`).set(as(userToken)).send({ medium: 'zoom', scheduledFor: start }).expect(404);
-      await http().post('/api/hub/legal/requests/not-an-id/booking').set(as(userToken)).send({ medium: 'zoom', scheduledFor: start }).expect(400);
-      await http().get('/api/hub/legal/requests/not-an-id/booking').set(as(userToken)).expect(400);
-      await http().get('/api/hub/legal/requests/not-an-id/deliverables').set(as(userToken)).expect(400);
-      await http().post(`/api/hub/legal/requests/${mine.id}/booking`).send({ medium: 'zoom', scheduledFor: start }).expect(401);
-      expect((await prisma.legalRequest.findUnique({ where: { id: mine.id } }))?.scheduledFor).toBeNull();
+      await http()
+        .post(`/api/hub/legal/requests/${mine.id}/booking`)
+        .set(as(otherToken))
+        .send({ medium: 'zoom', scheduledFor: start })
+        .expect(404);
+      await http()
+        .get(`/api/hub/legal/requests/${mine.id}/booking`)
+        .set(as(otherToken))
+        .expect(404);
+      await http()
+        .get(`/api/hub/legal/requests/${mine.id}/deliverables`)
+        .set(as(otherToken))
+        .expect(404);
+      await http()
+        .post(`/api/hub/legal/requests/${crypto.randomUUID()}/booking`)
+        .set(as(userToken))
+        .send({ medium: 'zoom', scheduledFor: start })
+        .expect(404);
+      await http()
+        .post('/api/hub/legal/requests/not-an-id/booking')
+        .set(as(userToken))
+        .send({ medium: 'zoom', scheduledFor: start })
+        .expect(400);
+      await http()
+        .get('/api/hub/legal/requests/not-an-id/booking')
+        .set(as(userToken))
+        .expect(400);
+      await http()
+        .get('/api/hub/legal/requests/not-an-id/deliverables')
+        .set(as(userToken))
+        .expect(400);
+      await http()
+        .post(`/api/hub/legal/requests/${mine.id}/booking`)
+        .send({ medium: 'zoom', scheduledFor: start })
+        .expect(401);
+      expect(
+        (await prisma.legalRequest.findUnique({ where: { id: mine.id } }))
+          ?.scheduledFor,
+      ).toBeNull();
     });
 
     it('does not book a service that needs no consultation, or a call nobody has priced', async () => {
@@ -772,7 +1068,10 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
       const simple = await http()
         .post('/api/hub/legal/requests')
         .set(as(userToken))
-        .send({ serviceCode: 'tax-registration', documents: ['https://files.example.com/tin.pdf'] })
+        .send({
+          serviceCode: 'tax-registration',
+          documents: ['https://files.example.com/tin.pdf'],
+        })
         .expect(201);
       createdIds.push(simple.body.data.id);
       const start = pick(await slotsFor('zoom'), 10, 1);
@@ -783,13 +1082,19 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
         .expect(400);
 
       const mine = await newRequest(userToken);
-      await setConsultation('phone', { priceKobo: null, minutes: null }).expect(200);
+      await setConsultation('phone', { priceKobo: null, minutes: null }).expect(
+        200,
+      );
       await http()
         .post(`/api/hub/legal/requests/${mine.id}/booking`)
         .set(as(userToken))
         .send({ medium: 'phone', scheduledFor: start })
         .expect(400);
-      await setConsultation('zoom', { priceKobo: 1_500_000, minutes: 30, enabled: false }).expect(200);
+      await setConsultation('zoom', {
+        priceKobo: 1_500_000,
+        minutes: 30,
+        enabled: false,
+      }).expect(200);
       await http()
         .post(`/api/hub/legal/requests/${mine.id}/booking`)
         .set(as(userToken))
@@ -806,9 +1111,18 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
         .set(as(userToken))
         .send({ medium: 'zoom', scheduledFor: start })
         .expect(200);
-      await setConsultation('zoom', { priceKobo: 9_900_000, minutes: 60 }).expect(200);
-      const read = await http().get(`/api/hub/legal/requests/${mine.id}/booking`).set(as(userToken)).expect(200);
-      expect(read.body.data).toMatchObject({ priceKobo: 1_500_000, minutes: 30 });
+      await setConsultation('zoom', {
+        priceKobo: 9_900_000,
+        minutes: 60,
+      }).expect(200);
+      const read = await http()
+        .get(`/api/hub/legal/requests/${mine.id}/booking`)
+        .set(as(userToken))
+        .expect(200);
+      expect(read.body.data).toMatchObject({
+        priceKobo: 1_500_000,
+        minutes: 30,
+      });
     });
 
     it('books a phone call at its own price and length', async () => {
@@ -820,10 +1134,21 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
         .set(as(userToken))
         .send({ medium: 'phone', scheduledFor: start })
         .expect(200);
-      expect(res.body.data).toMatchObject({ medium: 'phone', label: 'Phone call', minutes: 20, priceKobo: 1_000_000 });
+      expect(res.body.data).toMatchObject({
+        medium: 'phone',
+        label: 'Phone call',
+        minutes: 20,
+        priceKobo: 1_000_000,
+      });
       // The stored row is the new medium, and the web's reads of it still answer.
-      const web = await http().get(`/api/hub/legal/requests/${mine.id}`).set(as(userToken)).expect(200);
-      expect(web.body.data).toMatchObject({ consultationMedium: 'phone', consultationFee: 10_000 });
+      const web = await http()
+        .get(`/api/hub/legal/requests/${mine.id}`)
+        .set(as(userToken))
+        .expect(200);
+      expect(web.body.data).toMatchObject({
+        consultationMedium: 'phone',
+        consultationFee: 10_000,
+      });
       expect(Object.keys(web.body.data)).not.toContain('consultationMinutes');
     });
   });
@@ -831,8 +1156,16 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
   /* ================================================================ */
   describe('several delivered files', () => {
     const FILES = [
-      { fileName: 'Reviewed tenancy agreement.pdf', url: 'https://files.example.com/reviewed.pdf', pages: 12 },
-      { fileName: 'Consultant notes.pdf', url: 'https://files.example.com/notes.pdf', pages: 3 },
+      {
+        fileName: 'Reviewed tenancy agreement.pdf',
+        url: 'https://files.example.com/reviewed.pdf',
+        pages: 12,
+      },
+      {
+        fileName: 'Consultant notes.pdf',
+        url: 'https://files.example.com/notes.pdf',
+        pages: 3,
+      },
     ];
 
     async function paidWork(status = 'in_progress') {
@@ -844,45 +1177,86 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
           category: 'Contracts',
           path: 'consultation',
           status: status as never,
-          servicePaidAt: status === 'in_progress' || status === 'delivered' ? new Date() : null,
+          servicePaidAt:
+            status === 'in_progress' || status === 'delivered'
+              ? new Date()
+              : null,
         },
       });
       createdIds.push(row.id);
       return row;
     }
 
-    const deliver = (id: string, body: unknown, role: 'superadmin' | 'support' = 'support') =>
-      http().post(`/api/hub/legal/ops/requests/${id}/deliverables`).set(bearer(tokens[role])).send(body as object);
+    const deliver = (
+      id: string,
+      body: unknown,
+      role: 'superadmin' | 'support' = 'support',
+    ) =>
+      http()
+        .post(`/api/hub/legal/ops/requests/${id}/deliverables`)
+        .set(bearer(tokens[role]))
+        .send(body as object);
 
     it('posts both files into the chat, in order, and lists them for the client', async () => {
       const work = await paidWork();
       const res = await deliver(work.id, { files: FILES }).expect(200);
-      expect(res.body.data).toMatchObject({ requestId: work.id, status: 'delivered' });
+      expect(res.body.data).toMatchObject({
+        requestId: work.id,
+        status: 'delivered',
+      });
       expect(res.body.data.items).toHaveLength(2);
 
       // Both appear in the chat the client reads, from the consultant, oldest first.
-      const chat = await http().get(`/api/hub/legal/intake/chat/${work.id}`).set(as(userToken)).expect(200);
-      const bodies = chat.body.data.messages.map((m: { body: string; authorRole: string }) => [m.authorRole, m.body]);
+      const chat = await http()
+        .get(`/api/hub/legal/intake/chat/${work.id}`)
+        .set(as(userToken))
+        .expect(200);
+      const bodies = chat.body.data.messages.map(
+        (m: { body: string; authorRole: string }) => [m.authorRole, m.body],
+      );
       expect(bodies).toEqual([
         ['consultant', 'Reviewed tenancy agreement.pdf'],
         ['consultant', 'Consultant notes.pdf'],
       ]);
 
       // The client's own list of files names the message each arrived as.
-      const list = await http().get(`/api/hub/legal/requests/${work.id}/deliverables`).set(as(userToken)).expect(200);
+      const list = await http()
+        .get(`/api/hub/legal/requests/${work.id}/deliverables`)
+        .set(as(userToken))
+        .expect(200);
       expect(list.body.data.status).toBe('delivered');
-      expect(list.body.data.items.map((i: { fileName: string; pages: number; url: string }) => [i.fileName, i.pages, i.url])).toEqual(
-        FILES.map((f) => [f.fileName, f.pages, f.url]),
+      expect(
+        list.body.data.items.map(
+          (i: { fileName: string; pages: number; url: string }) => [
+            i.fileName,
+            i.pages,
+            i.url,
+          ],
+        ),
+      ).toEqual(FILES.map((f) => [f.fileName, f.pages, f.url]));
+      const messageIds = chat.body.data.messages.map(
+        (m: { id: string }) => m.id,
       );
-      const messageIds = chat.body.data.messages.map((m: { id: string }) => m.id);
-      expect(list.body.data.items.map((i: { chatMessageId: string }) => i.chatMessageId)).toEqual(messageIds);
+      expect(
+        list.body.data.items.map(
+          (i: { chatMessageId: string }) => i.chatMessageId,
+        ),
+      ).toEqual(messageIds);
 
       // The request itself still names the first file, for everything that reads one.
-      const web = await http().get(`/api/hub/legal/requests/${work.id}`).set(as(userToken)).expect(200);
-      expect(web.body.data).toMatchObject({ status: 'delivered', deliverableUrl: FILES[0].url });
+      const web = await http()
+        .get(`/api/hub/legal/requests/${work.id}`)
+        .set(as(userToken))
+        .expect(200);
+      expect(web.body.data).toMatchObject({
+        status: 'delivered',
+        deliverableUrl: FILES[0].url,
+      });
 
       // The client is told, once.
-      const notes = await prisma.notification.findMany({ where: { userWawuId: userId, kind: 'legal_delivered' } });
+      const notes = await prisma.notification.findMany({
+        where: { userWawuId: userId, kind: 'legal_delivered' },
+      });
       expect(notes).toHaveLength(1);
       expect(notes[0]).toMatchObject({
         title: 'Your documents are ready',
@@ -891,7 +1265,9 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
       expect(notes[0].body).toContain('2 documents');
       expect(notes[0].body).not.toContain('—');
 
-      const audit = await prisma.adminOpsAudit.findFirst({ where: { resourceId: work.id, action: 'legal_delivered' } });
+      const audit = await prisma.adminOpsAudit.findFirst({
+        where: { resourceId: work.id, action: 'legal_delivered' },
+      });
       expect(audit?.detail).toMatchObject({ fileCount: 2 });
     });
 
@@ -900,28 +1276,51 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
       await deliver(work.id, { files: FILES }).expect(200);
       const again = await deliver(work.id, { files: FILES }).expect(200);
       expect(again.body.data.items).toHaveLength(2);
-      expect(await prisma.legalChatMessage.count({ where: { legalRequestId: work.id } })).toBe(2);
-      expect(await prisma.notification.count({ where: { userWawuId: userId, kind: 'legal_delivered' } })).toBe(1);
+      expect(
+        await prisma.legalChatMessage.count({
+          where: { legalRequestId: work.id },
+        }),
+      ).toBe(2);
+      expect(
+        await prisma.notification.count({
+          where: { userWawuId: userId, kind: 'legal_delivered' },
+        }),
+      ).toBe(1);
 
-      const third = { fileName: 'Signed copy.pdf', url: 'https://files.example.com/signed.pdf' };
-      const more = await deliver(work.id, { files: [FILES[0], third] }).expect(200);
-      expect(more.body.data.items.map((i: { fileName: string }) => i.fileName)).toEqual([
-        FILES[0].fileName,
-        FILES[1].fileName,
-        'Signed copy.pdf',
-      ]);
+      const third = {
+        fileName: 'Signed copy.pdf',
+        url: 'https://files.example.com/signed.pdf',
+      };
+      const more = await deliver(work.id, { files: [FILES[0], third] }).expect(
+        200,
+      );
+      expect(
+        more.body.data.items.map((i: { fileName: string }) => i.fileName),
+      ).toEqual([FILES[0].fileName, FILES[1].fileName, 'Signed copy.pdf']);
       expect(more.body.data.items[2].pages).toBeNull();
-      expect(await prisma.legalChatMessage.count({ where: { legalRequestId: work.id } })).toBe(3);
+      expect(
+        await prisma.legalChatMessage.count({
+          where: { legalRequestId: work.id },
+        }),
+      ).toBe(3);
       // Delivering again never rewrites the first file or the time it was delivered.
-      const row = await prisma.legalRequest.findUnique({ where: { id: work.id } });
+      const row = await prisma.legalRequest.findUnique({
+        where: { id: work.id },
+      });
       expect(row?.deliverableUrl).toBe(FILES[0].url);
     });
 
     it('delivers two copies of one file in one request as one file', async () => {
       const work = await paidWork();
-      const res = await deliver(work.id, { files: [FILES[0], FILES[0]] }).expect(200);
+      const res = await deliver(work.id, {
+        files: [FILES[0], FILES[0]],
+      }).expect(200);
       expect(res.body.data.items).toHaveLength(1);
-      expect(await prisma.legalChatMessage.count({ where: { legalRequestId: work.id } })).toBe(1);
+      expect(
+        await prisma.legalChatMessage.count({
+          where: { legalRequestId: work.id },
+        }),
+      ).toBe(1);
     });
 
     it.each(DELIVER_ROLES)('%s can deliver', async (role) => {
@@ -929,21 +1328,38 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
       await deliver(work.id, { files: [FILES[0]] }, role).expect(200);
     });
 
-    it.each(rolesOtherThan(DELIVER_ROLES))('%s cannot deliver, and nothing is posted', async (role) => {
-      const work = await paidWork();
-      await http()
-        .post(`/api/hub/legal/ops/requests/${work.id}/deliverables`)
-        .set(bearer(tokens[role]))
-        .send({ files: FILES })
-        .expect(403);
-      expect(await prisma.legalChatMessage.count({ where: { legalRequestId: work.id } })).toBe(0);
-      expect((await prisma.legalRequest.findUnique({ where: { id: work.id } }))?.status).toBe('in_progress');
-    });
+    it.each(rolesOtherThan(DELIVER_ROLES))(
+      '%s cannot deliver, and nothing is posted',
+      async (role) => {
+        const work = await paidWork();
+        await http()
+          .post(`/api/hub/legal/ops/requests/${work.id}/deliverables`)
+          .set(bearer(tokens[role]))
+          .send({ files: FILES })
+          .expect(403);
+        expect(
+          await prisma.legalChatMessage.count({
+            where: { legalRequestId: work.id },
+          }),
+        ).toBe(0);
+        expect(
+          (await prisma.legalRequest.findUnique({ where: { id: work.id } }))
+            ?.status,
+        ).toBe('in_progress');
+      },
+    );
 
     it('refuses no credential and a user token', async () => {
       const work = await paidWork();
-      await http().post(`/api/hub/legal/ops/requests/${work.id}/deliverables`).send({ files: FILES }).expect(401);
-      await http().post(`/api/hub/legal/ops/requests/${work.id}/deliverables`).set(as(userToken)).send({ files: FILES }).expect(401);
+      await http()
+        .post(`/api/hub/legal/ops/requests/${work.id}/deliverables`)
+        .send({ files: FILES })
+        .expect(401);
+      await http()
+        .post(`/api/hub/legal/ops/requests/${work.id}/deliverables`)
+        .set(as(userToken))
+        .send({ files: FILES })
+        .expect(401);
     });
 
     it.each([
@@ -952,19 +1368,112 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
       ['files as a string', { files: 'a.pdf' }],
       ['files as an object', { files: { fileName: 'a.pdf' } }],
       ['a null file', { files: [null] }],
-      ['a file with no name', { files: [{ url: 'https://files.example.com/a.pdf' }] }],
-      ['a blank name', { files: [{ fileName: '   ', url: 'https://files.example.com/a.pdf' }] }],
-      ['a name with a control character', { files: [{ fileName: 'a\u0000.pdf', url: 'https://files.example.com/a.pdf' }] }],
-      ['a name that is a number', { files: [{ fileName: 7, url: 'https://files.example.com/a.pdf' }] }],
-      ['a name that is far too long', { files: [{ fileName: 'a'.repeat(201), url: 'https://files.example.com/a.pdf' }] }],
-      ['a url that is not a link', { files: [{ fileName: 'a.pdf', url: 'a.pdf' }] }],
-      ['a javascript url', { files: [{ fileName: 'a.pdf', url: 'javascript:alert(1)' }] }],
-      ['an ftp url', { files: [{ fileName: 'a.pdf', url: 'ftp://files.example.com/a.pdf' }] }],
-      ['a url that is far too long', { files: [{ fileName: 'a.pdf', url: `https://files.example.com/${'a'.repeat(600)}` }] }],
-      ['pages as a string', { files: [{ fileName: 'a.pdf', url: 'https://files.example.com/a.pdf', pages: '3' }] }],
-      ['zero pages', { files: [{ fileName: 'a.pdf', url: 'https://files.example.com/a.pdf', pages: 0 }] }],
-      ['half a page', { files: [{ fileName: 'a.pdf', url: 'https://files.example.com/a.pdf', pages: 1.5 }] }],
-      ['an unknown file field', { files: [{ fileName: 'a.pdf', url: 'https://files.example.com/a.pdf', size: 1 }] }],
+      [
+        'a file with no name',
+        { files: [{ url: 'https://files.example.com/a.pdf' }] },
+      ],
+      [
+        'a blank name',
+        {
+          files: [{ fileName: '   ', url: 'https://files.example.com/a.pdf' }],
+        },
+      ],
+      [
+        'a name with a control character',
+        {
+          files: [
+            { fileName: 'a\u0000.pdf', url: 'https://files.example.com/a.pdf' },
+          ],
+        },
+      ],
+      [
+        'a name that is a number',
+        { files: [{ fileName: 7, url: 'https://files.example.com/a.pdf' }] },
+      ],
+      [
+        'a name that is far too long',
+        {
+          files: [
+            {
+              fileName: 'a'.repeat(201),
+              url: 'https://files.example.com/a.pdf',
+            },
+          ],
+        },
+      ],
+      [
+        'a url that is not a link',
+        { files: [{ fileName: 'a.pdf', url: 'a.pdf' }] },
+      ],
+      [
+        'a javascript url',
+        { files: [{ fileName: 'a.pdf', url: 'javascript:alert(1)' }] },
+      ],
+      [
+        'an ftp url',
+        {
+          files: [{ fileName: 'a.pdf', url: 'ftp://files.example.com/a.pdf' }],
+        },
+      ],
+      [
+        'a url that is far too long',
+        {
+          files: [
+            {
+              fileName: 'a.pdf',
+              url: `https://files.example.com/${'a'.repeat(600)}`,
+            },
+          ],
+        },
+      ],
+      [
+        'pages as a string',
+        {
+          files: [
+            {
+              fileName: 'a.pdf',
+              url: 'https://files.example.com/a.pdf',
+              pages: '3',
+            },
+          ],
+        },
+      ],
+      [
+        'zero pages',
+        {
+          files: [
+            {
+              fileName: 'a.pdf',
+              url: 'https://files.example.com/a.pdf',
+              pages: 0,
+            },
+          ],
+        },
+      ],
+      [
+        'half a page',
+        {
+          files: [
+            {
+              fileName: 'a.pdf',
+              url: 'https://files.example.com/a.pdf',
+              pages: 1.5,
+            },
+          ],
+        },
+      ],
+      [
+        'an unknown file field',
+        {
+          files: [
+            {
+              fileName: 'a.pdf',
+              url: 'https://files.example.com/a.pdf',
+              size: 1,
+            },
+          ],
+        },
+      ],
       [
         'eleven files',
         {
@@ -977,8 +1486,15 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
     ])('refuses %s with a 400, never a 500', async (_label, body) => {
       const work = await paidWork();
       await deliver(work.id, body).expect(400);
-      expect(await prisma.legalChatMessage.count({ where: { legalRequestId: work.id } })).toBe(0);
-      expect((await prisma.legalRequest.findUnique({ where: { id: work.id } }))?.status).toBe('in_progress');
+      expect(
+        await prisma.legalChatMessage.count({
+          where: { legalRequestId: work.id },
+        }),
+      ).toBe(0);
+      expect(
+        (await prisma.legalRequest.findUnique({ where: { id: work.id } }))
+          ?.status,
+      ).toBe('in_progress');
     });
 
     it('refuses a body that is not an object, with a 400', async () => {
@@ -994,7 +1510,12 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
     });
 
     it('delivers only paid work in progress, and answers an unknown or malformed id', async () => {
-      for (const status of ['draft', 'quoted', 'awaiting_service_payment', 'cancelled']) {
+      for (const status of [
+        'draft',
+        'quoted',
+        'awaiting_service_payment',
+        'cancelled',
+      ]) {
         const row = await paidWork(status);
         await deliver(row.id, { files: [FILES[0]] }).expect(409);
       }
@@ -1019,9 +1540,14 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
       await http()
         .post(`/api/hub/legal/ops/requests/${work.id}/deliver`)
         .set(bearer(tokens.support))
-        .send({ deliverableUrl: 'https://files.example.com/Final%20agreement.pdf' })
+        .send({
+          deliverableUrl: 'https://files.example.com/Final%20agreement.pdf',
+        })
         .expect(200);
-      const list = await http().get(`/api/hub/legal/requests/${work.id}/deliverables`).set(as(userToken)).expect(200);
+      const list = await http()
+        .get(`/api/hub/legal/requests/${work.id}/deliverables`)
+        .set(as(userToken))
+        .expect(200);
       expect(list.body.data.items).toHaveLength(1);
       expect(list.body.data.items[0]).toMatchObject({
         fileName: 'Final agreement.pdf',
@@ -1032,7 +1558,10 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
 
       // More files added later sit after it; the first file stays listed.
       await deliver(work.id, { files: [FILES[1]] }).expect(200);
-      const after = await http().get(`/api/hub/legal/requests/${work.id}/deliverables`).set(as(userToken)).expect(200);
+      const after = await http()
+        .get(`/api/hub/legal/requests/${work.id}/deliverables`)
+        .set(as(userToken))
+        .expect(200);
       expect(after.body.data.items.map((i: { url: string }) => i.url)).toEqual([
         'https://files.example.com/Final%20agreement.pdf',
         FILES[1].url,
@@ -1041,8 +1570,14 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
 
     it('lists nothing before anything is delivered', async () => {
       const work = await paidWork();
-      const list = await http().get(`/api/hub/legal/requests/${work.id}/deliverables`).set(as(userToken)).expect(200);
-      expect(list.body.data).toMatchObject({ status: 'in_progress', items: [] });
+      const list = await http()
+        .get(`/api/hub/legal/requests/${work.id}/deliverables`)
+        .set(as(userToken))
+        .expect(200);
+      expect(list.body.data).toMatchObject({
+        status: 'in_progress',
+        items: [],
+      });
     });
   });
 });

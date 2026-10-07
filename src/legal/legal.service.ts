@@ -16,6 +16,7 @@ import {
   LEGAL_CATEGORIES,
   LEGAL_SERVICES,
   legalService,
+  type LegalService,
 } from './legal-catalogue';
 import { renderContract } from './contract-template';
 import { CONSULTATION_HOURS } from './availability';
@@ -53,6 +54,20 @@ const SLOT_HOLDING_STATUSES = [
  * they are real appointments.
  */
 export const UNPAID_HOLD_MINUTES = 30;
+
+/**
+ * One kind of consultation in the web's catalogue (`GET /legal/catalogue`).
+ * The prices and lengths are what WAWU set in admin (R-14); an in-person one
+ * is always listed unpriced, as it always was.
+ */
+type CatalogueConsultationOption =
+  | {
+      medium: 'chat' | 'zoom';
+      label: string;
+      minutes: number | null;
+      feeNaira: number | null;
+    }
+  | { medium: 'physical'; label: 'In person'; minutes: null; feeNaira: null };
 
 /**
  * WAWU Legal.
@@ -167,34 +182,44 @@ export class LegalRequestsService {
    * (R-14): a consultation kind that is not priced and switched on is left
    * out, and a service with a fixed price carries it in `priceNaira`.
    */
-  async catalogue() {
+  async catalogue(): Promise<{
+    categories: typeof LEGAL_CATEGORIES;
+    consultationOptions: CatalogueConsultationOption[];
+    services: LegalService[];
+  }> {
     const [options, servicePrices] = await Promise.all([
       this.prices.consultationOptions(),
       this.prices.servicePrices(),
     ]);
     return {
       categories: LEGAL_CATEGORIES,
-      consultationOptions: options
-        .filter((o) => o.medium !== 'phone' && isBookable(o))
-        .map((o) =>
+      consultationOptions: options.flatMap(
+        (o): CatalogueConsultationOption[] => {
+          if (!isBookable(o)) return [];
           // The web books an in-person consultation without a slot or a
           // checkout, so it is listed unpriced as it always was, whatever the
-          // app shows for it (LEGAL-03).
-          o.medium === 'physical'
-            ? {
-                medium: o.medium,
+          // app shows for it (LEGAL-03). The web has no phone call.
+          if (o.medium === 'physical') {
+            return [
+              {
+                medium: 'physical',
                 label: CATALOGUE_LABELS.physical,
                 minutes: null,
                 feeNaira: null,
-              }
-            : {
-                medium: o.medium,
-                label:
-                  CATALOGUE_LABELS[o.medium as keyof typeof CATALOGUE_LABELS],
-                minutes: o.minutes,
-                feeNaira: LegalPricesService.toNaira(o.priceKobo),
               },
-        ),
+            ];
+          }
+          if (o.medium === 'phone') return [];
+          return [
+            {
+              medium: o.medium,
+              label: CATALOGUE_LABELS[o.medium],
+              minutes: o.minutes,
+              feeNaira: LegalPricesService.toNaira(o.priceKobo),
+            },
+          ];
+        },
+      ),
       services: LEGAL_SERVICES.map((s) => ({
         ...s,
         priceNaira: LegalPricesService.toNaira(

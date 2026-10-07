@@ -3405,61 +3405,20 @@
                               "medium": {
                                 "type": "string",
                                 "enum": [
-                                  "chat"
-                                ]
-                              },
-                              "label": {
-                                "type": "string",
-                                "enum": [
-                                  "Chat"
-                                ]
-                              },
-                              "minutes": {
-                                "type": "number",
-                                "enum": [
-                                  60
-                                ]
-                              },
-                              "feeNaira": {
-                                "type": "number",
-                                "enum": [
-                                  25000
-                                ]
-                              }
-                            },
-                            "required": [
-                              "medium",
-                              "label",
-                              "minutes",
-                              "feeNaira"
-                            ]
-                          },
-                          {
-                            "type": "object",
-                            "properties": {
-                              "medium": {
-                                "type": "string",
-                                "enum": [
+                                  "chat",
                                   "zoom"
                                 ]
                               },
                               "label": {
-                                "type": "string",
-                                "enum": [
-                                  "Zoom call"
-                                ]
+                                "type": "string"
                               },
                               "minutes": {
                                 "type": "number",
-                                "enum": [
-                                  60
-                                ]
+                                "nullable": true
                               },
                               "feeNaira": {
                                 "type": "number",
-                                "enum": [
-                                  45000
-                                ]
+                                "nullable": true
                               }
                             },
                             "required": [
@@ -4208,20 +4167,7 @@
                               "type": "string"
                             },
                             "amount": {
-                              "oneOf": [
-                                {
-                                  "type": "number",
-                                  "enum": [
-                                    25000
-                                  ]
-                                },
-                                {
-                                  "type": "number",
-                                  "enum": [
-                                    45000
-                                  ]
-                                }
-                              ]
+                              "type": "number"
                             },
                             "currency": {
                               "type": "string"
@@ -5665,6 +5611,315 @@
         "summary": "Closes a matter that has usually already been paid for.",
         "tags": [
           "LegalOps"
+        ]
+      }
+    },
+    "/api/hub/legal/consultation/options": {
+      "get": {
+        "operationId": "LegalConsultationController_options",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsultationOptionsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The kinds of consultation WAWU has priced and switched on.",
+        "tags": [
+          "LegalConsultation"
+        ]
+      }
+    },
+    "/api/hub/legal/consultation/slots": {
+      "get": {
+        "operationId": "LegalConsultationController_slots",
+        "parameters": [
+          {
+            "name": "medium",
+            "required": true,
+            "in": "query",
+            "description": "A video or phone call. An in-person consultation has no calendar.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "zoom",
+                "phone"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsultationSlotsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The calendar for a video or phone call, at that call's length.",
+        "tags": [
+          "LegalConsultation"
+        ]
+      }
+    },
+    "/api/hub/legal/requests/{id}/booking": {
+      "post": {
+        "operationId": "LegalConsultationController_book",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BookConsultationSlotDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsultationBookingView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Holds the picked hour on the person's request (nothing is charged yet).",
+        "tags": [
+          "LegalConsultation"
+        ]
+      },
+      "get": {
+        "operationId": "LegalConsultationController_booking",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsultationBookingView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "LegalConsultation"
+        ]
+      }
+    },
+    "/api/hub/legal/requests/{id}/deliverables": {
+      "get": {
+        "operationId": "LegalConsultationController_delivered",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalDeliverablesView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Every file delivered on the person's request.",
+        "tags": [
+          "LegalConsultation"
+        ]
+      }
+    },
+    "/api/hub/legal/ops/prices": {
+      "get": {
+        "operationId": "LegalPricesOpsController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminLegalPricesView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Every consultation kind and every fixed-price service, set or not.",
+        "tags": [
+          "LegalPricesOps"
+        ]
+      }
+    },
+    "/api/hub/legal/ops/prices/consultations/{medium}": {
+      "put": {
+        "operationId": "LegalPricesOpsController_setConsultation",
+        "parameters": [
+          {
+            "name": "medium",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "enum": [
+                "chat",
+                "zoom",
+                "physical",
+                "phone"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetConsultationPriceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminConsultationPriceView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Sets one kind of consultation: its price, its length and its switch.",
+        "tags": [
+          "LegalPricesOps"
+        ]
+      }
+    },
+    "/api/hub/legal/ops/prices/services/{serviceCode}": {
+      "put": {
+        "operationId": "LegalPricesOpsController_setService",
+        "parameters": [
+          {
+            "name": "serviceCode",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetServicePriceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminServicePriceView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Sets, or with a null price clears, the fixed price of a service.",
+        "tags": [
+          "LegalPricesOps"
+        ]
+      }
+    },
+    "/api/hub/legal/ops/requests/{id}/deliverables": {
+      "post": {
+        "operationId": "LegalDeliverablesOpsController_deliver",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeliverFilesDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliverFilesResultView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Each file is posted into the client's chat and the client is notified.",
+        "tags": [
+          "LegalDeliverablesOps"
         ]
       }
     },
@@ -26371,6 +26626,112 @@
           "reason"
         ]
       },
+      "BookConsultationSlotDto": {
+        "type": "object",
+        "properties": {
+          "medium": {
+            "type": "string",
+            "enum": [
+              "zoom",
+              "phone",
+              "physical"
+            ]
+          },
+          "scheduledFor": {
+            "type": "string",
+            "description": "The start of the hour the person picked, exactly as `GET\n/legal/consultation/slots` gave it. Required for a video or phone call;\nan in-person consultation is arranged directly and books no hour."
+          }
+        },
+        "required": [
+          "medium"
+        ]
+      },
+      "SetConsultationPriceDto": {
+        "type": "object",
+        "properties": {
+          "priceKobo": {
+            "type": "number",
+            "nullable": true,
+            "description": "The price in kobo, whole naira only (a multiple of 100), or null to leave\nthe kind unpriced so the app does not offer it. Always null for an\nin-person consultation.",
+            "minimum": 100,
+            "maximum": 1000000000,
+            "multipleOf": 100
+          },
+          "minutes": {
+            "type": "number",
+            "nullable": true,
+            "description": "How long it runs, in minutes, or null to leave the kind unset. Null for in person.",
+            "minimum": 5,
+            "maximum": 480
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Switch the kind off without losing its price. Defaults to on."
+          }
+        },
+        "required": [
+          "priceKobo",
+          "minutes"
+        ]
+      },
+      "SetServicePriceDto": {
+        "type": "object",
+        "properties": {
+          "priceKobo": {
+            "type": "number",
+            "nullable": true,
+            "description": "The price in kobo, whole naira only, or null to quote the service instead.",
+            "minimum": 100,
+            "maximum": 1000000000,
+            "multipleOf": 100
+          }
+        },
+        "required": [
+          "priceKobo"
+        ]
+      },
+      "DeliveredFileDto": {
+        "type": "object",
+        "properties": {
+          "fileName": {
+            "type": "string",
+            "description": "What the file is called in the chat and on the delivery screen.",
+            "maxLength": 200,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "url": {
+            "type": "string",
+            "description": "Object-storage URL from POST /uploads/presign.",
+            "maxLength": 600,
+            "format": "uri"
+          },
+          "pages": {
+            "type": "number",
+            "description": "Page count, when it is known.",
+            "minimum": 1,
+            "maximum": 100000
+          }
+        },
+        "required": [
+          "fileName",
+          "url"
+        ]
+      },
+      "DeliverFilesDto": {
+        "type": "object",
+        "properties": {
+          "files": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeliveredFileDto"
+            }
+          }
+        },
+        "required": [
+          "files"
+        ]
+      },
       "RejectContentDto": {
         "type": "object",
         "properties": {
@@ -34750,6 +35111,366 @@
           "path",
           "blurb",
           "priceNaira"
+        ]
+      },
+      "ConsultationOptionView": {
+        "type": "object",
+        "properties": {
+          "medium": {
+            "type": "string",
+            "enum": [
+              "zoom",
+              "physical",
+              "phone"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "minutes": {
+            "type": "number",
+            "nullable": true
+          },
+          "priceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "onRequest": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "medium",
+          "label",
+          "minutes",
+          "priceKobo",
+          "onRequest"
+        ]
+      },
+      "ConsultationOptionsView": {
+        "type": "object",
+        "properties": {
+          "timeZone": {
+            "type": "string"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConsultationOptionView"
+            }
+          }
+        },
+        "required": [
+          "timeZone",
+          "options"
+        ]
+      },
+      "ConsultationSlotView": {
+        "type": "object",
+        "properties": {
+          "startsAt": {
+            "type": "string"
+          },
+          "available": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "startsAt",
+          "available"
+        ]
+      },
+      "ConsultationDayView": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string"
+          },
+          "slots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConsultationSlotView"
+            }
+          }
+        },
+        "required": [
+          "date",
+          "slots"
+        ]
+      },
+      "ConsultationSlotsView": {
+        "type": "object",
+        "properties": {
+          "medium": {
+            "type": "string",
+            "enum": [
+              "zoom",
+              "physical",
+              "phone"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "minutes": {
+            "type": "number"
+          },
+          "timeZone": {
+            "type": "string"
+          },
+          "horizonDays": {
+            "type": "number"
+          },
+          "days": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConsultationDayView"
+            }
+          }
+        },
+        "required": [
+          "medium",
+          "label",
+          "minutes",
+          "timeZone",
+          "horizonDays",
+          "days"
+        ]
+      },
+      "ConsultationBookingView": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "medium": {
+            "type": "string",
+            "enum": [
+              "chat",
+              "zoom",
+              "physical",
+              "phone"
+            ],
+            "nullable": true
+          },
+          "label": {
+            "type": "string",
+            "nullable": true
+          },
+          "minutes": {
+            "type": "number",
+            "nullable": true
+          },
+          "priceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "scheduledFor": {
+            "type": "string",
+            "nullable": true
+          },
+          "holdExpiresAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "paid": {
+            "type": "boolean"
+          },
+          "paidAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "requestId",
+          "status",
+          "medium",
+          "label",
+          "minutes",
+          "priceKobo",
+          "scheduledFor",
+          "holdExpiresAt",
+          "paid",
+          "paidAt"
+        ]
+      },
+      "LegalDeliverableView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "pages": {
+            "type": "number",
+            "nullable": true
+          },
+          "chatMessageId": {
+            "type": "string",
+            "nullable": true
+          },
+          "postedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "fileName",
+          "url",
+          "pages",
+          "chatMessageId",
+          "postedAt"
+        ]
+      },
+      "LegalDeliverablesView": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LegalDeliverableView"
+            }
+          }
+        },
+        "required": [
+          "requestId",
+          "status",
+          "items"
+        ]
+      },
+      "AdminConsultationPriceView": {
+        "type": "object",
+        "properties": {
+          "medium": {
+            "type": "string",
+            "enum": [
+              "chat",
+              "zoom",
+              "physical",
+              "phone"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "priceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "minutes": {
+            "type": "number",
+            "nullable": true
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "offered": {
+            "type": "boolean"
+          },
+          "updatedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "medium",
+          "label",
+          "priceKobo",
+          "minutes",
+          "enabled",
+          "offered",
+          "updatedAt"
+        ]
+      },
+      "AdminServicePriceView": {
+        "type": "object",
+        "properties": {
+          "serviceCode": {
+            "type": "string"
+          },
+          "serviceName": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "priceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "updatedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "serviceCode",
+          "serviceName",
+          "category",
+          "priceKobo",
+          "updatedAt"
+        ]
+      },
+      "AdminLegalPricesView": {
+        "type": "object",
+        "properties": {
+          "consultations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminConsultationPriceView"
+            }
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminServicePriceView"
+            }
+          }
+        },
+        "required": [
+          "consultations",
+          "services"
+        ]
+      },
+      "DeliverFilesResultView": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "deliveredAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LegalDeliverableView"
+            }
+          }
+        },
+        "required": [
+          "requestId",
+          "status",
+          "deliveredAt",
+          "items"
         ]
       },
       "WebhookResult": {

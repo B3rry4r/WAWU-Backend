@@ -41,7 +41,8 @@ describe('consultation slots by length', () => {
     const held = [{ scheduledFor: thursday(10), minutes: 90 }];
     const [first] = buildSlotDays(held, 60, now);
     const free = (hour: number) =>
-      first.slots.find((s) => s.startsAt === thursday(hour).toISOString())!.available;
+      first.slots.find((s) => s.startsAt === thursday(hour).toISOString())!
+        .available;
     expect(free(9)).toBe(true);
     expect(free(10)).toBe(false);
     expect(free(11)).toBe(false);
@@ -54,9 +55,9 @@ describe('consultation slots by length', () => {
   });
 
   it('reads a booking with no recorded length as one slot', () => {
-    expect(appointmentMinutes({ scheduledFor: thursday(10), minutes: null })).toBe(
-      CONSULTATION_HOURS.slotMinutes,
-    );
+    expect(
+      appointmentMinutes({ scheduledFor: thursday(10), minutes: null }),
+    ).toBe(CONSULTATION_HOURS.slotMinutes);
     const [first] = buildSlotDays(
       [{ scheduledFor: thursday(10), minutes: null }],
       30,
@@ -72,9 +73,15 @@ describe('consultation slots by length', () => {
     expect(isOfferedStart(thursday(16), 60, now)).toBe(true);
     expect(isOfferedStart(thursday(16), 90, now)).toBe(false);
     // Not on the hour, before opening, a weekend, and the past.
-    expect(isOfferedStart(new Date('2026-08-20T09:30:00.000Z'), 60, now)).toBe(false);
+    expect(isOfferedStart(new Date('2026-08-20T09:30:00.000Z'), 60, now)).toBe(
+      false,
+    );
     expect(isOfferedStart(thursday(8), 60, now)).toBe(false);
-    expect(isOfferedStart(new Date('2026-08-22T09:00:00.000Z'), 60, now)).toBe(false);
-    expect(isOfferedStart(new Date('2026-08-19T08:00:00.000Z'), 60, now)).toBe(false);
+    expect(isOfferedStart(new Date('2026-08-22T09:00:00.000Z'), 60, now)).toBe(
+      false,
+    );
+    expect(isOfferedStart(new Date('2026-08-19T08:00:00.000Z'), 60, now)).toBe(
+      false,
+    );
   });
 });

@@ -102,6 +102,7 @@ export class DeliveredFileDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(200)
+  // eslint-disable-next-line no-control-regex -- these ranges ARE the control characters being refused
   @Matches(/^[^\u0000-\u001f\u007f]+$/, {
     message: 'fileName cannot contain control characters.',
   })
