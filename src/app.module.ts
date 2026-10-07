@@ -15,6 +15,7 @@ import { AdminNotificationsModule } from './admin/notifications/admin-notificati
 import { AdminFeaturedCreatorsModule } from './admin/featured-creators/admin-featured-creators.module';
 import { ExploreModule } from './explore/explore.module';
 import { AdminLegalDocumentsModule } from './admin/legal-documents/admin-legal-documents.module';
+import { AdminSchoolsModule } from './admin/schools/admin-schools.module';
 import { AboutModule } from './about/about.module';
 import { AdsModule } from './ads/ads.module';
 import { PrismaModule } from './common/prisma/prisma.module';
@@ -359,6 +360,7 @@ import { AdsEventsModule } from './ads/ads-events.module';
     // under `admin/policies`.
     AboutModule,
     AdminLegalDocumentsModule,
+    AdminSchoolsModule,
     // EXPLORE-03: the superadmin write that features a creator, under
     // `admin/featured-creators`.
     AdminFeaturedCreatorsModule,
