@@ -21226,7 +21226,8 @@
               "type": "string",
               "enum": [
                 "in_person",
-                "online"
+                "online",
+                "hybrid"
               ]
             }
           },
@@ -21241,7 +21242,9 @@
                 "summit",
                 "webinar",
                 "meetup",
-                "competition"
+                "competition",
+                "conference",
+                "concert"
               ]
             }
           },
@@ -21253,10 +21256,10 @@
             "schema": {
               "type": "string",
               "enum": [
+                "conference",
                 "music",
                 "business",
                 "training",
-                "conference",
                 "church",
                 "entertainment",
                 "fashion",
@@ -21394,6 +21397,28 @@
           }
         },
         "summary": "The host's own submissions at every status, with the reason for the last\nrejection or takedown. Any authenticated user can have submitted an event,\nso there is no creator gate here.",
+        "tags": [
+          "Event"
+        ]
+      }
+    },
+    "/api/hub/events/options": {
+      "get": {
+        "operationId": "EventController_options",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventOptionsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The label to show for each category, format and kind, beside the value to\nsend (EVENTS-02): \"Business & Finance\" is `business`. Declared before\n`:id` for the same reason `mine` is.",
         "tags": [
           "Event"
         ]
@@ -28661,6 +28686,45 @@
           "name"
         ]
       },
+      "NewEventTicketTypeDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 60,
+            "pattern": "\\S"
+          },
+          "priceNaira": {
+            "type": "number",
+            "description": "Naira, like every ticket price this backend stores. 0 is a free ticket.",
+            "minimum": 0,
+            "maximum": 10000000
+          },
+          "quantity": {
+            "type": "number",
+            "description": "How many exist. A venue has a capacity, so there is no unlimited option.",
+            "minimum": 1,
+            "maximum": 1000000
+          },
+          "tier": {
+            "type": "string",
+            "enum": [
+              "free",
+              "regular",
+              "vip",
+              "vvip",
+              "early_bird",
+              "group"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "priceNaira",
+          "quantity"
+        ]
+      },
       "CreateEventDto": {
         "type": "object",
         "properties": {
@@ -28688,7 +28752,8 @@
             "type": "string",
             "enum": [
               "in_person",
-              "online"
+              "online",
+              "hybrid"
             ]
           },
           "type": {
@@ -28698,7 +28763,9 @@
               "summit",
               "webinar",
               "meetup",
-              "competition"
+              "competition",
+              "conference",
+              "concert"
             ]
           },
           "startsAt": {
@@ -28720,6 +28787,7 @@
           },
           "location": {
             "type": "string",
+            "description": "The city or venue line the card shows. Optional (EVENTS-02): the app's\nhost wizard asks only for the street address, so when this is left out\nthe server fills it from `address`, and leaves it empty when there is no\naddress either. A value sent here is stored as sent, as before.",
             "maxLength": 160,
             "pattern": "\\S"
           },
@@ -28747,10 +28815,10 @@
             "type": "string",
             "description": "What the event is about. Defaults to `other` when not stated.",
             "enum": [
+              "conference",
               "music",
               "business",
               "training",
-              "conference",
               "church",
               "entertainment",
               "fashion",
@@ -28773,6 +28841,13 @@
             "items": {
               "$ref": "#/components/schemas/EventSpeakerDto"
             }
+          },
+          "ticketTypes": {
+            "description": "The ticket types, sent with the event in the same submit (EVENTS-02), so\nthe event and its tickets go to review together. Omitted or empty, the\nevent sells nothing, exactly as before. The tiers can still be replaced\nafterwards through PUT /events/:id/tickets.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NewEventTicketTypeDto"
+            }
           }
         },
         "required": [
@@ -28781,8 +28856,7 @@
           "hostOrg",
           "format",
           "type",
-          "startsAt",
-          "location"
+          "startsAt"
         ]
       },
       "UpdateEventDto": {
@@ -28811,7 +28885,8 @@
             "type": "string",
             "enum": [
               "in_person",
-              "online"
+              "online",
+              "hybrid"
             ]
           },
           "type": {
@@ -28821,7 +28896,9 @@
               "summit",
               "webinar",
               "meetup",
-              "competition"
+              "competition",
+              "conference",
+              "concert"
             ]
           },
           "startsAt": {
@@ -28866,10 +28943,10 @@
             "type": "string",
             "description": "What the event is about. Defaults to `other` when not stated.",
             "enum": [
+              "conference",
               "music",
               "business",
               "training",
-              "conference",
               "church",
               "entertainment",
               "fashion",
@@ -36825,7 +36902,8 @@
             "type": "string",
             "enum": [
               "in_person",
-              "online"
+              "online",
+              "hybrid"
             ]
           },
           "type": {
@@ -36835,7 +36913,9 @@
               "summit",
               "webinar",
               "meetup",
-              "competition"
+              "competition",
+              "conference",
+              "concert"
             ]
           },
           "startsAt": {
@@ -37057,7 +37137,8 @@
             "type": "string",
             "enum": [
               "in_person",
-              "online"
+              "online",
+              "hybrid"
             ]
           },
           "type": {
@@ -37067,7 +37148,9 @@
               "summit",
               "webinar",
               "meetup",
-              "competition"
+              "competition",
+              "conference",
+              "concert"
             ]
           },
           "startsAt": {
@@ -39463,7 +39546,8 @@
             "type": "string",
             "enum": [
               "in_person",
-              "online"
+              "online",
+              "hybrid"
             ]
           },
           "type": {
@@ -39473,7 +39557,9 @@
               "summit",
               "webinar",
               "meetup",
-              "competition"
+              "competition",
+              "conference",
+              "concert"
             ]
           },
           "startsAt": {
@@ -39516,10 +39602,10 @@
             "type": "string",
             "enum": [
               "community",
+              "conference",
               "music",
               "business",
               "training",
-              "conference",
               "church",
               "entertainment",
               "fashion",
@@ -39636,6 +39722,96 @@
           "speakers",
           "createdAt",
           "lastDecisionReason"
+        ]
+      },
+      "EventOptionsView": {
+        "type": "object",
+        "properties": {
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "string",
+                  "enum": [
+                    "community",
+                    "conference",
+                    "music",
+                    "business",
+                    "training",
+                    "church",
+                    "entertainment",
+                    "fashion",
+                    "lifestyle",
+                    "other"
+                  ]
+                },
+                "label": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "value",
+                "label"
+              ]
+            }
+          },
+          "formats": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "string",
+                  "enum": [
+                    "in_person",
+                    "online",
+                    "hybrid"
+                  ]
+                },
+                "label": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "value",
+                "label"
+              ]
+            }
+          },
+          "types": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "string",
+                  "enum": [
+                    "workshop",
+                    "summit",
+                    "webinar",
+                    "meetup",
+                    "competition",
+                    "conference",
+                    "concert"
+                  ]
+                },
+                "label": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "value",
+                "label"
+              ]
+            }
+          }
+        },
+        "required": [
+          "categories",
+          "formats",
+          "types"
         ]
       },
       "EventGoingView": {
