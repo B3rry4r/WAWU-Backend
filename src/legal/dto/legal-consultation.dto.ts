@@ -107,9 +107,22 @@ export class SetServicePriceDto {
   priceKobo!: number | null;
 }
 
+/**
+ * Trims ordinary whitespace only. `String.trim` also removes the BOM and the
+ * line and paragraph separators, which would let a name with one at its edge
+ * through as a clean name instead of being refused.
+ */
+const trimPlainSpace = ({ value }: { value: unknown }): unknown =>
+  typeof value === 'string'
+    ? value.replace(
+        /^[ \t\n\v\f\r\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]+|[ \t\n\v\f\r\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]+$/g,
+        '',
+      )
+    : value;
+
 export class DeliveredFileDto {
   /** What the file is called in the chat and on the delivery screen. */
-  @Transform(trim)
+  @Transform(trimPlainSpace)
   @IsString()
   @IsNotEmpty()
   @MaxLength(200)

@@ -324,7 +324,10 @@ describe('LEGAL-03 fix round 3 (contract)', () => {
       ['a line separator', 'a\u2028b.pdf'],
       ['a paragraph separator', 'a\u2029b.pdf'],
       ['a next line', 'a\u0085b.pdf'],
-      ['a BOM', '\ufeffa.pdf'],
+      ['a BOM at the start', '\ufeffa.pdf'],
+      ['a BOM at the end', 'a.pdf\ufeff'],
+      ['a BOM inside', 'a\ufeff.pdf'],
+      ['a line separator at the end', 'a.pdf\u2028'],
       ['only zero-width spaces', '\u200b\u200b'],
       ['only a zero-width joiner', '\u200d'],
       ['only a word joiner', '\u2060\u2060'],
@@ -422,7 +425,7 @@ describe('LEGAL-03 fix round 3 (contract)', () => {
       async (_l, priceKobo) => {
         const before = await prisma.legalServicePrice.findMany();
         await http()
-          .put('/api/hub/legal/ops/prices/services/contract-drafting')
+          .put('/api/hub/legal/ops/prices/services/cac-registration')
           .set(bearer(tokens.finance))
           .send({ priceKobo })
           .expect(400);
@@ -432,12 +435,12 @@ describe('LEGAL-03 fix round 3 (contract)', () => {
 
     it('takes one naira, the floor', async () => {
       await http()
-        .put('/api/hub/legal/ops/prices/services/contract-drafting')
+        .put('/api/hub/legal/ops/prices/services/cac-registration')
         .set(bearer(tokens.finance))
         .send({ priceKobo: 100 })
         .expect(200);
       await http()
-        .put('/api/hub/legal/ops/prices/services/contract-drafting')
+        .put('/api/hub/legal/ops/prices/services/cac-registration')
         .set(bearer(tokens.finance))
         .send({ priceKobo: null })
         .expect(200);
