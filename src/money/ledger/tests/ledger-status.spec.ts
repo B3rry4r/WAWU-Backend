@@ -1,6 +1,7 @@
 import { ConfigService } from '@nestjs/config';
 import type { PrismaService } from '../../../common/prisma/prisma.service';
 import type { FintavaClient } from '../../../fintava/fintava-client';
+import { FintavaWalletProvider } from '../../../fintava/fintava-wallet-provider';
 import { ledgerStatusCheckAfterMs } from '../ledger-config';
 import { LedgerStatusService } from '../ledger-status.service';
 import type { LedgerService } from '../ledger.service';
@@ -83,7 +84,7 @@ describe('ledger status: settings and an unconfigured server', () => {
     ) as unknown as LedgerService;
     const service = new LedgerStatusService(
       prisma,
-      fintava,
+      new FintavaWalletProvider(fintava),
       ledger,
       new ConfigService({}),
     );

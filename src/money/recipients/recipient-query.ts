@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { toFintavaLocalPhone } from '../../fintava/fintava-client';
+import { toLocalNigerianPhone } from '../../wallet-provider/nigerian-phone';
 import {
   RECIPIENT_SEARCH_MAX_CHARS,
   RECIPIENT_SEARCH_MIN_CHARS,
@@ -24,7 +24,7 @@ export const SEARCH_TOO_LONG_MESSAGE = `Search for ${RECIPIENT_SEARCH_MAX_CHARS}
  * Reads the search text of `GET /money/recipients`.
  *
  * - A phone is a phone only when it is a whole Nigerian mobile after
- *   normalising (`toFintavaLocalPhone`: 080..., 80..., 234..., +234..., with
+ *   normalising (`toLocalNigerianPhone`: 080..., 80..., 234..., +234..., with
  *   spaces, dashes and brackets). It is then searched as a phone and as
  *   nothing else, so a handle written like a number can never stand in for
  *   someone's phone. Digits that are not a whole mobile are text: they match
@@ -39,7 +39,7 @@ export function readRecipientQuery(raw: string): RecipientQuery {
   if ([...text].length > RECIPIENT_SEARCH_MAX_CHARS) {
     throw new BadRequestException(SEARCH_TOO_LONG_MESSAGE);
   }
-  const local = toFintavaLocalPhone(text);
+  const local = toLocalNigerianPhone(text);
   if (local !== null) return { kind: 'phone', e164: `+234${local.slice(1)}` };
   if (text.startsWith('@')) {
     const prefix = text.slice(1).trim();
