@@ -1410,6 +1410,8 @@ describe('Phone push sender (INBOX-03)', () => {
           .every((d) => d.reason === 'send_unconfirmed_timeout'),
       ).toBe(true);
       expect(ds.filter((d) => d.status === 'pending')).toHaveLength(150);
+      // Expo answers again; the short limit was only for the hung request
+      expoClient.requestTimeoutMs = savedTimeout;
 
       const second_ = await sender.runOnce();
       expect(second_.sent).toBe(150);
