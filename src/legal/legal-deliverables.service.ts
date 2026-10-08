@@ -13,6 +13,10 @@ import {
   deliverableKeyFrom,
   type BucketLocation,
 } from '../storage/storage.service';
+import {
+  DELIVERY_REFUSAL_MESSAGE,
+  LegalDeliveryRule,
+} from './legal-delivery-rule';
 import type {
   DeliverFilesResultView,
   LegalDeliverableView,
@@ -37,6 +41,7 @@ export class LegalDeliverablesService {
     private readonly notifications: NotificationService,
     private readonly allowance: LegalAssistantAllowance,
     private readonly storage: StorageService,
+    private readonly rule: LegalDeliveryRule,
   ) {}
 
   /**
@@ -63,20 +68,25 @@ export class LegalDeliverablesService {
       throw new BadRequestException('This work has not been paid for.');
     }
 
-    // N1: a delivered file can only be a legal document on our own bucket.
-    // Each url must be a bare key or a link on this bucket's host whose key
-    // is under DELIVERABLE_KEY_FOLDERS; anything else is refused before
-    // anything is written, so no other object can become a client's link.
-    const at = await this.storage.bucketLocation();
-    const keys = dto.files.map((f, i) => {
-      const key = deliverableKeyFrom(f.url, at);
-      if (key === null) {
-        throw new BadRequestException([
-          `files.${i}.url must be a legal document uploaded to WAWU storage, under legal/document/.`,
-        ]);
-      }
-      return key;
-    });
+    // N1 and FIX-24: a delivered file can only be a legal document on our
+    // own bucket (a bare key, or a link on this bucket's host, under
+    // DELIVERABLE_KEY_FOLDERS) that someone uploaded through WAWU, and that
+    // upload must be this client's own or the legal team's. Anything else is
+    // refused before anything is written, so no other object, and no other
+    // client's document, can become this client's link.
+    const at = await this.rule.location();
+    const checks = await this.rule.check(
+      request.wawuUserId,
+      dto.files.map((f) => f.url),
+      at,
+    );
+    const refused = checks.findIndex((c) => c.key === null);
+    if (refused !== -1) {
+      throw new BadRequestException([
+        `files.${refused}.url ${DELIVERY_REFUSAL_MESSAGE}`,
+      ]);
+    }
+    const keys = checks.map((c) => c.key as string);
     // The single-file column the web reads holds a link, as it always has
     // (E3, unchanged here); a bare key is given one.
     const firstLink = async (i: number): Promise<string> =>
@@ -220,24 +230,8 @@ export class LegalDeliverablesService {
     return {
       requestId,
       status: request.status,
-      items: await this.items(request, await this.storage.bucketLocation()),
+      items: await this.items(request, await this.rule.location()),
     };
-  }
-
-  /**
-   * A fresh read link, valid 15 minutes, or null. A row that still holds a
-   * signed link from before has its key read from it here. Only a key under
-   * DELIVERABLE_KEY_FOLDERS on this bucket is ever signed (N1): any other
-   * stored value (a key in another folder, a link to another host) gets no
-   * link at all, and is never handed back as it was stored.
-   */
-  private async readLink(
-    stored: string,
-    at: BucketLocation | null,
-  ): Promise<string | null> {
-    const key = deliverableKeyFrom(stored, at);
-    if (key === null) return null;
-    return this.storage.signedReadUrl(key, DELIVERABLE_LINK_SECONDS);
   }
 
   /**
@@ -245,10 +239,20 @@ export class LegalDeliverablesService {
    * single-file route has no row and no chat message, so it is read from
    * `deliverableUrl` and listed first, unless a row already carries it. That
    * keeps it listed when more files are added to the same request later.
+   *
+   * Each gets a fresh read link, valid 15 minutes, only when it passes the
+   * delivery rule for this request's owner (N1 and FIX-24): a key on this
+   * bucket under DELIVERABLE_KEY_FOLDERS, uploaded through WAWU by the owner
+   * or by the legal team. A row that still holds a signed link from before
+   * has its key read from it here. Anything else (a key in another folder, a
+   * link to another host, another client's document, a key nobody uploaded,
+   * a legacy `deliverableUrl` included) is listed by name with no link, is
+   * logged once, and is never signed or handed back as it was stored.
    */
   private async items(
     request: {
       id: string;
+      wawuUserId: string;
       deliverableUrl: string | null;
       deliveredAt: Date | null;
     },
@@ -258,25 +262,46 @@ export class LegalDeliverablesService {
       where: { legalRequestId: request.id },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
+    const legacy = request.deliverableUrl;
+    const keyOf = (v: string) => deliverableKeyFrom(v, at) ?? v;
+    const withLegacy =
+      legacy !== null &&
+      legacy !== '' &&
+      !rows.some((r) => keyOf(r.url) === keyOf(legacy));
+    const checks = await this.rule.check(
+      request.wawuUserId,
+      [...rows.map((r) => r.url), ...(withLegacy ? [legacy] : [])],
+      at,
+    );
     // Called only after the ownership check (or for the operator's own
     // answer): a link is signed for the reader the API has already accepted.
+    const linkFor = async (
+      i: number,
+      fileId: string,
+    ): Promise<string | null> => {
+      const check = checks[i];
+      if (check.key === null) {
+        this.rule.withheld(request.id, fileId, check.refusal);
+        return null;
+      }
+      return this.storage.signedReadUrl(check.key, DELIVERABLE_LINK_SECONDS);
+    };
     const items: LegalDeliverableView[] = await Promise.all(
-      rows.map(async (r) => ({
+      rows.map(async (r, i) => ({
         id: r.id,
         fileName: r.fileName,
-        url: await this.readLink(r.url, at),
+        url: await linkFor(i, r.id),
         pages: r.pages,
         chatMessageId: r.chatMessageId,
         postedAt: r.createdAt.toISOString(),
       })),
     );
-    const legacy = request.deliverableUrl;
-    const keyOf = (v: string) => deliverableKeyFrom(v, at) ?? v;
-    if (legacy && !rows.some((r) => keyOf(r.url) === keyOf(legacy))) {
+    if (withLegacy) {
+      const id = `${request.id}:deliverable`;
       items.unshift({
-        id: `${request.id}:deliverable`,
+        id,
         fileName: fileNameFromUrl(legacy),
-        url: await this.readLink(legacy, at),
+        url: await linkFor(rows.length, id),
         pages: null,
         chatMessageId: null,
         postedAt: (request.deliveredAt ?? new Date(0)).toISOString(),
