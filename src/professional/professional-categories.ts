@@ -59,4 +59,9 @@ export const PROFESSIONAL_CATEGORIES = [
   'sports_fitness',
   'government_public',
   'social_impact',
+  // Not in the app's explore taxonomy (src/common/categories.ts): a field
+  // the mobile directory draws ("Engineering", P1 and P4) with no category
+  // to stand on. Added for professionals only (PROS-02); content never files
+  // under it. Not regulated: the regulated list above is unchanged.
+  'engineering',
 ] as const;

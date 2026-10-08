@@ -4,6 +4,10 @@ import {
   getSchemaPath,
 } from '@nestjs/swagger';
 import { MONEY_ERROR_CODES, type MoneyErrorCode } from './money-enums';
+import {
+  MONEY_LIMIT_NAMES,
+  type MoneyLimitName,
+} from '../limits/money-limit-names';
 import type {
   BankTransferBlock,
   FeeQuoteView,
@@ -80,6 +84,10 @@ export class MoneyErrorReason {
 
   /** bvn_not_confirmed, bvn_phone_mismatch: BVN checks left in the current 24 hours. selfie_not_matched: selfie matches left in the current 24 hours. */
   checksLeft?: number;
+
+  /** limit_reached: which limit the movement passes (NUV-07), WAWU's own or the provider's. */
+  @ApiPropertyOptional({ enum: MONEY_LIMIT_NAMES })
+  limit?: MoneyLimitName;
 }
 
 /** The body of every refused money request. */

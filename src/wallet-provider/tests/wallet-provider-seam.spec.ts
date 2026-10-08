@@ -14,6 +14,7 @@ import {
   WALLET_PROVIDER_CONFIG_KEY,
   WalletProviderConfigError,
 } from '../wallet-provider-config';
+import { NuvionConfigError } from '../../nuvion/nuvion-config';
 import { WalletProviderError } from '../wallet-provider-error';
 import {
   OTP_SENDER,
@@ -187,10 +188,14 @@ describe('MONEY-20: WALLET_PROVIDER picks the adapter', () => {
     },
   );
 
-  it('WALLET_PROVIDER=nuvion stops the app with a clear message until the Nuvion adapter lands', async () => {
-    await expect(boot('nuvion')).rejects.toThrow(WalletProviderConfigError);
+  // NUV-01 replaced MONEY-20's "nuvion is reserved" stop (the task's own
+  // words): nuvion now builds the Nuvion adapter, and without its settings
+  // the app stops naming the first one missing (src/nuvion/tests/ prove
+  // the adapter boots with them).
+  it('WALLET_PROVIDER=nuvion without the Nuvion settings stops the app, naming the missing setting and the rollback', async () => {
+    await expect(boot('nuvion')).rejects.toThrow(NuvionConfigError);
     await expect(boot('nuvion')).rejects.toThrow(
-      'WALLET_PROVIDER=nuvion is reserved: the nuvion wallet adapter is not built yet. Set WALLET_PROVIDER=fintava (or leave it unset) and restart.',
+      'NUVION_BASE_URL must be set when WALLET_PROVIDER=nuvion. Set it, or set WALLET_PROVIDER=fintava and restart to roll back.',
     );
   });
 

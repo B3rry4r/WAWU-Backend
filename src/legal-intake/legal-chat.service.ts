@@ -1,6 +1,8 @@
 import {
   ConflictException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
   Inject,
   Injectable,
   Logger,
@@ -16,8 +18,25 @@ import { cleanAiText, withoutEmDash } from './ai-text';
 import {
   LegalAssistantAllowance,
   consultantHasWritten,
+  openerRunning,
 } from './assistant/legal-assistant-allowance';
+import { LEGAL_OPENER_WAIT_MS } from './assistant/legal-assistant-config';
 import type { LegalBrief } from './legal-brief';
+
+/**
+ * How often a read waiting for another read's opener looks again (FIX-11).
+ * How long it waits at most is `ASSISTANT_OPENER_WAIT_MS`.
+ */
+const OPENER_POLL_MS = 50;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+type ChatRow = {
+  id: string;
+  authorRole: 'client' | 'ai' | 'consultant';
+  body: string;
+  createdAt: Date;
+};
 
 export interface ChatMessageView {
   id: string;
@@ -82,6 +101,7 @@ export class LegalChatService {
     private readonly prisma: PrismaService,
     @Inject(GEMINI_CLIENT) private readonly gemini: GeminiClient,
     private readonly allowance: LegalAssistantAllowance,
+    @Inject(LEGAL_OPENER_WAIT_MS) private readonly openerWaitMs: number,
   ) {}
 
   /**
@@ -103,11 +123,12 @@ export class LegalChatService {
     wawuUserId: string,
     requestId: string,
   ): Promise<ChatThreadView> {
+    // When this read began, before anything is awaited: an opener call that
+    // ends after this moment is one this read was in flight for, so the read
+    // never tries again after it (`LegalAssistantAllowance.reserveOpener`).
+    const arrivedAt = new Date();
     const request = await this.findOwned(wawuUserId, requestId);
-    const messages = await this.prisma.legalChatMessage.findMany({
-      where: { legalRequestId: requestId },
-      orderBy: { createdAt: 'asc' },
-    });
+    let messages = await this.linesOf(requestId);
 
     // The opener is written on first read rather than at payment time, so a
     // client always finds something waiting rather than an empty box that
@@ -116,8 +137,7 @@ export class LegalChatService {
       messages.length === 0 &&
       LegalChatService.OPEN_FROM.has(request.status)
     ) {
-      const opener = await this.openThread(request);
-      if (opener) messages.push(opener);
+      messages = await this.openThread(request, arrivedAt);
     }
 
     return {
@@ -284,7 +304,64 @@ export class LegalChatService {
     };
   }
 
-  private async openThread(request: { id: string; details: unknown }) {
+  /** The thread's lines, oldest first (the order every read has used). */
+  private linesOf(requestId: string): Promise<ChatRow[]> {
+    return this.prisma.legalChatMessage.findMany({
+      where: { legalRequestId: requestId },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  /**
+   * Write the opener on an empty, open thread, and answer with the thread's
+   * lines afterwards (FIX-11).
+   *
+   * The opener is a paid AI call nobody typed, so a read may not multiply
+   * it. The call is CLAIMED first, under the person's lock and in the same
+   * step as their hourly limits (`LegalAssistantAllowance.reserveOpener`):
+   * only the claim's holder calls the provider, and the call is counted like
+   * every other assistant call. Parallel reads find the claim held and wait
+   * for its opener instead of making their own, so twenty reads at once make
+   * one call and all see the same opener. A read that was in flight while
+   * a call ended without an opener answers the thread as it is; only a read
+   * that arrives after that may try again, so a failing provider is called
+   * once per batch of parallel reads, not once per read. Over a limit no
+   * call is made and the thread is read as it is.
+   */
+  private async openThread(
+    request: {
+      id: string;
+      wawuUserId: string;
+      details: unknown;
+    },
+    arrivedAt: Date,
+  ): Promise<ChatRow[]> {
+    let claim;
+    try {
+      claim = await this.allowance.reserveOpener(
+        request.wawuUserId,
+        request.id,
+        arrivedAt,
+      );
+    } catch (error) {
+      // An empty thread is recoverable: a later read tries again once the
+      // limit allows. Failing the whole screen over the opener is not.
+      const limited =
+        error instanceof HttpException &&
+        error.getStatus() === Number(HttpStatus.TOO_MANY_REQUESTS);
+      const why = `Legal chat opener for ${request.id} not attempted: ${
+        error instanceof Error ? error.message : String(error)
+      }`;
+      if (limited) this.logger.log(why);
+      else this.logger.warn(why);
+      return this.linesOf(request.id);
+    }
+    if (claim.kind === 'opened' || claim.kind === 'ended') {
+      return this.linesOf(request.id);
+    }
+    if (claim.kind === 'busy') return this.waitForOpener(request.id);
+
+    let reply: string | null = null;
     try {
       const raw = await this.gemini.chat({
         instruction: this.instructionWithBrief(request.details),
@@ -295,21 +372,70 @@ export class LegalChatService {
           },
         ],
       });
-      const reply = cleanAiText(raw);
+      reply = cleanAiText(raw) || null;
       if (!reply) throw new Error('The assistant opener was empty');
-      const created = await this.prisma.legalChatMessage.create({
-        data: { legalRequestId: request.id, authorRole: 'ai', body: reply },
-      });
-      return created;
     } catch (error) {
-      // An empty thread is recoverable — the next read tries again. Failing
-      // the whole screen because an opener could not be written is not.
+      // The call ends as failed and frees the thread: an empty thread is
+      // recoverable (a later read tries again, counted again), failing the
+      // whole screen because an opener could not be written is not.
+      reply = null;
       this.logger.warn(
         `Could not open legal chat for ${request.id}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
-      return null;
+    }
+
+    const body = reply;
+    try {
+      await this.allowance.finishOpener(
+        request.wawuUserId,
+        request.id,
+        claim.callId,
+        body === null
+          ? null
+          : (tx, createdAt) =>
+              tx.legalChatMessage.create({
+                data: {
+                  legalRequestId: request.id,
+                  authorRole: 'ai',
+                  body,
+                  createdAt,
+                },
+              }),
+      );
+    } catch (error) {
+      // The claim lapses on its own (ASSISTANT_CLAIM_MS); the read still
+      // answers with the thread as it is.
+      this.logger.warn(
+        `Could not store the legal chat opener for ${request.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    return this.linesOf(request.id);
+  }
+
+  /**
+   * Another read holds the opener's claim: wait for its opener rather than
+   * make a second call. Answers as soon as the thread has a line, or with
+   * the thread as it is once no opener call is running (it failed) or the
+   * wait (`ASSISTANT_OPENER_WAIT_MS`) is over. A read that waited never
+   * calls the provider itself, so a failing provider is not called once per
+   * waiting read.
+   */
+  private async waitForOpener(requestId: string): Promise<ChatRow[]> {
+    const deadline = Date.now() + this.openerWaitMs;
+    for (;;) {
+      // Running is asked BEFORE the lines are read: the opener and the end
+      // of its call are one write, so a call seen ended here has its opener
+      // (if any) in the lines read next.
+      const running = await openerRunning(this.prisma, requestId);
+      const lines = await this.linesOf(requestId);
+      if (lines.length > 0 || !running || Date.now() >= deadline) {
+        return lines;
+      }
+      await sleep(OPENER_POLL_MS);
     }
   }
 

@@ -173,6 +173,11 @@ Every refusal is the envelope this backend already answers with
   `reason.code`, never on `message`.
 - A 400 **without** `reason` is the global `ValidationPipe` refusing a
   malformed field; its `message` is the first validation message.
+- A 400, 413 or 415 **without** `reason` can also be the body parser
+  refusing the request before any route runs (too large, an unsupported
+  charset or encoding, a body it cannot read). It is not a money outcome, so
+  money routes carry no `reason` for it either; the app treats it as a
+  malformed request (FIX-08).
 - Success is `{ statusCode, message: "OK", data }`. The body's `statusCode` is
   always 200, even when the HTTP status is 201 (hazard H-3 in
   `src/common/tests/protected-registry.regression.spec.ts`): read the HTTP
@@ -237,6 +242,8 @@ Every refusal is the envelope this backend already answers with
 | `recipient_search_rate_limited` | 429 | the person has searched for recipients 20 times in the last minute, 120 in the last hour or 500 in the last day (`RECIPIENT_SEARCH_PERSON_LIMITS`, PROVISIONAL), counted after the token is verified (WALLET-08); also sent as the `Retry-After` header | `retryAfterSeconds` |
 | `statement_too_large` | 400 | the period holds more movements than one statement lists (`STATEMENT_MAX_ROWS`, 50,000); counted before anything is written, and the person picks a shorter range (WALLET-27) | |
 | `phone_held_by_other_identity` | 409 | account opening where Fintava already has a customer for the person's phone whose record does not carry the checked BVN (or carries none): nothing is adopted or created, and the opening stops for review (MONEY-12, BACKEND_GAPS G-37) | |
+| `fees_not_set` | 503 | the running wallet provider's fees are settings not filled in yet (Nuvion's `NUVION_FEE_*`, R-42): every fee quote and every money-moving route answers it before anything is sent to the provider; the balance, the history and the account number are unaffected (NUV-07, section 11) | |
+| `limit_reached` | 403 | the movement passes a limit: WAWU's own setting for its kind (`WAWU_LIMIT_<KIND>_<LIMIT>_KOBO`), checked before anything is sent, or the provider's own (Nuvion's per-transaction, daily or monthly refusal); the same answer either way (NUV-07, section 11) | `limit`: `per_transaction`, `daily` or `monthly` |
 
 The same table is `MONEY_ERROR_STATUS` in `src/money/money-contract.ts`; each
 operation in the contract lists the codes it can answer with, grouped by
@@ -932,8 +939,75 @@ still reads. Every answer is `Cache-Control: no-store`.
   `MERCHANT_MAX_PER_TXN_KOBO` is `400 amount_out_of_range` with
   `maximumKobo`, the largest `amountKobo` that fits. A send is not bound by
   it; a total a JSON number cannot carry exactly is refused the same way.
-- **Daily limit**: no task holds it (mobile repo BACKEND_GAPS G-7), so
-  `withinDailyLimit` is `true` and `remainingTodayKobo` `null`.
+- **Daily limit**: WAWU's limits are settings (NUV-07, below). Where the
+  module that mounts the route imports `MoneyLimitsModule`, the quote shows
+  today's standing for its kind (`withinDailyLimit`, `remainingTodayKobo`);
+  with no daily limit set for the kind, or without the module, it is `true`
+  and `null` as before.
+- **The provider's part, per provider (NUV-07, R-42)**: every `provider`
+  part comes from the running provider's schedule
+  (`src/money/fees/provider-fee-schedule.ts`); WAWU's parts and the order of
+  parts are the same under either provider, so R-23's one Fees row is
+  `fee.totalFeeKobo` either way.
+  - `fintava`: the WALLET-15 schedule above, unchanged (a rollback quotes
+    exactly what it quoted before).
+  - `nuvion`: `balance_transfer` is `NUVION_FEE_BOOK_TRANSFER` (a send to a
+    WAWU user, a purchase into WAWU's operational account), `bank_transfer`
+    is `NUVION_FEE_BANK_PAYOUT`; `NUVION_FEE_INFLOW` (money arriving by
+    transfer) is held for the add-money tasks. Each is one kobo figure or
+    `from:fee` bands, with **no default and no figure in code**. Nuvion has
+    no bill payments (R-39), so a `bill` is `409 target_not_payable`; its
+    operational account has no documented cap, so `MERCHANT_MAX_PER_TXN_KOBO`
+    (Fintava's merchant wallet policy) does not apply and WAWU's
+    per-transaction limit does that job.
+  - **Fees not set**: while any of the running provider's fee settings is
+    empty (only Nuvion's can be), every quote is `503 fees_not_set`, before
+    the wallet gate and before the query is read (`@RequireFeesSet()`, whose
+    guard runs first), and `FeeQuoteService.lines()`, `quote()` and `check()`
+    refuse the same way, so a payment that charges a quote cannot reach the
+    provider either. Default (agent), owner may override: a quote never asks
+    Nuvion (`POST /fee-simulations`); NUV-08 compares the setting with
+    Nuvion's own figure and reports a difference.
+- **Limits (NUV-07, `src/money/limits/`)**: per person, per kind of movement
+  (the quote's four kinds) and per limit (`per_transaction`, the Lagos
+  calendar `daily` and `monthly`), each the setting
+  `WAWU_LIMIT_<KIND>_<LIMIT>_KOBO` (whole kobo; empty is no WAWU limit; no
+  default, no figure in code), under either provider. What counts toward a
+  day or a month is the person's own pending and completed movements of the
+  kind out of their wallet, by amount before fees, from the ledger (never a
+  balance). A route is money-moving when it carries a debit gate, whatever
+  else it documents: the PIN guard (on the controller or the method;
+  `@RequireTransactionPin()` and `@RequireApproval()` bring it) or a refusal
+  only a debit or a PIN check answers (an Idempotency-Key code, a PIN code,
+  `insufficient_funds`, `quote_changed`, `limit_reached`). The routes that
+  check a PIN and move no money (changing the PIN, checking a PIN or an
+  approval, turning on approving from a phone) are named in the coverage
+  spec, each with its reason (FIX-21). Every money-moving route:
+  - carries `@RequireFeesSet()` as its last decorator, and puts nothing but
+    `WawuAuthGuard` on its controller (class guards run before method
+    guards), so `fees_not_set` is answered before the wallet gate, the
+    Idempotency-Key record and the PIN
+    (`src/money/limits/tests/money-moving-coverage.spec.ts` holds every
+    mounted route to it, reading class and method guards together as Nest
+    runs them, and every declared one documents `fees_not_set` and
+    `limit_reached` through `DEBIT_GATE_ERRORS`);
+  - calls `MoneyLimits.assertMayMove({ wawuUserId, kind, amountKobo }, { tx
+    })` in the transaction that writes the movement's pending ledger row,
+    before the provider is called: `fees_not_set`, then `403 limit_reached`
+    with `limit` (per transaction, then today, then this month). With `tx`
+    it takes a per-person lock first, so two movements by one person are
+    checked one after the other. That transaction stays at READ COMMITTED
+    (Prisma's default: no `isolationLevel`): the lock orders the reads only
+    there, so with `tx` the check first reads `transaction_isolation` and
+    refuses any other level with an `IsolationLevelError` naming it, a
+    programming error answered as a 500 (FIX-21,
+    `src/money/limits/read-committed.ts`);
+  - answers a provider failure with `error.toHttpException()`: the
+    provider's own limit refusal (a `WalletProviderLimitError`; Nuvion's
+    `error_transfer_transaction_limit_exceeded`,
+    `error_transfer_daily_limit_exceeded`,
+    `error_transfer_monthly_volume_exceeded`) is then the same
+    `limit_reached`, with nothing moved.
 - **Short-lived and checkable**: `quoteToken` is the quote signed by the
   server (HMAC-SHA256 under `FEE_QUOTE_KEY`: the person, kind, category,
   amount, total and `expiresAt`, `FEE_QUOTE_SECONDS` after it was given,
@@ -1100,3 +1174,60 @@ send `Cache-Control: no-store`, read our database only and never call Fintava.
 - **Contract.** The search declares its plain `400` (a malformed `q`, no
   `reason`) and `429` (`recipient_search_rate_limited`; the per-address 429
   has no `reason`); both lists carry `maxItems` (20 and 10).
+
+## 16. Points (POINTS-01)
+
+Points are not money: no provider holds them, no route converts them to
+naira or dollars, and every figure is a count of points (R-43). They are
+written here because the tasks that sell, spend and cash them out
+(TIER-03, POINTS-02 to POINTS-04, REF-01) answer in this one error shape.
+
+- **Where they live.** `src/points/`: `PointLot` (one grant: how many, how
+  many are left, when they end), `PointHold` (points taken for one job until
+  it is committed or released) and `PointLedger` (append-only, one row per
+  change to one lot). The lots are the authority for points; a balance is the
+  sum of a person's lots that have points and have not ended.
+- **The one writer.** `PointsService` (exported by `PointsModule`): `grant`,
+  `hold`, `commit`, `release` and `expireLapsed`. The first four can join the
+  caller's own READ COMMITTED transaction (`{ tx }`), so a payment can set a
+  tier and grant its bonus in one commit; `expireLapsed` takes no `tx`: it is
+  the expiry job's pass and writes each lapsed lot off in a transaction of
+  its own. The account purge's `purgePersonPoints` is the only delete.
+  Nothing else writes these tables.
+- **Idempotent.** A grant on its (source, reference) and a hold on its
+  (purpose, reference): the same call again changes nothing and answers what
+  the first one made, in its current state (a released hold stays released:
+  a new attempt needs a new reference). The same reference for another
+  person or amount is a 409, also when the two arrive at the same moment.
+- **A lot's end** must be after now and before 2100-01-01 UTC
+  (`POINTS_LATEST_END`), else `400 points_invalid`. The database holds the
+  end between 2000-01-01 and 2100-01-01 UTC.
+- **Spent soonest-ending first,** then oldest grant, then lot id. A release
+  puts every point back into the lot it came from.
+- **What the database refuses** (the migration's CHECKs and triggers): a lot
+  below 0 or above what it was granted, or ending outside 2000 to 2099; a lot
+  whose points differ from the sum of its ledger rows when the transaction
+  commits; any UPDATE or TRUNCATE of the ledger; any DELETE of ledger rows
+  except the account purge's (`purgePersonPoints`: one transaction, the
+  person's points lock, `wawu.points_purge` set to
+  `<person id>:<txid_current()>` for that transaction, then all of that one
+  person's rows in one statement; a value left at session level names an
+  earlier transaction and is refused); a hold
+  moving anywhere but from `held` to `committed` or `released`, or a settled
+  hold changing at all.
+- **Refusals** (`PointsError`, `src/points/points-error.ts`): `402
+  insufficient_points` with `balancePoints`, `neededPoints`,
+  `shortfallPoints`; `409 points_grant_conflict`; `409 points_hold_conflict`;
+  `404 points_hold_not_found` (also for a commit or release whose hold the
+  account purge deleted while it waited for the person's lock); `409 points_hold_settled` (spent, or already
+  given back); `400 points_invalid`. A field that carries points ends in
+  `Points`, as money fields end in `Kobo`.
+- **`GET /me/points`** (PT5): `balance`, `nextExpiry` or null (the soonest end
+  and every point that ends then, over all live lots), `lots` (soonest end
+  first, at most 50, `lotCount` says how many in all), `movements` (the last
+  20 ledger rows, newest first, each with a plain `label` and `pending` for a
+  hold still running). `Cache-Control: no-store`; the token is the person.
+- **For every caller** (lead, 8 Oct 2026): call `grant` or `hold` last in your
+  transaction, and never wait on a provider while you hold a person's points
+  lock: this service's own transactions use Prisma's 5 s default, so a
+  points call for that person would fail meanwhile.
