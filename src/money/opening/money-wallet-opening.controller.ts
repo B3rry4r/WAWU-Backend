@@ -67,11 +67,14 @@ export class MoneyWalletController {
     'account_not_opened',
     'phone_held_by_other_identity',
     'provider_unreachable',
+    // NUV-02, under a provider that reviews the person itself (Nuvion).
+    'phone_not_nigerian',
+    'identity_under_review',
   )
   open(
     @CurrentUser() user: WawuJwtClaims,
     @Body() body: OpenNairaWalletDto,
   ): Promise<WalletView> {
-    return this.opening.open(user.sub, user.email, body);
+    return this.opening.open(user.sub, user.email, body, user.phone);
   }
 }

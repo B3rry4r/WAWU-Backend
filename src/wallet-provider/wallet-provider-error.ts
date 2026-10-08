@@ -165,10 +165,7 @@ export function walletProviderErrorToHttp(
       // NUV-02 (the NUV-01 verifier's rule: a money route always fills
       // `reason`, so "under review" has its code before any route answers
       // it): 409 identity_under_review, the same sentence as before.
-      return new MoneyError(
-        'identity_under_review',
-        UNDER_REVIEW_MESSAGE,
-      );
+      return new MoneyError('identity_under_review', UNDER_REVIEW_MESSAGE);
     case 'outcome_unknown':
     case 'not_confirmed':
     case 'duplicate_reference':

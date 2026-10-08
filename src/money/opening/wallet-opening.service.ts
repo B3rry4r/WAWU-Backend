@@ -27,6 +27,7 @@ import { TransactionPinService } from '../pin/transaction-pin.service';
 import type { OpenNairaWalletDto } from './dto/open-wallet.dto';
 import { visibleBeneficiaries } from '../saved-accounts/beneficiary.service';
 import { type IdentityStop, stoppedOnIdentity } from './opening-stops';
+import { ReviewedOpening } from './reviewed-opening';
 import {
   WALLET_OPENING_DEFAULTS,
   WalletOpeningSettings,
@@ -175,6 +176,12 @@ function uniqueTarget(e: UniqueViolation): string {
 export class WalletOpeningService {
   private readonly logger = new Logger(WalletOpeningService.name);
   private sweeping = false;
+  /**
+   * Opening with a provider that reviews the person itself (NUV-02:
+   * `capabilities.separateKyc`, Nuvion): reviewed-opening.ts. Fintava's
+   * path below is unchanged.
+   */
+  private readonly reviewed: ReviewedOpening;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -184,7 +191,27 @@ export class WalletOpeningService {
     private readonly selfie: SelfieMatchService,
     private readonly pins: TransactionPinService,
     private readonly settings: WalletOpeningSettings,
-  ) {}
+  ) {
+    this.reviewed = new ReviewedOpening({
+      prisma,
+      provider,
+      hasher,
+      dbNow: () => this.dbNow(),
+      opening: (id) => this.opening(id),
+      unstick: (row, now) => this.unstick(row, now),
+      hasWallet: (id) => this.hasWallet(id),
+      mayHaveOpened: (e) => this.mayHaveOpened(e),
+      refusal: (e) => this.refusal(e),
+      unavailable: () => this.unavailable(),
+      resendAfterMs: () => this.resendAfterMs(),
+      recheckAfterMs: WALLET_OPENING_DEFAULTS.recheckAfterMs,
+    });
+  }
+
+  /** True when the running provider reviews the person itself (Nuvion). */
+  private get reviewing(): boolean {
+    return this.provider.capabilities.separateKyc;
+  }
 
   // -------------------------------------------------------------------------
   // GET /money/wallet
@@ -229,6 +256,10 @@ export class WalletOpeningService {
       beneficiaryCount: wallet
         ? (await visibleBeneficiaries(this.prisma, wawuUserId)).length
         : 0,
+      // NUV-02, additive: which Open your wallet this server runs, and the
+      // provider's review once something was sent (null on Fintava).
+      openingFlow: this.reviewing ? 'review' : 'check',
+      review: await this.reviewed.reviewOf(wawuUserId),
     };
   }
 
@@ -245,7 +276,14 @@ export class WalletOpeningService {
     wawuUserId: string,
     email: string | null | undefined,
     input: OpenNairaWalletDto,
+    phone?: string | null,
   ): Promise<WalletView> {
+    if (this.reviewing) {
+      // NUV-02: the details, the BVN and the NIN go to the provider's own
+      // review; no BVN check or selfie match comes before (reviewed-opening.ts).
+      await this.reviewed.open(wawuUserId, { email, phone }, input);
+      return this.view(wawuUserId);
+    }
     if (!this.hasher.configured || !this.provider.configured) {
       throw this.unavailable();
     }
@@ -456,6 +494,9 @@ export class WalletOpeningService {
   async reconcile(row: OpeningRow): Promise<OpeningReconciliation> {
     if (row.state !== 'unknown') return 'nothing_to_do';
     if (!isRowOf(this.provider.name, row.provider)) return 'nothing_to_do';
+    // NUV-02: a reviewing provider's lost create is settled from its
+    // delivery (NuvionEntity), never created again from here.
+    if (this.reviewing) return this.reviewed.reconcile(row);
     const now = await this.dbNow();
     // One asker at a time, and not more often than every few seconds.
     const asking = await this.prisma.fintavaWalletOpening.updateMany({

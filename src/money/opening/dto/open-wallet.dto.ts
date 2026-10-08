@@ -56,7 +56,10 @@ export const ID_TYPES = [
   'national_id',
 ] as const;
 /** NUV-02: Nuvion's `identification.proof_of_address.type`. */
-export const PROOF_OF_ADDRESS_TYPES = ['utility_bill', 'bank_statement'] as const;
+export const PROOF_OF_ADDRESS_TYPES = [
+  'utility_bill',
+  'bank_statement',
+] as const;
 
 /** A real calendar date, `YYYY-MM-DD`, today or later, before 2100. */
 export function isUnexpiredDate(value: unknown): boolean {
@@ -228,7 +231,8 @@ export class OpenNairaWalletDto {
   @ApiPropertyOptional({ enum: ID_TYPES })
   @IsOptional()
   @IsIn(ID_TYPES, {
-    message: 'idType must be international_passport, drivers_license or national_id',
+    message:
+      'idType must be international_passport, drivers_license or national_id',
   })
   idType?: (typeof ID_TYPES)[number];
 
