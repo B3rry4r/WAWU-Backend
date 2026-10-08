@@ -31,8 +31,10 @@ export type ExpoReceipt =
  * What came of one send request.
  *
  *  tickets   Expo took the request; one ticket per message, in order.
- *  retry     Expo took nothing (429, 5xx, or no connection): safe to send again.
- *  rejected  Expo refused the request itself (a 4xx): sending it again cannot help.
+ *  retry     Expo took nothing (429, 5xx, no connection, or a refusal that is
+ *            not Expo's own, such as a proxy's 403): safe to send again.
+ *  rejected  Expo refused the request itself (a 4xx carrying Expo's error
+ *            shape): sending it again cannot help.
  *  unknown   No answer in time, or one that cannot be read. Expo may have taken
  *            the messages, so they are never sent again.
  */
@@ -58,6 +60,9 @@ export type ReceiptOutcome =
 @Injectable()
 export class ExpoPushClient {
   private readonly logger = new Logger(ExpoPushClient.name);
+
+  /** How long one request may take before it is treated as unanswered. A field so a spec can shorten it. */
+  requestTimeoutMs = PUSH_REQUEST_TIMEOUT_MS;
 
   async send(messages: ExpoMessage[]): Promise<SendOutcome> {
     if (messages.length === 0) return { kind: 'tickets', tickets: [] };
@@ -117,10 +122,17 @@ export class ExpoPushClient {
         method: 'POST',
         headers,
         body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(PUSH_REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(this.requestTimeoutMs),
       });
     } catch (error) {
-      const name = error instanceof Error ? error.name : '';
+      // Read by name, not `instanceof Error`: the abort arrives as a
+      // DOMException from fetch's own realm, which a sandboxed `Error` (a
+      // test runner's) does not recognise, and a timeout taken for "no
+      // connection" would be sent again.
+      const name =
+        typeof error === 'object' && error !== null && 'name' in error
+          ? String((error as { name: unknown }).name)
+          : '';
       if (name === 'TimeoutError' || name === 'AbortError') {
         return { kind: 'unknown', reason: 'timeout' };
       }
@@ -158,13 +170,25 @@ export class ExpoPushClient {
       };
     }
 
+    // A 4xx is Expo's refusal only when it carries Expo's error shape. A
+    // proxy, firewall or gateway in between answers 403 or 407 with a body of
+    // its own: that is not Expo saying no, so it is retried like a 5xx (up to
+    // the cap) and the log does not send the operator to the access token.
     const errors = (body as { errors?: unknown[] } | null)?.errors;
-    const code = Array.isArray(errors)
-      ? errorCode(errors[0])
-      : `http_${response.status}`;
+    if (!Array.isArray(errors) || errors.length === 0) {
+      this.logger.warn(
+        `HTTP ${response.status} without an answer from Expo (a proxy or firewall in between?); the send will be retried.`,
+      );
+      return {
+        kind: 'retry',
+        reason: `http_${response.status}`,
+        retryAfterSeconds: null,
+      };
+    }
+    const code = errorCode(errors[0]);
     if (response.status === 401 || response.status === 403) {
       this.logger.error(
-        `Expo refused the push credentials (HTTP ${response.status}). Check EXPO_ACCESS_TOKEN.`,
+        `Expo refused the push credentials (HTTP ${response.status}, ${code}). Check EXPO_ACCESS_TOKEN.`,
       );
     }
     return { kind: 'rejected', reason: code };

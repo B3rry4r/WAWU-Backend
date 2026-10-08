@@ -23,15 +23,18 @@ import type { PushTokenRegistered, PushTokenRemoved } from './push-view.type';
 export class PushTokenController {
   constructor(private readonly tokens: PushTokenService) {}
 
-  /** Register this phone for the signed-in person. Idempotent: call it on every start. */
+  /**
+   * Register this phone for the signed-in person. Idempotent: call it on every
+   * start. `registered` is false, and nothing is stored, when the account's
+   * deletion has been asked for.
+   */
   @Post()
   @HttpCode(200)
   async register(
     @CurrentUser() user: WawuJwtClaims,
     @Body() dto: RegisterPushTokenDto,
   ): Promise<PushTokenRegistered> {
-    await this.tokens.register(user.sub, dto);
-    return { registered: true };
+    return { registered: await this.tokens.register(user.sub, dto) };
   }
 
   /** Remove this phone (sign-out). Removing a token twice, or one that is not yours, is a 200 with `removed: false`. */

@@ -277,6 +277,9 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // The deliveries go first; they also go with their token (cascade).
   { model: 'PushDelivery', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'PushToken', column: 'userWawuId', disposition: 'OWNED' },
+  // The mark that this account's deletion was asked for, which stops push
+  // until the purge: the purge is that deletion, so the mark goes too.
+  { model: 'PushStoppedAccount', column: 'userWawuId', disposition: 'OWNED' },
 
   // Last: everything above may reference these.
   // An admin's choice to feature this creator in Explore (EXPLORE-03): a

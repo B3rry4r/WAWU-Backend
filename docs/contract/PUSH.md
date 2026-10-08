@@ -15,11 +15,15 @@ controller declares.
 
 | Route | Body | Answer |
 |---|---|---|
-| `POST /push-tokens` | `expoPushToken` (`ExponentPushToken[...]` or `ExpoPushToken[...]`), `platform` (`android` or `ios`), optional `deviceId` (200 chars), `deviceLabel` (100 chars) | `200 {registered: true}` |
+| `POST /push-tokens` | `expoPushToken` (`ExponentPushToken[...]` or `ExpoPushToken[...]`), `platform` (`android` or `ios`), optional `deviceId` (200 chars), `deviceLabel` (100 chars) | `200 {registered: boolean}` |
 | `DELETE /push-tokens` | `expoPushToken` | `200 {removed: boolean}` |
 
 - **Register on every start.** It is idempotent: the same phone again keeps one
   row and moves `lastSeenAt`. The owner always comes from the access token.
+  `registered` is false, and nothing is stored, only when the account's
+  deletion has been asked for (section 4).
+- **Clean text only.** A NUL or a broken character in any field is a 400 (the
+  `IsCleanText` rule GET /search uses), never a 500.
 - **One phone, one person.** The token is unique. When somebody else signs in
   on the phone and registers, the row moves to them, and what was written for
   the first person before that moment is never pushed to the second.
@@ -44,6 +48,13 @@ decides nothing about categories by itself:
   null).
 - The same switch is read again just before the send (`NotificationService.
   isSwitchOff`), so a switch turned off a second ago is honoured.
+- **Blocks.** A notification about a person the recipient blocked, or who
+  blocked the recipient (its actor, or a profile it opens), is not pushed, and
+  so no push ever carries that person's id. Checked at the moment of sending.
+- **A deletion asked for.** `DELETE /account` deletes the person's tokens and
+  queued pushes at once and marks the account (`PushStoppedAccount`): a token
+  it registers later is not stored, and anything still queued is skipped. The
+  purge deletes the mark with the rest.
 - `src/push/push-policy.ts` decides every kind (`send` or `hold`) in a Record
   over the whole vocabulary: a kind added without a decision does not compile.
 
@@ -63,7 +74,8 @@ No agreed switch covers them. BACKEND_GAPS G-265 asks the owner for each.
 
 ## 3. The push
 
-Expo's `send` message: `to`, `title`, `body`, `ttl`, and `data`:
+Expo's `send` message: `to`, `title`, `body`, `ttl`, `priority: "high"`, and
+`data`:
 
 ```json
 {
@@ -74,10 +86,21 @@ Expo's `send` message: `to`, `title`, `body`, `ttl`, and `data`:
 }
 ```
 
-`title` and `body` are the notification's own words (`composeNotification`);
-nothing is composed for push. `actionHref` and `target` are present only when
-the notification has them. A body that would pass Expo's 4096 byte payload limit is
-shortened; `data` never is. INBOX-21 reads `data` on a tap.
+`title` and `body` are the notification's own words (`composeNotification`),
+with one exception: `content_rejected`'s list body carries the admin's
+free-text reason, which never goes on a lock screen, so its push body is
+"“<piece title>” was sent back. Tap to see why." (the reason is read in the
+app). `review_received` keeps the piece title and the stars (reviews are
+public); the amount-bearing kinds are as BACKEND_GAPS G-266 says.
+`actionHref` and `target` are present only when the notification has them. A
+body that would pass Expo's 4096 byte payload limit is shortened; `data` never
+is. INBOX-21 reads `data` on a tap.
+
+Default (agent), owner may override: `priority` is `high` (every pushed kind
+is something to act on, and Android's normal priority may hold a push until a
+sleeping phone wakes); no `sound` (Settings' Sound switch lives on the phone
+and is off by default, G-260; the phone side decides); no `channelId` (the
+app's default Android channel; INBOX-21 owns channels).
 
 ## 4. How it runs
 
@@ -89,14 +112,19 @@ instance needs to agree with another; each step is claimed in Postgres.
    before it was written. `UNIQUE(notificationId, pushTokenId)` with
    `ON CONFLICT DO NOTHING` makes two instances, or two passes, one delivery.
    The notification table is the outbox: nothing in `emit()` changed.
-2. **Send.** Due deliveries are claimed with `FOR UPDATE SKIP LOCKED`, checked
-   once more (token still there, still that person's, switch still on, not
-   already read), and sent in chunks of at most 100 messages. Expo's ticket is
-   kept. A 429, 5xx or no connection is retried with a doubling delay up to a
-   limit; Expo refusing the request fails it; an answer that was lost (timeout,
-   unreadable) fails it and is never sent again, because Expo may have taken it
-   and a missing push beats a double one.
-3. **Receipts.** About a minute after a send, then every five minutes while Expo
+2. **Send.** Due deliveries are taken one batch of at most 100 at a time:
+   `claimed` with `FOR UPDATE SKIP LOCKED` under a claim id, checked once more
+   (token still there, still that person's, not already read, the account not
+   being deleted, no block, switch still on), and only then marked `sending`,
+   in one statement, just before the request. Expo's tickets are recorded in
+   one statement as they arrive. A 429, 5xx, no connection, or a 4xx that does
+   not carry Expo's error shape (a proxy's 403) is retried with a doubling
+   delay up to a limit; Expo refusing the request in its own words fails it;
+   an answer that was lost (timeout, unreadable) fails it and is never sent
+   again, because Expo may have taken it and a missing push beats a double
+   one. A pass stops at the first batch Expo does not answer well, so a hung
+   Expo holds one batch, not the queue.
+3. **Receipts.** Thirty seconds after a send, then every five minutes while Expo
    has none, up to a day, the receipt ids are asked for (at most 300 a request).
    `ok` marks the delivery `delivered`. `DeviceNotRegistered` disables the
    token (only if the person has owned it since before that send).
@@ -105,8 +133,19 @@ instance needs to agree with another; each step is claimed in Postgres.
    never read the same delivery twice.
 
 A push failure never fails a notification or a request: nothing runs inside
-either. A send held by an instance that stopped mid-send is failed after two
-minutes.
+either.
+
+**An instance that stops** (a crash, a deploy, a hung request) leaves at most
+one batch held. After two minutes the reaper puts a `claimed` row back in the
+queue (it was never sent; up to the attempt limit), and a `sending` row back
+ONCE, keeping its attempt count (Expo may have taken it); found mid-send a
+second time it is failed (`send_interrupted`). Only the claim that holds a row
+may mark it `sending`, so a row another instance took meanwhile is not sent
+twice, and the unique key keeps one row per notification and phone.
+
+**One clock.** Every time column holds UTC and every write and comparison uses
+the database's own clock in UTC (`src/push/push-clock.ts`), so a database whose
+time zone is not UTC changes nothing.
 
 ## 5. Configuration
 

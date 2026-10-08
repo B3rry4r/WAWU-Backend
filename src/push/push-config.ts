@@ -7,8 +7,8 @@
  * (written out, nothing else counts). Expo's access token is optional: Expo
  * asks for one only when the project turned on its enhanced security.
  *
- * Every number below is a default for a figure Expo does not fix; each is
- * overridable in config where an operator may want to move it.
+ * Every number below that Expo does not fix carries its own PROVISIONAL
+ * marker: a figure the agent chose, for the owner to confirm.
  */
 
 /** Expo's push service. A host other than these two is refused at send time. */
@@ -42,6 +42,7 @@ export const EXPO_MAX_PAYLOAD_BYTES = 4096;
 /**
  * The kinds of token Expo issues: `ExponentPushToken[...]` and
  * `ExpoPushToken[...]` (the same test its server SDK applies to the string).
+ * A NUL or a broken character inside is refused by `IsCleanText` on the DTO.
  */
 export const EXPO_TOKEN_PATTERN = /^Expo(?:nent)?PushToken\[[^\]\s]{1,200}\]$/;
 
@@ -54,10 +55,7 @@ export const EXPO_TOKEN_PATTERN = /^Expo(?:nent)?PushToken\[[^\]\s]{1,200}\]$/;
 export const PUSH_MAX_TOKENS_PER_USER = 10;
 
 /**
- * PROVISIONAL(PUSH-TIMING, owner=YOU, why=Expo publishes no figures for backoff or send time and the task only asks for a push within a minute)
- *
- * Every figure below that sets how fast or how patiently the sender works:
- * the sweep, the look-back, the retries, the receipt checks and the lock.
+ * PROVISIONAL(PUSH-SWEEP, owner=YOU, why=Expo publishes no figure and the task only asks for a push within a minute)
  *
  * How often each hub instance looks for notifications to push. A push reaches
  * Expo within about this long after the notification is written.
@@ -65,37 +63,51 @@ export const PUSH_MAX_TOKENS_PER_USER = 10;
 export const PUSH_SWEEP_SECONDS = 10;
 
 /**
+ * PROVISIONAL(PUSH-LOOKBACK, owner=YOU, why=no ruling says how late a push is still worth sending)
+ *
  * How far back the sweep reads notifications. The unique key on a delivery
  * makes a notification seen twice harmless, so this only has to be longer
  * than a notification can sit uncommitted and shorter than a push is worth
- * sending.
+ * sending. A hub that was down longer than this does not push what was
+ * written meanwhile (it is in the app's list).
  */
 export const PUSH_LOOKBACK_MINUTES = 15;
 
 /**
+ * PROVISIONAL(PUSH-RETRY, owner=YOU, why=Expo publishes no backoff figures)
+ *
  * A send Expo refused with 429 or 5xx, or that could not reach Expo, is tried
  * again after `retryBaseSeconds` doubled for each earlier attempt, up to
- * `maxAttempts` tries in all. Past that the delivery is `failed`.
+ * `maxAttempts` tries in all. Past that the delivery is `failed`. The same cap
+ * stops a delivery that keeps being taken by an instance that then stops.
  */
 export const PUSH_RETRY = { maxAttempts: 5, retryBaseSeconds: 5 } as const;
 
 /**
+ * PROVISIONAL(PUSH-RECEIPTS, owner=YOU, why=the task asks for a receipt within a minute and Expo gives no time)
+ *
  * When to ask Expo for a receipt: `firstCheckSeconds` after the send, then
  * every `retrySeconds` while Expo has none, until `giveUpHours` after the
  * send (Expo keeps a receipt for about a day), when the delivery is marked
- * `expired`.
+ * `expired`. With the 10 s sweep a delivered push is recorded about 30 to 40
+ * seconds after the send.
  */
 export const PUSH_RECEIPTS = {
-  firstCheckSeconds: 60,
+  firstCheckSeconds: 30,
   retrySeconds: 300,
   giveUpHours: 24,
 } as const;
 
 /**
- * A delivery held for sending longer than this was dropped by an instance
- * that stopped mid-send. It is marked `failed`, never sent again: Expo may
- * already have taken it, and a missing push is better than a double one (the
- * notification is still in the app).
+ * PROVISIONAL(PUSH-LOCK, owner=YOU, why=no figure exists for how long an instance may hold a delivery)
+ *
+ * A delivery held longer than this belongs to an instance that stopped (a
+ * crash, a deploy, a hung request). The reaper puts it back in the queue:
+ * a `claimed` row was never sent, so it always goes back (up to
+ * PUSH_RETRY.maxAttempts takes); a `sending` row may have reached Expo, so it
+ * goes back ONCE and is failed if it is found mid-send again. Longer than a
+ * request may take (PUSH_REQUEST_TIMEOUT_MS), so a live request is never
+ * reaped.
  */
 export const PUSH_LOCK_SECONDS = 120;
 
@@ -110,14 +122,33 @@ export const PUSH_TTL_SECONDS = 86_400;
  * PROVISIONAL(PUSH-RETENTION, owner=YOU, why=no retention period for a dead token or a send log is set)
  *
  * A token Expo reported dead is disabled at once and deleted this many days
- * later.
+ * later; a finished delivery row is deleted after the same time.
  */
 export const PUSH_DISABLED_KEEP_DAYS = 30;
 
-/** How long one request to Expo may take before it is treated as unanswered. */
+/**
+ * PROVISIONAL(PUSH-PRUNE, owner=YOU, why=no figure exists for how often old rows are cleared)
+ *
+ * How often one instance clears dead tokens and old delivery rows.
+ */
+export const PUSH_PRUNE_EVERY_MINUTES = 60;
+
+/**
+ * PROVISIONAL(PUSH-REQUEST-TIMEOUT, owner=YOU, why=Expo publishes no answer time for its push API)
+ *
+ * How long one request to Expo may take before it is treated as unanswered.
+ * An unanswered send may have been taken, so it is never sent again.
+ */
 export const PUSH_REQUEST_TIMEOUT_MS = 20_000;
 
-/** The deliveries one sweep tick sends, and the receipts one tick asks about. */
+/**
+ * PROVISIONAL(PUSH-BATCH, owner=YOU, why=no figure exists for how much one instance sends per tick)
+ *
+ * The most deliveries one sweep tick sends, and the most receipts it asks
+ * about. Deliveries are taken EXPO_SEND_CHUNK at a time, each batch checked
+ * and sent before the next is taken, so a crash leaves at most one batch
+ * held.
+ */
 export const PUSH_BATCH_LIMIT = 500;
 
 export interface PushSettings {

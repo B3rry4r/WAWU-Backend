@@ -1,4 +1,4 @@
--- INBOX-03. Additive only: two new tables, nothing existing is changed.
+-- INBOX-03. Additive only: three new tables, nothing existing is changed.
 
 -- CreateTable
 CREATE TABLE "PushToken" (
@@ -27,6 +27,8 @@ CREATE TABLE "PushDelivery" (
     "attempts" INTEGER NOT NULL DEFAULT 0,
     "nextAttemptAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "lockedAt" TIMESTAMP(3),
+    "claimId" TEXT,
+    "interruptedSend" BOOLEAN NOT NULL DEFAULT false,
     "ticketId" TEXT,
     "sentAt" TIMESTAMP(3),
     "receiptDueAt" TIMESTAMP(3),
@@ -35,6 +37,14 @@ CREATE TABLE "PushDelivery" (
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "PushDelivery_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PushStoppedAccount" (
+    "userWawuId" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "PushStoppedAccount_pkey" PRIMARY KEY ("userWawuId")
 );
 
 -- CreateIndex

@@ -5,7 +5,14 @@ import {
   Matches,
   MaxLength,
 } from 'class-validator';
+import { IsCleanText } from '../../admin/legal-documents/policy-input';
 import { EXPO_TOKEN_PATTERN } from '../push-config';
+
+/*
+ * Every string here is also `IsCleanText` (the rule GET /search and the
+ * schools routes use): Postgres refuses a NUL in text, and a NUL that passed
+ * validation used to answer 500 instead of 400.
+ */
 
 /** POST /push-tokens. */
 export class RegisterPushTokenDto {
@@ -15,6 +22,7 @@ export class RegisterPushTokenDto {
   @Matches(EXPO_TOKEN_PATTERN, {
     message: 'expoPushToken must be an Expo push token',
   })
+  @IsCleanText()
   expoPushToken!: string;
 
   @IsIn(['android', 'ios'])
@@ -24,12 +32,14 @@ export class RegisterPushTokenDto {
   @IsOptional()
   @IsString()
   @MaxLength(200)
+  @IsCleanText()
   deviceId?: string;
 
   /** A name for the phone ("Pixel 8"), if the app has one. */
   @IsOptional()
   @IsString()
   @MaxLength(100)
+  @IsCleanText()
   deviceLabel?: string;
 }
 
@@ -40,5 +50,6 @@ export class RemovePushTokenDto {
   @Matches(EXPO_TOKEN_PATTERN, {
     message: 'expoPushToken must be an Expo push token',
   })
+  @IsCleanText()
   expoPushToken!: string;
 }

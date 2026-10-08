@@ -11,8 +11,13 @@ process.env.DATABASE_URL =
   process.env.DATABASE_URL ??
   'postgresql://postgres:postgres@localhost:5432/wawu_hub_test?schema=public';
 
+import { randomUUID } from 'crypto';
+import { ConsoleLogger, Logger } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
+import { TestingLogger } from '@nestjs/testing/services/testing-logger.service';
+import { PrismaPg } from '@prisma/adapter-pg';
+import { PrismaClient } from '../../../generated/prisma/client';
 import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
@@ -20,11 +25,17 @@ import { NotificationModule } from '../../notification/notification.module';
 import { NotificationService } from '../../notification/notification.service';
 import { AccountPurgeModule } from '../../account-purge/account-purge.module';
 import { AccountPurgeService } from '../../account-purge/account-purge.service';
+import { BlockedAccountService } from '../../blocked-account/blocked-account.service';
 import { PushModule } from '../push.module';
 import { PushTokenService } from '../push-token.service';
 import { PushSenderService } from '../push-sender.service';
 import { ExpoPushClient } from '../expo-push.client';
-import { PUSH_MAX_TOKENS_PER_USER, PUSH_RETRY } from '../push-config';
+import {
+  PUSH_LOCK_SECONDS,
+  PUSH_MAX_TOKENS_PER_USER,
+  PUSH_RECEIPTS,
+  PUSH_RETRY,
+} from '../push-config';
 import { EXPO_SHAPES, ExpoStandIn } from './expo-stand-in';
 
 const RUN = Date.now().toString(36);
@@ -49,8 +60,10 @@ describe('Phone push sender (INBOX-03)', () => {
   let tokens: PushTokenService;
   let sender: PushSenderService;
   let expoClient: ExpoPushClient;
+  let blocks: BlockedAccountService;
   const stand = new ExpoStandIn();
   const savedEnv = { ...process.env };
+  const savedTimeout = new ExpoPushClient().requestTimeoutMs;
 
   const register = async (user: string, token = newToken()) => {
     await tokens.register(user, { expoPushToken: token, platform: 'android' });
@@ -68,16 +81,29 @@ describe('Phone push sender (INBOX-03)', () => {
       where: { userWawuId: user },
       orderBy: { createdAt: 'asc' },
     });
+  // Every write a spec makes is scoped to its own people: specs touch only
+  // rows they create (lead ruling, 7 Oct 2026, VB-3).
   const makeReceiptsDue = () =>
     prisma.pushDelivery.updateMany({
-      where: { status: 'sent' },
+      where: { status: 'sent', userWawuId: { in: USERS } },
       data: { receiptDueAt: new Date(Date.now() - 1000) },
     });
   const makeRetriesDue = () =>
     prisma.pushDelivery.updateMany({
-      where: { status: 'pending' },
+      where: { status: 'pending', userWawuId: { in: USERS } },
       data: { nextAttemptAt: new Date(Date.now() - 1000) },
     });
+  /** Makes the rows a stopped instance would leave look older than the lock. */
+  const ageLocks = (user: string) =>
+    prisma.pushDelivery.updateMany({
+      where: { userWawuId: user, status: { in: ['claimed', 'sending'] } },
+      data: {
+        lockedAt: new Date(Date.now() - (PUSH_LOCK_SECONDS + 60) * 1000),
+      },
+    });
+  /** Another hub instance on the same database. */
+  const second = () =>
+    new PushSenderService(prisma, notifications, new ExpoPushClient(), blocks);
 
   beforeAll(async () => {
     await stand.start();
@@ -96,12 +122,24 @@ describe('Phone push sender (INBOX-03)', () => {
     tokens = moduleRef.get(PushTokenService);
     sender = moduleRef.get(PushSenderService);
     expoClient = moduleRef.get(ExpoPushClient);
+    blocks = moduleRef.get(BlockedAccountService);
     await moduleRef.init();
   }, 60000);
 
   const clean = async () => {
     await prisma.pushDelivery.deleteMany({
       where: { userWawuId: { in: USERS } },
+    });
+    await prisma.pushStoppedAccount.deleteMany({
+      where: { userWawuId: { in: USERS } },
+    });
+    await prisma.blockedAccount.deleteMany({
+      where: {
+        OR: [{ userWawuId: { in: USERS } }, { blockedWawuId: { in: USERS } }],
+      },
+    });
+    await prisma.contentPiece.deleteMany({
+      where: { creatorWawuId: { in: USERS } },
     });
     await prisma.pushToken.deleteMany({ where: { userWawuId: { in: USERS } } });
     await prisma.notification.deleteMany({
@@ -118,6 +156,7 @@ describe('Phone push sender (INBOX-03)', () => {
     process.env.PUSH_ENABLED = 'true';
     process.env.EXPO_PUSH_BASE_URL = stand.baseUrl;
     delete process.env.EXPO_ACCESS_TOKEN;
+    expoClient.requestTimeoutMs = savedTimeout;
   });
 
   afterAll(async () => {
@@ -165,6 +204,11 @@ describe('Phone push sender (INBOX-03)', () => {
         },
       });
       expect(JSON.stringify(message)).not.toMatch(DASHES);
+      // the fields chosen for the message (Default (agent), owner may override)
+      expect(message.priority).toBe('high');
+      expect(Object.keys(message).sort()).toEqual(
+        ['body', 'data', 'priority', 'title', 'to', 'ttl'].sort(),
+      );
 
       const [d1] = await deliveriesOf(USER_A);
       expect(d1.status).toBe('sent');
@@ -206,6 +250,7 @@ describe('Phone push sender (INBOX-03)', () => {
       expect(d.status).toBe('expired');
     });
 
+    // Its own time limit, like the receipts test below (VB-5).
     it('sends in chunks of at most 100 messages', async () => {
       const row = (await tip(USER_A))!;
       void row;
@@ -225,29 +270,41 @@ describe('Phone push sender (INBOX-03)', () => {
         .sendRequests()
         .map((r) => (r.json as unknown[]).length);
       expect(sizes.sort((a, b) => b - a)).toEqual([100, 100, 50]);
-    });
+    }, 60000);
 
+    // Made directly as 320 sent rows (two statements), not by sending 320
+    // pushes first, and given its own time limit: on a loaded machine the
+    // 5 s default is not a property of the code under test (VB-5).
     it('asks for receipts in chunks of at most 300 ids', async () => {
-      await tip(USER_A);
-      await prisma.pushToken.createMany({
-        data: Array.from({ length: 320 }, () => ({
+      const note = (await tip(USER_A))!;
+      const tokenRows = Array.from({ length: 320 }, () => ({
+        id: randomUUID(),
+        userWawuId: USER_A,
+        expoPushToken: newToken(),
+        platform: 'android',
+      }));
+      await prisma.pushToken.createMany({ data: tokenRows });
+      await prisma.pushDelivery.createMany({
+        data: tokenRows.map((t) => ({
+          notificationId: note.id,
           userWawuId: USER_A,
-          expoPushToken: newToken(),
-          platform: 'android',
-          createdAt: new Date(Date.now() - 60_000),
+          pushTokenId: t.id,
+          status: 'sent',
+          attempts: 1,
+          ticketId: randomUUID(),
+          sentAt: new Date(Date.now() - 60_000),
+          receiptDueAt: new Date(Date.now() - 1000),
         })),
       });
-      await sender.runOnce();
       for (const d of await deliveriesOf(USER_A))
         stand.receipts.set(d.ticketId!, EXPO_SHAPES.ok);
-      await makeReceiptsDue();
-      const report = await sender.runOnce();
+      const report = await sender.collectReceipts();
       expect(report.delivered).toBe(320);
       const sizes = stand
         .receiptRequests()
         .map((r) => (r.json as { ids: string[] }).ids.length);
       expect(sizes.sort((a, b) => b - a)).toEqual([300, 20]);
-    });
+    }, 60000);
   });
 
   describe('capability 2 (a category the person turned off is not sent)', () => {
@@ -462,6 +519,7 @@ describe('Phone push sender (INBOX-03)', () => {
 
       // a second job, or a late repeat, changes nothing
       await prisma.pushDelivery.updateMany({
+        where: { userWawuId: USER_A },
         data: { status: 'sent', receiptDueAt: new Date(Date.now() - 1000) },
       });
       await sender.runOnce();
@@ -534,11 +592,7 @@ describe('Phone push sender (INBOX-03)', () => {
         },
       });
       // a fresh instance: prune runs at most once an hour per process
-      await new PushSenderService(
-        prisma,
-        notifications,
-        new ExpoPushClient(),
-      ).prune();
+      await second().prune();
       const left = (
         await prisma.pushToken.findMany({ where: { userWawuId: USER_A } })
       ).map((t) => t.expoPushToken);
@@ -686,7 +740,7 @@ describe('Phone push sender (INBOX-03)', () => {
       );
     });
 
-    it('a sender that throws does not touch notifications, and the pass reports instead of throwing', async () => {
+    it('a sender that throws mid-send does not touch notifications, and the pass reports instead of throwing; the held row goes back to the queue once', async () => {
       await register(USER_A);
       const spy = jest
         .spyOn(expoClient, 'send')
@@ -698,21 +752,25 @@ describe('Phone push sender (INBOX-03)', () => {
       expect(
         await prisma.notification.count({ where: { userWawuId: USER_A } }),
       ).toBe(1);
-      // the delivery was held when it threw; it is failed after the lock time, never sent twice
-      await prisma.pushDelivery.updateMany({
-        data: { lockedAt: new Date(Date.now() - 10 * 60_000) },
+      // it threw after the row was marked `sending`: held until the lock time
+      expect((await deliveriesOf(USER_A))[0]).toMatchObject({
+        status: 'sending',
+        attempts: 1,
       });
       await sender.runOnce();
-      expect((await deliveriesOf(USER_A))[0]).toMatchObject({
-        status: 'failed',
-        reason: 'send_interrupted',
-      });
-      expect(stand.sendRequests()).toHaveLength(0);
+      expect((await deliveriesOf(USER_A))[0].status).toBe('sending');
+      // past the lock time the reaper puts it back once, with its attempt count
+      await ageLocks(USER_A);
+      await sender.runOnce();
+      const [d] = await deliveriesOf(USER_A);
+      expect(d).toMatchObject({ status: 'sent', attempts: 2 });
+      expect(d.interruptedSend).toBe(true);
+      expect(stand.sentMessages()).toHaveLength(1);
     });
   });
 
   describe('logs', () => {
-    it('no log line carries a token or the words of a notification, on any path (refused, rate limited, unauthorised, dead token, thrown)', async () => {
+    it('no log line carries a token or the words of a notification, on any path (refused, rate limited, unauthorised, not Expo, dead token, thrown), at any level', async () => {
       const logged: string[] = [];
       const spies = [process.stdout, process.stderr].map((stream) =>
         jest.spyOn(stream, 'write').mockImplementation((chunk: unknown) => {
@@ -720,6 +778,9 @@ describe('Phone push sender (INBOX-03)', () => {
           return true;
         }),
       );
+      // Nest's testing logger prints errors only; every level is printed
+      // here, so a token in a log or warn line is seen too (D7).
+      Logger.overrideLogger(new ConsoleLogger());
       try {
         const token = await register(USER_A);
         const dead = await register(USER_A);
@@ -734,10 +795,12 @@ describe('Phone push sender (INBOX-03)', () => {
           ],
           [429, EXPO_SHAPES.rateLimited],
           [500, { error: token }],
+          [403, `<html>denied ${token}</html>`],
         ] as const) {
           stand.sendBehaviour = () => ({ status, body });
           // put the delivery back to be sent, whatever the last pass made of it
           await prisma.pushDelivery.updateMany({
+            where: { userWawuId: USER_A },
             data: {
               status: 'pending',
               lockedAt: null,
@@ -746,7 +809,7 @@ describe('Phone push sender (INBOX-03)', () => {
           });
           await sender.runOnce();
         }
-        expect(stand.sendRequests()).toHaveLength(4 * 1);
+        expect(stand.sendRequests()).toHaveLength(5);
         stand.sendBehaviour = null;
         stand.ticketErrors.set(dead, 'DeviceNotRegistered');
         await prisma.pushDelivery.deleteMany({ where: { userWawuId: USER_A } });
@@ -769,14 +832,29 @@ describe('Phone push sender (INBOX-03)', () => {
         await tip(USER_A, 778);
         await sender.runOnce();
         spy.mockRestore();
+        // a receipt request that fails is a warn line
+        const [sent] = await prisma.pushDelivery.findMany({
+          where: { userWawuId: USER_A, status: 'sent' },
+        });
+        expect(sent).toBeDefined();
+        stand.receiptBehaviour = () => ({
+          status: 503,
+          body: { error: token },
+        });
+        await makeReceiptsDue();
+        await sender.runOnce();
         const all = logged.join('\n');
-        expect(all.length).toBeGreaterThan(0); // the failures were logged
+        // the failures were logged, the warnings among them
+        expect(all).toContain('Expo refused a send request');
+        expect(all).toContain('without an answer from Expo');
+        expect(all).toContain('Receipt request failed');
         expect(all).not.toContain(token);
         expect(all).not.toContain(dead);
         expect(all).not.toContain(row.title);
         expect(all).not.toContain(row.body);
         expect(all).not.toContain(`inbox03-${RUN}`);
       } finally {
+        Logger.overrideLogger(new TestingLogger());
         for (const spy of spies) spy.mockRestore();
       }
     });
@@ -868,9 +946,6 @@ describe('Phone push sender (INBOX-03)', () => {
   });
 
   describe('two hub instances', () => {
-    const second = () =>
-      new PushSenderService(prisma, notifications, new ExpoPushClient());
-
     it('parallel passes in two instances send each notification to each phone exactly once', async () => {
       await register(USER_A);
       await register(USER_A);
@@ -1072,4 +1147,542 @@ describe('Phone push sender (INBOX-03)', () => {
       ).toBe(1);
     });
   });
+  describe('a crash or a hung Expo loses nothing that was never sent (VB-1)', () => {
+    /** The rows another instance claimed (or marked sending) before it stopped. */
+    const leaveHeld = async (user: string, status: 'claimed' | 'sending') => {
+      await sender.enqueue();
+      await prisma.pushDelivery.updateMany({
+        where: { userWawuId: user, status: 'pending' },
+        data: {
+          status,
+          claimId: 'stopped-instance',
+          attempts: 1,
+          lockedAt: new Date(),
+        },
+      });
+    };
+
+    it('a batch claimed by an instance that stopped before sending is put back and sent, once each', async () => {
+      await register(USER_A);
+      await register(USER_A);
+      for (let i = 0; i < 40; i += 1) await tip(USER_A, 300 + i);
+      await leaveHeld(USER_A, 'claimed');
+      // while the lock is fresh nobody touches it (D7)
+      const early = await sender.runOnce();
+      expect(early.requeued).toBe(0);
+      expect(stand.sendRequests()).toHaveLength(0);
+      await ageLocks(USER_A);
+      const report = await sender.runOnce();
+      expect(report.requeued).toBe(80);
+      expect(report.sent).toBe(80);
+      const keys = stand
+        .sentMessages()
+        .map(
+          (m) =>
+            `${(m.data as { notificationId: string }).notificationId}|${m.to}`,
+        );
+      expect(keys).toHaveLength(80);
+      expect(new Set(keys).size).toBe(80);
+      const ds = await deliveriesOf(USER_A);
+      expect(ds.every((d) => d.status === 'sent' && d.attempts === 2)).toBe(
+        true,
+      );
+      expect(ds.every((d) => !d.interruptedSend)).toBe(true);
+    }, 60000);
+
+    it('a row an instance stopped holding mid-send goes back once, keeping its attempt count; found mid-send again it is failed, never sent a third time', async () => {
+      await register(USER_A);
+      await tip(USER_A);
+      await leaveHeld(USER_A, 'sending');
+      await sender.runOnce();
+      expect(stand.sendRequests()).toHaveLength(0); // fresh: still held
+      await ageLocks(USER_A);
+      await sender.runOnce();
+      let [d] = await deliveriesOf(USER_A);
+      expect(d).toMatchObject({
+        status: 'sent',
+        attempts: 2,
+        interruptedSend: true,
+      });
+      expect(stand.sentMessages()).toHaveLength(1);
+
+      // the same thing once more: no second chance
+      await prisma.pushDelivery.update({
+        where: { id: d.id },
+        data: { status: 'sending', claimId: 'stopped-again' },
+      });
+      await ageLocks(USER_A);
+      await sender.runOnce();
+      [d] = await deliveriesOf(USER_A);
+      expect(d).toMatchObject({ status: 'failed', reason: 'send_interrupted' });
+      expect(stand.sentMessages()).toHaveLength(1);
+    });
+
+    it('a row out of attempts that an instance stopped holding is failed, not put back', async () => {
+      await register(USER_A);
+      await tip(USER_A);
+      await leaveHeld(USER_A, 'claimed');
+      await prisma.pushDelivery.updateMany({
+        where: { userWawuId: USER_A },
+        data: { attempts: PUSH_RETRY.maxAttempts },
+      });
+      await ageLocks(USER_A);
+      await sender.runOnce();
+      expect((await deliveriesOf(USER_A))[0]).toMatchObject({
+        status: 'failed',
+        reason: 'claim_interrupted',
+      });
+      expect(stand.sendRequests()).toHaveLength(0);
+    });
+
+    it('an instance whose claim was reaped and taken by another instance does not send it again', async () => {
+      await register(USER_A);
+      await tip(USER_A);
+      await sender.enqueue();
+      // instance A claims, then stalls past the lock
+      const a = sender as unknown as {
+        claim(id: string, limit: number): Promise<Array<{ id: string }>>;
+        sendBatch(id: string, rows: unknown[], r: unknown): Promise<boolean>;
+      };
+      const held = await a.claim('instance-a', 10);
+      expect(held).toHaveLength(1);
+      await ageLocks(USER_A);
+      // instance B reaps it and sends it
+      await second().runOnce();
+      expect(stand.sentMessages()).toHaveLength(1);
+      // A wakes up and carries on with its old batch: nothing goes out
+      await a.sendBatch('instance-a', held, {
+        skipped: 0,
+        sent: 0,
+        failed: 0,
+        retried: 0,
+        tokensDisabled: 0,
+      });
+      expect(stand.sentMessages()).toHaveLength(1);
+      expect((await deliveriesOf(USER_A))[0].status).toBe('sent');
+    });
+
+    it('a hung Expo fails only the batch that was on the wire (never resent); the rest is sent on the next pass', async () => {
+      await prisma.pushToken.createMany({
+        data: Array.from({ length: 250 }, () => ({
+          userWawuId: USER_A,
+          expoPushToken: newToken(),
+          platform: 'android',
+          createdAt: new Date(Date.now() - 60_000),
+        })),
+      });
+      await tip(USER_A);
+      expoClient.requestTimeoutMs = 300;
+      let calls = 0;
+      stand.sendBehaviour = (messages) => {
+        calls += 1;
+        return calls === 1
+          ? { status: 200, body: { data: [] }, delayMs: 1500 }
+          : {
+              status: 200,
+              body: {
+                data: messages.map(() => ({ status: 'ok', id: randomUUID() })),
+              },
+            };
+      };
+      const first = await sender.runOnce();
+      expect(first.claimed).toBe(100); // the pass stopped at the hung request
+      let ds = await deliveriesOf(USER_A);
+      expect(ds.filter((d) => d.status === 'failed')).toHaveLength(100);
+      expect(
+        ds
+          .filter((d) => d.status === 'failed')
+          .every((d) => d.reason === 'send_unconfirmed_timeout'),
+      ).toBe(true);
+      expect(ds.filter((d) => d.status === 'pending')).toHaveLength(150);
+
+      const second_ = await sender.runOnce();
+      expect(second_.sent).toBe(150);
+      ds = await deliveriesOf(USER_A);
+      expect(ds.filter((d) => d.status === 'sent')).toHaveLength(150);
+      // each phone was on the wire once: the 100 that timed out were not sent again
+      const sentTo = stand.sentMessages().map((m) => m.to);
+      expect(sentTo).toHaveLength(250);
+      expect(new Set(sentTo).size).toBe(250);
+    }, 60000);
+  });
+
+  describe('the real client when Expo does not answer in time (VB-6)', () => {
+    it('a send with no answer in time is unknown: failed, and never sent again', async () => {
+      await register(USER_A);
+      await tip(USER_A);
+      expoClient.requestTimeoutMs = 200;
+      stand.sendBehaviour = () => ({
+        status: 200,
+        body: { data: [{ status: 'ok', id: randomUUID() }] },
+        delayMs: 1000,
+      });
+      const report = await sender.runOnce();
+      expect(report.failed).toBe(1);
+      expect((await deliveriesOf(USER_A))[0]).toMatchObject({
+        status: 'failed',
+        reason: 'send_unconfirmed_timeout',
+      });
+      stand.sendBehaviour = null;
+      await makeRetriesDue();
+      await sender.runOnce();
+      await sleep(1200); // the late answer arrives and changes nothing
+      await sender.runOnce();
+      expect(stand.sendRequests()).toHaveLength(1);
+      expect((await deliveriesOf(USER_A))[0].status).toBe('failed');
+    }, 30000);
+  });
+
+  describe("a refusal that is not Expo's own (D5)", () => {
+    it('a 403 with no Expo error in it (a proxy) is retried, not taken as bad credentials', async () => {
+      await register(USER_A);
+      await tip(USER_A);
+      stand.sendBehaviour = () => ({
+        status: 403,
+        body: '<html>denied</html>',
+      });
+      await sender.runOnce();
+      expect((await deliveriesOf(USER_A))[0]).toMatchObject({
+        status: 'pending',
+        reason: 'http_403',
+        attempts: 1,
+      });
+      stand.sendBehaviour = null;
+      await makeRetriesDue();
+      await sender.runOnce();
+      expect((await deliveriesOf(USER_A))[0].status).toBe('sent');
+    });
+
+    it("a 401 in Expo's own error shape is a refusal: failed, not retried", async () => {
+      await register(USER_A);
+      await tip(USER_A);
+      stand.sendBehaviour = () => ({
+        status: 401,
+        body: { errors: [{ code: 'UNAUTHORIZED', message: 'bad token' }] },
+      });
+      await sender.runOnce();
+      expect((await deliveriesOf(USER_A))[0]).toMatchObject({
+        status: 'failed',
+        reason: 'UNAUTHORIZED',
+      });
+      await makeRetriesDue();
+      await sender.runOnce();
+      expect(stand.sendRequests()).toHaveLength(1);
+    });
+  });
+
+  describe('blocks (VB-2)', () => {
+    const block = (by: string, whom: string) =>
+      prisma.blockedAccount.create({
+        data: { userWawuId: by, blockedWawuId: whom },
+      });
+    const followedBy = (recipient: string, actor: string) =>
+      notifications.emit({
+        kind: 'new_follower',
+        userWawuId: recipient,
+        about: { target: { kind: 'profile', id: actor }, actorWawuId: actor },
+      });
+
+    it('a block made after the notification, by the recipient, means no push', async () => {
+      await register(USER_A);
+      expect(await followedBy(USER_A, USER_B)).not.toBeNull();
+      await block(USER_A, USER_B);
+      const report = await sender.runOnce();
+      expect(report.skipped).toBe(1);
+      expect(stand.sendRequests()).toHaveLength(0);
+      expect((await deliveriesOf(USER_A))[0]).toMatchObject({
+        status: 'skipped',
+        reason: 'blocked',
+      });
+    });
+
+    it('a block the other way (the actor blocked the recipient) means no push either', async () => {
+      await register(USER_A);
+      await followedBy(USER_A, USER_B);
+      await block(USER_B, USER_A);
+      await sender.runOnce();
+      expect(stand.sendRequests()).toHaveLength(0);
+      expect((await deliveriesOf(USER_A))[0].reason).toBe('blocked');
+    });
+
+    it('a notification about something else whose actor is blocked (a sale, a paid question) is not pushed', async () => {
+      await register(USER_A);
+      await notifications.emit({
+        kind: 'dm_received',
+        userWawuId: USER_A,
+        amount: 2000,
+        about: {
+          target: { kind: 'paid_question', id: randomUUID() },
+          actorWawuId: USER_B,
+        },
+      });
+      await notifications.emit({
+        kind: 'tip_received',
+        userWawuId: USER_A,
+        netAmount: 850,
+        about: { target: { kind: 'profile', id: USER_C } },
+      });
+      await block(USER_A, USER_B);
+      await block(USER_C, USER_A);
+      await sender.runOnce();
+      expect(stand.sendRequests()).toHaveLength(0);
+      expect((await deliveriesOf(USER_A)).map((d) => d.reason)).toEqual([
+        'blocked',
+        'blocked',
+      ]);
+    });
+
+    it('with no block the push goes, and carries the person it is about; no push ever carries a blocked person', async () => {
+      await register(USER_A);
+      await followedBy(USER_A, USER_B);
+      await followedBy(USER_A, USER_C);
+      await block(USER_A, USER_C);
+      await sender.runOnce();
+      const messages = stand.sentMessages();
+      expect(messages).toHaveLength(1);
+      expect(messages[0].data).toMatchObject({
+        target: { kind: 'profile', id: USER_B },
+      });
+      expect(JSON.stringify(stand.requests)).not.toContain(USER_C);
+    });
+  });
+
+  describe('a scheduled account deletion (VU-2)', () => {
+    it("forgets the person's phones and queued pushes, stores no new phone, and the sender sends nothing", async () => {
+      const token = await register(USER_C);
+      await tip(USER_C);
+      await sender.enqueue();
+      expect(await deliveriesOf(USER_C)).toHaveLength(1);
+      await tokens.stopAccount(USER_C);
+      expect(
+        await prisma.pushToken.count({ where: { userWawuId: USER_C } }),
+      ).toBe(0);
+      expect(await deliveriesOf(USER_C)).toHaveLength(0);
+      expect(
+        await tokens.register(USER_C, {
+          expoPushToken: token,
+          platform: 'android',
+        }),
+      ).toBe(false);
+      expect(
+        await prisma.pushToken.count({ where: { userWawuId: USER_C } }),
+      ).toBe(0);
+      await tip(USER_C);
+      await sender.runOnce();
+      expect(stand.sendRequests()).toHaveLength(0);
+      // asking twice is harmless
+      await tokens.stopAccount(USER_C);
+      expect(
+        await prisma.pushStoppedAccount.count({
+          where: { userWawuId: USER_C },
+        }),
+      ).toBe(1);
+    });
+
+    it('a phone that got in anyway (written before the stop reached it) is skipped at send time', async () => {
+      await register(USER_C);
+      await tip(USER_C);
+      await sender.enqueue();
+      await prisma.pushStoppedAccount.create({ data: { userWawuId: USER_C } });
+      await sender.runOnce();
+      expect(stand.sendRequests()).toHaveLength(0);
+      expect((await deliveriesOf(USER_C))[0]).toMatchObject({
+        status: 'skipped',
+        reason: 'account_closing',
+      });
+    });
+
+    it('the purge deletes the mark with the rest', async () => {
+      await tokens.stopAccount(USER_C);
+      await moduleRef.get(AccountPurgeService).purge(USER_C);
+      expect(
+        await prisma.pushStoppedAccount.count({
+          where: { userWawuId: USER_C },
+        }),
+      ).toBe(0);
+    });
+  });
+
+  describe('lock-screen words (VB-4)', () => {
+    const REASON = 'Your cover shows a phone number, remove it';
+
+    it("a piece sent back says so, with the piece's title and never the admin's reason", async () => {
+      await register(USER_A);
+      const piece = await prisma.contentPiece.create({
+        data: {
+          slug: `inbox03-${RUN}-rejected`,
+          creatorWawuId: USER_A,
+          contentType: 'video',
+          title: 'Lagos at night',
+          description: 'Made by push-sender.contract.spec.ts.',
+          category: 'beauty',
+          tags: [],
+          accessType: 'free',
+          price: 0,
+          previewAssetUrl: 'https://storage.test/inbox03.mp4',
+          status: 'rejected',
+        },
+      });
+      const row = await notifications.emit({
+        kind: 'content_rejected',
+        userWawuId: USER_A,
+        contentTitle: 'Lagos at night',
+        reason: REASON,
+        about: { target: { kind: 'content', id: piece.id } },
+      });
+      expect(row!.body).toContain(REASON); // the list keeps it
+      await sender.runOnce();
+      const [message] = stand.sentMessages();
+      expect(message.title).toBe(row!.title);
+      expect(message.body).toBe(
+        '“Lagos at night” was sent back. Tap to see why.',
+      );
+      expect(JSON.stringify(stand.requests)).not.toContain(REASON);
+    });
+
+    it('with no piece to name, it still says the upload was sent back and nothing more', async () => {
+      await register(USER_A);
+      await notifications.emit({
+        kind: 'content_rejected',
+        userWawuId: USER_A,
+        contentTitle: 'x',
+        reason: REASON,
+      });
+      await sender.runOnce();
+      expect(stand.sentMessages()[0].body).toBe(
+        'Your upload was sent back. Tap to see why.',
+      );
+      expect(JSON.stringify(stand.requests)).not.toContain(REASON);
+    });
+
+    it('a review keeps its words: the piece title and the stars are public', async () => {
+      await register(USER_A);
+      const row = await notifications.emit({
+        kind: 'review_received',
+        userWawuId: USER_A,
+        contentTitle: 'Lagos at night',
+        stars: 4,
+      });
+      await sender.runOnce();
+      expect(stand.sentMessages()[0].body).toBe(row!.body);
+    });
+  });
+
+  // D4: the database's own clock in UTC for every write and comparison. Two
+  // sessions whose time zone is not UTC, one each side of it: Lagos (+1, a
+  // plausible production setting) and New York (-4 in October).
+  describe.each(['Africa/Lagos', 'America/New_York'])(
+    'a database session whose time zone is %s (D4)',
+    (zone) => {
+      let zoned: PrismaClient;
+      let zSender: PushSenderService;
+      let zTokens: PushTokenService;
+
+      beforeAll(async () => {
+        zoned = new PrismaClient({
+          adapter: new PrismaPg({
+            connectionString: process.env.DATABASE_URL,
+            options: `-c TimeZone=${zone}`,
+          }),
+        });
+        const [{ tz }] = await zoned.$queryRaw<Array<{ tz: string }>>`
+          SELECT current_setting('TimeZone') AS "tz"`;
+        expect(tz).toBe(zone);
+        const asService = zoned as unknown as PrismaService;
+        zSender = new PushSenderService(
+          asService,
+          notifications,
+          expoClient,
+          blocks,
+        );
+        zTokens = new PushTokenService(asService);
+      });
+      afterAll(async () => {
+        await zoned.$disconnect();
+      });
+
+      const near = (at: Date | null, expectedMs: number) => {
+        expect(at).not.toBeNull();
+        expect(Math.abs(at!.getTime() - expectedMs)).toBeLessThan(30_000);
+      };
+
+      it('a phone registered just now gets a notification written just after, and its times read back as now', async () => {
+        const token = newToken();
+        await zTokens.register(USER_A, {
+          expoPushToken: token,
+          platform: 'android',
+        });
+        const row = await prisma.pushToken.findUniqueOrThrow({
+          where: { expoPushToken: token },
+        });
+        near(row.createdAt, Date.now());
+        near(row.lastSeenAt, Date.now());
+        await sleep(8);
+        await tip(USER_A);
+        const report = await zSender.runOnce();
+        expect(report.sent).toBe(1);
+        const [d] = await deliveriesOf(USER_A);
+        near(d.sentAt, Date.now());
+        near(
+          d.receiptDueAt,
+          Date.now() + PUSH_RECEIPTS.firstCheckSeconds * 1000,
+        );
+      });
+
+      it('a notification older than the look-back is not pushed', async () => {
+        await zTokens.register(USER_A, {
+          expoPushToken: newToken(),
+          platform: 'android',
+        });
+        const old = (await tip(USER_A))!;
+        await prisma.notification.update({
+          where: { id: old.id },
+          data: { createdAt: new Date(Date.now() - 3 * 3_600_000) },
+        });
+        await zSender.runOnce();
+        expect(stand.sendRequests()).toHaveLength(0);
+      });
+
+      it('a retry waits its backoff and is taken when due, not hours early or late', async () => {
+        await register(USER_A);
+        await tip(USER_A);
+        stand.sendBehaviour = () => ({ status: 503, body: {} });
+        await zSender.runOnce();
+        let [d] = await deliveriesOf(USER_A);
+        expect(d.status).toBe('pending');
+        near(d.nextAttemptAt, Date.now() + PUSH_RETRY.retryBaseSeconds * 1000);
+        stand.sendBehaviour = null;
+        await makeRetriesDue();
+        await zSender.runOnce();
+        [d] = await deliveriesOf(USER_A);
+        expect(d.status).toBe('sent');
+      });
+
+      it('a receipt is asked for when due', async () => {
+        await register(USER_A);
+        await tip(USER_A);
+        await zSender.runOnce();
+        const [d] = await deliveriesOf(USER_A);
+        stand.receipts.set(d.ticketId!, EXPO_SHAPES.ok);
+        await zSender.runOnce();
+        expect(stand.receiptRequests()).toHaveLength(0); // not due yet
+        await makeReceiptsDue();
+        const report = await zSender.runOnce();
+        expect(report.delivered).toBe(1);
+      });
+
+      it('the reaper leaves a fresh hold alone and takes back an old one', async () => {
+        await register(USER_A);
+        await tip(USER_A);
+        await zSender.enqueue();
+        await prisma.pushDelivery.updateMany({
+          where: { userWawuId: USER_A },
+          data: { status: 'claimed', claimId: 'other', lockedAt: new Date() },
+        });
+        expect(await zSender.reapStuck()).toBe(0);
+        await ageLocks(USER_A);
+        expect(await zSender.reapStuck()).toBe(1);
+      });
+    },
+  );
 });

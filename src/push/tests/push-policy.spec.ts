@@ -143,6 +143,53 @@ describe('the words of a push', () => {
     expect(message.ttl).toBeGreaterThan(0);
   });
 
+  it.each(EVENTS.map((e) => [e.kind, e] as const))(
+    '%s: the push says nothing the list body keeps for the app alone, and no dash',
+    (_k, event) => {
+      const draft = composeNotification(event);
+      const message = buildMessage(
+        {
+          id: 'n1',
+          kind: draft.kind,
+          title: draft.title,
+          body: draft.body,
+          actionHref: draft.actionHref,
+          target: null,
+          pieceTitle: 'Night shoot',
+        },
+        'ExponentPushToken[abc]',
+      );
+      // an admin's reason is read in the app, never on a lock screen (VB-4)
+      expect(message.body).not.toContain('Too dark.');
+      expect(message.body).not.toMatch(DASHES);
+      if (event.kind === 'content_rejected') {
+        expect(message.body).toBe(
+          '“Night shoot” was sent back. Tap to see why.',
+        );
+      } else {
+        expect(message.body).toBe(draft.body);
+      }
+    },
+  );
+
+  it('carries only to, title, body, data, ttl and a high priority (Default (agent), owner may override)', () => {
+    const message = buildMessage(
+      {
+        id: 'n1',
+        kind: 'sale',
+        title: 'Content sold',
+        body: 'Someone unlocked it.',
+        actionHref: null,
+        target: null,
+      },
+      'ExponentPushToken[abc]',
+    );
+    expect(Object.keys(message).sort()).toEqual(
+      ['body', 'data', 'priority', 'title', 'to', 'ttl'].sort(),
+    );
+    expect(message.priority).toBe('high');
+  });
+
   it("is cut to Expo's payload limit by shortening the body, never the data the app needs", () => {
     const message = buildMessage(
       {

@@ -7,8 +7,14 @@ process.env.DATABASE_URL =
   'postgresql://postgres:postgres@localhost:5432/wawu_hub_test?schema=public';
 
 import type { Server } from 'http';
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import {
+  ConsoleLogger,
+  INestApplication,
+  Logger,
+  ValidationPipe,
+} from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { TestingLogger } from '@nestjs/testing/services/testing-logger.service';
 import { ThrottlerGuard } from '@nestjs/throttler';
 import request from 'supertest';
 import { AppModule } from '../../app.module';
@@ -20,11 +26,13 @@ import { ExpoStandIn } from './expo-stand-in';
 
 const USER_PLAIN = '00000000-0000-4000-8000-000000000001';
 const USER_BASIC = '00000000-0000-4000-8000-000000000002';
-const USERS = [USER_PLAIN, USER_BASIC];
+const USER_PRO = '00000000-0000-4000-8000-000000000003';
 const MOCK = process.env.WAWU_ID_BASE_URL ?? 'http://localhost:4001';
 const RUN = Date.now().toString(36);
 let seq = 0;
-const newToken = () => `ExponentPushToken[http-${RUN}-${(seq += 1)}]`;
+/** Every token this spec makes starts with this, and only those are ever deleted. */
+const MINE = `ExponentPushToken[http-${RUN}-`;
+const newToken = () => `${MINE}${(seq += 1)}]`;
 
 async function login(identifier: string): Promise<string> {
   const res = await fetch(`${MOCK}/auth/login`, {
@@ -41,6 +49,7 @@ describe('Push token routes (contract, INBOX-03)', () => {
   let prisma: PrismaService;
   let plain: string;
   let basic: string;
+  let pro: string;
   const logged: string[] = [];
   const spies: jest.SpyInstance[] = [];
   const savedEnv = { ...process.env };
@@ -78,6 +87,7 @@ describe('Push token routes (contract, INBOX-03)', () => {
   beforeAll(async () => {
     plain = await login('user@test.wawu.dev');
     basic = await login('creator-basic@test.wawu.dev');
+    pro = await login('creator-pro@test.wawu.dev');
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideGuard(ThrottlerGuard)
       .useValue({ canActivate: () => true })
@@ -95,7 +105,6 @@ describe('Push token routes (contract, INBOX-03)', () => {
     app.useGlobalInterceptors(new ResponseInterceptor());
     await app.init();
     prisma = app.get(PrismaService);
-    await prisma.pushToken.deleteMany({ where: { userWawuId: { in: USERS } } });
     for (const stream of [process.stdout, process.stderr]) {
       spies.push(
         jest.spyOn(stream, 'write').mockImplementation((chunk: unknown) => {
@@ -104,23 +113,18 @@ describe('Push token routes (contract, INBOX-03)', () => {
         }),
       );
     }
+    // Every level is printed (Nest's testing logger prints errors only), so a
+    // token in a log or warn line is caught by the log test below.
+    Logger.overrideLogger(new ConsoleLogger());
   }, 90000);
 
+  // Specs touch only rows they create (lead ruling, 7 Oct 2026, VB-3): the
+  // tokens this run made, by their prefix, and nothing else.
   afterAll(async () => {
+    Logger.overrideLogger(new TestingLogger());
     for (const spy of spies) spy.mockRestore();
-    await prisma.pushToken.deleteMany({ where: { userWawuId: { in: USERS } } });
-    await prisma.notification.deleteMany({
-      where: {
-        userWawuId: { in: USERS },
-        id: {
-          notIn: [
-            'a0000000-0000-4000-8000-000000000001',
-            'a0000000-0000-4000-8000-000000000002',
-          ],
-        },
-        kind: 'new_follower',
-        title: 'New follower',
-      },
+    await prisma.pushToken.deleteMany({
+      where: { expoPushToken: { startsWith: MINE } },
     });
     process.env = savedEnv;
     await app.close();
@@ -250,6 +254,31 @@ describe('Push token routes (contract, INBOX-03)', () => {
         platform: 'ios',
       },
     ],
+    // D1: Postgres refuses a NUL in text; it used to answer 500.
+    [
+      'a NUL inside the token',
+      { expoPushToken: 'ExponentPushToken[ab\u0000c]', platform: 'ios' },
+    ],
+    [
+      'a broken character inside the token',
+      { expoPushToken: 'ExponentPushToken[ab\ud800c]', platform: 'ios' },
+    ],
+    [
+      'a NUL in the device id',
+      {
+        expoPushToken: 'ExponentPushToken[abc]',
+        platform: 'ios',
+        deviceId: 'a\u0000b',
+      },
+    ],
+    [
+      'a NUL in the device label',
+      {
+        expoPushToken: 'ExponentPushToken[abc]',
+        platform: 'ios',
+        deviceLabel: 'Pixel\u00008',
+      },
+    ],
   ])('refuses %s with a 400 and stores nothing', async (_name, body) => {
     const res = await post(plain, body);
     expect(res.status).toBe(400);
@@ -312,10 +341,42 @@ describe('Push token routes (contract, INBOX-03)', () => {
   it('refuses a malformed removal with a 400', async () => {
     expect((await del(plain, { expoPushToken: 'nope' })).status).toBe(400);
     expect((await del(plain, {})).status).toBe(400);
+    expect(
+      (await del(plain, { expoPushToken: 'ExponentPushToken[a\u0000b]' }))
+        .status,
+    ).toBe(400);
+  });
+
+  it('stores nothing for an account whose deletion was asked for, and says so', async () => {
+    // a mark this test makes and removes; skipped if one was there before it
+    const had = await prisma.pushStoppedAccount.count({
+      where: { userWawuId: USER_PRO },
+    });
+    if (had === 0) {
+      await prisma.pushStoppedAccount.create({
+        data: { userWawuId: USER_PRO },
+      });
+    }
+    try {
+      const t = newToken();
+      const res = await post(pro, { expoPushToken: t, platform: 'android' });
+      expect(res.status).toBe(200);
+      expect(dataOf(res)).toEqual({ registered: false });
+      expect(await rowsOf(t)).toHaveLength(0);
+    } finally {
+      if (had === 0) {
+        await prisma.pushStoppedAccount.delete({
+          where: { userWawuId: USER_PRO },
+        });
+      }
+    }
   });
 
   it('keeps a person to the cap, pushing out the phone seen longest ago', async () => {
-    await prisma.pushToken.deleteMany({ where: { userWawuId: USER_BASIC } });
+    // only this run's tokens are cleared; the seed gives nobody a phone
+    await prisma.pushToken.deleteMany({
+      where: { userWawuId: USER_BASIC, expoPushToken: { startsWith: MINE } },
+    });
     const made: string[] = [];
     for (let i = 0; i < PUSH_MAX_TOKENS_PER_USER + 1; i += 1) {
       const t = newToken();
@@ -346,7 +407,16 @@ describe('Push token routes (contract, INBOX-03)', () => {
     expect(all).not.toContain(`http-${RUN}`);
   });
 
+  // The follow is basic -> pro, which the seed does not have (it has plain ->
+  // basic and plain -> pro), so the spec creates the edge and the notification
+  // and deletes exactly those two rows, by id (VB-3: it used to delete the
+  // seeded plain -> basic edge).
   it('the REST request that writes a notification is unaffected by a broken push: Expo refusing connections and push on', async () => {
+    const edge = {
+      followerWawuId: USER_BASIC,
+      followingWawuId: USER_PRO,
+    };
+    expect(await prisma.followRelationship.count({ where: edge })).toBe(0);
     const closed = new ExpoStandIn();
     await closed.start();
     process.env.PUSH_ENABLED = 'true';
@@ -354,30 +424,38 @@ describe('Push token routes (contract, INBOX-03)', () => {
     await closed.stop();
     const t = newToken();
     expect(
-      (await post(basic, { expoPushToken: t, platform: 'android' })).status,
+      (await post(pro, { expoPushToken: t, platform: 'android' })).status,
     ).toBe(200);
-    await prisma.followRelationship.deleteMany({
-      where: { followerWawuId: USER_PLAIN, followingWawuId: USER_BASIC },
-    });
-    const before = await prisma.notification.count({
-      where: { userWawuId: USER_BASIC, kind: 'new_follower' },
-    });
-    const res = await pace(
-      request(server())
-        .post(`/api/hub/creators/${USER_BASIC}/follow`)
-        .set('Authorization', `Bearer ${plain}`)
-        .send(),
+    const before = new Set(
+      (
+        await prisma.notification.findMany({
+          where: { userWawuId: USER_PRO, kind: 'new_follower' },
+          select: { id: true },
+        })
+      ).map((n) => n.id),
     );
-    expect([200, 201]).toContain(res.status);
-    expect(
-      await prisma.notification.count({
-        where: { userWawuId: USER_BASIC, kind: 'new_follower' },
-      }),
-    ).toBe(before + 1);
-    await prisma.followRelationship.deleteMany({
-      where: { followerWawuId: USER_PLAIN, followingWawuId: USER_BASIC },
-    });
-    delete process.env.PUSH_ENABLED;
-    delete process.env.EXPO_PUSH_BASE_URL;
+    try {
+      const res = await pace(
+        request(server())
+          .post(`/api/hub/creators/${USER_PRO}/follow`)
+          .set('Authorization', `Bearer ${basic}`)
+          .send(),
+      );
+      expect([200, 201]).toContain(res.status);
+    } finally {
+      const made = (
+        await prisma.notification.findMany({
+          where: { userWawuId: USER_PRO, kind: 'new_follower' },
+          select: { id: true },
+        })
+      ).filter((n) => !before.has(n.id));
+      expect(made).toHaveLength(1);
+      await prisma.notification.deleteMany({
+        where: { id: { in: made.map((n) => n.id) } },
+      });
+      await prisma.followRelationship.deleteMany({ where: edge });
+      delete process.env.PUSH_ENABLED;
+      delete process.env.EXPO_PUSH_BASE_URL;
+    }
   });
 });

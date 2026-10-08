@@ -1,11 +1,14 @@
+import { randomUUID } from 'crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { NotificationService } from '../notification/notification.service';
+import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import {
   ExpoPushClient,
   type ExpoReceipt,
   type ExpoTicket,
 } from './expo-push.client';
+import { NOW_UTC } from './push-clock';
 import {
   EXPO_RECEIPT_CHUNK,
   EXPO_SEND_CHUNK,
@@ -13,11 +16,16 @@ import {
   PUSH_DISABLED_KEEP_DAYS,
   PUSH_LOCK_SECONDS,
   PUSH_LOOKBACK_MINUTES,
+  PUSH_PRUNE_EVERY_MINUTES,
   PUSH_RECEIPTS,
   PUSH_RETRY,
   loadPushSettings,
 } from './push-config';
-import { buildMessage, type ExpoMessage } from './push-message';
+import {
+  buildMessage,
+  needsPieceTitle,
+  type ExpoMessage,
+} from './push-message';
 import { isPushed, pushGateFor, pushedKinds } from './push-policy';
 
 /** Delivery states that end a delivery. */
@@ -34,6 +42,11 @@ interface Claimed {
   attempts: number;
 }
 
+interface Outgoing {
+  delivery: Claimed;
+  message: ExpoMessage;
+}
+
 export interface PushRunReport {
   enqueued: number;
   claimed: number;
@@ -44,6 +57,8 @@ export interface PushRunReport {
   delivered: number;
   receiptsChecked: number;
   tokensDisabled: number;
+  /** Rows the reaper found held by an instance that stopped, put back in the queue. */
+  requeued: number;
 }
 
 /**
@@ -54,16 +69,27 @@ export interface PushRunReport {
  *     outbox) becomes one PushDelivery per live phone of its recipient. The
  *     unique key (notification, phone) means any number of hub instances, or
  *     the same instance twice, make exactly one delivery.
- *  2. send: deliveries are claimed with FOR UPDATE SKIP LOCKED, so two
- *     instances never hold the same one. Just before sending, the person's Z3
- *     switch for the kind is read again through NotificationService, so a
- *     switch turned off a second ago is honoured.
+ *  2. send, one batch of at most EXPO_SEND_CHUNK at a time: the batch is
+ *     claimed (`claimed`, FOR UPDATE SKIP LOCKED, so two instances never hold
+ *     the same row), each row is checked again at that moment (the person's
+ *     Z3 switch through NotificationService, a block between the person and
+ *     whoever the notification is about, a deletion asked for), and only the
+ *     rows that will go are marked `sending`, in one statement just before
+ *     the request. Expo's answer is recorded in one statement as it arrives.
  *  3. receipts: Expo's receipt for each accepted send is fetched; a
  *     DeviceNotRegistered answer, at either step, disables the phone's token.
  *
- * Nothing here runs inside a request or a notification write. A failure is
- * recorded on the delivery and logged without any token or message text; it
- * never reaches the caller of `emit()`.
+ * A stopped instance (crash, deploy, hung request) leaves at most one batch
+ * held. The reaper puts a `claimed` row back in the queue (it was never sent),
+ * and a `sending` row back ONCE (Expo may have taken it; a second time it is
+ * failed). A row a second instance took meanwhile cannot be sent twice: only
+ * the claim that holds it may mark it `sending`, and the unique key keeps one
+ * row per notification and phone.
+ *
+ * Every time is the database's clock in UTC (push-clock.ts). Nothing here runs
+ * inside a request or a notification write. A failure is recorded on the
+ * delivery and logged without any token or message text; it never reaches the
+ * caller of `emit()`.
  */
 @Injectable()
 export class PushSenderService {
@@ -75,6 +101,7 @@ export class PushSenderService {
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationService,
     private readonly expo: ExpoPushClient,
+    private readonly blocks: BlockedAccountService,
   ) {}
 
   /**
@@ -88,7 +115,7 @@ export class PushSenderService {
     if (this.running) return report;
     this.running = true;
     try {
-      await this.reapStuck();
+      report.requeued = await this.reapStuck();
       report.enqueued = await this.enqueue();
       await this.drain(report);
       await this.collectReceipts(report);
@@ -104,55 +131,103 @@ export class PushSenderService {
     return report;
   }
 
-  /** Deliveries whose sender stopped mid-send are failed, never sent again. */
+  /**
+   * Rows held longer than PUSH_LOCK_SECONDS belong to an instance that
+   * stopped. `claimed` never reached Expo: back to the queue, while it has
+   * takes left. `sending` may have: back to the queue once, with its attempt
+   * count, and failed if it is found mid-send a second time. Returns the
+   * number put back.
+   */
   async reapStuck(): Promise<number> {
-    return this.prisma.$executeRaw`
+    const rows = await this.prisma.$queryRaw<Array<{ status: string }>>`
       UPDATE "PushDelivery"
-      SET "status" = 'failed', "reason" = 'send_interrupted', "lockedAt" = NULL, "updatedAt" = now()
-      WHERE "status" = 'sending'
-        AND "lockedAt" < now() - make_interval(secs => ${PUSH_LOCK_SECONDS})`;
+      SET "status" = CASE
+            WHEN "attempts" >= ${PUSH_RETRY.maxAttempts} THEN 'failed'
+            WHEN "status" = 'sending' AND "interruptedSend" THEN 'failed'
+            ELSE 'pending' END,
+          "reason" = CASE
+            WHEN "attempts" >= ${PUSH_RETRY.maxAttempts}
+              OR ("status" = 'sending' AND "interruptedSend")
+            THEN (CASE WHEN "status" = 'sending' THEN 'send_interrupted' ELSE 'claim_interrupted' END)
+            ELSE (CASE WHEN "status" = 'sending' THEN 'requeued_after_send' ELSE 'requeued_after_claim' END) END,
+          "interruptedSend" = "interruptedSend" OR "status" = 'sending',
+          "nextAttemptAt" = ${NOW_UTC},
+          "lockedAt" = NULL,
+          "claimId" = NULL,
+          "updatedAt" = ${NOW_UTC}
+      WHERE "status" IN ('claimed', 'sending')
+        AND "lockedAt" < ${NOW_UTC} - make_interval(secs => ${PUSH_LOCK_SECONDS})
+      RETURNING "status"`;
+    return rows.filter((r) => r.status === 'pending').length;
   }
 
   /**
    * One delivery per (recent notification of a pushed kind, live phone the
    * recipient has owned since before the notification). `ON CONFLICT DO
    * NOTHING` on the unique key is the whole of the multi-instance safety.
+   * An account whose deletion is asked for gets nothing.
    */
   async enqueue(): Promise<number> {
     const kinds = pushedKinds();
     return this.prisma.$executeRaw`
       INSERT INTO "PushDelivery"
         ("id", "notificationId", "userWawuId", "pushTokenId", "status", "nextAttemptAt", "createdAt", "updatedAt")
-      SELECT gen_random_uuid()::text, n."id", n."userWawuId", t."id", 'pending', now(), now(), now()
+      SELECT gen_random_uuid()::text, n."id", n."userWawuId", t."id", 'pending', ${NOW_UTC}, ${NOW_UTC}, ${NOW_UTC}
       FROM "Notification" n
       JOIN "PushToken" t
         ON t."userWawuId" = n."userWawuId"
        AND t."disabledAt" IS NULL
        AND n."createdAt" >= t."createdAt"
-      WHERE n."createdAt" > now() - make_interval(mins => ${PUSH_LOOKBACK_MINUTES})
+      WHERE n."createdAt" > ${NOW_UTC} - make_interval(mins => ${PUSH_LOOKBACK_MINUTES})
         AND n."kind" = ANY(${kinds}::text[])
+        AND NOT EXISTS (
+          SELECT 1 FROM "PushStoppedAccount" s WHERE s."userWawuId" = n."userWawuId")
       ON CONFLICT ("notificationId", "pushTokenId") DO NOTHING`;
   }
 
-  private async claim(): Promise<Claimed[]> {
+  /** Takes at most `limit` due rows for this instance, under one claim id. */
+  private async claim(claimId: string, limit: number): Promise<Claimed[]> {
     return this.prisma.$queryRaw<Claimed[]>`
       UPDATE "PushDelivery" d
-      SET "status" = 'sending', "lockedAt" = now(), "attempts" = d."attempts" + 1, "updatedAt" = now()
+      SET "status" = 'claimed', "claimId" = ${claimId}, "lockedAt" = ${NOW_UTC},
+          "attempts" = d."attempts" + 1, "updatedAt" = ${NOW_UTC}
       WHERE d."id" IN (
         SELECT "id" FROM "PushDelivery"
-        WHERE "status" = 'pending' AND "nextAttemptAt" <= now()
+        WHERE "status" = 'pending' AND "nextAttemptAt" <= ${NOW_UTC}
         ORDER BY "createdAt", "id"
-        LIMIT ${PUSH_BATCH_LIMIT}
+        LIMIT ${limit}
         FOR UPDATE SKIP LOCKED)
       RETURNING d."id", d."notificationId", d."userWawuId", d."pushTokenId", d."attempts"`;
   }
 
-  /** Sends what is due. */
+  /**
+   * Sends what is due, one batch at a time, up to PUSH_BATCH_LIMIT. Stops
+   * early when Expo is not answering well (a retry or an unknown answer), so
+   * a hung Expo holds one batch, not the queue.
+   */
   async drain(report: PushRunReport = emptyReport()): Promise<PushRunReport> {
-    const claimed = await this.claim();
-    report.claimed += claimed.length;
-    if (claimed.length === 0) return report;
+    let taken = 0;
+    while (taken < PUSH_BATCH_LIMIT) {
+      const claimId = randomUUID();
+      const claimed = await this.claim(
+        claimId,
+        Math.min(EXPO_SEND_CHUNK, PUSH_BATCH_LIMIT - taken),
+      );
+      if (claimed.length === 0) break;
+      taken += claimed.length;
+      report.claimed += claimed.length;
+      const healthy = await this.sendBatch(claimId, claimed, report);
+      if (!healthy || claimed.length < EXPO_SEND_CHUNK) break;
+    }
+    return report;
+  }
 
+  /** Checks, marks `sending`, sends and records one claimed batch. False when Expo did not answer well. */
+  private async sendBatch(
+    claimId: string,
+    claimed: Claimed[],
+    report: PushRunReport,
+  ): Promise<boolean> {
     const tokens = await this.prisma.pushToken.findMany({
       where: { id: { in: claimed.map((c) => c.pushTokenId) } },
     });
@@ -162,24 +237,42 @@ export class PushSenderService {
       include: { target: true },
     });
     const noteById = new Map(notes.map((n) => [n.id, n]));
+    const stopped = new Set(
+      (
+        await this.prisma.pushStoppedAccount.findMany({
+          where: { userWawuId: { in: claimed.map((c) => c.userWawuId) } },
+          select: { userWawuId: true },
+        })
+      ).map((s) => s.userWawuId),
+    );
+    const pieceIds = notes
+      .filter(
+        (n) => needsPieceTitle(n.kind) && n.target?.targetKind === 'content',
+      )
+      .map((n) => n.target!.targetId);
+    const pieceTitle = new Map(
+      pieceIds.length === 0
+        ? []
+        : (
+            await this.prisma.contentPiece.findMany({
+              where: { id: { in: pieceIds } },
+              select: { id: true, title: true },
+            })
+          ).map((p) => [p.id, p.title]),
+    );
 
-    const toSend: Array<{
-      delivery: Claimed;
-      message: ExpoMessage;
-      tokenCreatedAt: Date;
-    }> = [];
+    const outgoing: Outgoing[] = [];
+    const skipped = new Map<string, string[]>();
     for (const delivery of claimed) {
       const token = tokenById.get(delivery.pushTokenId);
       const note = noteById.get(delivery.notificationId);
-      const skip = await this.skipReason(delivery, token, note);
+      const skip = await this.skipReason(delivery, token, note, stopped);
       if (skip) {
-        await this.finish(delivery.id, 'skipped', skip);
-        report.skipped += 1;
+        skipped.set(skip, [...(skipped.get(skip) ?? []), delivery.id]);
         continue;
       }
-      toSend.push({
+      outgoing.push({
         delivery,
-        tokenCreatedAt: token!.createdAt,
         message: buildMessage(
           {
             id: note!.id,
@@ -188,50 +281,81 @@ export class PushSenderService {
             body: note!.body,
             actionHref: note!.actionHref,
             target: note!.target,
+            pieceTitle:
+              note!.target?.targetKind === 'content'
+                ? (pieceTitle.get(note!.target.targetId) ?? null)
+                : null,
           },
           token!.expoPushToken,
         ),
       });
     }
-
-    for (let i = 0; i < toSend.length; i += EXPO_SEND_CHUNK) {
-      const chunk = toSend.slice(i, i + EXPO_SEND_CHUNK);
-      const outcome = await this.expo.send(chunk.map((c) => c.message));
-      if (outcome.kind === 'tickets') {
-        for (let j = 0; j < chunk.length; j += 1) {
-          await this.applyTicket(chunk[j], outcome.tickets[j], report);
-        }
-      } else if (outcome.kind === 'retry') {
-        for (const item of chunk) {
-          await this.retryOrFail(
-            item.delivery,
-            outcome.reason,
-            outcome.retryAfterSeconds,
-            report,
-          );
-        }
-      } else {
-        if (outcome.kind === 'rejected') {
-          this.logger.error(`Expo refused a send request: ${outcome.reason}`);
-        }
-        const reason =
-          outcome.kind === 'unknown'
-            ? `send_unconfirmed_${outcome.reason}`
-            : outcome.reason;
-        for (const item of chunk) {
-          await this.finish(item.delivery.id, 'failed', reason);
-          report.failed += 1;
-        }
-      }
+    for (const [reason, ids] of skipped) {
+      report.skipped += await this.finish(ids, 'skipped', reason);
     }
-    return report;
+    if (outgoing.length === 0) return true;
+
+    // Only rows this claim still holds go on the wire. A row the reaper put
+    // back (and another instance may have taken since) is not sent here.
+    const marked = new Set(
+      (
+        await this.prisma.$queryRaw<Array<{ id: string }>>`
+          UPDATE "PushDelivery"
+          SET "status" = 'sending', "lockedAt" = ${NOW_UTC}, "updatedAt" = ${NOW_UTC}
+          WHERE "id" = ANY(${outgoing.map((o) => o.delivery.id)}::text[])
+            AND "status" = 'claimed' AND "claimId" = ${claimId}
+          RETURNING "id"`
+      ).map((r) => r.id),
+    );
+    const chunk = outgoing.filter((o) => marked.has(o.delivery.id));
+    if (chunk.length === 0) return true;
+
+    const outcome = await this.expo.send(chunk.map((c) => c.message));
+    if (outcome.kind === 'tickets') {
+      await this.applyTickets(chunk, outcome.tickets, report);
+      return true;
+    }
+    if (outcome.kind === 'retry') {
+      await this.retryOrFail(
+        chunk.map((c) => c.delivery.id),
+        outcome.reason,
+        outcome.retryAfterSeconds,
+        report,
+      );
+      return false;
+    }
+    if (outcome.kind === 'rejected') {
+      this.logger.error(`Expo refused a send request: ${outcome.reason}`);
+    }
+    const reason =
+      outcome.kind === 'unknown'
+        ? `send_unconfirmed_${outcome.reason}`
+        : outcome.reason;
+    report.failed += await this.finish(
+      chunk.map((c) => c.delivery.id),
+      'failed',
+      reason,
+    );
+    return outcome.kind !== 'unknown';
   }
 
   /** Why this delivery must not be sent after all, or null to send it. */
   private async skipReason(
     delivery: Claimed,
     token: { userWawuId: string; disabledAt: Date | null } | undefined,
-    note: { kind: string; userWawuId: string; read: boolean } | undefined,
+    note:
+      | {
+          kind: string;
+          userWawuId: string;
+          read: boolean;
+          target: {
+            targetKind: string;
+            targetId: string;
+            actorWawuId: string | null;
+          } | null;
+        }
+      | undefined,
+    stopped: Set<string>,
   ): Promise<string | null> {
     if (!token) return 'token_removed';
     if (token.disabledAt) return 'token_disabled';
@@ -240,6 +364,10 @@ export class PushSenderService {
       return 'notification_gone';
     if (note.read) return 'already_read';
     if (!isPushed(note.kind)) return 'kind_held';
+    if (stopped.has(delivery.userWawuId)) return 'account_closing';
+    if (await this.involvesBlocked(delivery.userWawuId, note.target)) {
+      return 'blocked';
+    }
     const gate = pushGateFor(note.kind);
     if (
       gate &&
@@ -250,98 +378,141 @@ export class PushSenderService {
     return null;
   }
 
-  private async applyTicket(
-    item: { delivery: Claimed; tokenCreatedAt: Date },
-    ticket: ExpoTicket | undefined,
-    report: PushRunReport,
-  ): Promise<void> {
-    const { delivery } = item;
-    if (ticket?.status === 'ok' && typeof ticket.id === 'string') {
-      const updated = await this.prisma.pushDelivery.updateMany({
-        where: { id: delivery.id, status: 'sending' },
-        data: {
-          status: 'sent',
-          ticketId: ticket.id,
-          sentAt: new Date(),
-          lockedAt: null,
-          receiptDueAt: new Date(
-            Date.now() + PUSH_RECEIPTS.firstCheckSeconds * 1000,
-          ),
-        },
-      });
-      if (updated.count > 0) report.sent += 1;
-      return;
+  /**
+   * True when the notification is about a person the recipient blocked or is
+   * blocked by: its actor, or a person it opens. Such a push is not sent at
+   * all, so no push carries that person's id (lead ruling, 7 Oct 2026, VB-2).
+   */
+  private async involvesBlocked(
+    recipient: string,
+    target: {
+      targetKind: string;
+      targetId: string;
+      actorWawuId: string | null;
+    } | null,
+  ): Promise<boolean> {
+    if (!target) return false;
+    const people = new Set<string>();
+    if (target.actorWawuId) people.add(target.actorWawuId);
+    if (target.targetKind === 'profile') people.add(target.targetId);
+    people.delete(recipient);
+    for (const person of people) {
+      if (await this.blocks.isBlockedEitherWay(recipient, person)) return true;
     }
-    const code =
-      ticket?.status === 'error'
-        ? (ticket.details?.error ?? 'ticket_error')
-        : 'ticket_missing';
-    if (code === 'DeviceNotRegistered') {
-      await this.disableToken(delivery.pushTokenId, code, new Date());
-      report.tokensDisabled += 1;
-    } else if (code === 'InvalidCredentials') {
-      this.logger.error(
-        'Expo says the push credentials are invalid (FCM key not uploaded to Expo?).',
-      );
-    } else if (code === 'MessageRateExceeded') {
-      await this.retryOrFail(delivery, code, null, report);
-      return;
-    }
-    await this.finish(delivery.id, 'failed', code);
-    report.failed += 1;
+    return false;
   }
 
+  /**
+   * Records Expo's tickets the moment they arrive: every accepted one in a
+   * single statement, so a stop right after the answer leaves nothing that
+   * looks unsent. Then the refusals, one by one.
+   */
+  private async applyTickets(
+    chunk: Outgoing[],
+    tickets: ExpoTicket[],
+    report: PushRunReport,
+  ): Promise<void> {
+    const okIds: string[] = [];
+    const okTickets: string[] = [];
+    const refused: Array<{ delivery: Claimed; code: string }> = [];
+    chunk.forEach((item, j) => {
+      const ticket = tickets[j];
+      if (ticket?.status === 'ok' && typeof ticket.id === 'string') {
+        okIds.push(item.delivery.id);
+        okTickets.push(ticket.id);
+      } else {
+        refused.push({
+          delivery: item.delivery,
+          code:
+            ticket?.status === 'error'
+              ? (ticket.details?.error ?? 'ticket_error')
+              : 'ticket_missing',
+        });
+      }
+    });
+    if (okIds.length > 0) {
+      report.sent += await this.prisma.$executeRaw`
+        UPDATE "PushDelivery" d
+        SET "status" = 'sent', "ticketId" = v."ticket", "sentAt" = ${NOW_UTC},
+            "receiptDueAt" = ${NOW_UTC} + make_interval(secs => ${PUSH_RECEIPTS.firstCheckSeconds}),
+            "lockedAt" = NULL, "claimId" = NULL, "updatedAt" = ${NOW_UTC}
+        FROM unnest(${okIds}::text[], ${okTickets}::text[]) AS v("id", "ticket")
+        WHERE d."id" = v."id" AND d."status" = 'sending'`;
+    }
+    for (const { delivery, code } of refused) {
+      if (code === 'DeviceNotRegistered') {
+        await this.disableToken(delivery.id, code);
+        report.tokensDisabled += 1;
+      } else if (code === 'InvalidCredentials') {
+        this.logger.error(
+          'Expo says the push credentials are invalid (FCM key not uploaded to Expo?).',
+        );
+      } else if (code === 'MessageRateExceeded') {
+        await this.retryOrFail([delivery.id], code, null, report);
+        continue;
+      }
+      report.failed += await this.finish([delivery.id], 'failed', code);
+    }
+  }
+
+  /**
+   * Puts rows back to be sent again after the backoff, or fails the ones out
+   * of attempts. One statement, on the database's clock.
+   */
   private async retryOrFail(
-    delivery: Claimed,
+    ids: string[],
     reason: string,
     retryAfterSeconds: number | null,
     report: PushRunReport,
   ): Promise<void> {
-    if (delivery.attempts >= PUSH_RETRY.maxAttempts) {
-      await this.finish(delivery.id, 'failed', `retries_exhausted_${reason}`);
-      report.failed += 1;
-      return;
+    const rows = await this.prisma.$queryRaw<Array<{ status: string }>>`
+      UPDATE "PushDelivery"
+      SET "status" = CASE WHEN "attempts" >= ${PUSH_RETRY.maxAttempts} THEN 'failed' ELSE 'pending' END,
+          "reason" = CASE WHEN "attempts" >= ${PUSH_RETRY.maxAttempts}
+                       THEN ${`retries_exhausted_${reason}`} ELSE ${reason} END,
+          "nextAttemptAt" = ${NOW_UTC} + make_interval(secs => COALESCE(
+            ${retryAfterSeconds}::double precision,
+            ${PUSH_RETRY.retryBaseSeconds}::double precision * power(2, GREATEST("attempts" - 1, 0)))),
+          "lockedAt" = NULL, "claimId" = NULL, "updatedAt" = ${NOW_UTC}
+      WHERE "id" = ANY(${ids}::text[]) AND "status" = 'sending'
+      RETURNING "status"`;
+    for (const r of rows) {
+      if (r.status === 'failed') report.failed += 1;
+      else report.retried += 1;
     }
-    const wait =
-      retryAfterSeconds ??
-      PUSH_RETRY.retryBaseSeconds * 2 ** (delivery.attempts - 1);
-    await this.prisma.pushDelivery.updateMany({
-      where: { id: delivery.id, status: 'sending' },
-      data: {
-        status: 'pending',
-        reason,
-        lockedAt: null,
-        nextAttemptAt: new Date(Date.now() + wait * 1000),
-      },
-    });
-    report.retried += 1;
   }
 
+  /** Ends rows that are not ended yet. Returns how many it ended. */
   private async finish(
-    id: string,
+    ids: string[],
     status: string,
     reason: string,
-  ): Promise<void> {
-    await this.prisma.pushDelivery.updateMany({
-      where: { id, status: { notIn: TERMINAL } },
-      data: { status, reason, lockedAt: null },
-    });
+  ): Promise<number> {
+    return this.prisma.$executeRaw`
+      UPDATE "PushDelivery"
+      SET "status" = ${status}, "reason" = ${reason}, "lockedAt" = NULL,
+          "claimId" = NULL, "updatedAt" = ${NOW_UTC}
+      WHERE "id" = ANY(${ids}::text[]) AND "status" <> ALL(${TERMINAL}::text[])`;
   }
 
   /**
-   * Disables a token Expo called dead. Only a token the person has owned since
-   * before `sentBefore` is touched: a receipt for a send made before the phone
-   * was registered again must not kill the fresh registration. Idempotent.
+   * Disables the token of a delivery Expo called dead. Only a token the
+   * person has owned since before that send is touched (`sentAt`, or for a
+   * ticket answered this moment the time the row was marked `sending`): a
+   * receipt for a send made before the phone was registered again must not
+   * kill the fresh registration. Idempotent. All on the database's clock.
    */
   private async disableToken(
-    id: string,
+    deliveryId: string,
     reason: string,
-    sentBefore: Date,
   ): Promise<void> {
-    await this.prisma.pushToken.updateMany({
-      where: { id, disabledAt: null, createdAt: { lte: sentBefore } },
-      data: { disabledAt: new Date(), disabledReason: reason },
-    });
+    await this.prisma.$executeRaw`
+      UPDATE "PushToken" t
+      SET "disabledAt" = ${NOW_UTC}, "disabledReason" = ${reason}
+      FROM "PushDelivery" d
+      WHERE d."id" = ${deliveryId} AND t."id" = d."pushTokenId"
+        AND t."disabledAt" IS NULL
+        AND t."createdAt" <= COALESCE(d."sentAt", d."lockedAt", ${NOW_UTC})`;
   }
 
   /**
@@ -354,22 +525,22 @@ export class PushSenderService {
     report: PushRunReport = emptyReport(),
   ): Promise<PushRunReport> {
     const due = await this.prisma.$queryRaw<
-      Array<{ id: string; ticketId: string; pushTokenId: string; sentAt: Date }>
+      Array<{ id: string; ticketId: string; tooOld: boolean }>
     >`
       UPDATE "PushDelivery" d
-      SET "receiptDueAt" = now() + make_interval(secs => ${PUSH_RECEIPTS.retrySeconds}),
-          "receiptChecks" = d."receiptChecks" + 1, "updatedAt" = now()
+      SET "receiptDueAt" = ${NOW_UTC} + make_interval(secs => ${PUSH_RECEIPTS.retrySeconds}),
+          "receiptChecks" = d."receiptChecks" + 1, "updatedAt" = ${NOW_UTC}
       WHERE d."id" IN (
         SELECT "id" FROM "PushDelivery"
-        WHERE "status" = 'sent' AND "receiptDueAt" <= now() AND "ticketId" IS NOT NULL
+        WHERE "status" = 'sent' AND "receiptDueAt" <= ${NOW_UTC} AND "ticketId" IS NOT NULL
         ORDER BY "receiptDueAt", "id"
         LIMIT ${PUSH_BATCH_LIMIT}
         FOR UPDATE SKIP LOCKED)
-      RETURNING d."id", d."ticketId", d."pushTokenId", d."sentAt"`;
+      RETURNING d."id", d."ticketId",
+        (d."sentAt" < ${NOW_UTC} - make_interval(hours => ${PUSH_RECEIPTS.giveUpHours})) AS "tooOld"`;
     if (due.length === 0) return report;
     report.receiptsChecked += due.length;
 
-    const giveUpBefore = Date.now() - PUSH_RECEIPTS.giveUpHours * 3_600_000;
     for (let i = 0; i < due.length; i += EXPO_RECEIPT_CHUNK) {
       const chunk = due.slice(i, i + EXPO_RECEIPT_CHUNK);
       const outcome = await this.expo.getReceipts(chunk.map((d) => d.ticketId));
@@ -380,9 +551,7 @@ export class PushSenderService {
       for (const d of chunk) {
         const receipt: ExpoReceipt | undefined = outcome.receipts[d.ticketId];
         if (!receipt) {
-          if (d.sentAt.getTime() < giveUpBefore) {
-            await this.settleReceipt(d.id, 'expired', 'no_receipt');
-          }
+          if (d.tooOld) await this.settleReceipt(d.id, 'expired', 'no_receipt');
           continue;
         }
         if (receipt.status === 'ok') {
@@ -392,7 +561,7 @@ export class PushSenderService {
         }
         const code = receipt.details?.error ?? 'receipt_error';
         if (code === 'DeviceNotRegistered') {
-          await this.disableToken(d.pushTokenId, code, d.sentAt);
+          await this.disableToken(d.id, code);
           report.tokensDisabled += 1;
         } else if (code === 'InvalidCredentials') {
           this.logger.error(
@@ -411,32 +580,25 @@ export class PushSenderService {
     status: string,
     reason: string | null,
   ): Promise<boolean> {
-    const { count } = await this.prisma.pushDelivery.updateMany({
-      where: { id, status: 'sent' },
-      data: { status, reason },
-    });
+    const count = await this.prisma.$executeRaw`
+      UPDATE "PushDelivery"
+      SET "status" = ${status}, "reason" = ${reason}, "updatedAt" = ${NOW_UTC}
+      WHERE "id" = ${id} AND "status" = 'sent'`;
     return count > 0;
   }
 
-  /** Dead tokens and finished deliveries do not pile up. At most hourly per process. */
+  /** Dead tokens and finished deliveries do not pile up. At most every PUSH_PRUNE_EVERY_MINUTES per process. */
   async prune(): Promise<void> {
-    if (Date.now() - this.lastPruneAt < 3_600_000) return;
+    if (Date.now() - this.lastPruneAt < PUSH_PRUNE_EVERY_MINUTES * 60_000)
+      return;
     this.lastPruneAt = Date.now();
-    await this.prisma.pushToken.deleteMany({
-      where: {
-        disabledAt: {
-          lt: new Date(Date.now() - PUSH_DISABLED_KEEP_DAYS * 86_400_000),
-        },
-      },
-    });
-    await this.prisma.pushDelivery.deleteMany({
-      where: {
-        status: { in: TERMINAL },
-        updatedAt: {
-          lt: new Date(Date.now() - DELIVERY_KEEP_DAYS * 86_400_000),
-        },
-      },
-    });
+    await this.prisma.$executeRaw`
+      DELETE FROM "PushToken"
+      WHERE "disabledAt" < ${NOW_UTC} - make_interval(days => ${PUSH_DISABLED_KEEP_DAYS})`;
+    await this.prisma.$executeRaw`
+      DELETE FROM "PushDelivery"
+      WHERE "status" = ANY(${TERMINAL}::text[])
+        AND "updatedAt" < ${NOW_UTC} - make_interval(days => ${DELIVERY_KEEP_DAYS})`;
   }
 }
 
@@ -451,5 +613,6 @@ function emptyReport(): PushRunReport {
     delivered: 0,
     receiptsChecked: 0,
     tokensDisabled: 0,
+    requeued: 0,
   };
 }

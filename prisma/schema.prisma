@@ -4717,32 +4717,49 @@ model PushToken {
 /// One notification going to one phone. The notification table is the outbox:
 /// a row here is made for a Notification the notification service already
 /// wrote, once per phone (the unique key), so two hub instances can never push
-/// the same notification to the same phone twice. `pending` -> `sending` ->
-/// `sent` (Expo accepted it and gave a ticket) -> `delivered` (the receipt says
-/// ok); or `failed` or `skipped` with a `reason`.
+/// the same notification to the same phone twice. `pending` -> `claimed` (an
+/// instance took it to check it) -> `sending` (set just before the request to
+/// Expo) -> `sent` (Expo accepted it and gave a ticket) -> `delivered` (the
+/// receipt says ok); or `failed`, `skipped` or `expired` with a `reason`.
+/// Every time column holds UTC, written and compared on the database's clock.
 model PushDelivery {
-  id             String    @id @default(uuid())
-  notificationId String
-  userWawuId     String
-  pushTokenId    String
-  pushToken      PushToken @relation(fields: [pushTokenId], references: [id], onDelete: Cascade)
-  status         String    @default("pending")
-  reason         String?
-  attempts       Int       @default(0)
-  nextAttemptAt  DateTime  @default(now())
-  /// Set while an instance holds the row to send it.
-  lockedAt       DateTime?
+  id              String    @id @default(uuid())
+  notificationId  String
+  userWawuId      String
+  pushTokenId     String
+  pushToken       PushToken @relation(fields: [pushTokenId], references: [id], onDelete: Cascade)
+  status          String    @default("pending")
+  reason          String?
+  attempts        Int       @default(0)
+  nextAttemptAt   DateTime  @default(now())
+  /// Set while an instance holds the row (`claimed` or `sending`).
+  lockedAt        DateTime?
+  /// The batch an instance claimed this row in. Only that batch may move it
+  /// on to `sending`, so a row the reaper put back cannot be sent twice.
+  claimId         String?
+  /// True once the reaper found this row mid-send and put it back in the
+  /// queue. It is put back once only; the second time it is failed.
+  interruptedSend Boolean   @default(false)
   /// Expo's receipt id for this send.
-  ticketId       String?
-  sentAt         DateTime?
+  ticketId        String?
+  sentAt          DateTime?
   /// When to ask Expo for the receipt next, and how many times it was asked.
-  receiptDueAt   DateTime?
-  receiptChecks  Int       @default(0)
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  receiptDueAt    DateTime?
+  receiptChecks   Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   @@unique([notificationId, pushTokenId])
   @@index([status, nextAttemptAt])
   @@index([status, receiptDueAt])
   @@index([userWawuId])
+}
+
+/// An account whose deletion is scheduled (`DELETE /account`). Its push
+/// tokens were deleted when the deletion was asked for, a token it registers
+/// afterwards is not stored, and the sender sends it nothing. Deleted with
+/// the account at purge.
+model PushStoppedAccount {
+  userWawuId String   @id
+  createdAt  DateTime @default(now())
 }

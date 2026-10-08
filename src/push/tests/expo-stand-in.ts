@@ -24,7 +24,31 @@ export interface StandInMessage {
   body?: string;
   data?: Record<string, unknown>;
   ttl?: number;
+  priority?: string;
 }
+
+/**
+ * The message fields Expo's send endpoint documents (expo-server-sdk 7.2.0
+ * `ExpoPushMessage`). A message with any other field is refused, so a field
+ * the sender adds by mistake fails a spec instead of passing silently.
+ */
+const MESSAGE_FIELDS = new Set([
+  'to',
+  'data',
+  'title',
+  'subtitle',
+  'body',
+  'sound',
+  'ttl',
+  'expiration',
+  'priority',
+  'interruptionLevel',
+  'badge',
+  'channelId',
+  'categoryId',
+  'mutableContent',
+  'richContent',
+]);
 
 export interface StandInRequest {
   path: string;
@@ -48,6 +72,8 @@ export class ExpoStandIn {
   /** Override per token: the ticket error the send answers with (default: ok). */
   readonly ticketErrors = new Map<string, string>();
   sendBehaviour: SendBehaviour | null = null;
+  /** Override for the receipts endpoint (default: answer from `receipts`). */
+  receiptBehaviour: (() => { status: number; body: unknown }) | null = null;
   port = 0;
 
   get baseUrl(): string {
@@ -81,6 +107,7 @@ export class ExpoStandIn {
     this.ticketMessages.clear();
     this.ticketErrors.clear();
     this.sendBehaviour = null;
+    this.receiptBehaviour = null;
   }
 
   sendRequests(): StandInRequest[] {
@@ -108,8 +135,33 @@ export class ExpoStandIn {
       res.end(JSON.stringify(body));
     };
 
+    if (
+      !String(req.headers['content-type'] ?? '').startsWith('application/json')
+    ) {
+      return reply(400, {
+        errors: [{ code: 'VALIDATION_ERROR', message: 'not JSON' }],
+      });
+    }
+
     if (req.url?.endsWith('/push/send')) {
       const messages = json as StandInMessage[];
+      if (!Array.isArray(messages) || messages.length > 100) {
+        return reply(400, {
+          errors: [
+            {
+              code: 'PUSH_TOO_MANY_NOTIFICATIONS',
+              message: 'at most 100 messages',
+            },
+          ],
+        });
+      }
+      if (
+        messages.some((m) => Object.keys(m).some((k) => !MESSAGE_FIELDS.has(k)))
+      ) {
+        return reply(400, {
+          errors: [{ code: 'VALIDATION_ERROR', message: 'unknown field' }],
+        });
+      }
       if (this.sendBehaviour) {
         const out = this.sendBehaviour(messages);
         if (out.delayMs) await new Promise((r) => setTimeout(r, out.delayMs));
@@ -133,6 +185,17 @@ export class ExpoStandIn {
 
     if (req.url?.endsWith('/push/getReceipts')) {
       const ids = (json as { ids: string[] }).ids;
+      if (!Array.isArray(ids) || ids.length > 300) {
+        return reply(400, {
+          errors: [
+            { code: 'PUSH_TOO_MANY_RECEIPTS', message: 'at most 300 ids' },
+          ],
+        });
+      }
+      if (this.receiptBehaviour) {
+        const out = this.receiptBehaviour();
+        return reply(out.status, out.body);
+      }
       const data: Record<string, unknown> = {};
       for (const id of ids) {
         if (this.receipts.has(id)) data[id] = this.receipts.get(id);
