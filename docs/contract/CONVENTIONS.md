@@ -1160,7 +1160,7 @@ send `Cache-Control: no-store`, read our database only and never call Fintava.
   `reason`) and `429` (`recipient_search_rate_limited`; the per-address 429
   has no `reason`); both lists carry `maxItems` (20 and 10).
 
-## 14. A NUL, or other text Postgres cannot take (FIX-17)
+## 15. A NUL, or other text Postgres cannot take (FIX-17)
 
 Postgres refuses a NUL (U+0000) in a text parameter (error 22021), so a `%00`
 that reached a query answered 500 on 23 routes. The code base had no single

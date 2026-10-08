@@ -5,6 +5,7 @@ import {
   ValidationPipe,
 } from '@nestjs/common';
 import {
+  GUARDS_METADATA,
   METHOD_METADATA,
   PATH_METADATA,
   ROUTE_ARGS_METADATA,
@@ -73,6 +74,8 @@ const METHODS: Record<number, string> = {
 interface MountedRoute {
   method: string;
   path: string;
+  /** Behind AdminAuthGuard (the dashboard's routes, `/admin/*` and the `ops` ones). */
+  admin: boolean;
   queryKeys: string[];
   args: { type: number; pipes: unknown[] }[];
 }
@@ -136,6 +139,13 @@ function mountedRoutes(app: INestApplication): MountedRoute[] {
             out.push({
               method,
               path: joined.length > 1 ? joined.replace(/\/$/, '') : joined,
+              admin: [cls, fn].some((t) =>
+                (
+                  (Reflect.getMetadata(GUARDS_METADATA, t) ?? []) as {
+                    name?: string;
+                  }[]
+                ).some((g) => g.name === 'AdminAuthGuard'),
+              ),
               queryKeys: [...new Set(queryKeys)],
               args,
             });
@@ -290,6 +300,8 @@ describe('Text Postgres cannot take, on every Hub route (FIX-17)', () => {
     ['/admin/payments/receipts?txRef=%00', 'admin', 'txRef'],
     ['/admin/payments/receipts?flow=%00', 'admin', 'flow'],
     ['/admin/shop/orders?page=%00', 'admin', 'page'],
+    // Found by FIX-17's own sweep: an admin-guarded route outside /admin.
+    ['/services/ops/applications?status=a%00b', 'admin', 'status'],
   ];
 
   it.each(NAMED)(
@@ -327,9 +339,7 @@ describe('Text Postgres cannot take, on every Hub route (FIX-17)', () => {
           text: !NOT_TEXT.has(`GET ${r.path} ${k}`),
         })),
       ];
-      const callers = r.path.startsWith('/admin/')
-        ? [undefined, admin]
-        : [undefined, creator];
+      const callers = r.admin ? [undefined, admin] : [undefined, creator];
       for (const { path, text } of probes) {
         for (const token of callers) {
           const res = await get(path, token);
@@ -347,6 +357,10 @@ describe('Text Postgres cannot take, on every Hub route (FIX-17)', () => {
         }
       }
     }
+    // The dashboard's routes outside /admin (the `ops` ones) are asked as an admin too.
+    expect(
+      routes.filter((r) => r.admin && !r.path.startsWith('/admin/')).length,
+    ).toBeGreaterThan(10);
     expect(seen.length).toBeGreaterThan(400);
     expect(seen.filter((s) => s.startsWith('400 ')).length).toBeGreaterThan(
       200,
