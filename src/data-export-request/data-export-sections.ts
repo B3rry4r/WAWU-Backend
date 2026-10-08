@@ -941,4 +941,9 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
       reason:
         'A bookkeeping row for the assistant hourly limit (when a paid AI call was made, never what was said); nothing the person wrote.',
     },
+    {
+      model: 'LegalChatOpenerCall',
+      reason:
+        'A bookkeeping row for the opener of a legal thread (when its paid AI call was made and how it ended, never what was said); nothing the person wrote.',
+    },
   ];
