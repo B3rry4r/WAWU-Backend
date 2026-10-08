@@ -80,6 +80,7 @@ import { TgifModule } from './tgif/tgif.module';
 import { LiveModule } from './live/live.module';
 import { InboxModule } from './inbox/inbox.module';
 import { MeModule } from './me/me.module';
+import { PlansModule } from './plans/plans.module';
 import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
 import { NuvionWebhookModule } from './nuvion/webhook/nuvion-webhook.module';
 import { PaymentWebhookModule } from './payment-webhook/payment-webhook.module';
@@ -380,6 +381,10 @@ import { AdsEventsModule } from './ads/ads-events.module';
     // notifications and this month's earnings. `me` is a first segment nothing
     // else declares.
     MeModule,
+    // The maker plan (task TIER-01): GET /plans and GET /me/tier, from
+    // src/plans/plans.config.json, which a bad edit stops at boot. `plans` is a
+    // first segment nothing else declares; `me/tier` is a literal leaf.
+    PlansModule,
     // Fintava's webhooks (task MONEY-07): POST /webhooks/fintava, recorded
     // once, no money moved. `webhooks/fintava` is a fixed path no other
     // controller declares, beside the unchanged `webhooks/flutterwave`.
