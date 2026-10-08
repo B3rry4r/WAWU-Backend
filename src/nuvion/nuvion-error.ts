@@ -292,6 +292,51 @@ export class NuvionError extends WalletProviderError {
   }
 }
 
+/**
+ * Nuvion's three limit refusals (errors.md, "Transfers"; no values are
+ * published). Each is `refused` with nothing moved. BACKEND_GAPS G-411
+ * (NUV-07): the app answers them as `403 limit_reached`, through NUV-07's
+ * `providerLimitError('nuvion', type, ...)` in
+ * src/wallet-provider/wallet-provider-limit.ts. `nuvionLimitError` below is
+ * the one place they are mapped, so bringing NUV-07 and this file together
+ * changes one line there.
+ */
+export const NUVION_LIMIT_ERROR_TYPES = [
+  'error_transfer_transaction_limit_exceeded',
+  'error_transfer_daily_limit_exceeded',
+  'error_transfer_monthly_volume_exceeded',
+] as const;
+
+/**
+ * The error a limit refusal becomes, or null when `type` is not one of
+ * NUVION_LIMIT_ERROR_TYPES (the client then maps it as any other).
+ */
+export function nuvionLimitError(
+  type: string | null,
+  args: {
+    operation: string;
+    httpStatus?: number | null;
+    messages?: string[];
+    reference?: string | null;
+    requestId?: string | null;
+  },
+): WalletProviderError | null {
+  if (
+    type === null ||
+    !(NUVION_LIMIT_ERROR_TYPES as readonly string[]).includes(type)
+  ) {
+    return null;
+  }
+  // G-411 mapping point: NUV-07's providerLimitError('nuvion', type, args)
+  // answers here (403 limit_reached), in place of this plain refusal.
+  return new NuvionError({
+    ...args,
+    kind: 'refused',
+    recordMayExist: false,
+    nuvionType: type,
+  });
+}
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }

@@ -13,7 +13,11 @@ import {
 import { WalletProviderError } from '../../wallet-provider/wallet-provider-error';
 import { NuvionClient, type NuvionOp } from '../nuvion-client';
 import { NUVION_API_VERSION } from '../nuvion-config';
-import { NUVION_ERROR_TYPE_KINDS, NuvionError } from '../nuvion-error';
+import {
+  NUVION_ERROR_TYPE_KINDS,
+  NUVION_LIMIT_ERROR_TYPES,
+  NuvionError,
+} from '../nuvion-error';
 
 /**
  * NUV-01, the Nuvion client against the stand-in (test/nuvion/), over a
@@ -393,7 +397,12 @@ describe('NUV-01: the Nuvion client against the stand-in', () => {
       }
     });
 
-    it.each(TABLE)(
+    // The three limit refusals have their own mapping point (G-411, NUV-07):
+    // checked below, and in this table only for what holds either way.
+    const isLimit = (t: string) =>
+      (NUVION_LIMIT_ERROR_TYPES as readonly string[]).includes(t);
+
+    it.each(TABLE.filter(([t]) => !isLimit(t)))(
       '%s (HTTP %i) on a write is %s',
       async (type, status, kind) => {
         standin.failNext(type, `Refused: ${type}`);
@@ -418,6 +427,28 @@ describe('NUV-01: the Nuvion client against the stand-in', () => {
             kind,
           ),
         );
+      },
+    );
+
+    it.each(TABLE.filter(([t]) => isLimit(t)))(
+      '%s (HTTP %i), a limit, goes through the one mapping point (G-411): %s, nothing moved',
+      async (type, status, kind) => {
+        expect(NUVION_LIMIT_ERROR_TYPES).toHaveLength(3);
+        standin.failNext(type);
+        let e: unknown = null;
+        try {
+          await client.post(WRITE, '/transfers', {}, { reference: 'nuv01-l' });
+        } catch (err) {
+          e = err;
+        }
+        expect(e).toBeInstanceOf(WalletProviderError);
+        expect(e).toMatchObject({
+          kind,
+          httpStatus: status,
+          provider: 'nuvion',
+          reference: 'nuv01-l',
+          recordMayExist: false,
+        });
       },
     );
 

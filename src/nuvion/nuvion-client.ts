@@ -6,6 +6,7 @@ import {
   maskNuvionText,
   type NuvionCallKind,
   NuvionError,
+  nuvionLimitError,
 } from './nuvion-error';
 import type {
   NuvionAnswer,
@@ -13,7 +14,10 @@ import type {
   NuvionListQuery,
   NuvionPagination,
 } from './nuvion.interface';
-import type { WalletProviderErrorKind } from '../wallet-provider/wallet-provider-error';
+import type {
+  WalletProviderError,
+  WalletProviderErrorKind,
+} from '../wallet-provider/wallet-provider-error';
 
 /** One call, named for logs and errors. Never a URL: a query can hold an id. */
 export interface NuvionOp {
@@ -325,26 +329,35 @@ export class NuvionClient {
       nuvionType?: string | null;
       retryAfterSeconds?: number;
     },
-  ): NuvionError {
+  ): WalletProviderError {
     const messages = (args.messages ?? []).map((m) =>
       maskNuvionText(m, [this.#apiKey]),
     );
-    const error = new NuvionError({
-      kind: args.kind,
-      operation: op.name,
-      httpStatus: args.status ?? null,
-      messages,
-      reference: args.reference ?? null,
-      requestId: args.requestId ?? null,
-      nuvionType: args.nuvionType ?? null,
-      retryAfterSeconds:
-        args.retryAfterSeconds ?? this.settings.retryAfterSeconds,
-    });
+    // Nuvion's limit refusals have one mapping point (G-411, NUV-07).
+    const error =
+      nuvionLimitError(args.nuvionType ?? null, {
+        operation: op.name,
+        httpStatus: args.status ?? null,
+        messages,
+        reference: args.reference ?? null,
+        requestId: args.requestId ?? null,
+      }) ??
+      new NuvionError({
+        kind: args.kind,
+        operation: op.name,
+        httpStatus: args.status ?? null,
+        messages,
+        reference: args.reference ?? null,
+        requestId: args.requestId ?? null,
+        nuvionType: args.nuvionType ?? null,
+        retryAfterSeconds:
+          args.retryAfterSeconds ?? this.settings.retryAfterSeconds,
+      });
     this.logger.warn(
-      `${op.name}: ${args.kind}` +
+      `${op.name}: ${error.kind}` +
         (error.httpStatus === null ? '' : ` HTTP ${error.httpStatus}`) +
-        (error.nuvionType ? ` ${error.nuvionType}` : '') +
-        (error.requestId ? ` request ${error.requestId}` : '') +
+        (args.nuvionType ? ` ${args.nuvionType}` : '') +
+        (args.requestId ? ` request ${args.requestId}` : '') +
         (error.reference ? ` ref ${error.reference}` : '') +
         (messages.length ? ` "${messages.join('; ')}"` : ''),
     );
