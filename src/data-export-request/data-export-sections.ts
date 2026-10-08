@@ -927,6 +927,11 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
         'Legal matters may be privileged; whether they are emailed is the owner call.',
     },
     {
+      model: 'LegalDeliverable',
+      reason:
+        'The documents delivered on a legal matter; legal matters may be privileged, so whether they are emailed is the owner call.',
+    },
+    {
       model: 'LegalIntake',
       reason:
         'Legal matters may be privileged; whether they are emailed is the owner call.',

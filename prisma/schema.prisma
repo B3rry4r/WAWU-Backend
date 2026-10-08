@@ -773,12 +773,12 @@ model ContentFrame {
 /// number of rows; no counter column on ContentPiece, because a new column
 /// there would widen every live content response (protected route registry, entry H-1).
 model ContentShare {
-  id            String       @id @default(uuid())
-  contentId     String
-  content       ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
-  sharerWawuId  String
-  sharedOn      DateTime     @db.Date
-  sharedAt      DateTime     @default(now())
+  id           String       @id @default(uuid())
+  contentId    String
+  content      ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  sharerWawuId String
+  sharedOn     DateTime     @db.Date
+  sharedAt     DateTime     @default(now())
 
   @@unique([contentId, sharerWawuId, sharedOn])
   @@index([sharerWawuId])
@@ -1858,8 +1858,12 @@ enum LegalPath {
 
 enum ConsultationMedium {
   chat
+  /// A video call. The value keeps the name the web already writes; the app
+  /// calls it a video call (LegalConsultationOption, LEGAL-03).
   zoom
   physical
+  /// A phone call (LEGAL-03). Only the app's booking route writes it.
+  phone
 }
 
 /// The full lifecycle of a legal request. A `simple` request skips straight
@@ -1894,12 +1898,17 @@ model LegalRequest {
   details   Json?
   documents String[] @default([])
 
-  consultationMedium ConsultationMedium?
-  consultationFee    Int?
-  consultationTxRef  String?             @unique
-  consultationPaidAt DateTime?
-  scheduledFor       DateTime?
-  consultationNotes  String?
+  consultationMedium  ConsultationMedium?
+  consultationFee     Int?
+  /// How long the booked consultation runs, copied from the medium's setting
+  /// when the hour is held (LEGAL-03), so a later change in admin never moves
+  /// an appointment that is already booked. Null on a booking made before
+  /// then, which the calendar reads as the one-hour slot it always was.
+  consultationMinutes Int?
+  consultationTxRef   String?             @unique
+  consultationPaidAt  DateTime?
+  scheduledFor        DateTime?
+  consultationNotes   String?
 
   /// What WAWU quotes after the consultation.
   quoteAmount Int?
@@ -2203,6 +2212,8 @@ model PaymentWebhookReceipt {
 /// Which operator surface an AdminOpsAudit row belongs to.
 enum AdminOpsResource {
   legal_request
+  /// A legal price WAWU sets in admin (LEGAL-03, R-14).
+  legal_price
   service_application
   bill_payment
   health_subscription
@@ -2215,6 +2226,9 @@ enum AdminOpsAction {
   legal_consultation_completed
   legal_delivered
   legal_cancelled
+  /// A consultation price or length, or a fixed-price service's price, was set
+  /// or cleared (LEGAL-03, R-14). `detail` carries the old and new values.
+  legal_price_set
   application_progressed
   application_rejected
   application_approved
@@ -2849,14 +2863,14 @@ model LegalIntake {
   /// (a retry of the assistant's reply, or preparing the brief on Send), so
   /// a second one cannot start. Expires on its own if the process dies.
   assistantBusyUntil DateTime?
-
-  @@index([wawuUserId, status])
-  @@index([status, completedAt])
   // Also in the database, and NOT expressible here (Prisma has no partial
   // index): UNIQUE ("wawuUserId") WHERE "channel" = 'assistant' AND "status" =
   // 'in_progress', so a person has at most one open assistant conversation.
   // See migration 20261007200000_legal_assistant. `prisma migrate diff` does
   // not list it, so the schema and the migrations still agree.
+
+  @@index([wawuUserId, status])
+  @@index([status, completedAt])
 }
 
 /// Who wrote a message in the assistant conversation on an intake.
@@ -2948,6 +2962,63 @@ model LegalChatMessage {
   @@index([legalRequestId, createdAt])
 }
 
+/// What one kind of legal consultation costs and how long it runs, set by WAWU
+/// in admin (R-14, LEGAL-03). One row per medium. A medium with no row, or a
+/// row with no price or no length, is not offered for booking: nothing here
+/// has a built-in price, so nothing can be sold at a figure nobody set.
+///
+/// `priceKobo` is whole naira (a multiple of 100): the web still pays a
+/// consultation through Flutterwave in whole naira until it is moved, and both
+/// read this row. An in-person consultation carries neither price nor length:
+/// it is arranged directly and priced per matter.
+model LegalConsultationOption {
+  id               String             @id @default(uuid())
+  medium           ConsultationMedium @unique
+  priceKobo        Int?
+  minutes          Int?
+  /// Staff can switch a medium off without losing its price.
+  enabled          Boolean            @default(true)
+  updatedAt        DateTime           @updatedAt
+  updatedByAdminId String?
+}
+
+/// The price WAWU sets in admin for a fixed-price legal service (R-14,
+/// LEGAL-03), for example business name registration. No row means the service
+/// has no fixed price and is quoted by a consultant, as before. Whole naira, as
+/// LegalConsultationOption.
+model LegalServicePrice {
+  serviceCode      String   @id
+  priceKobo        Int
+  updatedAt        DateTime @updatedAt
+  updatedByAdminId String?
+}
+
+/// One file WAWU delivers on a legal request (LEGAL-03). A request can have
+/// several; each is also posted into the matter's chat as its own message
+/// (`chatMessageId`), so the client finds every document in the conversation
+/// and the consultant's name stays on it. `LegalRequest.deliverableUrl` still
+/// holds the first one for everything that reads a single file.
+/// `wawuUserId` is the client, so an account purge finds the rows directly.
+model LegalDeliverable {
+  id              String   @id @default(uuid())
+  legalRequestId  String
+  wawuUserId      String
+  fileName        String
+  url             String
+  /// Page count, when the consultant gave one.
+  pages           Int?
+  /// The chat message this file was posted as.
+  chatMessageId   String?  @unique
+  postedByAdminId String?
+  createdAt       DateTime @default(now())
+
+  /// The same file is never delivered twice on one request, so a repeated
+  /// submit is a no-op rather than a second copy in the chat.
+  @@unique([legalRequestId, url])
+  @@index([legalRequestId, createdAt])
+  @@index([wawuUserId])
+}
+
 /// One paid AI call that writes the assistant's opener on a matter's thread
 /// (FIX-11). The opener is written on the first read of an empty, open thread
 /// (`LegalChatService.getThread`), and reading a thread must never multiply
@@ -2977,13 +3048,13 @@ model LegalChatOpenerCall {
   /// Null while it runs.
   outcome        String?
   createdAt      DateTime  @default(now())
-
-  @@index([legalRequestId, createdAt])
-  @@index([wawuUserId, createdAt])
   // Also in the database, and NOT expressible here (Prisma has no partial
   // index): UNIQUE ("legalRequestId") WHERE "outcome" = 'written', so a
   // thread has at most one opener on record whatever reaches the table. See
   // migration 20261015200000_legal_chat_opener.
+
+  @@index([legalRequestId, createdAt])
+  @@index([wawuUserId, createdAt])
 }
 
 // -----------------------------------------------------------------------------
@@ -3695,32 +3766,32 @@ model TransactionPinReset {
 /// so does a PIN reset by code. Holds no secret: a public key.
 /// ─────────────────────────────────────────────────────────────────────────
 model ApprovalDevice {
-  wawuUserId  String    @id
+  wawuUserId String    @id
   /// New on every registration; the app keeps it to know this phone is the one.
-  deviceId    String    @unique @default(uuid())
+  deviceId   String    @unique @default(uuid())
   /// SubjectPublicKeyInfo (DER) of a P-256 key, base64url.
-  publicKey   String
+  publicKey  String
   /// What the phone approves with: `fingerprint` or `face` (W35's label).
-  biometric   String
+  biometric  String
   /// The last approval that passed.
-  lastUsedAt  DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 }
 
 /// One challenge for one biometric approval (task MONEY-14): random, short
 /// lived, tied to the person and the phone it was issued for, and used up by
 /// the first approval that names it, right or wrong.
 model ApprovalChallenge {
-  id          String    @id @default(uuid())
-  wawuUserId  String
+  id         String    @id @default(uuid())
+  wawuUserId String
   /// ApprovalDevice.deviceId when the challenge was issued.
-  deviceId    String
+  deviceId   String
   /// 32 random bytes, base64url. Not a secret: only the phone's key can sign it.
-  challenge   String
-  expiresAt   DateTime
-  usedAt      DateTime?
-  createdAt   DateTime  @default(now())
+  challenge  String
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime  @default(now())
 
   @@index([wawuUserId, createdAt])
 }
@@ -3974,16 +4045,16 @@ model BvnCheckAttempt {
 /// holds the selfie, the BVN photo or any part of the BVN: only the outcome,
 /// when, and Fintava's confidence score when it gives one.
 model SelfieMatchAttempt {
-  id         String    @id @default(uuid())
-  wawuUserId String
+  id            String    @id @default(uuid())
+  wawuUserId    String
   /// `pending` while Fintava is being asked; then `matched`, `not_matched`
   /// or `unavailable`.
-  outcome    String    @default("pending")
+  outcome       String    @default("pending")
   /// Fintava's confidence score for this match, as sent, when it sends one.
-  confidence Float?
+  confidence    Float?
   /// When Fintava's answer came back; null while pending.
-  settledAt  DateTime?
-  createdAt  DateTime  @default(now())
+  settledAt     DateTime?
+  createdAt     DateTime  @default(now())
   /// The passed BVN check this selfie was compared against, read once at the
   /// start of the request (migration 20261002230000): when that check passed
   /// (WalletIdentity.bvnVerifiedAt) and its BVN's keyed hash
@@ -4550,7 +4621,7 @@ model SchoolCourse {
   /// merchant cap any one payment is bounded by.
   priceKobo Int
   /// SCHOOLS-02: when the dashboard hid this course. Null: shown. SCHOOLS-04 serves only unhidden rows.
-  hiddenAt DateTime?
+  hiddenAt  DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -4578,7 +4649,7 @@ model CourseIntake {
   capacity   Int
   seatsTaken Int          @default(0)
   /// SCHOOLS-02: when the dashboard hid this intake. Null: shown. SCHOOLS-04 serves only unhidden rows.
-  hiddenAt DateTime?
+  hiddenAt   DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
