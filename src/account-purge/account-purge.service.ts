@@ -25,10 +25,18 @@ export class AccountPurgeService {
    * partial purge that is retryable beats a purge that cannot run at all
    * while the site is busy. Each deleteMany is idempotent, so retrying is
    * safe and the second run simply finds nothing.
+   *
+   * `pointsLeft` is true when the points step failed and every points row
+   * of the person is still there (POINTS-01 round 3): the caller retries.
    */
-  async purge(wawuUserId: string): Promise<{ deleted: Record<string, number>; total: number }> {
+  async purge(wawuUserId: string): Promise<{
+    deleted: Record<string, number>;
+    total: number;
+    pointsLeft: boolean;
+  }> {
     const deleted: Record<string, number> = {};
     let total = 0;
+    let pointsLeft = false;
 
     // Points (POINTS-01) go in their own transaction under the person's
     // points lock: the ledger is append-only and its delete trigger accepts
@@ -43,6 +51,7 @@ export class AccountPurgeService {
         }
       }
     } catch (e) {
+      pointsLeft = true;
       this.logger.error(
         `Purge failed on points for ${wawuUserId}: ${(e as Error).message}`,
       );
@@ -72,7 +81,12 @@ export class AccountPurgeService {
       }
     }
 
-    this.logger.log(`Purged ${total} rows for ${wawuUserId}: ${JSON.stringify(deleted)}`);
-    return { deleted, total };
+    this.logger.log(
+      `Purged ${total} rows for ${wawuUserId}: ${JSON.stringify(deleted)}` +
+        (pointsLeft
+          ? '; points were left (the points step failed; purge again)'
+          : ''),
+    );
+    return { deleted, total, pointsLeft };
   }
 }

@@ -287,7 +287,7 @@ export class PointsService {
         skipDuplicates: true,
       });
       if (count === 0) {
-        const winner = await tx.pointHold.findUniqueOrThrow({
+        const winner = await tx.pointHold.findUnique({
           where: {
             purpose_reference: {
               purpose: input.purpose,
@@ -295,7 +295,10 @@ export class PointsService {
             },
           },
         });
+        // The winner can only be gone if its person was purged in between;
+        // the reference was still taken when this insert met it.
         if (
+          !winner ||
           winner.wawuUserId !== input.wawuUserId ||
           winner.quantity !== input.points
         ) {
@@ -534,17 +537,16 @@ export class PointsService {
   ): Promise<PointHoldOutcome> {
     return this.inTx(outer, async (tx) => {
       const found = await findHold(tx, key);
-      if (!found) {
-        throw new PointsError(
-          'points_hold_not_found',
-          "We couldn't find those held points.",
-        );
-      }
-      // The hold's person never changes, so lock them and read it again.
+      if (!found) throw holdNotFound();
+      // The hold's person never changes, so lock them and read it again. It
+      // can be gone by then: the account purge's points step (which takes the
+      // same lock) may have deleted it while this call waited. That is the
+      // same answer as a hold that never existed.
       await lockPersonPoints(tx, found.wawuUserId);
-      const hold = await tx.pointHold.findUniqueOrThrow({
+      const hold = await tx.pointHold.findUnique({
         where: { id: found.id },
       });
+      if (!hold) throw holdNotFound();
       if (hold.state === to) return outcomeOf(tx, hold, true);
       if (hold.state !== 'held') {
         throw new PointsError(
@@ -687,6 +689,13 @@ async function outcomeOf(
     parts: await partsOf(tx, hold.id),
     replayed,
   };
+}
+
+function holdNotFound(): PointsError {
+  return new PointsError(
+    'points_hold_not_found',
+    "We couldn't find those held points.",
+  );
 }
 
 function requirePerson(wawuUserId: string): void {

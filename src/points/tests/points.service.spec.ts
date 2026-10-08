@@ -11,7 +11,9 @@ process.env.DATABASE_URL =
 import { randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { Logger } from '@nestjs/common';
 import { PrismaPg } from '@prisma/adapter-pg';
+import { Client } from 'pg';
 import { PrismaClient } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AccountPurgeService } from '../../account-purge/account-purge.service';
@@ -1065,7 +1067,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       // The setting names one person; the statement takes another's rows too.
       const both = (who: string) =>
         prisma.$transaction(async (tx) => {
-          await tx.$executeRaw`SELECT set_config('wawu.points_purge', ${who}, true)`;
+          await tx.$executeRaw`SELECT set_config('wawu.points_purge', ${who}::text || ':' || txid_current()::text, true)`;
           await tx.pointLedger.deleteMany({
             where: { wawuUserId: { in: [me, other] } },
           });
@@ -1074,13 +1076,21 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       // The setting names the person, but only some of their rows go.
       await expect(
         prisma.$transaction(async (tx) => {
-          await tx.$executeRaw`SELECT set_config('wawu.points_purge', ${me}, true)`;
+          await tx.$executeRaw`SELECT set_config('wawu.points_purge', ${me}::text || ':' || txid_current()::text, true)`;
           await tx.pointLedger.delete({ where: { id: rowId } });
         }),
       ).rejects.toThrow(/all together or not at all/);
       // The setting ends with its transaction.
       await expect(
         prisma.pointLedger.deleteMany({ where: { wawuUserId: other } }),
+      ).rejects.toThrow(/only by the account purge/);
+      // The person's id alone (round 2's form, without the transaction id)
+      // is no longer enough (round 3, U4).
+      await expect(
+        prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT set_config('wawu.points_purge', ${other}, true)`;
+          await tx.pointLedger.deleteMany({ where: { wawuUserId: other } });
+        }),
       ).rejects.toThrow(/only by the account purge/);
       expect(await prisma.pointLedger.count()).toBe(total);
       // The purge step itself takes all of one person's rows and nobody else's.
@@ -1448,6 +1458,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       );
 
       const purged = await new AccountPurgeService(prisma).purge(me);
+      expect(purged.pointsLeft).toBe(false);
       expect(purged.deleted).toMatchObject({
         'PointLedger.wawuUserId': 3,
         'PointHold.wawuUserId': 1,
@@ -1883,5 +1894,254 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       }
       expect(heldFirst + purgedFirst).toBe(50);
     }, 180000);
+  });
+
+  // ---------------------------------------------------------------------------
+  describe('round 3: what the round 2 verifier found', () => {
+    const counts = (who: string) =>
+      Promise.all([
+        prisma.pointLedger.count({ where: { wawuUserId: who } }),
+        prisma.pointHold.count({ where: { wawuUserId: who } }),
+        prisma.pointLot.count({ where: { wawuUserId: who } }),
+      ]);
+    const rawClient = async (): Promise<Client> => {
+      const c = new Client({ connectionString: process.env.DATABASE_URL });
+      await c.connect();
+      return c;
+    };
+    /** Advisory locks waited on in this database right now. */
+    const waiting = async (): Promise<number> => {
+      const rows = await prisma.$queryRaw<Array<{ n: bigint }>>`
+        SELECT count(*)::bigint AS n FROM pg_locks
+         WHERE locktype = 'advisory' AND NOT granted
+           AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`;
+      return Number(rows[0].n);
+    };
+
+    it('a commit and a release that waited while the purge deleted the hold answer points_hold_not_found, and nothing is written (D6)', async () => {
+      const me = person();
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('d6'),
+          points: 100,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      const h = await points.hold(
+        {
+          wawuUserId: me,
+          purpose: 'ai_job',
+          reference: ref('d6-h'),
+          points: 40,
+        },
+        at,
+      );
+      const c = await rawClient();
+      try {
+        // The purge's own steps, by hand: the lock first.
+        await c.query('BEGIN');
+        await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `points:${me}`,
+        ]);
+        const before = await waiting();
+        const release = points.release({ holdId: h.holdId }, at);
+        const commit = points.commit({ holdId: h.holdId }, at);
+        // Both have found the hold and now wait for the person's lock.
+        for (let i = 0; i < 100 && (await waiting()) < before + 2; i += 1) {
+          await new Promise((r) => setTimeout(r, 20));
+        }
+        expect(await waiting()).toBeGreaterThanOrEqual(before + 2);
+        await c.query(
+          `SELECT set_config('wawu.points_purge', $1::text || ':' || txid_current()::text, true)`,
+          [me],
+        );
+        await c.query('DELETE FROM "PointLedger" WHERE "wawuUserId" = $1', [
+          me,
+        ]);
+        await c.query('DELETE FROM "PointHold" WHERE "wawuUserId" = $1', [me]);
+        await c.query('DELETE FROM "PointLot" WHERE "wawuUserId" = $1', [me]);
+        await c.query('COMMIT');
+        const settled = await Promise.allSettled([release, commit]);
+        for (const r of settled) {
+          expect(r.status).toBe('rejected');
+          const reason = (r as PromiseRejectedResult).reason as unknown;
+          expect(reason).toBeInstanceOf(PointsError);
+          expect((reason as PointsError).code).toBe('points_hold_not_found');
+          expect((reason as PointsError).getStatus()).toBe(404);
+        }
+      } finally {
+        await c.end();
+      }
+      expect(await counts(me)).toEqual([0, 0, 0]);
+    });
+
+    it('the purge racing a commit or a release, 50 rounds: only typed answers, nothing left (D6)', async () => {
+      let notFound = 0;
+      let settledFirst = 0;
+      for (let round = 0; round < 50; round += 1) {
+        const who = person();
+        await points.grant(
+          {
+            wawuUserId: who,
+            source: 'pack',
+            sourceRef: ref(`d6r-${round}`),
+            points: 100,
+            expiresAt: JANUARY,
+          },
+          at,
+        );
+        const h = await points.hold(
+          {
+            wawuUserId: who,
+            purpose: 'ai_job',
+            reference: ref(`d6rh-${round}`),
+            points: 30,
+          },
+          at,
+        );
+        const settle =
+          round % 2 === 0
+            ? points.commit({ holdId: h.holdId }, at)
+            : points.release({ holdId: h.holdId }, at);
+        const [purge, done] = await Promise.allSettled([
+          purgePersonPoints(prisma, who),
+          settle,
+        ]);
+        expect(purge.status).toBe('fulfilled');
+        if (done.status === 'fulfilled') {
+          settledFirst += 1;
+        } else {
+          expect(done.reason).toBeInstanceOf(PointsError);
+          expect((done.reason as PointsError).code).toBe(
+            'points_hold_not_found',
+          );
+          notFound += 1;
+        }
+        expect({ round, left: await counts(who) }).toEqual({
+          round,
+          left: [0, 0, 0],
+        });
+      }
+      expect(notFound + settledFirst).toBe(50);
+    }, 180000);
+
+    it('a purge flag set at session level in one transaction is refused in the next (U4)', async () => {
+      const me = person();
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('u4'),
+          points: 9,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      const c = await rawClient();
+      try {
+        // Session level (is_local false), with that transaction's own id.
+        await c.query('BEGIN');
+        await c.query(
+          `SELECT set_config('wawu.points_purge', $1::text || ':' || txid_current()::text, false)`,
+          [me],
+        );
+        await c.query('COMMIT');
+        const left = await c.query<{ flag: string }>(
+          `SELECT current_setting('wawu.points_purge', true) AS flag`,
+        );
+        expect(left.rows[0].flag.startsWith(`${me}:`)).toBe(true);
+        // The next transaction on the same connection still carries it.
+        await c.query('BEGIN');
+        await expect(
+          c.query('DELETE FROM "PointLedger" WHERE "wawuUserId" = $1', [me]),
+        ).rejects.toThrow(/only by the account purge/);
+        await c.query('ROLLBACK');
+        // A plain SET naming the person and some transaction id: also refused.
+        await c.query(`SET wawu.points_purge = '${me}:1'`);
+        await c.query('BEGIN');
+        await expect(
+          c.query('DELETE FROM "PointLedger" WHERE "wawuUserId" = $1', [me]),
+        ).rejects.toThrow(/only by the account purge/);
+        await c.query('ROLLBACK');
+      } finally {
+        await c.end();
+      }
+      expect(await counts(me)).toEqual([1, 0, 1]);
+    });
+
+    it.each([
+      ['-infinity', '-infinity'],
+      ['1999-12-31', '1999-12-31 23:59:59'],
+      ['2000-01-01 itself', '2000-01-01 00:00:00'],
+    ])('the database refuses a lot ending at %s (N3)', async (_what, end) => {
+      const me = person();
+      await expect(
+        prisma.$transaction(async (tx) => {
+          await tx.$executeRawUnsafe(
+            `INSERT INTO "PointLot"(id,"wawuUserId",source,"sourceRef",quantity,remaining,"expiresAt") VALUES ($1,$2,'pack',$3,5,5,$4::timestamp)`,
+            randomUUID(),
+            me,
+            ref('n3'),
+            end,
+          );
+        }),
+      ).rejects.toThrow(/PointLot_expiresAt_bounded/);
+      expect(await counts(me)).toEqual([0, 0, 0]);
+    });
+
+    it('when the points step fails, the purge says the points were left (N4)', async () => {
+      const me = person();
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('n4'),
+          points: 12,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      // The points step's transaction fails, as it does when another call
+      // holds the person's points lock past Prisma's 5 s.
+      const failing = new Proxy(prisma, {
+        get(target, key, receiver) {
+          if (key === '$transaction') {
+            return () =>
+              Promise.reject(new Error('Transaction already closed'));
+          }
+          const value: unknown = Reflect.get(target, key, receiver);
+          if (typeof value !== 'function') return value;
+          return (value as (...args: unknown[]) => unknown).bind(
+            target,
+          ) as unknown;
+        },
+      });
+      const logged: string[] = [];
+      const spy = jest
+        .spyOn(Logger.prototype, 'log')
+        .mockImplementation((message: unknown) => {
+          logged.push(String(message));
+        });
+      try {
+        const out = await new AccountPurgeService(failing).purge(me);
+        expect(out.pointsLeft).toBe(true);
+        expect(out.deleted).toEqual({});
+      } finally {
+        spy.mockRestore();
+      }
+      expect(logged.some((l) => l.includes('points were left'))).toBe(true);
+      expect(await counts(me)).toEqual([1, 0, 1]);
+      // A purge that works says nothing was left.
+      const again = await new AccountPurgeService(prisma).purge(me);
+      expect(again.pointsLeft).toBe(false);
+      expect(again.deleted).toMatchObject({
+        'PointLedger.wawuUserId': 1,
+        'PointLot.wawuUserId': 1,
+      });
+      expect(await counts(me)).toEqual([0, 0, 0]);
+    });
   });
 });

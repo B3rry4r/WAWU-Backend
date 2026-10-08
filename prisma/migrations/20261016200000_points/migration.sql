@@ -9,12 +9,14 @@
 --   * a lot's points always equal the sum of its ledger rows, checked when
 --     each transaction commits, so no change to a lot can skip the ledger;
 --   * a ledger row is never updated; it is deleted only by the account purge
---     (a transaction that sets wawu.points_purge to the person's id), only
---     that one person's rows, and all of them in one statement;
+--     (a transaction that sets wawu.points_purge to the person's id joined to
+--     that transaction's own id), only that one person's rows, and all of
+--     them in one statement;
 --   * the ledger is never truncated;
 --   * a hold is `held` until it is committed or released, and a settled hold
 --     never changes again; who, what for, which job and how many never change;
---   * a lot ends before 2100-01-01 (UTC), so every stored end reads back.
+--   * a lot ends after 2000-01-01 and before 2100-01-01 (UTC), so every
+--     stored end reads back (no -infinity, no year 10000).
 --
 -- Rollback (nothing else references these tables):
 --   DROP TABLE "PointLedger"; DROP TABLE "PointHold"; DROP TABLE "PointLot";
@@ -52,9 +54,14 @@ CREATE TABLE "PointLot" (
     CONSTRAINT "PointLot_quantity_positive" CHECK ("quantity" > 0),
     CONSTRAINT "PointLot_remaining_in_range" CHECK ("remaining" >= 0 AND "remaining" <= "quantity"),
     CONSTRAINT "PointLot_sourceRef_length" CHECK (char_length("sourceRef") BETWEEN 1 AND 200),
-    -- The same bound PointsService checks (POINTS_LIMITS.latestEnd): an end
+    -- The upper bound is the one PointsService checks (POINTS_LATEST_END in
+    -- points-config.ts); the lower one keeps out -infinity and other ends no
+    -- grant can make (the service refuses any end at or before now). An end
     -- Postgres can store but JavaScript cannot read back never gets in.
-    CONSTRAINT "PointLot_expiresAt_bounded" CHECK ("expiresAt" < TIMESTAMP '2100-01-01 00:00:00')
+    CONSTRAINT "PointLot_expiresAt_bounded" CHECK (
+        "expiresAt" > TIMESTAMP '2000-01-01 00:00:00'
+        AND "expiresAt" < TIMESTAMP '2100-01-01 00:00:00'
+    )
 );
 
 -- CreateTable
@@ -145,23 +152,30 @@ CREATE TRIGGER "PointLedger_no_update"
   FOR EACH ROW EXECUTE FUNCTION points_ledger_refuse_update();
 
 -- A ledger row is deleted only by the account purge: a transaction that has
--- set wawu.points_purge to one person's id (set_config(..., true), so it ends
--- with the transaction), taken that person's points lock, and deletes all of
--- that person's rows and nobody else's in one statement. Any other delete,
--- one of some rows, one across several people, or one without the setting,
--- is refused. A statement that deletes nothing passes.
+-- taken one person's points lock and set wawu.points_purge to
+-- '<person id>:<txid_current()>' (set_config(..., true), so it ends with the
+-- transaction), and deletes all of that person's rows and nobody else's in
+-- one statement. The transaction id binds the setting to the transaction
+-- that set it: a value left on a connection at session level (SET, or
+-- set_config(..., false)) names an earlier transaction and never matches a
+-- later one. Any other delete, one of some rows, one across several people,
+-- or one without a matching setting, is refused. A statement that deletes
+-- nothing passes.
 CREATE FUNCTION points_ledger_purge_only() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE
-  purging TEXT := current_setting('wawu.points_purge', true);
+  flag TEXT := current_setting('wawu.points_purge', true);
+  this_tx TEXT := ':' || txid_current()::text;
+  purging TEXT;
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM gone) THEN
     RETURN NULL;
   END IF;
-  IF purging IS NULL OR purging = '' THEN
+  IF flag IS NULL OR length(flag) <= length(this_tx) OR right(flag, length(this_tx)) <> this_tx THEN
     RAISE EXCEPTION 'PointLedger is append-only: ledger rows are deleted only by the account purge'
       USING ERRCODE = 'restrict_violation';
   END IF;
+  purging := left(flag, length(flag) - length(this_tx));
   IF EXISTS (SELECT 1 FROM gone g WHERE g."wawuUserId" IS DISTINCT FROM purging) THEN
     RAISE EXCEPTION 'PointLedger is append-only: the purge deletes only the purged person''s rows'
       USING ERRCODE = 'restrict_violation';

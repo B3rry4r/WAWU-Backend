@@ -17,9 +17,10 @@ export interface PointsPurgeCounts {
 /**
  * Account deletion's points step (task POINTS-01, round 2). One transaction:
  * the person's points lock first, so no grant, hold, release or expiry of
- * theirs runs alongside; then `wawu.points_purge` set to their id for this
- * transaction only (`set_config(..., true)`), the one thing the ledger's
- * delete trigger accepts; then their ledger rows (all of them, in one
+ * theirs runs alongside; then `wawu.points_purge` set to their id joined to
+ * this transaction's id (`<id>:<txid_current()>`, with `set_config(...,
+ * true)`), the one thing the ledger's delete trigger accepts, and only in
+ * this transaction; then their ledger rows (all of them, in one
  * statement, which the trigger also requires), their holds and their lots.
  * Either all of it goes or none of it does. Running it again finds nothing.
  */
@@ -29,7 +30,9 @@ export async function purgePersonPoints(
 ): Promise<PointsPurgeCounts> {
   return prisma.$transaction(async (tx) => {
     await lockPersonPoints(tx, wawuUserId);
-    await tx.$executeRaw`SELECT set_config('wawu.points_purge', ${wawuUserId}, true)`;
+    // '<person>:<this transaction's id>': the trigger accepts it only in
+    // the transaction that set it (round 3, U4).
+    await tx.$executeRaw`SELECT set_config('wawu.points_purge', ${wawuUserId}::text || ':' || txid_current()::text, true)`;
     const ledger = await tx.pointLedger.deleteMany({ where: { wawuUserId } });
     const holds = await tx.pointHold.deleteMany({ where: { wawuUserId } });
     const lots = await tx.pointLot.deleteMany({ where: { wawuUserId } });
