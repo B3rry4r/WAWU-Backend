@@ -5,7 +5,10 @@ import {
   FintavaDouble,
   MERCHANT_BALANCE,
 } from '../../../test/fintava/fintava-double';
-import { walletToWallet } from '../../../test/fintava/fintava-webhook-payloads';
+import {
+  accountFunded,
+  walletToWallet,
+} from '../../../test/fintava/fintava-webhook-payloads';
 import {
   guardOutbound,
   type OutboundGuard,
@@ -340,6 +343,25 @@ describe('NUV-01: a rollback leaves the other provider rows alone', () => {
         status: 200,
         body: MERCHANT_BALANCE,
       });
+      const consumer = moduleRef.get(LedgerConsumerService);
+      expect(await consumer.consume(id)).toBe('processed');
+      expect(
+        (await prisma.fintavaWebhookEvent.findUniqueOrThrow({ where: { id } }))
+          .note,
+      ).toContain('no WAWU wallet on either side');
+      const onA = await prisma.fintavaLedgerEntry.findMany({
+        where: { wawuUserId: A.id },
+      });
+      expect(onA.map((r) => r.id)).toEqual([nuvRow]);
+    });
+
+    it('ledger consumer: money in (account_funded) naming the Nuvion customer is not credited to the Nuvion wallet', async () => {
+      const body = JSON.parse(accountFunded(RUN)) as {
+        data: Record<string, unknown>;
+      };
+      body.data.userId = A.customerId;
+      body.data.beneficiaryAccountNumber = A.accountNumber;
+      const id = await delivery('account_funded', body, `${RUN}-fund`);
       const consumer = moduleRef.get(LedgerConsumerService);
       expect(await consumer.consume(id)).toBe('processed');
       expect(
