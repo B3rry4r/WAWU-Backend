@@ -14,7 +14,7 @@ import {
   ASSISTANT_CLAIM_MS,
   ASSISTANT_CLIENT_MESSAGES_PER_HOUR,
   ASSISTANT_CLIENT_MESSAGES_PER_INTAKE,
-  ASSISTANT_OPENER_ATTEMPTS_PER_HOUR,
+  ASSISTANT_OPENER_FAILURES_PER_HOUR,
 } from './legal-assistant-config';
 
 export const ONE_HOUR_MS = 3_600_000;
@@ -31,11 +31,16 @@ export type Spend = 'message' | 'reply' | 'brief';
 
 /**
  * What `reserveOpener` found: this caller makes the opener's call (`claimed`,
- * with the call's row id), the thread already has a line (`opened`), or
- * another read is making the call right now (`busy`).
+ * with the call's row id), the thread already has a line (`opened`), another
+ * read is making the call right now (`busy`), or a call for the thread ended
+ * without an opener after this read arrived (`ended`: the read answers the
+ * thread as it is and does not try again).
  */
 export type OpenerClaim =
-  { kind: 'claimed'; callId: string } | { kind: 'opened' } | { kind: 'busy' };
+  | { kind: 'claimed'; callId: string }
+  | { kind: 'opened' }
+  | { kind: 'busy' }
+  | { kind: 'ended' };
 
 /** How an opener call ended (`LegalChatOpenerCall.outcome`). */
 export type OpenerOutcome = 'written' | 'failed' | 'superseded';
@@ -82,6 +87,23 @@ export async function openerRunning(
 ): Promise<boolean> {
   const row = await db.legalChatOpenerCall.findFirst({
     where: { legalRequestId: requestId, outcome: null, busyUntil: { gt: now } },
+    select: { id: true },
+  });
+  return row !== null;
+}
+
+/**
+ * Did an opener call for this thread stop holding its claim at or after
+ * `since` (it ended, or it lapsed)? `busyUntil` is when a claim stops
+ * holding: its lapse time while the call runs, the time it ended after.
+ */
+async function openerEndedSince(
+  db: Pick<Prisma.TransactionClient, 'legalChatOpenerCall'>,
+  requestId: string,
+  since: Date,
+): Promise<boolean> {
+  const row = await db.legalChatOpenerCall.findFirst({
+    where: { legalRequestId: requestId, busyUntil: { gte: since } },
     select: { id: true },
   });
   return row !== null;
@@ -198,10 +220,15 @@ export class LegalAssistantAllowance {
    *
    * Under the person's lock, in one step: if the thread has any line it is
    * already open; if another opener call for it is running (its claim has
-   * not lapsed) this caller waits for that one; otherwise the hourly limits
-   * are checked and the call is written down (`LegalChatOpenerCall`), which
-   * both counts it and holds the claim. The provider is called after this
-   * returns, never inside it. Over a limit this throws the same 429
+   * not lapsed) this caller waits for that one; if one ended or lapsed after
+   * this read ARRIVED (`arrivedAt`, taken when the read began), the read was
+   * in flight while that call ran, so it answers the thread as it is and
+   * does not try again (only a read that arrives after a call has ended may
+   * claim the next one, so parallel reads make one call whatever the
+   * provider does and however slowly they reach the lock); otherwise the
+   * limits are checked and the call is written down (`LegalChatOpenerCall`),
+   * which both counts it and holds the claim. The provider is called after
+   * this returns, never inside it. Over a limit this throws the same 429
    * `assistant_rate_limited` a message gets, and no call is made.
    *
    * Every thread line is written under this same lock (client messages in
@@ -212,12 +239,16 @@ export class LegalAssistantAllowance {
   async reserveOpener(
     wawuUserId: string,
     requestId: string,
+    arrivedAt: Date,
   ): Promise<OpenerClaim> {
     return this.prisma.$transaction(async (tx) => {
       await this.lockPerson(tx, wawuUserId);
       if (await threadHasLine(tx, requestId)) return { kind: 'opened' };
       const now = new Date();
       if (await openerRunning(tx, requestId, now)) return { kind: 'busy' };
+      if (await openerEndedSince(tx, requestId, arrivedAt)) {
+        return { kind: 'ended' };
+      }
       await this.checkLimits(tx, wawuUserId, null, 'opener');
       const call = await tx.legalChatOpenerCall.create({
         data: {
@@ -240,7 +271,8 @@ export class LegalAssistantAllowance {
    * it: the opener is not stored after it (`superseded`). The call stays
    * counted whatever the outcome; it was made. `write` is null when the
    * provider failed or answered nothing (`failed`), which also frees the
-   * thread for the next read to try again.
+   * thread for the next read that ARRIVES after this moment to try again.
+   * `busyUntil` becomes the time the call ended.
    */
   async finishOpener(
     wawuUserId: string,
@@ -266,7 +298,7 @@ export class LegalAssistantAllowance {
       // opener goes with it.
       await tx.legalChatOpenerCall.update({
         where: { id: callId },
-        data: { outcome, busyUntil: null },
+        data: { outcome, busyUntil: new Date() },
       });
       return outcome;
     }, TX_OPTIONS);
@@ -333,7 +365,7 @@ export class LegalAssistantAllowance {
       // The opener calls on matter threads (FIX-11), every attempt.
       tx.legalChatOpenerCall.findMany({
         where: { wawuUserId, createdAt: { gte: since } },
-        select: { createdAt: true },
+        select: { createdAt: true, outcome: true, busyUntil: true },
       }),
       requestIds.length === 0
         ? Promise.resolve(
@@ -401,12 +433,22 @@ export class LegalAssistantAllowance {
     }
 
     if (spend === 'opener') {
-      const openers = openerRows
+      // Only the tries that came to nothing: a call that failed, or a claim
+      // that lapsed with no outcome (its Hub died). A written opener, or one
+      // superseded by a line the thread gained meanwhile, is not a retry.
+      const nowMs = Date.now();
+      const failures = openerRows
+        .filter(
+          (c) =>
+            c.outcome === 'failed' ||
+            (c.outcome === null &&
+              (c.busyUntil === null || c.busyUntil.getTime() <= nowMs)),
+        )
         .map((c) => c.createdAt.getTime())
         .sort((a, b) => a - b);
-      if (openers.length >= ASSISTANT_OPENER_ATTEMPTS_PER_HOUR) {
+      if (failures.length >= ASSISTANT_OPENER_FAILURES_PER_HOUR) {
         throw this.rateLimited(
-          openers[openers.length - ASSISTANT_OPENER_ATTEMPTS_PER_HOUR],
+          failures[failures.length - ASSISTANT_OPENER_FAILURES_PER_HOUR],
           'The assistant could not open this conversation a few times just now. Try again a little later.',
         );
       }

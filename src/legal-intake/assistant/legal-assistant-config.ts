@@ -32,12 +32,29 @@ export const ASSISTANT_BRIEF_ATTEMPTS_PER_HOUR = 5;
  * nobody asked for: it runs when the client first reads an empty thread. A
  * failed one is tried again on a later read, but only this often, so a
  * screen that keeps reading while the provider is down cannot spend the
- * client's hourly allowance for them. These also count toward the hourly
- * limit above.
+ * client's hourly allowance for them.
  *
- * PROVISIONAL(LEGAL-OPENER-ATTEMPTS-PER-HOUR, owner=YOU, why=no ruling names one; the opener should take one call, so five tries an hour, the same as the brief, covers a bad few minutes at the provider without letting reads multiply paid calls)
+ * Only tries that came to nothing count here: calls that failed, and claims
+ * that lapsed because their Hub died mid-call. An opener that was written
+ * (one per matter) never counts, so a person with several paid matters gets
+ * every one opened (lead ruling, 8 Oct 2026). Every try, written or not,
+ * still counts toward the hourly limit above.
+ *
+ * PROVISIONAL(LEGAL-OPENER-FAILURES-PER-HOUR, owner=YOU, why=no ruling names one; an opener should take one call so five failed or lapsed tries an hour cover a bad few minutes at the provider without letting reads multiply paid calls; written openers never count)
  */
-export const ASSISTANT_OPENER_ATTEMPTS_PER_HOUR = 5;
+export const ASSISTANT_OPENER_FAILURES_PER_HOUR = 5;
+
+/**
+ * How long a read that found another read's opener call running waits for
+ * that opener before answering with the thread as it is, in milliseconds
+ * (FIX-11). The real provider adapter gives up on a call after the same 20 s,
+ * so a waiting read is held no longer than the call it waits for. Read
+ * through `LEGAL_OPENER_WAIT_MS` so a spec can set a short one.
+ */
+export const ASSISTANT_OPENER_WAIT_MS = 20_000;
+
+/** The injection token for `ASSISTANT_OPENER_WAIT_MS`. */
+export const LEGAL_OPENER_WAIT_MS = Symbol('LEGAL_OPENER_WAIT_MS');
 
 /**
  * How long a claim on a conversation (a retry of the reply, preparing the

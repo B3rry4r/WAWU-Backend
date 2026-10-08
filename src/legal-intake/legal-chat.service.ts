@@ -20,14 +20,13 @@ import {
   consultantHasWritten,
   openerRunning,
 } from './assistant/legal-assistant-allowance';
+import { LEGAL_OPENER_WAIT_MS } from './assistant/legal-assistant-config';
 import type { LegalBrief } from './legal-brief';
 
 /**
- * How long a read that found another read writing the thread's opener waits
- * for it before answering with the thread as it is (FIX-11), and how often
- * it looks. The same wait a lost claim on the assistant's brief gets.
+ * How often a read waiting for another read's opener looks again (FIX-11).
+ * How long it waits at most is `ASSISTANT_OPENER_WAIT_MS`.
  */
-const OPENER_WAIT_MS = 20_000;
 const OPENER_POLL_MS = 50;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -102,6 +101,7 @@ export class LegalChatService {
     private readonly prisma: PrismaService,
     @Inject(GEMINI_CLIENT) private readonly gemini: GeminiClient,
     private readonly allowance: LegalAssistantAllowance,
+    @Inject(LEGAL_OPENER_WAIT_MS) private readonly openerWaitMs: number,
   ) {}
 
   /**
@@ -123,6 +123,10 @@ export class LegalChatService {
     wawuUserId: string,
     requestId: string,
   ): Promise<ChatThreadView> {
+    // When this read began, before anything is awaited: an opener call that
+    // ends after this moment is one this read was in flight for, so the read
+    // never tries again after it (`LegalAssistantAllowance.reserveOpener`).
+    const arrivedAt = new Date();
     const request = await this.findOwned(wawuUserId, requestId);
     let messages = await this.linesOf(requestId);
 
@@ -133,7 +137,7 @@ export class LegalChatService {
       messages.length === 0 &&
       LegalChatService.OPEN_FROM.has(request.status)
     ) {
-      messages = await this.openThread(request);
+      messages = await this.openThread(request, arrivedAt);
     }
 
     return {
@@ -318,19 +322,26 @@ export class LegalChatService {
    * only the claim's holder calls the provider, and the call is counted like
    * every other assistant call. Parallel reads find the claim held and wait
    * for its opener instead of making their own, so twenty reads at once make
-   * one call and all see the same opener. Over a limit no call is made and
-   * the thread is read as it is.
+   * one call and all see the same opener. A read that was in flight while
+   * a call ended without an opener answers the thread as it is; only a read
+   * that arrives after that may try again, so a failing provider is called
+   * once per batch of parallel reads, not once per read. Over a limit no
+   * call is made and the thread is read as it is.
    */
-  private async openThread(request: {
-    id: string;
-    wawuUserId: string;
-    details: unknown;
-  }): Promise<ChatRow[]> {
+  private async openThread(
+    request: {
+      id: string;
+      wawuUserId: string;
+      details: unknown;
+    },
+    arrivedAt: Date,
+  ): Promise<ChatRow[]> {
     let claim;
     try {
       claim = await this.allowance.reserveOpener(
         request.wawuUserId,
         request.id,
+        arrivedAt,
       );
     } catch (error) {
       // An empty thread is recoverable: a later read tries again once the
@@ -345,7 +356,9 @@ export class LegalChatService {
       else this.logger.warn(why);
       return this.linesOf(request.id);
     }
-    if (claim.kind === 'opened') return this.linesOf(request.id);
+    if (claim.kind === 'opened' || claim.kind === 'ended') {
+      return this.linesOf(request.id);
+    }
     if (claim.kind === 'busy') return this.waitForOpener(request.id);
 
     let reply: string | null = null;
@@ -407,11 +420,12 @@ export class LegalChatService {
    * Another read holds the opener's claim: wait for its opener rather than
    * make a second call. Answers as soon as the thread has a line, or with
    * the thread as it is once no opener call is running (it failed) or the
-   * wait is over. A read that waited never calls the provider itself, so a
-   * failing provider is not called once per waiting read.
+   * wait (`ASSISTANT_OPENER_WAIT_MS`) is over. A read that waited never
+   * calls the provider itself, so a failing provider is not called once per
+   * waiting read.
    */
   private async waitForOpener(requestId: string): Promise<ChatRow[]> {
-    const deadline = Date.now() + OPENER_WAIT_MS;
+    const deadline = Date.now() + this.openerWaitMs;
     for (;;) {
       // Running is asked BEFORE the lines are read: the opener and the end
       // of its call are one write, so a call seen ended here has its opener

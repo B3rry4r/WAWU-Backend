@@ -6,6 +6,7 @@ process.env.DATABASE_URL =
 import { ChildProcess, spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import * as path from 'path';
+import { Client } from 'pg';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -25,7 +26,8 @@ import { LegalChatService } from '../legal-chat.service';
 import { LegalIntakeModule } from '../legal-intake.module';
 import {
   ASSISTANT_CLIENT_MESSAGES_PER_HOUR,
-  ASSISTANT_OPENER_ATTEMPTS_PER_HOUR,
+  ASSISTANT_OPENER_FAILURES_PER_HOUR,
+  LEGAL_OPENER_WAIT_MS,
 } from '../assistant/legal-assistant-config';
 
 /**
@@ -53,9 +55,12 @@ const OPENER_TEXT = 'Hello. I have read your intake about your rent.';
 const ANSWER_TEXT = 'Thank you. When did the landlord write to you?';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-async function waitFor(check: () => boolean, timeoutMs = 5000) {
+async function waitFor(
+  check: () => boolean | Promise<boolean>,
+  timeoutMs = 10000,
+) {
   const until = Date.now() + timeoutMs;
-  while (!check()) {
+  while (!(await check())) {
     if (Date.now() > until) throw new Error('waitFor timed out');
     await sleep(10);
   }
@@ -66,13 +71,20 @@ class StandIn implements GeminiClient {
   chats: GeminiChatRequest[] = [];
   delayMs = 150;
   fail = false;
+  /**
+   * A barrier: when set, every call waits for it before it answers or
+   * fails, so a spec decides exactly when the provider's answer lands.
+   */
+  hold: Promise<void> | null = null;
   reset() {
     this.chats = [];
     this.delayMs = 150;
     this.fail = false;
+    this.hold = null;
   }
   async chat(req: GeminiChatRequest): Promise<string> {
     this.chats.push(req);
+    if (this.hold) await this.hold;
     if (this.delayMs) await sleep(this.delayMs);
     if (this.fail) throw new Error('stand-in provider failure');
     return req.history[0]?.text === OPENER_ASK ? OPENER_TEXT : ANSWER_TEXT;
@@ -150,8 +162,14 @@ const reason = (res: Res) =>
   (res.body as { reason?: { code?: string; retryAfterSeconds?: unknown } })
     .reason;
 
-async function makeApp(ai: GeminiClient): Promise<INestApplication> {
-  const moduleRef = await Test.createTestingModule({
+/** The short wait the wait-cap spec configures (the real one is 20 s). */
+const SHORT_OPENER_WAIT_MS = 400;
+
+async function makeApp(
+  ai: GeminiClient,
+  openerWaitMs?: number,
+): Promise<INestApplication> {
+  let builder = Test.createTestingModule({
     imports: [
       ConfigModule.forRoot({ isGlobal: true }),
       PrismaModule,
@@ -159,8 +177,13 @@ async function makeApp(ai: GeminiClient): Promise<INestApplication> {
     ],
   })
     .overrideProvider(GEMINI_CLIENT)
-    .useValue(ai)
-    .compile();
+    .useValue(ai);
+  if (openerWaitMs !== undefined) {
+    builder = builder
+      .overrideProvider(LEGAL_OPENER_WAIT_MS)
+      .useValue(openerWaitMs);
+  }
+  const moduleRef = await builder.compile();
   const app = moduleRef.createNestApplication();
   app.setGlobalPrefix('api/hub');
   app.useGlobalPipes(
@@ -182,6 +205,8 @@ describe('The legal thread opener: written once, metered and locked (FIX-11, con
   let app: INestApplication;
   /** A second Hub on the same database: the claim lives in the database. */
   let app2: INestApplication;
+  /** A Hub whose reads wait at most SHORT_OPENER_WAIT_MS for an opener. */
+  let appShortWait: INestApplication;
   let prisma: PrismaService;
   let mockWawuId: ChildProcess | undefined;
   let owned = false;
@@ -272,6 +297,39 @@ describe('The legal thread opener: written once, metered and locked (FIX-11, con
     });
     return earlier.id;
   };
+  /**
+   * Counts the reads that have ARRIVED (begun `getThread`, which stamps the
+   * arrival before it awaits anything) on one Hub, so a spec can hold the
+   * provider until every read it fired is in, without a sleep.
+   */
+  const arrivals = (on: INestApplication = app) => {
+    const chat = on.get(LegalChatService);
+    const original = chat.getThread.bind(chat);
+    let n = 0;
+    const waiters: Array<{ at: number; resolve: () => void }> = [];
+    jest.spyOn(chat, 'getThread').mockImplementation((who, id) => {
+      n += 1;
+      const result = original(who, id);
+      for (const w of waiters) if (w.at <= n) w.resolve();
+      return result;
+    });
+    return {
+      count: () => n,
+      reached: (at: number) =>
+        new Promise<void>((resolve) => {
+          if (n >= at) resolve();
+          else waiters.push({ at, resolve });
+        }),
+    };
+  };
+  /** Is some session of this database queued on an advisory lock? */
+  const queuedOnPersonLock = async () => {
+    const rows = await prisma.$queryRaw<Array<{ n: bigint }>>`
+      SELECT count(*) AS n FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND wait_event_type = 'Lock' AND wait_event = 'advisory'`;
+    return Number(rows[0]?.n ?? 0) > 0;
+  };
 
   async function cleanUp() {
     const requests = await prisma.legalRequest.findMany({
@@ -318,6 +376,7 @@ describe('The legal thread opener: written once, metered and locked (FIX-11, con
     }
     app = await makeApp(ai);
     app2 = await makeApp(ai);
+    appShortWait = await makeApp(ai, SHORT_OPENER_WAIT_MS);
     prisma = app.get(PrismaService);
     await cleanUp();
     token = await login(ME_EMAIL);
@@ -325,12 +384,14 @@ describe('The legal thread opener: written once, metered and locked (FIX-11, con
   }, 40000);
 
   afterEach(async () => {
+    jest.restoreAllMocks();
     await cleanUp();
     ai.reset();
   });
 
   afterAll(async () => {
     if (prisma) await cleanUp();
+    await appShortWait?.close();
     await app2?.close();
     await app?.close();
     if (owned && mockWawuId) mockWawuId.kill();
@@ -363,11 +424,9 @@ describe('The legal thread opener: written once, metered and locked (FIX-11, con
         }
         const calls = await openerCalls(id);
         expect(calls).toHaveLength(1);
-        expect(calls[0]).toMatchObject({
-          wawuUserId: ME,
-          outcome: 'written',
-          busyUntil: null,
-        });
+        expect(calls[0]).toMatchObject({ wawuUserId: ME, outcome: 'written' });
+        // The claim holds no longer: `busyUntil` is when the call ended.
+        expect(calls[0].busyUntil?.getTime()).toBeLessThanOrEqual(Date.now());
       }
     }, 60000);
 
@@ -461,29 +520,92 @@ describe('The legal thread opener: written once, metered and locked (FIX-11, con
       expect(ai.chats).toHaveLength(1);
     }, 30000);
 
-    it(`a failing provider: 20 parallel reads make 1 call, later reads 1 each, at most ${ASSISTANT_OPENER_ATTEMPTS_PER_HOUR} an hour, and the client can still write`, async () => {
+    it('a failing provider: 20 parallel reads, the failure held until all 20 have arrived, make exactly 1 call; it ends failed and no opener is stored', async () => {
       ai.fail = true;
+      ai.delayMs = 0;
       const id = await paidThread();
+      const seen = arrivals();
+      // The barrier: the one call fails only once every read is in.
+      ai.hold = seen.reached(20);
 
       const rs = await par(20, () => read(id));
+
+      expect(seen.count()).toBe(20);
       expect(rs.map((r) => r.status)).toEqual(Array(20).fill(200));
       expect(rs.every((r) => data(r).messages.length === 0)).toBe(true);
       expect(ai.chats).toHaveLength(1);
-      expect((await openerCalls(id)).map((c) => c.outcome)).toEqual(['failed']);
+      const calls = await openerCalls(id);
+      expect(calls.map((c) => c.outcome)).toEqual(['failed']);
+      expect(calls[0].busyUntil?.getTime()).toBeLessThanOrEqual(Date.now());
+      expect(await lines(id)).toHaveLength(0);
+    }, 30000);
 
+    it('a read in flight while a claim ended as failed answers the thread as it is and does not claim again; a read that arrives after it may', async () => {
+      const id = await paidThread();
+      // Another Hub's opener call, running.
+      const other = await prisma.legalChatOpenerCall.create({
+        data: {
+          legalRequestId: id,
+          wawuUserId: ME,
+          busyUntil: new Date(Date.now() + 30_000),
+        },
+      });
+      const db = new Client({ connectionString: process.env.DATABASE_URL });
+      await db.connect();
+      const seen = arrivals();
+      let pending: Promise<Res> = Promise.resolve({ status: 0, body: null });
+      try {
+        // The person's lock held elsewhere, so the read arrives while the
+        // call runs and reaches the lock only after the call has ended.
+        await db.query('BEGIN');
+        await db.query(
+          'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+          [`legal-assistant:${ME}`],
+        );
+        pending = read(id);
+        await seen.reached(1);
+        await waitFor(queuedOnPersonLock);
+        await prisma.legalChatOpenerCall.update({
+          where: { id: other.id },
+          data: { outcome: 'failed', busyUntil: new Date() },
+        });
+      } finally {
+        await db.query('COMMIT').catch(() => undefined);
+        await db.end();
+      }
+      const r = await pending;
+      expect(r.status).toBe(200);
+      expect(data(r).messages).toEqual([]);
+      expect(ai.chats).toHaveLength(0);
+      expect(await openerCalls(id)).toHaveLength(1);
+
+      const after = await read(id);
+      expect(data(after).messages.map((m) => m.body)).toEqual([OPENER_TEXT]);
+      expect(ai.chats).toHaveLength(1);
+      expect((await openerCalls(id)).map((c) => c.outcome)).toEqual([
+        'failed',
+        'written',
+      ]);
+    }, 30000);
+
+    it(`six failing tries on one thread stop at ${ASSISTANT_OPENER_FAILURES_PER_HOUR}: later reads make no call, and the client can still write`, async () => {
+      ai.fail = true;
       ai.delayMs = 0;
-      for (let i = 0; i < 10; i += 1) {
+      const id = await paidThread();
+
+      for (let i = 0; i < 6; i += 1) {
         const r = await read(id);
         expect(r.status).toBe(200);
         expect(data(r).messages).toEqual([]);
       }
-      // Each failed try was a paid call and is counted; the tries stop at
-      // the cap, so the reads did not spend the client's whole allowance.
-      expect(ai.chats).toHaveLength(ASSISTANT_OPENER_ATTEMPTS_PER_HOUR);
+      // Each failed try was a paid call and is counted; the sixth is not
+      // made, so the reads did not spend the client's whole allowance.
+      expect(ai.chats).toHaveLength(ASSISTANT_OPENER_FAILURES_PER_HOUR);
+      for (let i = 0; i < 4; i += 1) await read(id);
+      expect(ai.chats).toHaveLength(ASSISTANT_OPENER_FAILURES_PER_HOUR);
       const calls = await openerCalls(id);
-      expect(calls).toHaveLength(ASSISTANT_OPENER_ATTEMPTS_PER_HOUR);
+      expect(calls).toHaveLength(ASSISTANT_OPENER_FAILURES_PER_HOUR);
       expect(calls.every((c) => c.outcome === 'failed')).toBe(true);
-      expect(calls.every((c) => c.busyUntil === null)).toBe(true);
 
       // The provider is back: the client's own message is answered (the
       // allowance still has room), and no opener is stored after it.
@@ -494,8 +616,70 @@ describe('The legal thread opener: written once, metered and locked (FIX-11, con
         ['client', 'Are you there?'],
         ['ai', ANSWER_TEXT],
       ]);
-      expect(openerAsks()).toBe(ASSISTANT_OPENER_ATTEMPTS_PER_HOUR);
+      expect(openerAsks()).toBe(ASSISTANT_OPENER_FAILURES_PER_HOUR);
     }, 60000);
+
+    it('six paid matters read for the first time within an hour each get their opener, one call each, and all six count in the hour', async () => {
+      const ids: string[] = [];
+      for (let i = 0; i < 6; i += 1) {
+        const id = await paidThread();
+        ids.push(id);
+        const before = ai.chats.length;
+        const r = await read(id);
+        expect(r.status).toBe(200);
+        expect(data(r).messages.map((m) => m.body)).toEqual([OPENER_TEXT]);
+        expect(ai.chats.length - before).toBe(1);
+      }
+      const calls = await prisma.legalChatOpenerCall.findMany({
+        where: { wawuUserId: ME },
+      });
+      expect(calls).toHaveLength(6);
+      expect(calls.every((c) => c.outcome === 'written')).toBe(true);
+
+      // The six count toward the 30 like any assistant call.
+      await seedSpent(ASSISTANT_CLIENT_MESSAGES_PER_HOUR - 6);
+      const sent = await post(ids[5], 'My landlord wants 60% more.');
+      expect(sent.status).toBe(429);
+      expect(reason(sent)?.code).toBe('assistant_rate_limited');
+      expect(ai.chats).toHaveLength(6);
+    }, 60000);
+
+    it(`the cap counts failed and lapsed tries only: written and superseded openers never count toward the ${ASSISTANT_OPENER_FAILURES_PER_HOUR}`, async () => {
+      const recently = new Date(Date.now() - 5 * 60_000);
+      const row = (outcome: string | null, busyUntil: Date) => ({
+        legalRequestId: randomUUID(),
+        wawuUserId: ME,
+        outcome,
+        busyUntil,
+        createdAt: recently,
+      });
+      await prisma.legalChatOpenerCall.createMany({
+        data: [
+          ...Array.from({ length: 6 }, () => row('written', recently)),
+          ...Array.from({ length: 3 }, () => row('superseded', recently)),
+          ...Array.from(
+            { length: ASSISTANT_OPENER_FAILURES_PER_HOUR - 1 },
+            () => row('failed', recently),
+          ),
+        ],
+      });
+      // One short of the cap in failures: a new matter still opens.
+      const first = await paidThread();
+      const r1 = await read(first);
+      expect(data(r1).messages.map((m) => m.body)).toEqual([OPENER_TEXT]);
+      expect(ai.chats).toHaveLength(1);
+
+      // A claim whose Hub died mid-call (no outcome, lapsed) is a failure too.
+      await prisma.legalChatOpenerCall.create({
+        data: row(null, new Date(Date.now() - 60_000)),
+      });
+      const second = await paidThread();
+      const r2 = await read(second);
+      expect(r2.status).toBe(200);
+      expect(data(r2).messages).toEqual([]);
+      expect(ai.chats).toHaveLength(1);
+      expect(await openerCalls(second)).toHaveLength(0);
+    }, 30000);
   });
 
   describe('the opener never lands after another line', () => {
@@ -518,11 +702,8 @@ describe('The legal thread opener: written once, metered and locked (FIX-11, con
       ]);
       const calls = await openerCalls(id);
       expect(calls).toHaveLength(1);
-      expect(calls[0]).toMatchObject({
-        outcome: 'superseded',
-        busyUntil: null,
-        wawuUserId: ME,
-      });
+      expect(calls[0]).toMatchObject({ outcome: 'superseded', wawuUserId: ME });
+      expect(calls[0].busyUntil?.getTime()).toBeLessThanOrEqual(Date.now());
     }, 30000);
 
     it('a client message sent while the opener call is in flight is answered, and the opener is not stored after it', async () => {
@@ -585,6 +766,29 @@ describe('The legal thread opener: written once, metered and locked (FIX-11, con
       expect(data(r).messages.map((m) => m.body)).toEqual([OPENER_TEXT]);
       expect(ai.chats).toHaveLength(1);
     }, 30000);
+
+    it(`a read waits for another read's opener at most the configured time (${SHORT_OPENER_WAIT_MS} ms on this Hub), then answers the thread as it is with no call`, async () => {
+      const id = await paidThread();
+      // Another Hub's call, still running for 8 s.
+      await prisma.legalChatOpenerCall.create({
+        data: {
+          legalRequestId: id,
+          wawuUserId: ME,
+          busyUntil: new Date(Date.now() + 8_000),
+        },
+      });
+      const startedAt = Date.now();
+      const r = await read(id, appShortWait);
+      const took = Date.now() - startedAt;
+
+      expect(r.status).toBe(200);
+      expect(data(r).messages).toEqual([]);
+      expect(ai.chats).toHaveLength(0);
+      expect(took).toBeGreaterThanOrEqual(SHORT_OPENER_WAIT_MS);
+      expect(took).toBeLessThan(4_000);
+      // Every other Hub here waits the real 20 s.
+      expect(app.get(LEGAL_OPENER_WAIT_MS)).toBe(20_000);
+    }, 20000);
 
     it('the database keeps at most one written opener per thread', async () => {
       const legalRequestId = randomUUID();
