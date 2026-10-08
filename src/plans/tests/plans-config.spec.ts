@@ -189,7 +189,7 @@ describe('plans.config.json (TIER-01)', () => {
       ],
       [
         'a name with an em-dash',
-        (r) => (r.tiers[0].name = 'Verify — basic'),
+        (r) => (r.tiers[0].name = 'Verify \u2014 basic'),
         'tiers[0].name must not contain an em-dash',
       ],
       [
