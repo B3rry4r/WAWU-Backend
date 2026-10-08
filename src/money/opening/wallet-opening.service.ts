@@ -256,10 +256,15 @@ export class WalletOpeningService {
       beneficiaryCount: wallet
         ? (await visibleBeneficiaries(this.prisma, wawuUserId)).length
         : 0,
-      // NUV-02, additive: which Open your wallet this server runs, and the
-      // provider's review once something was sent (null on Fintava).
-      openingFlow: this.reviewing ? 'review' : 'check',
-      review: await this.reviewed.reviewOf(wawuUserId),
+      // NUV-02, additive and only under a provider that reviews the person
+      // itself: the answer under Fintava is exactly MONEY-12's (an absent
+      // `openingFlow` is `check`).
+      ...(this.reviewing
+        ? {
+            openingFlow: 'review' as const,
+            review: await this.reviewed.reviewOf(wawuUserId),
+          }
+        : {}),
     };
   }
 

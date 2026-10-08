@@ -143,7 +143,8 @@ export interface WalletView {
   bankTransfers: BankTransferAccessView;
   beneficiaryCount: number;
   /**
-   * Which Open your wallet this server runs (NUV-02, additive): `check`, the
+   * Which Open your wallet this server runs (NUV-02, additive; sent only
+   * under a provider that reviews the person, so absent means `check`): `check`, the
    * BVN check and selfie match, then the account (Fintava, MONEY-12);
    * `review`, the details with the BVN and NIN sent once for the provider's
    * own review, then the ID document and proof of address (Nuvion, NUV-02
@@ -151,8 +152,8 @@ export interface WalletView {
    */
   openingFlow?: WalletOpeningFlow;
   /**
-   * Where the provider's review of the person stands (NUV-02, additive):
-   * null when there is none (Fintava, or nothing sent yet). It never changes
+   * Where the provider's review of the person stands (NUV-02, additive;
+   * sent only with `openingFlow` `review`): null when nothing was sent yet. It never changes
    * what `state` means: `not_open` while documents are needed, after a
    * refusal, or when the review was stopped; `opening` while it is checked
    * and once approved, until the account number arrives (NUV-04).
