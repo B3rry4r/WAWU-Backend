@@ -2900,6 +2900,41 @@ model LegalChatMessage {
   @@index([legalRequestId, createdAt])
 }
 
+/// One paid AI call that writes the assistant's opener on a matter's thread
+/// (FIX-11). The opener is written on the first read of an empty, open thread
+/// (`LegalChatService.getThread`), and reading a thread must never multiply
+/// paid calls, so this row is two things at once:
+///
+/// - the CLAIM: it is written under the person's lock, only while the thread
+///   is empty and no other opener call is running for it, so parallel reads
+///   make one call between them and wait for its answer;
+/// - the METER: it is written in the same step that checks the person's
+///   hourly limits and counts toward them, like a `LegalAssistantCall`.
+///
+/// One row per attempt (a failed call is still a paid call). Carries no
+/// words of the conversation.
+model LegalChatOpenerCall {
+  id             String    @id @default(uuid())
+  legalRequestId String
+  wawuUserId     String
+  /// While the call runs: when its claim lapses, so a process that died
+  /// mid-call does not hold the thread for good. Null once it has ended.
+  busyUntil      DateTime?
+  /// How the call ended: `written` (the opener is in the thread), `failed`
+  /// (the provider failed or answered nothing) or `superseded` (the thread
+  /// was no longer empty when the answer came back, so it was not written).
+  /// Null while it runs.
+  outcome        String?
+  createdAt      DateTime  @default(now())
+
+  @@index([legalRequestId, createdAt])
+  @@index([wawuUserId, createdAt])
+  // Also in the database, and NOT expressible here (Prisma has no partial
+  // index): UNIQUE ("legalRequestId") WHERE "outcome" = 'written', so a
+  // thread has at most one opener on record whatever reaches the table. See
+  // migration 20261015200000_legal_chat_opener.
+}
+
 // -----------------------------------------------------------------------------
 // Event ticketing
 // -----------------------------------------------------------------------------

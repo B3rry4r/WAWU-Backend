@@ -28,8 +28,21 @@ export const ASSISTANT_CLIENT_MESSAGES_PER_INTAKE = 40;
 export const ASSISTANT_BRIEF_ATTEMPTS_PER_HOUR = 5;
 
 /**
- * How long a claim on a conversation (a retry of the reply, or preparing the
- * brief) holds if the process holding it dies, in milliseconds. The provider
+ * Writing the opener on a paid matter's thread (FIX-11) is a paid AI call
+ * nobody asked for: it runs when the client first reads an empty thread. A
+ * failed one is tried again on a later read, but only this often, so a
+ * screen that keeps reading while the provider is down cannot spend the
+ * client's hourly allowance for them. These also count toward the hourly
+ * limit above.
+ *
+ * PROVISIONAL(LEGAL-OPENER-ATTEMPTS-PER-HOUR, owner=YOU, why=no ruling names one; the opener should take one call, so five tries an hour, the same as the brief, covers a bad few minutes at the provider without letting reads multiply paid calls)
+ */
+export const ASSISTANT_OPENER_ATTEMPTS_PER_HOUR = 5;
+
+/**
+ * How long a claim on a conversation (a retry of the reply, preparing the
+ * brief, or writing a matter thread's opener) holds if the process holding
+ * it dies, in milliseconds. The provider
  * adapter sets no timeout of its own, so a call that hangs longer than this
  * lets one more claim start; every call is still counted against the hourly
  * limits, so the cost stays capped either way.
