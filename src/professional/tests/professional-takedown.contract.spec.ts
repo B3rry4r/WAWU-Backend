@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import type { Server } from 'http';
+import { Client } from 'pg';
 import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AllExceptionsFilter } from '../../common/filters/all-exceptions.filter';
@@ -578,5 +579,41 @@ describe('FIX-06: an admin takedown of a professional listing (contract)', () =>
       expect((await takedownRow())?.liftedAt).toBeNull();
       expect(await listedInDb()).toBe(false);
     }
+  });
+
+  it('a Show that arrives while an admin is taking the listing down waits for it, then is refused', async () => {
+    // The admin's unlist, held open half way: the listing's row locked, the
+    // takedown written, nothing committed yet.
+    const admin = new Client({ connectionString: process.env.DATABASE_URL });
+    await admin.connect();
+    try {
+      await admin.query('BEGIN');
+      await admin.query(
+        'SELECT "id" FROM "ProfessionalProfile" WHERE "id" = $1 FOR UPDATE',
+        [LISTING],
+      );
+      await admin.query(
+        `INSERT INTO "ProfessionalTakedown"
+           ("professionalId", "wawuUserId", "ownerListed", "takenDownByAdminId", "takenDownByAdminEmail", "takenDownByAdminRole")
+         VALUES ($1, $2, true, $3, $4, 'superadmin')`,
+        [LISTING, OWNER_SUB, ADMIN_SUPER_ID, SUPER_EMAIL],
+      );
+      await admin.query(
+        'UPDATE "ProfessionalProfile" SET "listed" = false WHERE "id" = $1',
+        [LISTING],
+      );
+
+      const showing = show(true).then((res) => res);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await admin.query('COMMIT');
+
+      const res = await showing;
+      expect(res.status).toBe(409);
+      expect(bodyOf(res).reason?.code).toBe('listing_taken_down');
+    } finally {
+      await admin.end();
+    }
+    expect(await listedInDb()).toBe(false);
+    expect(await inDirectory()).toBe(false);
   });
 });
