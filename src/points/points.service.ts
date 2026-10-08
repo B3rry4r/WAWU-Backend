@@ -7,7 +7,13 @@ import type {
   PointLotSource,
 } from '../../generated/prisma/enums';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { POINTS_EXPIRY, POINTS_LIMITS, POINTS_VIEW } from './points-config';
+import {
+  POINTS_EXPIRY,
+  POINTS_LATEST_END,
+  POINTS_LIMITS,
+  POINTS_VIEW,
+} from './points-config';
+import { lockPersonPoints } from './points-lock';
 import { PointsError } from './points-error';
 import { POINT_LOT_LABELS, pointMovementLabel } from './points-labels';
 import type { MyPointsView, PointMovementView } from './points-view.type';
@@ -123,11 +129,17 @@ export class PointsService {
       Number.isNaN(input.expiresAt.getTime()) ||
       input.expiresAt.getTime() <= now.getTime()
     ) {
-      throw new PointsError('points_invalid', 'Points must end after today.');
+      throw new PointsError('points_invalid', 'Points must end in the future.');
+    }
+    // The migration's CHECK holds the same bound: an end Postgres can store
+    // but JavaScript cannot read back (after the year 9999) never gets in, so
+    // no person's points view can fail on a stored date.
+    if (input.expiresAt.getTime() >= POINTS_LATEST_END.getTime()) {
+      throw new PointsError('points_invalid', 'That end date is too far away.');
     }
 
     return this.inTx(opts.tx, async (tx) => {
-      await lockPerson(tx, input.wawuUserId);
+      await lockPersonPoints(tx, input.wawuUserId);
       const lotId = randomUUID();
       // INSERT ... ON CONFLICT DO NOTHING: a grant that loses a race on the
       // same source and reference writes nothing and reads the winner below.
@@ -212,7 +224,7 @@ export class PointsService {
     }
 
     return this.inTx(opts.tx, async (tx) => {
-      await lockPerson(tx, input.wawuUserId);
+      await lockPersonPoints(tx, input.wawuUserId);
       const existing = await tx.pointHold.findUnique({
         where: {
           purpose_reference: {
@@ -256,15 +268,50 @@ export class PointsService {
         );
       }
 
-      const hold = await tx.pointHold.create({
-        data: {
-          wawuUserId: input.wawuUserId,
-          purpose: input.purpose,
-          reference: input.reference,
-          title,
-          quantity: input.points,
-        },
+      // INSERT ... ON CONFLICT DO NOTHING, as a grant does: two people asking
+      // for one purpose and reference at the same moment take different
+      // person locks, so the loser of the unique index writes nothing and is
+      // answered as if it had come second.
+      const holdId = randomUUID();
+      const { count } = await tx.pointHold.createMany({
+        data: [
+          {
+            id: holdId,
+            wawuUserId: input.wawuUserId,
+            purpose: input.purpose,
+            reference: input.reference,
+            title,
+            quantity: input.points,
+          },
+        ],
+        skipDuplicates: true,
       });
+      if (count === 0) {
+        const winner = await tx.pointHold.findUniqueOrThrow({
+          where: {
+            purpose_reference: {
+              purpose: input.purpose,
+              reference: input.reference,
+            },
+          },
+        });
+        if (
+          winner.wawuUserId !== input.wawuUserId ||
+          winner.quantity !== input.points
+        ) {
+          throw new PointsError(
+            'points_hold_conflict',
+            'These points were already held with different details.',
+          );
+        }
+        return outcomeOf(tx, winner, true);
+      }
+      const hold = {
+        id: holdId,
+        wawuUserId: input.wawuUserId,
+        quantity: input.points,
+        state: 'held' as const,
+      };
       const parts: PointHoldOutcome['parts'] = [];
       let left = input.points;
       for (const lot of lots) {
@@ -367,7 +414,7 @@ export class PointsService {
     now: Date,
   ): Promise<number> {
     return this.prisma.$transaction(async (tx) => {
-      await lockPerson(tx, candidate.wawuUserId);
+      await lockPersonPoints(tx, candidate.wawuUserId);
       const lot = await tx.pointLot.findUnique({
         where: { id: candidate.id },
       });
@@ -401,38 +448,50 @@ export class PointsService {
     };
     // One snapshot, so the balance, the lots and the movements agree with
     // each other even while a hold or a grant lands.
-    const [sum, lotCount, lots, rows] = await this.prisma.$transaction(
-      [
-        this.prisma.pointLot.aggregate({
-          where: live,
-          _sum: { remaining: true },
-        }),
-        this.prisma.pointLot.count({ where: live }),
-        this.prisma.pointLot.findMany({
-          where: live,
-          orderBy: [{ expiresAt: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
-          take: POINTS_VIEW.lots,
-        }),
-        this.prisma.pointLedger.findMany({
-          where: { wawuUserId },
-          orderBy: { seq: 'desc' },
-          take: POINTS_VIEW.movements,
-          include: {
-            lot: { select: { source: true } },
-            hold: { select: { purpose: true, state: true, title: true } },
-          },
-        }),
-      ],
-      { isolationLevel: 'RepeatableRead' },
-    );
+    const [sum, lotCount, soonestEnd, lots, rows] =
+      await this.prisma.$transaction(
+        [
+          this.prisma.pointLot.aggregate({
+            where: live,
+            _sum: { remaining: true },
+          }),
+          this.prisma.pointLot.count({ where: live }),
+          // The soonest end and every point that ends then, over all of the
+          // person's live lots, not only the ones listed.
+          this.prisma.pointLot.groupBy({
+            by: ['expiresAt'],
+            where: live,
+            _sum: { remaining: true },
+            orderBy: { expiresAt: 'asc' },
+            take: 1,
+          }),
+          this.prisma.pointLot.findMany({
+            where: live,
+            orderBy: [
+              { expiresAt: 'asc' },
+              { createdAt: 'asc' },
+              { id: 'asc' },
+            ],
+            take: POINTS_VIEW.lots,
+          }),
+          this.prisma.pointLedger.findMany({
+            where: { wawuUserId },
+            orderBy: { seq: 'desc' },
+            take: POINTS_VIEW.movements,
+            include: {
+              lot: { select: { source: true } },
+              hold: { select: { purpose: true, state: true, title: true } },
+            },
+          }),
+        ],
+        { isolationLevel: 'RepeatableRead' },
+      );
 
-    const soonest = lots[0]?.expiresAt;
+    const soonest = soonestEnd[0];
     const nextExpiry = soonest
       ? {
-          points: lots
-            .filter((l) => l.expiresAt.getTime() === soonest.getTime())
-            .reduce((s, l) => s + l.remaining, 0),
-          expiresAt: soonest.toISOString(),
+          points: soonest._sum?.remaining ?? 0,
+          expiresAt: soonest.expiresAt.toISOString(),
         }
       : null;
 
@@ -482,7 +541,7 @@ export class PointsService {
         );
       }
       // The hold's person never changes, so lock them and read it again.
-      await lockPerson(tx, found.wawuUserId);
+      await lockPersonPoints(tx, found.wawuUserId);
       const hold = await tx.pointHold.findUniqueOrThrow({
         where: { id: found.id },
       });
@@ -513,7 +572,8 @@ export class PointsService {
             },
           });
           if (lot.expiresAt <= now) {
-            await takeFromLot(tx, lot.id, part.points, now);
+            // The lot's first lapse time stands.
+            await takeFromLot(tx, lot.id, part.points, lot.lapsedAt ?? now);
             await tx.pointLedger.create({
               data: {
                 wawuUserId: hold.wawuUserId,
@@ -543,11 +603,6 @@ export class PointsService {
 }
 
 // -----------------------------------------------------------------------------
-
-/** One person's points, one call at a time. */
-async function lockPerson(tx: Tx, wawuUserId: string): Promise<void> {
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`points:${wawuUserId}`}, 0))`;
-}
 
 /** Takes `points` from a lot, only if it still has them. */
 async function takeFromLot(

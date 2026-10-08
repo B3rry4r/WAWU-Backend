@@ -8,15 +8,19 @@
 --   * a lot's who, where from, how many and when it ends never change;
 --   * a lot's points always equal the sum of its ledger rows, checked when
 --     each transaction commits, so no change to a lot can skip the ledger;
---   * a ledger row is never updated, and never deleted unless every row of
---     that person goes in the same statement (an account deletion);
---   * the ledger is never truncated.
+--   * a ledger row is never updated; it is deleted only by the account purge
+--     (a transaction that sets wawu.points_purge to the person's id), only
+--     that one person's rows, and all of them in one statement;
+--   * the ledger is never truncated;
+--   * a hold is `held` until it is committed or released, and a settled hold
+--     never changes again; who, what for, which job and how many never change;
+--   * a lot ends before 2100-01-01 (UTC), so every stored end reads back.
 --
 -- Rollback (nothing else references these tables):
 --   DROP TABLE "PointLedger"; DROP TABLE "PointHold"; DROP TABLE "PointLot";
---   DROP FUNCTION points_ledger_refuse_update(); DROP FUNCTION points_ledger_whole_person_only();
+--   DROP FUNCTION points_ledger_refuse_update(); DROP FUNCTION points_ledger_purge_only();
 --   DROP FUNCTION points_ledger_refuse_truncate(); DROP FUNCTION points_lot_fixed_fields();
---   DROP FUNCTION points_lot_matches_ledger();
+--   DROP FUNCTION points_lot_matches_ledger(); DROP FUNCTION points_hold_transitions();
 --   DROP TYPE "PointHoldState"; DROP TYPE "PointHoldPurpose";
 --   DROP TYPE "PointLedgerReason"; DROP TYPE "PointLotSource";
 
@@ -47,7 +51,10 @@ CREATE TABLE "PointLot" (
     CONSTRAINT "PointLot_pkey" PRIMARY KEY ("id"),
     CONSTRAINT "PointLot_quantity_positive" CHECK ("quantity" > 0),
     CONSTRAINT "PointLot_remaining_in_range" CHECK ("remaining" >= 0 AND "remaining" <= "quantity"),
-    CONSTRAINT "PointLot_sourceRef_length" CHECK (char_length("sourceRef") BETWEEN 1 AND 200)
+    CONSTRAINT "PointLot_sourceRef_length" CHECK (char_length("sourceRef") BETWEEN 1 AND 200),
+    -- The same bound PointsService checks (POINTS_LIMITS.latestEnd): an end
+    -- Postgres can store but JavaScript cannot read back never gets in.
+    CONSTRAINT "PointLot_expiresAt_bounded" CHECK ("expiresAt" < TIMESTAMP '2100-01-01 00:00:00')
 );
 
 -- CreateTable
@@ -137,17 +144,29 @@ CREATE TRIGGER "PointLedger_no_update"
   BEFORE UPDATE ON "PointLedger"
   FOR EACH ROW EXECUTE FUNCTION points_ledger_refuse_update();
 
--- A ledger row is deleted only with every other row of the same person, in
--- the same statement: the account purge's one deleteMany per person. Removing
--- some of a person's rows (rewriting their history) is refused.
-CREATE FUNCTION points_ledger_whole_person_only() RETURNS trigger
+-- A ledger row is deleted only by the account purge: a transaction that has
+-- set wawu.points_purge to one person's id (set_config(..., true), so it ends
+-- with the transaction), taken that person's points lock, and deletes all of
+-- that person's rows and nobody else's in one statement. Any other delete,
+-- one of some rows, one across several people, or one without the setting,
+-- is refused. A statement that deletes nothing passes.
+CREATE FUNCTION points_ledger_purge_only() RETURNS trigger
 LANGUAGE plpgsql AS $$
+DECLARE
+  purging TEXT := current_setting('wawu.points_purge', true);
 BEGIN
-  IF EXISTS (
-    SELECT 1
-      FROM "PointLedger" l
-     WHERE l."wawuUserId" IN (SELECT DISTINCT g."wawuUserId" FROM gone g)
-  ) THEN
+  IF NOT EXISTS (SELECT 1 FROM gone) THEN
+    RETURN NULL;
+  END IF;
+  IF purging IS NULL OR purging = '' THEN
+    RAISE EXCEPTION 'PointLedger is append-only: ledger rows are deleted only by the account purge'
+      USING ERRCODE = 'restrict_violation';
+  END IF;
+  IF EXISTS (SELECT 1 FROM gone g WHERE g."wawuUserId" IS DISTINCT FROM purging) THEN
+    RAISE EXCEPTION 'PointLedger is append-only: the purge deletes only the purged person''s rows'
+      USING ERRCODE = 'restrict_violation';
+  END IF;
+  IF EXISTS (SELECT 1 FROM "PointLedger" l WHERE l."wawuUserId" = purging) THEN
     RAISE EXCEPTION 'PointLedger is append-only: a person''s ledger rows are deleted all together or not at all'
       USING ERRCODE = 'restrict_violation';
   END IF;
@@ -155,10 +174,10 @@ BEGIN
 END;
 $$;
 
-CREATE TRIGGER "PointLedger_delete_whole_person"
+CREATE TRIGGER "PointLedger_delete_by_purge_only"
   AFTER DELETE ON "PointLedger"
   REFERENCING OLD TABLE AS gone
-  FOR EACH STATEMENT EXECUTE FUNCTION points_ledger_whole_person_only();
+  FOR EACH STATEMENT EXECUTE FUNCTION points_ledger_purge_only();
 
 CREATE FUNCTION points_ledger_refuse_truncate() RETURNS trigger
 LANGUAGE plpgsql AS $$
@@ -234,3 +253,34 @@ CREATE CONSTRAINT TRIGGER "PointLedger_matches_lot"
   AFTER INSERT ON "PointLedger"
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION points_lot_matches_ledger();
+
+-- ---------------------------------------------------------------------------
+-- A hold moves once: held, then committed or released, never back.
+-- ---------------------------------------------------------------------------
+
+CREATE FUNCTION points_hold_transitions() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW."id" IS DISTINCT FROM OLD."id"
+     OR NEW."wawuUserId" IS DISTINCT FROM OLD."wawuUserId"
+     OR NEW."purpose" IS DISTINCT FROM OLD."purpose"
+     OR NEW."reference" IS DISTINCT FROM OLD."reference"
+     OR NEW."title" IS DISTINCT FROM OLD."title"
+     OR NEW."quantity" IS DISTINCT FROM OLD."quantity"
+     OR NEW."createdAt" IS DISTINCT FROM OLD."createdAt" THEN
+    RAISE EXCEPTION 'PointHold: only its state and settle time change'
+      USING ERRCODE = 'restrict_violation';
+  END IF;
+  IF OLD."state" <> 'held'
+     AND (NEW."state" IS DISTINCT FROM OLD."state"
+          OR NEW."settledAt" IS DISTINCT FROM OLD."settledAt") THEN
+    RAISE EXCEPTION 'PointHold: a committed or released hold never changes'
+      USING ERRCODE = 'restrict_violation';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "PointHold_transitions"
+  BEFORE UPDATE ON "PointHold"
+  FOR EACH ROW EXECUTE FUNCTION points_hold_transitions();

@@ -1160,7 +1160,7 @@ send `Cache-Control: no-store`, read our database only and never call Fintava.
   `reason`) and `429` (`recipient_search_rate_limited`; the per-address 429
   has no `reason`); both lists carry `maxItems` (20 and 10).
 
-## 14. Points (POINTS-01)
+## 16. Points (POINTS-01)
 
 Points are not money: no provider holds them, no route converts them to
 naira or dollars, and every figure is a count of points (R-43). They are
@@ -1178,23 +1178,35 @@ written here because the tasks that sell, spend and cash them out
   its bonus in one commit. Nothing else writes these tables.
 - **Idempotent.** A grant on its (source, reference) and a hold on its
   (purpose, reference): the same call again changes nothing and answers what
-  the first one made. The same reference for another person or amount is a
-  409.
+  the first one made, in its current state (a released hold stays released:
+  a new attempt needs a new reference). The same reference for another
+  person or amount is a 409, also when the two arrive at the same moment.
+- **A lot's end** must be after now and before 2100-01-01 UTC
+  (`POINTS_LATEST_END`; the database holds the same bound), else `400
+  points_invalid`.
 - **Spent soonest-ending first,** then oldest grant, then lot id. A release
   puts every point back into the lot it came from.
 - **What the database refuses** (the migration's CHECKs and triggers): a lot
-  below 0 or above what it was granted; a lot whose points differ from the sum
-  of its ledger rows when the transaction commits; any UPDATE or TRUNCATE of
-  the ledger; a DELETE that leaves part of a person's ledger behind (the
-  account purge deletes all of it in one statement).
+  below 0 or above what it was granted, or ending in 2100 or later; a lot
+  whose points differ from the sum of its ledger rows when the transaction
+  commits; any UPDATE or TRUNCATE of the ledger; any DELETE of ledger rows
+  except the account purge's (`purgePersonPoints`: one transaction, the
+  person's points lock, `wawu.points_purge` set to their id for that
+  transaction, then all of that one person's rows in one statement); a hold
+  moving anywhere but from `held` to `committed` or `released`, or a settled
+  hold changing at all.
 - **Refusals** (`PointsError`, `src/points/points-error.ts`): `402
   insufficient_points` with `balancePoints`, `neededPoints`,
   `shortfallPoints`; `409 points_grant_conflict`; `409 points_hold_conflict`;
   `404 points_hold_not_found`; `409 points_hold_settled` (spent, or already
   given back); `400 points_invalid`. A field that carries points ends in
   `Points`, as money fields end in `Kobo`.
-- **`GET /me/points`** (PT5): `balance`, `nextExpiry` or null, `lots` (soonest
-  end first, at most 50, `lotCount` says how many in all), `movements` (the
-  last 20 ledger rows, newest first, each with a plain `label` and `pending`
-  for a hold still running). `Cache-Control: no-store`; the token is the
-  person.
+- **`GET /me/points`** (PT5): `balance`, `nextExpiry` or null (the soonest end
+  and every point that ends then, over all live lots), `lots` (soonest end
+  first, at most 50, `lotCount` says how many in all), `movements` (the last
+  20 ledger rows, newest first, each with a plain `label` and `pending` for a
+  hold still running). `Cache-Control: no-store`; the token is the person.
+- **For every caller** (lead, 8 Oct 2026): call `grant` or `hold` last in your
+  transaction, and never wait on a provider while you hold a person's points
+  lock: this service's own transactions use Prisma's 5 s default, so a
+  points call for that person would fail meanwhile.

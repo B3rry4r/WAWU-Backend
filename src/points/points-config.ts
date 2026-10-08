@@ -36,3 +36,12 @@ export const POINTS_LIMITS = {
   /** Postgres INTEGER, which every points column is. */
   maxPoints: 2_147_483_647,
 } as const;
+
+/**
+ * The latest end a lot may have (UTC). The migration's CHECK
+ * (`PointLot_expiresAt_bounded`) holds the same bound, so an end that
+ * Postgres can store but JavaScript cannot read back (after the year 9999)
+ * is refused before it is stored. Not a product rule: every real end is
+ * months away.
+ */
+export const POINTS_LATEST_END = new Date('2100-01-01T00:00:00.000Z');

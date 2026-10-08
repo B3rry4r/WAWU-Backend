@@ -263,10 +263,11 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // This person's points: the ledger of every change, the holds that spent
   // them and the lots they were held in. All of it is theirs and goes with
   // them, ledger first (it references the other two). The ledger is
-  // append-only, and the database lets a person's ledger rows be deleted
-  // only all together in one statement, which is exactly this purge's one
-  // deleteMany per person. Default (agent), owner may override: points
-  // left unspent are not paid out when an account is deleted.
+  // append-only: AccountPurgeService deletes these three in one transaction
+  // under the person's points lock (`purgePersonPoints`), the only delete
+  // the ledger's trigger accepts, and its table loop skips them. Default
+  // (agent), owner may override: unspent points are not paid out when an
+  // account is deleted.
   { model: 'PointLedger', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'PointHold', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'PointLot', column: 'wawuUserId', disposition: 'OWNED' },

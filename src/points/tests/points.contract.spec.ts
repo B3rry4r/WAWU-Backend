@@ -4,8 +4,8 @@
 // mock-wawu-id (its port from WAWU_ID_JWKS_URL, else 4001), like every other
 // contract spec. The route is mounted the way AppModule mounts it: through
 // MeModule. Points are written through PointsService, the one writer. Every
-// points row of the three seeded people is removed before and after (a whole
-// person's ledger, the one delete the ledger allows).
+// points row of the three seeded people is removed before and after, through
+// the purge's points step (the one delete the ledger allows).
 
 process.env.DATABASE_URL =
   process.env.DATABASE_URL ??
@@ -27,6 +27,7 @@ import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
 import { NotificationModule } from '../../notification/notification.module';
 import { MeModule } from '../../me/me.module';
 import { PointsService } from '../points.service';
+import { purgePersonPoints } from '../points-purge';
 import type { MyPointsView } from '../points-view.type';
 
 const dataOf = <T>(res: { body: unknown }): T => (res.body as { data: T }).data;
@@ -85,13 +86,9 @@ describe('POINTS-01: GET /me/points (contract)', () => {
   const ref = (what: string) => `p01c-${what}-${randomUUID()}`;
 
   async function cleanUp(): Promise<void> {
-    await prisma.pointLedger.deleteMany({
-      where: { wawuUserId: { in: SEEDED } },
-    });
-    await prisma.pointHold.deleteMany({
-      where: { wawuUserId: { in: SEEDED } },
-    });
-    await prisma.pointLot.deleteMany({ where: { wawuUserId: { in: SEEDED } } });
+    // The purge's points step, one person at a time: the only delete the
+    // ledger allows.
+    for (const who of SEEDED) await purgePersonPoints(prisma, who);
   }
 
   beforeAll(async () => {
@@ -301,14 +298,49 @@ describe('POINTS-01: GET /me/points (contract)', () => {
       await points.release({ holdId: h.holdId });
       const back = dataOf<MyPointsView>(await mine(plain).expect(200));
       expect(back.balance).toBe(1060);
+      // The cancelled conversion's own row reads as cancelled (round 2, D5).
       expect(back.movements[1]).toMatchObject({
-        label: 'Converting to cash',
+        label: 'Conversion cancelled',
+        points: -60,
         pending: false,
       });
       expect(back.movements[0]).toMatchObject({
-        label: 'Conversion cancelled',
+        label: 'Returned from a cancelled conversion',
         points: 60,
       });
+      expect(back.movements.map((m) => m.label)).not.toContain(
+        'Converting to cash',
+      );
     });
   });
+
+  it('the next end counts every live lot that ends then, over HTTP too (round 2, D1)', async () => {
+    const soon = inDays(10);
+    for (let i = 0; i < 60; i += 1) {
+      await points.grant({
+        wawuUserId: PRO,
+        source: 'referral',
+        sourceRef: ref(`d1-${i}`),
+        points: 1,
+        expiresAt: soon,
+      });
+    }
+    for (let i = 0; i < 5; i += 1) {
+      await points.grant({
+        wawuUserId: PRO,
+        source: 'pack',
+        sourceRef: ref(`d1-late-${i}`),
+        points: 100,
+        expiresAt: inDays(100),
+      });
+    }
+    const view = dataOf<MyPointsView>(await mine(pro).expect(200));
+    expect(view.balance).toBe(560);
+    expect(view.lotCount).toBe(65);
+    expect(view.lots).toHaveLength(50);
+    expect(view.nextExpiry).toEqual({
+      points: 60,
+      expiresAt: soon.toISOString(),
+    });
+  }, 120000);
 });

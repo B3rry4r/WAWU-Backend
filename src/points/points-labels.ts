@@ -37,8 +37,9 @@ export interface PointMovementFacts {
 /**
  * A grant says where the points came from; a hold says what they paid for
  * ("Spent on VoiceOver" once committed, "Held for VoiceOver" while the job
- * runs or after it was given back); a release says they came back; an expiry
- * says they ended.
+ * runs or after it was given back; a conversion "Converting to cash" only
+ * while it runs, then "Converted to cash" or "Conversion cancelled"); a
+ * release says they came back; an expiry says they ended.
  */
 export function pointMovementLabel(facts: PointMovementFacts): string {
   switch (facts.reason) {
@@ -50,10 +51,13 @@ export function pointMovementLabel(facts: PointMovementFacts): string {
     case 'release': {
       const hold = facts.hold;
       if (hold?.purpose === 'cash_out') {
-        if (facts.reason === 'release') return 'Conversion cancelled';
-        return hold.state === 'committed'
-          ? 'Converted to cash'
-          : 'Converting to cash';
+        // A conversion's own row says how it ended; only one still running
+        // says "Converting".
+        if (facts.reason === 'release')
+          return 'Returned from a cancelled conversion';
+        if (hold.state === 'committed') return 'Converted to cash';
+        if (hold.state === 'released') return 'Conversion cancelled';
+        return 'Converting to cash';
       }
       const what = hold?.title ?? AN_AI_TOOL;
       if (facts.reason === 'release') return `Returned from ${what}`;

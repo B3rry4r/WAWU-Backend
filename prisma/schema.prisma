@@ -4738,10 +4738,11 @@ model AdDailyTotal {
 // soonest-expiring lot first, through a hold (PointHold) that is committed or
 // released. Every change to a lot's points is one row in PointLedger, which
 // is append-only: the migration's triggers refuse an UPDATE of a ledger row,
-// and a DELETE that would leave part of a person's ledger behind (only an
-// account deletion removes a person's ledger, and it removes all of it).
-// CHECK constraints in the migration keep a lot between 0 and what it was
-// granted, so the balance can never go below zero.
+// and any DELETE but the account purge's (one person, all of their rows, in a
+// transaction that set wawu.points_purge). A hold moves once, from held to
+// committed or released. CHECK constraints in the migration keep a lot
+// between 0 and what it was granted, so the balance can never go below zero,
+// and its end before 2100.
 // -----------------------------------------------------------------------------
 
 /// Where a lot of points came from. The task that grants each one owns its
@@ -4833,7 +4834,7 @@ model PointHold {
 }
 
 /// Append-only: one row per change to one lot's points. Never updated; a
-/// person's rows are deleted only all together, with their account.
+/// person's rows are deleted only by the account purge, all together.
 model PointLedger {
   id         String            @id @default(uuid())
   wawuUserId String
@@ -4849,11 +4850,11 @@ model PointLedger {
   /// The job or purchase reference: the lot's for a grant, the hold's for a
   /// hold or a release; null for an expiry.
   reference  String?
-  /// When the row was written (the transaction's time, so the rows of one
-  /// hold share it).
+  /// When the row was written (the app's clock at each INSERT, so the rows
+  /// of one hold can differ by milliseconds; `seq` orders them).
   at         DateTime          @default(now())
   /// The order rows were written in: a person's movements, newest first, are
-  /// read by this, never by `at`, which rows of one transaction share.
+  /// read by this, never by `at`.
   seq        BigInt            @default(autoincrement())
 
   /// A person's last movements, newest first.

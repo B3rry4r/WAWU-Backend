@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { rowsToDelete } from './account-data-map';
+import { POINTS_PURGE_MODELS, purgePersonPoints } from '../points/points-purge';
 
 /**
  * Removes one account's data from this database, everywhere it lives.
@@ -29,7 +30,26 @@ export class AccountPurgeService {
     const deleted: Record<string, number> = {};
     let total = 0;
 
+    // Points (POINTS-01) go in their own transaction under the person's
+    // points lock: the ledger is append-only and its delete trigger accepts
+    // only this step. The loop below then leaves those three tables alone.
+    const pointsModels: ReadonlySet<string> = new Set(POINTS_PURGE_MODELS);
+    try {
+      const points = await purgePersonPoints(this.prisma, wawuUserId);
+      for (const model of POINTS_PURGE_MODELS) {
+        if (points[model] > 0) {
+          deleted[`${model}.wawuUserId`] = points[model];
+          total += points[model];
+        }
+      }
+    } catch (e) {
+      this.logger.error(
+        `Purge failed on points for ${wawuUserId}: ${(e as Error).message}`,
+      );
+    }
+
     for (const rule of rowsToDelete()) {
+      if (pointsModels.has(rule.model)) continue;
       const delegateName = rule.model.charAt(0).toLowerCase() + rule.model.slice(1);
       const delegate = (this.prisma as unknown as Record<string, { deleteMany?: (a: unknown) => Promise<{ count: number }> }>)[delegateName];
       if (!delegate?.deleteMany) {
