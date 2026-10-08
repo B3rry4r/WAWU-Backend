@@ -99,6 +99,51 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    // Featured works (ME-16). The pictures are file keys, which an export
+    // never carries (rule 3), so `media` is left out; the count says how
+    // many there were.
+    key: 'profileWorks',
+    models: ['ProfileWork'],
+    load: async (prisma, me) => {
+      const rows = await prisma.profileWork.findMany({
+        where: { wawuUserId: me },
+        select: {
+          title: true,
+          role: true,
+          client: true,
+          year: true,
+          link: true,
+          category: true,
+          description: true,
+          media: true,
+          position: true,
+          createdAt: true,
+        },
+        orderBy: [{ position: 'asc' }, { id: 'asc' }],
+      });
+      return rows.map(({ media, ...work }) => ({
+        ...work,
+        mediaCount: media.length,
+      }));
+    },
+  },
+  {
+    key: 'profileEducation',
+    models: ['ProfileEducation'],
+    load: (prisma, me) =>
+      prisma.profileEducation.findMany({
+        where: { wawuUserId: me },
+        select: {
+          school: true,
+          field: true,
+          startYear: true,
+          endYear: true,
+          createdAt: true,
+        },
+        orderBy: [{ startYear: 'desc' }, { id: 'asc' }],
+      }),
+  },
+  {
     key: 'likes',
     models: ['ContentLike'],
     load: (prisma, me) =>
@@ -144,6 +189,36 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    key: 'tgifReactions',
+    models: ['TgifReaction'],
+    load: (prisma, me) =>
+      prisma.tgifReaction.findMany({
+        where: { userWawuId: me },
+        select: { day: true, card: true, kind: true, createdAt: true },
+        orderBy: NEWEST,
+      }),
+  },
+  {
+    key: 'tgifReads',
+    models: ['TgifRead'],
+    load: (prisma, me) =>
+      prisma.tgifRead.findMany({
+        where: { userWawuId: me },
+        select: { day: true, createdAt: true },
+        orderBy: NEWEST,
+      }),
+  },
+  {
+    key: 'tgifShares',
+    models: ['TgifShare'],
+    load: (prisma, me) =>
+      prisma.tgifShare.findMany({
+        where: { userWawuId: me },
+        select: { day: true, createdAt: true },
+        orderBy: NEWEST,
+      }),
+  },
+  {
     key: 'creatorSettings',
     models: ['CreatorState'],
     load: (prisma, me) =>
@@ -164,6 +239,15 @@ export const EXPORT_SECTIONS: ExportSection[] = [
           showFollowing: true,
           showInMemberLists: true,
         },
+      }),
+  },
+  {
+    key: 'tgifPreference',
+    models: ['TgifPreference'],
+    load: (prisma, me) =>
+      prisma.tgifPreference.findUnique({
+        where: { userWawuId: me },
+        select: { show: true, updatedAt: true },
       }),
   },
   {
@@ -284,6 +368,28 @@ export const EXPORT_SECTIONS: ExportSection[] = [
         where: { userWawuId: me },
         select: { eventId: true, savedAt: true },
         orderBy: { savedAt: 'desc' },
+      }),
+  },
+  {
+    // ME-10: the creators this person saved (M30).
+    key: 'savedCreators',
+    models: ['SavedCreator'],
+    load: (prisma, me) =>
+      prisma.savedCreator.findMany({
+        where: { userWawuId: me },
+        select: { creatorWawuId: true, savedAt: true },
+        orderBy: { savedAt: 'desc' },
+      }),
+  },
+  {
+    // ME-10: the course lessons this person marked finished (M29).
+    key: 'lessonsFinished',
+    models: ['CourseLessonProgress'],
+    load: (prisma, me) =>
+      prisma.courseLessonProgress.findMany({
+        where: { userWawuId: me },
+        select: { contentId: true, lessonId: true, doneAt: true },
+        orderBy: { doneAt: 'desc' },
       }),
   },
   {
@@ -586,6 +692,16 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    key: 'professionalLocation',
+    models: ['ProfessionalLocation'],
+    // The city the person wrote for their professional card.
+    load: (prisma, me) =>
+      prisma.professionalLocation.findMany({
+        where: { wawuUserId: me },
+        select: { city: true, createdAt: true, updatedAt: true },
+      }),
+  },
+  {
     key: 'billPayments',
     models: ['BillPayment'],
     load: (prisma, me) =>
@@ -666,7 +782,17 @@ export const EXPORT_SECTIONS: ExportSection[] = [
  */
 export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
   [
+    // Editorial placement, not the person's own content (EXPLORE-03).
+    {
+      model: 'FeaturedCreator',
+      reason:
+        'An admin choice to show the creator in Explore, with the admin id; the person wrote none of it.',
+    },
     // Secrets and identity records: never in an email.
+    {
+      model: 'EventDoorStaff',
+      reason: 'A door role the organiser gave, not data the person gave.',
+    },
     { model: 'TransactionPin', reason: 'A PIN hash is a secret.' },
     { model: 'TransactionPinReset', reason: 'A reset code hash is a secret.' },
     { model: 'ApprovalDevice', reason: 'A device key is a secret.' },
@@ -752,6 +878,11 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
         'Who looked at a profile is those people browsing, not this account data.',
     },
     {
+      model: 'AdEvent',
+      reason:
+        'Which sponsored cards were opened, tapped or skipped on which day: an advertising count kept so each is counted once a day, not something the person made (BACKEND_GAPS G-199).',
+    },
+    {
       model: 'DmReport',
       reason: 'A report about somebody else is a moderation record.',
     },
@@ -786,5 +917,15 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
       model: 'LegalIntake',
       reason:
         'Legal matters may be privileged; whether they are emailed is the owner call.',
+    },
+    {
+      model: 'LegalIntakeMessage',
+      reason:
+        'Legal matters may be privileged; whether they are emailed is the owner call.',
+    },
+    {
+      model: 'LegalAssistantCall',
+      reason:
+        'A bookkeeping row for the assistant hourly limit (when a paid AI call was made, never what was said); nothing the person wrote.',
     },
   ];

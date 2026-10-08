@@ -32,7 +32,7 @@ import { PAY_ROUTE, WalletPaymentService } from './wallet-payment.service';
 
 /**
  * Pay from wallet (task MONEY-17). Declared by MONEY-04, served here
- * (docs/contract/CONVENTIONS.md sections 0 and 12). `GET
+ * (docs/contract/CONVENTIONS.md sections 0 and 14). `GET
  * /money/payments/{id}` (MONEY-19) and the holds (MONEY-18) stay declared
  * in money-payment.controller.ts.
  */
@@ -44,11 +44,11 @@ export class MoneyPaymentsController {
 
   /**
    * What the pay sheet shows before the PIN (H14, H17): the price from the
-   * server's own record of the item, Fintava's charge, the total, the balance
-   * and the shortfall, and a signed quote the payment sends back. Nothing is
-   * reserved. A total above MERCHANT_MAX_PER_TXN_KOBO is amount_out_of_range.
-   * A kind whose feature has not moved onto the wallet yet is
-   * target_not_payable.
+   * server's own record of the item, the wallet provider's charge, the
+   * total, the balance and the shortfall, and a signed quote the payment
+   * sends back. Nothing is reserved. A total above MERCHANT_MAX_PER_TXN_KOBO
+   * is amount_out_of_range. A kind whose feature has not moved onto the
+   * wallet yet, or an item not priced in naira, is target_not_payable.
    */
   @Get('payments/quote')
   @Header('Cache-Control', 'no-store')
@@ -68,13 +68,14 @@ export class MoneyPaymentsController {
   }
 
   /**
-   * Pay from the wallet: the price from the buyer's wallet to WAWU's
-   * merchant wallet (R-19), Fintava's charge on top (R-10), the 85/15 split
-   * of the price recorded with it (R-5). Answers 201 with the payment:
-   * completed, pending when Fintava has not confirmed the debit yet (H18,
-   * E10; it is never sent again blindly), or failed when Fintava refused it
-   * and nothing moved. The same Idempotency-Key and body answer the first
-   * result again (`Idempotent-Replayed: true`) without checking the PIN.
+   * Pay from the wallet: the price from the buyer's wallet to WAWU's own
+   * account at the wallet provider (R-19, R-42), the provider's charge on
+   * top (R-10), the 85/15 split of the price recorded with it (R-5). Answers
+   * 201 with the payment: completed, pending when the provider has not
+   * confirmed the debit yet (H18, E10; it is never sent again blindly), or
+   * failed when the provider refused it and nothing moved. The same
+   * Idempotency-Key and body answer the first result again
+   * (`Idempotent-Replayed: true`) without checking the PIN.
    */
   @Post('payments')
   @HttpCode(201)

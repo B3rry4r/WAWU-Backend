@@ -1,7 +1,10 @@
 import { applyDecorators } from '@nestjs/common';
 import { ApiExtension, ApiHeader, ApiResponse } from '@nestjs/swagger';
 import type { MoneyErrorCode } from './dto/money-enums';
-import { MoneyErrorEnvelope } from './dto/money-error.dto';
+import {
+  MoneyErrorEnvelope,
+  MoneyPlainErrorEnvelope,
+} from './dto/money-error.dto';
 
 /**
  * Helpers the Naira wallet contract controllers are declared with (task
@@ -75,6 +78,7 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   // The per-person statement limit and the two-at-once cap (WALLET-27 round 3).
   statement_rate_limited: 429,
   statement_busy: 503,
+  recipient_search_rate_limited: 429,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */
@@ -103,6 +107,28 @@ export const DEBIT_GATE_ERRORS: MoneyErrorCode[] = [
 /** The task that serves this route, written into the contract as `x-wawu-built-by`. */
 export function BuiltBy(task: string): MethodDecorator {
   return ApiExtension('x-wawu-built-by', task);
+}
+
+/**
+ * The most items a list route answers with, written into the contract as
+ * `x-wawu-max-items` and as `maxItems` on the 200 array
+ * (scripts/enrich-contract.js). Short lists carry a stated maximum
+ * (CONVENTIONS.md section 6).
+ */
+export function MaxItems(max: number): MethodDecorator {
+  return ApiExtension('x-wawu-max-items', max);
+}
+
+/**
+ * Documents the plain 400 of a malformed field: no `reason`, just the
+ * envelope (CONVENTIONS.md section 3).
+ */
+export function PlainBadRequest(description: string): MethodDecorator {
+  return ApiResponse({
+    status: 400,
+    description,
+    type: MoneyPlainErrorEnvelope,
+  });
 }
 
 /**

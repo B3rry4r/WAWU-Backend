@@ -162,11 +162,16 @@ export class NameCheckDto {
 
 /**
  * GET /money/recipients?q=. A name, an @handle, or a phone number in any
- * common Nigerian form (080..., 234..., +234..., spaces allowed); the
- * server normalises a phone to +234 before matching, and matches a phone
- * only in full.
+ * common Nigerian form (080..., 80..., 234..., +234..., spaces, dashes and
+ * brackets allowed). The server normalises a phone to +234 and matches it
+ * only in full; a name or @handle is matched by its beginning, and needs at
+ * least 2 characters once trimmed (a leading "@" does not count). Anything
+ * shorter is a plain 400.
  */
 export class RecipientSearchQueryDto {
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
   @IsString()
   @MinLength(2)
   @MaxLength(60)

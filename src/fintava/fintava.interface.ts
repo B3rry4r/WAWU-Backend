@@ -292,12 +292,16 @@ export type FintavaSender =
 
 export type FintavaSendKind = 'wallet_to_wallet' | 'bank_transfer';
 
-/** What Fintava knows about one of our references, lookup then history. */
-export type FintavaReconciliation =
+/**
+ * What Fintava knows about one of our references, lookup then history.
+ * Generic in the transaction so the wallet provider seam (MONEY-20) can run
+ * the same rules on its neutral transaction; Fintava's own is the default.
+ */
+export type FintavaReconciliation<T = FintavaTransaction> =
   | {
       state: 'found';
       source: 'lookup' | 'history';
-      transaction: FintavaTransaction;
+      transaction: T;
     }
   | { state: 'absent' }
   | {
@@ -328,8 +332,8 @@ export type FintavaReconciliation =
  *   or any bank send: a refused bank send can leave a PENDING record and
  *   uses its reference up, `sandbox/14-`).
  */
-export type FintavaRetryDecision =
-  | { action: 'settled'; transaction: FintavaTransaction }
+export type FintavaRetryDecision<T = FintavaTransaction> =
+  | { action: 'settled'; transaction: T }
   | {
       action: 'wait';
       why:
@@ -344,7 +348,7 @@ export type FintavaRetryDecision =
   | {
       action: 'resend_new_reference';
       why: 'failed' | 'absent';
-      transaction: FintavaTransaction | null;
+      transaction: T | null;
     };
 
 export interface FintavaRetryOutcome {

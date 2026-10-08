@@ -78,7 +78,7 @@ export class MoneyErrorReason {
   })
   blockedBy?: BankTransferBlock;
 
-  /** provider_unreachable, idempotency_in_progress, identity_checks_exhausted, selfie_checks_exhausted, reset_codes_exhausted: seconds to wait before trying again. */
+  /** provider_unreachable, idempotency_in_progress, identity_checks_exhausted, selfie_checks_exhausted, reset_codes_exhausted, recipient_search_rate_limited: seconds to wait before trying again. */
   retryAfterSeconds?: number;
 
   /** bvn_not_confirmed, bvn_phone_mismatch: BVN checks left in the current 24 hours. selfie_not_matched: selfie matches left in the current 24 hours. */
@@ -98,4 +98,21 @@ export class MoneyErrorEnvelope {
   data!: null;
 
   reason!: MoneyErrorReason;
+}
+
+/**
+ * The body of a 400 for a malformed field (the global ValidationPipe, or a
+ * route's own plain refusal): the same envelope with no `reason`
+ * (docs/contract/CONVENTIONS.md section 3). The app switches on the status.
+ */
+export class MoneyPlainErrorEnvelope {
+  /** 400. */
+  statusCode!: number;
+
+  /** A sentence about the first field that is wrong. */
+  message!: string;
+
+  /** Always null on an error. */
+  @ApiProperty({ nullable: true, type: Object, example: null })
+  data!: null;
 }

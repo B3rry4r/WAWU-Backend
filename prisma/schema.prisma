@@ -313,6 +313,56 @@ model ProfileDetails {
   updatedAt     DateTime @updatedAt
 }
 
+/// One featured work on somebody's profile (ME-16): what M33 shows under
+/// "Featured works", M34 lists and M35 opens.
+///
+/// ITS OWN TABLE, WITH NO RELATION TO UserProfile, for the reason ProfileDetails
+/// gives: nothing here widens GET or PATCH /users/me or the public profile.
+/// `position` is the order the owner chose (0 first); a new work goes to 0 and
+/// the rest move down one, inside a per-person advisory lock, so two requests
+/// cannot take the same slot or push a person past the cap. `media` holds
+/// object KEYS (never signed URLs, which expire) of the owner's own uploads,
+/// first one is the cover; every read signs them fresh.
+model ProfileWork {
+  id          String   @id @default(uuid())
+  wawuUserId  String
+  title       String
+  /// What the person did on it ("Director"). Required: M36 draws it unmarked.
+  role        String
+  client      String?
+  /// The year it was made. A whole year, never a date.
+  year        Int
+  /// Where to see it elsewhere. Stored as inert text, never fetched.
+  link        String?
+  /// Free text; M34's filter chips are the distinct categories one person used.
+  category    String?
+  description String?
+  media       String[] @default([])
+  position    Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([wawuUserId, position])
+}
+
+/// One education entry on somebody's profile (ME-16): school, field of study,
+/// first and last year. A NULL `endYear` means still studying there (the same
+/// single-column rule ProfileExperience.endedOn follows). No relation to
+/// UserProfile, same reason as ProfileWork.
+model ProfileEducation {
+  id         String   @id @default(uuid())
+  wawuUserId String
+  school     String
+  /// "Mass Communication". Optional: M33 draws the line from whatever is there.
+  field      String?
+  startYear  Int
+  endYear    Int?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([wawuUserId, startYear])
+}
+
 /// One role on somebody's profile: what they did, where, and when.
 ///
 /// WHY A TABLE AND NOT A JSON COLUMN. Each row is independently editable and
@@ -554,7 +604,29 @@ model CourseLesson {
   order         Int
   durationLabel String?
 
+  /// ME-10: who has finished this lesson (M29 "3 of 12 done").
+  progress CourseLessonProgress[]
+
   @@index([contentId])
+}
+
+/// ME-10. One person's finished lesson of a course piece: M29's
+/// "3 of 12 done" counts these against the piece's CourseLesson rows. Written
+/// only by the person themselves (PUT and DELETE /me/lessons/:lessonId/done),
+/// and only for a piece they may open (bought, free, or their own). One row
+/// per person per lesson; the lesson's piece is copied onto the row so a
+/// piece's count is one indexed read. Goes with the lesson (cascade).
+model CourseLessonProgress {
+  id         String       @id @default(uuid())
+  userWawuId String
+  lessonId   String
+  lesson     CourseLesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  contentId  String
+  doneAt     DateTime     @default(now())
+
+  @@unique([userWawuId, lessonId])
+  @@index([userWawuId, contentId])
+  @@index([lessonId])
 }
 
 model Comment {
@@ -990,6 +1062,10 @@ model CommunityMessage {
 
   @@index([communityId])
   @@index([senderWawuId])
+  /// INBOX-07. The inbox ranks every room a person is in by its newest
+  /// message and counts the messages after a read mark: both walk one room's
+  /// messages in time order, and this index serves them without a sort.
+  @@index([communityId, sentAt])
 }
 
 model CreditsState {
@@ -1225,6 +1301,12 @@ model Notification {
   /// Null for every organically emitted notification.
   campaignId String?
 
+  /// ME-10: what this notification is about, when its event named a thing
+  /// (a piece, a paid question, a room, a person). A side table, not columns
+  /// here, so GET /notifications (protected, read by the web) returns exactly
+  /// the fields it always did. Rows written before ME-10 have none.
+  target NotificationTarget?
+
   @@index([userWawuId])
   @@index([userWawuId, read])
   @@index([createdAt])
@@ -1233,6 +1315,23 @@ model Notification {
   /// these", per user, per kind. Without this it is a sequential scan of the
   /// whole table on every run.
   @@index([userWawuId, kind, createdAt])
+}
+
+/// ME-10. What one notification is about, so opening it opens that thing
+/// (M31: Reply, See why, a piece, a person). Written by NotificationService.emit()
+/// in the same insert as its notification, from the event that caused it;
+/// never by a client. `targetKind` is content, paid_question, community or
+/// profile; `targetId` that thing's id. `actorWawuId` is the other person in
+/// the event (the buyer, tipper, follower, asker, rater), never the reader.
+model NotificationTarget {
+  notificationId String       @id
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  targetKind     String
+  targetId       String
+  actorWawuId    String?
+  createdAt      DateTime     @default(now())
+
+  @@index([actorWawuId])
 }
 
 model NotificationSettings {
@@ -2219,17 +2318,24 @@ model AdminOpsAudit {
 enum EventFormat {
   in_person
   online
+  /// In a room and streamed at once (the host wizard's third format, task
+  /// EVENTS-02). Added after the first two, so a client that only knows
+  /// in_person and online has never been sent it for an event it already had.
+  hybrid
 }
 
-/// Exactly the five the public filter row offers (old EVENT_FILTERS, minus the
-/// two format chips and the "All" chip). A sixth kind would be a chip nobody
-/// can tap, i.e. an event nobody can find.
+/// The kinds the filter rows offer. The first five are the web's chips (old
+/// EVENT_FILTERS, minus the two format chips and the "All" chip); `conference`
+/// and `concert` are the app's Kind chips (task EVENTS-02). A kind no filter
+/// offers would be a chip nobody can tap, i.e. an event nobody can find.
 enum EventType {
   workshop
   summit
   webinar
   meetup
   competition
+  conference
+  concert
 }
 
 /// Every state here has an exit, and that is a hard requirement rather than a
@@ -2293,6 +2399,10 @@ model Event {
   timezone  String?
 
   /// City or venue name (always shown), and the street address (detail only).
+  /// Optional on a submit since EVENTS-02 (the app's host wizard asks only
+  /// for the street address): when a host leaves it out it is filled from
+  /// `address`, and is the empty string when there is no address either, so
+  /// the column and its wire type stay a string for every client.
   location String
   address  String?
 
@@ -2339,6 +2449,8 @@ model Event {
   orders      EventOrder[]
   tickets     EventTicket[]
   referrals   EventReferral[]
+  /// People the host lets scan tickets in at the door (EVENTS-05).
+  doorStaff   EventDoorStaff[]
 
   /// Banner image. Object-storage URL from POST /uploads/presign.
   bannerUrl    String?
@@ -2410,6 +2522,20 @@ model EventGoing {
 /// the unique constraint IS the idempotency, and a DELETE that matches
 /// nothing is still the correct end state. Private: nothing publishes who
 /// saved what, and the only count on the wire is the caller's own boolean.
+/// ME-10. One person's saved creator: the "Creators" tab of Saved (M30).
+/// A bookmark, not a follow: it sends nothing to the creator and changes no
+/// count they see. Written by PUT and DELETE /me/saved/creators/:wawuId.
+model SavedCreator {
+  id            String   @id @default(uuid())
+  userWawuId    String
+  creatorWawuId String
+  savedAt       DateTime @default(now())
+
+  @@unique([userWawuId, creatorWawuId])
+  @@index([userWawuId, savedAt])
+  @@index([creatorWawuId])
+}
+
 model EventSave {
   id         String   @id @default(uuid())
   eventId    String
@@ -2546,6 +2672,27 @@ model ProfessionalProfile {
   @@index([status])
 }
 
+/// Where a professional works: the city on their card ("Chartered
+/// accountant · Ikeja", H10) and in the directory (PROS-02).
+///
+/// A SIDE TABLE, NOT A COLUMN. ProfessionalProfile rows go out whole on
+/// routes the web calls today (POST /professionals/applications, GET
+/// /professionals/applications/mine, PATCH .../listing), so a column there
+/// would add a key to each of those answers (the protected route list,
+/// hazard H-1).
+///
+/// One row per PERSON, not per listing: somebody listed in two fields works
+/// from one place. Written by its owner through PUT /professionals/location
+/// and read only by the professional directory routes. No row means the card
+/// shows no city, never a guessed one.
+model ProfessionalLocation {
+  wawuUserId String   @id
+  /// As the professional wrote it, trimmed: "Ikeja", "Port Harcourt".
+  city       String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
 /// One client's rating of one professional listing.
 ///
 /// The directory card draws stars and a review count next to a Book button,
@@ -2638,8 +2785,85 @@ model LegalIntake {
   startedAt   DateTime  @default(now())
   completedAt DateTime?
 
+  /// How the intake is being filled. Null: the question form (the web's
+  /// `/legal/intake` routes, every row written before LEGAL-01).
+  /// `assistant`: the chat-first flow (`/legal/assistant`, LEGAL-01), where
+  /// the assistant profiles the problem in conversation before any payment.
+  channel String?
+
+  /// The assistant's working brief while the conversation runs (LEGAL-01):
+  /// `{ headline, facts: [{ label, value }], ready }`. Only what the client
+  /// said, as the client is shown it to confirm. On "Send to a consultant"
+  /// it becomes `brief` above, in the same shape the form writes.
+  draftBrief Json?
+
+  /// A short claim while one paid AI call is running for this conversation
+  /// (a retry of the assistant's reply, or preparing the brief on Send), so
+  /// a second one cannot start. Expires on its own if the process dies.
+  assistantBusyUntil DateTime?
+
   @@index([wawuUserId, status])
   @@index([status, completedAt])
+  // Also in the database, and NOT expressible here (Prisma has no partial
+  // index): UNIQUE ("wawuUserId") WHERE "channel" = 'assistant' AND "status" =
+  // 'in_progress', so a person has at most one open assistant conversation.
+  // See migration 20261007200000_legal_assistant. `prisma migrate diff` does
+  // not list it, so the schema and the migrations still agree.
+}
+
+/// Who wrote a message in the assistant conversation on an intake.
+enum LegalIntakeAuthor {
+  client
+  /// The WAWU Legal assistant: Gemini, or a line the server writes itself
+  /// (`scripted`). Never a person.
+  assistant
+}
+
+/// One message in the assistant conversation on an UNPAID legal intake
+/// (LEGAL-01: legal starts as a chat).
+///
+/// Kept apart from LegalChatMessage on purpose: that thread belongs to a
+/// LegalRequest, which only exists once the client sends the brief to a
+/// consultant. Everything said before that lives here; everything after it
+/// (the consultant joining, the client's replies) lives on the request's
+/// own thread, so the dashboard's consultant routes read it unchanged.
+///
+/// `wawuUserId` is carried so the account purge can delete these rows by
+/// owner (account-data-map.ts), like the intake itself.
+model LegalIntakeMessage {
+  id            String            @id @default(uuid())
+  legalIntakeId String
+  wawuUserId    String
+  authorRole    LegalIntakeAuthor
+  /// Written by the server, not the model: the opener (which carries the
+  /// client's first name) and the "sent to a consultant" line. Never sent to
+  /// the model.
+  scripted      Boolean           @default(false)
+  body          String
+  /// The answers offered as taps under this message: `[{ id, label }]`.
+  /// Only the newest assistant message's are live.
+  quickReplies  Json?
+  createdAt     DateTime          @default(now())
+
+  @@index([legalIntakeId, createdAt])
+  @@index([wawuUserId, createdAt])
+}
+
+/// One paid AI call the assistant made that no new client message paid for:
+/// asking again after a failed reply (`reply`) or preparing the brief on Send
+/// (`brief`). Written in the same step that checks the limits, so the hourly
+/// and per-conversation counts (client messages plus these) cannot be beaten
+/// by parallel requests. Carries no words of the conversation.
+model LegalAssistantCall {
+  id            String   @id @default(uuid())
+  legalIntakeId String
+  wawuUserId    String
+  /// `reply` or `brief`.
+  kind          String
+  createdAt     DateTime @default(now())
+
+  @@index([legalIntakeId, createdAt])
+  @@index([wawuUserId, createdAt])
 }
 
 /// Who said it.
@@ -2849,6 +3073,27 @@ model EventReferral {
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
   @@index([eventId])
+}
+
+/// Someone the host lets check tickets in at the door (EVENTS-05, E19 to E24).
+///
+/// One row per (event, person). Removing someone sets `removedAt` rather than
+/// deleting the row, so a ticket they already let in still reads "by Door 1"
+/// (E23) after they stop working the door. Adding them again clears it.
+/// `label` is what the door result prints after "by": the host's own name for
+/// the door, "Door 1" by default.
+model EventDoorStaff {
+  id          String    @id @default(uuid())
+  eventId     String
+  staffWawuId String
+  label       String
+  addedAt     DateTime  @default(now())
+  removedAt   DateTime?
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, staffWawuId])
+  @@index([staffWawuId])
 }
 
 // -----------------------------------------------------------------------------
@@ -3704,6 +3949,10 @@ model ChatParticipant {
   lastReadAt        DateTime?
   /// The message that mark points at.
   lastReadMessageId String?
+  /// When the mark last moved (INBOX-02). The live catch-up reads it to tell
+  /// which read marks changed since a cursor. Null on a row that has never
+  /// moved, and on every row from before this column.
+  readAt            DateTime?
   conversation      ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@id([conversationId, wawuUserId])
@@ -4001,10 +4250,17 @@ model WalletPayment {
   payeeShareKobo        BigInt
   wawuShareKobo         BigInt
   payeeSettledAt        DateTime?
-  /// OUR CustomerReference at Fintava, derived from this row's id.
+  /// OUR reference at the wallet provider, derived from this row's id.
   customerReference     String    @unique
   payerAccountNumber    String?
+  /// WAWU's own account at the provider the money went to (Fintava's
+  /// merchant wallet, Nuvion's operational account).
   merchantAccountNumber String
+  /// The wallet provider that took the payment (WALLET_PROVIDER at the time:
+  /// `fintava` or `nuvion`). The sweep asks only the provider the server
+  /// runs about its own payments, so a rollback never asks one provider
+  /// about the other's transfers (MONEY-20 finding 2).
+  provider              String    @default("fintava")
   status                String
   /// `<payer>:<kind>:<targetId>` while the payment is `pending`, null once
   /// it is settled: the unique key is the rule "one open payment per buyer
@@ -4174,6 +4430,8 @@ model School {
   /// Where the enrolment report goes: the student's details, course and
   /// intake (SCHOOLS-09). Never shown in the app.
   reportEmail String
+  /// SCHOOLS-02: when the dashboard hid this school. Null: shown. SCHOOLS-04 serves only unhidden rows.
+  hiddenAt    DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -4200,6 +4458,8 @@ model SchoolCourse {
   /// Int carries up to 21,474,836.47 naira, above the 10,000,000 naira
   /// merchant cap any one payment is bounded by.
   priceKobo Int
+  /// SCHOOLS-02: when the dashboard hid this course. Null: shown. SCHOOLS-04 serves only unhidden rows.
+  hiddenAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -4226,9 +4486,332 @@ model CourseIntake {
   location   String?
   capacity   Int
   seatsTaken Int          @default(0)
+  /// SCHOOLS-02: when the dashboard hid this intake. Null: shown. SCHOOLS-04 serves only unhidden rows.
+  hiddenAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([courseId, startDate])
+}
+
+/// SETTINGS-02: the owner's legal text, one row per document ("terms",
+/// "privacy"), served by GET /policies/:slug and written by the superadmin
+/// route PUT /admin/policies/:slug. No row means the owner has not filled it
+/// in yet, and the app says so; nothing here is ever seeded with wording.
+model LegalDocument {
+  /// "terms" or "privacy".
+  slug          String   @id
+  title         String
+  /// The date the owner gives the text. Shown as "Updated 1 September 2026".
+  effectiveDate DateTime @db.Date
+  /// [{ heading, body }]; a body's paragraphs are separated by a blank line.
+  sections      Json
+  updatedAt     DateTime @updatedAt
+}
+
+/// One person's reaction to one TGIF card on one day (HOME-10). The unique
+/// (person, day, card) key is what makes a reaction count once: two taps at
+/// once race on the key and one row exists. Counts are always the number of
+/// rows (no counter column), so a count can never drift from its rows. `kind`
+/// is "amen" today; the migration holds it to that with a CHECK.
+model TgifReaction {
+  id         String   @id @default(uuid())
+  userWawuId String
+  /// The calendar day the card belongs to (a date, not an instant).
+  day        DateTime @db.Date
+  card       String
+  kind       String   @default("amen")
+  createdAt  DateTime @default(now())
+
+  @@unique([userWawuId, day, card])
+  @@index([day, card])
+}
+
+/// One person opened TGIF on one day (HOME-10). "Readers today" is the number
+/// of rows for the day: one person is one row however often they open it.
+model TgifRead {
+  id         String   @id @default(uuid())
+  userWawuId String
+  day        DateTime @db.Date
+  createdAt  DateTime @default(now())
+
+  @@unique([userWawuId, day])
+  @@index([day])
+}
+
+/// One person shared TGIF on one day (HOME-10). The share count for a day is
+/// the number of rows, as ContentShare's is for a piece.
+model TgifShare {
+  id         String   @id @default(uuid())
+  userWawuId String
+  day        DateTime @db.Date
+  createdAt  DateTime @default(now())
+
+  @@unique([userWawuId, day])
+  @@index([day])
+}
+
+/// HOME-11: whether this person wants TGIF on Today. One row per person, made
+/// the first time they change it; no row means the default (shown). Nothing
+/// else references it.
+model TgifPreference {
+  userWawuId String   @id
+  /// false = the person turned TGIF off on Today.
+  show       Boolean  @default(true)
+  updatedAt  DateTime @updatedAt
+}
+
+/// EXPLORE-03: a creator an admin has chosen to show in Explore's "Featured
+/// creators" rail. One row per featured creator; no row means not featured.
+/// `position` orders the rail (lowest first). Set only by the superadmin
+/// route PUT /admin/featured-creators/:wawuId and removed by DELETE.
+model FeaturedCreator {
+  wawuUserId        String   @id
+  position          Int      @default(0)
+  /// The admin who featured them (an audit record, kept when a creator goes).
+  featuredByAdminId String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([position])
+}
+
+// -----------------------------------------------------------------------------
+// Sponsored cards (ADS-03, R-15)
+//
+// Ads at launch are booked by the WAWU team and invoiced by hand, so nothing
+// here records a price, an advertiser account or a payment. Money lives in the
+// team's invoices, not in this schema.
+//
+// Holds no personal data: no column names a WAWU user, so
+// src/account-purge/account-data-map.ts has nothing to classify here. (ADS-05's
+// per-viewer rows will, and classify themselves in that task.)
+//
+// CHECK constraints are in the migration, because Prisma does not model them:
+//   AdCampaign: endsAt > startsAt; weight between 1 and 100 (the range
+//   is AD_WEIGHT_MIN and AD_WEIGHT_MAX in src/ads/ads-limits.ts); advertiser
+//   is not blank.
+//   AdCreative: headline, CTA label and destination id are not blank, and a
+//   subline is absent or not blank; artworkUrl is absent or an http(s) link.
+//   "Blank" means empty or only white space, control, zero-width or other
+//   invisible characters, spelled out in the migration so it does not depend
+//   on the server's locale.
+// -----------------------------------------------------------------------------
+
+/// Where a sponsored card shows: inside the TGIF reader before the takeaway
+/// (`tgif_card`), or in TGIF's place on Today when the person has TGIF off
+/// (`today_slot`). Adding a placement is an `ALTER TYPE ... ADD VALUE`.
+enum AdPlacement {
+  tgif_card
+  today_slot
+}
+
+/// Where the team has put a campaign. The window (`startsAt`, `endsAt`) decides
+/// when it may run; this decides whether it may run at all. Only `scheduled`
+/// and `live` are ever served; `draft`, `paused` and `ended` never are.
+enum AdCampaignStatus {
+  draft
+  scheduled
+  live
+  paused
+  ended
+}
+
+/// What the card's button opens. THE ALLOW-LIST: a card can only open one of
+/// these, so a destination outside it cannot be stored. `event` opens the event
+/// detail screen for `AdCreative.ctaDestinationId` (H33 "Get tickets", H36
+/// "Tickets"). The only destination the design draws is the event; a new kind
+/// is an additive `ALTER TYPE ... ADD VALUE` that the task needing it names.
+enum AdCtaDestination {
+  event
+}
+
+/// One booking: who it is for, where it shows, when, and how it ranks against
+/// another booking for the same placement. The card itself is the AdCreative.
+model AdCampaign {
+  id String @id @default(uuid())
+
+  /// The advertiser's name as the card shows it ("SPONSORED · <advertiser>").
+  /// A name, not an account: advertisers have no accounts (R-15).
+  advertiser String
+
+  placement AdPlacement
+  status    AdCampaignStatus @default(draft)
+
+  /// The window the card may be served in: startsAt <= now < endsAt. Instants
+  /// (UTC); the dashboard turns "Saturday 18 October" into instants.
+  startsAt DateTime
+  endsAt   DateTime
+
+  /// Ranks bookings that overlap on one placement, so one is served: the
+  /// higher weight wins, and ADS-04 breaks a tie. 1 to 100, whole numbers. Range: src/ads/ads-limits.ts.
+  weight Int @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// At most one (AdCreative.campaignId is unique). Removing a campaign
+  /// removes its card.
+  creative AdCreative?
+
+  /// Counts (ADS-05). Back-relations only; no column is added.
+  events      AdEvent[]
+  dailyTotals AdDailyTotal[]
+
+  /// The serving query (ADS-04): one placement, a servable status, a window
+  /// that contains now.
+  @@index([placement, status, startsAt, endsAt])
+}
+
+/// The card a campaign shows. Everything on H33 and H36 is here and nothing
+/// else: the advertiser's name is the campaign's, the "SPONSORED" label and
+/// "Ads keep TGIF free" are the app's own words, and the event's date and
+/// price are typed into `subline` by the team (the app never invents them).
+model AdCreative {
+  id String @id @default(uuid())
+
+  campaignId String     @unique
+  campaign   AdCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  /// "Gospel Night Live".
+  headline String
+  /// "Abuja · Sat 18 October", exactly as the team wrote it, price and all.
+  /// Optional: a card with only a headline is allowed.
+  subline  String?
+
+  /// The button's words ("Get tickets", "Tickets").
+  ctaLabel         String
+  /// What the button opens: a kind from the allow-list (AdCtaDestination) and
+  /// the id of the thing of that kind. For `event`, an Event id. No foreign
+  /// key: the id's table depends on the kind, and an FK onto Event would stop
+  /// an event being deleted. Serving checks the target is still open.
+  ctaDestination   AdCtaDestination
+  ctaDestinationId String
+
+  /// The picture. An http(s) URL from POST /uploads/presign, the same as
+  /// Event.bannerUrl and NotificationCampaign.imageUrl. Null: the card is drawn
+  /// without a picture.
+  artworkUrl String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// -----------------------------------------------------------------------------
+// Admin ad management audit (ADS-06, R-15)
+//
+// One row for every change an admin makes to an ad campaign, written in the
+// same transaction as the change. Same side-table idiom as AdminEventReview:
+// no foreign key to AdCampaign (a deleted draft keeps its history) or to
+// AdminUser (the admin's email and role are snapshots, so "who paused this"
+// stays answerable after that admin is renamed or removed).
+//
+// No column names a WAWU user, so src/account-purge/account-data-map.ts has
+// nothing to classify here. `changes` can hold the advertiser's name, which
+// may be a named person who is not a user; erasing it is a manual job, as for
+// AdCampaign itself.
+// -----------------------------------------------------------------------------
+
+enum AdminAdAction {
+  created
+  updated
+  scheduled
+  paused
+  resumed
+  ended
+  deleted
+}
+
+/// What an admin did to a campaign, who did it, and the before and after.
+model AdminAdAudit {
+  id String @id @default(uuid())
+
+  /// Gives the history one exact order even when two rows share a timestamp.
+  seq Int @default(autoincrement())
+
+  /// The campaign. Not a foreign key: a deleted draft keeps its rows.
+  campaignId String
+
+  action AdminAdAction
+
+  /// The campaign's status before and after. `previousStatus` is null on
+  /// `created`; `newStatus` is null on `deleted`.
+  previousStatus AdCampaignStatus?
+  newStatus      AdCampaignStatus?
+
+  /// `{ field: { from, to } }` for the fields the action changed. On `created`
+  /// and `deleted` every field, with `from` or `to` null.
+  changes Json?
+
+  /// Snapshots of who acted.
+  adminId    String
+  adminEmail String
+  adminRole  AdminRole
+
+  createdAt DateTime @default(now())
+
+  @@index([campaignId, seq])
+  @@index([adminId])
+}
+
+// -----------------------------------------------------------------------------
+// Counting ad views, taps and skips (ADS-05, R-15)
+//
+// Ads are invoiced by hand, so these are reporting figures, not a ledger of
+// money. Two tables, one rule: a person's view, tap or skip of a campaign is
+// counted ONCE per UTC day.
+//
+//   AdEvent       the raw record: one row per (campaign, person, kind, day).
+//                 Its primary key IS the dedupe rule, so a double tap, a
+//                 retry or fifty parallel requests leave one row.
+//   AdDailyTotal  the daily totals: one row per (campaign, day). Moved in the
+//                 same SQL statement that creates an AdEvent row, and only
+//                 when that row was new, so the totals equal the raw rows.
+//
+// The totals hold no person, so they outlive a purged account; the raw rows
+// name a person (viewerWawuId) and are classified in
+// src/account-purge/account-data-map.ts.
+//
+// Both tables reference AdCampaign with ON DELETE RESTRICT: a campaign that
+// has been counted cannot be deleted, because its counts are what the owner
+// invoices from. A campaign is ended or paused, never deleted, once it ran.
+// CHECK constraints (counts are not negative) are in the migration.
+// -----------------------------------------------------------------------------
+
+/// What a person did with a sponsored card.
+enum AdEventType {
+  view
+  tap
+  skip
+}
+
+/// One person, one kind of action, one campaign, one UTC day. Never updated.
+model AdEvent {
+  campaignId   String
+  campaign     AdCampaign  @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  viewerWawuId String
+  type         AdEventType
+  /// The UTC calendar day of `createdAt`.
+  day          DateTime    @db.Date
+  createdAt    DateTime    @default(now())
+
+  @@id([campaignId, viewerWawuId, type, day])
+  /// The report: one campaign over a span of days.
+  @@index([campaignId, day])
+  /// Removing an account's rows.
+  @@index([viewerWawuId])
+}
+
+/// A campaign's counts for one UTC day. Written only by the statement that
+/// also writes the AdEvent row it counts.
+model AdDailyTotal {
+  campaignId String
+  campaign   AdCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  day        DateTime   @db.Date
+  views      Int        @default(0)
+  taps       Int        @default(0)
+  skips      Int        @default(0)
+
+  @@id([campaignId, day])
 }

@@ -1,17 +1,20 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import type { Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { FintavaClient } from '../../fintava/fintava-client';
-import { FintavaError } from '../../fintava/fintava-error';
-import type {
-  FintavaSender,
-  FintavaTransaction,
-} from '../../fintava/fintava.interface';
+import {
+  type LedgerParty,
+  type LedgerWebhookMovement,
+  type LedgerWebhookReversal,
+  type ProviderHolder,
+  type ProviderMovementConfirmation,
+  WALLET_PROVIDER,
+  type WalletProvider,
+} from '../../wallet-provider/wallet-provider.interface';
+import { WalletProviderError } from '../../wallet-provider/wallet-provider-error';
 import type { TransferStatus } from '../money-view.type';
 import {
-  FINTAVA_WALLET_BANK_CODE,
   LEDGER_CONFIG_KEYS,
   LEDGER_DEFAULTS,
   ledgerConfirmWindowMs,
@@ -23,14 +26,6 @@ import type {
 } from './ledger.interface';
 import { LedgerStatusService } from './ledger-status.service';
 import { LedgerService } from './ledger.service';
-import {
-  LEDGER_WEBHOOK_EVENTS,
-  ledgerStatusOf,
-  readLedgerWebhook,
-  type LedgerParty,
-  type LedgerWebhookMovement,
-  type LedgerWebhookReversal,
-} from './ledger-webhook';
 
 /** What one pass over one stored delivery did. */
 export type LedgerConsumeOutcome =
@@ -43,20 +38,10 @@ export type LedgerConsumeOutcome =
   /** Not the ledger's, not pending, or another worker holds it. */
   | 'skipped';
 
-/** What Fintava says about a movement a delivery names. */
-type Confirmation =
-  | {
-      state: 'found';
-      transaction: FintavaTransaction;
-      tagapayTransRef: string | null;
-    }
-  | { state: 'absent' }
-  | { state: 'unknown'; why: string };
-
 /** A party that is one of WAWU's wallets. */
 interface OurWallet {
   wallet: LedgerWallet;
-  /** Fintava's customerId, for the person's history; null on the merchant wallet. */
+  /** The provider's customerId, for the person's history; null on the merchant wallet. */
   customerId: string | null;
 }
 
@@ -90,6 +75,11 @@ const MINUTE = 60_000;
  * same amount by id (only the by-id record carries `tagapayTransRef`). A
  * lookup that answers `{}` is neither found nor absent: the delivery stays
  * `pending` and is tried again, backing off, for the confirm window.
+ *
+ * Through the wallet provider seam (MONEY-20): the deliveries' events and
+ * payload format are the provider's (`provider.deliveries`, Fintava's in
+ * src/fintava/fintava-ledger-delivery.ts), and so is the confirmation walk
+ * (`provider.confirmMovement`). This file keeps the ledger's own rules.
  */
 @Injectable()
 export class LedgerConsumerService {
@@ -102,7 +92,7 @@ export class LedgerConsumerService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly fintava: FintavaClient,
+    @Inject(WALLET_PROVIDER) private readonly provider: WalletProvider,
     private readonly ledger: LedgerService,
     config: ConfigService,
     private readonly status: LedgerStatusService,
@@ -130,7 +120,7 @@ export class LedgerConsumerService {
       const due = await this.prisma.fintavaWebhookEvent.findMany({
         where: {
           processingStatus: 'pending',
-          event: { in: [...LEDGER_WEBHOOK_EVENTS] },
+          event: { in: [...this.provider.deliveries.ledgerEvents] },
           ...(resting.length ? { id: { notIn: resting } } : {}),
         },
         orderBy: [{ receivedAt: 'asc' }, { id: 'asc' }],
@@ -178,11 +168,11 @@ export class LedgerConsumerService {
     if (
       !event ||
       event.processingStatus !== 'pending' ||
-      !(LEDGER_WEBHOOK_EVENTS as readonly string[]).includes(event.event)
+      !this.provider.deliveries.ledgerEvents.includes(event.event)
     ) {
       return 'skipped';
     }
-    const reading = readLedgerWebhook(
+    const reading = this.provider.deliveries.read(
       event.event,
       event.payload,
       event.reference,
@@ -217,7 +207,7 @@ export class LedgerConsumerService {
       } else if (e instanceof MerchantAccountUnknown) {
         outcome = await this.wait(
           event.id,
-          "ledger: WAWU's merchant account number could not be read from Fintava; tried again on the next sweep",
+          `ledger: WAWU's merchant account number could not be read from ${this.provider.label}; tried again on the next sweep`,
         );
       } else {
         throw e;
@@ -323,39 +313,41 @@ export class LedgerConsumerService {
       );
       if (c.state === 'found') {
         const t = c.transaction;
-        status = ledgerStatusOf(t.status) ?? status;
+        status = t.outcome ?? status;
         // Only a sender of ours wrote the record's CustomerReference.
-        named.customerReference = from ? t.customerReference : null;
-        named.fintavaReference = t.fintavaReference;
-        named.tagapayTransRef = c.tagapayTransRef ?? t.tagapayTransRef;
+        named.customerReference = from ? t.ourReference : null;
+        named.fintavaReference = t.providerReference;
+        named.tagapayTransRef = c.secondaryReference ?? t.secondaryReference;
         named.fintavaTransactionId = t.id;
         occurredAt = Number.isNaN(Date.parse(t.createdAt))
           ? null
           : new Date(t.createdAt);
-        notes.push('confirmed with Fintava');
-        if (t.amountKobo !== m.amountKobo) {
-          disagreement = `Fintava's record says ${t.amountKobo} kobo, the delivery ${m.amountKobo}`;
+        notes.push(`confirmed with ${this.provider.label}`);
+        if (t.amountKobo !== BigInt(m.amountKobo)) {
+          disagreement = `${this.provider.label}'s record says ${t.amountKobo} kobo, the delivery ${m.amountKobo}`;
           notes.push(disagreement, 'left pending for review');
         }
       } else if (c.state === 'unknown' && age < this.confirmWindowMs) {
         return this.wait(
           event.id,
-          `ledger: waiting for Fintava to confirm (${c.why}); tried again on the next sweep`,
+          `ledger: waiting for ${this.provider.label} to confirm (${c.why}); tried again on the next sweep`,
         );
       } else {
         notes.push(
           c.state === 'absent'
-            ? 'recorded from the signed delivery: Fintava does not find it by these references'
-            : 'recorded from the signed delivery: Fintava could not confirm it within the window',
+            ? `recorded from the signed delivery: ${this.provider.label} does not find it by these references`
+            : `recorded from the signed delivery: ${this.provider.label} could not confirm it within the window`,
         );
       }
     }
     // A wallet-to-wallet delivery reports no status but the balances after
-    // the move; a bank send without a status is still on its way.
+    // the move; a bank send without a status is still on its way. A send to
+    // a bank account is the only movement whose receiver is a bank account
+    // (Fintava's `customer_bank_transfer`), so the rule reads that, not the
+    // provider's event name (MONEY-20).
     const final: TransferStatus = disagreement
       ? 'pending'
-      : (status ??
-        (m.event === 'customer_bank_transfer' ? 'pending' : 'completed'));
+      : (status ?? (m.to?.where === 'bank_account' ? 'pending' : 'completed'));
 
     return this.finish(event.id, async (tx, touch) => {
       const written: string[] = [];
@@ -441,10 +433,10 @@ export class LedgerConsumerService {
         refs = [
           ...r.references,
           ...[
-            t.customerReference,
-            t.fintavaReference,
-            c.tagapayTransRef,
-            t.tagapayTransRef,
+            t.ourReference,
+            t.providerReference,
+            c.secondaryReference,
+            t.secondaryReference,
             t.id,
           ].filter((v): v is string => !!v),
         ];
@@ -596,18 +588,18 @@ export class LedgerConsumerService {
     this.retryAt.set(eventId, { at: now.getTime() + delayMs, delayMs });
   }
 
-  /** WAWU's merchant account number, read from Fintava once per process. */
+  /** WAWU's merchant account number, read from the provider once per process. */
   private async merchantAccount(): Promise<string> {
     if (this.merchantAccountNumber) return this.merchantAccountNumber;
-    if (this.fintava.environment === 'unconfigured') {
+    if (!this.provider.configured) {
       throw new MerchantAccountUnknown();
     }
     try {
-      const m = await this.fintava.getMerchantBalance();
+      const m = await this.provider.getPlatformAccount();
       this.merchantAccountNumber = m.accountNumber;
       return m.accountNumber;
     } catch (e) {
-      if (e instanceof FintavaError) throw new MerchantAccountUnknown();
+      if (e instanceof WalletProviderError) throw new MerchantAccountUnknown();
       throw e;
     }
   }
@@ -619,9 +611,10 @@ export class LedgerConsumerService {
    * - a party the delivery names with Fintava's customerId is found by that
    *   id and nothing else (an id that is not ours is not ours);
    * - a `bank_account` is a WAWU wallet only when its bank code is
-   *   Fintava's own (FINTAVA_WALLET_BANK_CODE); otherwise it is someone at
-   *   another bank, never a WAWU user, whatever its number;
-   * - a `fintava_wallet` (or a `bank_account` at Fintava's bank) is found by
+   *   the provider's own (`provider.walletBankCode`, Fintava's 090620);
+   *   otherwise it is someone at another bank, never a WAWU user, whatever
+   *   its number;
+   * - a `provider_wallet` (or a `bank_account` at the provider's bank) is found by
    *   its account numbers, in the order the delivery gives them, among the
    *   people's wallets and then WAWU's merchant wallet.
    */
@@ -658,7 +651,7 @@ export class LedgerConsumerService {
     }
     if (
       party.where === 'bank_account' &&
-      party.bankCode !== FINTAVA_WALLET_BANK_CODE
+      party.bankCode !== this.provider.walletBankCode
     ) {
       return null;
     }
@@ -681,7 +674,7 @@ export class LedgerConsumerService {
     return null;
   }
 
-  private senderOf(from: OurWallet | null): FintavaSender | null {
+  private senderOf(from: OurWallet | null): ProviderHolder | null {
     if (!from) return null;
     if (from.wallet.kind === 'merchant') return { kind: 'merchant' };
     return from.customerId
@@ -718,121 +711,27 @@ export class LedgerConsumerService {
     };
   }
 
-  /** The by-id record's tagapayTransRef: the only record that carries it. */
-  private async tagapayOf(t: FintavaTransaction): Promise<string | null> {
-    if (t.tagapayTransRef) return t.tagapayTransRef;
-    try {
-      const l = await this.fintava.getTransactionById(t.id);
-      return l.state === 'found' ? l.transaction.tagapayTransRef : null;
-    } catch (e) {
-      if (e instanceof FintavaError) return null;
-      throw e;
-    }
-  }
-
   /**
-   * What Fintava knows about a movement named by these references: the
-   * lookup by each (ours and Fintava's are findable), then, for a sender of
-   * ours, its history (debits only), matching any reference, and rows of the
-   * same amount read by id for their tagapayTransRef.
+   * What the provider knows about a movement named by these references:
+   * the provider's own walk (Fintava: the lookup by each reference, then,
+   * for a sender of ours, its history, and rows of the same amount read by
+   * id), through the seam (MONEY-20).
    */
-  private async confirm(
+  private confirm(
     references: readonly string[],
-    sender: FintavaSender | null,
+    sender: ProviderHolder | null,
     amountKobo: number,
     around: Date,
-  ): Promise<Confirmation> {
-    if (this.fintava.environment === 'unconfigured') {
-      // Nothing is sent; one answer, not a warning per reference.
-      return { state: 'unknown', why: 'not_configured' };
-    }
-    const refs = [...new Set(references)].filter(
-      (r) => !r.startsWith('sha256:'),
-    );
-    let unclear = '';
-    for (const ref of refs.slice(0, 4)) {
-      try {
-        const l = await this.fintava.getTransactionByReference(ref);
-        if (l.state === 'found') {
-          return {
-            state: 'found',
-            transaction: l.transaction,
-            tagapayTransRef: await this.tagapayOf(l.transaction),
-          };
-        }
-        if (l.state === 'unknown') unclear = 'empty_lookup';
-      } catch (e) {
-        if (!(e instanceof FintavaError)) throw e;
-        unclear =
-          e.kind === 'not_configured' ? 'not_configured' : 'unreachable';
-        if (e.kind === 'not_configured' || e.kind === 'auth') {
-          return { state: 'unknown', why: unclear };
-        }
-      }
-    }
-    if (sender) {
-      const has = (t: FintavaTransaction) =>
-        [t.customerReference, t.fintavaReference, t.tagapayTransRef].some(
-          (v) => v !== null && refs.includes(v),
-        );
-      const sameAmount: FintavaTransaction[] = [];
-      try {
-        for (let page = 1; page <= LEDGER_DEFAULTS.historyPages; page += 1) {
-          const rows =
-            sender.kind === 'merchant'
-              ? await this.fintava.getMerchantHistory({
-                  page,
-                  take: 100,
-                  order: 'DESC',
-                })
-              : await this.fintava.getCustomerHistory({
-                  customerId: sender.customerId,
-                  page,
-                  take: 100,
-                });
-          const hit = rows.items.find(has);
-          if (hit) {
-            return {
-              state: 'found',
-              transaction: hit,
-              tagapayTransRef: await this.tagapayOf(hit),
-            };
-          }
-          for (const t of rows.items) {
-            const when = Date.parse(t.createdAt);
-            if (
-              t.amountKobo === amountKobo &&
-              t.tagapayTransRef === null &&
-              Math.abs(when - around.getTime()) < 24 * 60 * MINUTE
-            ) {
-              sameAmount.push(t);
-            }
-          }
-          if (!rows.hasNextPage || rows.items.length === 0) break;
-        }
-        // Nearest in time first: history is not sorted the same way for
-        // customers and for WAWU (`sandbox/09-`, `10-`).
-        sameAmount.sort(
-          (x, y) =>
-            Math.abs(Date.parse(x.createdAt) - around.getTime()) -
-            Math.abs(Date.parse(y.createdAt) - around.getTime()),
-        );
-        for (const t of sameAmount.slice(0, LEDGER_DEFAULTS.byIdChecks)) {
-          const l = await this.fintava.getTransactionById(t.id);
-          if (l.state === 'found' && has(l.transaction)) {
-            return {
-              state: 'found',
-              transaction: l.transaction,
-              tagapayTransRef: l.transaction.tagapayTransRef,
-            };
-          }
-          if (l.state === 'unknown') unclear = unclear || 'empty_lookup';
-        }
-      } catch (e) {
-        if (!(e instanceof FintavaError)) throw e;
-        unclear = 'unreachable';
-      }
-    }
-    return unclear ? { state: 'unknown', why: unclear } : { state: 'absent' };
+  ): Promise<ProviderMovementConfirmation> {
+    return this.provider.confirmMovement({
+      references,
+      sender,
+      amountKobo,
+      around,
+      limits: {
+        historyPages: LEDGER_DEFAULTS.historyPages,
+        byIdChecks: LEDGER_DEFAULTS.byIdChecks,
+      },
+    });
   }
 }

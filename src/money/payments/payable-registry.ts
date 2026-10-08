@@ -14,6 +14,14 @@ export interface PayableTarget {
   priceKobo: number;
   /** Who gets the 85% (R-5); null when WAWU itself is paid (credits, ticks). */
   payee: MoneyPartyView | null;
+  /**
+   * The currency the price is in, ISO 4217; unset means naira (`NGN`).
+   * Only naira is paid from the wallet today (`PAYMENT_CURRENCY`): a feature
+   * that prices an item in dollars for someone billed in dollars (R-43)
+   * says so here, and the payment is refused until a dollar wallet can pay
+   * it (NUV-09), so cents are never charged as kobo.
+   */
+  currency?: string;
 }
 
 /** What a feature is asked to price. */
@@ -24,7 +32,7 @@ export interface PayableLookup {
   amountKobo?: number;
 }
 
-/** A payment Fintava confirmed, handed to the feature that sold it. */
+/** A payment the wallet provider confirmed, handed to the feature that sold it. */
 export interface CompletedPayment {
   paymentId: string;
   payerWawuUserId: string;
@@ -47,8 +55,8 @@ export interface CompletedPayment {
  *   target_not_found` or `409 target_not_payable` (a MoneyError): already
  *   owned, sold out, closed, the payer's own item. It moves nothing and may
  *   be asked more than once for one payment (the quote, then the pay).
- * - `onCompleted` delivers what was paid for once Fintava has confirmed the
- *   debit: in the request when Fintava answers at once, else from the
+ * - `onCompleted` delivers what was paid for once the provider has confirmed
+ *   the debit: in the request when it answers at once, else from the
  *   payment sweep when a pending payment settles, and again from the sweep
  *   while it has not succeeded. It MUST be idempotent (it can run twice for
  *   one payment, from two servers) and must not move money: the payee's 85%
@@ -66,8 +74,8 @@ export interface PayableKindHandler {
  * target_not_payable` ("can't be paid from your wallet yet"), so no payment
  * is ever taken for something nothing would deliver.
  *
- * Held kinds (a paid DM, a ticket, a bill: the price waits in WAWU's
- * merchant wallet until something happens, R-19) are MONEY-18's: they are
+ * Held kinds (a paid DM, a ticket, a bill: the price waits in WAWU's own
+ * account at the provider until something happens, R-19, R-42) are MONEY-18's: they are
  * refused here until it builds the hold, its release and its refund.
  */
 @Injectable()

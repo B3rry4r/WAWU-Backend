@@ -173,6 +173,11 @@ Every refusal is the envelope this backend already answers with
   `reason.code`, never on `message`.
 - A 400 **without** `reason` is the global `ValidationPipe` refusing a
   malformed field; its `message` is the first validation message.
+- A 400, 413 or 415 **without** `reason` can also be the body parser
+  refusing the request before any route runs (too large, an unsupported
+  charset or encoding, a body it cannot read). It is not a money outcome, so
+  money routes carry no `reason` for it either; the app treats it as a
+  malformed request (FIX-08).
 - Success is `{ statusCode, message: "OK", data }`. The body's `statusCode` is
   always 200, even when the HTTP status is 201 (hazard H-3 in
   `src/common/tests/protected-registry.regression.spec.ts`): read the HTTP
@@ -235,6 +240,7 @@ Every refusal is the envelope this backend already answers with
 | `payment_in_progress` | 409 | a payment for this item by this person is still being confirmed (or is under review); a second one is not taken, under any Idempotency-Key (MONEY-17) | `paymentId` |
 | `statement_rate_limited` | 429 | the person has asked for 5 statements in the last minute or 30 in the last hour (`STATEMENT_RATE_LIMITS`, PROVISIONAL), counted after the token is verified (WALLET-27) | `retryAfterSeconds` |
 | `statement_busy` | 503 | two statements are already being built and no place came free within 5 s (`STATEMENT_CONCURRENCY`, PROVISIONAL) (WALLET-27) | `retryAfterSeconds` |
+| `recipient_search_rate_limited` | 429 | the person has searched for recipients 20 times in the last minute, 120 in the last hour or 500 in the last day (`RECIPIENT_SEARCH_PERSON_LIMITS`, PROVISIONAL), counted after the token is verified (WALLET-08); also sent as the `Retry-After` header | `retryAfterSeconds` |
 | `statement_too_large` | 400 | the period holds more movements than one statement lists (`STATEMENT_MAX_ROWS`, 50,000); counted before anything is written, and the person picks a shorter range (WALLET-27) | |
 | `phone_held_by_other_identity` | 409 | account opening where Fintava already has a customer for the person's phone whose record does not carry the checked BVN (or carries none): nothing is adopted or created, and the opening stops for review (MONEY-12, BACKEND_GAPS G-37) | |
 
@@ -1047,10 +1053,89 @@ still reads. Every answer is `Cache-Control: no-store`.
   BACKEND_GAPS G-68) and sending it by email (the backend has no email
   sender; G-69).
 
-## 13. Pay from wallet (MONEY-17)
+---
+
+## 13. Finding a recipient (WALLET-08)
+
+`src/money/recipients/`. `GET /money/recipients?q=` and `GET
+/money/recipients/recent` answer `RecipientView[]` (plain arrays, at most 20
+and 10, no paging: section 6 keeps recipients a short list, and a search is
+narrowed by typing more). Both run MONEY-13's gate (`@RequireOpenWallet()`),
+send `Cache-Control: no-store`, read our database only and never call Fintava.
+
+- **Who can be found, on both routes.** Only a person with an OPEN wallet (a
+  `FintavaWallet` row; R-6). Never the caller. Never a person blocked either
+  way: the one list `BlockedAccountService.hiddenFrom` (SETTINGS-04), read
+  once per request. A blocked person, a person with no wallet and a person
+  who does not exist all answer the same way: nothing.
+- **What a result is.** `wawuUserId`, `displayName`, `handle`, `avatarUrl`,
+  `tick`, and nothing else. Never a phone number (not even masked), an
+  account number, an email, a BVN or a NIN: the queries select none of them.
+  A person found by phone is shown exactly like one found by name. The name
+  is WAWU ID's, else the name on their wallet, else the handle; one with
+  none of the three is left out.
+- **A phone is matched in full, as a phone, and as nothing else.** The text
+  is a phone when it is a whole Nigerian mobile after normalising
+  (`08031234567`, `8031234567`, `2348031234567`, `+2348031234567`, spaces,
+  dashes and brackets ignored; section 2). It is compared with the phone the
+  person's wallet was opened with (`FintavaWalletOpening.phone`, and
+  `WalletIdentity.verifiedPhone`, E.164). Digits that are not a whole mobile
+  are read as text: they can match the beginning of a name or handle, never
+  part of a phone. A handle written like a number never stands in for that
+  number. The Hub holds no other phone: a person who changed the phone on
+  their WAWU account since opening the wallet is found by the one they opened
+  it with.
+- **A name or @handle is matched by its beginning**, case ignored: the
+  beginning of the handle, or of the name on the wallet or any word of it
+  (`okoro` finds `ADAEZE OKORO`). `@text` searches handles only. `%`, `_` and
+  `\` are the characters they are, never wildcards. At least 2 characters
+  after trimming (and after a leading `@`), at most 60; anything else, a
+  missing `q`, a repeated `q` or another query field is a plain 400 in the
+  one error shape (no `reason`: it is a malformed field, section 3). Names
+  live in WAWU ID, which has no search, so a name search reads the name on
+  the wallet and the handle (BACKEND_GAPS G-132).
+- **Order and size.** Search: name order, then id, the first 20. Recent:
+  the caller's own completed outgoing ledger rows (`direction out`, `status
+  completed`, `counterpartyKind wawu_user`, category `transfer` or
+  `purchase`), one person once at the time of their latest send, newest
+  first, the first 10 after blocked people and people with no open wallet are
+  taken out. A pending, failed or reversed send is not a person sent to.
+- **Limits** (PROVISIONAL `RECIPIENT-SEARCH-RATE`,
+  `src/money/recipients/recipient-config.ts`; lead's figures after the
+  round-1 verifier walked 6,000 holders at about 3 requests a person). Two
+  kinds, both kept:
+  - **Per address**, on the app's named throttlers, tighter than the global
+    ones (which stay): at most 20 a minute and 120 an hour from one address.
+    A refusal is the guard's own `429` with no `reason`, before the token is
+    read. The recent list sets none of its own.
+  - **Per person** (`RecipientSearchLimiter`, the shared
+    `PersonWindowLimiter` that statements use too): at most 20 a minute, 120
+    an hour and 500 a day, each a fixed window that starts at the person's
+    first search in it, keyed by the verified wawuUserId. It is counted in
+    the handler, after `WawuAuthGuard` has verified the token and the wallet
+    gate has found the wallet, so a forged or missing token never makes an
+    entry and a person with no wallet is refused by the gate first. A search
+    the route refuses with a 400 is read before it is counted and does not
+    count. Beyond any window: `429 recipient_search_rate_limited`, "You have
+    searched a lot in a short time. Try again in a little while.", with
+    `retryAfterSeconds` (seconds to the end of the longest full window,
+    rounded up, at least 1) and the same number in a `Retry-After` header.
+    One account cannot get round it by changing address (a whole IPv6 /64 is
+    one caller's), and two accounts on one address each keep their own
+    budget while the address limit still holds for the address.
+- **Contract.** The search declares its plain `400` (a malformed `q`, no
+  `reason`) and `429` (`recipient_search_rate_limited`; the per-address 429
+  has no `reason`); both lists carry `maxItems` (20 and 10).
+
+---
+
+## 14. Pay from wallet (MONEY-17)
 
 As built in round 2 (4 Oct 2026, lead rulings D1 to D4, each "Default
-(lead), owner may override"):
+(lead), owner may override"), and moved onto the wallet provider seam on 8
+Oct 2026 (MONEY-20's `WALLET_PROVIDER`; R-39, R-42, R-44): nothing in
+`src/money/payments/` names a provider's client, so the same routes pay on
+Fintava or on Nuvion, whichever the server runs.
 
 - **Routes** (`src/money/payments/`): `GET /money/payments/quote?kind=&targetId=&amountKobo=`
   (`PaymentQuoteView`, behind the wallet gate, `no-store`) and `POST
@@ -1075,6 +1160,13 @@ As built in round 2 (4 Oct 2026, lead rulings D1 to D4, each "Default
   "This can't be paid for from your wallet yet." Held kinds (paid DM,
   ticket, bill) are refused until MONEY-18. `amountKobo` and `note` only on
   a tip; paying for your own item is `target_not_payable`.
+- **Naira only.** A feature may say what currency its price is in
+  (`PayableTarget.currency`, ISO 4217; unset is `NGN`). Only `NGN` is paid
+  from the wallet: an item priced in another currency (R-43's dollar prices)
+  is `409 target_not_payable` "This isn't priced in naira, so it can't be
+  paid from your naira wallet." on the quote and the payment, and nothing is
+  stored, so a price in cents is never taken as kobo. Paying in dollars is
+  NUV-09's dollar wallet.
 - **The quote is bound to the item.** The payment quote's `quoteToken` is
   the fee quote (section 11) signed with the subject
   `payment:<kind>:<targetId>`; `POST /money/payments` checks it with the
@@ -1082,11 +1174,25 @@ As built in round 2 (4 Oct 2026, lead rulings D1 to D4, each "Default
   token, never pays another (`409 quote_changed` with `reason.paymentQuote`,
   the quote as it stands). Expired, another person's, another price, signed
   before a restart: the same answer.
-- **The money.** One `/transaction/wallet-to-wallet` of the price from the
-  buyer's wallet to WAWU's merchant wallet (R-19; its account number as
-  `GET /merchant/balance` reports it), our CustomerReference
-  `wawu-pay-<payment id>`. Fintava takes its balance-transfer charge on top
-  (R-10), as the quote showed (`fee.providerFeeKobo`; `wawuFeeKobo` 0).
+- **The money.** One `walletToWallet` of the price through the seam, from
+  the buyer's wallet to WAWU's own account at the provider
+  (`getPlatformAccount`, read once per process): on Fintava a
+  `/transaction/wallet-to-wallet` to the merchant wallet (R-19), on Nuvion a
+  book transfer to the operational account's `nuvion_ban` (R-42, NUV-05).
+  Our reference `wawu-pay-<payment id>` (45 characters, inside Nuvion's 64
+  for `unique_reference`). The provider takes its charge on top (R-10), as
+  the quote showed (`fee.providerFeeKobo`; `wawuFeeKobo` 0). Each payment
+  records the provider that took it (`WalletPayment.provider`).
+- **What the seam's answer means.** `walletToWallet` resolves with a receipt
+  only for a transfer the provider has completed; the payment is then
+  `completed` (or held for review when another amount moved). A transfer the
+  provider accepted and has not completed (Nuvion's `pending` or
+  `processing`) is `not_confirmed`, and a lost answer `outcome_unknown`:
+  both may have moved money (`recordMayExist`), so the payment stays
+  `pending` and is settled as below. A provider that has no such transfer
+  yet (`not_supported`, the Nuvion adapter before NUV-05), is not set up, or
+  refuses our key answers `503 provider_unreachable` and gives the key back,
+  as `not_configured` always did.
 - **One open payment per buyer and item** (D1.2). While a payment is
   `pending` (under review included), another for the same person, kind and
   target, under any Idempotency-Key and at any moment, is `409
@@ -1094,15 +1200,15 @@ As built in round 2 (4 Oct 2026, lead rulings D1 to D4, each "Default
   (`WalletPayment.openKey`) from the claim until the payment is completely
   finished: cleared when it fails, is reversed, or, once paid, when what was
   paid for is delivered (the feature's record that the buyer owns it is then
-  in place), never at the moment Fintava confirms. The claim is taken before
+  in place), never at the moment the provider confirms. The claim is taken before
   the feature's "already owned" rule is read for the last time, and given
   back (nothing sent, failed, the key freed) when that now refuses.
 - **Before money moves**, in order, none of which stores anything: the
   wallet gate, the Idempotency-Key, the PIN, the body, the target, the
   quote, the merchant cap (`amount_out_of_range`), an open payment for the
-  item, Fintava's available balance (`402 insufficient_funds` with
+  item, the provider's available balance (`402 insufficient_funds` with
   `balanceKobo`, `totalKobo`, `shortfallKobo`, "You need ₦523.25 more in
-  your wallet."; a buyer holding exactly the total pays). When Fintava
+  your wallet."; a buyer holding exactly the total pays). When the provider
   itself refuses for funds, the balance is read again: a real shortfall is
   shown as above; otherwise "Your balance changed. Check it and try again."
   with no `shortfallKobo` (D3). A shortfall shown is never ₦0.00 or less.
@@ -1116,31 +1222,37 @@ As built in round 2 (4 Oct 2026, lead rulings D1 to D4, each "Default
   map).
 - **The ledger** gets both sides (buyer `out`, merchant `in`, category
   `purchase`, `paymentId`, the link) as `pending` in the same transaction as
-  the payment, with the quoted charge as the expected fee, then Fintava's
-  figures from its answer. A difference (the sandbox charges ₦0) is kept on
-  the row's `discrepancy` and on the payment for MONEY-16.
+  the payment, with the quoted charge as the expected fee, then the
+  provider's figures from its answer. A difference (Fintava's sandbox
+  charges ₦0) is kept on the row's `discrepancy` and on the payment for
+  MONEY-16.
 - **Answers** (all `201` with `PaymentView`, stored for the key):
-  - `completed`: Fintava moved the price.
+  - `completed`: the provider moved the price.
   - `pending`, with `statusMessage` "We're still confirming this payment.
     Don't pay again; we'll let you know.": the outcome is not known (a
-    timeout, a 5xx, a 2xx without a transaction, a repeated reference), or
-    Fintava moved another amount than the price (then straight to review).
-    **Absence is never proof that no money moved** (D1): Fintava having no
-    record of the transfer yet keeps it `pending`. The payment sweep (every
-    minute) asks Fintava itself (lookup by our reference, then the buyer's
-    history), backing off 1, 2, 4 ... minutes to hourly, never sends again
+    timeout, a 5xx, a 2xx without a transaction, a repeated reference, a
+    transfer accepted and not completed), or the provider moved another
+    amount than the price (then straight to review). **Absence is never
+    proof that no money moved** (D1): the provider having no record of the
+    transfer yet keeps it `pending`. The payment sweep (every minute) asks
+    the provider itself (`reconcileSend`: lookup by our reference, then the
+    buyer's history), backing off 1, 2, 4 ... minutes to hourly, never sends again
     and never refunds; past `PAYMENT_REVIEW_AFTER_HOURS` (PROVISIONAL, 72) it
     goes to manual review: still `pending`, out of the sweep, the item still
-    blocked. Whatever settles a payment's ledger row (a webhook, MONEY-08's
+    blocked. A payment another provider took (written before a switch of
+    `WALLET_PROVIDER`) is never asked of the running one, whose silence
+    about it says nothing: it waits for its ledger rows and goes to review
+    past the bound, its note naming the provider. Whatever settles a payment's ledger row (a webhook, MONEY-08's
     status check, a reversal) settles the payment at once (D2), including a
     payment under review or in its hourly backoff, and the webhook consumer's
     own transaction: the payment hears of its ledger rows once that
     transaction has committed (R3-3).
   - `failed`, with `failureReason` "The payment did not go through. No money
-    left your wallet.": only Fintava's own refusal of the transfer, or its
-    FAILURE status. Fintava's "not enough", a frozen wallet, or Fintava
-    being unusable (no key, wrong key, merchant inactive) fail the payment,
-    give the key back, and answer `402`, `423 wallet_frozen` or `503`.
+    left your wallet.": only the provider's own refusal of the transfer, or
+    its failed record. The provider's "not enough", a frozen wallet, or the
+    provider being unusable (no key, wrong key, merchant inactive, no such
+    transfer yet) fail the payment, give the key back, and answer `402`,
+    `423 wallet_frozen` or `503`.
   - `reversed`: the debit came back.
   A key answers what it stored: a payment answered `pending` stays `pending`
   on its key after it completes; the app reads the outcome from `GET

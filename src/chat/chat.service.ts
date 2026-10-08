@@ -11,6 +11,7 @@ import { WawuIdClient } from '../common/auth/wawu-id.client';
 import { deriveVerificationState } from '../common/verification/verification-state';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { StorageService } from '../storage/storage.service';
+import { LivePublisher } from '../live/live-publisher.service';
 import {
   CHAT_LIMITS,
   CHAT_UPLOAD_FOLDERS,
@@ -45,7 +46,7 @@ interface ConversationRow {
   lastActivityAt: Date;
 }
 
-interface MessageRow {
+export interface MessageRow {
   id: string;
   conversationId: string;
   senderWawuId: string;
@@ -135,6 +136,7 @@ export class ChatService {
     private readonly wawuId: WawuIdClient,
     private readonly blocks: BlockedAccountService,
     private readonly storage: StorageService,
+    private readonly live: LivePublisher,
   ) {}
 
   // ── opening and listing ──────────────────────────────────────────────────
@@ -340,6 +342,12 @@ export class ChatService {
         await this.advanceMark(tx, chatId, me, created);
         return created;
       });
+      // After the commit, so a listener that hydrates the message finds it.
+      await this.live.publish({
+        kind: 'chat.message',
+        chatId,
+        messageId: row.id,
+      });
     } catch (e) {
       // The same clientMessageId sent twice at the same moment: the first
       // insert won, and its message is the answer to both.
@@ -378,7 +386,9 @@ export class ChatService {
     if (dto.messageId && !target) {
       throw new NotFoundException('That message is not in this chat.');
     }
-    if (target) await this.advanceMark(this.prisma, chatId, me, target);
+    if (target && (await this.advanceMark(this.prisma, chatId, me, target))) {
+      await this.live.publish({ kind: 'chat.read', chatId, readerWawuId: me });
+    }
 
     const marks = (await this.readMarks(me, [chatId])).get(chatId);
     const unread = await this.unreadCounts(
@@ -475,14 +485,18 @@ export class ChatService {
     }
   }
 
-  /** Moves a read mark forward to `message`, never back. */
+  /**
+   * Moves a read mark forward to `message`, never back. True when it moved.
+   * `readAt` is when it moved, which the live catch-up (INBOX-02) reads to
+   * tell which read marks changed since a cursor.
+   */
   private async advanceMark(
     db: Pick<PrismaService, 'chatParticipant'>,
     chatId: string,
     me: string,
     message: { id: string; createdAt: Date },
-  ): Promise<void> {
-    await db.chatParticipant.updateMany({
+  ): Promise<boolean> {
+    const { count } = await db.chatParticipant.updateMany({
       where: {
         conversationId: chatId,
         wawuUserId: me,
@@ -497,8 +511,13 @@ export class ChatService {
           },
         ],
       },
-      data: { lastReadAt: message.createdAt, lastReadMessageId: message.id },
+      data: {
+        lastReadAt: message.createdAt,
+        lastReadMessageId: message.id,
+        readAt: new Date(),
+      },
     });
+    return count > 0;
   }
 
   private async readMarks(
@@ -656,6 +675,33 @@ export class ChatService {
       });
     }
     return out;
+  }
+
+  /**
+   * Messages as `viewer` sees them (INBOX-02): the live push and the
+   * catch-up. The viewer must be in each message's chat; a row from a chat
+   * they are not in is left out rather than shown.
+   */
+  async viewMessages(
+    viewer: string,
+    rows: MessageRow[],
+  ): Promise<ChatMessage[]> {
+    if (rows.length === 0) return [];
+    const chatIds = [...new Set(rows.map((r) => r.conversationId))];
+    const mine = await this.prisma.chatConversation.findMany({
+      where: {
+        id: { in: chatIds },
+        OR: [{ userAWawuId: viewer }, { userBWawuId: viewer }],
+      },
+      select: { id: true },
+    });
+    const allowed = new Set(mine.map((c) => c.id));
+    const marks = await this.readMarks(viewer, [...allowed]);
+    return Promise.all(
+      rows
+        .filter((r) => allowed.has(r.conversationId))
+        .map((r) => this.toMessage(viewer, r, marks.get(r.conversationId))),
+    );
   }
 
   private async toMessageWithMarks(

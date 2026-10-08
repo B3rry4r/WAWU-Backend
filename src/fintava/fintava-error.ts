@@ -1,5 +1,5 @@
-import { HttpException, UnprocessableEntityException } from '@nestjs/common';
-import { MoneyError } from '../money/money-error';
+import type { HttpException } from '@nestjs/common';
+import { walletProviderErrorToHttp } from '../wallet-provider/wallet-provider-error';
 import { FINTAVA_DEFAULTS } from './fintava-config';
 
 /**
@@ -284,43 +284,10 @@ export function fintavaErrorToHttp(
   error: FintavaError,
   detail: { retryAfterSeconds?: number } = {},
 ): HttpException {
-  const retryAfterSeconds =
-    detail.retryAfterSeconds ?? FINTAVA_DEFAULTS.retryAfterSeconds;
-  switch (error.kind) {
-    case 'insufficient_funds':
-      return new MoneyError(
-        'insufficient_funds',
-        'There is not enough money in the wallet for this.',
-      );
-    case 'wallet_inactive':
-      return new MoneyError(
-        'wallet_frozen',
-        'This wallet cannot send or receive money right now.',
-      );
-    case 'not_found':
-      return new MoneyError('not_found', 'We could not find that.');
-    case 'below_minimum':
-      return new MoneyError(
-        'amount_out_of_range',
-        'That amount is below the minimum.',
-      );
-    case 'identity_refused':
-      return new UnprocessableEntityException(
-        'We could not confirm those identity details.',
-      );
-    case 'outcome_unknown':
-    case 'not_confirmed':
-    case 'duplicate_reference':
-      return new MoneyError(
-        'provider_unreachable',
-        'We are still confirming this payment. Check your history before you try again.',
-        { retryAfterSeconds },
-      );
-    default:
-      return new MoneyError(
-        'provider_unreachable',
-        'Payments are not available right now. Try again in a moment.',
-        { retryAfterSeconds },
-      );
-  }
+  // One mapping for every provider (MONEY-20): the neutral one, with
+  // Fintava's default wait.
+  return walletProviderErrorToHttp(error.kind, {
+    retryAfterSeconds:
+      detail.retryAfterSeconds ?? FINTAVA_DEFAULTS.retryAfterSeconds,
+  });
 }
