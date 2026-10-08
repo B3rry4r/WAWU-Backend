@@ -11,6 +11,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { ApiResponse } from '@nestjs/swagger';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { OptionalWawuAuthGuard } from '../search-response/guards/optional-wawu-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -28,6 +29,7 @@ import type {
   ProfessionalLocationView,
 } from './professional.service';
 import type { ProfessionalFieldView } from './professional-fields';
+import type { ProfessionalListingVisibilityView } from './professional-takedown';
 
 /**
  * The professional directory — `/api/hub/professionals/*`.
@@ -62,8 +64,25 @@ export class ProfessionalController {
     return this.service.listMine(user.sub);
   }
 
+  /**
+   * Each approved listing of yours and where it stands: listed, hidden by
+   * you, or taken down by an admin (FIX-06). P8 reads it beside .../mine.
+   */
+  @UseGuards(WawuAuthGuard)
+  @Get('applications/mine/visibility')
+  myVisibility(
+    @CurrentUser() user: WawuJwtClaims,
+  ): Promise<ProfessionalListingVisibilityView[]> {
+    return this.service.myVisibility(user.sub);
+  }
+
   @UseGuards(WawuAuthGuard)
   @Patch('applications/:id/listing')
+  @ApiResponse({
+    status: 409,
+    description:
+      'Refused: the listing is not approved, or (reason.code listing_taken_down, with reason.takenDownAt) an admin took it down and only an admin lists it again (FIX-06). A Hide on a taken-down listing is accepted.',
+  })
   setListed(
     @CurrentUser() user: WawuJwtClaims,
     @Param('id', ParseUUIDPipe) id: string,
