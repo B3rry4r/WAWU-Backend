@@ -106,6 +106,45 @@ export interface UploadAllowanceView {
 }
 
 /**
+ * Why a link's path cannot become an object key, or null when it can. Checks
+ * the path after decoding (twice, so a double-encoded `%252e%252e` or `%2500`
+ * is seen for what it becomes): a NUL (Postgres refuses it, 22021), a lone
+ * surrogate, malformed percent-encoding, a `.` or `..` segment, or a key over
+ * the 1024 bytes S3 allows. Only http(s) links are looked at; anything else is
+ * a key already and is not this function's business.
+ */
+export function storedKeyProblem(stored: unknown): string | null {
+  if (typeof stored !== 'string') return 'must be text';
+  if (!stored.startsWith('http://') && !stored.startsWith('https://'))
+    return null;
+  try {
+    new URL(stored);
+  } catch {
+    return 'must be a full link';
+  }
+  // The path as written: `new URL` resolves `/%2e%2e/` away, which would hide it.
+  const path = /^https?:\/\/[^/?#]*([^?#]*)/i.exec(stored)?.[1] ?? '';
+  let decoded = path;
+  for (let pass = 0; pass < 2; pass++) {
+    try {
+      decoded = decodeURIComponent(decoded);
+    } catch {
+      return 'has invalid percent-encoding in its path';
+    }
+    // eslint-disable-next-line no-control-regex -- the NUL and other controls are what is refused
+    if (/[\u0000-\u001f\u007f]/.test(decoded))
+      return 'cannot have control characters in its path';
+    if (!/^(?:[^\ud800-\udfff]|[\ud800-\udbff][\udc00-\udfff])*$/.test(decoded))
+      return 'cannot have a broken character in its path';
+    if (decoded.split(/[/\\]/).some((seg) => seg === '.' || seg === '..'))
+      return 'cannot have . or .. in its path';
+    if (Buffer.byteLength(decoded, 'utf8') > 1024)
+      return 'has a path too long to be an object key';
+  }
+  return null;
+}
+
+/**
  * Recovers the object key from whatever is stored on a row.
  *
  * `presignUpload().fileUrl` is `readUrlFor(key)` — an absolute,
@@ -120,6 +159,7 @@ export interface UploadAllowanceView {
  * passed through unchanged; nothing stored is ever rewritten.
  */
 export function objectKeyFrom(stored: string): string {
+  if (typeof stored !== 'string') return '';
   if (!stored.startsWith('http://') && !stored.startsWith('https://'))
     return stored;
 
@@ -129,6 +169,11 @@ export function objectKeyFrom(stored: string): string {
   } catch {
     return stored;
   }
+  // A path that decodes to something a key cannot be (a NUL, a lone
+  // surrogate, a `..` segment, too long) is not one of ours: pass it through
+  // unchanged, as for any link that does not match, rather than derive a key
+  // from it. Reading a bad stored row must never throw.
+  if (storedKeyProblem(stored) !== null) return stored;
 
   for (const folder of UPLOAD_FOLDERS) {
     const marker = `/${folder}/`;
@@ -136,6 +181,90 @@ export function objectKeyFrom(stored: string): string {
     if (at !== -1) return pathname.slice(at + 1);
   }
   return stored;
+}
+
+/**
+ * The folders a delivered legal document may come from (LEGAL-03, N1). A
+ * delivered file is signed for the client on every read, so a key outside
+ * these folders (an identity document, an avatar, anything else in the
+ * bucket) must never be accepted or signed through that route.
+ *
+ * `legal/document` is where the files a matter holds are uploaded today.
+ * LEGAL-07 builds the admin upload for delivered documents (SHARED-CHANGES
+ * "LEGAL-03 #2"); its folder is added to this list when that task names it,
+ * and not before.
+ */
+export const DELIVERABLE_KEY_FOLDERS: readonly string[] = ['legal/document'];
+
+/**
+ * Where this bucket's objects are read from: the origin (scheme, host and
+ * port) and the path before the key (`/` for a virtual-hosted bucket,
+ * `/<bucket>/` for a path-style one). StorageService.bucketLocation reads it
+ * from the storage client itself, never from a literal.
+ */
+export interface BucketLocation {
+  origin: string;
+  pathPrefix: string;
+}
+
+/** One key segment: what presignUpload writes, and nothing else. */
+const KEY_SEGMENT = /^[A-Za-z0-9._~-]+$/;
+
+/**
+ * The object key a delivered file names, or null when it may not be used.
+ *
+ * Accepted: a bare key, or a link that starts with exactly this bucket's
+ * origin and path prefix (`location`); a query (a signature) after the key is
+ * ignored. The key, as written (never decoded), must be one of `folders`
+ * followed by exactly two plain segments (letters, digits, `.`, `_`, `~`,
+ * `-`; never only dots, never empty), the shape presignUpload writes. So a
+ * link on another host, a look-alike host (userinfo, a longer host, another
+ * port or scheme), a backslash, an encoded slash or any other `%` escape, a
+ * control or broken character, or a key in another folder gives null. Never
+ * throws.
+ */
+export function deliverableKeyFrom(
+  value: unknown,
+  location: BucketLocation | null,
+  folders: readonly string[] = DELIVERABLE_KEY_FOLDERS,
+): string | null {
+  if (typeof value !== 'string' || value.length === 0) return null;
+  if (value.length > 2048) return null;
+  // Printable ASCII only: a presigned link and a key are both written in it,
+  // so a space, a control, a backslash or any other character is not ours.
+  if (!/^[\x21-\x7e]+$/.test(value) || value.includes('\\')) return null;
+
+  let key: string;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value) || value.startsWith('//')) {
+    if (!location) return null;
+    const base = `${location.origin}${location.pathPrefix}`;
+    if (!value.startsWith(base)) return null;
+    try {
+      const parsed = new URL(value);
+      if (parsed.origin !== location.origin) return null;
+      if (parsed.username || parsed.password) return null;
+    } catch {
+      return null;
+    }
+    // The path as written. Our keys never need percent-encoding, so a `%`
+    // in it (an encoded slash, dot, NUL or broken byte) is not one of ours.
+    key = value.slice(base.length).split(/[?#]/, 1)[0];
+  } else {
+    key = value;
+  }
+
+  if (Buffer.byteLength(key, 'utf8') > 1024) return null;
+  // The shape presignUpload writes: `<folder>/<wawuId>/<uuid>.<ext>`, so
+  // exactly two plain segments after the folder, none of them only dots.
+  const segments = key.split('/');
+  if (!segments.every((seg) => KEY_SEGMENT.test(seg) && !/^\.+$/.test(seg)))
+    return null;
+  const inFolder = folders.some(
+    (folder) =>
+      key.startsWith(`${folder}/`) &&
+      segments.length === folder.split('/').length + 2,
+  );
+  return inFolder ? key : null;
 }
 
 /** Sizes in refusal messages are for a person to read, not a machine. */
@@ -196,6 +325,40 @@ export class StorageService {
       // NEPC paperwork: none of it could be uploaded at all.
       requestChecksumCalculation: 'WHEN_REQUIRED',
     });
+  }
+
+  private bucketLocationRead: Promise<BucketLocation | null> | null = null;
+
+  /**
+   * This bucket's origin and key prefix, read from the storage client: a
+   * read link is signed (locally, nothing is sent) for a probe key and the
+   * part before the key is kept. So the host follows STORAGE_ENDPOINT,
+   * STORAGE_BUCKET and STORAGE_FORCE_PATH_STYLE exactly as every real link
+   * does. Null when storage is not configured.
+   */
+  bucketLocation(): Promise<BucketLocation | null> {
+    if (!this.client) return Promise.resolve(null);
+    const client = this.client;
+    this.bucketLocationRead ??= (async () => {
+      const probe = 'legal/document/probe/probe.pdf';
+      const link = new URL(
+        await getSignedUrl(
+          client,
+          new GetObjectCommand({ Bucket: this.bucket, Key: probe }),
+          { expiresIn: 60 },
+        ),
+      );
+      if (!link.pathname.endsWith(`/${probe}`)) return null;
+      return {
+        origin: link.origin,
+        pathPrefix: link.pathname.slice(0, -probe.length),
+      };
+    })().catch((e) => {
+      this.logger.warn(`Could not read the bucket location: ${String(e)}`);
+      this.bucketLocationRead = null;
+      return null;
+    });
+    return this.bucketLocationRead;
   }
 
   get isConfigured(): boolean {
