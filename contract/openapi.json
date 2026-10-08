@@ -26406,6 +26406,28 @@
         ]
       }
     },
+    "/api/hub/webhooks/nuvion": {
+      "post": {
+        "operationId": "NuvionWebhookController_receive",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NuvionWebhookAck"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Stores one Nuvion delivery and acknowledges it. Nuvion's webhook, never\ncalled by an app. The body is untyped on purpose: the global\nValidationPipe forbids unknown fields, and Nuvion's payloads differ by\nevent. The signature is checked over the raw bytes before this runs.",
+        "tags": [
+          "PaymentWebhook"
+        ]
+      }
+    },
     "/api/hub/admin/ads": {
       "get": {
         "operationId": "AdminAdsController_list",
@@ -45742,6 +45764,26 @@
           "checkoutBump",
           "actions",
           "caps"
+        ]
+      },
+      "NuvionWebhookAck": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "recorded",
+              "duplicate"
+            ]
+          },
+          "event": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "outcome",
+          "event"
         ]
       },
       "AdCreativeView": {
