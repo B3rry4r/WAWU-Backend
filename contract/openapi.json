@@ -28255,7 +28255,7 @@
           "scheduledFor": {
             "type": "string",
             "description": "The start of the hour the person picked, exactly as `GET\n/legal/consultation/slots` gave it. Required for a video or phone call;\nan in-person consultation is arranged directly and books no hour.",
-            "pattern": "T\\d{2}(?::?\\d{2}(?::?\\d{2}(?:[.,]\\d+)?)?)?(?:Z|[+-]\\d{2}(?::?\\d{2})?)$"
+            "pattern": "T\\d{2}(?::?\\d{2}(?::?\\d{2}(?:[.,]\\d+)?)?)?(?:Z|[+-]\\d{2}:?\\d{2})$"
           }
         },
         "required": [
@@ -28317,9 +28317,8 @@
           },
           "url": {
             "type": "string",
-            "description": "Object-storage URL from POST /uploads/presign.",
+            "description": "The file's `fileUrl` or `key` from POST /uploads/presign: a link on WAWU\nstorage or a bare key, under `legal/document/`. Anything else is refused\nwith a 400 naming this field (N1).",
             "maxLength": 600,
-            "format": "uri",
             "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
           },
           "pages": {
@@ -38294,7 +38293,8 @@
             "type": "string"
           },
           "url": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "pages": {
             "type": "number",
