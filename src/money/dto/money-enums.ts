@@ -167,5 +167,9 @@ export const MONEY_ERROR_CODES = [
   'statement_busy',
   // Finding a recipient (WALLET-08).
   'recipient_search_rate_limited',
+  // Fees and limits as settings (NUV-07): the running provider's fees are
+  // not set, so nothing is quoted or moved (R-42); a movement passes a limit.
+  'fees_not_set',
+  'limit_reached',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];

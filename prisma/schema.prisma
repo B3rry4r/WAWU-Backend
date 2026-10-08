@@ -2660,6 +2660,8 @@ model ProfessionalProfile {
   /// Hidden from the directory without deleting the record — a professional
   /// who is too busy to take work, or one an admin has pulled. Distinct from
   /// `status`: this is availability, that is whether they were ever approved.
+  /// Which of the two hid it is ProfessionalTakedown (FIX-06): while an
+  /// admin's takedown stands this is false and the person cannot set it.
   listed Boolean @default(true)
 
   reviews ProfessionalReview[]
@@ -2691,6 +2693,52 @@ model ProfessionalLocation {
   city       String
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+}
+
+/// An admin's takedown of one professional listing, kept apart from the
+/// person's own Hide (FIX-06).
+///
+/// Before this table, POST /admin/professionals/:id/unlist and the person's
+/// Hide (PATCH /professionals/applications/:id/listing) wrote the same
+/// `ProfessionalProfile.listed = false`, so the person's Show put back a
+/// listing an admin had pulled. A row here whose `liftedAt` is null is a
+/// takedown that stands: `listed` stays false, the person's Show is refused
+/// (409, reason.code `listing_taken_down`), and only an admin lifts it
+/// (POST /admin/professionals/:id/relist).
+///
+/// A SIDE TABLE, NOT A COLUMN, for ProfessionalLocation's reason:
+/// ProfessionalProfile rows go out whole on routes the web calls today, so a
+/// column there would add a key to each of those answers (the protected
+/// route list, hazard H-1).
+///
+/// One row per listing: the latest takedown, and who lifted it and when. A
+/// takedown after a lift replaces the row. Admin email and role are
+/// SNAPSHOTS, as in AdminOpsAudit: "who took this down" has to stay
+/// answerable after that admin is renamed, suspended or deleted. No FK,
+/// matching ProfessionalLocation.
+model ProfessionalTakedown {
+  /// The listing: a ProfessionalProfile id.
+  professionalId String  @id
+  /// Whose listing (ProfessionalProfile.wawuUserId when it was taken down),
+  /// so the account purge and the data export find the row by its owner.
+  wawuUserId     String
+  /// What the person themselves last chose: the listing's `listed` when the
+  /// admin took it down, then false if they press Hide while it is down.
+  /// Lifting the takedown puts the listing back to this.
+  ownerListed    Boolean
+
+  takenDownAt           DateTime  @default(now())
+  takenDownByAdminId    String
+  takenDownByAdminEmail String
+  takenDownByAdminRole  AdminRole
+
+  /// All null while the takedown stands.
+  liftedAt           DateTime?
+  liftedByAdminId    String?
+  liftedByAdminEmail String?
+  liftedByAdminRole  AdminRole?
+
+  @@index([wawuUserId])
 }
 
 /// One client's rating of one professional listing.
@@ -2898,6 +2946,44 @@ model LegalChatMessage {
   createdAt      DateTime        @default(now())
 
   @@index([legalRequestId, createdAt])
+}
+
+/// One paid AI call that writes the assistant's opener on a matter's thread
+/// (FIX-11). The opener is written on the first read of an empty, open thread
+/// (`LegalChatService.getThread`), and reading a thread must never multiply
+/// paid calls, so this row is two things at once:
+///
+/// - the CLAIM: it is written under the person's lock, only while the thread
+///   is empty, no other opener call is running for it and none ended since
+///   the read arrived, so parallel reads make one call between them and wait
+///   for its answer;
+/// - the METER: it is written in the same step that checks the person's
+///   hourly limits and counts toward them, like a `LegalAssistantCall`.
+///
+/// One row per attempt (a failed call is still a paid call). Carries no
+/// words of the conversation.
+model LegalChatOpenerCall {
+  id             String    @id @default(uuid())
+  legalRequestId String
+  wawuUserId     String
+  /// When the claim stops holding. While the call runs: when it lapses, so
+  /// a process that died mid-call does not hold the thread for good. Once
+  /// the call has ended: when it ended. A read that arrived before this time
+  /// never claims again for the thread.
+  busyUntil      DateTime?
+  /// How the call ended: `written` (the opener is in the thread), `failed`
+  /// (the provider failed or answered nothing) or `superseded` (the thread
+  /// was no longer empty when the answer came back, so it was not written).
+  /// Null while it runs.
+  outcome        String?
+  createdAt      DateTime  @default(now())
+
+  @@index([legalRequestId, createdAt])
+  @@index([wawuUserId, createdAt])
+  // Also in the database, and NOT expressible here (Prisma has no partial
+  // index): UNIQUE ("legalRequestId") WHERE "outcome" = 'written', so a
+  // thread has at most one opener on record whatever reaches the table. See
+  // migration 20261015200000_legal_chat_opener.
 }
 
 // -----------------------------------------------------------------------------

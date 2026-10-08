@@ -174,6 +174,13 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'wawuUserId',
     disposition: 'OWNED',
   },
+  // One row per AI call that tried to write a matter thread's opener
+  // (FIX-11): the claim and the hourly count; holds no words.
+  {
+    model: 'LegalChatOpenerCall',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
   { model: 'LegalIntake', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'ProfessionalProfile', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'StorageObject', column: 'wawuUserId', disposition: 'OWNED' },
@@ -263,6 +270,15 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // public only beside a listing that goes with them.
   {
     model: 'ProfessionalLocation',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
+  // An admin's takedown of one of this person's professional listings, and
+  // the Hide or Show they had chosen (FIX-06). It exists only beside a
+  // listing that goes with them, as FeaturedCreator (an admin's choice about
+  // this account) does.
+  {
+    model: 'ProfessionalTakedown',
     column: 'wawuUserId',
     disposition: 'OWNED',
   },
