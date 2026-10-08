@@ -173,6 +173,11 @@ Every refusal is the envelope this backend already answers with
   `reason.code`, never on `message`.
 - A 400 **without** `reason` is the global `ValidationPipe` refusing a
   malformed field; its `message` is the first validation message.
+- A 400, 413 or 415 **without** `reason` can also be the body parser
+  refusing the request before any route runs (too large, an unsupported
+  charset or encoding, a body it cannot read). It is not a money outcome, so
+  money routes carry no `reason` for it either; the app treats it as a
+  malformed request (FIX-08).
 - Success is `{ statusCode, message: "OK", data }`. The body's `statusCode` is
   always 200, even when the HTTP status is 201 (hazard H-3 in
   `src/common/tests/protected-registry.regression.spec.ts`): read the HTTP
