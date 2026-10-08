@@ -176,6 +176,13 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'wawuUserId',
     disposition: 'OWNED',
   },
+  // One row per AI call that tried to write a matter thread's opener
+  // (FIX-11): the claim and the hourly count; holds no words.
+  {
+    model: 'LegalChatOpenerCall',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
   { model: 'LegalIntake', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'ProfessionalProfile', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'StorageObject', column: 'wawuUserId', disposition: 'OWNED' },

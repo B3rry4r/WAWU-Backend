@@ -773,12 +773,12 @@ model ContentFrame {
 /// number of rows; no counter column on ContentPiece, because a new column
 /// there would widen every live content response (protected route registry, entry H-1).
 model ContentShare {
-  id            String       @id @default(uuid())
-  contentId     String
-  content       ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
-  sharerWawuId  String
-  sharedOn      DateTime     @db.Date
-  sharedAt      DateTime     @default(now())
+  id           String       @id @default(uuid())
+  contentId    String
+  content      ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  sharerWawuId String
+  sharedOn     DateTime     @db.Date
+  sharedAt     DateTime     @default(now())
 
   @@unique([contentId, sharerWawuId, sharedOn])
   @@index([sharerWawuId])
@@ -2863,14 +2863,14 @@ model LegalIntake {
   /// (a retry of the assistant's reply, or preparing the brief on Send), so
   /// a second one cannot start. Expires on its own if the process dies.
   assistantBusyUntil DateTime?
-
-  @@index([wawuUserId, status])
-  @@index([status, completedAt])
   // Also in the database, and NOT expressible here (Prisma has no partial
   // index): UNIQUE ("wawuUserId") WHERE "channel" = 'assistant' AND "status" =
   // 'in_progress', so a person has at most one open assistant conversation.
   // See migration 20261007200000_legal_assistant. `prisma migrate diff` does
   // not list it, so the schema and the migrations still agree.
+
+  @@index([wawuUserId, status])
+  @@index([status, completedAt])
 }
 
 /// Who wrote a message in the assistant conversation on an intake.
@@ -3017,6 +3017,44 @@ model LegalDeliverable {
   @@unique([legalRequestId, url])
   @@index([legalRequestId, createdAt])
   @@index([wawuUserId])
+}
+
+/// One paid AI call that writes the assistant's opener on a matter's thread
+/// (FIX-11). The opener is written on the first read of an empty, open thread
+/// (`LegalChatService.getThread`), and reading a thread must never multiply
+/// paid calls, so this row is two things at once:
+///
+/// - the CLAIM: it is written under the person's lock, only while the thread
+///   is empty, no other opener call is running for it and none ended since
+///   the read arrived, so parallel reads make one call between them and wait
+///   for its answer;
+/// - the METER: it is written in the same step that checks the person's
+///   hourly limits and counts toward them, like a `LegalAssistantCall`.
+///
+/// One row per attempt (a failed call is still a paid call). Carries no
+/// words of the conversation.
+model LegalChatOpenerCall {
+  id             String    @id @default(uuid())
+  legalRequestId String
+  wawuUserId     String
+  /// When the claim stops holding. While the call runs: when it lapses, so
+  /// a process that died mid-call does not hold the thread for good. Once
+  /// the call has ended: when it ended. A read that arrived before this time
+  /// never claims again for the thread.
+  busyUntil      DateTime?
+  /// How the call ended: `written` (the opener is in the thread), `failed`
+  /// (the provider failed or answered nothing) or `superseded` (the thread
+  /// was no longer empty when the answer came back, so it was not written).
+  /// Null while it runs.
+  outcome        String?
+  createdAt      DateTime  @default(now())
+  // Also in the database, and NOT expressible here (Prisma has no partial
+  // index): UNIQUE ("legalRequestId") WHERE "outcome" = 'written', so a
+  // thread has at most one opener on record whatever reaches the table. See
+  // migration 20261015200000_legal_chat_opener.
+
+  @@index([legalRequestId, createdAt])
+  @@index([wawuUserId, createdAt])
 }
 
 // -----------------------------------------------------------------------------
@@ -3719,32 +3757,32 @@ model TransactionPinReset {
 /// so does a PIN reset by code. Holds no secret: a public key.
 /// ─────────────────────────────────────────────────────────────────────────
 model ApprovalDevice {
-  wawuUserId  String    @id
+  wawuUserId String    @id
   /// New on every registration; the app keeps it to know this phone is the one.
-  deviceId    String    @unique @default(uuid())
+  deviceId   String    @unique @default(uuid())
   /// SubjectPublicKeyInfo (DER) of a P-256 key, base64url.
-  publicKey   String
+  publicKey  String
   /// What the phone approves with: `fingerprint` or `face` (W35's label).
-  biometric   String
+  biometric  String
   /// The last approval that passed.
-  lastUsedAt  DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 }
 
 /// One challenge for one biometric approval (task MONEY-14): random, short
 /// lived, tied to the person and the phone it was issued for, and used up by
 /// the first approval that names it, right or wrong.
 model ApprovalChallenge {
-  id          String    @id @default(uuid())
-  wawuUserId  String
+  id         String    @id @default(uuid())
+  wawuUserId String
   /// ApprovalDevice.deviceId when the challenge was issued.
-  deviceId    String
+  deviceId   String
   /// 32 random bytes, base64url. Not a secret: only the phone's key can sign it.
-  challenge   String
-  expiresAt   DateTime
-  usedAt      DateTime?
-  createdAt   DateTime  @default(now())
+  challenge  String
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime  @default(now())
 
   @@index([wawuUserId, createdAt])
 }
@@ -3998,16 +4036,16 @@ model BvnCheckAttempt {
 /// holds the selfie, the BVN photo or any part of the BVN: only the outcome,
 /// when, and Fintava's confidence score when it gives one.
 model SelfieMatchAttempt {
-  id         String    @id @default(uuid())
-  wawuUserId String
+  id            String    @id @default(uuid())
+  wawuUserId    String
   /// `pending` while Fintava is being asked; then `matched`, `not_matched`
   /// or `unavailable`.
-  outcome    String    @default("pending")
+  outcome       String    @default("pending")
   /// Fintava's confidence score for this match, as sent, when it sends one.
-  confidence Float?
+  confidence    Float?
   /// When Fintava's answer came back; null while pending.
-  settledAt  DateTime?
-  createdAt  DateTime  @default(now())
+  settledAt     DateTime?
+  createdAt     DateTime  @default(now())
   /// The passed BVN check this selfie was compared against, read once at the
   /// start of the request (migration 20261002230000): when that check passed
   /// (WalletIdentity.bvnVerifiedAt) and its BVN's keyed hash
@@ -4439,7 +4477,7 @@ model SchoolCourse {
   /// merchant cap any one payment is bounded by.
   priceKobo Int
   /// SCHOOLS-02: when the dashboard hid this course. Null: shown. SCHOOLS-04 serves only unhidden rows.
-  hiddenAt DateTime?
+  hiddenAt  DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -4467,7 +4505,7 @@ model CourseIntake {
   capacity   Int
   seatsTaken Int          @default(0)
   /// SCHOOLS-02: when the dashboard hid this intake. Null: shown. SCHOOLS-04 serves only unhidden rows.
-  hiddenAt DateTime?
+  hiddenAt   DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
