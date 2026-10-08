@@ -7,6 +7,7 @@ import { AppModule } from './app.module';
 import { applyHubHttpSettings, HUB_APP_OPTIONS } from './hub-app-options';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
+import { checkStorableTextOnEveryRoute } from './storable-text/storable-text.pipe';
 
 async function bootstrap() {
   // rawBody: true, for the Fintava webhook signature (src/hub-app-options.ts).
@@ -44,6 +45,11 @@ async function bootstrap() {
       transform: true,
     }),
   );
+  // FIX-17: a query or path value Postgres cannot take (a NUL) is a 400
+  // naming the field, on every route, after every other check of that value
+  // (src/storable-text/storable-text.pipe.ts). Before app.listen(): Nest
+  // reads each route's arguments when it builds the router.
+  checkStorableTextOnEveryRoute(app);
   app.useGlobalFilters(new AllExceptionsFilter());
   app.useGlobalInterceptors(new ResponseInterceptor());
 

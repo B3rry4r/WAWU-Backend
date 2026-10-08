@@ -13,6 +13,7 @@ import {
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { OptionalWawuAuthGuard } from '../search-response/guards/optional-wawu-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { PRODUCT_CATEGORY_PIPE } from './product-category.pipe';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { ShopService } from './shop.service';
 import {
@@ -52,7 +53,9 @@ export class ShopController {
   /** The subcategories in an aisle that actually have stock. */
   @UseGuards(OptionalWawuAuthGuard)
   @Get('categories/:category/subcategories')
-  subcategories(@Param('category') category: ProductCategory) {
+  subcategories(
+    @Param('category', PRODUCT_CATEGORY_PIPE) category: ProductCategory,
+  ) {
     return this.service.listSubcategories(category);
   }
 

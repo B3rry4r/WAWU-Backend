@@ -1105,3 +1105,57 @@ send `Cache-Control: no-store`, read our database only and never call Fintava.
 - **Contract.** The search declares its plain `400` (a malformed `q`, no
   `reason`) and `429` (`recipient_search_rate_limited`; the per-address 429
   has no `reason`); both lists carry `maxItems` (20 and 10).
+
+## 14. A NUL, or other text Postgres cannot take (FIX-17)
+
+Postgres refuses a NUL (U+0000) in a text parameter (error 22021), so a `%00`
+that reached a query answered 500 on 23 routes. The code base had no single
+rule: a NUL was stripped (money searches, AI text), refused (legal documents,
+the assistant, the profile audience) or replaced with U+FFFD (the Fintava
+webhook). From FIX-17 on there is ONE rule, and it holds for every route,
+money routes included:
+
+- **Refuse it with 400 naming the field, before any query runs.** The body is
+  the plain 400 (no `reason`):
+
+  ```json
+  { "statusCode": 400, "message": "<field> must have text in it, with no null characters or broken characters", "data": null }
+  ```
+
+  One sentence for this fault everywhere (`unstorableTextMessage` in
+  `src/storable-text/storable-text.ts`); `/search` (FIX-07) and `/schools`
+  (SCHOOLS-04) already answered it for `q`. The app treats it as any
+  malformed request.
+- **What counts:** a NUL, or a lone UTF-16 surrogate, anywhere in the value
+  (`isStorableText`). Over HTTP only the NUL arrives: Express turns a
+  percent-encoded surrogate or broken UTF-8 into U+FFFD, which is searched
+  for like any other character. A blank value is not this rule's business,
+  and every other character (control characters, U+FFFD, U+FFFE, emoji) is
+  accepted.
+- **Where, with no line per route:** every query and path value of every
+  route, every method. `checkStorableTextOnEveryRoute(app)` in `src/main.ts`
+  puts one pipe last on every argument of every route the app mounts, so a
+  route added later is covered automatically. A test app that should answer
+  as the Hub does calls it too, before `app.init()`.
+- **What answers first, unchanged:** a guard (`401`, `403`, `409
+  wallet_not_open`, `423`), every check that already refused the value (the
+  ValidationPipe's `MaxLength`, `IsUUID`, `IsIn` and so on, the argument's
+  own pipe such as `ParseUUIDPipe`), and a fault in another argument (an
+  undeclared query key, a bad body). Only text that every other check let
+  through is refused here. Query keys are never read: an undeclared key is
+  the ValidationPipe's (`property x should not exist`) or is ignored.
+- **Request bodies are not in this rule yet.** FIX-17 changed no body. What
+  a body does today stays: money text and AI text strip a NUL, legal
+  documents, the assistant and the profile audience refuse it (`IsCleanText`,
+  the same sentence). A new body field that stores text refuses it the same
+  way (`@IsCleanText()`, or `isStorableText` for a field that may be blank).
+  A provider's webhook body is the one standing exception: it is recorded,
+  with a NUL replaced by U+FFFD, because refusing it would lose the
+  provider's event.
+- **Money searches.** `GET /money/transactions?q=` and `GET
+  /money/recipients?q=` stripped a NUL in code (`searchText` in
+  `transaction-history.service.ts`, `recipient-query.ts`). For a person with
+  a wallet the refusal now answers first (`409 wallet_not_open` still comes
+  first for a person without one), and a refused recipient search does not
+  count towards the person's limit (section 13). The strip code no longer
+  sees a NUL from a query string; it stays until the money owner removes it.

@@ -1,5 +1,8 @@
 import { BadRequestException } from '@nestjs/common';
-import { isCleanText } from '../admin/legal-documents/policy-input';
+import {
+  isStorableText,
+  unstorableTextMessage,
+} from '../storable-text/storable-text';
 
 /**
  * FIX-07. A search term Postgres cannot take.
@@ -19,17 +22,20 @@ import { isCleanText } from '../admin/legal-documents/policy-input';
  * protected route, so every answer that was not a 500 stays as it was. For
  * any string that is not blank, `isCleanText` is false exactly when the
  * string holds a NUL or a lone surrogate (trimming never removes either).
+ *
+ * FIX-17 made this the rule for every query and path value on every route
+ * (`isStorableText`), so over HTTP that check answers first, with the same
+ * sentence; this one stays the guard for a direct call to the handlers.
  */
 export function isSearchableQuery(q: string): boolean {
-  return q.trim() === '' || isCleanText(q);
+  return isStorableText(q);
 }
 
 /**
  * The refusal, word for word what the `schools` tab answers for the same
  * term, so every tab and `/search/closest` agree.
  */
-export const UNSEARCHABLE_QUERY_MESSAGE =
-  'q must have text in it, with no null characters or broken characters';
+export const UNSEARCHABLE_QUERY_MESSAGE = unstorableTextMessage('q');
 
 /**
  * 400 naming `q`, thrown before any query runs. Called by the handlers after
