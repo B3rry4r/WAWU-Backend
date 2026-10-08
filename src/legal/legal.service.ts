@@ -27,6 +27,10 @@ import {
   appointmentMinutes,
 } from './consultation-slots';
 import { LegalPricesService, isBookable } from './legal-prices.service';
+import {
+  DELIVERY_REFUSAL_MESSAGE,
+  LegalDeliveryRule,
+} from './legal-delivery-rule';
 import type {
   BookConsultationDto,
   CancelLegalRequestDto,
@@ -100,6 +104,7 @@ export class LegalRequestsService {
     private readonly verifier: FlutterwaveCheckoutVerifier,
     private readonly audit: AdminOpsAuditService,
     private readonly prices: LegalPricesService,
+    private readonly deliveryRule: LegalDeliveryRule,
   ) {}
 
   /**
@@ -577,6 +582,27 @@ export class LegalRequestsService {
     }
     if (!record.servicePaidAt) {
       throw new BadRequestException('This work has not been paid for.');
+    }
+    // FIX-24: a link that names our own storage is delivered only under the
+    // delivery rule (N1, an upload record for exactly that key, uploaded by
+    // this client or the legal team), because the app's list of delivered
+    // files signs a fresh link to it for the client on every read, and the
+    // web's request read returns it as stored. A link on any other host
+    // cannot read one of our objects and is taken as before: refusing it too
+    // would change an answer the protected route lock holds (its probe
+    // delivers a link on another host), which needs the owner's relock.
+    const at = await this.deliveryRule.location();
+    if (this.deliveryRule.namesOurStorage(dto.deliverableUrl, at)) {
+      const [check] = await this.deliveryRule.check(
+        record.wawuUserId,
+        [dto.deliverableUrl],
+        at,
+      );
+      if (check.key === null) {
+        throw new BadRequestException([
+          `deliverableUrl ${DELIVERY_REFUSAL_MESSAGE}`,
+        ]);
+      }
     }
 
     const updated = await this.prisma.legalRequest.update({
