@@ -32,9 +32,16 @@ export class PushSweepService implements OnModuleInit {
   async tick(): Promise<void> {
     try {
       const report = await this.sender.runOnce();
-      if (report.sent + report.failed + report.delivered + report.skipped > 0) {
+      if (
+        report.sent +
+          report.failed +
+          report.delivered +
+          report.skipped +
+          report.requeued >
+        0
+      ) {
         this.logger.log(
-          `Push pass: ${report.sent} sent, ${report.delivered} delivered, ${report.skipped} skipped, ${report.failed} failed, ${report.retried} to retry.`,
+          `Push pass: ${report.sent} sent, ${report.delivered} delivered, ${report.skipped} skipped, ${report.failed} failed, ${report.retried} to retry, ${report.requeued} put back after an instance stopped.`,
         );
       }
     } catch (error) {
