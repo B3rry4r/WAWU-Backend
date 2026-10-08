@@ -30,9 +30,9 @@ const USER_PRO = '00000000-0000-4000-8000-000000000003';
 const MOCK = process.env.WAWU_ID_BASE_URL ?? 'http://localhost:4001';
 const RUN = Date.now().toString(36);
 let seq = 0;
-/** Every token this spec makes starts with this, and only those are ever deleted. */
-const MINE = `ExponentPushToken[http-${RUN}-`;
-const newToken = () => `${MINE}${(seq += 1)}]`;
+/** Every token this spec makes carries this, and only those are ever deleted. */
+const MINE = `[http-${RUN}-`;
+const newToken = () => `ExponentPushToken${MINE}${(seq += 1)}]`;
 
 async function login(identifier: string): Promise<string> {
   const res = await fetch(`${MOCK}/auth/login`, {
@@ -124,7 +124,7 @@ describe('Push token routes (contract, INBOX-03)', () => {
     Logger.overrideLogger(new TestingLogger());
     for (const spy of spies) spy.mockRestore();
     await prisma.pushToken.deleteMany({
-      where: { expoPushToken: { startsWith: MINE } },
+      where: { expoPushToken: { contains: MINE } },
     });
     process.env = savedEnv;
     await app.close();
@@ -280,20 +280,18 @@ describe('Push token routes (contract, INBOX-03)', () => {
       },
     ],
   ])('refuses %s with a 400 and stores nothing', async (_name, body) => {
+    const before = await prisma.pushToken.count({
+      where: { userWawuId: USER_PLAIN },
+    });
     const res = await post(plain, body);
     expect(res.status).toBe(400);
     expect(
-      await prisma.pushToken.count({
-        where: {
-          userWawuId: USER_PLAIN,
-          expoPushToken: { not: { startsWith: 'ExponentPushToken[http-' } },
-        },
-      }),
-    ).toBe(0);
+      await prisma.pushToken.count({ where: { userWawuId: USER_PLAIN } }),
+    ).toBe(before);
   });
 
   it('accepts both token spellings Expo issues', async () => {
-    const a = `ExpoPushToken[http-${RUN}-b1]`;
+    const a = `ExpoPushToken${MINE}b1]`;
     expect(
       (await post(plain, { expoPushToken: a, platform: 'android' })).status,
     ).toBe(200);
@@ -375,7 +373,7 @@ describe('Push token routes (contract, INBOX-03)', () => {
   it('keeps a person to the cap, pushing out the phone seen longest ago', async () => {
     // only this run's tokens are cleared; the seed gives nobody a phone
     await prisma.pushToken.deleteMany({
-      where: { userWawuId: USER_BASIC, expoPushToken: { startsWith: MINE } },
+      where: { userWawuId: USER_BASIC, expoPushToken: { contains: MINE } },
     });
     const made: string[] = [];
     for (let i = 0; i < PUSH_MAX_TOKENS_PER_USER + 1; i += 1) {

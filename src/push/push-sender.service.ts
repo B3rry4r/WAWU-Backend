@@ -187,16 +187,23 @@ export class PushSenderService {
 
   /** Takes at most `limit` due rows for this instance, under one claim id. */
   private async claim(claimId: string, limit: number): Promise<Claimed[]> {
+    // The rows are picked once, in a MATERIALIZED CTE. Written as
+    // `WHERE id IN (SELECT ... LIMIT n FOR UPDATE SKIP LOCKED)` the planner
+    // may run the subquery again for the join, and each run skips what the
+    // last one locked, so the UPDATE took more than `n` rows (seen: 250 for
+    // a limit of 100, which Expo would refuse as one request).
     return this.prisma.$queryRaw<Claimed[]>`
-      UPDATE "PushDelivery" d
-      SET "status" = 'claimed', "claimId" = ${claimId}, "lockedAt" = ${NOW_UTC},
-          "attempts" = d."attempts" + 1, "updatedAt" = ${NOW_UTC}
-      WHERE d."id" IN (
+      WITH picked AS MATERIALIZED (
         SELECT "id" FROM "PushDelivery"
         WHERE "status" = 'pending' AND "nextAttemptAt" <= ${NOW_UTC}
         ORDER BY "createdAt", "id"
         LIMIT ${limit}
         FOR UPDATE SKIP LOCKED)
+      UPDATE "PushDelivery" d
+      SET "status" = 'claimed', "claimId" = ${claimId}, "lockedAt" = ${NOW_UTC},
+          "attempts" = d."attempts" + 1, "updatedAt" = ${NOW_UTC}
+      FROM picked
+      WHERE d."id" = picked."id"
       RETURNING d."id", d."notificationId", d."userWawuId", d."pushTokenId", d."attempts"`;
   }
 
@@ -527,15 +534,17 @@ export class PushSenderService {
     const due = await this.prisma.$queryRaw<
       Array<{ id: string; ticketId: string; tooOld: boolean }>
     >`
-      UPDATE "PushDelivery" d
-      SET "receiptDueAt" = ${NOW_UTC} + make_interval(secs => ${PUSH_RECEIPTS.retrySeconds}),
-          "receiptChecks" = d."receiptChecks" + 1, "updatedAt" = ${NOW_UTC}
-      WHERE d."id" IN (
+      WITH picked AS MATERIALIZED (
         SELECT "id" FROM "PushDelivery"
         WHERE "status" = 'sent' AND "receiptDueAt" <= ${NOW_UTC} AND "ticketId" IS NOT NULL
         ORDER BY "receiptDueAt", "id"
         LIMIT ${PUSH_BATCH_LIMIT}
         FOR UPDATE SKIP LOCKED)
+      UPDATE "PushDelivery" d
+      SET "receiptDueAt" = ${NOW_UTC} + make_interval(secs => ${PUSH_RECEIPTS.retrySeconds}),
+          "receiptChecks" = d."receiptChecks" + 1, "updatedAt" = ${NOW_UTC}
+      FROM picked
+      WHERE d."id" = picked."id"
       RETURNING d."id", d."ticketId",
         (d."sentAt" < ${NOW_UTC} - make_interval(hours => ${PUSH_RECEIPTS.giveUpHours})) AS "tooOld"`;
     if (due.length === 0) return report;

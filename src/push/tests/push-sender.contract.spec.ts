@@ -1262,6 +1262,31 @@ describe('Phone push sender (INBOX-03)', () => {
       expect((await deliveriesOf(USER_A))[0].status).toBe('sent');
     });
 
+    // Found in round 2: with the table's statistics taken while it was empty,
+    // `WHERE id IN (SELECT ... LIMIT 100 FOR UPDATE SKIP LOCKED)` became a
+    // nested loop that ran the subquery again per row and claimed 162 rows.
+    it('a claim takes at most one batch, whatever the planner believes about the table', async () => {
+      await prisma.$executeRawUnsafe('ANALYZE "PushDelivery"');
+      await prisma.pushToken.createMany({
+        data: Array.from({ length: 250 }, () => ({
+          userWawuId: USER_A,
+          expoPushToken: newToken(),
+          platform: 'android',
+          createdAt: new Date(Date.now() - 60_000),
+        })),
+      });
+      await tip(USER_A);
+      expect(await sender.enqueue()).toBe(250);
+      const claim = (
+        sender as unknown as {
+          claim(id: string, limit: number): Promise<unknown[]>;
+        }
+      ).claim.bind(sender);
+      expect(await claim('batch-1', 100)).toHaveLength(100);
+      expect(await claim('batch-2', 100)).toHaveLength(100);
+      expect(await claim('batch-3', 100)).toHaveLength(50);
+    }, 60000);
+
     it('a hung Expo fails only the batch that was on the wire (never resent); the rest is sent on the next pass', async () => {
       await prisma.pushToken.createMany({
         data: Array.from({ length: 250 }, () => ({
