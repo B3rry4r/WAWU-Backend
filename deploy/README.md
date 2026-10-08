@@ -155,6 +155,34 @@ RECEIPT_RENDER_CONCURRENCY=
 # About: where "Contact support" sends mail (SETTINGS-02). The owner's fact, no default
 # (empty: the row says "Not available yet").
 SUPPORT_EMAIL=
+# Nuvion's charges (NUV-07, R-42), read only when WALLET_PROVIDER=nuvion. No
+# default: the owner fills them in from Nuvion's written NGN fees (NUV-10).
+# While any is empty under nuvion, every fee quote and every money-moving
+# route answers 503 fees_not_set and nothing is sent to Nuvion (the balance,
+# history and account number keep working). Kobo: one whole number, or
+# from:fee bands such as 0:<fee>,<from>:<fee>. A bad value stops the server
+# at boot. Set them, then `sudo systemctl restart wawu-hub-api`. A rollback to
+# fintava ignores them (Fintava's ruled fees apply, .env.example).
+NUVION_FEE_BOOK_TRANSFER=
+NUVION_FEE_BANK_PAYOUT=
+NUVION_FEE_INFLOW=
+# WAWU's own limits on moving money (NUV-07), per person and per kind, under
+# either provider. Whole kobo, 1 or more; empty = no WAWU limit. Above one,
+# 403 limit_reached naming the limit, before anything is sent. The owner sets
+# them (NUV-10); a bad value, or a per-transaction limit above its daily one
+# (or a daily above its monthly), stops the server at boot.
+WAWU_LIMIT_WAWU_TRANSFER_PER_TRANSACTION_KOBO=
+WAWU_LIMIT_WAWU_TRANSFER_DAILY_KOBO=
+WAWU_LIMIT_WAWU_TRANSFER_MONTHLY_KOBO=
+WAWU_LIMIT_BANK_TRANSFER_PER_TRANSACTION_KOBO=
+WAWU_LIMIT_BANK_TRANSFER_DAILY_KOBO=
+WAWU_LIMIT_BANK_TRANSFER_MONTHLY_KOBO=
+WAWU_LIMIT_PURCHASE_PER_TRANSACTION_KOBO=
+WAWU_LIMIT_PURCHASE_DAILY_KOBO=
+WAWU_LIMIT_PURCHASE_MONTHLY_KOBO=
+WAWU_LIMIT_BILL_PER_TRANSACTION_KOBO=
+WAWU_LIMIT_BILL_DAILY_KOBO=
+WAWU_LIMIT_BILL_MONTHLY_KOBO=
 
 GEMINI_API_KEY=
 

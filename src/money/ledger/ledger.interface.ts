@@ -9,6 +9,7 @@
  * once, at the Fintava boundary (`fintavaAmountToKobo`, MONEY-06); the
  * database holds BIGINT and nothing on the way multiplies or divides.
  */
+import type { WalletProviderName } from '../../wallet-provider/wallet-provider.interface';
 import type {
   TransactionCategory,
   TransactionCounterpartyView,
@@ -96,6 +97,16 @@ export interface LedgerMovementInput {
   sourceEventId?: string | null;
   /** When the money moved, if the source says; else now. */
   occurredAt?: Date | null;
+  /**
+   * The wallet provider that moved it (`fintava` or `nuvion`), when the
+   * writer knows it is not simply the running one: pay from wallet names its
+   * payment's own provider on every row it writes (MONEY-17, lead ruling 6,
+   * 8 Oct 2026), so a row written for a Fintava payment while Nuvion runs
+   * still says Fintava. The ledger table's `provider` column is NUV-01's;
+   * LedgerService writes this value there, the running provider when unset,
+   * once that column exists.
+   */
+  provider?: WalletProviderName | null;
 }
 
 export interface LedgerRecordResult {

@@ -619,6 +619,20 @@ export interface WalletProvider {
    * provider could not say.
    */
   secondaryReferenceOf(t: ProviderTransaction): Promise<string | null>;
+
+  // Identity (MONEY-17, lead ruling R5-1, 8 Oct 2026)
+  /**
+   * Whether two references name one account at this provider. Each is any
+   * number or id the provider knows an account by: Nuvion's NGN account
+   * number, its account id and its `nuvion_ban` all name one account. Pay
+   * from wallet asks it before money moves, so a payment from WAWU's own
+   * account to WAWU's own account is refused however the provider names
+   * the two. Optional: a provider without it names each account by one
+   * number (Fintava's NUBAN), so two references are one account exactly
+   * when they are the same text. Never moves money; fails with a
+   * `WalletProviderError` when the provider cannot say.
+   */
+  isSameAccount?(a: string, b: string): Promise<boolean>;
 }
 
 /**

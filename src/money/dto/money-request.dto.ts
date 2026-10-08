@@ -12,8 +12,10 @@ import {
   MaxLength,
   Min,
   MinLength,
+  registerDecorator,
   ValidateIf,
 } from 'class-validator';
+import { isCleanText } from '../../admin/legal-documents/policy-input';
 import {
   APPROVAL_BIOMETRICS,
   type ApprovalBiometricKind,
@@ -354,6 +356,30 @@ export class PaymentQuoteQueryDto {
   amountKobo?: number;
 }
 
+/**
+ * Text the database can store (MONEY-17, lead ruling R5-2): no NUL and no
+ * lone surrogate, read by main's one rule (`isCleanText`, SETTINGS-02 and
+ * FIX-07). `blankAllowed`: an empty or all-space value passes too (a tip's
+ * note, stored as none). A value that fails is a plain 400 naming the field,
+ * answered before anything is claimed, never a 500 from the database.
+ */
+function IsStorableText(blankAllowed = false) {
+  return (object: object, propertyName: string) =>
+    registerDecorator({
+      name: 'isStorableText',
+      target: object.constructor,
+      propertyName,
+      options: {
+        message: '$property must have no null characters or broken characters',
+      },
+      validator: {
+        validate: (v: unknown) =>
+          typeof v === 'string' &&
+          ((blankAllowed && v.trim() === '') || isCleanText(v)),
+      },
+    });
+}
+
 /** POST /money/payments (H14 to H18 and every "Pay from wallet"). Headers: Idempotency-Key, X-Transaction-Pin. */
 export class PaymentDto {
   @ApiProperty({ enum: PAYMENT_KINDS })
@@ -386,12 +412,14 @@ export class PaymentDto {
    */
   @IsString()
   @Length(1, 1024)
+  @IsStorableText()
   quoteToken!: string;
 
   /** Only for a tip: the message that goes with it, 500 characters as POST /tips takes today. */
   @IsOptional()
   @IsString()
   @MaxLength(500)
+  @IsStorableText(true)
   note?: string;
 }
 

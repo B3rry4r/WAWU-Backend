@@ -243,6 +243,8 @@ Every refusal is the envelope this backend already answers with
 | `recipient_search_rate_limited` | 429 | the person has searched for recipients 20 times in the last minute, 120 in the last hour or 500 in the last day (`RECIPIENT_SEARCH_PERSON_LIMITS`, PROVISIONAL), counted after the token is verified (WALLET-08); also sent as the `Retry-After` header | `retryAfterSeconds` |
 | `statement_too_large` | 400 | the period holds more movements than one statement lists (`STATEMENT_MAX_ROWS`, 50,000); counted before anything is written, and the person picks a shorter range (WALLET-27) | |
 | `phone_held_by_other_identity` | 409 | account opening where Fintava already has a customer for the person's phone whose record does not carry the checked BVN (or carries none): nothing is adopted or created, and the opening stops for review (MONEY-12, BACKEND_GAPS G-37) | |
+| `fees_not_set` | 503 | the running wallet provider's fees are settings not filled in yet (Nuvion's `NUVION_FEE_*`, R-42): every fee quote and every money-moving route answers it before anything is sent to the provider; the balance, the history and the account number are unaffected (NUV-07, section 11) | |
+| `limit_reached` | 403 | the movement passes a limit: WAWU's own setting for its kind (`WAWU_LIMIT_<KIND>_<LIMIT>_KOBO`), checked before anything is sent, or the provider's own (Nuvion's per-transaction, daily or monthly refusal); the same answer either way (NUV-07, section 11) | `limit`: `per_transaction`, `daily` or `monthly` |
 
 The same table is `MONEY_ERROR_STATUS` in `src/money/money-contract.ts`; each
 operation in the contract lists the codes it can answer with, grouped by
@@ -956,8 +958,60 @@ still reads. Every answer is `Cache-Control: no-store`.
   `MERCHANT_MAX_PER_TXN_KOBO` is `400 amount_out_of_range` with
   `maximumKobo`, the largest `amountKobo` that fits. A send is not bound by
   it; a total a JSON number cannot carry exactly is refused the same way.
-- **Daily limit**: no task holds it (mobile repo BACKEND_GAPS G-7), so
-  `withinDailyLimit` is `true` and `remainingTodayKobo` `null`.
+- **Daily limit**: WAWU's limits are settings (NUV-07, below). Where the
+  module that mounts the route imports `MoneyLimitsModule`, the quote shows
+  today's standing for its kind (`withinDailyLimit`, `remainingTodayKobo`);
+  with no daily limit set for the kind, or without the module, it is `true`
+  and `null` as before.
+- **The provider's part, per provider (NUV-07, R-42)**: every `provider`
+  part comes from the running provider's schedule
+  (`src/money/fees/provider-fee-schedule.ts`); WAWU's parts and the order of
+  parts are the same under either provider, so R-23's one Fees row is
+  `fee.totalFeeKobo` either way.
+  - `fintava`: the WALLET-15 schedule above, unchanged (a rollback quotes
+    exactly what it quoted before).
+  - `nuvion`: `balance_transfer` is `NUVION_FEE_BOOK_TRANSFER` (a send to a
+    WAWU user, a purchase into WAWU's operational account), `bank_transfer`
+    is `NUVION_FEE_BANK_PAYOUT`; `NUVION_FEE_INFLOW` (money arriving by
+    transfer) is held for the add-money tasks. Each is one kobo figure or
+    `from:fee` bands, with **no default and no figure in code**. Nuvion has
+    no bill payments (R-39), so a `bill` is `409 target_not_payable`; its
+    operational account has no documented cap, so `MERCHANT_MAX_PER_TXN_KOBO`
+    (Fintava's merchant wallet policy) does not apply and WAWU's
+    per-transaction limit does that job.
+  - **Fees not set**: while any of the running provider's fee settings is
+    empty (only Nuvion's can be), every quote is `503 fees_not_set`, before
+    the wallet gate and before the query is read (`@RequireFeesSet()`, whose
+    guard runs first), and `FeeQuoteService.lines()`, `quote()` and `check()`
+    refuse the same way, so a payment that charges a quote cannot reach the
+    provider either. Default (agent), owner may override: a quote never asks
+    Nuvion (`POST /fee-simulations`); NUV-08 compares the setting with
+    Nuvion's own figure and reports a difference.
+- **Limits (NUV-07, `src/money/limits/`)**: per person, per kind of movement
+  (the quote's four kinds) and per limit (`per_transaction`, the Lagos
+  calendar `daily` and `monthly`), each the setting
+  `WAWU_LIMIT_<KIND>_<LIMIT>_KOBO` (whole kobo; empty is no WAWU limit; no
+  default, no figure in code), under either provider. What counts toward a
+  day or a month is the person's own pending and completed movements of the
+  kind out of their wallet, by amount before fees, from the ledger (never a
+  balance). Every money-moving route:
+  - carries `@RequireFeesSet()` as its last decorator, so `fees_not_set` is
+    answered before the wallet gate, the Idempotency-Key record and the PIN
+    (`src/money/limits/tests/money-moving-coverage.spec.ts` holds every
+    mounted route to it, and every declared one documents `fees_not_set` and
+    `limit_reached` through `DEBIT_GATE_ERRORS`);
+  - calls `MoneyLimits.assertMayMove({ wawuUserId, kind, amountKobo }, { tx
+    })` in the transaction that writes the movement's pending ledger row,
+    before the provider is called: `fees_not_set`, then `403 limit_reached`
+    with `limit` (per transaction, then today, then this month). With `tx`
+    it takes a per-person lock first, so two movements by one person are
+    checked one after the other;
+  - answers a provider failure with `error.toHttpException()`: the
+    provider's own limit refusal (a `WalletProviderLimitError`; Nuvion's
+    `error_transfer_transaction_limit_exceeded`,
+    `error_transfer_daily_limit_exceeded`,
+    `error_transfer_monthly_volume_exceeded`) is then the same
+    `limit_reached`, with nothing moved.
 - **Short-lived and checkable**: `quoteToken` is the quote signed by the
   server (HMAC-SHA256 under `FEE_QUOTE_KEY`: the person, kind, category,
   amount, total and `expiresAt`, `FEE_QUOTE_SECONDS` after it was given,
@@ -1142,6 +1196,21 @@ Fintava or on Nuvion, whichever the server runs.
   /money/payments` (`PaymentDto`; `Idempotency-Key`, and the PIN or a
   biometric approval, `@RequireApproval()`). `GET /money/payments/{id}`
   stays declared for MONEY-19, the holds for MONEY-18.
+- **Fees and limits first** (NUV-07, BACKEND_GAPS G-410; round 6). Both
+  routes carry `@RequireFeesSet()` as their last decorator, so while the
+  running provider's fees are not set they answer `503 fees_not_set` before
+  the wallet gate, the key and the PIN. The quote's `withinDailyLimit` and
+  `remainingTodayKobo` say where WAWU's own purchase limit stands today
+  (`MoneyLimits.dailyStanding`). The payment checks the limits
+  (`MoneyLimits.assertMayMove`, kind `purchase`, the price) inside the
+  claim's transaction (READ COMMITTED, under the limits' per-person lock),
+  so two payments by one person are counted one after the other: past a
+  limit is `403 limit_reached` with `reason.limit`, nothing stored or sent,
+  the key free. The provider's own limit refusal is the same answer.
+- **Text the database can store** (round 6, R5-2). A NUL or a lone
+  surrogate in `quoteToken` or `note` is a plain `400` naming the field
+  (main's `isCleanText`), before anything is claimed; a blank note is no
+  note.
 - **What is paid for.** Each selling feature registers its kind with
   `PayableRegistry` (MoneyModule exports it): `resolve` gives the title, the
   price from its own record and the payee (or `404 target_not_found`, `409
@@ -1192,7 +1261,34 @@ Fintava or on Nuvion, whichever the server runs.
   `pending` and is settled as below. A provider that has no such transfer
   yet (`not_supported`, the Nuvion adapter before NUV-05), is not set up, or
   refuses our key answers `503 provider_unreachable` and gives the key back,
-  as `not_configured` always did.
+  as `not_configured` always did. Every such refusal is the provider
+  error's own answer (`toHttpException()`): a frozen wallet `423
+  wallet_frozen`, the provider's limit `403 limit_reached`, anything else
+  `503 provider_unreachable` with the provider's wait; insufficient funds
+  keeps its shortfall answer (below).
+- **WAWU's own account is never the payer** (round 6, R5-1). Before the
+  claim, the payer's wallet is compared with WAWU's account by identity,
+  not by format: the same text, or the provider's `isSameAccount` (Nuvion
+  knows one account by its NGN account number, its id and its
+  `nuvion_ban`). The same account is `503 provider_unreachable`, logged,
+  nothing sent.
+- **The real debit is the record** (round 6, lead ruling 5). The payment
+  records and answers the fee and total the provider really took, never
+  the quoted ones; a debit above the quoted total sets `debitReviewSince`
+  and names both figures on `discrepancy` (NUV-08 reconciles it with the
+  provider); the price moved as asked, so what was paid for is delivered.
+  The ledger's `out` row keeps its own rule (a disagreement is held, not
+  applied: MONEY-10).
+- **A reversal** found by the sweep (round 6, lead ruling 7): the provider
+  moved the payment and gave it back, so the payment is `reversed`, both
+  ledger sides `reversed`, nothing delivered, the item free; nothing is
+  owed back by WAWU. A reversal of another amount than the price is a stop
+  (review, the item claimed). A status word the provider has and we do not
+  know is never read as failed: still `pending`, asked again later.
+- **The provider on every ledger row** (round 6, lead ruling 6): each
+  movement this task writes names its payment's provider
+  (`LedgerMovementInput.provider`), which the ledger writes to its
+  `provider` column once NUV-01 adds it.
 - **One open payment per buyer and item** (D1.2). While a payment is
   `pending` (under review included), another for the same person, kind and
   target, under any Idempotency-Key and at any moment, is `409

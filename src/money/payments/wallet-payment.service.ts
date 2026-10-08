@@ -16,11 +16,13 @@ import {
   safeKoboNumber,
   WALLET_PROVIDER,
   type WalletProvider,
+  type WalletProviderName,
 } from '../../wallet-provider/wallet-provider.interface';
 import {
   WalletProviderError,
   type WalletProviderErrorKind,
 } from '../../wallet-provider/wallet-provider-error';
+import { WalletProviderLimitError } from '../../wallet-provider/wallet-provider-limit';
 import { WalletBalanceService } from '../balance/wallet-balance.service';
 import {
   PAYER_CHOSEN_AMOUNT_KINDS,
@@ -59,6 +61,7 @@ import {
   type PayableTarget,
 } from './payable-registry';
 import { isUniqueViolationOn } from '../prisma-unique';
+import { MoneyLimits } from '../limits/money-limits.service';
 import { PaymentSettings, splitPrice } from './payment-config';
 
 /** The route a payment's Idempotency-Key is scoped to. */
@@ -231,6 +234,7 @@ export class WalletPaymentService implements OnModuleInit {
     private readonly registry: PayableRegistry,
     private readonly keys: IdempotencyService,
     private readonly settings: PaymentSettings,
+    private readonly limits: MoneyLimits,
   ) {}
 
   onModuleInit(): void {
@@ -277,9 +281,27 @@ export class WalletPaymentService implements OnModuleInit {
       q.kind,
       q.targetId,
       target,
-      fee,
+      await this.withStanding(wallet.wawuUserId, fee, target.priceKobo),
       await this.balanceOrNull(wallet),
     );
+  }
+
+  /**
+   * The quote with where today's purchase limit stands (NUV-07, G-410 (3)):
+   * `withinDailyLimit` and `remainingTodayKobo` from WAWU's own limits, the
+   * same figures `assertMayMove` holds the payment to inside its claim.
+   */
+  private async withStanding(
+    payer: string,
+    fee: FeeQuoteView,
+    priceKobo: number,
+  ): Promise<FeeQuoteView> {
+    const standing = await this.limits.dailyStanding({
+      wawuUserId: payer,
+      kind: 'purchase',
+      amountKobo: priceKobo,
+    });
+    return { ...fee, ...standing };
   }
 
   // -------------------------------------------------------------------------
@@ -317,7 +339,7 @@ export class WalletPaymentService implements OnModuleInit {
       throw this.insufficient(availableKobo, fee.totalKobo);
     }
     const merchant = await this.merchant.account();
-    if (merchant === wallet.accountNumber) {
+    if (await this.isWawuAccount(wallet, merchant)) {
       this.logger.error('payment: the payer wallet is WAWU own account');
       throw new MoneyError(
         'provider_unreachable',
@@ -417,7 +439,20 @@ export class WalletPaymentService implements OnModuleInit {
   ): Promise<PaymentRow> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
+        // READ COMMITTED (Postgres's default; nothing here raises it): WAWU's
+        // limits take a per-person lock for this transaction and count the
+        // person's purchases today and this month, so two payments by one
+        // person are checked one after the other and the second sees the
+        // first one's pending ledger row (NUV-07, G-410 (2)).
         return await this.prisma.$transaction(async (tx) => {
+          await this.limits.assertMayMove(
+            {
+              wawuUserId: data.payerWawuUserId!,
+              kind: 'purchase',
+              amountKobo: koboNumber(BigInt(data.priceKobo)),
+            },
+            { tx },
+          );
           await this.keys.attach(tx, scope, id);
           const row = await tx.walletPayment.create({ data });
           await this.ledger.record(this.movement(row, 'out', 'pending'), tx);
@@ -511,10 +546,33 @@ export class WalletPaymentService implements OnModuleInit {
         dto.kind,
         dto.targetId,
         target,
-        fresh,
+        await this.withStanding(wallet.wawuUserId, fresh, target.priceKobo),
         await this.balanceOrNull(wallet),
       ),
     });
+  }
+
+  /**
+   * Whether the payer's wallet is WAWU's own account at the provider (lead
+   * ruling R5-1): the same account, however the provider names it. Fintava
+   * names each account by one number; Nuvion knows one account by its NGN
+   * account number, its id and its `nuvion_ban`, so the provider is asked
+   * (`isSameAccount`). When it cannot say, nothing is sent (503).
+   */
+  private async isWawuAccount(
+    wallet: OpenWallet,
+    merchant: string,
+  ): Promise<boolean> {
+    if (merchant === wallet.accountNumber || merchant === wallet.walletId) {
+      return true;
+    }
+    if (!this.provider.isSameAccount) return false;
+    try {
+      return await this.provider.isSameAccount(wallet.accountNumber, merchant);
+    } catch (e) {
+      if (e instanceof WalletProviderError) throw e.toHttpException();
+      throw e;
+    }
   }
 
   /** The provider did not take the payment, or we do not know whether it did. */
@@ -535,7 +593,10 @@ export class WalletPaymentService implements OnModuleInit {
       return this.answer(scope, payment);
     }
     const failed = await this.markFailed(payment, PAYMENT_FAILED_REASON);
-    if (RELEASED.includes(refusal.kind)) {
+    if (
+      RELEASED.includes(refusal.kind) ||
+      refusal instanceof WalletProviderLimitError
+    ) {
       // Nothing moved and the person can fix the cause: the key is given
       // back so the same payment can be sent again (CONVENTIONS section 4).
       await this.keys.release(scope);
@@ -545,14 +606,11 @@ export class WalletPaymentService implements OnModuleInit {
           koboNumber(payment.totalKobo),
         );
       }
-      if (refusal.kind === 'wallet_inactive') {
-        throw refusal.toHttpException();
-      }
-      throw new MoneyError(
-        'provider_unreachable',
-        PAYMENTS_UNAVAILABLE_MESSAGE,
-        { retryAfterSeconds: this.provider.timings.retryAfterSeconds },
-      );
+      // The provider's own answer (G-410 (4)): its limit is the same `403
+      // limit_reached` as WAWU's (NUV-07), a frozen wallet `423
+      // wallet_frozen`, anything else `503 provider_unreachable` with the
+      // provider's wait.
+      throw refusal.toHttpException();
     }
     this.logger.warn(
       `payment ${payment.id}: ${this.provider.label} refused it (${refusal.kind}); nothing moved`,
@@ -617,7 +675,39 @@ export class WalletPaymentService implements OnModuleInit {
         `payment ${payment.id}: the ledger could not record the receipt (${e instanceof Error ? e.name : 'error'})`,
       );
     }
-    const discrepancy = notes.length ? notes.join('; ').slice(0, 1000) : null;
+    let discrepancy = notes.length ? notes.join('; ').slice(0, 1000) : null;
+    // What the provider really took is the payment's record and its answer,
+    // never the quote (lead ruling 5): its charge and the total it debited.
+    // A debit above the quoted total is flagged for review with both figures
+    // (`debitReviewSince`; NUV-08 reconciles it with the provider); the
+    // price moved as asked, so what was paid for is still delivered.
+    const realFee = receipt.feeKobo;
+    const realTotal = receipt.totalKobo;
+    const above = realTotal > payment.totalKobo;
+    if (
+      realFee !== payment.providerFeeKobo ||
+      realTotal !== payment.totalKobo
+    ) {
+      const note = `${above ? 'debit above the quote' : 'debit differs from the quote'}: ${this.provider.label} took ${realTotal} kobo (fee ${realFee}), quoted ${payment.totalKobo} kobo (fee ${payment.providerFeeKobo})`;
+      if (above) {
+        this.logger.error(`payment ${payment.id}: ${note}; flagged for review`);
+      }
+      discrepancy = [note, discrepancy]
+        .filter(Boolean)
+        .join('; ')
+        .slice(0, 1000);
+      await this.prisma.walletPayment.updateMany({
+        where: { id: payment.id, status: 'pending' },
+        data: {
+          providerFeeKobo: realFee,
+          totalKobo: realTotal,
+          ...(above ? { debitReviewSince: new Date() } : {}),
+        },
+      });
+      payment = await this.prisma.walletPayment.findUniqueOrThrow({
+        where: { id: payment.id },
+      });
+    }
     let row: PaymentRow;
     if (receipt.amountKobo === payment.priceKobo) {
       row = await this.complete(payment, discrepancy, handler);
@@ -817,9 +907,46 @@ export class WalletPaymentService implements OnModuleInit {
         return (await this.markFailed(p, PAYMENT_FAILED_REASON, false))
           .status as PaymentStatus;
       }
+      if (status === 'reversed') {
+        return this.settleReversed(p, row, t, answer.source);
+      }
+      // Any other word (null: a status we do not know) says neither: still
+      // pending, asked again later, and to review past the bound. Never read
+      // as "no money moved".
     }
     await this.reschedule(p, now);
     return 'pending';
+  }
+
+  /**
+   * The provider moved the payment and then reversed it (lead ruling 7, 8
+   * Oct 2026): the debit came back to the buyer at the provider, so nothing
+   * is owed back by WAWU and nothing is delivered. The payment is
+   * `reversed`, both ledger sides say so, and the item is free again. A
+   * reversal of another amount than the price is a stop: review, the item
+   * still claimed.
+   */
+  private async settleReversed(
+    p: PaymentRow,
+    out: { feeKobo: bigint; totalKobo: bigint } | null,
+    t: ProviderTransaction,
+    source: 'lookup' | 'history',
+  ): Promise<PaymentStatus> {
+    if (t.amountKobo !== p.priceKobo) {
+      return (
+        await this.toReview(
+          p,
+          `${this.provider.label} reversed ${t.amountKobo} kobo for a price of ${p.priceKobo}`,
+        )
+      ).status as PaymentStatus;
+    }
+    await this.recordSighting(p, out, 'reversed', t, source);
+    this.logger.warn(
+      `payment ${p.id}: ${this.provider.label} reversed the transfer; the money went back to the buyer and nothing is delivered`,
+    );
+    return (
+      await this.transition(p, 'reversed', { openKey: null, nextCheckAt: null })
+    ).status as PaymentStatus;
   }
 
   /**
@@ -860,7 +987,7 @@ export class WalletPaymentService implements OnModuleInit {
   private async recordSighting(
     p: PaymentRow,
     out: { feeKobo: bigint; totalKobo: bigint } | null,
-    status: 'completed' | 'failed',
+    status: 'completed' | 'failed' | 'reversed',
     t: ProviderTransaction,
     source: 'lookup' | 'history',
   ): Promise<void> {
@@ -1063,7 +1190,7 @@ export class WalletPaymentService implements OnModuleInit {
   private movement(
     p: PaymentRow,
     side: 'out' | 'in',
-    status: 'pending' | 'completed' | 'failed',
+    status: 'pending' | 'completed' | 'failed' | 'reversed',
     figures?: { amountKobo: number; feeKobo: number; totalKobo: number },
     refs: {
       fintavaReference?: string | null;
@@ -1088,6 +1215,9 @@ export class WalletPaymentService implements OnModuleInit {
       source: 'send' as const,
       occurredAt: p.sentAt ?? p.createdAt,
       failureReason: status === 'failed' ? p.failureReason : null,
+      // The payment's own provider on every row it writes, whichever one
+      // this server runs (lead ruling 6).
+      provider: p.provider as WalletProviderName,
     };
     if (side === 'out') {
       return {

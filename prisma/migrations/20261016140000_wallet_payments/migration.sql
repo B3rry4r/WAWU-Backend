@@ -13,7 +13,8 @@
 -- WalletPayment: one row per payment from a wallet to WAWU's own account at
 -- the wallet provider, with the 85/15 split of the price; every figure
 -- BIGINT kobo. `openKey` is unique: one open payment per buyer and item.
--- `provider` names the provider that took it (WALLET_PROVIDER at the time).
+-- `provider` names the provider that took it (WALLET_PROVIDER at the time);
+-- `debitReviewSince` flags a debit above the quoted total for review.
 -- "TransactionPin"."pendingTries": checks that took a slot and have not
 -- finished. A check takes a slot in one conditional UPDATE (failedTries +
 -- pendingTries below the limit), compares the PIN with no transaction and no
@@ -68,6 +69,7 @@ CREATE TABLE "WalletPayment" (
     "reviewSince" TIMESTAMP(3),
     "failureReason" TEXT,
     "discrepancy" TEXT,
+    "debitReviewSince" TIMESTAMP(3),
     "note" TEXT,
     "sentAt" TIMESTAMP(3),
     "completedAt" TIMESTAMP(3),

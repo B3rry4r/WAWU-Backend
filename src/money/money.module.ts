@@ -50,6 +50,7 @@ import { PublicReceiptController } from './receipts/public-receipt.controller';
 import { ReceiptSettings } from './receipts/receipt-config';
 import { ReceiptService } from './receipts/receipt.service';
 import { WalletProviderModule } from '../wallet-provider/wallet-provider.module';
+import { MoneyLimitsModule } from './limits/money-limits.module';
 
 /**
  * The served half of the Naira wallet contract. Routes move here from
@@ -144,6 +145,9 @@ import { WalletProviderModule } from '../wallet-provider/wallet-provider.module'
     LedgerModule,
     WawuAuthModule,
     BlockedAccountModule,
+    // Limits (task NUV-07): validates the WAWU_LIMIT_* settings at boot and gives the
+    // quote today's standing.
+    MoneyLimitsModule,
   ],
   controllers: [
     MoneyPinController,

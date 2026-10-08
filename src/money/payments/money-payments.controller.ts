@@ -23,6 +23,7 @@ import {
   WALLET_GATE_ERRORS,
 } from '../money-contract';
 import type { PaymentQuoteView, PaymentView } from '../money-view.type';
+import { RequireFeesSet } from '../fees/fees-set.guard';
 import {
   CurrentIdempotencyScope,
   type IdempotencyScope,
@@ -49,6 +50,9 @@ export class MoneyPaymentsController {
    * sends back. Nothing is reserved. A total above MERCHANT_MAX_PER_TXN_KOBO
    * is amount_out_of_range. A kind whose feature has not moved onto the
    * wallet yet, or an item not priced in naira, is target_not_payable.
+   * While the running provider's fees are not set, fees_not_set before
+   * anything else (NUV-07); `withinDailyLimit` and `remainingTodayKobo` say
+   * where today's purchase limit stands.
    */
   @Get('payments/quote')
   @Header('Cache-Control', 'no-store')
@@ -59,7 +63,9 @@ export class MoneyPaymentsController {
     'target_not_found',
     'target_not_payable',
     'amount_out_of_range',
+    'fees_not_set',
   )
+  @RequireFeesSet()
   quote(
     @CurrentWallet() wallet: OpenWallet,
     @Query() query: PaymentQuoteQueryDto,
@@ -75,7 +81,9 @@ export class MoneyPaymentsController {
    * confirmed the debit yet (H18, E10; it is never sent again blindly), or
    * failed when the provider refused it and nothing moved. The same
    * Idempotency-Key and body answer the first result again
-   * (`Idempotent-Replayed: true`) without checking the PIN.
+   * (`Idempotent-Replayed: true`) without checking the PIN. fees_not_set
+   * comes before the wallet gate, the key and the PIN; limit_reached (WAWU's
+   * limit or the provider's) before anything is sent.
    */
   @Post('payments')
   @HttpCode(201)
@@ -89,6 +97,7 @@ export class MoneyPaymentsController {
     'target_not_payable',
     'payment_in_progress',
   )
+  @RequireFeesSet()
   pay(
     @CurrentWallet() wallet: OpenWallet,
     @CurrentIdempotencyScope() scope: IdempotencyScope,

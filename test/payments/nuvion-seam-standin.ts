@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { TransferStatus } from '../../money-view.type';
+import type { TransferStatus } from '../../src/money/money-view.type';
 import {
   type ProviderAccountName,
   type ProviderBalance,
@@ -29,64 +29,70 @@ import {
   type WalletProvider,
   type WalletProviderCapabilities,
   type WalletProviderTimings,
-} from '../../../wallet-provider/wallet-provider.interface';
+} from '../../src/wallet-provider/wallet-provider.interface';
 import {
   WalletProviderError,
   type WalletProviderErrorKind,
-} from '../../../wallet-provider/wallet-provider-error';
+} from '../../src/wallet-provider/wallet-provider-error';
+import { providerLimitError } from '../../src/wallet-provider/wallet-provider-limit';
 
 /**
- * Nuvion, stood in at the wallet provider seam (task MONEY-17, 8 Oct 2026).
+ * Nuvion, stood in at the wallet provider seam (task MONEY-17; rounds 5 and
+ * 6, 8 Oct 2026).
  *
  * The Nuvion sandbox key does not work yet (SANDBOX-FINDINGS, 7 Oct: 401),
- * and NUV-01's HTTP stand-in and NUV-05's book transfers are being built
- * beside this task. So this is a `WalletProvider` that behaves the way
- * Nuvion's documented API does for the calls a wallet payment makes, mapped
- * onto the seam the way an adapter honouring the seam must map it. It is a
- * test double: no host is called, nothing is real money.
+ * and NUV-05's book transfers are being built beside this task. So this is a
+ * `WalletProvider` that behaves the way Nuvion's PUBLIC DOCS say its API
+ * does for the calls a wallet payment makes (lead ruling 4: the docs, not
+ * the dashboard code), mapped onto the seam the way an adapter honouring the
+ * seam must map it. A test double: no host is called, nothing is real money.
  *
- * What it models, from Nuvion's docs (lead's scratchpad `nuvion/docs/`):
+ * From Nuvion's docs (lead's scratchpad `nuvion/docs/`):
  * - **Accounts** (`core-concepts__accounts.md`, `api-reference__accounts.md`):
- *   each person is a child entity with an NGN `checking` account (ULID id, a
+ *   each person is a child entity with an NGN `checking` account (an id, a
  *   `nuvion_ban`, a 10-digit NGN account number); WAWU's parent entity holds
- *   an `operational` account. Balances are integers in the smallest unit;
- *   `balance.available` is what can be spent.
- * - **Book transfers** (`guides__send-a-payout.md`, "Nuvion Direct", and
- *   `api-reference__transfers.md`; SANDBOX-FINDINGS item 9): `POST
- *   /transfers` with `payment_type: book-transfer`, the payer's `entity_id`
- *   and `account_id`, the receiver's `nuvion_ban`, `currency: NGN`,
- *   `unique_reference` (required, at most 64 characters: a second transfer
- *   with the same reference for the account returns the original, never a
- *   second one), `narration` (required, at most 100 characters). The fee
- *   (`applicable_fee`) is charged on top of the amount. Every transfer is
- *   asynchronous: the answer says `pending`, `processing`, `successful`,
- *   `failed` or `reversed`; book transfers are "Instant", so a payment can
- *   be `successful` in the answer, or still `pending` and settled later.
- * - **Errors** (`errors.md`): `error_transfer_insufficient_funds` (400),
- *   `error_transfer_account_not_active` (400), `error_transfer_compliance_
- *   rejected` (422), `error_transfer_network_unavailable` (503),
- *   `error_idempotency_request_processing` (409), `error_auth_credentials_
- *   invalid` (401), `error_auth_rate_limit_exceeded` (429), a timeout and a
- *   bare 5xx. Each becomes one `WalletProviderError` kind below
- *   (`NUVION_ERROR_KINDS`): this double's mapping, until NUV-01 builds the
- *   real one.
+ *   an `operational` account. Integers in the smallest unit; `available` is
+ *   what can be spent. An outflow is taken from `available` when Nuvion
+ *   accepts it and given back if it fails or is cancelled (the docs leave
+ *   this open; holding it is the reading that never lets one balance pay
+ *   twice).
+ * - **Transfers** (`api-reference__transfers.md`): "All transfers are
+ *   asynchronous: the response reflects the initial queued state". The
+ *   create answer is `pending` (the default here, `mode: 'pending'`), then
+ *   `processing`, `successful`, `failed`, `reversed`; `outflows.cancelled`
+ *   (`webhooks__event-types.md`) is a transfer that will not be made. A
+ *   second create with the same `unique_reference` for the account answers
+ *   `409` with the original transfer; the same reference with other
+ *   parameters is `409 error_idempotency_key_mismatch`. `applicable_fee` is
+ *   charged on top of the amount. `unique_reference` at most 64 characters,
+ *   `narration` required, at most 100.
  * - **No lookup by our reference** (NUVION-RESEARCH section 7): the adapter
- *   keeps Nuvion's transfer id for each reference (NUV-05), and
- *   `reconcileSend` answers from it.
+ *   keeps Nuvion's transfer id from every answer it read (`keptIds`) and
+ *   looks a transfer up by that id (`GET /transfers/{id}`). When the answer
+ *   was lost it has no id, so it walks the payer's transfers (`GET
+ *   /transfers?entity_id=&account_id=`, each item carrying its
+ *   `unique_reference`): a `history` sighting.
+ * - **Errors** (`errors.md`), mapped by `type`, never by HTTP status (the
+ *   insufficient-funds answer is 400 on the errors page and 422 on the
+ *   transfers page): see `NUVION_ERROR_KINDS`. The three limit errors go
+ *   through NUV-07's `providerLimitError`, so they answer `limit_reached`.
+ *   A system error (500, 503, 504) or a timeout on a create says nothing
+ *   about whether the transfer exists: `outcome_unknown`, money may move.
  *
- * How it sits on the seam (the contract MONEY-17 relies on; SHARED-CHANGES
- * row for the seam's wording): `walletToWallet` resolves with a receipt only
- * for a transfer Nuvion reports `successful`; a transfer Nuvion accepted and
- * has not completed (`pending`, `processing`) is `not_confirmed` with
- * `recordMayExist`, because the money may move; a lost answer is
- * `outcome_unknown`. Nothing else in the interface would let the payment
- * tell "queued" from "moved".
+ * On the seam (the contract MONEY-17 relies on; SHARED-CHANGES MONEY-17 #1):
+ * `walletToWallet` resolves with a receipt only for a transfer Nuvion
+ * reports `successful`; one it accepted and has not finished (`pending`,
+ * `processing`) is `not_confirmed`, a repeated reference
+ * `duplicate_reference`, a lost answer `outcome_unknown`: each may have
+ * moved money (`recordMayExist`), so the payment stays pending and settles
+ * from Nuvion's later answer. `isSameAccount` knows one account by its NGN
+ * account number, its id and its `nuvion_ban` (lead ruling R5-1).
  */
 
 /** A Nuvion account as the double keeps it. */
 export interface NuvionAccount {
   entityId: string;
-  /** The account's ULID: what the seam calls `walletId`. */
+  /** The account's id: what the seam calls `walletId`. */
   accountId: string;
   /** Nuvion's internal routing number, the book transfer's receiver. */
   nuvionBan: string;
@@ -109,6 +115,13 @@ export interface NuvionBookTransferRequest {
   narration: string;
 }
 
+/**
+ * A transfer's status as Nuvion words it: `pending`, `processing`,
+ * `successful`, `failed`, `cancelled`, `reversed`, or any other word Nuvion
+ * might send (read as unknown).
+ */
+export type NuvionTransferStatus = string;
+
 /** A transfer as Nuvion records it. */
 export interface NuvionTransfer {
   id: string;
@@ -117,90 +130,104 @@ export interface NuvionTransfer {
   toAccountId: string;
   amountKobo: bigint;
   feeKobo: bigint;
-  status: 'pending' | 'processing' | 'successful' | 'failed' | 'reversed';
+  status: NuvionTransferStatus;
   statusReason: string;
   created: number;
 }
 
-/** What the double does with the next book transfer. */
+/** What Nuvion does with the next book transfer. */
 export type NuvionSendMode =
-  /** Book transfers are instant: `successful` in the answer. */
-  | 'instant'
-  /** Accepted and `pending` in the answer; `settle()` finishes it. */
-  | 'queued'
-  /** The money moves and the answer is lost (a timeout). */
+  /** Accepted; the answer says `pending` (Nuvion's documented first answer). */
+  | 'pending'
+  /** Accepted; the answer says `processing`. */
+  | 'processing'
+  /** Accepted and `successful` in the answer (book transfers are "Instant"). */
+  | 'successful'
+  /** Nuvion takes the transfer; the answer never arrives (a timeout). */
   | 'timeout'
-  /** Nothing moves and the answer is lost (a timeout before Nuvion took it). */
+  /** Nothing is taken and the answer never arrives. */
   | 'timeout_nothing'
-  /** A bare 500 after Nuvion took the transfer. */
-  | 'error500'
+  /** A system or rail error answered on the create (`systemError` says which). */
+  | 'system_error'
+  /** `error_transfer_already_processing` (409). */
+  | 'already_processing'
+  /** `error_idempotency_request_processing` (409). */
+  | 'request_processing'
+  /** `error_transfer_insufficient_funds`, whatever Nuvion's balance says. */
   | 'insufficient'
   | 'account_not_active'
   | 'compliance_rejected'
-  | 'network_unavailable'
-  | 'request_processing'
   | 'auth'
   | 'rate_limited'
-  /** Nuvion moves another amount than asked (a stop for review). */
-  | 'wrong_amount'
+  /** One of Nuvion's three limit errors (`limitError` says which). */
+  | 'limit'
   /** The adapter's book area not built yet (NUV-01 before NUV-05). */
   | 'not_supported';
 
-/** Nuvion's error types, as this double maps them onto the seam. */
+/** A system error on a create: its type, HTTP status, and whether Nuvion made the transfer anyway. */
+export interface NuvionSystemError {
+  type:
+    | 'error_system_internal_error'
+    | 'error_system_service_unavailable'
+    | 'error_system_dependency_unavailable'
+    | 'error_system_timeout'
+    | 'error_transfer_network_unavailable';
+  httpStatus: 500 | 503 | 504;
+  created: boolean;
+}
+
+/** Nuvion's error types, as this double maps them onto the seam (by type, never by status). */
 export const NUVION_ERROR_KINDS: Record<
   string,
-  {
-    kind: WalletProviderErrorKind;
-    httpStatus: number | null;
-    mayExist: boolean;
-  }
+  { kind: WalletProviderErrorKind; mayExist: boolean }
 > = {
   error_transfer_insufficient_funds: {
     kind: 'insufficient_funds',
-    httpStatus: 400,
     mayExist: false,
   },
   error_transfer_account_not_active: {
     kind: 'wallet_inactive',
-    httpStatus: 400,
     mayExist: false,
   },
-  error_transfer_compliance_rejected: {
-    kind: 'refused',
-    httpStatus: 422,
-    mayExist: false,
-  },
-  error_transfer_network_unavailable: {
-    kind: 'unavailable',
-    httpStatus: 503,
-    mayExist: false,
+  error_transfer_compliance_rejected: { kind: 'refused', mayExist: false },
+  error_auth_credentials_invalid: { kind: 'auth', mayExist: false },
+  error_auth_rate_limit_exceeded: { kind: 'rate_limited', mayExist: false },
+  // Nuvion may already hold the transfer: never read as "nothing moved".
+  error_transfer_already_processing: {
+    kind: 'outcome_unknown',
+    mayExist: true,
   },
   error_idempotency_request_processing: {
     kind: 'outcome_unknown',
-    httpStatus: 409,
     mayExist: true,
   },
-  error_auth_credentials_invalid: {
-    kind: 'auth',
-    httpStatus: 401,
-    mayExist: false,
-  },
-  error_auth_rate_limit_exceeded: {
-    kind: 'rate_limited',
-    httpStatus: 429,
-    mayExist: false,
-  },
-  /** A timeout or a 5xx on a write: the transfer may exist. */
-  lost_answer: { kind: 'outcome_unknown', httpStatus: null, mayExist: true },
-  /** Accepted, not completed yet. */
-  accepted_pending: {
-    kind: 'not_confirmed',
-    httpStatus: 201,
+  error_idempotency_key_mismatch: {
+    kind: 'duplicate_reference',
     mayExist: true,
   },
+  error_system_internal_error: { kind: 'outcome_unknown', mayExist: true },
+  error_system_service_unavailable: {
+    kind: 'outcome_unknown',
+    mayExist: true,
+  },
+  error_system_dependency_unavailable: {
+    kind: 'outcome_unknown',
+    mayExist: true,
+  },
+  error_system_timeout: { kind: 'outcome_unknown', mayExist: true },
+  error_transfer_network_unavailable: {
+    kind: 'outcome_unknown',
+    mayExist: true,
+  },
+  /** A timeout before any answer. */
+  lost_answer: { kind: 'outcome_unknown', mayExist: true },
+  /** A `409` with the original transfer: the reference was used before. */
+  duplicate_original: { kind: 'duplicate_reference', mayExist: true },
+  /** Accepted, not finished yet (`pending`, `processing`). */
+  accepted_unfinished: { kind: 'not_confirmed', mayExist: true },
 };
 
-/** Nuvion's transfer status read as a ledger status (null: none we know). */
+/** Nuvion's transfer status read as a ledger status (null: a word we do not know). */
 export function nuvionOutcome(status: string): TransferStatus | null {
   switch (status) {
     case 'successful':
@@ -208,7 +235,9 @@ export function nuvionOutcome(status: string): TransferStatus | null {
     case 'pending':
     case 'processing':
       return 'pending';
+    // A cancelled transfer is one Nuvion will not make (`outflows.cancelled`).
     case 'failed':
+    case 'cancelled':
       return 'failed';
     case 'reversed':
       return 'reversed';
@@ -222,11 +251,13 @@ function ulid(): string {
   const alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
   const hex = randomUUID().replace(/-/g, '') + randomUUID().replace(/-/g, '');
   let out = '01';
-  for (let i = 0; out.length < 26; i += 1) {
-    out += alphabet[parseInt(hex[i], 16) % alphabet.length];
+  for (let i = 0; out.length < 26; i += 2) {
+    out += alphabet[parseInt(hex.slice(i, i + 2), 16) % alphabet.length];
   }
   return out;
 }
+
+const UNFINISHED = new Set(['pending', 'processing']);
 
 export class NuvionSeamStandIn implements WalletProvider {
   readonly name = 'nuvion' as const;
@@ -253,8 +284,30 @@ export class NuvionSeamStandIn implements WalletProvider {
   readonly transfers: NuvionTransfer[] = [];
   /** Every call the payment code made, by method name. */
   readonly calls: Array<{ method: string; args: unknown }> = [];
+  /**
+   * Our reference to Nuvion's transfer id, for every create answer the
+   * adapter READ (a lost answer leaves none): what the adapter stores,
+   * since Nuvion has no lookup by our reference.
+   */
+  readonly keptIds = new Map<string, string>();
   /** What the next book transfers do. */
-  mode: NuvionSendMode = 'instant';
+  mode: NuvionSendMode = 'pending';
+  /** For `mode: 'system_error'`. */
+  systemError: NuvionSystemError = {
+    type: 'error_system_internal_error',
+    httpStatus: 500,
+    created: false,
+  };
+  /** For `mode: 'limit'`. */
+  limitError:
+    | 'error_transfer_transaction_limit_exceeded'
+    | 'error_transfer_daily_limit_exceeded'
+    | 'error_transfer_monthly_volume_exceeded' =
+    'error_transfer_daily_limit_exceeded';
+  /** The HTTP status Nuvion answers insufficient funds with (400 or 422: mapped by type). */
+  insufficientStatus: 400 | 422 = 422;
+  /** Added to what Nuvion moves (another amount than asked: a stop for review). */
+  extraKobo = 0n;
   /** Nuvion's `applicable_fee` on a book transfer: its fee settings (NUV-07). */
   feeKobo: (amountKobo: bigint) => bigint = () => 0n;
   /** References whose record the adapter cannot read yet (Nuvion lagging). */
@@ -301,45 +354,49 @@ export class NuvionSeamStandIn implements WalletProvider {
     return a;
   }
 
-  /** Finishes a queued transfer the way Nuvion's processing would. */
-  settle(reference: string, status: 'successful' | 'failed'): void {
+  /** Moves a transfer Nuvion holds to its next status, as Nuvion's processing would. */
+  settle(reference: string, status: NuvionTransferStatus): void {
     const t = this.transfers.find(
       (x) => x.request.unique_reference === reference,
     );
-    if (!t || (t.status !== 'pending' && t.status !== 'processing')) {
-      throw new Error(`stand-in: no queued transfer ${reference}`);
+    if (!t) throw new Error(`stand-in: no transfer ${reference}`);
+    const from = this.accounts.get(t.fromAccountId)!;
+    const to = this.accounts.get(t.toAccountId)!;
+    const was = t.status;
+    if (status === 'successful' && UNFINISHED.has(was)) {
+      to.availableKobo += t.amountKobo;
+    } else if (
+      (status === 'failed' || status === 'cancelled') &&
+      UNFINISHED.has(was)
+    ) {
+      from.availableKobo += t.amountKobo + t.feeKobo;
+    } else if (status === 'reversed' && was === 'successful') {
+      to.availableKobo -= t.amountKobo;
+      from.availableKobo += t.amountKobo + t.feeKobo;
     }
-    if (status === 'successful') {
-      this.move(t);
-      t.statusReason = 'completed';
-    } else {
-      t.statusReason = 'compliance_hold';
-    }
+    // Any other word Nuvion might send moves no money here.
     t.status = status;
+    t.statusReason =
+      status === 'failed' ? 'compliance_hold' : `now ${String(status)}`;
   }
 
   sendsFrom(accountId: string): NuvionTransfer[] {
     return this.transfers.filter((t) => t.fromAccountId === accountId);
   }
 
-  private move(t: NuvionTransfer): void {
-    const from = this.accounts.get(t.fromAccountId)!;
-    const to = this.accounts.get(t.toAccountId)!;
-    from.availableKobo -= t.amountKobo + t.feeKobo;
-    to.availableKobo += t.amountKobo;
-  }
-
   private error(
-    type: keyof typeof NUVION_ERROR_KINDS,
+    type: string,
     operation: string,
     reference: string | null = null,
+    httpStatus: number | null = null,
   ): WalletProviderError {
     const e = NUVION_ERROR_KINDS[type];
+    if (!e) throw new Error(`stand-in: no mapping for ${type}`);
     return new WalletProviderError({
       kind: e.kind,
       provider: 'nuvion',
       operation,
-      httpStatus: e.httpStatus,
+      httpStatus,
       messages: [type],
       reference,
       recordMayExist: e.mayExist,
@@ -356,16 +413,16 @@ export class NuvionSeamStandIn implements WalletProvider {
     });
   }
 
-  private byAccountNumber(accountNumber: string): NuvionAccount | null {
+  /** The account a reference names: its NGN account number, its id or its `nuvion_ban`. */
+  private resolve(ref: string): NuvionAccount | null {
     for (const a of this.accounts.values()) {
-      if (a.accountNumber === accountNumber) return a;
-    }
-    return null;
-  }
-
-  private byBan(ban: string): NuvionAccount | null {
-    for (const a of this.accounts.values()) {
-      if (a.nuvionBan === ban) return a;
+      if (
+        a.accountNumber === ref ||
+        a.accountId === ref ||
+        a.nuvionBan === ref
+      ) {
+        return a;
+      }
     }
     return null;
   }
@@ -412,6 +469,14 @@ export class NuvionSeamStandIn implements WalletProvider {
     });
   }
 
+  isSameAccount(a: string, b: string): Promise<boolean> {
+    this.calls.push({ method: 'isSameAccount', args: { a, b } });
+    if (a === b) return Promise.resolve(true);
+    const x = this.resolve(a);
+    const y = this.resolve(b);
+    return Promise.resolve(!!x && !!y && x.accountId === y.accountId);
+  }
+
   async walletToWallet(
     input: ProviderWalletTransferInput,
   ): Promise<ProviderTransferReceipt> {
@@ -420,8 +485,8 @@ export class NuvionSeamStandIn implements WalletProvider {
     await Promise.resolve();
     const op = 'book transfer';
     if (this.mode === 'not_supported') throw this.notSupported(op);
-    const from = this.byAccountNumber(input.fromAccountNumber);
-    const to = this.byBan(input.toAccountNumber);
+    const from = this.resolve(input.fromAccountNumber);
+    const to = this.resolve(input.toAccountNumber);
     if (!from || !to) {
       throw new WalletProviderError({
         kind: 'not_found',
@@ -459,39 +524,77 @@ export class NuvionSeamStandIn implements WalletProvider {
         recordMayExist: false,
       });
     }
-    // The same unique_reference for the account answers the original
-    // transfer (Nuvion's 409), never a second one.
+    // The same unique_reference for the account: 409 with the original
+    // transfer (whose id the adapter keeps), or a mismatch when the
+    // parameters differ. Never a second transfer.
     const original = this.transfers.find(
       (t) =>
         t.fromAccountId === from.accountId &&
         t.request.unique_reference === input.reference,
     );
-    if (original) return this.answerFor(original, op);
+    if (original) {
+      if (original.request.amount !== request.amount) {
+        throw this.error(
+          'error_idempotency_key_mismatch',
+          op,
+          input.reference,
+          409,
+        );
+      }
+      this.keptIds.set(input.reference, original.id);
+      throw this.error('duplicate_original', op, input.reference, 409);
+    }
 
     const mode = this.mode;
-    const refusals: Partial<Record<NuvionSendMode, string>> = {
-      insufficient: 'error_transfer_insufficient_funds',
-      account_not_active: 'error_transfer_account_not_active',
-      compliance_rejected: 'error_transfer_compliance_rejected',
-      network_unavailable: 'error_transfer_network_unavailable',
-      request_processing: 'error_idempotency_request_processing',
-      auth: 'error_auth_credentials_invalid',
-      rate_limited: 'error_auth_rate_limit_exceeded',
+    const refusals: Partial<Record<NuvionSendMode, [string, number]>> = {
+      account_not_active: ['error_transfer_account_not_active', 400],
+      compliance_rejected: ['error_transfer_compliance_rejected', 422],
+      already_processing: ['error_transfer_already_processing', 409],
+      request_processing: ['error_idempotency_request_processing', 409],
+      auth: ['error_auth_credentials_invalid', 401],
+      rate_limited: ['error_auth_rate_limit_exceeded', 429],
+      insufficient: [
+        'error_transfer_insufficient_funds',
+        this.insufficientStatus,
+      ],
     };
     const refusal = refusals[mode];
-    if (refusal) throw this.error(refusal, op, input.reference);
+    if (refusal) throw this.error(refusal[0], op, input.reference, refusal[1]);
+    if (mode === 'limit') {
+      throw providerLimitError('nuvion', this.limitError, {
+        operation: op,
+        httpStatus: 400,
+        messages: [this.limitError],
+        reference: input.reference,
+      })!;
+    }
     if (mode === 'timeout_nothing') {
       throw this.error('lost_answer', op, input.reference);
     }
-    const amountKobo = input.amountKobo + (mode === 'wrong_amount' ? 100n : 0n);
+    if (mode === 'system_error' && !this.systemError.created) {
+      throw this.error(
+        this.systemError.type,
+        op,
+        input.reference,
+        this.systemError.httpStatus,
+      );
+    }
+    const amountKobo = input.amountKobo + this.extraKobo;
     const feeKobo = this.feeKobo(input.amountKobo);
     if (from.availableKobo < amountKobo + feeKobo) {
       throw this.error(
         'error_transfer_insufficient_funds',
         op,
         input.reference,
+        this.insufficientStatus,
       );
     }
+    const status: NuvionTransferStatus =
+      mode === 'successful'
+        ? 'successful'
+        : mode === 'processing'
+          ? 'processing'
+          : 'pending';
     const t: NuvionTransfer = {
       id: ulid(),
       request,
@@ -499,23 +602,36 @@ export class NuvionSeamStandIn implements WalletProvider {
       toAccountId: to.accountId,
       amountKobo,
       feeKobo,
-      status: mode === 'queued' ? 'pending' : 'successful',
-      statusReason: mode === 'queued' ? 'awaiting_processing' : 'completed',
+      status,
+      statusReason:
+        status === 'successful' ? 'completed' : 'awaiting_processing',
       created: Date.now(),
     };
     this.transfers.push(t);
-    if (t.status === 'successful') this.move(t);
-    if (mode === 'timeout' || mode === 'error500') {
-      // Nuvion took it; the answer never reached us.
+    // Accepted: the amount and fee leave `available` now; the receiver is
+    // credited when the transfer succeeds.
+    from.availableKobo -= amountKobo + feeKobo;
+    if (status === 'successful') to.availableKobo += amountKobo;
+    if (mode === 'timeout') {
+      // Nuvion took it; the answer never reached us, so no id is kept.
       throw this.error('lost_answer', op, input.reference);
     }
+    if (mode === 'system_error') {
+      throw this.error(
+        this.systemError.type,
+        op,
+        input.reference,
+        this.systemError.httpStatus,
+      );
+    }
+    this.keptIds.set(input.reference, t.id);
     return this.answerFor(t, op);
   }
 
-  /** The seam's answer for a transfer Nuvion holds: a receipt only once it moved. */
+  /** The seam's answer for a transfer Nuvion holds: a receipt only once it is `successful`. */
   private answerFor(t: NuvionTransfer, op: string): ProviderTransferReceipt {
-    if (t.status === 'pending' || t.status === 'processing') {
-      throw this.error('accepted_pending', op, t.request.unique_reference);
+    if (UNFINISHED.has(t.status)) {
+      throw this.error('accepted_unfinished', op, t.request.unique_reference);
     }
     if (t.status !== 'successful') {
       throw new WalletProviderError({
@@ -541,6 +657,11 @@ export class NuvionSeamStandIn implements WalletProvider {
     };
   }
 
+  /**
+   * What Nuvion knows of one of our sends: by the id the adapter kept
+   * (`GET /transfers/{id}`), else a walk of the payer's transfers for our
+   * `unique_reference` (`GET /transfers?entity_id=&account_id=`).
+   */
   reconcileSend(
     reference: string,
     holder: ProviderHolder,
@@ -553,27 +674,34 @@ export class NuvionSeamStandIn implements WalletProvider {
     if (this.unseen.has(reference)) {
       return Promise.resolve({ state: 'unknown', why: 'too_soon' });
     }
+    const kept = this.keptIds.get(reference);
+    if (kept) {
+      const t = this.transfers.find((x) => x.id === kept);
+      if (t) {
+        return Promise.resolve({
+          state: 'found',
+          source: 'lookup',
+          transaction: this.transaction(t),
+        });
+      }
+    }
+    const entity = holder.kind === 'customer' ? holder.customerId : null;
     const t = this.transfers.find(
-      (x) => x.request.unique_reference === reference,
+      (x) =>
+        x.request.unique_reference === reference &&
+        (entity === null || x.request.entity_id === entity),
     );
     if (!t) return Promise.resolve({ state: 'absent' });
     return Promise.resolve({
       state: 'found',
-      source: 'lookup',
+      source: 'history',
       transaction: this.transaction(t),
     });
   }
 
-  findTransactionByReference(reference: string): Promise<ProviderLookup> {
-    this.calls.push({ method: 'findTransactionByReference', args: reference });
-    const t = this.transfers.find(
-      (x) => x.request.unique_reference === reference,
-    );
-    return Promise.resolve(
-      t
-        ? { state: 'found', transaction: this.transaction(t) }
-        : { state: 'absent' },
-    );
+  /** Nuvion has no lookup by our reference (only by its own id). */
+  findTransactionByReference(): Promise<ProviderLookup> {
+    return Promise.reject(this.notSupported('lookup by our reference'));
   }
 
   findTransactionById(id: string): Promise<ProviderLookup> {
@@ -590,7 +718,11 @@ export class NuvionSeamStandIn implements WalletProvider {
     _kind: ProviderSendKind,
     r: ProviderReconciliation,
   ): ProviderRetryDecision {
-    if (r.state === 'found' && r.transaction.outcome === 'completed') {
+    if (
+      r.state === 'found' &&
+      r.transaction.outcome !== null &&
+      r.transaction.outcome !== 'pending'
+    ) {
       return { action: 'settled', transaction: r.transaction };
     }
     return { action: 'wait', why: r.state === 'unknown' ? r.why : 'pending' };
