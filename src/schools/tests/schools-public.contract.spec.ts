@@ -18,13 +18,33 @@ const NONE = '00000000-0000-4000-8000-0000000000ff';
 describe('Public schools: browse, search, course page (SCHOOLS-04)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
-  const http = () => request(app.getHttpServer());
+  const http = () =>
+    request(app.getHttpServer() as Parameters<typeof request>[0]);
   const get = (p: string) => http().get(`/api/hub${p}`);
-  const names = (res: request.Response) =>
-    (res.body.data.items as { name: string }[]).map((i) => i.name);
+  /** The `data` of a response, typed by the caller. */
+  const data = <T>(res: { body: unknown }): T => (res.body as { data: T }).data;
+  type Card = {
+    id: string;
+    name: string;
+    matchedCourses: string[];
+    courseCount: number;
+    fromPriceKobo: number | null;
+  };
+  type Intake = { id: string; startDate: string; seatsLeft: number };
+  type Course = {
+    intakes: Intake[];
+    school: { id: string };
+    priceKobo: number;
+  };
+  type School = {
+    courses: { id: string; nextIntake: Intake | null }[];
+    about: string;
+  };
+  const items = (res: { body: unknown }) =>
+    data<{ items: Card[]; nextCursor: string | null }>(res).items;
+  const names = (res: { body: unknown }) => items(res).map((i) => i.name);
 
   let design: string; // school with a "Product Design" course
-  let other: string; // school with an unrelated course
   let course: string;
   let hiddenCourse: string;
   let i1: string;
@@ -100,7 +120,6 @@ describe('Public schools: browse, search, course page (SCHOOLS-04)', () => {
       location: '100% Lekki_Phase',
     });
     design = a.id;
-    other = b.id;
     const c1 = await mkCourse(a.id, 'Product Design');
     course = c1.id;
     await mkCourse(a.id, 'Hidden Design Secret', { hiddenAt: new Date() }).then(
@@ -122,9 +141,7 @@ describe('Public schools: browse, search, course page (SCHOOLS-04)', () => {
 
   it('a user can search "design" and get the schools whose courses match, with the matching course', async () => {
     const res = await get('/schools?q=DESIGN').expect(200);
-    const mine = (
-      res.body.data.items as { id: string; matchedCourses: string[] }[]
-    ).find((i) => i.id === design);
+    const mine = items(res).find((i) => i.id === design);
     expect(mine?.matchedCourses).toEqual(['Product Design']);
     expect(names(res)).not.toContain(`${MARK} Beta House`);
   });
@@ -133,17 +150,15 @@ describe('Public schools: browse, search, course page (SCHOOLS-04)', () => {
     const res = await get('/schools?q=Secret').expect(200);
     expect(names(res)).not.toContain(`${MARK} Alpha Academy`);
     const list = await get('/schools?q=Alpha').expect(200);
-    const alpha = list.body.data.items.find(
-      (i: { id: string }) => i.id === design,
-    );
-    expect(alpha.courseCount).toBe(1);
-    expect(alpha.fromPriceKobo).toBe(15_000_000);
+    const alpha = items(list).find((i) => i.id === design);
+    expect(alpha?.courseCount).toBe(1);
+    expect(alpha?.fromPriceKobo).toBe(15_000_000);
   });
 
   it('a course page shows each intake with seats left from capacity minus seats taken, soonest first, hidden intake dropped', async () => {
     const res = await get(`/schools/courses/${course}`).expect(200);
-    const d = res.body.data;
-    expect(d.intakes.map((i: { id: string }) => i.id)).toEqual([i1, i2]);
+    const d = data<Course>(res);
+    expect(d.intakes.map((i) => i.id)).toEqual([i1, i2]);
     expect(d.intakes[0]).toMatchObject({
       startDate: '2026-11-03',
       capacity: 20,
@@ -151,7 +166,7 @@ describe('Public schools: browse, search, course page (SCHOOLS-04)', () => {
       full: false,
     });
     expect(d.intakes[1]).toMatchObject({ seatsLeft: 0, full: true });
-    expect(d.intakes.some((i: { id: string }) => i.id === iHidden)).toBe(false);
+    expect(d.intakes.some((i) => i.id === iHidden)).toBe(false);
     expect(d.school.id).toBe(design);
     expect(d.priceKobo).toBe(15_000_000);
     expect(JSON.stringify(d)).not.toMatch(
@@ -165,7 +180,7 @@ describe('Public schools: browse, search, course page (SCHOOLS-04)', () => {
       data: { seatsTaken: 19 },
     });
     const res = await get(`/schools/courses/${course}`).expect(200);
-    expect(res.body.data.intakes[0].seatsLeft).toBe(1);
+    expect(data<Course>(res).intakes[0].seatsLeft).toBe(1);
     await prisma.courseIntake.update({
       where: { id: i1 },
       data: { seatsTaken: 7 },
@@ -174,8 +189,8 @@ describe('Public schools: browse, search, course page (SCHOOLS-04)', () => {
 
   it('the school page lists shown courses with the next shown intake', async () => {
     const res = await get(`/schools/${design}`).expect(200);
-    const d = res.body.data;
-    expect(d.courses.map((c: { id: string }) => c.id)).toEqual([course]);
+    const d = data<School>(res);
+    expect(d.courses.map((c) => c.id)).toEqual([course]);
     expect(d.courses[0].nextIntake).toMatchObject({ id: i1, seatsLeft: 13 });
     expect(d.about).toBe('About text');
     expect(JSON.stringify(d)).not.toMatch(/reportEmail|secret@|rating/);
@@ -189,13 +204,13 @@ describe('Public schools: browse, search, course page (SCHOOLS-04)', () => {
       data: { hiddenAt: new Date() },
     });
     let r = await get(`/schools/courses/${course}`).expect(200);
-    expect(r.body.data.intakes.map((i: { id: string }) => i.id)).toEqual([i2]);
+    expect(data<Course>(r).intakes.map((i) => i.id)).toEqual([i2]);
     await prisma.courseIntake.update({
       where: { id: i1 },
       data: { hiddenAt: null },
     });
     r = await get(`/schools/courses/${course}`).expect(200);
-    expect(r.body.data.intakes).toHaveLength(2);
+    expect(data<Course>(r).intakes).toHaveLength(2);
 
     await prisma.school.update({
       where: { id: design },
@@ -206,7 +221,7 @@ describe('Public schools: browse, search, course page (SCHOOLS-04)', () => {
     expect(names(await get('/schools?q=Alpha').expect(200))).toEqual([]);
     expect(names(await get('/schools?q=Product').expect(200))).toEqual([]);
     const tab = await get('/search?q=Alpha&tab=schools').expect(200);
-    expect(tab.body.data.schools).toEqual([]);
+    expect(data<{ schools: Card[] }>(tab).schools).toEqual([]);
     await prisma.school.update({
       where: { id: design },
       data: { hiddenAt: null },
@@ -242,7 +257,7 @@ describe('Public schools: browse, search, course page (SCHOOLS-04)', () => {
         `/schools?q=${MARK}&limit=1${cursor ? `&cursor=${cursor}` : ''}`,
       ).expect(200);
       seen.push(...names(res));
-      cursor = res.body.data.nextCursor as string | null;
+      cursor = data<{ nextCursor: string | null }>(res).nextCursor;
       if (!cursor) break;
     }
     expect(seen).toEqual([`${MARK} Alpha Academy`, `${MARK} Beta House`]);
@@ -279,7 +294,7 @@ describe('Public schools: browse, search, course page (SCHOOLS-04)', () => {
       expect(res.status).toBeLessThan(500);
     }
     const ok = await get('/schools?q=').expect(200);
-    expect(ok.body.data.items).toBeInstanceOf(Array);
+    expect(items(ok)).toBeInstanceOf(Array);
     await get('/search?q=%20%20&tab=schools').expect(200);
     await get('/schools?q=a%ED%A0%80').expect(200); // not UTF-8: plain text
     await get('/schools?q=%ff%fe').expect(200);
@@ -290,12 +305,12 @@ describe('Public schools: browse, search, course page (SCHOOLS-04)', () => {
   it('the schools tab of search returns schools; other tabs keep their exact keys', async () => {
     const tab = await get('/search?q=design&tab=schools').expect(200);
     expect(
-      tab.body.data.schools.some((s: { id: string }) => s.id === design),
+      data<{ schools: Card[] }>(tab).schools.some((s) => s.id === design),
     ).toBe(true);
-    expect(tab.body.data.content).toEqual([]);
+    expect(data<{ content: unknown[] }>(tab).content).toEqual([]);
     for (const t of ['all', 'content', 'creators', 'communities']) {
       const r = await get(`/search?q=design&tab=${t}`).expect(200);
-      expect(Object.keys(r.body.data).sort()).toEqual([
+      expect(Object.keys(data<object>(r)).sort()).toEqual([
         'communities',
         'content',
         'creators',
