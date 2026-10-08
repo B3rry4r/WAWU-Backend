@@ -9,6 +9,7 @@ import {
 } from './fintava-amount';
 import {
   FINTAVA_CONFIG_KEYS,
+  FintavaConfigError,
   fintavaIsUnconfigured,
   readFintavaSettings,
   unconfiguredFintavaSettings,
@@ -497,6 +498,15 @@ export function historyPageConsistent(
 const RECONCILE_SKEW_MS = 10 * 60_000;
 
 /**
+ * True when WALLET_PROVIDER names Nuvion (NUV-01). Read here directly, not
+ * through the seam's reader, so a WALLET_PROVIDER value the seam refuses
+ * still stops the server with the seam's own message.
+ */
+function runsOnNuvion(get: (key: string) => string | undefined): boolean {
+  return (get('WALLET_PROVIDER') ?? '').trim().toLowerCase() === 'nuvion';
+}
+
+/**
  * The one place this backend talks to Fintava (task MONEY-06). Bearer key,
  * no request signing. It goes beside the Flutterwave code, which it does not
  * touch; it serves no route itself (the tasks that use it, MONEY-07 onwards, do).
@@ -541,8 +551,26 @@ export class FintavaClient {
       return;
     }
     // A set value is checked here, at boot: a wrong or non-Fintava host
-    // stops the app (MONEY-06).
-    this.settings = readFintavaSettings(get);
+    // stops the app (MONEY-06). Except when Nuvion runs the wallets
+    // (WALLET_PROVIDER=nuvion, NUV-01): a leftover wrong FINTAVA_* value
+    // must not stop a Nuvion server, so the client starts unconfigured and
+    // sends nothing (MONEY-20 verifier finding 1). The Fintava webhook
+    // receiver does not use this client and keeps running.
+    let settings: FintavaSettings;
+    try {
+      settings = readFintavaSettings(get);
+    } catch (e) {
+      if (!(e instanceof FintavaConfigError) || !runsOnNuvion(get)) throw e;
+      this.settings = unconfiguredFintavaSettings();
+      this.#apiKey = '';
+      this.logger.warn(
+        `A Fintava setting is wrong (${e.message}) and WALLET_PROVIDER=nuvion: ` +
+          'Fintava is not configured on this server and nothing is sent to it. ' +
+          'Fix the setting before rolling back to Fintava.',
+      );
+      return;
+    }
+    this.settings = settings;
     this.#apiKey = (get(FINTAVA_CONFIG_KEYS.apiKey) ?? '').trim();
   }
 

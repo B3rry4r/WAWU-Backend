@@ -620,6 +620,45 @@ export const EXPORT_SECTIONS: ExportSection[] = [
         orderBy: NEWEST,
       }),
   },
+  // The maker plan (TIER-01): the person's billing currency, the tier they
+  // hold and the event passes their tiers issued. The purchase reference is
+  // a payment reference, so it stays out (rule 3).
+  {
+    key: 'billingCurrency',
+    models: ['PersonBilling'],
+    load: (prisma, me) =>
+      prisma.personBilling.findUnique({
+        where: { wawuUserId: me },
+        select: { currency: true, fixedBy: true, fixedAt: true },
+      }),
+  },
+  {
+    key: 'makerTier',
+    models: ['MakerTier'],
+    load: (prisma, me) =>
+      prisma.makerTier.findUnique({
+        where: { wawuUserId: me },
+        select: {
+          tierId: true,
+          activeFrom: true,
+          activeUntil: true,
+          productsIncluded: true,
+          extraProducts: true,
+          pointsIncluded: true,
+          voiceIntroIncluded: true,
+        },
+      }),
+  },
+  {
+    key: 'eventPasses',
+    models: ['EventPass'],
+    load: (prisma, me) =>
+      prisma.eventPass.findMany({
+        where: { wawuUserId: me },
+        select: { type: true, createdAt: true },
+        orderBy: NEWEST,
+      }),
+  },
   {
     key: 'courseEnrollments',
     models: ['CourseEnrollment'],
@@ -776,6 +815,63 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    // POINTS-01: the person's points lots (what they were given, what is
+    // left, when each ends), the holds that spent them and every movement.
+    // Counts of points only; no provider reference (a lot's or hold's
+    // reference is the granting task's own id, not a payment provider's).
+    key: 'pointLots',
+    models: ['PointLot'],
+    load: (prisma, me) =>
+      prisma.pointLot.findMany({
+        where: { wawuUserId: me },
+        select: {
+          id: true,
+          source: true,
+          quantity: true,
+          remaining: true,
+          expiresAt: true,
+          lapsedAt: true,
+          createdAt: true,
+        },
+        orderBy: NEWEST,
+      }),
+  },
+  {
+    key: 'pointHolds',
+    models: ['PointHold'],
+    load: (prisma, me) =>
+      prisma.pointHold.findMany({
+        where: { wawuUserId: me },
+        select: {
+          id: true,
+          purpose: true,
+          title: true,
+          quantity: true,
+          state: true,
+          createdAt: true,
+          settledAt: true,
+        },
+        orderBy: NEWEST,
+      }),
+  },
+  {
+    key: 'pointMovements',
+    models: ['PointLedger'],
+    load: (prisma, me) =>
+      prisma.pointLedger.findMany({
+        where: { wawuUserId: me },
+        select: {
+          id: true,
+          lotId: true,
+          holdId: true,
+          delta: true,
+          reason: true,
+          at: true,
+        },
+        orderBy: { seq: 'desc' },
+      }),
+  },
+  {
     key: 'exportRequests',
     models: ['DataExportRequest'],
     load: (prisma, me) =>
@@ -837,6 +933,15 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
     {
       model: 'FintavaWallet',
       reason: 'A pointer to the account at Fintava, which holds the balance.',
+    },
+    // NUV-01. NuvionWebhookEvent, the other table NUV-01 adds, has no
+    // person column (like FintavaWebhookEvent): it is Nuvion's record of
+    // events, not the person's, so neither the purge map nor this list
+    // names it.
+    {
+      model: 'NuvionEntity',
+      reason:
+        'A pointer to the person at Nuvion (entity, account and review state), which holds the balance and the identity documents.',
     },
     {
       model: 'FintavaLedgerEntry',

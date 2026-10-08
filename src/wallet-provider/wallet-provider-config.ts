@@ -40,10 +40,10 @@ export function readWalletProviderName(
 }
 
 /**
- * Picks the adapter for the configured provider. `nuvion` is reserved: its
- * adapter is not built yet, so the server refuses to start rather than run
- * the wallet on nothing. Set WALLET_PROVIDER=fintava (or unset it) and
- * restart to run on Fintava.
+ * Picks the adapter for the configured provider. A provider with no adapter
+ * in `adapters` stops the server rather than run the wallet on nothing.
+ * Since NUV-01 both `fintava` and `nuvion` have one (wallet-provider.module.ts);
+ * set WALLET_PROVIDER=fintava (or unset it) and restart to run on Fintava.
  */
 export function selectWalletAdapter<T>(
   name: WalletProviderName,

@@ -621,16 +621,39 @@ export interface WalletProvider {
   secondaryReferenceOf(t: ProviderTransaction): Promise<string | null>;
 }
 
+/** One PIN reset code for one person, as an `OtpSender` sends it (NUV-01). */
+export interface OtpResetCode {
+  /** Whose code: an email sender has WAWU ID write to this account's address. */
+  wawuUserId: string;
+  /** The proved phone (E.164) an SMS sender texts; null when there is none. */
+  phone: string | null;
+  /** The code itself. Never logged, never stored in the clear. */
+  code: string;
+  /** How long it lives, in whole minutes. */
+  minutes: number;
+  /** The whole message, for a sender that sends a text as it is (SMS). */
+  text: string;
+}
+
 /**
- * Sends a short text to a person's phone (the PIN reset code). Separate from
- * the wallet provider: Nuvion has no SMS, and the owner rules codes go by
- * email, so the Nuvion task gives this token another sender.
+ * Sends the PIN reset code to a person (MONEY-14). Separate from the wallet
+ * provider: Nuvion has no SMS and the owner rules codes go by email (R-39),
+ * so under nuvion this token is an email sender (NUV-01) and under fintava
+ * Fintava's SMS.
  */
 export interface OtpSender {
   readonly configured: boolean;
   /**
+   * How the code reaches the person: `sms`, a text to the phone their BVN
+   * check proved; `email`, an email to their account's address.
+   */
+  readonly channel: 'sms' | 'email';
+  /**
    * Sends one text. Fails with a `WalletProviderError`: an unknown outcome
-   * (`recordMayExist`) may have arrived; any other kind was not sent.
+   * (`recordMayExist`) may have arrived; any other kind was not sent. An
+   * email sender sends no text (`not_supported`).
    */
   sendText(phone: string, text: string): Promise<void>;
+  /** Sends one PIN reset code by `channel`. Fails as `sendText` does. */
+  sendResetCode(code: OtpResetCode): Promise<void>;
 }

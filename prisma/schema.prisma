@@ -313,6 +313,83 @@ model ProfileDetails {
   updatedAt     DateTime @updatedAt
 }
 
+// -----------------------------------------------------------------------------
+// The maker plan (TIER-01, R-43): billing currency, tiers and event passes.
+// Prices, product counts and points live in src/plans/plans.config.json, never
+// here: these tables hold what a person HAS, the config what things COST.
+// -----------------------------------------------------------------------------
+
+/// The currency a person is billed in. NGN amounts are kobo, USD amounts are
+/// cents, both integers.
+enum BillingCurrency {
+  NGN
+  USD
+}
+
+/// A person's billing currency, fixed at their first purchase (TIER-01; the
+/// purchase task, TIER-03, fixes it). No row means it is not fixed yet: the
+/// person's currency is then resolved on each read (BillingCurrencyService).
+///
+/// ITS OWN TABLE, NOT A COLUMN ON UserProfile: GET and PATCH /users/me return
+/// the whole UserProfile row, so a column there would widen two live
+/// responses the web reads.
+///
+/// NEVER UPDATED. The only writer inserts a row when there is none
+/// (`ON CONFLICT DO NOTHING`); no route changes it, not even after the person
+/// opens a naira wallet or changes their phone (owner brief v2.0 section 3:
+/// "Do not switch without support"). The account purge deletes it.
+model PersonBilling {
+  wawuUserId String          @id
+  currency   BillingCurrency
+  /// What fixed it: `first_purchase` (the only value the code writes) or
+  /// `support` (a person at WAWU, by hand). Held to that list by a CHECK.
+  fixedBy    String
+  /// The purchase that fixed it (its payment reference), when one did.
+  purchaseRef String?
+  fixedAt    DateTime        @default(now())
+}
+
+/// The tier a person holds (TIER-01; written by TIER-03 when a purchase is
+/// paid, and by TIER-04 for extra products). One row per person: renewing
+/// moves `activeUntil`, upgrading changes `tierId` and the period. A row whose
+/// `activeUntil` has passed is an ENDED tier, kept so VF14 can say which tier
+/// ended.
+///
+/// `tierId` names a tier in src/plans/plans.config.json. What the tier gave
+/// is copied onto the row when it is bought (`productsIncluded`,
+/// `pointsIncluded`), so a later change to the config never takes away what a
+/// person paid for (Default (agent), owner may override).
+model MakerTier {
+  wawuUserId         String   @id
+  tierId             String
+  activeFrom         DateTime
+  activeUntil        DateTime
+  /// The tier's own product count when it was bought.
+  productsIncluded   Int
+  /// Products bought on top (TIER-04), counted with the tier's own.
+  extraProducts      Int      @default(0)
+  /// The bonus points the tier came with (the lot itself is POINTS-01's).
+  pointsIncluded     Int
+  /// The tier includes the first Voice Intro, not yet used.
+  voiceIntroIncluded Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+/// A pass to the Christmas event, issued with a tier (W44). One row per
+/// purchase that issued one: `purchaseRef` is unique, so a repeated payment
+/// confirmation issues it once. `type` names an event pass in
+/// src/plans/plans.config.json; the reader shows a person's best one.
+model EventPass {
+  id          String   @id @default(uuid())
+  wawuUserId  String
+  type        String
+  purchaseRef String   @unique
+  createdAt   DateTime @default(now())
+
+  @@index([wawuUserId])
+}
+
 /// One featured work on somebody's profile (ME-16): what M33 shows under
 /// "Featured works", M34 lists and M35 opens.
 ///
@@ -3813,6 +3890,11 @@ model FintavaWallet {
   /// `wallet.accountName` as Fintava answered when the account opened
   /// (MONEY-12, W1, A8). Null on a row written before the column existed.
   accountName   String?
+  /// Which wallet provider this row belongs to (NUV-01): `fintava` or
+  /// `nuvion`; null is Fintava (a row from before the column). A server acts
+  /// only on rows of the provider it runs, so after a rollback one
+  /// provider's ids are never sent to the other (MONEY-20 finding 2).
+  provider      String?  @default("fintava")
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
@@ -3863,6 +3945,10 @@ model FintavaWalletOpening {
   failure          String?
   /// When Fintava was last asked about a lost answer.
   checkedAt        DateTime?
+  /// Which wallet provider this opening is with (NUV-01): `fintava` or
+  /// `nuvion`; null is Fintava. The opening sweep reconciles only openings
+  /// of the provider the server runs.
+  provider         String?   @default("fintava")
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
@@ -4289,6 +4375,11 @@ model FintavaLedgerEntry {
   /// written on `discrepancy`, and the row stays in the sweep.
   revivedAt    DateTime?
   revivedBy    String?
+
+  /// Which wallet provider recorded this movement (NUV-01): `fintava` or
+  /// `nuvion`; null is Fintava. The pending sweep and the ledger consumer
+  /// act only on rows of the provider the server runs.
+  provider String? @default("fintava")
 
   references FintavaLedgerReference[]
 
@@ -4832,4 +4923,266 @@ model AdDailyTotal {
   skips      Int        @default(0)
 
   @@id([campaignId, day])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// NUVION WEBHOOK EVENTS (task NUV-01)
+///
+/// Every signed delivery Nuvion sends to `POST /api/hub/webhooks/nuvion`,
+/// stored once and acknowledged (Nuvion retries anything but a 2xx for 15
+/// minutes, then drops it). Nothing here moves money or touches a balance:
+/// the handler registry (src/nuvion/handlers/, one file per task NUV-02 to
+/// NUV-08) reads the `pending` rows of the events it handles and marks them
+/// `processed` or `failed`. Nuvion's balance stays the only balance.
+///
+/// Exactly once, twice over: `eventId` (`x-nuvion-event-id`) is unique, so a
+/// retry of the same event lands on the same row; and the signed pair
+/// (`signedAt`, `bodySha256`) is unique, so a captured delivery replayed
+/// inside the time window under another event id (the id is not signed)
+/// lands on the same row too. The insert is `ON CONFLICT DO NOTHING`; there
+/// is no read before the write.
+/// ─────────────────────────────────────────────────────────────────────────
+enum NuvionWebhookProcessing {
+  /// Stored; waiting for the handlers of its event (or for a handler to exist).
+  pending
+  /// Every handler of its event finished with it.
+  processed
+  /// A handler could not use it; `note` says why. Kept for review.
+  failed
+  /// Not one of Nuvion's documented events (or none). Kept for review.
+  unrecognised
+  /// Nuvion's own test delivery (`POST /webhook-tests`): `{event_group,
+  /// event_name}`, no data. Proves the signature works; nothing acts on it.
+  test
+}
+
+model NuvionWebhookEvent {
+  id String @id @default(uuid())
+
+  /// `x-nuvion-event-id` as sent: the event's own id.
+  eventId    String  @unique
+  /// The body's `event` (`inflows.completed`), trimmed and lower case; for a
+  /// test delivery `<event_group>.<event_name>`. Empty when it named none.
+  event      String
+  /// The id the event is about: `data.id`, else `data.account.id` or
+  /// `data.account_details.id` (accounts.created, account_details.created
+  /// wrap their object). Null when the delivery carries none.
+  resourceId String?
+  /// The entity the event is about (`data.entity_id`, or the wrapped
+  /// object's): which person, through NuvionEntity.
+  entityId   String?
+
+  /// `x-nuvion-event-timestamp` exactly as sent: the signature covers it.
+  signedAt   String
+  /// The SHA-256, hex, of `rawBody`.
+  bodySha256 String
+  /// The body exactly as delivered (the bytes the signature covers). Its
+  /// personal data stays here and in `payload`, never in a log.
+  rawBody    Bytes
+  /// The same body parsed, every NUL in a key or string replaced by U+FFFD
+  /// (Postgres json cannot hold one).
+  payload    Json
+
+  processingStatus NuvionWebhookProcessing @default(pending)
+  /// What the handlers did, or why they could not.
+  note             String?
+  /// Tries by the dispatcher so far.
+  attempts         Int                     @default(0)
+  /// Not tried again before this (backing off after a handler waited).
+  nextAttemptAt    DateTime?
+  /// A dispatcher holds the row until then: one worker at a time.
+  claimedUntil     DateTime?
+  receivedAt       DateTime                @default(now())
+  processedAt      DateTime?
+
+  @@unique([signedAt, bodySha256])
+  @@index([processingStatus, event, receivedAt])
+  @@index([event, resourceId])
+  @@index([entityId])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// ONE PERSON AT NUVION (task NUV-01; written by NUV-02 to NUV-04 and NUV-09)
+///
+/// The person as Nuvion knows them: their individual entity (a child of
+/// WAWU's parent entity), its review, and the one account opened for them
+/// once approved, with its account details. One row per person.
+///
+/// Never the BVN, the NIN, a document, an image, the date of birth or the
+/// address: Nuvion holds those; the rejection reasons are Nuvion's own
+/// words with digits masked to their last 4. The balance is never here: it
+/// is Nuvion's `available`, read when it is shown.
+/// ─────────────────────────────────────────────────────────────────────────
+model NuvionEntity {
+  wawuUserId           String    @id
+  /// Nuvion's entity id (`POST /individual-entities`), once created.
+  entityId             String?   @unique
+  /// The entity's person record (`person.id`): documents link to it.
+  personId             String?
+  /// Nuvion's review state: incomplete, pending, approved, rejected,
+  /// failed or suspended (Nuvion's own words).
+  status               String    @default("incomplete")
+  /// When Nuvion approved or rejected it.
+  decidedAt            DateTime?
+  /// Why Nuvion said no, in its words (masked); empty otherwise.
+  rejectionReasons     String[]  @default([])
+  /// The account opened after approval (`POST /accounts`).
+  accountId            String?   @unique
+  /// The account's `nuvion_ban`: book transfers go to it.
+  nuvionBan            String?   @unique
+  /// The account details (`POST /account-details`), provisioned later.
+  accountDetailsId     String?   @unique
+  /// `pending` until Nuvion makes the account number `active`.
+  accountDetailsStatus String?
+  /// The number people send money to, once active.
+  accountNumber        String?
+  /// The bank that issued it (`issuer.name`, `issuer.code`).
+  issuerBankName       String?
+  issuerBankCode       String?
+  /// The account's currency: NGN, or USD for people billed in dollars (NUV-09).
+  currency             String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([status])
+  @@index([accountNumber])
+}
+
+// -----------------------------------------------------------------------------
+// POINTS (task POINTS-01, R-43)
+//
+// Points are their own balance for the AI tools, always a count of points,
+// never naira or dollars, and separate from WAWU Credits (R-43 leaves open
+// whether they replace credits; the round 2 brief draws them apart). They are
+// WAWU's own instrument, not money a provider holds, so these lots are the
+// authority for a person's points.
+//
+// Points come in lots that expire (PointLot). Spending takes the
+// soonest-expiring lot first, through a hold (PointHold) that is committed or
+// released. Every change to a lot's points is one row in PointLedger, which
+// is append-only: the migration's triggers refuse an UPDATE of a ledger row,
+// and any DELETE but the account purge's (one person, all of their rows, in a
+// transaction that set wawu.points_purge to the person's id and its own
+// transaction id). A hold moves once, from held to
+// committed or released. CHECK constraints in the migration keep a lot
+// between 0 and what it was granted, so the balance can never go below zero,
+// and its end between 2000 and 2100 (UTC).
+// -----------------------------------------------------------------------------
+
+/// Where a lot of points came from. The task that grants each one owns its
+/// reference: TIER-03 (`tier_bonus`, `bump`), POINTS-02 (`pack`), REF-01
+/// (`referral`), POINTS-03 (`shortfall`), and points given back after a spend
+/// (`returned`).
+enum PointLotSource {
+  tier_bonus
+  pack
+  bump
+  referral
+  shortfall
+  returned
+}
+
+/// Why a ledger row moved a lot: a grant adds, a hold takes, a release gives
+/// back to the same lot, an expiry takes what a lapsed lot still had.
+enum PointLedgerReason {
+  grant
+  hold
+  release
+  expire
+}
+
+/// What held points are for: an AI tool's job (POINTS-03) or turning points
+/// into wallet cash (POINTS-04).
+enum PointHoldPurpose {
+  ai_job
+  cash_out
+}
+
+/// A hold is `held` until its job ends: `committed` (the points are spent) or
+/// `released` (every point went back to the lot it came from). Both are final.
+enum PointHoldState {
+  held
+  committed
+  released
+}
+
+/// One grant of points: how many, how many are left, and when they end.
+model PointLot {
+  id         String         @id @default(uuid())
+  wawuUserId String
+  source     PointLotSource
+  /// The granting task's own reference (a purchase, a referral, a job). One
+  /// lot per source and reference: the same grant twice grants once.
+  sourceRef  String
+  /// Points granted. Never changes.
+  quantity   Int
+  /// Points still in the lot. Taken by holds, put back by releases, set to 0
+  /// by the expiry job. CHECK: 0 <= remaining <= quantity.
+  remaining  Int
+  expiresAt  DateTime
+  /// When the expiry job took what the lot still had; null while it has not.
+  lapsedAt   DateTime?
+  createdAt  DateTime       @default(now())
+
+  ledger PointLedger[]
+
+  @@unique([source, sourceRef])
+  /// A person's live lots, soonest-expiring first.
+  @@index([wawuUserId, expiresAt])
+  /// The expiry job's search.
+  @@index([expiresAt])
+}
+
+/// Points taken from a person's lots for one job, until it is committed or
+/// released. Which lots, and how many from each, are the hold's ledger rows.
+model PointHold {
+  id         String           @id @default(uuid())
+  wawuUserId String
+  purpose    PointHoldPurpose
+  /// The job or conversion this hold pays for. One hold per purpose and
+  /// reference: the same hold asked for twice holds once.
+  reference  String
+  /// What the movement list calls it ("VoiceOver"), from the calling task's
+  /// own table, never from what a person typed.
+  title      String?
+  quantity   Int
+  state      PointHoldState   @default(held)
+  createdAt  DateTime         @default(now())
+  /// When it was committed or released.
+  settledAt  DateTime?
+
+  ledger PointLedger[]
+
+  @@unique([purpose, reference])
+  @@index([wawuUserId, createdAt])
+}
+
+/// Append-only: one row per change to one lot's points. Never updated; a
+/// person's rows are deleted only by the account purge, all together.
+model PointLedger {
+  id         String            @id @default(uuid())
+  wawuUserId String
+  lotId      String
+  lot        PointLot          @relation(fields: [lotId], references: [id], onDelete: Restrict)
+  /// Points added (positive) or taken (negative); never 0. CHECK: a grant
+  /// and a release add, a hold and an expiry take.
+  delta      Int
+  reason     PointLedgerReason
+  /// The hold a `hold` or `release` row belongs to.
+  holdId     String?
+  hold       PointHold?        @relation(fields: [holdId], references: [id], onDelete: Restrict)
+  /// The job or purchase reference: the lot's for a grant, the hold's for a
+  /// hold or a release; null for an expiry.
+  reference  String?
+  /// When the row was written (the app's clock at each INSERT, so the rows
+  /// of one hold can differ by milliseconds; `seq` orders them).
+  at         DateTime          @default(now())
+  /// The order rows were written in: a person's movements, newest first, are
+  /// read by this, never by `at`.
+  seq        BigInt            @default(autoincrement())
+
+  /// A person's last movements, newest first.
+  @@index([wawuUserId, seq])
+  @@index([lotId])
+  @@index([holdId])
 }
