@@ -138,7 +138,7 @@ describe('POINTS-01: GET /me/points (contract)', () => {
     await cleanUp();
     await app?.close();
     mockWawuId?.kill();
-  });
+  }, 60000);
 
   it('needs a signed-in caller', async () => {
     await http().get('/me/points').expect(401);

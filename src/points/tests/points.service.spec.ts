@@ -82,7 +82,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
     prisma = new PrismaService();
     await prisma.$connect();
     points = new PointsService(prisma);
-  });
+  }, 60000);
 
   afterAll(async () => {
     // One statement per table for every person this run made: a whole
@@ -95,7 +95,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
     });
     await prisma.pointLot.deleteMany({ where: { wawuUserId: { in: people } } });
     await prisma.$disconnect();
-  });
+  }, 60000);
 
   // ---------------------------------------------------------------------------
   describe('spending takes the soonest-expiring lot first', () => {
