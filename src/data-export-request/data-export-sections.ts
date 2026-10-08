@@ -825,6 +825,15 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
       model: 'FintavaWallet',
       reason: 'A pointer to the account at Fintava, which holds the balance.',
     },
+    // NUV-01. NuvionWebhookEvent, the other table NUV-01 adds, has no
+    // person column (like FintavaWebhookEvent): it is Nuvion's record of
+    // events, not the person's, so neither the purge map nor this list
+    // names it.
+    {
+      model: 'NuvionEntity',
+      reason:
+        'A pointer to the person at Nuvion (entity, account and review state), which holds the balance and the identity documents.',
+    },
     {
       model: 'FintavaLedgerEntry',
       reason:

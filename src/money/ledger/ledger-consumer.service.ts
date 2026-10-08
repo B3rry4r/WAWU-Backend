@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import type { Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { isRowOf, rowsOf } from '../../wallet-provider/provider-rows';
 import {
   type LedgerParty,
   type LedgerWebhookMovement,
@@ -51,6 +52,15 @@ class MerchantAccountUnknown extends Error {}
 const MINUTE = 60_000;
 
 /**
+ * Whose deliveries FintavaWebhookEvent holds (NUV-01). The consumer reads
+ * that table only while the server runs that provider: under nuvion the
+ * stored Fintava deliveries wait, untouched, for a rollback, and Nuvion's
+ * own deliveries reach the ledger through their handlers
+ * (src/nuvion/handlers/).
+ */
+const STORED_DELIVERIES_PROVIDER = 'fintava';
+
+/**
  * Feeds the ledger from MONEY-07's stored Fintava deliveries (task MONEY-10).
  *
  * Mechanism, Default (agent), owner may override: a sweep every 30 seconds
@@ -80,6 +90,11 @@ const MINUTE = 60_000;
  * payload format are the provider's (`provider.deliveries`, Fintava's in
  * src/fintava/fintava-ledger-delivery.ts), and so is the confirmation walk
  * (`provider.confirmMovement`). This file keeps the ledger's own rules.
+ *
+ * Only the running provider's rows (NUV-01, MONEY-20 finding 2): a party is
+ * one of our wallets only if that wallet is held by the provider the server
+ * runs, and a reversal that names a debit another provider recorded leaves
+ * it alone. Under nuvion this sweep reads nothing (the table above).
  */
 @Injectable()
 export class LedgerConsumerService {
@@ -111,7 +126,7 @@ export class LedgerConsumerService {
       waiting: 0,
       skipped: 0,
     };
-    if (this.sweeping) return counts;
+    if (this.sweeping || !this.readsStoredDeliveries()) return counts;
     this.sweeping = true;
     try {
       const resting = [...this.retryAt.entries()]
@@ -168,6 +183,7 @@ export class LedgerConsumerService {
     if (
       !event ||
       event.processingStatus !== 'pending' ||
+      !this.readsStoredDeliveries() ||
       !this.provider.deliveries.ledgerEvents.includes(event.event)
     ) {
       return 'skipped';
@@ -423,7 +439,14 @@ export class LedgerConsumerService {
       at: receivedAt,
     };
     let refs = r.references;
-    if ((await this.ledger.debitsFor(refs)).length === 0) {
+    const named = await this.ledger.debitsFor(refs);
+    if (await this.anyOtherProvider(named)) {
+      return this.finish(eventId, () => ({
+        status: 'failed',
+        note: `ledger: the reversal names a debit recorded by another provider than ${this.provider.label}; nothing was changed (review)`,
+      }));
+    }
+    if (named.length === 0) {
       // The debit may be held under references the delivery does not carry:
       // ask Fintava for the record and try its references too.
       const c = await this.confirm(r.references, null, 0, receivedAt);
@@ -444,6 +467,15 @@ export class LedgerConsumerService {
           eventId,
           'ledger: no debit in the ledger matches this reversal yet; tried again on the next sweep',
         );
+      }
+    }
+    if (refs !== r.references) {
+      const more = await this.ledger.debitsFor(refs);
+      if (await this.anyOtherProvider(more)) {
+        return this.finish(eventId, () => ({
+          status: 'failed',
+          note: `ledger: the reversal names a debit recorded by another provider than ${this.provider.label}; nothing was changed (review)`,
+        }));
       }
     }
     return this.finish(
@@ -551,6 +583,23 @@ export class LedgerConsumerService {
     return outcome;
   }
 
+  /** True while the server runs the provider whose deliveries the table holds. */
+  private readsStoredDeliveries(): boolean {
+    return this.provider.name === STORED_DELIVERIES_PROVIDER;
+  }
+
+  /** True when any of these ledger rows was recorded by another provider. */
+  private async anyOtherProvider(
+    entryIds: readonly string[],
+  ): Promise<boolean> {
+    if (entryIds.length === 0) return false;
+    const rows = await this.prisma.fintavaLedgerEntry.findMany({
+      where: { id: { in: [...entryIds] } },
+      select: { provider: true },
+    });
+    return rows.some((row) => !isRowOf(this.provider.name, row.provider));
+  }
+
   /** Leaves the delivery pending, saying why. */
   private async wait(
     eventId: string,
@@ -631,9 +680,11 @@ export class LedgerConsumerService {
       },
       customerId: w.customerId,
     });
+    // Only a wallet the running provider holds is ours here (NUV-01).
+    const held = rowsOf(this.provider.name);
     if (party.customerId) {
-      const w = await this.prisma.fintavaWallet.findUnique({
-        where: { customerId: party.customerId },
+      const w = await this.prisma.fintavaWallet.findFirst({
+        where: { customerId: party.customerId, ...held },
         select,
       });
       return w ? ours(w) : null;
@@ -645,8 +696,8 @@ export class LedgerConsumerService {
       return null;
     }
     for (const accountNumber of party.accountNumbers) {
-      const w = await this.prisma.fintavaWallet.findUnique({
-        where: { accountNumber },
+      const w = await this.prisma.fintavaWallet.findFirst({
+        where: { accountNumber, ...held },
         select,
       });
       if (w) return ours(w);

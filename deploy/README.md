@@ -99,13 +99,40 @@ FLUTTERWAVE_SECRET_KEY=
 FLUTTERWAVE_PUBLIC_KEY=
 FLUTTERWAVE_WEBHOOK_HASH=
 
-# Which company holds the naira wallets (MONEY-20): fintava, or empty for
-# fintava. `nuvion` is reserved and stops the server at boot with a clear
-# message until its adapter task lands; any other value stops it too.
+# Which company holds the naira wallets (MONEY-20, NUV-01): fintava (or
+# empty), or nuvion, which needs the NUVION_* values below; any other value
+# stops the server.
 # ROLLBACK between providers = change this one value, then
 # `sudo systemctl restart wawu-hub-api`. Nothing else is edited, no migration
-# runs, and the FINTAVA_* values below stay in place either way.
+# runs, and the FINTAVA_* and NUVION_* values stay in place either way: the
+# server acts only on the wallets, openings and ledger rows of the provider
+# it runs, and both webhook receivers stay mounted.
 WALLET_PROVIDER=fintava
+# Nuvion (NUV-01; read only when WALLET_PROVIDER=nuvion). Put here by NUV-10:
+# NUVION_BASE_URL is exactly https://api.nuvion.co in production
+# (https://api.nuvion.dev is the sandbox); anything else stops the server.
+# NUVION_API_VERSION may stay empty (pinned to 2026-02-06). Under nuvion a
+# missing NUVION_BASE_URL, NUVION_API_KEY, NUVION_WEBHOOK_SECRET or
+# NUVION_OPERATIONAL_ACCOUNT_ID stops the server at boot, naming it.
+# NUVION_WEBHOOK_SECRET is shown once by Nuvion when NUV-10 registers
+#   https://<the API's public host>/api/hub/webhooks/nuvion
+# and is read under any WALLET_PROVIDER: without it every delivery is
+# refused with 401. NUVION_WALLET_* are the owner's bank, licence and
+# deposit-insurance lines for Nuvion wallets (empty hides them).
+# PIN reset codes go by email under nuvion (R-39): WAWU ID sends them
+# (WAWU_ID_BASE_URL and WAWU_ID_INTERNAL_SERVICE_KEY, BACKEND_GAPS G-400).
+NUVION_BASE_URL=
+NUVION_API_KEY=
+NUVION_API_VERSION=
+NUVION_WEBHOOK_SECRET=
+NUVION_OPERATIONAL_ACCOUNT_ID=
+NUVION_TIMEOUT_MS=
+NUVION_MONEY_TIMEOUT_MS=
+NUVION_CHECK_TIMEOUT_MS=
+NUVION_RESEND_SAFETY_MS=
+NUVION_WALLET_BANK_NAME=
+NUVION_WALLET_LICENCE_LINE=
+NUVION_WALLET_DEPOSIT_INSURANCE_LINE=
 # Fintava (naira wallets; src/fintava/, MONEY-06). Production must name the
 # live base URL here: the client never assumes live, and refuses any host
 # other than Fintava's. The timeouts may stay empty (defaults in
