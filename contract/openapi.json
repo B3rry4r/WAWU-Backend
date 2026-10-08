@@ -6793,7 +6793,41 @@
             }
           }
         },
-        "summary": "Pull an approved listing without erasing that it was approved.",
+        "summary": "Pull an approved listing without erasing that it was approved. It stays\nout until an admin lists it again: the owner's Show is refused (FIX-06).",
+        "tags": [
+          "AdminProfessionalReview"
+        ]
+      }
+    },
+    "/api/hub/admin/professionals/{id}/relist": {
+      "post": {
+        "operationId": "AdminProfessionalReviewController_relist",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminProfessionalDecisionView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused (reason.code listing_not_taken_down): no admin takedown stands on this listing, so its owner shows or hides it."
+          }
+        },
+        "summary": "List again a listing an admin took down (FIX-06). It goes back to what\nits owner had chosen, and the owner hides and shows it as before.",
         "tags": [
           "AdminProfessionalReview"
         ]
@@ -18194,6 +18228,31 @@
         ]
       }
     },
+    "/api/hub/professionals/applications/mine/visibility": {
+      "get": {
+        "operationId": "ProfessionalController_myVisibility",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProfessionalListingVisibilityView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "Each approved listing of yours and where it stands: listed, hidden by\nyou, or taken down by an admin (FIX-06). P8 reads it beside .../mine.",
+        "tags": [
+          "Professional"
+        ]
+      }
+    },
     "/api/hub/professionals/applications/{id}/listing": {
       "patch": {
         "operationId": "ProfessionalController_setListed",
@@ -18313,6 +18372,9 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Refused: the listing is not approved, or (reason.code listing_taken_down, with reason.takenDownAt) an admin took it down and only an admin lists it again (FIX-06). A Hide on a taken-down listing is accepted."
           }
         },
         "tags": [
@@ -40264,6 +40326,36 @@
           "pieceCount",
           "verification",
           "following"
+        ]
+      },
+      "ProfessionalListingVisibilityView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "hidden",
+              "listed",
+              "taken_down"
+            ]
+          },
+          "takenDownAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "category",
+          "visibility",
+          "takenDownAt"
         ]
       },
       "ProfessionalLocationView": {
