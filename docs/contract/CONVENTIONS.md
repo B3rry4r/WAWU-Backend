@@ -975,18 +975,33 @@ still reads. Every answer is `Cache-Control: no-store`.
   default, no figure in code), under either provider. What counts toward a
   day or a month is the person's own pending and completed movements of the
   kind out of their wallet, by amount before fees, from the ledger (never a
-  balance). Every money-moving route:
-  - carries `@RequireFeesSet()` as its last decorator, so `fees_not_set` is
-    answered before the wallet gate, the Idempotency-Key record and the PIN
+  balance). A route is money-moving when it carries a debit gate, whatever
+  else it documents: the PIN guard (on the controller or the method;
+  `@RequireTransactionPin()` and `@RequireApproval()` bring it) or a refusal
+  only a debit or a PIN check answers (an Idempotency-Key code, a PIN code,
+  `insufficient_funds`, `quote_changed`, `limit_reached`). The routes that
+  check a PIN and move no money (changing the PIN, checking a PIN or an
+  approval, turning on approving from a phone) are named in the coverage
+  spec, each with its reason (FIX-21). Every money-moving route:
+  - carries `@RequireFeesSet()` as its last decorator, and puts nothing but
+    `WawuAuthGuard` on its controller (class guards run before method
+    guards), so `fees_not_set` is answered before the wallet gate, the
+    Idempotency-Key record and the PIN
     (`src/money/limits/tests/money-moving-coverage.spec.ts` holds every
-    mounted route to it, and every declared one documents `fees_not_set` and
+    mounted route to it, reading class and method guards together as Nest
+    runs them, and every declared one documents `fees_not_set` and
     `limit_reached` through `DEBIT_GATE_ERRORS`);
   - calls `MoneyLimits.assertMayMove({ wawuUserId, kind, amountKobo }, { tx
     })` in the transaction that writes the movement's pending ledger row,
     before the provider is called: `fees_not_set`, then `403 limit_reached`
     with `limit` (per transaction, then today, then this month). With `tx`
     it takes a per-person lock first, so two movements by one person are
-    checked one after the other;
+    checked one after the other. That transaction stays at READ COMMITTED
+    (Prisma's default: no `isolationLevel`): the lock orders the reads only
+    there, so with `tx` the check first reads `transaction_isolation` and
+    refuses any other level with an `IsolationLevelError` naming it, a
+    programming error answered as a 500 (FIX-21,
+    `src/money/limits/read-committed.ts`);
   - answers a provider failure with `error.toHttpException()`: the
     provider's own limit refusal (a `WalletProviderLimitError`; Nuvion's
     `error_transfer_transaction_limit_exceeded`,
