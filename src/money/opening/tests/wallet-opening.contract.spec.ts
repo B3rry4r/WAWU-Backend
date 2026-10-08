@@ -626,6 +626,7 @@ describe('Opening the Fintava account (MONEY-12) over HTTP', () => {
         pin: { isSet: false, changedAt: null, triesLeft: 5, lockedUntil: null },
         bankTransfers: { allowed: true, blockedBy: null },
         beneficiaryCount: 0,
+        accountNumberStatus: 'active',
       });
 
       // Asked first whether Fintava had one (it had not), then one create.
