@@ -9,7 +9,7 @@
 -- Rollback:
 --   DROP TABLE "EventPass", "MakerTier", "PersonBilling";
 --   DROP TYPE "BillingCurrency";
---   DELETE FROM "_prisma_migrations" WHERE migration_name = '20261016120000_maker_plan';
+--   DELETE FROM "_prisma_migrations" WHERE migration_name = '20261016170000_maker_plan';
 
 -- CreateEnum
 CREATE TYPE "BillingCurrency" AS ENUM ('NGN', 'USD');
