@@ -41,6 +41,20 @@ export const NUVION_CONFIG_KEYS = {
   moneyTimeoutMs: 'NUVION_MONEY_TIMEOUT_MS',
   checkTimeoutMs: 'NUVION_CHECK_TIMEOUT_MS',
   resendSafetyMs: 'NUVION_RESEND_SAFETY_MS',
+  /**
+   * NUV-03: `on` makes Nuvion's hosted selfie a step of opening (it must
+   * pass before the opening is submitted); `off` (the default) leaves it out.
+   * Nuvion's docs do not list the selfie API, so whether it can start a
+   * session for a child entity is only known once the sandbox key works
+   * (R-39); until then it is off and opening goes on without a selfie.
+   */
+  hostedLiveness: 'NUVION_HOSTED_LIVENESS',
+  /**
+   * NUV-03: the https origins the hosted selfie page may send the person
+   * back to (the app's link and the website), comma separated. Empty: any
+   * https address.
+   */
+  livenessRedirectOrigins: 'NUVION_LIVENESS_REDIRECT_ORIGINS',
 } as const;
 
 /** The settings without which the Nuvion adapter cannot start. */
@@ -105,6 +119,10 @@ export interface NuvionSettings {
   /** Added to `moneyTimeoutMs` before a lost send may be sent again. */
   resendSafetyMs: number;
   retryAfterSeconds: number;
+  /** NUV-03: the hosted selfie is a step of opening (`NUVION_HOSTED_LIVENESS=on`). */
+  hostedLiveness?: boolean;
+  /** NUV-03: the https origins the selfie page may return to; empty means any https address. */
+  livenessRedirectOrigins?: readonly string[];
 }
 
 /** A Nuvion setting that is missing or wrong under nuvion. Stops the app at boot. */
@@ -205,6 +223,47 @@ export function readNuvionSettings(get: (key: string) => string | undefined): {
       [60_000, 86_400_000],
     ),
     retryAfterSeconds: NUVION_DEFAULTS.retryAfterSeconds,
+    hostedLiveness: switchSetting(
+      get(NUVION_CONFIG_KEYS.hostedLiveness),
+      NUVION_CONFIG_KEYS.hostedLiveness,
+    ),
+    livenessRedirectOrigins: origins(
+      get(NUVION_CONFIG_KEYS.livenessRedirectOrigins),
+      NUVION_CONFIG_KEYS.livenessRedirectOrigins,
+    ),
   };
   return { settings, apiKey: value(NUVION_CONFIG_KEYS.apiKey) };
+}
+
+/** `on` or `off` (unset or empty: off), anything else stops the server at boot. */
+function switchSetting(raw: string | undefined, key: string): boolean {
+  const v = (raw ?? '').trim().toLowerCase();
+  if (v === '' || v === 'off') return false;
+  if (v === 'on') return true;
+  throw new NuvionConfigError(`${key} must be on or off.`);
+}
+
+/** A comma separated list of https origins (scheme and host, no path); unset: none. */
+function origins(raw: string | undefined, key: string): string[] {
+  const list = (raw ?? '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter((x) => x !== '');
+  for (const item of list) {
+    let url: URL;
+    try {
+      url = new URL(item);
+    } catch {
+      throw new NuvionConfigError(`${key} must list https origins.`);
+    }
+    if (
+      url.protocol !== 'https:' ||
+      url.origin !== item.replace(/\/+$/, '') ||
+      url.username !== '' ||
+      url.password !== ''
+    ) {
+      throw new NuvionConfigError(`${key} must list https origins.`);
+    }
+  }
+  return [...new Set(list.map((x) => new URL(x).origin))];
 }

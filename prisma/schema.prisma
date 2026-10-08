@@ -5069,6 +5069,99 @@ model NuvionEntity {
   @@index([accountNumber])
 }
 
+/// ─────────────────────────────────────────────────────────────────────────
+/// THE DOCUMENTS SENT TO NUVION (task NUV-03, R-42)
+///
+/// One row per person and kind (`identity`: the ID document; `proof_of_
+/// address`). The file goes to Nuvion and nowhere else: this table keeps
+/// which kind and which sides went in the one call, the state, Nuvion's
+/// document id, the time, and a SHA-256 fingerprint of the bytes so the
+/// same file sent twice (a double tap, a retry after a lost answer) is
+/// forwarded once. Never the file, a base64 copy of it, a number read off
+/// it, or a file name.
+///
+/// `state`: `sending` (claimed, the call is out), `uploaded` (Nuvion
+/// accepted it), `unknown` (the call went out and no answer came back: it
+/// is looked for at Nuvion before anything is sent again), `failed`
+/// (Nuvion refused it; nothing was made).
+/// ─────────────────────────────────────────────────────────────────────────
+model NuvionDocument {
+  wawuUserId       String
+  /// `identity` or `proof_of_address` (Nuvion's `key`).
+  kind             String
+  /// The Nuvion entity the file was sent for.
+  entityId         String
+  /// Which sides went in the call: `front`, and `back` when there was one.
+  sides            String[]  @default([])
+  state            String
+  /// Nuvion's id for the document (`data.document.id`), once it answered.
+  nuvionDocumentId String?
+  /// Every Nuvion document id this row has ever recorded, so a look for an
+  /// upload whose answer was lost never takes an earlier one for it.
+  knownDocumentIds String[]  @default([])
+  /// SHA-256 (hex) of the bytes sent. Not the file.
+  fingerprint      String?
+  /// Calls made so far for this kind (each a new attempt).
+  attempts         Int       @default(1)
+  /// When the current attempt started: nothing is sent again before the
+  /// money timeout plus the resend safety has passed since then.
+  attemptStartedAt DateTime
+  uploadedAt       DateTime?
+  /// Why the last attempt made nothing: our own word, never Nuvion's text.
+  failure          String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@id([wawuUserId, kind])
+  @@index([entityId])
+  @@index([state, attemptStartedAt])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// THE SUBMISSION AND THE HOSTED SELFIE (task NUV-03, R-39, R-42)
+///
+/// One row per person. `submitRequestedAt` is the claim taken before
+/// `POST /onboarding-submissions` is sent, so two uploads at once, a
+/// replayed delivery and a retry send it once; `submittedAt` is when Nuvion
+/// is known to have it (its answer, or the entity moving past `incomplete`).
+/// A submission older than the person's last correction (NuvionEntity.
+/// correctedAt) is no longer current, and the review starts again.
+///
+/// The selfie is Nuvion's hosted page: `livenessSessionId` is its session
+/// (`query_id`), saved on the entity as `meta.liveness_check_id`
+/// (`livenessLinkedAt`). `livenessRefusedAt` is set when Nuvion could not
+/// start a session for this person, and the opening then goes on without
+/// one (R-39). Never an image or a face; the result is one word.
+/// ─────────────────────────────────────────────────────────────────────────
+model NuvionOnboarding {
+  wawuUserId        String    @id
+  entityId          String
+  submitRequestedAt DateTime?
+  submittedAt       DateTime?
+  submitAttempts    Int       @default(0)
+  /// Nuvion read the last submission and refused it (nothing was made): not
+  /// sent again for a minute, or until a document changes.
+  submitRefusedAt   DateTime?
+  /// Nuvion's liveness session (`query_id`); null until one was started.
+  livenessSessionId String?
+  /// Taken just before a session is started, so two starts at once make one.
+  livenessClaimedAt DateTime?
+  livenessStartedAt DateTime?
+  /// When the session id was saved on the entity (`meta.liveness_check_id`).
+  livenessLinkedAt  DateTime?
+  /// `pending`, `passed` or `not_passed`, in our words, from Nuvion's.
+  livenessState     String?
+  livenessCheckedAt DateTime?
+  /// Sessions started for this person so far.
+  livenessSessions  Int       @default(0)
+  /// Nuvion would not start a session for this person: no selfie needed.
+  livenessRefusedAt DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([submittedAt])
+}
+
 // -----------------------------------------------------------------------------
 // POINTS (task POINTS-01, R-43)
 //
