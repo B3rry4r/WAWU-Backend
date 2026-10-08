@@ -19,6 +19,40 @@ import type {
   WalletProviderErrorKind,
 } from '../wallet-provider/wallet-provider-error';
 
+/** Percent-decoding rounds a path segment is read through before refusal. */
+const MAX_DECODE_DEPTH = 4;
+
+/**
+ * True when one path segment is, or decodes to at any depth, `.` or `..`
+ * or a slash: `..`, `%2e%2e`, `%2E%2e`, `.%2e`, `%252e%252e`, `%2f`. The
+ * URL parser reads `%2e%2e` as `..` and climbs out of the path the area
+ * built (verifier finding 8, lead ruling 7). A segment that does not
+ * decode, or still decodes after MAX_DECODE_DEPTH rounds, is refused too.
+ */
+export function unsafeSegment(segment: string): boolean {
+  let text = segment;
+  for (let depth = 0; depth <= MAX_DECODE_DEPTH; depth += 1) {
+    if (
+      text === '.' ||
+      text === '..' ||
+      text.includes('/') ||
+      text.includes('\\')
+    ) {
+      return true;
+    }
+    if (!text.includes('%')) return false;
+    let next: string;
+    try {
+      next = decodeURIComponent(text);
+    } catch {
+      return true;
+    }
+    if (next === text) return false;
+    text = next;
+  }
+  return true;
+}
+
 /** One call, named for logs and errors. Never a URL: a query can hold an id. */
 export interface NuvionOp {
   name: string;
@@ -327,13 +361,14 @@ export class NuvionClient {
       reference?: string | null;
       requestId?: string | null;
       nuvionType?: string | null;
+      recordMayExist?: boolean;
       retryAfterSeconds?: number;
     },
   ): WalletProviderError {
     const messages = (args.messages ?? []).map((m) =>
       maskNuvionText(m, [this.#apiKey]),
     );
-    // Nuvion's limit refusals have one mapping point (G-411, NUV-07).
+    // Nuvion's limit refusals below 500 have one mapping point (G-411).
     const error =
       nuvionLimitError(args.nuvionType ?? null, {
         operation: op.name,
@@ -350,6 +385,7 @@ export class NuvionClient {
         reference: args.reference ?? null,
         requestId: args.requestId ?? null,
         nuvionType: args.nuvionType ?? null,
+        recordMayExist: args.recordMayExist,
         retryAfterSeconds:
           args.retryAfterSeconds ?? this.settings.retryAfterSeconds,
       });
@@ -365,12 +401,13 @@ export class NuvionClient {
   }
 
   private url(path: string, query?: NuvionListQuery): URL {
-    // Paths are ours, built by the areas: one leading slash, no traversal,
-    // no query or fragment of their own. Anything else is a bug here.
+    // Paths are ours, built by the areas: one leading slash, no traversal
+    // (plain or percent-encoded, at any depth), no query or fragment of
+    // their own. Anything else is a bug here.
     if (
       !/^\/[A-Za-z0-9._~%/-]*$/.test(path) ||
       path.includes('//') ||
-      /(^|\/)\.\.?(\/|$)/.test(path)
+      path.split('/').some(unsafeSegment)
     ) {
       throw new RangeError('A Nuvion path must be a plain absolute path.');
     }
@@ -484,7 +521,7 @@ export class NuvionClient {
       };
     }
 
-    const { kind, type, messages } = classifyNuvionFailure({
+    const { kind, type, messages, recordMayExist } = classifyNuvionFailure({
       httpStatus: res.status,
       body: parsed ? body : null,
       call: op.call,
@@ -503,6 +540,7 @@ export class NuvionClient {
       reference: opts.reference,
       requestId,
       nuvionType: type,
+      recordMayExist,
       retryAfterSeconds,
     });
   }

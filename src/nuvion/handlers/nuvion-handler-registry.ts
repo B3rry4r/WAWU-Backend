@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import type { NuvionWebhookEventName } from '../nuvion.interface';
 import { NuvionAccountsHandler } from './accounts.handler';
 import { NuvionBookHandler } from './book.handler';
 import { NuvionDocumentsHandler } from './documents.handler';
@@ -48,7 +47,7 @@ export class NuvionHandlerRegistry {
   }
 
   /** Every event some handler handles. */
-  events(): NuvionWebhookEventName[] {
-    return [...this.byEvent.keys()] as NuvionWebhookEventName[];
+  events(): string[] {
+    return [...this.byEvent.keys()];
   }
 }

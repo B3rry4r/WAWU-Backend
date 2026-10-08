@@ -1,7 +1,13 @@
 import {
+  WALLET_PROVIDER_UNKNOWN_OUTCOMES,
   WalletProviderError,
   type WalletProviderErrorKind,
 } from '../wallet-provider/wallet-provider-error';
+import {
+  PROVIDER_LIMIT_ERROR_TYPES,
+  providerLimitError,
+  type WalletProviderLimitError,
+} from '../wallet-provider/wallet-provider-limit';
 
 /**
  * Nuvion's failures in the seam's neutral words (task NUV-01).
@@ -84,7 +90,8 @@ export const NUVION_ERROR_TYPE_KINDS: Readonly<
   error_entity_person_document_link_mismatch: 'validation',
   error_entity_user_has_no_access: 'auth',
   error_entity_user_already_has_access: 'refused',
-  error_entity_status_due_diligence_required: 'identity_refused',
+  // "Entity requires additional verification": a review, not a refusal.
+  error_entity_status_due_diligence_required: 'under_review',
   error_entity_status_not_incomplete: 'refused',
   // KYC
   error_kyc_identity_verification_failed: 'identity_refused',
@@ -93,9 +100,11 @@ export const NUVION_ERROR_TYPE_KINDS: Readonly<
   error_kyc_document_type_not_accepted: 'identity_refused',
   error_kyc_documents_incomplete: 'identity_refused',
   error_kyc_application_rejected: 'identity_refused',
-  error_kyc_under_compliance_review: 'identity_refused',
+  // Under review (lead ruling 4): wait for Nuvion's decision, never "your
+  // details failed".
+  error_kyc_under_compliance_review: 'under_review',
   error_kyc_sanctions_check_failed: 'identity_refused',
-  error_kyc_enhanced_due_diligence_required: 'identity_refused',
+  error_kyc_enhanced_due_diligence_required: 'under_review',
   // KYB (WAWU's own business entity)
   error_kyb_business_verification_failed: 'refused',
   error_kyb_tax_id_invalid: 'refused',
@@ -126,7 +135,10 @@ export const NUVION_ERROR_TYPE_KINDS: Readonly<
   error_transfer_monthly_volume_exceeded: 'refused',
   error_transfer_account_not_active: 'wallet_inactive',
   error_transfer_counterparty_not_approved: 'refused',
-  error_transfer_same_day_cutoff_passed: 'payouts_blocked',
+  // "Same-day cutoff has passed; transfer will process next business day":
+  // the transfer still goes, so it is never "nothing moved". Reconciled by
+  // its unique_reference, never sent again (verifier defect 2).
+  error_transfer_same_day_cutoff_passed: 'outcome_unknown',
   error_transfer_outside_business_hours: 'payouts_blocked',
   error_transfer_compliance_rejected: 'refused',
   error_transfer_recipient_flagged: 'refused',
@@ -293,23 +305,59 @@ export class NuvionError extends WalletProviderError {
 }
 
 /**
- * Nuvion's three limit refusals (errors.md, "Transfers"; no values are
- * published). Each is `refused` with nothing moved. BACKEND_GAPS G-411
- * (NUV-07): the app answers them as `403 limit_reached`, through NUV-07's
- * `providerLimitError('nuvion', type, ...)` in
- * src/wallet-provider/wallet-provider-limit.ts. `nuvionLimitError` below is
- * the one place they are mapped, so bringing NUV-07 and this file together
- * changes one line there.
+ * The types that say the record is there at Nuvion although the call
+ * failed, so `recordMayExist` is true on them whatever their kind (the
+ * seam's own definition; verifier defect 3 and lead ruling 4):
+ * - "already exists" or "already verified" (409): a create that meets one
+ *   after a lost answer or a double tap adopts what is there;
+ * - "under review" (422): the application is with Nuvion's compliance
+ *   team; it is never sent again while it is.
  */
-export const NUVION_LIMIT_ERROR_TYPES = [
-  'error_transfer_transaction_limit_exceeded',
-  'error_transfer_daily_limit_exceeded',
-  'error_transfer_monthly_volume_exceeded',
-] as const;
+export const NUVION_RECORD_EXISTS_TYPES: readonly string[] = [
+  'error_account_already_exists',
+  'error_account_already_verified',
+  'error_counterparty_already_exists',
+  'error_wallet_already_exists',
+  'error_kyc_under_compliance_review',
+  'error_kyc_enhanced_due_diligence_required',
+  'error_entity_status_due_diligence_required',
+];
+
+/** True when a failure of this kind and type may have left a record. */
+export function nuvionRecordMayExist(
+  kind: WalletProviderErrorKind,
+  type: string | null,
+): boolean {
+  return (
+    WALLET_PROVIDER_UNKNOWN_OUTCOMES.includes(kind) ||
+    (type !== null && NUVION_RECORD_EXISTS_TYPES.includes(type))
+  );
+}
 
 /**
- * The error a limit refusal becomes, or null when `type` is not one of
- * NUVION_LIMIT_ERROR_TYPES (the client then maps it as any other).
+ * Nuvion's three limit refusals (errors.md, "Transfers"; no values are
+ * published), taken from NUV-07's table so there is one list
+ * (src/wallet-provider/wallet-provider-limit.ts). BACKEND_GAPS G-411.
+ */
+export const NUVION_LIMIT_ERROR_TYPES: readonly string[] = Object.keys(
+  PROVIDER_LIMIT_ERROR_TYPES.nuvion,
+);
+
+/** What Nuvion support needs to trace a failed call. */
+export interface NuvionTrace {
+  /** Nuvion's X-Request-ID, or null when no answer came back. */
+  readonly requestId: string | null;
+  /** Nuvion's `error_*` type, or null when the answer carried none. */
+  readonly nuvionType: string | null;
+}
+
+/**
+ * The error a limit refusal becomes (G-411): NUV-07's
+ * `providerLimitError('nuvion', type, ...)`, a `refused` with nothing
+ * moved that answers `403 limit_reached`, with Nuvion's request id and type
+ * kept on it. Null when `type` is not one of Nuvion's limit types, and for
+ * any answer of 500 or above: a 5xx is never a refusal, whatever type it
+ * carries (lead ruling 9), so the client maps it as an unknown outcome.
  */
 export function nuvionLimitError(
   type: string | null,
@@ -320,21 +368,16 @@ export function nuvionLimitError(
     reference?: string | null;
     requestId?: string | null;
   },
-): WalletProviderError | null {
-  if (
-    type === null ||
-    !(NUVION_LIMIT_ERROR_TYPES as readonly string[]).includes(type)
-  ) {
-    return null;
-  }
-  // G-411 mapping point: NUV-07's providerLimitError('nuvion', type, args)
-  // answers here (403 limit_reached), in place of this plain refusal.
-  return new NuvionError({
-    ...args,
-    kind: 'refused',
-    recordMayExist: false,
-    nuvionType: type,
-  });
+): (WalletProviderLimitError & NuvionTrace) | null {
+  const status = args.httpStatus ?? null;
+  if (type === null || status === null || status >= 500) return null;
+  const { requestId, ...limitArgs } = args;
+  const limit = providerLimitError('nuvion', type, limitArgs);
+  if (limit === null) return null;
+  const trace: NuvionTrace = { requestId: requestId ?? null, nuvionType: type };
+  const error = Object.assign(limit, trace);
+  if (error.requestId) error.message += ` request ${error.requestId}`;
+  return error;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -431,26 +474,30 @@ export function classifyNuvionFailure(args: {
   kind: WalletProviderErrorKind;
   type: string | null;
   messages: string[];
+  recordMayExist: boolean;
 } {
   const read = readNuvionErrorBody(args.body);
   const type = read?.type ?? null;
   const messages = (read?.messages ?? []).map((m) =>
     maskNuvionText(m, args.secrets),
   );
-  // A 5xx never counts as a refusal, whatever type it carries: Nuvion
-  // could not finish, so a write may still have happened.
+  const typed = kindForType(type, args.call);
+  // A 5xx never counts as a refusal, whatever type it carries (lead ruling
+  // 9): Nuvion could not finish, so a write may still have happened (an
+  // unknown outcome, or the unknown-outcome kind its type names) and a read
+  // or a check is simply asked again.
   const kind =
     args.httpStatus >= 500
-      ? (kindForType(type, args.call) ?? lostKind(args.call))
-      : (kindForType(type, args.call) ??
-        kindForStatus(args.httpStatus, args.call, read !== null));
-  const safe =
-    args.httpStatus >= 500 &&
-    args.call === 'write' &&
-    kind !== 'outcome_unknown' &&
-    kind !== 'duplicate_reference' &&
-    kind !== 'not_confirmed'
-      ? 'outcome_unknown'
-      : kind;
-  return { kind: safe, type, messages };
+      ? args.call === 'write' &&
+        typed !== null &&
+        WALLET_PROVIDER_UNKNOWN_OUTCOMES.includes(typed)
+        ? typed
+        : lostKind(args.call)
+      : (typed ?? kindForStatus(args.httpStatus, args.call, read !== null));
+  return {
+    kind,
+    type,
+    messages,
+    recordMayExist: nuvionRecordMayExist(kind, type),
+  };
 }

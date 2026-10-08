@@ -17,10 +17,25 @@ import {
 export interface NuvionDeliveryReading {
   /** Trimmed, lower case; '' when the body named none. */
   event: string;
+  /**
+   * `pending` for a live delivery that names an event and carries `data`,
+   * documented or not (lead ruling 6): the dispatcher hands it over once a
+   * handler lists its event. `unrecognised` only for a body it cannot be
+   * (no event name, a malformed one, or no `data`).
+   */
   status: 'pending' | 'unrecognised' | 'test';
+  /** True when the event is one of NUVION_WEBHOOK_EVENTS. */
+  documented: boolean;
   resourceId: string | null;
   entityId: string | null;
 }
+
+/**
+ * An event name as Nuvion writes them (`<group>.<name>`, lower case, words
+ * joined by `_`), at most 100 characters. Only such a name is stored as
+ * `pending`, logged or matched to a handler.
+ */
+const EVENT_NAME = /^(?=.{3,100}$)[a-z][a-z0-9_]*(\.[a-z0-9_]+){1,2}$/;
 
 const NUL = String.fromCharCode(0);
 const REPLACEMENT = String.fromCharCode(0xfffd);
@@ -43,6 +58,7 @@ export function readNuvionDelivery(body: unknown): NuvionDeliveryReading {
     return {
       event: '',
       status: 'unrecognised',
+      documented: false,
       resourceId: null,
       entityId: null,
     };
@@ -56,12 +72,17 @@ export function readNuvionDelivery(body: unknown): NuvionDeliveryReading {
       .trim()
       .toLowerCase()
       .slice(0, 100);
-    return { event, status: 'test', resourceId: null, entityId: null };
+    return {
+      event,
+      status: 'test',
+      documented: isKnown(event),
+      resourceId: null,
+      entityId: null,
+    };
   }
-  const event =
-    typeof body.event === 'string'
-      ? body.event.trim().toLowerCase().slice(0, 100)
-      : '';
+  const named =
+    typeof body.event === 'string' ? body.event.trim().toLowerCase() : '';
+  const event = named.slice(0, 100);
   const data = isRecord(body.data) ? body.data : null;
   // The object the event is about: `data` itself, or the one it wraps.
   const inner =
@@ -72,7 +93,9 @@ export function readNuvionDelivery(body: unknown): NuvionDeliveryReading {
         : ([data.account, data.account_details].find(isRecord) ?? null);
   return {
     event,
-    status: isKnown(event) && data !== null ? 'pending' : 'unrecognised',
+    status:
+      EVENT_NAME.test(named) && data !== null ? 'pending' : 'unrecognised',
+    documented: isKnown(event),
     resourceId: inner ? idText(inner.id) : null,
     entityId:
       (inner ? idText(inner.entity_id) : null) ??

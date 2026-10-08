@@ -26,7 +26,12 @@ import type {
   NuvionHandlerResult,
 } from '../handlers/nuvion-handler.interface';
 import { NUVION_WEBHOOK_WINDOW_MS } from '../nuvion-config';
-import { signNuvionDelivery } from '../webhook/nuvion-signature';
+import {
+  readNuvionTimestamp,
+  signNuvionDelivery,
+  withinNuvionWindow,
+} from '../webhook/nuvion-signature';
+import { NuvionSignatureGuard } from '../webhook/nuvion-signature.guard';
 import { NuvionWebhookDispatcher } from '../webhook/nuvion-webhook-dispatcher.service';
 import { NuvionWebhookModule } from '../webhook/nuvion-webhook.module';
 
@@ -346,7 +351,7 @@ describe('NUV-01: Nuvion webhooks are received, checked and stored once', () => 
       });
     });
 
-    it('an event Nuvion does not document is stored `unrecognised`, for review', async () => {
+    it('an event Nuvion does not document is stored `pending`, for a handler that lists it later (ruling 6)', async () => {
       const id = eventId();
       await deliver(
         JSON.stringify({ event: 'Wallets.Exploded', data: { id: 'x1' } }),
@@ -358,8 +363,30 @@ describe('NUV-01: Nuvion webhooks are received, checked and stored once', () => 
         }),
       ).toMatchObject({
         event: 'wallets.exploded',
-        processingStatus: 'unrecognised',
+        processingStatus: 'pending',
+        attempts: 0,
       });
+    });
+
+    it('only a body that names no event, a malformed one, or carries no data is `unrecognised`', async () => {
+      for (const body of [
+        { data: { id: 'x2' } },
+        { event: 'not an event!', data: { id: 'x3' } },
+        { event: 'wallets', data: { id: 'x4' } },
+        { event: `wallets.${'x'.repeat(120)}`, data: { id: 'x5' } },
+        { event: 'wallets.exploded' },
+        [1, 2],
+      ]) {
+        const id = eventId();
+        await deliver(JSON.stringify(body), { id }).expect(200);
+        expect(
+          (
+            await prisma.nuvionWebhookEvent.findUniqueOrThrow({
+              where: { eventId: id },
+            })
+          ).processingStatus,
+        ).toBe('unrecognised');
+      }
     });
 
     it('a NUL in the body is kept in the raw bytes and replaced in the parsed copy', async () => {
@@ -477,6 +504,72 @@ describe('NUV-01: Nuvion webhooks are received, checked and stored once', () => 
         ).toISOString(),
       }).expect(200);
       expect((await rows()).length).toBe(before + 1);
+    });
+
+    describe('the window, to the millisecond, on a fixed clock', () => {
+      const NOON = Date.parse('2026-10-08T12:00:00.000Z');
+      let clock = NOON;
+      let n = 900;
+      beforeEach(() => {
+        clock = NOON;
+        jest
+          .spyOn(NuvionSignatureGuard.prototype, 'now')
+          .mockImplementation(() => clock);
+      });
+      afterEach(() => jest.restoreAllMocks());
+      const at = (timestamp: string) =>
+        deliver(JSON.stringify(inflow((n += 1))), { timestamp });
+
+      it('is 20 minutes either side (Nuvion 15-minute retry span plus 5, ruling 5)', async () => {
+        expect(NUVION_WEBHOOK_WINDOW_MS).toBe(20 * 60_000);
+        // Written out, not derived from the constant.
+        await at('2026-10-08T11:41:00.000Z').expect(200);
+        await at('2026-10-08T11:39:00.000Z').expect(401);
+        await at('2026-10-08T12:19:00.000Z').expect(200);
+        await at('2026-10-08T12:21:00.000Z').expect(401);
+        // A retry 14 minutes after the first attempt, signed then.
+        await at('2026-10-08T11:46:00.000Z').expect(200);
+      });
+
+      it('the edge is inside: exactly 20 minutes is taken, 1 ms more is refused, both sides', async () => {
+        await at('2026-10-08T11:40:00.000Z').expect(200);
+        await at('2026-10-08T11:39:59.999Z').expect(401);
+        await at('2026-10-08T12:20:00.000Z').expect(200);
+        await at('2026-10-08T12:20:00.001Z').expect(401);
+        expect(withinNuvionWindow(NOON - 1_200_000, NOON, 1_200_000)).toBe(
+          true,
+        );
+        expect(withinNuvionWindow(NOON - 1_200_001, NOON, 1_200_000)).toBe(
+          false,
+        );
+        expect(withinNuvionWindow(NOON + 1_200_000, NOON, 1_200_000)).toBe(
+          true,
+        );
+        expect(withinNuvionWindow(NOON + 1_200_001, NOON, 1_200_000)).toBe(
+          false,
+        );
+      });
+
+      it('an ISO 8601 timestamp must be a whole one: date, T, time and a zone', async () => {
+        await at('2026-10-08T12:00:00Z').expect(200);
+        await at('2026-10-08T12:00:00.123456Z').expect(200);
+        await at('2026-10-08T13:00:00+01:00').expect(200);
+        for (const t of [
+          '2026-10-08 12:00:00Z',
+          '2026-10-08T12:00:00',
+          '2026-10-08T12:00Z',
+          '2026-10-08T12:00:00Z junk',
+          '2026-10-08T12:00:00.Z',
+        ]) {
+          expect(readNuvionTimestamp(t)).toBeNull();
+          await at(t).expect(401);
+        }
+        // A bare date reads as midnight: refused even with the clock there.
+        clock = Date.parse('2026-10-08T00:05:00.000Z');
+        expect(readNuvionTimestamp('2026-10-08')).toBeNull();
+        await at('2026-10-08').expect(401);
+        await at('2026-10-08T00:04:00Z').expect(200);
+      });
     });
 
     it('an event id we would not store', async () => {
@@ -663,6 +756,49 @@ describe('NUV-01: Nuvion webhooks are received, checked and stored once', () => 
       });
       expect(await dispatcher.dispatch(t.id)).toBe('skipped');
       expect(seen).toHaveLength(0);
+    });
+
+    it('an undocumented event waits, pending, until a handler lists it; then the sweep hands it over (ruling 6)', async () => {
+      // A name only this run uses, so the sweep's batch holds no other row.
+      const name = `wallets.exploded_${RUN.slice(-8)}`;
+      const id = eventId();
+      await deliver(
+        JSON.stringify({ ...inflow(350), event: name.toUpperCase() }),
+        { id },
+      ).expect(200);
+      const row = await prisma.nuvionWebhookEvent.findUniqueOrThrow({
+        where: { eventId: id },
+      });
+      expect(row).toMatchObject({ event: name, processingStatus: 'pending' });
+      expect(await dispatcher.dispatch(row.id)).toBe('skipped');
+      await dispatcher.sweep(new Date());
+      expect(
+        await prisma.nuvionWebhookEvent.findUniqueOrThrow({
+          where: { id: row.id },
+        }),
+      ).toMatchObject({ processingStatus: 'pending', attempts: 0 });
+
+      const later: NuvionDelivery[] = [];
+      registry.add({
+        task: 'LATER',
+        events: [name],
+        handle: (d) => {
+          later.push(d);
+          return Promise.resolve({ outcome: 'done', note: 'handled' });
+        },
+      });
+      expect(registry.events()).toContain(name);
+      await dispatcher.sweep(new Date());
+      expect(later.map((d) => [d.id, d.event])).toEqual([[row.id, name]]);
+      expect(
+        await prisma.nuvionWebhookEvent.findUniqueOrThrow({
+          where: { id: row.id },
+        }),
+      ).toMatchObject({
+        processingStatus: 'processed',
+        note: 'LATER: handled',
+        attempts: 1,
+      });
     });
   });
 

@@ -18,10 +18,19 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { WalletBalanceService } from '../../money/balance/wallet-balance.service';
 import { LedgerConsumerService } from '../../money/ledger/ledger-consumer.service';
 import { LedgerStatusService } from '../../money/ledger/ledger-status.service';
-import { LedgerService } from '../../money/ledger/ledger.service';
+import {
+  LedgerProviderConflictError,
+  LedgerService,
+} from '../../money/ledger/ledger.service';
 import { MoneyError } from '../../money/money-error';
 import { MoneyModule } from '../../money/money.module';
 import { WalletOpeningService } from '../../money/opening/wallet-opening.service';
+import {
+  DEFAULT_ROW_PROVIDER,
+  isRowOf,
+  rowProvider,
+  rowsOf,
+} from '../../wallet-provider/provider-rows';
 import {
   WALLET_PROVIDER,
   type WalletProvider,
@@ -70,8 +79,16 @@ const C = {
   accountNumber: digits(10),
 };
 const D = { id: randomUUID(), phone: `+23481${digits(8)}` };
+/** E: a wallet and a send from before the column (`provider` null): Fintava's. */
+const E = {
+  id: randomUUID(),
+  customerId: `${RUN}-fE`,
+  walletId: `${RUN}-fwE`,
+  accountNumber: digits(10),
+};
 const NUV_REF = `${RUN}-nref`;
 const FIN_REF = `${RUN}-fref`;
+const OLD_REF = `${RUN}-oref`;
 
 const FINTAVA_ENV: Record<string, string | undefined> = {
   WALLET_PROVIDER: undefined,
@@ -98,6 +115,7 @@ describe('NUV-01: a rollback leaves the other provider rows alone', () => {
   let prisma: PrismaService;
   let nuvRow: string;
   let finRow: string;
+  let oldRow: string;
 
   async function boot(env: Record<string, string | undefined>) {
     if (moduleRef) await moduleRef.close();
@@ -134,7 +152,6 @@ describe('NUV-01: a rollback leaves the other provider rows alone', () => {
     guard = guardOutbound();
     await double.start();
     await boot(FINTAVA_ENV);
-    const ledger = moduleRef.get(LedgerService);
     const old = new Date(Date.now() - 30 * MINUTE);
     const hash = (s: string) => createHash('sha256').update(s).digest('hex');
 
@@ -178,13 +195,24 @@ describe('NUV-01: a rollback leaves the other provider rows alone', () => {
         attemptStartedAt: old,
       },
     });
+    await prisma.fintavaWallet.create({
+      data: {
+        wawuUserId: E.id,
+        customerId: E.customerId,
+        walletId: E.walletId,
+        accountNumber: E.accountNumber,
+        provider: null,
+      },
+    });
+    // Every ledger row through the ledger's own writer, which stamps the
+    // provider the server runs (SHARED-CHANGES NUV-01 #2, ruling 8).
     const send = async (
       wawuUserId: string,
       accountNumber: string,
       ref: string,
     ) =>
       (
-        await ledger.record({
+        await moduleRef.get(LedgerService).record({
           wallet: { kind: 'user', wawuUserId, accountNumber },
           direction: 'out',
           status: 'pending',
@@ -201,21 +229,29 @@ describe('NUV-01: a rollback leaves the other provider rows alone', () => {
           source: 'send',
         })
       ).entryId;
+    await boot(NUVION_ENV);
     nuvRow = await send(A.id, A.accountNumber, NUV_REF);
+    await boot(FINTAVA_ENV);
     finRow = await send(C.id, C.accountNumber, FIN_REF);
+    oldRow = await send(E.id, E.accountNumber, OLD_REF);
+    expect((await entry(nuvRow)).provider).toBe('nuvion');
+    expect((await entry(finRow)).provider).toBe('fintava');
+    for (const id of [nuvRow, finRow]) {
+      await prisma.fintavaLedgerEntry.update({
+        where: { id },
+        data: { createdAt: old },
+      });
+    }
+    // A row from before the column.
     await prisma.fintavaLedgerEntry.update({
-      where: { id: nuvRow },
-      data: { provider: 'nuvion', createdAt: old },
-    });
-    await prisma.fintavaLedgerEntry.update({
-      where: { id: finRow },
-      data: { createdAt: old },
+      where: { id: oldRow },
+      data: { createdAt: old, provider: null },
     });
   });
 
   afterAll(async () => {
     if (prisma) {
-      const users = [A.id, B.id, C.id, D.id];
+      const users = [A.id, B.id, C.id, D.id, E.id];
       await prisma.fintavaLedgerEntry.deleteMany({
         where: { wawuUserId: { in: users } },
       });
@@ -259,6 +295,11 @@ describe('NUV-01: a rollback leaves the other provider rows alone', () => {
         provider: 'nuvion',
       });
       expect((await entry(finRow)).statusChecks).toBe(1);
+      // A row from before the column (null) is Fintava's: claimed too.
+      expect(await entry(oldRow)).toMatchObject({
+        statusChecks: 1,
+        provider: null,
+      });
       const direct = await status.check(nuvRow, new Date());
       expect(direct).toMatchObject({
         outcome: 'skipped',
@@ -303,6 +344,74 @@ describe('NUV-01: a rollback leaves the other provider rows alone', () => {
         .balance({ wawuUserId: C.id, walletId: C.walletId })
         .catch(() => null);
       expect(asked(C.walletId).length).toBe(1);
+      // A wallet from before the column (null) is Fintava's: asked too.
+      await balances
+        .balance({ wawuUserId: E.id, walletId: E.walletId })
+        .catch(() => null);
+      expect(asked(E.walletId).length).toBe(1);
+    });
+
+    it('the ledger reads only its own provider rows: lookups, the absent check, a fold and a reversal leave the Nuvion row alone (ruling 8)', async () => {
+      const ledger = moduleRef.get(LedgerService);
+      expect(
+        await ledger.entriesFor(A.accountNumber, 'out', [NUV_REF]),
+      ).toEqual([]);
+      expect(
+        await ledger.entriesFor(C.accountNumber, 'out', [FIN_REF]),
+      ).toEqual([finRow]);
+      expect(
+        await ledger.entriesFor(E.accountNumber, 'out', [OLD_REF]),
+      ).toEqual([oldRow]);
+      expect(await ledger.debitsFor([NUV_REF, FIN_REF])).toEqual([finRow]);
+      expect(await ledger.foreignDebitsFor([NUV_REF, FIN_REF])).toEqual([
+        nuvRow,
+      ]);
+      expect(await ledger.foreignDebitsFor([OLD_REF])).toEqual([]);
+
+      // Never failed as absent at Fintava, even at its current version.
+      const [{ v }] = await prisma.$queryRaw<Array<{ v: string }>>`
+        SELECT xmin::text AS v FROM "FintavaLedgerEntry" WHERE "id" = ${nuvRow}`;
+      expect(await ledger.markAbsentFailed(nuvRow, v)).toBe(false);
+
+      // A Fintava sighting naming the Nuvion row's reference on its side: a
+      // stop, never a fold; nothing is written.
+      const before = await entry(nuvRow);
+      await expect(
+        ledger.record({
+          wallet: {
+            kind: 'user',
+            wawuUserId: A.id,
+            accountNumber: A.accountNumber,
+          },
+          direction: 'out',
+          status: 'completed',
+          category: 'transfer',
+          amountKobo: 150_000,
+          feeKobo: 1_000,
+          references: { customerReference: NUV_REF },
+          source: 'send',
+        }),
+      ).rejects.toBeInstanceOf(LedgerProviderConflictError);
+      expect(
+        (
+          await prisma.fintavaLedgerEntry.findMany({
+            where: { wawuUserId: A.id },
+          })
+        ).map((r) => r.id),
+      ).toEqual([nuvRow]);
+
+      // A reversal through the ledger itself finds no debit of its own.
+      expect(
+        await ledger.applyReversal({
+          references: [NUV_REF],
+          reversalReference: `${RUN}-rev0`,
+          amountKobo: 1500,
+          chargesKobo: 10,
+          totalKobo: 1510,
+          at: new Date(),
+        }),
+      ).toEqual({ state: 'no_match' });
+      expect(await entry(nuvRow)).toEqual(before);
     });
 
     async function delivery(
@@ -431,6 +540,77 @@ describe('NUV-01: a rollback leaves the other provider rows alone', () => {
       expect(double.seen).toEqual([]);
     });
 
+    it('the ledger stamps nuvion on what it writes and reads only Nuvion rows (ruling 8)', async () => {
+      const ledger = moduleRef.get(LedgerService);
+      expect(
+        await ledger.entriesFor(A.accountNumber, 'out', [NUV_REF]),
+      ).toEqual([nuvRow]);
+      expect(
+        await ledger.entriesFor(C.accountNumber, 'out', [FIN_REF]),
+      ).toEqual([]);
+      expect(
+        await ledger.entriesFor(E.accountNumber, 'out', [OLD_REF]),
+      ).toEqual([]);
+      expect(await ledger.debitsFor([NUV_REF, FIN_REF, OLD_REF])).toEqual([
+        nuvRow,
+      ]);
+      expect(
+        (await ledger.foreignDebitsFor([NUV_REF, FIN_REF, OLD_REF])).sort(),
+      ).toEqual([finRow, oldRow].sort());
+      const [{ v }] = await prisma.$queryRaw<Array<{ v: string }>>`
+        SELECT xmin::text AS v FROM "FintavaLedgerEntry" WHERE "id" = ${oldRow}`;
+      expect(await ledger.markAbsentFailed(oldRow, v)).toBe(false);
+      const ref = `${RUN}-nref2`;
+      const made = await ledger.record({
+        wallet: {
+          kind: 'user',
+          wawuUserId: A.id,
+          accountNumber: A.accountNumber,
+        },
+        direction: 'in',
+        status: 'completed',
+        category: 'transfer',
+        amountKobo: 5_000,
+        feeKobo: 0,
+        references: { customerReference: ref },
+        source: 'send',
+      });
+      expect(made.created).toBe(true);
+      expect((await entry(made.entryId)).provider).toBe('nuvion');
+      // The same movement seen again folds into its own Nuvion row.
+      const again = await ledger.record({
+        wallet: {
+          kind: 'user',
+          wawuUserId: A.id,
+          accountNumber: A.accountNumber,
+        },
+        direction: 'in',
+        status: 'completed',
+        category: 'transfer',
+        amountKobo: 5_000,
+        feeKobo: 0,
+        references: { customerReference: ref },
+        source: 'send',
+      });
+      expect(again).toMatchObject({ entryId: made.entryId, created: false });
+      await expect(
+        ledger.record({
+          wallet: {
+            kind: 'user',
+            wawuUserId: C.id,
+            accountNumber: C.accountNumber,
+          },
+          direction: 'out',
+          status: 'completed',
+          category: 'transfer',
+          amountKobo: 150_000,
+          feeKobo: 1_000,
+          references: { customerReference: FIN_REF },
+          source: 'send',
+        }),
+      ).rejects.toBeInstanceOf(LedgerProviderConflictError);
+    });
+
     it('ledger consumer: reads no Fintava delivery; a pending one stays pending, untouched', async () => {
       const body = JSON.parse(walletToWallet(`${RUN}x`)) as Record<
         string,
@@ -490,6 +670,24 @@ describe('NUV-01: a rollback leaves the other provider rows alone', () => {
         .catch(() => null);
       expect(get.mock.calls).toEqual([[{ walletId: A.walletId }]]);
       expect(double.seen).toEqual([]);
+    });
+  });
+
+  describe('which provider a row is, null included (the column default)', () => {
+    it('null is Fintava, never another provider; anything else unknown is no provider', () => {
+      expect(DEFAULT_ROW_PROVIDER).toBe('fintava');
+      expect(rowProvider(null)).toBe('fintava');
+      expect(rowProvider(undefined)).toBe('fintava');
+      expect(rowProvider(' NUVION ')).toBe('nuvion');
+      expect(rowProvider('flutterwave')).toBe('other');
+      expect(isRowOf('fintava', null)).toBe(true);
+      expect(isRowOf('nuvion', null)).toBe(false);
+      expect(isRowOf('nuvion', 'nuvion')).toBe(true);
+      expect(isRowOf('fintava', 'nuvion')).toBe(false);
+      expect(rowsOf('fintava')).toEqual({
+        OR: [{ provider: 'fintava' }, { provider: null }],
+      });
+      expect(rowsOf('nuvion')).toEqual({ OR: [{ provider: 'nuvion' }] });
     });
   });
 

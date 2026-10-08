@@ -6,7 +6,6 @@ import type {
   NuvionDelivery,
   NuvionHandlerResult,
 } from '../handlers/nuvion-handler.interface';
-import type { NuvionWebhookEventName } from '../nuvion.interface';
 
 /** What one pass over one stored delivery did. */
 export type NuvionDispatchOutcome =
@@ -128,7 +127,7 @@ export class NuvionWebhookDispatcher {
     const delivery: NuvionDelivery = {
       id: row.id,
       eventId: row.eventId,
-      event: row.event as NuvionWebhookEventName,
+      event: row.event,
       resourceId: row.resourceId,
       entityId: row.entityId,
       data: payload && typeof payload === 'object' ? payload.data : undefined,

@@ -21,6 +21,7 @@ export interface OutboundGuard {
 }
 
 type ConnectArgs = unknown[];
+type Connect = (this: Socket, ...args: ConnectArgs) => Socket;
 
 function target(args: ConnectArgs): { host: string; port: string } | null {
   const [first, second] = args;
@@ -30,10 +31,16 @@ function target(args: ConnectArgs): { host: string; port: string } | null {
     if (typeof o.path === 'string') return null; // a local IPC socket
     return {
       host: typeof o.host === 'string' ? o.host : 'localhost',
-      port: String(o.port ?? ''),
+      port:
+        typeof o.port === 'number' || typeof o.port === 'string'
+          ? String(o.port)
+          : '',
     };
   }
-  if (typeof first === 'number' || (typeof first === 'string' && /^\d+$/.test(first))) {
+  if (
+    typeof first === 'number' ||
+    (typeof first === 'string' && /^\d+$/.test(first))
+  ) {
     return {
       host: typeof second === 'string' ? second : 'localhost',
       port: String(first),
@@ -45,8 +52,10 @@ function target(args: ConnectArgs): { host: string; port: string } | null {
 
 export function guardOutbound(): OutboundGuard {
   const violations: string[] = [];
-  const original = Socket.prototype.connect;
-  Socket.prototype.connect = function (this: Socket, ...args: ConnectArgs) {
+  // A typed view of the prototype: `connect` is swapped and put back whole.
+  const proto = Socket.prototype as unknown as { connect: Connect };
+  const original = proto.connect;
+  proto.connect = function (this: Socket, ...args: ConnectArgs) {
     const t = target(args);
     if (t && !LOOPBACK.has(t.host.replace(/^\[|\]$/g, '').toLowerCase())) {
       violations.push(`${t.host}:${t.port}`);
@@ -55,12 +64,12 @@ export function guardOutbound(): OutboundGuard {
       );
       return this;
     }
-    return (original as (...a: ConnectArgs) => Socket).apply(this, args);
-  } as typeof Socket.prototype.connect;
+    return original.apply(this, args);
+  };
   return {
     violations,
     restore: () => {
-      Socket.prototype.connect = original;
+      proto.connect = original;
     },
   };
 }

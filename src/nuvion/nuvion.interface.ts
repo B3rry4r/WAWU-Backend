@@ -47,7 +47,9 @@ export interface NuvionListQuery {
 /**
  * The events Nuvion documents (webhooks__overview.md, "Event types";
  * api-reference__webhooks.md, `enabled_events`). A delivery naming any
- * other event is stored, but `unrecognised`.
+ * other well-formed event is stored `pending` all the same, and handed to
+ * a handler once one lists it (lead ruling 6): nothing Nuvion sends is
+ * dropped because its docs had not named it yet.
  */
 export const NUVION_WEBHOOK_EVENTS = [
   'entities.created',

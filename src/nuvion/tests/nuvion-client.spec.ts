@@ -10,13 +10,16 @@ import {
   guardOutbound,
   type OutboundGuard,
 } from '../../../test/nuvion/outbound-guard';
+import { MoneyError } from '../../money/money-error';
 import { WalletProviderError } from '../../wallet-provider/wallet-provider-error';
-import { NuvionClient, type NuvionOp } from '../nuvion-client';
+import { WalletProviderLimitError } from '../../wallet-provider/wallet-provider-limit';
+import { NuvionClient, type NuvionOp, unsafeSegment } from '../nuvion-client';
 import { NUVION_API_VERSION } from '../nuvion-config';
 import {
   NUVION_ERROR_TYPE_KINDS,
   NUVION_LIMIT_ERROR_TYPES,
   NuvionError,
+  type NuvionTrace,
 } from '../nuvion-error';
 
 /**
@@ -52,9 +55,13 @@ const WRITE: NuvionOp = { name: 'make thing', call: 'write' };
  * - a reference or idempotency key already used is `duplicate_reference`;
  * - credentials, permissions and versions are `auth`; 429 `rate_limited`;
  * - field and format refusals `validation`; KYC refusals `identity_refused`;
+ * - an application under review (compliance review, due diligence)
+ *   `under_review`: wait, never "your details failed" (lead ruling 4);
  * - a frozen, closed or inactive account `wallet_inactive`;
  * - not enough money `insufficient_funds`; a missing record `not_found`;
- * - a cut-off or business-hours refusal `payouts_blocked`;
+ * - a business-hours refusal `payouts_blocked`; the same-day cutoff, after
+ *   which the transfer still goes next business day, `outcome_unknown`
+ *   (verifier defect 2);
  * - anything else that says no: `refused`.
  */
 const TABLE: ReadonlyArray<[string, number, string]> = [
@@ -111,7 +118,7 @@ const TABLE: ReadonlyArray<[string, number, string]> = [
   ['error_entity_person_document_link_mismatch', 422, 'validation'],
   ['error_entity_user_has_no_access', 403, 'auth'],
   ['error_entity_user_already_has_access', 409, 'refused'],
-  ['error_entity_status_due_diligence_required', 422, 'identity_refused'],
+  ['error_entity_status_due_diligence_required', 422, 'under_review'],
   ['error_entity_status_not_incomplete', 400, 'refused'],
   ['error_kyc_identity_verification_failed', 422, 'identity_refused'],
   ['error_kyc_document_expired', 422, 'identity_refused'],
@@ -119,9 +126,9 @@ const TABLE: ReadonlyArray<[string, number, string]> = [
   ['error_kyc_document_type_not_accepted', 422, 'identity_refused'],
   ['error_kyc_documents_incomplete', 422, 'identity_refused'],
   ['error_kyc_application_rejected', 422, 'identity_refused'],
-  ['error_kyc_under_compliance_review', 422, 'identity_refused'],
+  ['error_kyc_under_compliance_review', 422, 'under_review'],
   ['error_kyc_sanctions_check_failed', 422, 'identity_refused'],
-  ['error_kyc_enhanced_due_diligence_required', 422, 'identity_refused'],
+  ['error_kyc_enhanced_due_diligence_required', 422, 'under_review'],
   ['error_kyb_business_verification_failed', 422, 'refused'],
   ['error_kyb_tax_id_invalid', 422, 'refused'],
   ['error_kyb_incorporation_documents_missing', 422, 'refused'],
@@ -148,7 +155,7 @@ const TABLE: ReadonlyArray<[string, number, string]> = [
   ['error_transfer_monthly_volume_exceeded', 400, 'refused'],
   ['error_transfer_account_not_active', 400, 'wallet_inactive'],
   ['error_transfer_counterparty_not_approved', 400, 'refused'],
-  ['error_transfer_same_day_cutoff_passed', 400, 'payouts_blocked'],
+  ['error_transfer_same_day_cutoff_passed', 400, 'outcome_unknown'],
   ['error_transfer_outside_business_hours', 400, 'payouts_blocked'],
   ['error_transfer_compliance_rejected', 422, 'refused'],
   ['error_transfer_recipient_flagged', 403, 'refused'],
@@ -211,6 +218,21 @@ const TABLE: ReadonlyArray<[string, number, string]> = [
   ['error_system_timeout', 504, 'outcome_unknown'],
   ['error_system_dependency_unavailable', 503, 'outcome_unknown'],
   ['error_system_maintenance', 503, 'outcome_unknown'],
+];
+
+/**
+ * The types whose words say the record is there at Nuvion (errors.md): a
+ * record may exist although the call failed, whatever the kind (verifier
+ * defect 3, lead ruling 4). Written out here, not read from the client.
+ */
+const SAYS_THE_RECORD_IS_THERE = [
+  'error_account_already_exists',
+  'error_account_already_verified',
+  'error_counterparty_already_exists',
+  'error_wallet_already_exists',
+  'error_kyc_under_compliance_review',
+  'error_kyc_enhanced_due_diligence_required',
+  'error_entity_status_due_diligence_required',
 ];
 
 describe('NUV-01: the Nuvion client against the stand-in', () => {
@@ -371,6 +393,28 @@ describe('NUV-01: the Nuvion client against the stand-in', () => {
       const e2 = await failure(client.listAll(READ, '/accounts'));
       expect(e2.kind).toBe('bad_response');
       expect(standin.seen).toHaveLength(2);
+      // A loop through another page (A, B, A) is caught by the cursors
+      // already followed, before the third request.
+      standin.reset();
+      standin.next(page('A')).next(page('B')).next(page('A'));
+      const e3 = await failure(client.listAll(READ, '/accounts'));
+      expect(e3.kind).toBe('bad_response');
+      expect(standin.seen.map((r) => r.query.cursor ?? null)).toEqual([
+        null,
+        'A',
+        'B',
+      ]);
+    });
+
+    it('limit runs 1 to 100: 100 is sent as it is, 0 and 101 are refused before sending', async () => {
+      await client.listPage(READ, '/accounts', { limit: 100 });
+      expect(standin.seen.map((r) => r.query.limit)).toEqual(['100']);
+      for (const limit of [0, 101, 2.5]) {
+        await expect(
+          client.listPage(READ, '/accounts', { limit }),
+        ).rejects.toThrow(RangeError);
+      }
+      expect(standin.seen).toHaveLength(1);
     });
 
     it('a 2xx that is not a list page is bad_response', async () => {
@@ -398,9 +442,8 @@ describe('NUV-01: the Nuvion client against the stand-in', () => {
     });
 
     // The three limit refusals have their own mapping point (G-411, NUV-07):
-    // checked below, and in this table only for what holds either way.
-    const isLimit = (t: string) =>
-      (NUVION_LIMIT_ERROR_TYPES as readonly string[]).includes(t);
+    // checked below, not in this table.
+    const isLimit = (t: string) => NUVION_LIMIT_ERROR_TYPES.includes(t);
 
     it.each(TABLE.filter(([t]) => !isLimit(t)))(
       '%s (HTTP %i) on a write is %s',
@@ -421,34 +464,164 @@ describe('NUV-01: the Nuvion client against the stand-in', () => {
         expect(e.message).toContain(`request ${e.requestId}`);
         expect(e.reference).toBe('nuv01-t');
         expect(e.provider).toBe('nuvion');
-        // Money may have moved exactly when the kind says so.
+        // Money may have moved, or a record exists, exactly when the kind
+        // or the type's own words say so.
         expect(e.recordMayExist).toBe(
           ['outcome_unknown', 'not_confirmed', 'duplicate_reference'].includes(
             kind,
-          ),
+          ) || SAYS_THE_RECORD_IS_THERE.includes(type),
         );
       },
     );
 
-    it.each(TABLE.filter(([t]) => isLimit(t)))(
-      '%s (HTTP %i), a limit, goes through the one mapping point (G-411): %s, nothing moved',
-      async (type, status, kind) => {
+    it.each([
+      ['error_transfer_transaction_limit_exceeded', 'per_transaction'],
+      ['error_transfer_daily_limit_exceeded', 'daily'],
+      ['error_transfer_monthly_volume_exceeded', 'monthly'],
+    ])(
+      '%s, a limit below 500, is NUV-07 limit refusal (G-411): 403 limit_reached %s, nothing moved, Nuvion request id kept',
+      async (type, limit) => {
         expect(NUVION_LIMIT_ERROR_TYPES).toHaveLength(3);
-        standin.failNext(type);
+        const status = TABLE.find(([t]) => t === type)![1];
+        expect(status).toBeLessThan(500);
+        standin.failNext(type, `Refused: ${type}`);
         let e: unknown = null;
         try {
           await client.post(WRITE, '/transfers', {}, { reference: 'nuv01-l' });
         } catch (err) {
           e = err;
         }
+        expect(e).toBeInstanceOf(WalletProviderLimitError);
         expect(e).toBeInstanceOf(WalletProviderError);
-        expect(e).toMatchObject({
-          kind,
+        const l = e as WalletProviderLimitError & NuvionTrace;
+        expect(l).toMatchObject({
+          kind: 'refused',
+          limit,
           httpStatus: status,
           provider: 'nuvion',
           reference: 'nuv01-l',
           recordMayExist: false,
+          nuvionType: type,
         });
+        expect(l.requestId).toMatch(/^01REQ[0-9A-F]+$/);
+        expect(l.message).toContain(`request ${l.requestId}`);
+        const http = l.toHttpException();
+        expect(http).toBeInstanceOf(MoneyError);
+        expect(http.getStatus()).toBe(403);
+        expect(http.getResponse()).toMatchObject({
+          reason: { code: 'limit_reached', limit },
+        });
+      },
+    );
+
+    it.each(NUVION_LIMIT_ERROR_TYPES.map((t) => [t]))(
+      '%s carried by a 5xx is never a limit refusal: outcome_unknown on a write, unavailable on a read (lead ruling 9)',
+      async (type) => {
+        for (const status of [500, 503]) {
+          standin.statusNext(status, errorBody(type));
+          const w = await failure(
+            client.post(WRITE, '/transfers', {}, { reference: 'nuv01-l5' }),
+          );
+          expect(w).not.toBeInstanceOf(WalletProviderLimitError);
+          expect(w).toMatchObject({
+            kind: 'outcome_unknown',
+            recordMayExist: true,
+            httpStatus: status,
+            nuvionType: type,
+          });
+          expect(w.requestId).toMatch(/^01REQ[0-9A-F]+$/);
+          standin.statusNext(status, errorBody(type));
+          const r = await failure(client.get(READ, '/bank-codes/NG'));
+          expect(r).not.toBeInstanceOf(WalletProviderLimitError);
+          expect(r.kind).toBe('unavailable');
+        }
+      },
+    );
+
+    it.each([
+      'error_transfer_insufficient_funds',
+      'error_transfer_compliance_rejected',
+      'error_validation_amount_invalid',
+      'error_account_suspended',
+      'error_resource_not_found',
+      'error_transfer_outside_business_hours',
+    ])(
+      'a write answered 500 or 503 carrying %s is never a refusal: outcome_unknown, money may have moved',
+      async (type) => {
+        for (const status of [500, 503]) {
+          standin.statusNext(status, errorBody(type));
+          const w = await failure(
+            client.post(WRITE, '/transfers', {}, { reference: 'nuv01-r5' }),
+          );
+          expect([w.kind, w.recordMayExist, w.nuvionType]).toEqual([
+            'outcome_unknown',
+            true,
+            type,
+          ]);
+        }
+      },
+    );
+
+    it('the same-day cutoff is a transfer that still goes: never answered as "nothing moved" (defect 2)', async () => {
+      standin.failNext('error_transfer_same_day_cutoff_passed');
+      const e = await failure(
+        client.post(WRITE, '/transfers', {}, { reference: 'nuv01-cut' }),
+      );
+      expect([e.kind, e.recordMayExist, e.httpStatus]).toEqual([
+        'outcome_unknown',
+        true,
+        400,
+      ]);
+      expect(e.toHttpException().getResponse()).toMatchObject({
+        reason: {
+          code: 'provider_unreachable',
+          message:
+            'We are still confirming this payment. Check your history before you try again.',
+        },
+      });
+    });
+
+    it.each([
+      'error_account_already_exists',
+      'error_account_already_verified',
+      'error_counterparty_already_exists',
+      'error_wallet_already_exists',
+    ])(
+      '%s (409) says the record is there: recordMayExist, on a write and a read (defect 3)',
+      async (type) => {
+        standin.failNext(type);
+        const w = await failure(client.post(WRITE, '/accounts', {}));
+        expect([w.kind, w.recordMayExist, w.httpStatus]).toEqual([
+          'refused',
+          true,
+          409,
+        ]);
+        standin.failNext(type);
+        const r = await failure(client.get(READ, '/accounts'));
+        expect(r.recordMayExist).toBe(true);
+      },
+    );
+
+    it.each([
+      'error_kyc_under_compliance_review',
+      'error_kyc_enhanced_due_diligence_required',
+      'error_entity_status_due_diligence_required',
+    ])(
+      '%s is under_review, never identity_refused: the app hears "being reviewed" (ruling 4)',
+      async (type) => {
+        const CHECK: NuvionOp = { name: 'check person', call: 'check' };
+        standin.failNext(type);
+        const e = await failure(client.post(CHECK, '/entities', {}));
+        expect([e.kind, e.recordMayExist, e.httpStatus]).toEqual([
+          'under_review',
+          true,
+          422,
+        ]);
+        const http = e.toHttpException();
+        expect(http.getStatus()).toBe(409);
+        expect(http.message).toBe(
+          'Your details are being reviewed. We will let you know when the review is done.',
+        );
       },
     );
 
@@ -671,6 +844,42 @@ describe('NUV-01: the Nuvion client against the stand-in', () => {
         await expect(client.get(READ, p)).rejects.toThrow(RangeError);
       }
       expect(standin.seen).toHaveLength(0);
+    });
+
+    it('encoded traversal is refused too: %2e%2e in any case, mixed, double-encoded, an encoded slash (ruling 7)', async () => {
+      for (const p of [
+        '/accounts/%2e%2e/admin',
+        '/accounts/%2E%2E/admin',
+        '/accounts/%2e%2E/admin',
+        '/accounts/.%2e/admin',
+        '/accounts/%2e./admin',
+        '/accounts/%2e',
+        '/accounts/%252e%252e/admin',
+        '/accounts/%25252E%25252e/admin',
+        '/accounts/%2f..%2fadmin',
+        '/accounts/x%2Fy',
+        '/accounts/%5c..',
+        '/accounts/%',
+        '/accounts/%zz',
+        // Encoded six times over: past the depth the guard reads through.
+        '/accounts/%25252525252e%25252525252e',
+      ]) {
+        await expect(client.get(READ, p)).rejects.toThrow(RangeError);
+      }
+      expect(standin.seen).toHaveLength(0);
+      // An id that only looks encoded, or decodes to plain text, is a path.
+      for (const segment of [
+        'acc_1',
+        '01HXYZ',
+        'a%20b',
+        '%41%42',
+        'a.b',
+        '...',
+      ]) {
+        expect(unsafeSegment(segment)).toBe(false);
+      }
+      await client.get(READ, `/accounts/${standin.accounts[0].id}`);
+      expect(standin.seen).toHaveLength(1);
     });
   });
 

@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import type { Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { isRowOf, rowsOf } from '../../wallet-provider/provider-rows';
+import { rowsOf } from '../../wallet-provider/provider-rows';
 import {
   type LedgerParty,
   type LedgerWebhookMovement,
@@ -440,11 +440,8 @@ export class LedgerConsumerService {
     };
     let refs = r.references;
     const named = await this.ledger.debitsFor(refs);
-    if (await this.anyOtherProvider(named)) {
-      return this.finish(eventId, () => ({
-        status: 'failed',
-        note: `ledger: the reversal names a debit recorded by another provider than ${this.provider.label}; nothing was changed (review)`,
-      }));
+    if ((await this.ledger.foreignDebitsFor(refs)).length > 0) {
+      return this.foreignReversal(eventId);
     }
     if (named.length === 0) {
       // The debit may be held under references the delivery does not carry:
@@ -469,14 +466,11 @@ export class LedgerConsumerService {
         );
       }
     }
-    if (refs !== r.references) {
-      const more = await this.ledger.debitsFor(refs);
-      if (await this.anyOtherProvider(more)) {
-        return this.finish(eventId, () => ({
-          status: 'failed',
-          note: `ledger: the reversal names a debit recorded by another provider than ${this.provider.label}; nothing was changed (review)`,
-        }));
-      }
+    if (
+      refs !== r.references &&
+      (await this.ledger.foreignDebitsFor(refs)).length > 0
+    ) {
+      return this.foreignReversal(eventId);
     }
     return this.finish(
       eventId,
@@ -588,16 +582,12 @@ export class LedgerConsumerService {
     return this.provider.name === STORED_DELIVERIES_PROVIDER;
   }
 
-  /** True when any of these ledger rows was recorded by another provider. */
-  private async anyOtherProvider(
-    entryIds: readonly string[],
-  ): Promise<boolean> {
-    if (entryIds.length === 0) return false;
-    const rows = await this.prisma.fintavaLedgerEntry.findMany({
-      where: { id: { in: [...entryIds] } },
-      select: { provider: true },
-    });
-    return rows.some((row) => !isRowOf(this.provider.name, row.provider));
+  /** A reversal naming a debit another provider recorded: a stop, for review. */
+  private foreignReversal(eventId: string): Promise<LedgerConsumeOutcome> {
+    return this.finish(eventId, () => ({
+      status: 'failed',
+      note: `ledger: the reversal names a debit recorded by another provider than ${this.provider.label}; nothing was changed (review)`,
+    }));
   }
 
   /** Leaves the delivery pending, saying why. */

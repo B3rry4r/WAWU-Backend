@@ -1,5 +1,3 @@
-import type { NuvionWebhookEventName } from '../nuvion.interface';
-
 /**
  * One stored Nuvion delivery as a handler sees it (task NUV-01). `data` is
  * the body's `data` exactly as stored (NUL characters replaced); a handler
@@ -11,7 +9,11 @@ export interface NuvionDelivery {
   id: string;
   /** `x-nuvion-event-id`. */
   eventId: string;
-  event: NuvionWebhookEventName;
+  /**
+   * The event's name, lower case: one of NUVION_WEBHOOK_EVENTS, or one
+   * Nuvion sends without documenting it (stored `pending` all the same).
+   */
+  event: string;
   resourceId: string | null;
   entityId: string | null;
   data: unknown;
@@ -43,7 +45,12 @@ export type NuvionHandlerResult =
 export interface NuvionEventHandler {
   /** The task that owns it, for notes and logs. */
   readonly task: string;
-  /** The events it handles. Several handlers may share an event. */
-  readonly events: readonly NuvionWebhookEventName[];
+  /**
+   * The events it handles, by name as stored (lower case). Several handlers
+   * may share an event. Documented names are NUVION_WEBHOOK_EVENTS; a name
+   * Nuvion sends undocumented may be listed too, and its rows already
+   * stored are handed over on the next sweep.
+   */
+  readonly events: readonly string[];
   handle(delivery: NuvionDelivery): Promise<NuvionHandlerResult>;
 }

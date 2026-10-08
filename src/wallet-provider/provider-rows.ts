@@ -35,9 +35,9 @@ export function isRowOf(
  * null (rows from before the column). Combine with `AND`, never by
  * spreading into a `where` that has its own `OR`.
  */
-export function rowsOf(
-  running: WalletProviderName,
-): { OR: Array<{ provider: string | null }> } {
+export function rowsOf(running: WalletProviderName): {
+  OR: Array<{ provider: string | null }>;
+} {
   return running === DEFAULT_ROW_PROVIDER
     ? { OR: [{ provider: running }, { provider: null }] }
     : { OR: [{ provider: running }] };

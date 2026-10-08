@@ -72,9 +72,17 @@ export function documentedStatus(type: string): number {
 
 /** The Nigerian bank list example (api-reference__bank-codes.md, "NG"). */
 export const NG_BANK_CODES = [
-  { bank_code: '120001', bank_name: '9 Payment Service Bank', swift_bic: 'IPSBNGLA' },
+  {
+    bank_code: '120001',
+    bank_name: '9 Payment Service Bank',
+    swift_bic: 'IPSBNGLA',
+  },
   { bank_code: '090270', bank_name: 'AB Microfinance Bank', swift_bic: null },
-  { bank_code: '090260', bank_name: 'Above Only Microfinance Bank', swift_bic: null },
+  {
+    bank_code: '090260',
+    bank_name: 'Above Only Microfinance Bank',
+    swift_bic: null,
+  },
 ];
 
 /** One account as pagination.md's example lists it, with its own id. */
@@ -101,8 +109,11 @@ export function exampleId(prefix: string, n: number): string {
 
 export class NuvionStandin {
   readonly seen: StandinRequest[] = [];
-  private routes: Array<{ method: string; path: string | RegExp; handler: Handler }> =
-    [];
+  private routes: Array<{
+    method: string;
+    path: string | RegExp;
+    handler: Handler;
+  }> = [];
   private queued: Handler[] = [];
   private server: Server | null = null;
   private port = 0;
@@ -132,7 +143,11 @@ export class NuvionStandin {
   }
 
   /** Answer `method path` (exact, or a pattern). Later wins. */
-  on(method: string, path: string | RegExp, answer: StandinAnswer | Handler): this {
+  on(
+    method: string,
+    path: string | RegExp,
+    answer: StandinAnswer | Handler,
+  ): this {
     const handler = typeof answer === 'function' ? answer : () => answer;
     this.routes.unshift({ method, path, handler });
     return this;
@@ -163,7 +178,11 @@ export class NuvionStandin {
     });
   }
 
-  statusNext(status: number, body?: unknown, contentType?: string | null): this {
+  statusNext(
+    status: number,
+    body?: unknown,
+    contentType?: string | null,
+  ): this {
     return this.next({ status, body, contentType });
   }
 
@@ -199,7 +218,8 @@ export class NuvionStandin {
         this.seen.push(seen);
         const handler = this.queued.shift();
         const answer = handler ? handler(seen) : this.route(seen);
-        const requestId = `01REQ${randomBytes(8).toString('hex').toUpperCase()}`.slice(0, 26);
+        const requestId =
+          `01REQ${randomBytes(8).toString('hex').toUpperCase()}`.slice(0, 26);
         const send = () => {
           if (answer.hangUp) {
             req.socket.destroy();
@@ -212,11 +232,14 @@ export class NuvionStandin {
                 ? ''
                 : JSON.stringify(answer.body);
           const type =
-            answer.contentType === undefined ? 'application/json' : answer.contentType;
+            answer.contentType === undefined
+              ? 'application/json'
+              : answer.contentType;
           res.statusCode = answer.status;
           if (type !== null) res.setHeader('Content-Type', type);
           res.setHeader('X-Request-ID', requestId);
-          for (const [k, v] of Object.entries(answer.headers ?? {})) res.setHeader(k, v);
+          for (const [k, v] of Object.entries(answer.headers ?? {}))
+            res.setHeader(k, v);
           if (answer.bodyDelayMs) {
             res.flushHeaders();
             setTimeout(() => res.end(text), answer.bodyDelayMs).unref();
@@ -265,12 +288,17 @@ export class NuvionStandin {
     const hit = this.routes.find(
       (r) =>
         r.method === req.method &&
-        (typeof r.path === 'string' ? r.path === req.path : r.path.test(req.path)),
+        (typeof r.path === 'string'
+          ? r.path === req.path
+          : r.path.test(req.path)),
     );
     if (!hit) {
       return {
         status: 404,
-        body: errorBody('error_endpoint_not_found', 'API endpoint does not exist'),
+        body: errorBody(
+          'error_endpoint_not_found',
+          'API endpoint does not exist',
+        ),
       };
     }
     return hit.handler(req);
@@ -319,8 +347,17 @@ export class NuvionStandin {
       const id = req.path.split('/')[2];
       const account = this.accounts.find((a) => a.id === id);
       return account
-        ? { status: 200, body: envelope(account, 'Account retrieved successfully') }
-        : { status: 404, body: errorBody('error_resource_not_found', 'Resource does not exist') };
+        ? {
+            status: 200,
+            body: envelope(account, 'Account retrieved successfully'),
+          }
+        : {
+            status: 404,
+            body: errorBody(
+              'error_resource_not_found',
+              'Resource does not exist',
+            ),
+          };
     });
     // A transfer accepted for processing (api-reference__transfers.md).
     this.on('POST', '/transfers', (req) => {

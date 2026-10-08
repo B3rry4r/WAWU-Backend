@@ -76,14 +76,19 @@ export const NUVION_DEFAULTS = {
 export const NUVION_RESEND_SAFETY_MS = 10 * 60_000;
 
 /**
- * PROVISIONAL(NUVION-WEBHOOK-WINDOW, owner=YOU, why=Nuvion's docs state no replay window for signed deliveries; five minutes either side of our clock)
+ * PROVISIONAL(NUVION-WEBHOOK-WINDOW, owner=YOU, why=Nuvion's docs state no replay window; its 15-minute retry span plus 5 minutes until the sandbox log shows whether a retry is signed anew)
  *
  * A delivery whose `x-nuvion-event-timestamp` is further than this from our
- * clock, before or after, is refused (401) and not stored: a captured
- * delivery cannot be replayed later. Nuvion retries a refused delivery for
- * up to 15 minutes with fresh attempts.
+ * clock, before or after, is refused (401) and not stored. Nuvion retries a
+ * delivery for up to 15 minutes (webhooks__overview.md) and its docs do not
+ * say whether a retry carries the first attempt's timestamp, so the window
+ * is that retry span plus 5 minutes of clock drift (lead ruling 5): a retry
+ * after an outage or a deploy is never refused for its age. A wider window
+ * costs no replay safety for anything stored: the event id and the signed
+ * (timestamp, body) pair are unique for good, so a replay of a stored
+ * delivery is one row however late it comes.
  */
-export const NUVION_WEBHOOK_WINDOW_MS = 5 * 60_000;
+export const NUVION_WEBHOOK_WINDOW_MS = 20 * 60_000;
 
 /** Everything the client needs except the key, which is kept apart. */
 export interface NuvionSettings {

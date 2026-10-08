@@ -40,9 +40,15 @@ export class NuvionWebhookStore {
     body: unknown;
   }): Promise<NuvionWebhookAck> {
     const delivery = readNuvionDelivery(input.body);
-    // Only a documented name reaches a log line.
+    // Only a documented or well-formed name reaches a log line.
     const label =
-      delivery.status === 'unrecognised' ? 'unrecognised event' : delivery.event;
+      delivery.status === 'unrecognised'
+        ? 'unrecognised event'
+        : delivery.documented
+          ? delivery.event
+          : delivery.status === 'test'
+            ? 'test of an undocumented event'
+            : `undocumented event ${delivery.event}`;
     let written: number;
     try {
       const result = await this.prisma.nuvionWebhookEvent.createMany({
@@ -53,7 +59,9 @@ export class NuvionWebhookStore {
             resourceId: delivery.resourceId,
             entityId: delivery.entityId,
             signedAt: input.signedAt.slice(0, 64),
-            bodySha256: createHash('sha256').update(input.rawBody).digest('hex'),
+            bodySha256: createHash('sha256')
+              .update(input.rawBody)
+              .digest('hex'),
             rawBody: new Uint8Array(input.rawBody),
             payload:
               input.body === null || input.body === undefined
