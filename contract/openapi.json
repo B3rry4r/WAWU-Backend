@@ -20777,9 +20777,9 @@
             "name": "cursor",
             "required": false,
             "in": "query",
-            "description": "The `nextCursor` of the previous page: a school id.",
+            "description": "The `nextCursor` of the previous page: opaque, not to be built by hand.",
             "schema": {
-              "format": "uuid",
+              "maxLength": 1000,
               "type": "string"
             }
           }
