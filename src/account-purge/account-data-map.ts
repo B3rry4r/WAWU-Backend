@@ -281,6 +281,19 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // with them, and each code then opens the plain "not found" page.
   { model: 'MoneyReceipt', column: 'wawuUserId', disposition: 'OWNED' },
 
+  // ── points (POINTS-01) ──────────────────────────────────────────────────
+  // This person's points: the ledger of every change, the holds that spent
+  // them and the lots they were held in. All of it is theirs and goes with
+  // them, ledger first (it references the other two). The ledger is
+  // append-only: AccountPurgeService deletes these three in one transaction
+  // under the person's points lock (`purgePersonPoints`), the only delete
+  // the ledger's trigger accepts, and its table loop skips them. Default
+  // (agent), owner may override: unspent points are not paid out when an
+  // account is deleted.
+  { model: 'PointLedger', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'PointHold', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'PointLot', column: 'wawuUserId', disposition: 'OWNED' },
+
   // The city on this person's professional card (PROS-02). Theirs, and
   // public only beside a listing that goes with them.
   {

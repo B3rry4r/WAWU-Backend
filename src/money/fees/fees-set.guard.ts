@@ -30,8 +30,11 @@ export class FeesSetGuard implements CanActivate {
  * other guard on the method: before the wallet gate, the Idempotency-Key
  * record and the PIN (`@RequireTransactionPin()` and `@RequireApproval()`
  * bring the gate and the PIN check together). While fees are not set no PIN
- * try is used and nothing is stored. src/money/limits/tests/
- * money-moving-coverage.spec.ts holds every mounted route to it.
+ * try is used and nothing is stored. Class guards run before every method
+ * guard, so the wallet gate and the PIN guard never go on the controller:
+ * only `WawuAuthGuard` does. src/money/limits/tests/
+ * money-moving-coverage.spec.ts holds every mounted route to it, class
+ * guards included (task FIX-21).
  */
 export function RequireFeesSet(): MethodDecorator {
   return applyDecorators(UseGuards(FeesSetGuard));

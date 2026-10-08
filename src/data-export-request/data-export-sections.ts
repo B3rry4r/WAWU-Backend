@@ -815,6 +815,63 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    // POINTS-01: the person's points lots (what they were given, what is
+    // left, when each ends), the holds that spent them and every movement.
+    // Counts of points only; no provider reference (a lot's or hold's
+    // reference is the granting task's own id, not a payment provider's).
+    key: 'pointLots',
+    models: ['PointLot'],
+    load: (prisma, me) =>
+      prisma.pointLot.findMany({
+        where: { wawuUserId: me },
+        select: {
+          id: true,
+          source: true,
+          quantity: true,
+          remaining: true,
+          expiresAt: true,
+          lapsedAt: true,
+          createdAt: true,
+        },
+        orderBy: NEWEST,
+      }),
+  },
+  {
+    key: 'pointHolds',
+    models: ['PointHold'],
+    load: (prisma, me) =>
+      prisma.pointHold.findMany({
+        where: { wawuUserId: me },
+        select: {
+          id: true,
+          purpose: true,
+          title: true,
+          quantity: true,
+          state: true,
+          createdAt: true,
+          settledAt: true,
+        },
+        orderBy: NEWEST,
+      }),
+  },
+  {
+    key: 'pointMovements',
+    models: ['PointLedger'],
+    load: (prisma, me) =>
+      prisma.pointLedger.findMany({
+        where: { wawuUserId: me },
+        select: {
+          id: true,
+          lotId: true,
+          holdId: true,
+          delta: true,
+          reason: true,
+          at: true,
+        },
+        orderBy: { seq: 'desc' },
+      }),
+  },
+  {
     key: 'exportRequests',
     models: ['DataExportRequest'],
     load: (prisma, me) =>

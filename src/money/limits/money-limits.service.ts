@@ -11,6 +11,7 @@ import { unsetFeeSettings } from '../fees/provider-fee-schedule';
 import { lagosDayStart, lagosMonthStart } from './lagos-window';
 import { limitReached } from './limit-reached';
 import { type MoneyLimitKind, MoneyLimitSettings } from './money-limit-config';
+import { assertReadCommitted } from './read-committed';
 
 /** One movement about to be sent to the provider. */
 export interface MovementInput {
@@ -75,8 +76,13 @@ const KIND_WHERE: Record<MoneyLimitKind, Prisma.FintavaLedgerEntryWhereInput> =
  * Concurrency: called with the transaction in which the caller writes the
  * movement's pending ledger row, it first takes a per-person lock for that
  * transaction, so two movements by one person are checked one after the
- * other and the second sees the first. Called without one it reads, and two
- * movements at the same instant could each pass.
+ * other and the second sees the first. That holds only at READ COMMITTED
+ * (Prisma's default), so given a transaction it first reads that
+ * transaction's isolation level and refuses any other with an
+ * IsolationLevelError naming it (task FIX-21, `read-committed.ts`): a
+ * programming error, before anything is locked, read or written. Called
+ * without one it reads, and two movements at the same instant could each
+ * pass.
  *
  * The provider's own limit refusals answer the same `limit_reached`
  * (`WalletProviderLimitError.toHttpException()`,
@@ -111,11 +117,17 @@ export class MoneyLimits {
     await this.assertWithinLimits(input, opts);
   }
 
-  /** The limits alone: per transaction, then today, then this month. */
+  /**
+   * The limits alone: per transaction, then today, then this month. Given
+   * the caller's transaction, its isolation level is checked first, whatever
+   * limits are set, so a caller at the wrong level fails in its own specs
+   * and not only where a daily or monthly limit happens to be set.
+   */
   async assertWithinLimits(
     input: MovementInput,
     opts: { tx?: Prisma.TransactionClient; now?: Date } = {},
   ): Promise<void> {
+    if (opts.tx) await assertReadCommitted(opts.tx);
     const amount = this.amountOf(input);
     const { kind } = input;
     const perTransaction = this.settings.limitOf(kind, 'per_transaction');
