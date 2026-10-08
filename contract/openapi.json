@@ -6657,6 +6657,37 @@
         ]
       }
     },
+    "/api/hub/admin/professionals/{id}/visibility": {
+      "get": {
+        "operationId": "AdminProfessionalReviewController_visibility",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminProfessionalVisibilityView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Whether a listing is in the directory, hidden by its owner or taken down\nby an admin, and the latest takedown on record (FIX-06).",
+        "tags": [
+          "AdminProfessionalReview"
+        ]
+      }
+    },
     "/api/hub/admin/professionals/{id}/document-url": {
       "post": {
         "operationId": "AdminProfessionalReviewController_documentUrl",
@@ -6793,7 +6824,41 @@
             }
           }
         },
-        "summary": "Pull an approved listing without erasing that it was approved.",
+        "summary": "Pull an approved listing without erasing that it was approved. It stays\nout until an admin lists it again: the owner's Show is refused (FIX-06).",
+        "tags": [
+          "AdminProfessionalReview"
+        ]
+      }
+    },
+    "/api/hub/admin/professionals/{id}/relist": {
+      "post": {
+        "operationId": "AdminProfessionalReviewController_relist",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminProfessionalDecisionView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused (reason.code listing_not_taken_down): no admin takedown stands on this listing, so its owner shows or hides it."
+          }
+        },
+        "summary": "List again a listing an admin took down (FIX-06). It goes back to what\nits owner had chosen, and the owner hides and shows it as before.",
         "tags": [
           "AdminProfessionalReview"
         ]
@@ -18005,6 +18070,9 @@
                       "format": "date-time",
                       "nullable": true
                     },
+                    "listed": {
+                      "type": "boolean"
+                    },
                     "category": {
                       "type": "string"
                     },
@@ -18052,15 +18120,13 @@
                     "issuingBody": {
                       "type": "string",
                       "nullable": true
-                    },
-                    "listed": {
-                      "type": "boolean"
                     }
                   },
                   "required": [
                     "id",
                     "status",
                     "reviewedAt",
+                    "listed",
                     "category",
                     "documents",
                     "wawuUserId",
@@ -18071,8 +18137,7 @@
                     "services",
                     "credentialKind",
                     "licenceNumber",
-                    "issuingBody",
-                    "listed"
+                    "issuingBody"
                   ]
                 }
               }
@@ -18113,6 +18178,9 @@
                         "type": "string",
                         "format": "date-time",
                         "nullable": true
+                      },
+                      "listed": {
+                        "type": "boolean"
                       },
                       "category": {
                         "type": "string"
@@ -18161,15 +18229,13 @@
                       "issuingBody": {
                         "type": "string",
                         "nullable": true
-                      },
-                      "listed": {
-                        "type": "boolean"
                       }
                     },
                     "required": [
                       "id",
                       "status",
                       "reviewedAt",
+                      "listed",
                       "category",
                       "documents",
                       "wawuUserId",
@@ -18180,8 +18246,7 @@
                       "services",
                       "credentialKind",
                       "licenceNumber",
-                      "issuingBody",
-                      "listed"
+                      "issuingBody"
                     ]
                   }
                 }
@@ -18189,6 +18254,31 @@
             }
           }
         },
+        "tags": [
+          "Professional"
+        ]
+      }
+    },
+    "/api/hub/professionals/applications/mine/visibility": {
+      "get": {
+        "operationId": "ProfessionalController_myVisibility",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProfessionalListingVisibilityView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "Each approved listing of yours and where it stands: listed, hidden by\nyou, or taken down by an admin (FIX-06). P8 reads it beside .../mine.",
         "tags": [
           "Professional"
         ]
@@ -18241,6 +18331,9 @@
                       "format": "date-time",
                       "nullable": true
                     },
+                    "listed": {
+                      "type": "boolean"
+                    },
                     "category": {
                       "type": "string"
                     },
@@ -18288,15 +18381,13 @@
                     "issuingBody": {
                       "type": "string",
                       "nullable": true
-                    },
-                    "listed": {
-                      "type": "boolean"
                     }
                   },
                   "required": [
                     "id",
                     "status",
                     "reviewedAt",
+                    "listed",
                     "category",
                     "documents",
                     "wawuUserId",
@@ -18307,12 +18398,14 @@
                     "services",
                     "credentialKind",
                     "licenceNumber",
-                    "issuingBody",
-                    "listed"
+                    "issuingBody"
                   ]
                 }
               }
             }
+          },
+          "409": {
+            "description": "Refused: the listing is not approved, or (reason.code listing_taken_down, with reason.takenDownAt) an admin took it down and only an admin lists it again (FIX-06). A Hide on a taken-down listing is accepted."
           }
         },
         "tags": [
@@ -34329,6 +34422,116 @@
           "otherCategories"
         ]
       },
+      "AdminProfessionalTakedownRecordView": {
+        "type": "object",
+        "properties": {
+          "standing": {
+            "type": "boolean"
+          },
+          "takenDownAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "takenDownByAdminId": {
+            "type": "string"
+          },
+          "takenDownByAdminEmail": {
+            "type": "string"
+          },
+          "takenDownByAdminRole": {
+            "type": "string",
+            "enum": [
+              "superadmin",
+              "reviewer",
+              "support",
+              "finance"
+            ]
+          },
+          "relistsAs": {
+            "type": "string",
+            "enum": [
+              "listed",
+              "hidden"
+            ]
+          },
+          "liftedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "liftedByAdminId": {
+            "type": "string",
+            "nullable": true
+          },
+          "liftedByAdminEmail": {
+            "type": "string",
+            "nullable": true
+          },
+          "liftedByAdminRole": {
+            "type": "string",
+            "enum": [
+              "superadmin",
+              "reviewer",
+              "support",
+              "finance"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "standing",
+          "takenDownAt",
+          "takenDownByAdminId",
+          "takenDownByAdminEmail",
+          "takenDownByAdminRole",
+          "relistsAs",
+          "liftedAt",
+          "liftedByAdminId",
+          "liftedByAdminEmail",
+          "liftedByAdminRole"
+        ]
+      },
+      "AdminProfessionalVisibilityView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "rejected",
+              "approved"
+            ]
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "listed",
+              "hidden",
+              "taken_down"
+            ],
+            "nullable": true
+          },
+          "takenDownAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "latestTakedown": {
+            "$ref": "#/components/schemas/AdminProfessionalTakedownRecordView",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "visibility",
+          "takenDownAt",
+          "latestTakedown"
+        ]
+      },
       "AdminProfessionalDocumentUrlView": {
         "type": "object",
         "properties": {
@@ -36630,8 +36833,8 @@
             "type": "string",
             "enum": [
               "live",
-              "draft",
-              "hidden"
+              "hidden",
+              "draft"
             ]
           },
           "createdAt": {
@@ -40285,6 +40488,36 @@
           "pieceCount",
           "verification",
           "following"
+        ]
+      },
+      "ProfessionalListingVisibilityView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "listed",
+              "hidden",
+              "taken_down"
+            ]
+          },
+          "takenDownAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "category",
+          "visibility",
+          "takenDownAt"
         ]
       },
       "ProfessionalLocationView": {
