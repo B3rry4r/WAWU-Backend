@@ -153,16 +153,76 @@ describe('FIX-06: an admin takedown of a professional listing (contract)', () =>
     http()
       .get('/api/hub/professionals/applications/mine/visibility')
       .set(auth(token));
+  const approve = (token = superToken, id = PENDING) =>
+    http().post(`/api/hub/admin/professionals/${id}/approve`).set(auth(token));
+  const reject = (token = superToken, id = PENDING) =>
+    http()
+      .post(`/api/hub/admin/professionals/${id}/reject`)
+      .set(auth(token))
+      .send({ reason: 'Please add a portfolio link that opens.' });
+  const adminVisibility = (token = superToken, id = LISTING) =>
+    http()
+      .get(`/api/hub/admin/professionals/${id}/visibility`)
+      .set(auth(token));
+
+  /** Requests in this database waiting on a lock, right now. */
+  async function lockWaiters(): Promise<number> {
+    const rows = await prisma.$queryRaw<Array<{ n: number }>>`
+      SELECT COUNT(*)::int AS "n" FROM pg_stat_activity
+      WHERE "datname" = current_database() AND "wait_event_type" = 'Lock'`;
+    return rows[0]?.n ?? 0;
+  }
+
+  /** Waits until `n` requests queue behind the held row, so their order is known. */
+  async function untilWaiting(n: number): Promise<void> {
+    const deadline = Date.now() + 15_000;
+    while ((await lockWaiters()) < n) {
+      if (Date.now() > deadline) {
+        throw new Error(`fewer than ${n} requests waited on the row`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
+  /**
+   * Holds one listing's row, as a decision in flight does, until `release`.
+   * Requests started meanwhile queue behind it in the order they arrive.
+   */
+  async function holdRow(
+    id: string,
+  ): Promise<{ release: () => Promise<void> }> {
+    const holder = new Client({ connectionString: process.env.DATABASE_URL });
+    await holder.connect();
+    await holder.query('BEGIN');
+    await holder.query(
+      'SELECT "id" FROM "ProfessionalProfile" WHERE "id" = $1 FOR UPDATE',
+      [id],
+    );
+    return {
+      release: async () => {
+        await holder.query('COMMIT');
+        await holder.end();
+      },
+    };
+  }
+
+  /** What main answers for a decision on an application already decided. */
+  const decided = (status: string) => ({
+    statusCode: 409,
+    message: `This application is already ${status}.`,
+    data: null,
+  });
 
   /**
    * Whether the listing is in front of buyers, on every surface that shows
    * one: the web's directory and profile, the app's directory and profile.
    */
-  async function inDirectory(id = LISTING): Promise<boolean> {
+  async function inDirectory(
+    id = LISTING,
+    category = CATEGORY,
+  ): Promise<boolean> {
     const [web, app_, webProfile, appProfile] = await Promise.all([
-      http()
-        .get('/api/hub/professionals')
-        .query({ category: CATEGORY, perPage: 50 }),
+      http().get('/api/hub/professionals').query({ category, perPage: 50 }),
       http().get('/api/hub/professionals/directory').query({ perPage: 50 }),
       http().get(`/api/hub/professionals/${id}`),
       http().get(`/api/hub/professionals/directory/${id}`),
@@ -199,7 +259,7 @@ describe('FIX-06: an admin takedown of a professional listing (contract)', () =>
       where: { id: { in: FIXTURE_IDS } },
     });
     await prisma.professionalProfile.deleteMany({
-      where: { wawuUserId: OWNER_SUB, category: { in: [CATEGORY, 'design'] } },
+      where: { wawuUserId: OWNER_SUB, category: { in: [CATEGORY, 'beauty'] } },
     });
     await prisma.professionalProfile.deleteMany({
       where: { wawuUserId: OTHER_SUB, category: CATEGORY },
@@ -229,7 +289,7 @@ describe('FIX-06: an admin takedown of a professional listing (contract)', () =>
           ...base,
           id: PENDING,
           wawuUserId: OWNER_SUB,
-          category: 'design',
+          category: 'beauty',
           status: 'pending',
           listed: true,
         },
@@ -615,5 +675,215 @@ describe('FIX-06: an admin takedown of a professional listing (contract)', () =>
     }
     expect(await listedInDb()).toBe(false);
     expect(await inDirectory()).toBe(false);
+  });
+
+  // ── round 2: decisions race a takedown (D1) ───────────────────────────────
+
+  it('two approves and an unlist in the verifier order: the late approve is refused as main refuses a decided application, and the takedown holds', async () => {
+    const row = await holdRow(PENDING);
+    let first: request.Response;
+    let pull: request.Response;
+    let late: request.Response;
+    try {
+      const firstP = approve(superToken).then((r) => r);
+      await untilWaiting(1);
+      const pullP = unlist(superToken, PENDING).then((r) => r);
+      await untilWaiting(2);
+      const lateP = approve(reviewerToken).then((r) => r);
+      await untilWaiting(3);
+      await row.release();
+      [first, pull, late] = await Promise.all([firstP, pullP, lateP]);
+    } finally {
+      await row.release().catch(() => undefined);
+    }
+
+    expect(first.status).toBe(200);
+    expect(dataOf(first)).toMatchObject({ status: 'approved', listed: true });
+    expect(pull.status).toBe(200);
+    expect(late.status).toBe(409);
+    expect(late.body).toEqual(decided('approved'));
+
+    const after = await prisma.professionalProfile.findUniqueOrThrow({
+      where: { id: PENDING },
+      select: { status: true, listed: true },
+    });
+    expect(after).toEqual({ status: 'approved', listed: false });
+    expect((await takedownRow(PENDING))?.liftedAt).toBeNull();
+    expect(await inDirectory(PENDING, 'beauty')).toBe(false);
+    await show(true, PENDING).expect(409);
+  });
+
+  it('approve, unlist, then a reject that read pending before the approve: the reject is refused and the takedown holds', async () => {
+    const row = await holdRow(PENDING);
+    let yes: request.Response;
+    let pull: request.Response;
+    let no: request.Response;
+    try {
+      const yesP = approve(superToken).then((r) => r);
+      await untilWaiting(1);
+      const pullP = unlist(superToken, PENDING).then((r) => r);
+      await untilWaiting(2);
+      const noP = reject(reviewerToken).then((r) => r);
+      await untilWaiting(3);
+      await row.release();
+      [yes, pull, no] = await Promise.all([yesP, pullP, noP]);
+    } finally {
+      await row.release().catch(() => undefined);
+    }
+
+    expect([yes.status, pull.status, no.status]).toEqual([200, 200, 409]);
+    expect(no.body).toEqual(decided('approved'));
+    const after = await prisma.professionalProfile.findUniqueOrThrow({
+      where: { id: PENDING },
+      select: { status: true, listed: true, rejectionReason: true },
+    });
+    expect(after).toEqual({
+      status: 'approved',
+      listed: false,
+      rejectionReason: null,
+    });
+    expect((await takedownRow(PENDING))?.liftedAt).toBeNull();
+    await show(true, PENDING).expect(409);
+  });
+
+  it('a takedown survives a rejection and a fresh application: the new approval stays taken down until an admin lists it again', async () => {
+    await show(false).expect(200);
+    await unlist().expect(200);
+    // The state the verifier's reject race reached on round 1's code: the
+    // application turned down with the takedown still standing.
+    await prisma.professionalProfile.update({
+      where: { id: LISTING },
+      data: { status: 'rejected', rejectionReason: 'Fix the link.' },
+    });
+
+    const again = await http()
+      .post('/api/hub/professionals/applications')
+      .set(auth(ownerToken))
+      .send({
+        category: CATEGORY,
+        headline: 'Backend engineer, 10 years',
+        about: 'I build payment integrations, mostly NestJS and Postgres.',
+        services: ['API review'],
+        credentialKind: 'portfolio',
+      })
+      .expect(201);
+    expect(dataOf(again)).toMatchObject({ id: LISTING, status: 'pending' });
+
+    const approved = await approve(superToken, LISTING).expect(200);
+    expect(dataOf(approved)).toMatchObject({
+      status: 'approved',
+      listed: false,
+    });
+    expect(await inDirectory()).toBe(false);
+    expect(dataOf<Row[]>(await visibility().expect(200))[0]).toMatchObject({
+      id: LISTING,
+      visibility: 'taken_down',
+    });
+    await show(true).expect(409);
+    // A fresh approval lists by default, so lifting it lists it.
+    expect((await takedownRow())!.ownerListed).toBe(true);
+
+    expect(dataOf(await relist().expect(200)).listed).toBe(true);
+    expect(await inDirectory()).toBe(true);
+  });
+
+  it('approve and reject of a decided or unknown application answer exactly what they answered before', async () => {
+    await approve().expect(200);
+    expect((await approve().expect(409)).body).toEqual(decided('approved'));
+    expect((await reject().expect(409)).body).toEqual(decided('approved'));
+    expect((await approve(superToken, UNKNOWN).expect(404)).body).toEqual({
+      statusCode: 404,
+      message: 'Application not found',
+      data: null,
+    });
+    expect((await reject(superToken, UNKNOWN).expect(404)).body).toEqual({
+      statusCode: 404,
+      message: 'Application not found',
+      data: null,
+    });
+    await resetFixtures();
+    await reject().expect(200);
+    expect((await approve().expect(409)).body).toEqual(decided('rejected'));
+    expect((await reject().expect(409)).body).toEqual(decided('rejected'));
+    // The approve with no takedown still lists, as it always did.
+    await resetFixtures();
+    expect(dataOf(await approve().expect(200))).toMatchObject({
+      listed: true,
+    });
+    expect(await inDirectory(PENDING, 'beauty')).toBe(true);
+  });
+
+  // ── round 2: the dashboard's read of the takedown state ───────────────────
+
+  it('an admin reads where a listing stands and the latest takedown, without the protected answers changing', async () => {
+    let res = await adminVisibility().expect(200);
+    expect(dataOf(res)).toEqual({
+      id: LISTING,
+      status: 'approved',
+      visibility: 'listed',
+      takenDownAt: null,
+      latestTakedown: null,
+    });
+
+    await show(false).expect(200);
+    expect(dataOf(await adminVisibility().expect(200)).visibility).toBe(
+      'hidden',
+    );
+
+    await unlist(reviewerToken).expect(200);
+    res = await adminVisibility().expect(200);
+    const row = await takedownRow();
+    expect(dataOf(res)).toEqual({
+      id: LISTING,
+      status: 'approved',
+      visibility: 'taken_down',
+      takenDownAt: row!.takenDownAt.toISOString(),
+      latestTakedown: {
+        standing: true,
+        takenDownAt: row!.takenDownAt.toISOString(),
+        takenDownByAdminId: ADMIN_REVIEWER_ID,
+        takenDownByAdminEmail: REVIEWER_EMAIL,
+        takenDownByAdminRole: 'reviewer',
+        relistsAs: 'hidden',
+        liftedAt: null,
+        liftedByAdminId: null,
+        liftedByAdminEmail: null,
+        liftedByAdminRole: null,
+      },
+    });
+
+    await relist(superToken).expect(200);
+    res = await adminVisibility(reviewerToken).expect(200);
+    expect(dataOf(res)).toMatchObject({
+      visibility: 'hidden',
+      takenDownAt: null,
+      latestTakedown: {
+        standing: false,
+        takenDownByAdminEmail: REVIEWER_EMAIL,
+        liftedByAdminId: ADMIN_SUPER_ID,
+        liftedByAdminEmail: SUPER_EMAIL,
+        liftedByAdminRole: 'superadmin',
+      },
+    });
+
+    // Not a listing yet: no visibility.
+    expect(
+      dataOf(await adminVisibility(superToken, PENDING).expect(200)),
+    ).toEqual({
+      id: PENDING,
+      status: 'pending',
+      visibility: null,
+      takenDownAt: null,
+      latestTakedown: null,
+    });
+    await adminVisibility(superToken, UNKNOWN).expect(404);
+
+    // Roles as unlist: support and finance refused, a person's token and none 401.
+    await adminVisibility(supportToken).expect(403);
+    await adminVisibility(financeToken).expect(403);
+    await adminVisibility(ownerToken).expect(401);
+    await http()
+      .get(`/api/hub/admin/professionals/${LISTING}/visibility`)
+      .expect(401);
   });
 });

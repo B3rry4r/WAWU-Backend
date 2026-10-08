@@ -18,7 +18,10 @@ import { AdminRolesGuard } from '../auth/guards/admin-roles.guard';
 import { AdminRoles } from '../auth/decorators/admin-roles.decorator';
 import { CurrentAdmin } from '../auth/decorators/current-admin.decorator';
 import type { AdminUserView } from '../auth/admin-user-view.type';
-import type { AdminProfessionalDecisionView } from './admin-professional-view.type';
+import type {
+  AdminProfessionalDecisionView,
+  AdminProfessionalVisibilityView,
+} from './admin-professional-view.type';
 import { AdminProfessionalReviewService } from './admin-professional-review.service';
 import {
   AdminProfessionalQueueQueryDto,
@@ -39,6 +42,7 @@ class ProfessionalDocumentUrlDto {
  *   document-url         — superadmin, reviewer
  *   approve, reject      — superadmin, reviewer
  *   unlist, relist       — superadmin, reviewer
+ *   visibility           — superadmin, reviewer (FIX-06; as unlist)
  *   finance              — refused entirely; nothing here is a money decision
  *
  * Support can READ the queue, because "where is my application" is a support
@@ -64,6 +68,18 @@ export class AdminProfessionalReviewController {
   @Get(':id')
   detail(@Param('id', ParseUUIDPipe) id: string) {
     return this.service.detail(id);
+  }
+
+  /**
+   * Whether a listing is in the directory, hidden by its owner or taken down
+   * by an admin, and the latest takedown on record (FIX-06).
+   */
+  @AdminRoles(AdminRole.superadmin, AdminRole.reviewer)
+  @Get(':id/visibility')
+  visibility(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<AdminProfessionalVisibilityView> {
+    return this.service.visibility(id);
   }
 
   /** A short-lived signed URL for one document on this application. */
