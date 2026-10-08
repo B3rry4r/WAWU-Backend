@@ -24018,7 +24018,7 @@
             }
           },
           "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
+            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable",
             "content": {
               "application/json": {
                 "schema": {
@@ -24036,6 +24036,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "reason.code: fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -24043,7 +24053,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "What a send, a withdrawal, a purchase or a bill will cost, before the\nPIN (W10, W17, H14): Fintava's charge plus WAWU's fee from config\n(R-10, R-31), each charge as its own part, the total, and a signed\nquote the paying request can send back. Nothing is reserved and\nFintava is not asked. A purchase or bill whose total is above\nMERCHANT_MAX_PER_TXN_KOBO is amount_out_of_range with maximumKobo.",
+        "summary": "What a send, a withdrawal, a purchase or a bill will cost, before the\nPIN (W10, W17, H14): Fintava's charge plus WAWU's fee from config\n(R-10, R-31), each charge as its own part, the total, and a signed\nquote the paying request can send back. Nothing is reserved and\nFintava is not asked. A purchase or bill whose total is above\nMERCHANT_MAX_PER_TXN_KOBO is amount_out_of_range with maximumKobo.\n\nNUV-07: the provider's charge comes from the running provider's\nsettings. While any of them is unset (Nuvion's, until the owner fills\nthem in) every quote is fees_not_set, before the wallet gate; under\nNuvion, which has no bill payments, a bill is target_not_payable.",
         "tags": [
           "MoneyFees"
         ],
@@ -26792,7 +26802,7 @@
             }
           },
           "403": {
-            "description": "reason.code: pin_required, pin_incorrect, daily_limit_exceeded, recipient_blocked",
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, daily_limit_exceeded, recipient_blocked",
             "content": {
               "application/json": {
                 "schema": {
@@ -26832,7 +26842,7 @@
             }
           },
           "503": {
-            "description": "reason.code: provider_unreachable",
+            "description": "reason.code: provider_unreachable, fees_not_set",
             "content": {
               "application/json": {
                 "schema": {
@@ -26923,7 +26933,7 @@
             }
           },
           "403": {
-            "description": "reason.code: pin_required, pin_incorrect, daily_limit_exceeded, bank_transfers_blocked",
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, daily_limit_exceeded, bank_transfers_blocked",
             "content": {
               "application/json": {
                 "schema": {
@@ -26963,7 +26973,7 @@
             }
           },
           "503": {
-            "description": "reason.code: provider_unreachable",
+            "description": "reason.code: provider_unreachable, fees_not_set",
             "content": {
               "application/json": {
                 "schema": {
@@ -27234,7 +27244,7 @@
             }
           },
           "403": {
-            "description": "reason.code: pin_required, pin_incorrect, daily_limit_exceeded",
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, daily_limit_exceeded",
             "content": {
               "application/json": {
                 "schema": {
@@ -27274,7 +27284,7 @@
             }
           },
           "503": {
-            "description": "reason.code: provider_unreachable",
+            "description": "reason.code: provider_unreachable, fees_not_set",
             "content": {
               "application/json": {
                 "schema": {
@@ -30494,7 +30504,9 @@
               "statement_too_large",
               "statement_rate_limited",
               "statement_busy",
-              "recipient_search_rate_limited"
+              "recipient_search_rate_limited",
+              "fees_not_set",
+              "limit_reached"
             ],
             "type": "string"
           },
@@ -30544,6 +30556,15 @@
               "kyc_pending",
               "kyc_rejected",
               "kyc_not_submitted"
+            ],
+            "type": "string"
+          },
+          "limit": {
+            "description": "limit_reached: which limit the movement passes (NUV-07), WAWU's own or the provider's.",
+            "enum": [
+              "per_transaction",
+              "daily",
+              "monthly"
             ],
             "type": "string"
           },
