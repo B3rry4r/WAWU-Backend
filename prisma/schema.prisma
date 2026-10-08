@@ -5047,3 +5047,142 @@ model NuvionEntity {
   @@index([status])
   @@index([accountNumber])
 }
+
+// -----------------------------------------------------------------------------
+// POINTS (task POINTS-01, R-43)
+//
+// Points are their own balance for the AI tools, always a count of points,
+// never naira or dollars, and separate from WAWU Credits (R-43 leaves open
+// whether they replace credits; the round 2 brief draws them apart). They are
+// WAWU's own instrument, not money a provider holds, so these lots are the
+// authority for a person's points.
+//
+// Points come in lots that expire (PointLot). Spending takes the
+// soonest-expiring lot first, through a hold (PointHold) that is committed or
+// released. Every change to a lot's points is one row in PointLedger, which
+// is append-only: the migration's triggers refuse an UPDATE of a ledger row,
+// and any DELETE but the account purge's (one person, all of their rows, in a
+// transaction that set wawu.points_purge to the person's id and its own
+// transaction id). A hold moves once, from held to
+// committed or released. CHECK constraints in the migration keep a lot
+// between 0 and what it was granted, so the balance can never go below zero,
+// and its end between 2000 and 2100 (UTC).
+// -----------------------------------------------------------------------------
+
+/// Where a lot of points came from. The task that grants each one owns its
+/// reference: TIER-03 (`tier_bonus`, `bump`), POINTS-02 (`pack`), REF-01
+/// (`referral`), POINTS-03 (`shortfall`), and points given back after a spend
+/// (`returned`).
+enum PointLotSource {
+  tier_bonus
+  pack
+  bump
+  referral
+  shortfall
+  returned
+}
+
+/// Why a ledger row moved a lot: a grant adds, a hold takes, a release gives
+/// back to the same lot, an expiry takes what a lapsed lot still had.
+enum PointLedgerReason {
+  grant
+  hold
+  release
+  expire
+}
+
+/// What held points are for: an AI tool's job (POINTS-03) or turning points
+/// into wallet cash (POINTS-04).
+enum PointHoldPurpose {
+  ai_job
+  cash_out
+}
+
+/// A hold is `held` until its job ends: `committed` (the points are spent) or
+/// `released` (every point went back to the lot it came from). Both are final.
+enum PointHoldState {
+  held
+  committed
+  released
+}
+
+/// One grant of points: how many, how many are left, and when they end.
+model PointLot {
+  id         String         @id @default(uuid())
+  wawuUserId String
+  source     PointLotSource
+  /// The granting task's own reference (a purchase, a referral, a job). One
+  /// lot per source and reference: the same grant twice grants once.
+  sourceRef  String
+  /// Points granted. Never changes.
+  quantity   Int
+  /// Points still in the lot. Taken by holds, put back by releases, set to 0
+  /// by the expiry job. CHECK: 0 <= remaining <= quantity.
+  remaining  Int
+  expiresAt  DateTime
+  /// When the expiry job took what the lot still had; null while it has not.
+  lapsedAt   DateTime?
+  createdAt  DateTime       @default(now())
+
+  ledger PointLedger[]
+
+  @@unique([source, sourceRef])
+  /// A person's live lots, soonest-expiring first.
+  @@index([wawuUserId, expiresAt])
+  /// The expiry job's search.
+  @@index([expiresAt])
+}
+
+/// Points taken from a person's lots for one job, until it is committed or
+/// released. Which lots, and how many from each, are the hold's ledger rows.
+model PointHold {
+  id         String           @id @default(uuid())
+  wawuUserId String
+  purpose    PointHoldPurpose
+  /// The job or conversion this hold pays for. One hold per purpose and
+  /// reference: the same hold asked for twice holds once.
+  reference  String
+  /// What the movement list calls it ("VoiceOver"), from the calling task's
+  /// own table, never from what a person typed.
+  title      String?
+  quantity   Int
+  state      PointHoldState   @default(held)
+  createdAt  DateTime         @default(now())
+  /// When it was committed or released.
+  settledAt  DateTime?
+
+  ledger PointLedger[]
+
+  @@unique([purpose, reference])
+  @@index([wawuUserId, createdAt])
+}
+
+/// Append-only: one row per change to one lot's points. Never updated; a
+/// person's rows are deleted only by the account purge, all together.
+model PointLedger {
+  id         String            @id @default(uuid())
+  wawuUserId String
+  lotId      String
+  lot        PointLot          @relation(fields: [lotId], references: [id], onDelete: Restrict)
+  /// Points added (positive) or taken (negative); never 0. CHECK: a grant
+  /// and a release add, a hold and an expiry take.
+  delta      Int
+  reason     PointLedgerReason
+  /// The hold a `hold` or `release` row belongs to.
+  holdId     String?
+  hold       PointHold?        @relation(fields: [holdId], references: [id], onDelete: Restrict)
+  /// The job or purchase reference: the lot's for a grant, the hold's for a
+  /// hold or a release; null for an expiry.
+  reference  String?
+  /// When the row was written (the app's clock at each INSERT, so the rows
+  /// of one hold can differ by milliseconds; `seq` orders them).
+  at         DateTime          @default(now())
+  /// The order rows were written in: a person's movements, newest first, are
+  /// read by this, never by `at`.
+  seq        BigInt            @default(autoincrement())
+
+  /// A person's last movements, newest first.
+  @@index([wawuUserId, seq])
+  @@index([lotId])
+  @@index([holdId])
+}

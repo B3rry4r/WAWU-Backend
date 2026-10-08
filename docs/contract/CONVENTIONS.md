@@ -1174,3 +1174,60 @@ send `Cache-Control: no-store`, read our database only and never call Fintava.
 - **Contract.** The search declares its plain `400` (a malformed `q`, no
   `reason`) and `429` (`recipient_search_rate_limited`; the per-address 429
   has no `reason`); both lists carry `maxItems` (20 and 10).
+
+## 16. Points (POINTS-01)
+
+Points are not money: no provider holds them, no route converts them to
+naira or dollars, and every figure is a count of points (R-43). They are
+written here because the tasks that sell, spend and cash them out
+(TIER-03, POINTS-02 to POINTS-04, REF-01) answer in this one error shape.
+
+- **Where they live.** `src/points/`: `PointLot` (one grant: how many, how
+  many are left, when they end), `PointHold` (points taken for one job until
+  it is committed or released) and `PointLedger` (append-only, one row per
+  change to one lot). The lots are the authority for points; a balance is the
+  sum of a person's lots that have points and have not ended.
+- **The one writer.** `PointsService` (exported by `PointsModule`): `grant`,
+  `hold`, `commit`, `release` and `expireLapsed`. The first four can join the
+  caller's own READ COMMITTED transaction (`{ tx }`), so a payment can set a
+  tier and grant its bonus in one commit; `expireLapsed` takes no `tx`: it is
+  the expiry job's pass and writes each lapsed lot off in a transaction of
+  its own. The account purge's `purgePersonPoints` is the only delete.
+  Nothing else writes these tables.
+- **Idempotent.** A grant on its (source, reference) and a hold on its
+  (purpose, reference): the same call again changes nothing and answers what
+  the first one made, in its current state (a released hold stays released:
+  a new attempt needs a new reference). The same reference for another
+  person or amount is a 409, also when the two arrive at the same moment.
+- **A lot's end** must be after now and before 2100-01-01 UTC
+  (`POINTS_LATEST_END`), else `400 points_invalid`. The database holds the
+  end between 2000-01-01 and 2100-01-01 UTC.
+- **Spent soonest-ending first,** then oldest grant, then lot id. A release
+  puts every point back into the lot it came from.
+- **What the database refuses** (the migration's CHECKs and triggers): a lot
+  below 0 or above what it was granted, or ending outside 2000 to 2099; a lot
+  whose points differ from the sum of its ledger rows when the transaction
+  commits; any UPDATE or TRUNCATE of the ledger; any DELETE of ledger rows
+  except the account purge's (`purgePersonPoints`: one transaction, the
+  person's points lock, `wawu.points_purge` set to
+  `<person id>:<txid_current()>` for that transaction, then all of that one
+  person's rows in one statement; a value left at session level names an
+  earlier transaction and is refused); a hold
+  moving anywhere but from `held` to `committed` or `released`, or a settled
+  hold changing at all.
+- **Refusals** (`PointsError`, `src/points/points-error.ts`): `402
+  insufficient_points` with `balancePoints`, `neededPoints`,
+  `shortfallPoints`; `409 points_grant_conflict`; `409 points_hold_conflict`;
+  `404 points_hold_not_found` (also for a commit or release whose hold the
+  account purge deleted while it waited for the person's lock); `409 points_hold_settled` (spent, or already
+  given back); `400 points_invalid`. A field that carries points ends in
+  `Points`, as money fields end in `Kobo`.
+- **`GET /me/points`** (PT5): `balance`, `nextExpiry` or null (the soonest end
+  and every point that ends then, over all live lots), `lots` (soonest end
+  first, at most 50, `lotCount` says how many in all), `movements` (the last
+  20 ledger rows, newest first, each with a plain `label` and `pending` for a
+  hold still running). `Cache-Control: no-store`; the token is the person.
+- **For every caller** (lead, 8 Oct 2026): call `grant` or `hold` last in your
+  transaction, and never wait on a provider while you hold a person's points
+  lock: this service's own transactions use Prisma's 5 s default, so a
+  points call for that person would fail meanwhile.
