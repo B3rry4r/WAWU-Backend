@@ -275,7 +275,7 @@ describe('LEGAL-03 fix round 1 (contract)', () => {
     // link on our own bucket under legal/document/, whose key needs no escape.
     it('stores a good url as its key, with the audit row naming the same key', async () => {
       const work = await paidWork();
-      const url = `${DOCS}files/cafe.pdf?v=1&b=2`;
+      const url = `${DOCS}cafe.pdf?v=1&b=2`;
       const key = url.slice(`${BUCKET_ORIGIN}/`.length, url.indexOf('?'));
       await deliver(work.id, { files: [{ fileName: 'a.pdf', url }] }).expect(
         200,

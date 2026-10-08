@@ -124,6 +124,13 @@ describe('LEGAL-03 round 5: which delivered files may be signed', () => {
     ['dot-dot in a link', `${AT.origin}/legal/document/../../${KYC}`],
     ['a dot segment', 'legal/document/./u1/a.pdf'],
     ['an empty segment', 'legal/document//u1/a.pdf'],
+    ['a segment of three dots', 'legal/document/u1/...'],
+    [
+      'a segment of three dots, linked',
+      `${AT.origin}/legal/document/.../a.pdf`,
+    ],
+    ['one segment after the folder', 'legal/document/a.pdf'],
+    ['three segments after the folder', 'legal/document/u1/x/a.pdf'],
     ['encoded slash', `${AT.origin}/legal%2Fdocument/u1/a.pdf`],
     ['encoded dot-dot', `${AT.origin}/legal/document/%2e%2e/%2e%2e/${KYC}`],
     ['encoded backslash', `${AT.origin}/legal/document/u1%5c..%5ca.pdf`],

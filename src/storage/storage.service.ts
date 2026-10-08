@@ -215,12 +215,13 @@ const KEY_SEGMENT = /^[A-Za-z0-9._~-]+$/;
  *
  * Accepted: a bare key, or a link that starts with exactly this bucket's
  * origin and path prefix (`location`); a query (a signature) after the key is
- * ignored. The key, as written (never decoded), must be under one of
- * `folders` and made of plain segments (letters, digits, `.`, `_`, `~`, `-`; never `.`
- * or `..`, never empty). So a link on another host, a look-alike host
- * (userinfo, a longer host, another port or scheme), a backslash, an encoded
- * slash or any other `%` escape, a control or broken character, or a key in another folder
- * gives null. Never throws.
+ * ignored. The key, as written (never decoded), must be one of `folders`
+ * followed by exactly two plain segments (letters, digits, `.`, `_`, `~`,
+ * `-`; never only dots, never empty), the shape presignUpload writes. So a
+ * link on another host, a look-alike host (userinfo, a longer host, another
+ * port or scheme), a backslash, an encoded slash or any other `%` escape, a
+ * control or broken character, or a key in another folder gives null. Never
+ * throws.
  */
 export function deliverableKeyFrom(
   value: unknown,
@@ -253,17 +254,15 @@ export function deliverableKeyFrom(
   }
 
   if (Buffer.byteLength(key, 'utf8') > 1024) return null;
+  // The shape presignUpload writes: `<folder>/<wawuId>/<uuid>.<ext>`, so
+  // exactly two plain segments after the folder, none of them only dots.
   const segments = key.split('/');
-  if (
-    !segments.every(
-      (seg) => KEY_SEGMENT.test(seg) && seg !== '.' && seg !== '..',
-    )
-  )
+  if (!segments.every((seg) => KEY_SEGMENT.test(seg) && !/^\.+$/.test(seg)))
     return null;
   const inFolder = folders.some(
     (folder) =>
       key.startsWith(`${folder}/`) &&
-      key.split('/').length > folder.split('/').length,
+      segments.length === folder.split('/').length + 2,
   );
   return inFolder ? key : null;
 }
