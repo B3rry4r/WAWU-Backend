@@ -3,7 +3,7 @@ import {
   IsIn,
   IsInt,
   IsOptional,
-  IsUUID,
+  IsString,
   Max,
   MaxLength,
   Min,
@@ -48,8 +48,9 @@ export class ListPublicSchoolsDto {
   @Max(50)
   limit?: number;
 
-  /** The `nextCursor` of the previous page: a school id. */
+  /** The `nextCursor` of the previous page: opaque, not to be built by hand. */
   @IsOptional()
-  @IsUUID()
+  @IsString()
+  @MaxLength(1000)
   cursor?: string;
 }

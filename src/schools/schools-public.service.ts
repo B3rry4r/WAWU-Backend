@@ -20,6 +20,45 @@ import {
 const DEFAULT_PAGE = 20;
 const MATCHED_COURSES = 3;
 
+/** Longest name a cursor may carry (a school name is far shorter). */
+const MAX_CURSOR_NAME = 300;
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** An opaque position: base64url of [name, id]. */
+export function encodeCursor(row: { name: string; id: string }): string {
+  return Buffer.from(JSON.stringify([row.name, row.id]), 'utf8').toString(
+    'base64url',
+  );
+}
+
+/** A cursor this server did not give out (or altered) is a 400, never a 500. */
+export function decodeCursor(cursor: string): { name: string; id: string } {
+  const bad = () =>
+    new BadRequestException('cursor is not one this server gave out');
+  if (!/^[A-Za-z0-9_-]{1,1000}$/.test(cursor)) throw bad();
+  let v: unknown;
+  try {
+    v = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+  } catch {
+    throw bad();
+  }
+  if (
+    !Array.isArray(v) ||
+    v.length !== 2 ||
+    typeof v[0] !== 'string' ||
+    typeof v[1] !== 'string' ||
+    v[0].length > MAX_CURSOR_NAME ||
+    !isCleanText(v[0]) ||
+    !UUID_RE.test(v[1])
+  )
+    throw bad();
+  const name = v[0];
+  const id = v[1].toLowerCase();
+  if (encodeCursor({ name, id }) !== cursor) throw bad();
+  return { name, id };
+}
+
 /** Rows the app may see: each level checked on its own (SCHOOLS-02). */
 const SHOWN = { hiddenAt: null } as const;
 const SHOWN_COURSES = { where: SHOWN } as const;
@@ -36,17 +75,29 @@ export class SchoolsPublicService {
   /** GET /schools: browse by category, search by name, place or course. */
   async list(q: ListPublicSchoolsDto): Promise<PublicSchoolsPage> {
     const limit = q.limit ?? DEFAULT_PAGE;
-    if (
-      q.cursor !== undefined &&
-      (await this.prisma.school.count({ where: { id: q.cursor } })) === 0
-    )
-      throw new BadRequestException('cursor is not one this server gave out');
-    const where = this.listWhere(q.category, q.q);
+    const after = q.cursor === undefined ? null : decodeCursor(q.cursor);
+    const filter = this.listWhere(q.category, q.q);
+    // Keyset paging on (name, id): the cursor holds the position, not a row
+    // that must still be shown, so hiding or filtering out the school a page
+    // ended on skips nothing. Both the comparison and the ORDER BY use the
+    // columns' own collation, so they agree.
+    const where: Prisma.SchoolWhereInput = after
+      ? {
+          AND: [
+            filter,
+            {
+              OR: [
+                { name: { gt: after.name } },
+                { name: after.name, id: { gt: after.id } },
+              ],
+            },
+          ],
+        }
+      : filter;
     const rows = await this.prisma.school.findMany({
       where,
       orderBy: [{ name: 'asc' }, { id: 'asc' }],
       take: limit + 1,
-      ...(q.cursor ? { cursor: { id: q.cursor }, skip: 1 } : {}),
       include: {
         courses: {
           ...SHOWN_COURSES,
@@ -69,7 +120,7 @@ export class SchoolsPublicService {
             : [],
         ),
       ),
-      nextCursor: more ? page[page.length - 1].id : null,
+      nextCursor: more ? encodeCursor(page[page.length - 1]) : null,
     };
   }
 
