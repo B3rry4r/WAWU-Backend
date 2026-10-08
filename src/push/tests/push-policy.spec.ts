@@ -47,6 +47,7 @@ describe('which notifications reach a phone', () => {
       'campaign',
       'credits_low',
       'kyc_verified',
+      'legal_delivered',
       'paid_dm_paused',
       'paid_dm_warning',
       'verify_reminder',

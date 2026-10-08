@@ -46,6 +46,10 @@ export const PUSH_RULE: Record<NotificationKind, PushRule> = {
   kyc_verified: 'hold',
   verify_reminder: 'hold',
   campaign: 'hold',
+  // LEGAL-03. A consultant's document for a request the person paid for. No
+  // switch covers it, so it is held until the owner answers (G-265), as the
+  // round 2 report ruled for whichever of LEGAL-03 and INBOX-03 merged second.
+  legal_delivered: 'hold',
 };
 
 /**

@@ -1,4 +1,6 @@
 import { HttpException, Inject, Injectable, Logger } from '@nestjs/common';
+import { PrismaService } from '../../common/prisma/prisma.service';
+import { isRowOf } from '../../wallet-provider/provider-rows';
 import {
   safeKoboNumber,
   WALLET_PROVIDER,
@@ -30,6 +32,10 @@ export const BALANCE_UNREACHABLE_MESSAGE =
  * - No wallet yet, or one still being opened, never gets here: the route's
  *   wallet gate (MONEY-13) answers first, with the same body every wallet
  *   route gives.
+ * - Only a wallet of the provider the server runs is asked about (NUV-01):
+ *   after a rollback, a wallet another provider holds is never sent to this
+ *   one (its id means nothing here). It answers W6's 503, which is true:
+ *   the bank that holds that money is not reachable from this server.
  */
 @Injectable()
 export class WalletBalanceService {
@@ -37,12 +43,29 @@ export class WalletBalanceService {
 
   constructor(
     @Inject(WALLET_PROVIDER) private readonly provider: WalletProvider,
+    private readonly prisma: PrismaService,
   ) {}
 
   /** The balance of the wallet the gate found for the caller. */
   async balance(
-    wallet: Pick<OpenWallet, 'walletId'>,
+    wallet: Pick<OpenWallet, 'wawuUserId' | 'walletId'>,
   ): Promise<WalletBalanceView> {
+    const row = await this.prisma.fintavaWallet.findUnique({
+      where: { wawuUserId: wallet.wawuUserId },
+      select: { provider: true },
+    });
+    if (!isRowOf(this.provider.name, row?.provider)) {
+      this.logger.warn(
+        `wallet balance: the wallet is held by another provider than ${this.provider.label}; not asked`,
+      );
+      throw new MoneyError(
+        'provider_unreachable',
+        BALANCE_UNREACHABLE_MESSAGE,
+        {
+          retryAfterSeconds: this.provider.timings.retryAfterSeconds,
+        },
+      );
+    }
     try {
       const balance = await this.provider.getBalance({
         walletId: wallet.walletId,
