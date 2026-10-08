@@ -84,7 +84,11 @@ export interface ConsultationBookingView {
 export interface LegalDeliverableView {
   id: string;
   fileName: string;
-  url: string;
+  /**
+   * A download link signed for 15 minutes. Null when the stored file is not a
+   * legal document on WAWU storage: such a file is listed, never linked.
+   */
+  url: string | null;
   /** Page count, when the consultant gave one. */
   pages: number | null;
   /** The chat message this file arrived as. Null on a file with no message. */

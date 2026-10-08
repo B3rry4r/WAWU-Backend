@@ -12,7 +12,6 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
-  IsUrl,
   Matches,
   Max,
   MaxLength,
@@ -52,11 +51,23 @@ export class BookConsultationSlotDto {
   // A time with no zone would be read in the server's zone, which is a
   // different hour on a different host.
   @Matches(
-    /T\d{2}(?::?\d{2}(?::?\d{2}(?:[.,]\d+)?)?)?(?:Z|[+-]\d{2}(?::?\d{2})?)$/i,
+    // The offset needs its minutes: `+01` is ISO 8601 but no JavaScript
+    // date reads it, so it is refused here, naming the field, like a time
+    // with no zone.
+    /T\d{2}(?::?\d{2}(?::?\d{2}(?:[.,]\d+)?)?)?(?:Z|[+-]\d{2}:?\d{2})$/i,
     {
       message: 'scheduledFor must end with Z or a +hh:mm offset.',
     },
   )
+  // Whatever form it takes, it must be a time the server can read.
+  @ValidateBy({
+    name: 'readableTime',
+    validator: {
+      validate: (v: unknown) =>
+        typeof v === 'string' && !Number.isNaN(Date.parse(v)),
+      defaultMessage: () => 'scheduledFor must be a date and time.',
+    },
+  })
   scheduledFor?: string;
 }
 
@@ -147,11 +158,13 @@ export class DeliveredFileDto {
   })
   fileName!: string;
 
-  /** Object-storage URL from POST /uploads/presign. */
-  @IsUrl(
-    { protocols: ['http', 'https'], require_protocol: true },
-    { message: 'url must be a full link' },
-  )
+  /**
+   * The file's `fileUrl` or `key` from POST /uploads/presign: a link on WAWU
+   * storage or a bare key, under `legal/document/`. Anything else is refused
+   * with a 400 naming this field (N1).
+   */
+  @IsString({ message: 'url must be a link or an object key.' })
+  @IsNotEmpty({ message: 'url must be a link or an object key.' })
   @MaxLength(600)
   // eslint-disable-next-line no-control-regex -- these ranges ARE the control characters being refused
   @Matches(/^[^\u0000-\u001f\u007f]+$/, {

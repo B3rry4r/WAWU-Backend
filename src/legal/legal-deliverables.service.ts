@@ -8,7 +8,11 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { type AdminActor } from '../common/audit/admin-ops-audit.service';
 import { LegalAssistantAllowance } from '../legal-intake/assistant/legal-assistant-allowance';
 import { NotificationService } from '../notification/notification.service';
-import { StorageService, objectKeyFrom } from '../storage/storage.service';
+import {
+  StorageService,
+  deliverableKeyFrom,
+  type BucketLocation,
+} from '../storage/storage.service';
 import type {
   DeliverFilesResultView,
   LegalDeliverableView,
@@ -59,6 +63,27 @@ export class LegalDeliverablesService {
       throw new BadRequestException('This work has not been paid for.');
     }
 
+    // N1: a delivered file can only be a legal document on our own bucket.
+    // Each url must be a bare key or a link on this bucket's host whose key
+    // is under DELIVERABLE_KEY_FOLDERS; anything else is refused before
+    // anything is written, so no other object can become a client's link.
+    const at = await this.storage.bucketLocation();
+    const keys = dto.files.map((f, i) => {
+      const key = deliverableKeyFrom(f.url, at);
+      if (key === null) {
+        throw new BadRequestException([
+          `files.${i}.url must be a legal document uploaded to WAWU storage, under legal/document/.`,
+        ]);
+      }
+      return key;
+    });
+    // The single-file column the web reads holds a link, as it always has
+    // (E3, unchanged here); a bare key is given one.
+    const firstLink = async (i: number): Promise<string> =>
+      /^https?:\/\//i.test(dto.files[i].url)
+        ? dto.files[i].url
+        : this.storage.readUrlFor(keys[i]);
+
     let posted: { fileName: string; url: string }[] = [];
     try {
       // Under the client's lock (LEGAL-01), so each handover to the consultant
@@ -74,14 +99,15 @@ export class LegalDeliverablesService {
                 where: { legalRequestId: requestId },
                 select: { url: true },
               })
-            ).map((d) => objectKeyFrom(d.url)),
+            ).map((d) => deliverableKeyFrom(d.url, at) ?? d.url),
           );
-          const fresh = dto.files.filter((f) => {
-            const key = objectKeyFrom(f.url);
-            if (have.has(key)) return false;
-            have.add(key);
-            return true;
-          });
+          const fresh = dto.files
+            .map((f, i) => ({ ...f, key: keys[i], index: i }))
+            .filter((f) => {
+              if (have.has(f.key)) return false;
+              have.add(f.key);
+              return true;
+            });
 
           // One millisecond apart, so the messages keep the order they were
           // sent in whatever sorts them.
@@ -105,7 +131,7 @@ export class LegalDeliverablesService {
                 // The object key, never the signed link ops posted: a link
                 // dies in 7 days and is a bearer token. The list signs a
                 // fresh 15-minute link for the owner on every read.
-                url: objectKeyFrom(file.url),
+                url: file.key,
                 pages: file.pages ?? null,
                 chatMessageId: message.id,
                 postedByAdminId: admin.id,
@@ -119,7 +145,7 @@ export class LegalDeliverablesService {
               where: { id: requestId, status: 'in_progress' },
               data: {
                 status: 'delivered',
-                deliverableUrl: fresh[0]?.url ?? dto.files[0].url,
+                deliverableUrl: await firstLink(fresh[0]?.index ?? 0),
                 deliveredAt: new Date(),
               },
             });
@@ -131,7 +157,7 @@ export class LegalDeliverablesService {
           }
           const files = fresh.map((f) => ({
             fileName: f.fileName,
-            url: objectKeyFrom(f.url),
+            url: f.key,
           }));
           if (files.length > 0) {
             await tx.adminOpsAudit.create({
@@ -176,7 +202,7 @@ export class LegalDeliverablesService {
       requestId,
       status: after.status,
       deliveredAt: after.deliveredAt?.toISOString() ?? null,
-      items: await this.items(after),
+      items: await this.items(after, at),
     };
   }
 
@@ -194,20 +220,24 @@ export class LegalDeliverablesService {
     return {
       requestId,
       status: request.status,
-      items: await this.items(request),
+      items: await this.items(request, await this.storage.bucketLocation()),
     };
   }
 
   /**
-   * A fresh read link, valid 15 minutes. A row that still holds a signed link
-   * from before has its object key derived from it here (`objectKeyFrom`); a
-   * value that is not one of this bucket's is returned as it is.
+   * A fresh read link, valid 15 minutes, or null. A row that still holds a
+   * signed link from before has its key read from it here. Only a key under
+   * DELIVERABLE_KEY_FOLDERS on this bucket is ever signed (N1): any other
+   * stored value (a key in another folder, a link to another host) gets no
+   * link at all, and is never handed back as it was stored.
    */
-  private readLink(stored: string): Promise<string> {
-    return this.storage.signedReadUrl(
-      objectKeyFrom(stored),
-      DELIVERABLE_LINK_SECONDS,
-    );
+  private async readLink(
+    stored: string,
+    at: BucketLocation | null,
+  ): Promise<string | null> {
+    const key = deliverableKeyFrom(stored, at);
+    if (key === null) return null;
+    return this.storage.signedReadUrl(key, DELIVERABLE_LINK_SECONDS);
   }
 
   /**
@@ -216,11 +246,14 @@ export class LegalDeliverablesService {
    * `deliverableUrl` and listed first, unless a row already carries it. That
    * keeps it listed when more files are added to the same request later.
    */
-  private async items(request: {
-    id: string;
-    deliverableUrl: string | null;
-    deliveredAt: Date | null;
-  }): Promise<LegalDeliverableView[]> {
+  private async items(
+    request: {
+      id: string;
+      deliverableUrl: string | null;
+      deliveredAt: Date | null;
+    },
+    at: BucketLocation | null,
+  ): Promise<LegalDeliverableView[]> {
     const rows = await this.prisma.legalDeliverable.findMany({
       where: { legalRequestId: request.id },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -231,21 +264,19 @@ export class LegalDeliverablesService {
       rows.map(async (r) => ({
         id: r.id,
         fileName: r.fileName,
-        url: await this.readLink(r.url),
+        url: await this.readLink(r.url, at),
         pages: r.pages,
         chatMessageId: r.chatMessageId,
         postedAt: r.createdAt.toISOString(),
       })),
     );
     const legacy = request.deliverableUrl;
-    if (
-      legacy &&
-      !rows.some((r) => objectKeyFrom(r.url) === objectKeyFrom(legacy))
-    ) {
+    const keyOf = (v: string) => deliverableKeyFrom(v, at) ?? v;
+    if (legacy && !rows.some((r) => keyOf(r.url) === keyOf(legacy))) {
       items.unshift({
         id: `${request.id}:deliverable`,
         fileName: fileNameFromUrl(legacy),
-        url: await this.readLink(legacy),
+        url: await this.readLink(legacy, at),
         pages: null,
         chatMessageId: null,
         postedAt: (request.deliveredAt ?? new Date(0)).toISOString(),

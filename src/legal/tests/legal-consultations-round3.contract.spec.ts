@@ -115,6 +115,10 @@ describe('LEGAL-03 fix round 3 (contract)', () => {
       // lifetime and a counter, as the real helper does for a key.
       .overrideProvider(StorageService)
       .useValue({
+        // Round 5 (N1): the bucket the links name, as the real service reads
+        // it from its client.
+        bucketLocation: () =>
+          Promise.resolve({ origin: 'https://bucket.test', pathPrefix: '/' }),
         signedReadUrl: (key: string, ttl = 900): Promise<string> => {
           signed.push({ key, ttl });
           if (key.startsWith('http')) return Promise.resolve(key);
@@ -336,7 +340,9 @@ describe('LEGAL-03 fix round 3 (contract)', () => {
       async (_l, fileName) => {
         const work = await paidWork();
         const res = await deliver(work.id, {
-          files: [{ fileName, url: 'https://x.example/a.pdf' }],
+          files: [
+            { fileName, url: 'https://bucket.test/legal/document/abc/a.pdf' },
+          ],
         }).expect(400);
         expect(JSON.stringify(res.body)).toContain('fileName');
         expect(
@@ -355,7 +361,9 @@ describe('LEGAL-03 fix round 3 (contract)', () => {
     ])('still allows %s', async (_l, fileName) => {
       const work = await paidWork();
       await deliver(work.id, {
-        files: [{ fileName, url: 'https://x.example/a.pdf' }],
+        files: [
+          { fileName, url: 'https://bucket.test/legal/document/abc/a.pdf' },
+        ],
       }).expect(200);
     });
   });
@@ -510,7 +518,7 @@ describe('LEGAL-03 fix round 3 (contract)', () => {
       const work = await paidWork();
       const files = Array.from({ length: n }, (_, i) => ({
         fileName: `f${i}.pdf`,
-        url: `https://x.example/f${i}.pdf`,
+        url: `https://bucket.test/legal/document/abc/f${i}.pdf`,
       }));
       await deliver(work.id, { files }).expect(200);
       const note = await prisma.notification.findFirstOrThrow({

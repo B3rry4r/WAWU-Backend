@@ -57,6 +57,21 @@ async function loginAs(identifier: string): Promise<string> {
 const subOf = (token: string): string =>
   JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString('utf8')).sub;
 
+/**
+ * Round 5 (N1): an offline bucket for the delivery tests. The SDK signs
+ * virtual-hosted links on `https://<bucket>.<endpoint host>/<key>`.
+ */
+const TEST_BUCKET_ENV = {
+  STORAGE_ENDPOINT: 'https://storage.test.invalid',
+  STORAGE_BUCKET: 'wawu-test',
+  STORAGE_ACCESS_KEY_ID: 'test-key',
+  STORAGE_SECRET_ACCESS_KEY: 'test-secret',
+  STORAGE_REGION: 'auto',
+};
+const BUCKET_ORIGIN = 'https://wawu-test.storage.test.invalid';
+/** Where a delivered legal document lives on that bucket. */
+const DOCS = `${BUCKET_ORIGIN}/legal/document/u1/`;
+
 describe('LEGAL-03 fix round 1 (contract)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
@@ -77,11 +92,21 @@ describe('LEGAL-03 fix round 1 (contract)', () => {
   const as = (token: string) => ({ Authorization: `Bearer ${token}` });
 
   beforeAll(async () => {
-    for (const key of ['ADMIN_JWT_SECRET', 'ADMIN_JWT_REFRESH_SECRET']) {
+    for (const key of [
+      'ADMIN_JWT_SECRET',
+      'ADMIN_JWT_REFRESH_SECRET',
+      'STORAGE_FORCE_PATH_STYLE',
+      ...Object.keys(TEST_BUCKET_ENV),
+    ]) {
       envSnapshot[key] = process.env[key];
     }
     process.env.ADMIN_JWT_SECRET = SECRETS.access;
     process.env.ADMIN_JWT_REFRESH_SECRET = SECRETS.refresh;
+    // Round 5 (N1): a delivered file must be a legal document on our own
+    // bucket, so the suite runs with one configured. Links are signed
+    // locally; nothing is sent to it.
+    delete process.env.STORAGE_FORCE_PATH_STYLE;
+    Object.assign(process.env, TEST_BUCKET_ENV);
     if (!(await isMockUp())) {
       mock = spawn('node', ['mock-wawu-id/server.js'], {
         cwd: REPO_ROOT,
@@ -194,13 +219,13 @@ describe('LEGAL-03 fix round 1 (contract)', () => {
   /* ================================================================ */
   describe('D1, D2: a url that cannot be stored is a 400', () => {
     it.each([
-      ['a NUL', 'https://x.example/\u0000'],
-      ['a NUL early', 'https://x.example/a\u0000b.pdf'],
-      ['a newline', 'https://x.example/a\nb.pdf'],
-      ['a tab', 'https://x.example/a\tb.pdf'],
-      ['a lone high surrogate', 'https://x.example/\ud800'],
-      ['a lone low surrogate', 'https://x.example/\udc00x'],
-      ['a reversed pair', 'https://x.example/\udc00\ud800'],
+      ['a NUL', `${DOCS}\u0000`],
+      ['a NUL early', `${DOCS}a\u0000b.pdf`],
+      ['a newline', `${DOCS}a\nb.pdf`],
+      ['a tab', `${DOCS}a\tb.pdf`],
+      ['a lone high surrogate', `${DOCS}\ud800`],
+      ['a lone low surrogate', `${DOCS}\udc00x`],
+      ['a reversed pair', `${DOCS}\udc00\ud800`],
     ])(
       'refuses a url with %s, naming the field, and posts nothing',
       async (_l, url) => {
@@ -235,8 +260,8 @@ describe('LEGAL-03 fix round 1 (contract)', () => {
       const work = await paidWork();
       await deliver(work.id, {
         files: [
-          { fileName: 'ok.pdf', url: 'https://x.example/ok.pdf' },
-          { fileName: 'bad.pdf', url: 'https://x.example/\u0000' },
+          { fileName: 'ok.pdf', url: `${DOCS}ok.pdf` },
+          { fileName: 'bad.pdf', url: `${DOCS}\u0000` },
         ],
       }).expect(400);
       expect(
@@ -246,22 +271,25 @@ describe('LEGAL-03 fix round 1 (contract)', () => {
       ).toBe(0);
     });
 
-    it('stores a good url exactly, with the audit row naming the same url', async () => {
+    // Round 3 (D2) stores the key, not the link; round 5 (N1) takes only a
+    // link on our own bucket under legal/document/, whose key needs no escape.
+    it('stores a good url as its key, with the audit row naming the same key', async () => {
       const work = await paidWork();
-      const url = 'https://x.example/files/caf%C3%A9.pdf?v=1&b=2';
+      const url = `${DOCS}files/cafe.pdf?v=1&b=2`;
+      const key = url.slice(`${BUCKET_ORIGIN}/`.length, url.indexOf('?'));
       await deliver(work.id, { files: [{ fileName: 'a.pdf', url }] }).expect(
         200,
       );
       const row = await prisma.legalDeliverable.findFirstOrThrow({
         where: { legalRequestId: work.id },
       });
-      expect(row.url).toBe(url);
+      expect(row.url).toBe(key);
       const audit = await prisma.adminOpsAudit.findFirst({
         where: { resourceId: work.id, action: 'legal_delivered' },
       });
       expect(audit?.detail).toEqual({
         fileCount: 1,
-        files: [{ fileName: 'a.pdf', url }],
+        files: [{ fileName: 'a.pdf', url: key }],
       });
     });
 
@@ -281,7 +309,7 @@ describe('LEGAL-03 fix round 1 (contract)', () => {
           }),
         );
       const res = await deliver(work.id, {
-        files: [{ fileName: 'a.pdf', url: 'https://x.example/a.pdf' }],
+        files: [{ fileName: 'a.pdf', url: `${DOCS}a.pdf` }],
       });
       spy.mockRestore();
       expect(res.status).toBeGreaterThanOrEqual(400);
@@ -314,8 +342,8 @@ describe('LEGAL-03 fix round 1 (contract)', () => {
       const spy = jest.spyOn(allowance, 'writeAsConsultant');
       await deliver(work.id, {
         files: [
-          { fileName: 'One.pdf', url: 'https://x.example/1.pdf' },
-          { fileName: 'Two.pdf', url: 'https://x.example/2.pdf' },
+          { fileName: 'One.pdf', url: `${DOCS}1.pdf` },
+          { fileName: 'Two.pdf', url: `${DOCS}2.pdf` },
         ],
       }).expect(200);
       expect(spy).toHaveBeenCalledTimes(1);
@@ -351,7 +379,7 @@ describe('LEGAL-03 fix round 1 (contract)', () => {
       await gotLock;
       let done = false;
       const delivery = deliver(work.id, {
-        files: [{ fileName: 'a.pdf', url: 'https://x.example/a.pdf' }],
+        files: [{ fileName: 'a.pdf', url: `${DOCS}a.pdf` }],
       }).then((r) => {
         done = true;
         return r;

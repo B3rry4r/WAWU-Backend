@@ -62,6 +62,21 @@ async function loginAs(identifier: string): Promise<string> {
 const subOf = (token: string): string =>
   JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString('utf8')).sub;
 
+/**
+ * Round 5 (N1): an offline bucket for the delivery tests. The SDK signs
+ * virtual-hosted links on `https://<bucket>.<endpoint host>/<key>`.
+ */
+const TEST_BUCKET_ENV = {
+  STORAGE_ENDPOINT: 'https://storage.test.invalid',
+  STORAGE_BUCKET: 'wawu-test',
+  STORAGE_ACCESS_KEY_ID: 'test-key',
+  STORAGE_SECRET_ACCESS_KEY: 'test-secret',
+  STORAGE_REGION: 'auto',
+};
+const BUCKET_ORIGIN = 'https://wawu-test.storage.test.invalid';
+/** Where a delivered legal document lives on that bucket. */
+const DOCS = `${BUCKET_ORIGIN}/legal/document/u1/`;
+
 describe('WAWU Legal consultations and deliverables (contract)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
@@ -143,11 +158,21 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
   ) => cal.days[day].slots[slot].startsAt;
 
   beforeAll(async () => {
-    for (const key of ['ADMIN_JWT_SECRET', 'ADMIN_JWT_REFRESH_SECRET']) {
+    for (const key of [
+      'ADMIN_JWT_SECRET',
+      'ADMIN_JWT_REFRESH_SECRET',
+      'STORAGE_FORCE_PATH_STYLE',
+      ...Object.keys(TEST_BUCKET_ENV),
+    ]) {
       envSnapshot[key] = process.env[key];
     }
     process.env.ADMIN_JWT_SECRET = SECRETS.access;
     process.env.ADMIN_JWT_REFRESH_SECRET = SECRETS.refresh;
+    // Round 5 (N1): a delivered file must be a legal document on our own
+    // bucket, so the suite runs with one configured. Links are signed
+    // locally; nothing is sent to it.
+    delete process.env.STORAGE_FORCE_PATH_STYLE;
+    Object.assign(process.env, TEST_BUCKET_ENV);
 
     if (!(await isMockUp())) {
       mock = spawn('node', ['mock-wawu-id/server.js'], {
@@ -1167,12 +1192,12 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
     const FILES = [
       {
         fileName: 'Reviewed tenancy agreement.pdf',
-        url: 'https://files.example.com/reviewed.pdf',
+        url: `${DOCS}reviewed.pdf`,
         pages: 12,
       },
       {
         fileName: 'Consultant notes.pdf',
-        url: 'https://files.example.com/notes.pdf',
+        url: `${DOCS}notes.pdf`,
         pages: 3,
       },
     ];
@@ -1242,7 +1267,17 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
             i.url,
           ],
         ),
-      ).toEqual(FILES.map((f) => [f.fileName, f.pages, f.url]));
+      ).toEqual(
+        // Round 3 (D2): each link is signed fresh for 15 minutes, for the key.
+        FILES.map((f) => [
+          f.fileName,
+          f.pages,
+          expect.stringContaining(f.url.slice(`${BUCKET_ORIGIN}/`.length)),
+        ]),
+      );
+      for (const i of list.body.data.items as { url: string }[]) {
+        expect(i.url).toContain('X-Amz-Expires=900');
+      }
       const messageIds = chat.body.data.messages.map(
         (m: { id: string }) => m.id,
       );
@@ -1298,7 +1333,7 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
 
       const third = {
         fileName: 'Signed copy.pdf',
-        url: 'https://files.example.com/signed.pdf',
+        url: `${DOCS}signed.pdf`,
       };
       const more = await deliver(work.id, { files: [FILES[0], third] }).expect(
         200,
@@ -1377,35 +1412,28 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
       ['files as a string', { files: 'a.pdf' }],
       ['files as an object', { files: { fileName: 'a.pdf' } }],
       ['a null file', { files: [null] }],
-      [
-        'a file with no name',
-        { files: [{ url: 'https://files.example.com/a.pdf' }] },
-      ],
+      ['a file with no name', { files: [{ url: `${DOCS}a.pdf` }] }],
       [
         'a blank name',
         {
-          files: [{ fileName: '   ', url: 'https://files.example.com/a.pdf' }],
+          files: [{ fileName: '   ', url: `${DOCS}a.pdf` }],
         },
       ],
       [
         'a name with a control character',
         {
-          files: [
-            { fileName: 'a\u0000.pdf', url: 'https://files.example.com/a.pdf' },
-          ],
+          files: [{ fileName: 'a\u0000.pdf', url: `${DOCS}a.pdf` }],
         },
       ],
       [
         'a name with a lone surrogate',
         {
-          files: [
-            { fileName: 'a\ud800.pdf', url: 'https://files.example.com/a.pdf' },
-          ],
+          files: [{ fileName: 'a\ud800.pdf', url: `${DOCS}a.pdf` }],
         },
       ],
       [
         'a name that is a number',
-        { files: [{ fileName: 7, url: 'https://files.example.com/a.pdf' }] },
+        { files: [{ fileName: 7, url: `${DOCS}a.pdf` }] },
       ],
       [
         'a name that is far too long',
@@ -1413,7 +1441,7 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
           files: [
             {
               fileName: 'a'.repeat(201),
-              url: 'https://files.example.com/a.pdf',
+              url: `${DOCS}a.pdf`,
             },
           ],
         },
@@ -1438,7 +1466,7 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
           files: [
             {
               fileName: 'a.pdf',
-              url: `https://files.example.com/${'a'.repeat(600)}`,
+              url: `${DOCS}${'a'.repeat(600)}`,
             },
           ],
         },
@@ -1449,7 +1477,7 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
           files: [
             {
               fileName: 'a.pdf',
-              url: 'https://files.example.com/a.pdf',
+              url: `${DOCS}a.pdf`,
               pages: '3',
             },
           ],
@@ -1461,7 +1489,7 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
           files: [
             {
               fileName: 'a.pdf',
-              url: 'https://files.example.com/a.pdf',
+              url: `${DOCS}a.pdf`,
               pages: 0,
             },
           ],
@@ -1473,7 +1501,7 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
           files: [
             {
               fileName: 'a.pdf',
-              url: 'https://files.example.com/a.pdf',
+              url: `${DOCS}a.pdf`,
               pages: 1.5,
             },
           ],
@@ -1485,7 +1513,7 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
           files: [
             {
               fileName: 'a.pdf',
-              url: 'https://files.example.com/a.pdf',
+              url: `${DOCS}a.pdf`,
               size: 1,
             },
           ],
@@ -1496,7 +1524,7 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
         {
           files: Array.from({ length: 11 }, (_, i) => ({
             fileName: `f${i}.pdf`,
-            url: `https://files.example.com/f${i}.pdf`,
+            url: `${DOCS}f${i}.pdf`,
           })),
         },
       ],
@@ -1553,6 +1581,46 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
     });
 
     it('still delivers one file through the original route, and the client sees it', async () => {
+      // Round 5 (T1, N1): the legacy column is signed fresh when it is a
+      // legal document on our bucket, and is never handed back as stored.
+      const work = await paidWork();
+      const legacy = `${DOCS}Final-agreement.pdf?X-Amz-Expires=604800&X-Amz-Signature=old`;
+      await http()
+        .post(`/api/hub/legal/ops/requests/${work.id}/deliver`)
+        .set(bearer(tokens.support))
+        .send({ deliverableUrl: legacy })
+        .expect(200);
+      const list = await http()
+        .get(`/api/hub/legal/requests/${work.id}/deliverables`)
+        .set(as(userToken))
+        .expect(200);
+      expect(list.body.data.items).toHaveLength(1);
+      expect(list.body.data.items[0]).toMatchObject({
+        fileName: 'Final-agreement.pdf',
+        pages: null,
+        chatMessageId: null,
+      });
+      const first = list.body.data.items[0].url as string;
+      expect(first).not.toBe(legacy);
+      expect(first).toContain('legal/document/u1/Final-agreement.pdf');
+      expect(first).toContain('X-Amz-Expires=900');
+      expect(first).not.toContain('Signature=old');
+
+      // More files added later sit after it; the first file stays listed.
+      await deliver(work.id, { files: [FILES[1]] }).expect(200);
+      const after = await http()
+        .get(`/api/hub/legal/requests/${work.id}/deliverables`)
+        .set(as(userToken))
+        .expect(200);
+      expect(after.body.data.items.map((i: { url: string }) => i.url)).toEqual([
+        expect.stringContaining('legal/document/u1/Final-agreement.pdf'),
+        expect.stringContaining('legal/document/u1/notes.pdf'),
+      ]);
+    });
+
+    it('lists a legacy file on another host by name, with no link', async () => {
+      // Round 5 (T1, N1): the web route takes any link; the app's list never
+      // hands it back unsigned and never signs it.
       const work = await paidWork();
       await http()
         .post(`/api/hub/legal/ops/requests/${work.id}/deliver`)
@@ -1568,21 +1636,10 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
       expect(list.body.data.items).toHaveLength(1);
       expect(list.body.data.items[0]).toMatchObject({
         fileName: 'Final agreement.pdf',
-        url: 'https://files.example.com/Final%20agreement.pdf',
+        url: null,
         pages: null,
         chatMessageId: null,
       });
-
-      // More files added later sit after it; the first file stays listed.
-      await deliver(work.id, { files: [FILES[1]] }).expect(200);
-      const after = await http()
-        .get(`/api/hub/legal/requests/${work.id}/deliverables`)
-        .set(as(userToken))
-        .expect(200);
-      expect(after.body.data.items.map((i: { url: string }) => i.url)).toEqual([
-        'https://files.example.com/Final%20agreement.pdf',
-        FILES[1].url,
-      ]);
     });
 
     it('lists nothing before anything is delivered', async () => {
