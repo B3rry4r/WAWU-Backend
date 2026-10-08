@@ -29,7 +29,10 @@ export async function ticketTotals(
   prisma: CountReader,
   eventId: string,
 ): Promise<TicketTotals> {
-  const [sold, checkedIn, capacity] = await Promise.all([
+  // A retired tier (EVENTS-11 round 5) is not for sale: its seats are not
+  // "remaining", and a ticket a buyer settled on it after it was retired
+  // counts as sold but takes no seat from the tiers on sale.
+  const [sold, checkedIn, capacity, soldOnSale] = await Promise.all([
     prisma.eventTicket.count({
       where: { eventId, status: { in: SOLD_TICKET_STATUSES } },
     }),
@@ -37,14 +40,21 @@ export async function ticketTotals(
       where: { eventId, status: 'checked_in' },
     }),
     prisma.eventTicketType.aggregate({
-      where: { eventId },
+      where: { eventId, retiredAt: null },
       _sum: { quantity: true },
+    }),
+    prisma.eventTicket.count({
+      where: {
+        eventId,
+        status: { in: SOLD_TICKET_STATUSES },
+        ticketType: { retiredAt: null },
+      },
     }),
   ]);
   return {
     sold,
     checkedIn,
-    remaining: Math.max(0, (capacity._sum.quantity ?? 0) - sold),
+    remaining: Math.max(0, (capacity._sum.quantity ?? 0) - soldOnSale),
   };
 }
 

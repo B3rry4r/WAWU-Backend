@@ -221,7 +221,7 @@ describe('Protected routes (MONEY-01, V3 regression)', () => {
     for (const step of section.setup ?? []) await runStep(step, 'setup');
   }, 120_000);
 
-  /** Runs a setup or `before` step; a step that fails stops the run with its own error. */
+  /** Runs a setup, `before` or `after` step; a step that fails stops the run with its own error. */
   async function runStep(step: Step, where: string): Promise<void> {
     if ('sql' in step) {
       const client = new Client({ connectionString: DATABASE_URL });
@@ -450,6 +450,8 @@ describe('Protected routes (MONEY-01, V3 regression)', () => {
               ? EMPTY_BODY
               : fingerprint(actual, probe.mapPaths ?? []),
         });
+        for (const step of probe.after ?? [])
+          await runStep(step, `${route.id} after`);
         return;
       }
 
@@ -474,6 +476,8 @@ describe('Protected routes (MONEY-01, V3 regression)', () => {
         route: route.id,
         shapeProblems: [],
       });
+      for (const step of probe.after ?? [])
+        await runStep(step, `${route.id} after`);
     });
   });
 });

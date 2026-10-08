@@ -3210,6 +3210,12 @@ model EventTicketType {
   /// null end means "until the event begins".
   salesStartAt DateTime?
   salesEndAt   DateTime?
+  /// EVENTS-11 (R-40, round 5 ruling): set when a host's PUT
+  /// /events/:id/tickets drops or changes a tier that an order points at.
+  /// Such a tier is never deleted (the order keeps its row and a pending
+  /// one can still settle at the price its buyer saw); it is hidden from
+  /// every public and admin read and cannot be bought. Null is on sale.
+  retiredAt    DateTime?
 
   event   Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
   orders  EventOrder[]

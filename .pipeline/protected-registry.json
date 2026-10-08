@@ -7273,9 +7273,9 @@
       }
     ],
     "lock": {
-      "lockedAt": "2026-10-02T02:40:04.662Z",
-      "lockedAgainst": "ddb572723b8be6c8d4387519580546fffbe08a10",
-      "sha256": "755ce4fa4f80138ff7393d2e7cbda32c687b10cf1522d6e345fb8ce65f07591f"
+      "lockedAt": "2026-10-07T14:32:12.609Z",
+      "lockedAgainst": "4f75821563888a0b1979783930eb09e897c2f54e",
+      "sha256": "dd8809e53366a5859aece0263d545245cadf4eb5490a743dc199d07d92db4939"
     },
     "routes": [
       {
@@ -13291,6 +13291,7 @@
                 ],
                 "startsAt": "string",
                 "status": "string",
+                "ticketTypes": [],
                 "timeLabel": "string",
                 "timezone": "string",
                 "type": "string",
@@ -13458,6 +13459,7 @@
               ],
               "startsAt": "string",
               "status": "string",
+              "ticketTypes": [],
               "timeLabel": "string",
               "timezone": "string",
               "type": "string",
@@ -13937,7 +13939,17 @@
                 "quantity": 100
               }
             ]
-          }
+          },
+          "after": [
+            {
+              "api": "POST /admin/events/:id/approve",
+              "as": "superadmin",
+              "params": {
+                "id": "{{eventId}}"
+              }
+            }
+          ],
+          "why": "R-40 (owner, 7 Oct 2026): a tier change on a published event sends it back to review. The approve after it succeeds only from pending, so this probe fails if the event stayed published; it also puts the event back on sale, as an admin would, for the probes that follow."
         },
         "expect": {
           "status": 200,

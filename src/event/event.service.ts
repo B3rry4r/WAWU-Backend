@@ -90,8 +90,13 @@ export class EventService {
    * Being refused for want of a NGN 4,999 purchase and being refused because
    * you are on the wrong kind of account are different problems with
    * different remedies, and a single 403 string cannot tell them apart.
+   *
+   * Public, and the ONE copy of the rule: PUT /events/:id/tickets
+   * (EventTicketingService.setTicketTypes) calls this too (R-40, owner,
+   * 7 Oct 2026), so repricing an approved event's tickets needs the same
+   * current tick as creating or editing the event, with the same 403s.
    */
-  private async assertMayHost(userWawuId: string): Promise<void> {
+  async assertMayHost(userWawuId: string): Promise<void> {
     const state: VerificationState = await this.verification.forOne(userWawuId);
     if (holdsAnyTick(state)) return;
 
@@ -281,7 +286,8 @@ export class EventService {
    *
    * The ticket types, when sent, are created in the same write as the event
    * (EVENTS-02), so a host never has an event in the queue whose tickets
-   * failed to save, and the reviewer sees both at once.
+   * failed to save. The reviewer reads both: the admin queue and the admin
+   * event detail carry the event's ticket types (R-42, EVENTS-11).
    */
   async create(userWawuId: string, dto: CreateEventDto): Promise<EventView> {
     await this.assertMayHost(userWawuId);
@@ -349,23 +355,38 @@ export class EventService {
     // create path refuses, and every edit re-enters the moderation queue
     // anyway, so an edit IS a submission.
     await this.assertMayHost(userWawuId);
-    const existing = await this.prisma.event.findUnique({ where: { id } });
-    if (!existing || existing.hostWawuId !== userWawuId) {
-      // Same 404-not-403 reasoning as findOne: an event that is not yours is
-      // an event you are not told about.
-      throw new NotFoundException('Event not found.');
-    }
-    if (existing.status === 'removed') {
-      throw new ForbiddenException(
-        'This event was taken down by an admin and cannot be edited. Submit a new one, or contact support.',
-      );
-    }
 
-    const startsAt = dto.startsAt ? new Date(dto.startsAt) : existing.startsAt;
-    const endsAt = dto.endsAt ? new Date(dto.endsAt) : existing.endsAt;
-    assertWindowOrdered(startsAt, endsAt);
-
+    // The event is read, checked and written under a lock on its row, in one
+    // transaction (EVENTS-11 D1). An admin's remove that lands while this
+    // edit is in flight either commits first, and this edit then gets the
+    // takedown's 403, or waits for this edit and finds the event `pending`.
+    // Read before the lock, a takedown in between was overwritten with
+    // `pending` and an approve would then have published it.
+    //
+    // FOR NO KEY UPDATE, not FOR UPDATE (EVENTS-11 D2): it conflicts with
+    // every other update of the event row (an admin's decision, another
+    // edit) but not with the FOR KEY SHARE lock Postgres takes on the event
+    // for each row inserted that points at it (an order, a ticket, a going
+    // mark), so none of those waits on an edit and none can deadlock with
+    // one.
     const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "Event" WHERE "id" = ${id} FOR NO KEY UPDATE`;
+      const existing = await tx.event.findUnique({ where: { id } });
+      if (!existing || existing.hostWawuId !== userWawuId) {
+        // Same 404-not-403 reasoning as findOne: an event that is not yours
+        // is an event you are not told about.
+        throw new NotFoundException('Event not found.');
+      }
+      if (existing.status === 'removed') {
+        throw new ForbiddenException(TAKEN_DOWN_MESSAGE);
+      }
+
+      const startsAt = dto.startsAt
+        ? new Date(dto.startsAt)
+        : existing.startsAt;
+      const endsAt = dto.endsAt ? new Date(dto.endsAt) : existing.endsAt;
+      assertWindowOrdered(startsAt, endsAt);
+
       if (dto.speakers) {
         // Wholesale replacement — see UpdateEventDto. Both halves are in the
         // same transaction so an event is never briefly speakerless.
@@ -420,8 +441,7 @@ export class EventService {
           // Every edit re-enters review, and the old decision reason goes with
           // it — a rejection note still attached to a resubmission tells the
           // host they were rejected for something they have just fixed.
-          status: 'pending',
-          lastDecisionReason: null,
+          ...BACK_TO_REVIEW,
         },
         include: { speakers: { orderBy: { order: 'asc' } } },
       });
@@ -578,9 +598,10 @@ export class EventService {
       // The "from" price, DERIVED: the cheapest tier this event offers. One
       // grouped read for the whole page rather than a price column on Event
       // that would go stale the moment a tier is added or repriced.
+      // Retired tiers (EVENTS-11 round 5) are not on sale and set no price.
       this.prisma.eventTicketType.groupBy({
         by: ['eventId'],
-        where: { eventId: { in: ids } },
+        where: { eventId: { in: ids }, retiredAt: null },
         _min: { priceNaira: true },
       }),
       // One batched read for the whole page, not one per row.
@@ -646,6 +667,27 @@ export class EventService {
     }));
   }
 }
+
+/**
+ * The refusal for an edit to an event an admin took down (`removed`). PATCH
+ * /events/:id and PUT /events/:id/tickets (R-40 round 4 ruling) both answer
+ * it, as a 403 with this message, and write nothing: the way back from a
+ * takedown is an admin's restore, and a restore must not publish anything
+ * the host changed after the takedown.
+ */
+export const TAKEN_DOWN_MESSAGE =
+  'This event was taken down by an admin and cannot be edited. Submit a new one, or contact support.';
+
+/**
+ * What sending an event back to review writes: `pending`, and the old
+ * decision reason cleared. PATCH /events/:id writes it on every edit, and
+ * PUT /events/:id/tickets on a tier change (R-40), from this one place, so
+ * the two can never disagree about what "back to review" means.
+ */
+export const BACK_TO_REVIEW = {
+  status: 'pending',
+  lastDecisionReason: null,
+} as const;
 
 /**
  * upcoming / past, decided on `endsAt ?? startsAt`.
