@@ -142,6 +142,74 @@ export interface WalletView {
   pin: PinStateView;
   bankTransfers: BankTransferAccessView;
   beneficiaryCount: number;
+  /**
+   * Which Open your wallet this server runs (NUV-02, additive): `check`, the
+   * BVN check and selfie match, then the account (Fintava, MONEY-12);
+   * `review`, the details with the BVN and NIN sent once for the provider's
+   * own review, then the ID document and proof of address (Nuvion, NUV-02
+   * and NUV-03).
+   */
+  openingFlow?: WalletOpeningFlow;
+  /**
+   * Where the provider's review of the person stands (NUV-02, additive):
+   * null when there is none (Fintava, or nothing sent yet). It never changes
+   * what `state` means: `not_open` while documents are needed, after a
+   * refusal, or when the review was stopped; `opening` while it is checked
+   * and once approved, until the account number arrives (NUV-04).
+   */
+  review?: WalletReviewView | null;
+}
+
+/** Which Open your wallet a server runs (NUV-02). */
+export type WalletOpeningFlow = 'check' | 'review';
+
+/**
+ * needs_documents: the details are in; the ID document and proof of address
+ *                  are still needed (NUV-03), also after corrected details.
+ * checking:        sent for review; the decision is on its way.
+ * approved:        approved; the account number is on its way (NUV-04).
+ * rejected:        the review said no: `reasons` say why and what to fix,
+ *                  and the details may be sent again.
+ * stopped:         the review failed for good or was suspended: money
+ *                  routes answer `wallet_not_open`; support can help.
+ */
+export type WalletReviewStage =
+  'needs_documents' | 'checking' | 'approved' | 'rejected' | 'stopped';
+
+/** Why a review said no, in plain words, and what to fix (NUV-02). */
+export interface WalletReviewReasonView {
+  code: WalletReviewReasonCode;
+  /** What went wrong, a plain sentence the app may show. */
+  message: string;
+  /** What to do about it, a plain sentence the app may show. */
+  fix: string;
+}
+
+/**
+ * bvn_not_verified / nin_not_verified: that number could not be confirmed.
+ * id_document_not_verified / proof_of_address_not_verified: that document.
+ * bvn_phone_mismatch: the provider named the phone as not the BVN's (A14).
+ * details_not_verified: the provider gave no reason we can name.
+ * review_stopped: the review failed for good or was suspended.
+ */
+export type WalletReviewReasonCode =
+  | 'bvn_not_verified'
+  | 'nin_not_verified'
+  | 'id_document_not_verified'
+  | 'proof_of_address_not_verified'
+  | 'bvn_phone_mismatch'
+  | 'details_not_verified'
+  | 'review_stopped';
+
+/** The provider's review of the person, as GET /money/wallet tells it (NUV-02). */
+export interface WalletReviewView {
+  stage: WalletReviewStage;
+  /** Why, when `stage` is `rejected` or `stopped`; empty otherwise. */
+  reasons: WalletReviewReasonView[];
+  /** True when corrected details may be sent (POST /money/wallet/open). */
+  canResubmit: boolean;
+  /** When the provider decided (approved, rejected or stopped); else null. */
+  decidedAt: string | null;
 }
 
 /**
@@ -161,7 +229,10 @@ export interface WalletBalanceView {
 /** POST /money/pin/reset: a code was sent to the phone on file (W37). */
 export interface PinResetView {
   resetId: string;
-  /** The phone the code went to, masked to its last 4 digits: `+234 *** *** 4412`. */
+  /**
+   * The phone (SMS, Fintava) or the email (Nuvion, R-39) the code went to,
+   * masked: `+234 *** *** 4412` or `a***@example.com`.
+   */
   sentTo: string;
   /** When Resend becomes available (W37's countdown). */
   resendAvailableAt: string;

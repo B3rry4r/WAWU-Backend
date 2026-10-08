@@ -5041,6 +5041,27 @@ model NuvionEntity {
   issuerBankCode       String?
   /// The account's currency: NGN, or USD for people billed in dollars (NUV-09).
   currency             String?
+  /// NUV-02 (migration 20261016220000): each check of Nuvion's review, in
+  /// Nuvion's own words (`identification.identity_numbers[].verification_status`
+  /// for the BVN and the NIN, `identification.document` and
+  /// `identification.proof_of_address` for the two documents, and the
+  /// identification's overall status), as the last `GET /entities/{id}`
+  /// read them. Never the numbers themselves.
+  bvnStatus            String?
+  ninStatus            String?
+  documentStatus       String?
+  addressProofStatus   String?
+  identificationStatus String?
+  /// When the entity was last read back from Nuvion (`GET /entities/{id}`).
+  reviewReadAt         DateTime?
+  /// When the person last sent corrected details after a refusal
+  /// (`PATCH /individual-entities/{id}`): the review starts again from the
+  /// documents (NUV-03) while this is after `decidedAt`.
+  correctedAt          DateTime?
+  /// The one naira account's claim: set just before `POST /accounts` is
+  /// sent, so two deliveries never open two; the account is looked for
+  /// (`GET /accounts`) before any second request.
+  accountRequestedAt   DateTime?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 

@@ -171,5 +171,8 @@ export const MONEY_ERROR_CODES = [
   // not set, so nothing is quoted or moved (R-42); a movement passes a limit.
   'fees_not_set',
   'limit_reached',
+  // Opening a wallet on Nuvion (NUV-02): the person's details are with the
+  // provider's compliance review; they wait, and nothing is sent again.
+  'identity_under_review',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];

@@ -226,16 +226,97 @@ export interface ProviderOpenWalletInput {
   dateOfBirth: string;
   bvn: string;
   nin: string;
+  /**
+   * What a provider that reviews the person itself (`capabilities.
+   * separateKyc`, Nuvion) needs beyond the fields above (NUV-02). Fintava
+   * takes none of it and ignores it.
+   */
+  review?: ProviderReviewDetails;
+}
+
+/** A home address in parts, as a reviewing provider takes it (NUV-02). */
+export interface ProviderAddressParts {
+  line1: string;
+  line2: string | null;
+  city: string;
+  state: string;
+  postalCode: string;
+  /** ISO 3166-1 alpha-2. */
+  countryCode: string;
+}
+
+/** The ID document the person holds (NUV-02). Its number is never stored. */
+export interface ProviderIdDocument {
+  type: 'international_passport' | 'drivers_license' | 'national_id';
+  number: string;
+  /** YYYY-MM-DD, or null when not given. */
+  issueDate: string | null;
+  expiryDate: string | null;
+  /** ISO 3166-1 alpha-2 of the issuing country. */
+  issuingCountry: string;
+}
+
+/**
+ * The person's details for a provider that reviews them (NUV-02), and what
+ * this call is: a first opening, a correction of the customer the provider
+ * already has (`customerId`, after its review said no), or an opening sent
+ * again after an earlier one's answer was lost (`lostAttemptAt`), which
+ * first looks for the customer that earlier call may have made and makes
+ * one only when the provider proves there is none.
+ */
+export interface ProviderReviewDetails {
+  middleName: string | null;
+  gender: 'male' | 'female';
+  /** ISO 3166-1 alpha-2. */
+  nationality: string;
+  address: ProviderAddressParts;
+  idDocument: ProviderIdDocument;
+  proofOfAddressType: 'utility_bill' | 'bank_statement';
+  /** The customer to correct instead of making another; null for a new one. */
+  customerId: string | null;
+  /**
+   * With `customerId`: send the BVN and NIN again, because the review named
+   * one of them as what failed.
+   */
+  numbersAgain: boolean;
+  /** When an earlier opening whose answer was lost was sent; null otherwise. */
+  lostAttemptAt: Date | null;
+}
+
+/**
+ * Where a provider's own review of a person stands (NUV-02): its words,
+ * kept as it sends them, never a number or a document. `reasons` are the
+ * provider's own words for a refusal, already masked.
+ */
+export interface ProviderReviewState {
+  /** The person record documents are linked to, when the provider has one. */
+  personId: string | null;
+  /** The review's state in the provider's words (Nuvion: `incomplete` ...). */
+  status: string;
+  bvnStatus: string | null;
+  ninStatus: string | null;
+  documentStatus: string | null;
+  addressProofStatus: string | null;
+  identificationStatus: string | null;
+  reasons: string[];
+  /** True when the customer was found (after a lost answer), not made now. */
+  found: boolean;
 }
 
 /**
  * What opening answered: the account (Fintava answers it at once), or a
  * customer whose account number comes later (Nuvion provisions it
- * asynchronously; `getWalletAccount` reads it when it is ready).
+ * asynchronously; `getWalletAccount` reads it when it is ready). A
+ * reviewing provider also says where its review stands (`review`, NUV-02).
  */
 export type ProviderOpenedWallet =
   | { state: 'open'; customer: ProviderCustomer }
-  | { state: 'provisioning'; customerId: string; walletId: string | null };
+  | {
+      state: 'provisioning';
+      customerId: string;
+      walletId: string | null;
+      review?: ProviderReviewState;
+    };
 
 // ---------------------------------------------------------------------------
 // Balances

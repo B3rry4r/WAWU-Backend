@@ -1,8 +1,4 @@
-import {
-  ConflictException,
-  HttpException,
-  UnprocessableEntityException,
-} from '@nestjs/common';
+import { HttpException, UnprocessableEntityException } from '@nestjs/common';
 import { MoneyError } from '../money/money-error';
 import type { WalletProviderName } from './wallet-provider.interface';
 
@@ -62,6 +58,10 @@ export type WalletProviderErrorKind =
  */
 export const WALLET_PROVIDER_UNKNOWN_OUTCOMES: readonly WalletProviderErrorKind[] =
   ['outcome_unknown', 'not_confirmed', 'duplicate_reference'];
+
+/** What a person under the provider's compliance review is told (NUV-01, NUV-02). */
+export const UNDER_REVIEW_MESSAGE =
+  'Your details are being reviewed. We will let you know when the review is done.';
 
 /** The default wait a refusal tells the app, when the provider gives none. */
 export const DEFAULT_PROVIDER_RETRY_AFTER_SECONDS = 30;
@@ -162,10 +162,12 @@ export function walletProviderErrorToHttp(
         'We could not confirm those identity details.',
       );
     case 'under_review':
-      // Default (agent), owner may override: a plain 409 like the plain
-      // 422 above, so no money reason code is added to the contract.
-      return new ConflictException(
-        'Your details are being reviewed. We will let you know when the review is done.',
+      // NUV-02 (the NUV-01 verifier's rule: a money route always fills
+      // `reason`, so "under review" has its code before any route answers
+      // it): 409 identity_under_review, the same sentence as before.
+      return new MoneyError(
+        'identity_under_review',
+        UNDER_REVIEW_MESSAGE,
       );
     case 'outcome_unknown':
     case 'not_confirmed':
