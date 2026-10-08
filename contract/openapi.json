@@ -6657,6 +6657,37 @@
         ]
       }
     },
+    "/api/hub/admin/professionals/{id}/visibility": {
+      "get": {
+        "operationId": "AdminProfessionalReviewController_visibility",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminProfessionalVisibilityView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Whether a listing is in the directory, hidden by its owner or taken down\nby an admin, and the latest takedown on record (FIX-06).",
+        "tags": [
+          "AdminProfessionalReview"
+        ]
+      }
+    },
     "/api/hub/admin/professionals/{id}/document-url": {
       "post": {
         "operationId": "AdminProfessionalReviewController_documentUrl",
@@ -18039,6 +18070,9 @@
                       "format": "date-time",
                       "nullable": true
                     },
+                    "listed": {
+                      "type": "boolean"
+                    },
                     "category": {
                       "type": "string"
                     },
@@ -18086,15 +18120,13 @@
                     "issuingBody": {
                       "type": "string",
                       "nullable": true
-                    },
-                    "listed": {
-                      "type": "boolean"
                     }
                   },
                   "required": [
                     "id",
                     "status",
                     "reviewedAt",
+                    "listed",
                     "category",
                     "documents",
                     "wawuUserId",
@@ -18105,8 +18137,7 @@
                     "services",
                     "credentialKind",
                     "licenceNumber",
-                    "issuingBody",
-                    "listed"
+                    "issuingBody"
                   ]
                 }
               }
@@ -18147,6 +18178,9 @@
                         "type": "string",
                         "format": "date-time",
                         "nullable": true
+                      },
+                      "listed": {
+                        "type": "boolean"
                       },
                       "category": {
                         "type": "string"
@@ -18195,15 +18229,13 @@
                       "issuingBody": {
                         "type": "string",
                         "nullable": true
-                      },
-                      "listed": {
-                        "type": "boolean"
                       }
                     },
                     "required": [
                       "id",
                       "status",
                       "reviewedAt",
+                      "listed",
                       "category",
                       "documents",
                       "wawuUserId",
@@ -18214,8 +18246,7 @@
                       "services",
                       "credentialKind",
                       "licenceNumber",
-                      "issuingBody",
-                      "listed"
+                      "issuingBody"
                     ]
                   }
                 }
@@ -18300,6 +18331,9 @@
                       "format": "date-time",
                       "nullable": true
                     },
+                    "listed": {
+                      "type": "boolean"
+                    },
                     "category": {
                       "type": "string"
                     },
@@ -18347,15 +18381,13 @@
                     "issuingBody": {
                       "type": "string",
                       "nullable": true
-                    },
-                    "listed": {
-                      "type": "boolean"
                     }
                   },
                   "required": [
                     "id",
                     "status",
                     "reviewedAt",
+                    "listed",
                     "category",
                     "documents",
                     "wawuUserId",
@@ -18366,8 +18398,7 @@
                     "services",
                     "credentialKind",
                     "licenceNumber",
-                    "issuingBody",
-                    "listed"
+                    "issuingBody"
                   ]
                 }
               }
@@ -34370,6 +34401,116 @@
           "otherCategories"
         ]
       },
+      "AdminProfessionalTakedownRecordView": {
+        "type": "object",
+        "properties": {
+          "standing": {
+            "type": "boolean"
+          },
+          "takenDownAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "takenDownByAdminId": {
+            "type": "string"
+          },
+          "takenDownByAdminEmail": {
+            "type": "string"
+          },
+          "takenDownByAdminRole": {
+            "type": "string",
+            "enum": [
+              "superadmin",
+              "reviewer",
+              "support",
+              "finance"
+            ]
+          },
+          "relistsAs": {
+            "type": "string",
+            "enum": [
+              "listed",
+              "hidden"
+            ]
+          },
+          "liftedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "liftedByAdminId": {
+            "type": "string",
+            "nullable": true
+          },
+          "liftedByAdminEmail": {
+            "type": "string",
+            "nullable": true
+          },
+          "liftedByAdminRole": {
+            "type": "string",
+            "enum": [
+              "superadmin",
+              "reviewer",
+              "support",
+              "finance"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "standing",
+          "takenDownAt",
+          "takenDownByAdminId",
+          "takenDownByAdminEmail",
+          "takenDownByAdminRole",
+          "relistsAs",
+          "liftedAt",
+          "liftedByAdminId",
+          "liftedByAdminEmail",
+          "liftedByAdminRole"
+        ]
+      },
+      "AdminProfessionalVisibilityView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "rejected",
+              "approved"
+            ]
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "listed",
+              "hidden",
+              "taken_down"
+            ],
+            "nullable": true
+          },
+          "takenDownAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "latestTakedown": {
+            "$ref": "#/components/schemas/AdminProfessionalTakedownRecordView",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "visibility",
+          "takenDownAt",
+          "latestTakedown"
+        ]
+      },
       "AdminProfessionalDocumentUrlView": {
         "type": "object",
         "properties": {
@@ -36671,8 +36812,8 @@
             "type": "string",
             "enum": [
               "live",
-              "draft",
-              "hidden"
+              "hidden",
+              "draft"
             ]
           },
           "createdAt": {
@@ -40340,8 +40481,8 @@
           "visibility": {
             "type": "string",
             "enum": [
-              "hidden",
               "listed",
+              "hidden",
               "taken_down"
             ]
           },
