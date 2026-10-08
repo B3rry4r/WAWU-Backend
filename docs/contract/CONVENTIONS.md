@@ -1105,3 +1105,42 @@ send `Cache-Control: no-store`, read our database only and never call Fintava.
 - **Contract.** The search declares its plain `400` (a malformed `q`, no
   `reason`) and `429` (`recipient_search_rate_limited`; the per-address 429
   has no `reason`); both lists carry `maxItems` (20 and 10).
+
+## 14. Points (POINTS-01)
+
+Points are not money: no provider holds them, no route converts them to
+naira or dollars, and every figure is a count of points (R-43). They are
+written here because the tasks that sell, spend and cash them out
+(TIER-03, POINTS-02 to POINTS-04, REF-01) answer in this one error shape.
+
+- **Where they live.** `src/points/`: `PointLot` (one grant: how many, how
+  many are left, when they end), `PointHold` (points taken for one job until
+  it is committed or released) and `PointLedger` (append-only, one row per
+  change to one lot). The lots are the authority for points; a balance is the
+  sum of a person's lots that have points and have not ended.
+- **The one writer.** `PointsService` (exported by `PointsModule`): `grant`,
+  `hold`, `commit`, `release`, `expireLapsed`. Each can join the caller's own
+  READ COMMITTED transaction (`{ tx }`), so a payment can set a tier and grant
+  its bonus in one commit. Nothing else writes these tables.
+- **Idempotent.** A grant on its (source, reference) and a hold on its
+  (purpose, reference): the same call again changes nothing and answers what
+  the first one made. The same reference for another person or amount is a
+  409.
+- **Spent soonest-ending first,** then oldest grant, then lot id. A release
+  puts every point back into the lot it came from.
+- **What the database refuses** (the migration's CHECKs and triggers): a lot
+  below 0 or above what it was granted; a lot whose points differ from the sum
+  of its ledger rows when the transaction commits; any UPDATE or TRUNCATE of
+  the ledger; a DELETE that leaves part of a person's ledger behind (the
+  account purge deletes all of it in one statement).
+- **Refusals** (`PointsError`, `src/points/points-error.ts`): `402
+  insufficient_points` with `balancePoints`, `neededPoints`,
+  `shortfallPoints`; `409 points_grant_conflict`; `409 points_hold_conflict`;
+  `404 points_hold_not_found`; `409 points_hold_settled` (spent, or already
+  given back); `400 points_invalid`. A field that carries points ends in
+  `Points`, as money fields end in `Kobo`.
+- **`GET /me/points`** (PT5): `balance`, `nextExpiry` or null, `lots` (soonest
+  end first, at most 50, `lotCount` says how many in all), `movements` (the
+  last 20 ledger rows, newest first, each with a plain `label` and `pending`
+  for a hold still running). `Cache-Control: no-store`; the token is the
+  person.
