@@ -26079,7 +26079,7 @@
             }
           }
         },
-        "summary": "The plan as the caller pays for it. Every amount is whole minor units of\n`currency` (kobo for NGN, cents for USD); one currency per answer.",
+        "summary": "The plan as the caller pays for it. Every amount is whole minor units of\n`currency` (kobo for NGN, cents for USD); one currency per answer.\n`no-store`: the answer is the caller's own (their currency).",
         "tags": [
           "Plans"
         ]
@@ -26101,7 +26101,7 @@
             }
           }
         },
-        "summary": "`none`, `active`, `ending` or `ended`, with what the tier gives.",
+        "summary": "`none`, `active`, `ending` or `ended`, with what the tier gives.\n`no-store`: the answer is the caller's own.",
         "tags": [
           "MeTier"
         ]
@@ -44579,7 +44579,11 @@
             "nullable": true
           },
           "badge": {
-            "$ref": "#/components/schemas/PlanBadgeView",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PlanBadgeView"
+              }
+            ],
             "nullable": true
           }
         },
@@ -44617,7 +44621,11 @@
             ]
           },
           "tier": {
-            "$ref": "#/components/schemas/MyTierSummaryView",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MyTierSummaryView"
+              }
+            ],
             "nullable": true
           },
           "activeFrom": {
@@ -44629,19 +44637,23 @@
             "nullable": true
           },
           "productsAllowed": {
-            "type": "number"
+            "type": "integer"
           },
           "extraProducts": {
-            "type": "number"
+            "type": "integer"
           },
           "pointsIncluded": {
-            "type": "number"
+            "type": "integer"
           },
           "firstVoiceIntroIncluded": {
             "type": "boolean"
           },
           "eventPass": {
-            "$ref": "#/components/schemas/PlanEventPassView",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PlanEventPassView"
+              }
+            ],
             "nullable": true
           }
         },
@@ -44667,19 +44679,19 @@
             "type": "string"
           },
           "days": {
-            "type": "number"
+            "type": "integer"
           },
           "products": {
-            "type": "number"
+            "type": "integer"
           },
           "bonusPoints": {
-            "type": "number"
+            "type": "integer"
           },
           "bonusPointsExpireDays": {
-            "type": "number"
+            "type": "integer"
           },
           "priceMinor": {
-            "type": "number"
+            "type": "integer"
           },
           "eventPass": {
             "$ref": "#/components/schemas/PlanEventPassView"
@@ -44688,7 +44700,7 @@
             "$ref": "#/components/schemas/PlanBadgeView"
           },
           "packBonusPercent": {
-            "type": "number"
+            "type": "integer"
           },
           "firstVoiceIntroIncluded": {
             "type": "boolean"
@@ -44716,10 +44728,10 @@
         "type": "object",
         "properties": {
           "count": {
-            "type": "number"
+            "type": "integer"
           },
           "priceMinor": {
-            "type": "number"
+            "type": "integer"
           }
         },
         "required": [
@@ -44734,10 +44746,10 @@
             "type": "string"
           },
           "points": {
-            "type": "number"
+            "type": "integer"
           },
           "priceMinor": {
-            "type": "number"
+            "type": "integer"
           }
         },
         "required": [
@@ -44750,10 +44762,10 @@
         "type": "object",
         "properties": {
           "points": {
-            "type": "number"
+            "type": "integer"
           },
           "priceMinor": {
-            "type": "number"
+            "type": "integer"
           }
         },
         "required": [
@@ -44768,7 +44780,7 @@
             "type": "string"
           },
           "points": {
-            "type": "number"
+            "type": "integer"
           },
           "per": {
             "type": "string",
@@ -44791,13 +44803,13 @@
         "type": "object",
         "properties": {
           "dailyPoints": {
-            "type": "number"
+            "type": "integer"
           },
           "maxCharactersPerJob": {
-            "type": "number"
+            "type": "integer"
           },
           "maxAudioMinutesPerJob": {
-            "type": "number"
+            "type": "integer"
           }
         },
         "required": [

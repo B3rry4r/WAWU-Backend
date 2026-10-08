@@ -87,6 +87,36 @@ export interface PlanPack {
   price: MinorPrice;
 }
 
+/**
+ * The largest value a Postgres INTEGER column holds. Counts and points are
+ * copied into such columns (`MakerTier.productsIncluded`, `pointsIncluded`,
+ * `extraProducts`), so the file may not hold a bigger whole number: it would
+ * boot and then fail at the first purchase.
+ */
+export const INT4_MAX = 2_147_483_647;
+
+/**
+ * Every AI action the plan prices (brief section 2, `action_points`), in the
+ * file's order. The file must price each one, and only these: the points
+ * service (POINTS-03) charges by these ids, so a missing one would be an
+ * action with no price.
+ */
+export const PLAN_ACTIONS = [
+  'say_my_name',
+  'voice_intro',
+  'voiceover_per_min',
+  'quick_voice_per_min',
+  'captions_per_min',
+  'clean_audio_per_min',
+  'music_per_track',
+  'sfx',
+  'dub_standard_per_min_lang',
+  'dub_premium_per_min_lang',
+  'receptionist_message',
+  'receptionist_voice_per_min',
+] as const;
+export type PlanActionId = (typeof PLAN_ACTIONS)[number];
+
 /** What an action's points are counted per. */
 export const ACTION_UNITS = [
   'use',
@@ -233,7 +263,86 @@ export function loadPlansConfig(file: string = PLANS_CONFIG_FILE): PlansConfig {
       file,
     );
   }
+  // JSON.parse keeps the last of two equal keys, so a price written twice
+  // (an edit that left the old line in place) would boot on whichever came
+  // second. The file is refused instead, naming the key.
+  const repeated = repeatedKey(text);
+  if (repeated !== null)
+    throw new PlansConfigError(repeated, 'is written twice', file);
   return parsePlansConfig(raw, file);
+}
+
+/**
+ * The path of the first key written twice in one object (`tiers[0].price.kobo`),
+ * or null. Runs on text JSON.parse has already accepted, so it only has to
+ * walk valid JSON. Keys are compared as JSON decodes them (`"kobo"` and
+ * `"\u006bobo"` are the same key).
+ */
+export function repeatedKey(text: string): string | null {
+  let i = 0;
+  const end = text.length;
+  const space = () => {
+    while (i < end && ' \t\n\r'.includes(text[i])) i++;
+  };
+  const str = (): string => {
+    const start = i;
+    i++;
+    while (i < end && text[i] !== '"') {
+      if (text[i] === '\\') i++; // an escape: skip the escaped character too
+      i++;
+    }
+    i++;
+    return JSON.parse(text.slice(start, i)) as string;
+  };
+  const value = (path: string): string | null => {
+    space();
+    const ch = text[i];
+    if (ch === '{') {
+      i++;
+      space();
+      if (text[i] === '}') {
+        i++;
+        return null;
+      }
+      const seen = new Set<string>();
+      while (i < end) {
+        space();
+        const key = str();
+        const at = path ? `${path}.${key}` : key;
+        if (seen.has(key)) return at;
+        seen.add(key);
+        space();
+        i++; // the colon
+        const inner = value(at);
+        if (inner !== null) return inner;
+        space();
+        if (text[i++] !== ',') return null; // the closing brace
+      }
+      return null;
+    }
+    if (ch === '[') {
+      i++;
+      space();
+      if (text[i] === ']') {
+        i++;
+        return null;
+      }
+      for (let n = 0; i < end; n++) {
+        const inner = value(`${path}[${n}]`);
+        if (inner !== null) return inner;
+        space();
+        if (text[i++] !== ',') return null; // the closing bracket
+      }
+      return null;
+    }
+    if (ch === '"') {
+      str();
+      return null;
+    }
+    while (i < end && !' \t\n\r,]}'.includes(text[i])) i++;
+    return null;
+  };
+  return value('');
 }
 
 // ─── the checks ────────────────────────────────────────────────────────────
@@ -244,7 +353,7 @@ class Check {
   constructor(private readonly file: string) {}
 
   fail(path: string, problem: string): never {
-    throw new PlansConfigError(path, problem, this.file);
+    throw new PlansConfigError(path || '(the file)', problem, this.file);
   }
 
   /** An object with exactly these keys: one missing or one unknown stops it. */
@@ -292,6 +401,11 @@ class Check {
       this.fail(
         path,
         `must be a whole number of ${min} or more (it is ${show(v)})`,
+      );
+    if (v > INT4_MAX)
+      this.fail(
+        path,
+        `must be at most ${INT4_MAX}, the most a whole-number column holds (it is ${v})`,
       );
     return v;
   }
@@ -525,16 +639,16 @@ export function parsePlansConfig(raw: unknown, file: string): PlansConfig {
     minimumPoints: c.whole(cash.minimum_points, 'cash_out.minimum_points', 1),
   };
 
-  const actionMap = c.map(top.action_points, 'action_points', (v, p) => {
-    const o = c.object(v, p, ['points', 'per']);
+  const actionsO = c.object(top.action_points, 'action_points', PLAN_ACTIONS);
+  const actions = PLAN_ACTIONS.map((id): PlanAction => {
+    const p = `action_points.${id}`;
+    const o = c.object(actionsO[id], p, ['points', 'per']);
     return {
+      id,
       points: c.whole(o.points, `${p}.points`, 1),
       per: c.oneOf(o.per, `${p}.per`, ACTION_UNITS),
     };
   });
-  const actions = Object.entries(actionMap).map(([id, a]) => ({ id, ...a }));
-  if (actions.length === 0)
-    c.fail('action_points', 'must name at least one action');
 
   const capsO = c.object(top.caps, 'caps', [
     'daily_points_per_user',

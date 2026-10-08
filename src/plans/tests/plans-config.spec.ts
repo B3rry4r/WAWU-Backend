@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import {
   loadPlansConfig,
   parsePlansConfig,
+  repeatedKey,
   PLANS_CONFIG_FILE,
   PlansConfigError,
   priceIn,
@@ -198,6 +199,31 @@ describe('plans.config.json (TIER-01)', () => {
         'provisional.PLAN-PRICES must be text',
       ],
       [
+        'products a whole-number column cannot hold',
+        (r) => (r.tiers[2].products = 2_147_483_648),
+        'tiers[2].products must be at most 2147483647, the most a whole-number column holds (it is 2147483648)',
+      ],
+      [
+        'bonus points a whole-number column cannot hold',
+        (r) => (r.tiers[0].bonus_points = 3_000_000_000),
+        'tiers[0].bonus_points must be at most 2147483647',
+      ],
+      [
+        'extra products a whole-number column cannot hold',
+        (r) => (r.extra_products.count = 2_147_483_648),
+        'extra_products.count must be at most 2147483647',
+      ],
+      [
+        'an action the plan prices left out',
+        (r) => delete r.action_points.voice_intro,
+        'action_points.voice_intro is missing',
+      ],
+      [
+        'an action the plan does not price',
+        (r) => (r.action_points.teleport = { points: 9, per: 'use' }),
+        'action_points.teleport is not a known field',
+      ],
+      [
         'an empty object',
         (r) => {
           for (const k of Object.keys(r)) delete r[k];
@@ -210,6 +236,67 @@ describe('plans.config.json (TIER-01)', () => {
       expect(message.startsWith('plans.config.json: ')).toBe(true);
     });
 
+    it.each<[string, (text: string) => string, string]>([
+      [
+        'a price written twice (the old line left in place)',
+        (t) => t.replace('"kobo": 100000,', '"kobo": 100000, "kobo": 1,'),
+        'tiers[0].price.kobo is written twice',
+      ],
+      [
+        'a key repeated at the top',
+        (t) =>
+          t.replace(
+            '"tier_ending_days": 7,',
+            '"tier_ending_days": 7, "tier_ending_days": 7,',
+          ),
+        'tier_ending_days is written twice',
+      ],
+      [
+        'a key repeated inside a list item',
+        (t) => t.replace('"id": "s",', '"id": "s", "id": "x",'),
+        'packs[0].id is written twice',
+      ],
+      [
+        'a key repeated in another spelling of the same name',
+        (t) =>
+          t.replace('"hold_days": 7,', '"hold_days": 7, "hold_\\u0064ays": 1,'),
+        'referral.hold_days is written twice',
+      ],
+      [
+        'a whole section written twice',
+        (t) =>
+          t.replace(
+            '"caps": {',
+            '"caps": { "max_chars_per_job": 1 }, "caps": {',
+          ),
+        'caps is written twice',
+      ],
+    ])('%s stops boot, naming the key', (_name, edit, expected) => {
+      const text = readFileSync(PLANS_CONFIG_FILE, 'utf8');
+      const changed = edit(text);
+      expect(changed).not.toBe(text);
+      const file = join(
+        mkdtempSync(join(tmpdir(), 'plans-')),
+        'plans.config.json',
+      );
+      writeFileSync(file, changed);
+      expect(() => loadPlansConfig(file)).toThrow(
+        `plans.config.json: ${expected}. Fix the file and restart.`,
+      );
+    });
+
+    it('the shipped file and keys repeated only across different objects pass the repeated-key check', () => {
+      const text = readFileSync(PLANS_CONFIG_FILE, 'utf8');
+      expect(repeatedKey(text)).toBeNull();
+      expect(
+        repeatedKey('{"a":{"k":1},"b":{"k":1},"c":[{"k":1},{"k":2}]}'),
+      ).toBeNull();
+      expect(repeatedKey('{"a":"\\"}","a":1}')).toBe('a');
+      expect(repeatedKey('{"a":[[],{}],"b":{"c":[1,{"d":1,"d":2}]}}')).toBe(
+        'b.c[1].d',
+      );
+    });
+
     it('a file that is not JSON stops boot and says so', () => {
       const dir = mkdtempSync(join(tmpdir(), 'plans-'));
       const file = join(dir, 'plans.config.json');
@@ -217,6 +304,14 @@ describe('plans.config.json (TIER-01)', () => {
       expect(() => loadPlansConfig(file)).toThrow(
         /plans\.config\.json: \(the file\) is not valid JSON/,
       );
+    });
+
+    it('a file whose top is not an object names the file, not an empty field', () => {
+      for (const top of [[], 'tiers', 7, null]) {
+        expect(() => parsePlansConfig(top, PLANS_CONFIG_FILE)).toThrow(
+          'plans.config.json: (the file) must be an object. Fix the file and restart.',
+        );
+      }
     });
 
     it('a missing file stops boot and says so', () => {

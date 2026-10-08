@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get, Header, UseGuards } from '@nestjs/common';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
@@ -19,9 +19,14 @@ export class PlansController {
   /**
    * The plan as the caller pays for it. Every amount is whole minor units of
    * `currency` (kobo for NGN, cents for USD); one currency per answer.
+   * `no-store`: the answer is the caller's own (their currency).
    */
   @Get()
+  @Header('Cache-Control', 'no-store')
   get(@CurrentUser() user: WawuJwtClaims): Promise<PlansView> {
-    return this.plans.plansFor(user.sub, user.phone);
+    return this.plans.plansFor(user.sub, {
+      phone: user.phone,
+      country: user.country,
+    });
   }
 }

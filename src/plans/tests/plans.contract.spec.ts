@@ -42,7 +42,7 @@ const DAY = 86_400_000;
 const NIGERIAN = '+2348031234567';
 const ABROAD = '+447700900123';
 
-function mintToken(sub: string, phone: string): string {
+function mintToken(sub: string, phone: unknown, country: unknown): string {
   const privateKey = readFileSync(
     join(__dirname, '../../../mock-wawu-id/private.pem'),
     'utf8',
@@ -54,7 +54,7 @@ function mintToken(sub: string, phone: string): string {
       phone,
       firstName: 'Plans',
       lastName: 'Tester',
-      country: 'Nigeria',
+      country,
       verificationTier: 'basic',
       trustScore: 0,
       status: 'active',
@@ -122,11 +122,17 @@ describe('GET /plans and GET /me/tier (TIER-01) over HTTP', () => {
     users.push(id);
     return id;
   };
-  const auth = (id: string, phone: string) => `Bearer ${mintToken(id, phone)}`;
-  const plans = (id: string, phone: string, on = app) =>
+  const auth = (id: string, phone: unknown, country: unknown = 'Nigeria') =>
+    `Bearer ${mintToken(id, phone, country)}`;
+  const plans = (
+    id: string,
+    phone: unknown,
+    on = app,
+    country: unknown = 'Nigeria',
+  ) =>
     request(on.getHttpServer())
       .get('/api/hub/plans')
-      .set('Authorization', auth(id, phone))
+      .set('Authorization', auth(id, phone, country))
       .expect(200)
       .then((r) => data<PlansView>(r));
   const myTier = (id: string) =>
@@ -241,14 +247,70 @@ describe('GET /plans and GET /me/tier (TIER-01) over HTTP', () => {
     });
 
     it.each([
-      ['08031234567', 'NGN'],
-      ['2348031234567', 'NGN'],
-      ['+234 803 123 4567', 'NGN'],
-      ['8031234567', 'NGN'],
-      ['+14155550100', 'USD'],
-      ['', 'USD'],
-    ])('reads the phone %p as %s', async (phone, currency) => {
-      expect((await plans(person(), phone)).currency).toBe(currency);
+      // A Nigerian country code decides, whatever the country claim says.
+      ['+2348031234567', 'United States', 'NGN'],
+      ['+234 803 123 4567', null, 'NGN'],
+      ['2348031234567', 'United Kingdom', 'NGN'],
+      ['002348031234567', '', 'NGN'],
+      // Any other country code decides too.
+      ['+14155550100', 'Nigeria', 'USD'],
+      ['+447700900123', 'NG', 'USD'],
+      ['0044 7700 900123', 'Nigeria', 'USD'],
+      // No country code: the country claim breaks the tie (lead ruling N1).
+      ['08031234567', 'Nigeria', 'NGN'],
+      ['8031234567', ' nigeria ', 'NGN'],
+      ['08031234567', 'NGA', 'NGN'],
+      ['08031234567', 'United States', 'USD'],
+      ['07123456789', 'United Kingdom', 'USD'],
+      ['08031234567', null, 'USD'],
+      ['', 'Nigeria', 'NGN'],
+      ['', 'United States', 'USD'],
+    ])(
+      'reads the phone %p with the country %p as %s',
+      async (phone, country, currency) => {
+        expect((await plans(person(), phone, app, country)).currency).toBe(
+          currency,
+        );
+      },
+    );
+
+    it('a United States web sign-up (a local number, dial code apart) is billed in dollars', async () => {
+      // WAWU ID's web register keeps the phone as typed and the dial code
+      // apart: ten digits that look like a Nigerian mobile.
+      const v = await plans(person(), '(803) 555-0100', app, 'United States');
+      expect(v.currency).toBe('USD');
+      expect(v.tiers.map((t) => t.priceMinor)).toEqual(
+        config.tiers.map((t) => t.price.cents),
+      );
+    });
+
+    it.each([
+      ['a number', 8031234567],
+      ['a list', ['+2348031234567']],
+      ['an object', { number: '+2348031234567' }],
+      ['null', null],
+    ])(
+      'a phone claim that is %s is read as no phone, never a 500',
+      async (_kind, phone) => {
+        expect((await plans(person(), phone, app, 'Nigeria')).currency).toBe(
+          'NGN',
+        );
+        expect(
+          (await plans(person(), phone, app, 'United States')).currency,
+        ).toBe('USD');
+        expect((await plans(person(), phone, app, 42)).currency).toBe('USD');
+      },
+    );
+
+    it('both answers are personal and say no-store', async () => {
+      const id = person();
+      for (const route of ['/api/hub/plans', '/api/hub/me/tier']) {
+        const res = await request(app.getHttpServer())
+          .get(route)
+          .set('Authorization', auth(id, NIGERIAN))
+          .expect(200);
+        expect(res.headers['cache-control']).toBe('no-store');
+      }
     });
 
     it('serves the rest of the plan from the config: tiers, actions and caps', async () => {
@@ -522,6 +584,39 @@ describe('GET /plans and GET /me/tier (TIER-01) over HTTP', () => {
       expect((await myTier(holder)).tier?.id).toBe(config.tiers[0].id);
     });
 
+    it('keeps what a person bought when the config has changed that tier since', async () => {
+      // A tier the config still names, bought when it gave other figures.
+      const id = person();
+      const t = config.tiers[1];
+      await prisma.makerTier.create({
+        data: {
+          wawuUserId: id,
+          tierId: t.id,
+          activeFrom: new Date(Date.now() - DAY),
+          activeUntil: new Date(Date.now() + 60 * DAY),
+          productsIncluded: t.products + 2,
+          extraProducts: 1,
+          pointsIncluded: t.bonusPoints + 7,
+          voiceIntroIncluded: !t.firstVoiceIntro,
+        },
+      });
+      expect(await myTier(id)).toMatchObject({
+        state: 'active',
+        tier: { id: t.id, name: t.name, badge: t.badge },
+        productsAllowed: t.products + 3,
+        extraProducts: 1,
+        pointsIncluded: t.bonusPoints + 7,
+        firstVoiceIntroIncluded: !t.firstVoiceIntro,
+      });
+      const held = await tiers.tierOf(id);
+      expect(held).toMatchObject({
+        productsIncluded: t.products + 2,
+        productsAllowed: t.products + 3,
+        pointsIncluded: t.bonusPoints + 7,
+      });
+      expect(held.tier).toEqual(t);
+    });
+
     it('keeps what a person bought when the config no longer names their tier', async () => {
       const id = person();
       await prisma.makerTier.create({
@@ -553,6 +648,7 @@ describe('GET /plans and GET /me/tier (TIER-01) over HTTP', () => {
         await billing.fixAtFirstPurchase({
           wawuUserId: id,
           phone: id === me ? NIGERIAN : ABROAD,
+          country: 'Nigeria',
           purchaseRef: `test-${randomUUID()}`,
         });
         await seedTier(id, id === me ? 0 : 1, 10);

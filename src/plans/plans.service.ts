@@ -1,6 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { BillingCurrency } from '../../generated/prisma/enums';
-import { BillingCurrencyService } from './billing-currency.service';
+import {
+  BillingCurrencyService,
+  type BillingClaims,
+} from './billing-currency.service';
 import { MakerTierService } from './maker-tier.service';
 import {
   countIn,
@@ -31,9 +34,9 @@ export class PlansService {
   /** The plan as the caller pays for it. */
   async plansFor(
     wawuUserId: string,
-    phone: string | null | undefined,
+    claims: BillingClaims,
   ): Promise<PlansView> {
-    const billing = await this.currency.resolve(wawuUserId, phone);
+    const billing = await this.currency.resolve(wawuUserId, claims);
     return {
       ...planIn(this.config, billing.currency),
       currencyFixed: billing.fixed,
