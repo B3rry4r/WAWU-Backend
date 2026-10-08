@@ -731,6 +731,19 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    key: 'professionalTakedowns',
+    models: ['ProfessionalTakedown'],
+    // When an admin took one of the person's listings down and when it was
+    // listed again (FIX-06). Which admin did it is not the person's data and
+    // is left out.
+    load: (prisma, me) =>
+      prisma.professionalTakedown.findMany({
+        where: { wawuUserId: me },
+        select: { professionalId: true, takenDownAt: true, liftedAt: true },
+        orderBy: { takenDownAt: 'desc' },
+      }),
+  },
+  {
     key: 'professionalLocation',
     models: ['ProfessionalLocation'],
     // The city the person wrote for their professional card.
