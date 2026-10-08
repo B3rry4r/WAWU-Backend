@@ -9,6 +9,12 @@ import { StorageService } from '../../storage/storage.service';
 import { isRegulatedCategory } from '../../professional/professional-categories';
 import type { ReviewStatus } from '../../../generated/prisma/enums';
 import type { AdminProfessionalQueueQueryDto } from './dto/professional-review.dto';
+import type { AdminActor } from '../../common/audit/admin-ops-audit.service';
+import {
+  LISTING_NOT_TAKEN_DOWN,
+  lockListing,
+  standingTakedown,
+} from '../../professional/professional-takedown';
 import type { Paginated } from '../../common/interceptors/response.interceptor';
 import type {
   AdminProfessionalDecisionView,
@@ -285,23 +291,102 @@ export class AdminProfessionalReviewService {
    * Deliberately NOT a delete and NOT a status change: the approval happened
    * and the record of it should survive. This is the control for a complaint
    * that needs acting on before it can be investigated properly.
+   *
+   * FIX-06: the pull now HOLDS. It records a ProfessionalTakedown (who, when,
+   * and what the person had chosen themselves), so the person's Show is
+   * refused until an admin lists it again (`relist`). The answer is the one
+   * this route always gave (the dashboard reads it). Unlisting a listing that
+   * is already taken down changes nothing: the first takedown stands.
    */
-  async unlist(id: string): Promise<AdminProfessionalDecisionView> {
-    const row = await this.prisma.professionalProfile.findUnique({
-      where: { id },
-      select: { status: true },
-    });
-    if (!row) throw new NotFoundException('Application not found');
-    if (row.status !== 'approved') {
-      throw new ConflictException(
-        'Only an approved listing can be pulled from the directory.',
-      );
-    }
-    return this.toDecision(
-      await this.prisma.professionalProfile.update({
+  async unlist(
+    id: string,
+    admin: AdminActor,
+  ): Promise<AdminProfessionalDecisionView> {
+    return this.prisma.$transaction(async (tx) => {
+      if (!(await lockListing(tx, id))) {
+        throw new NotFoundException('Application not found');
+      }
+      const row = await tx.professionalProfile.findUnique({
         where: { id },
-        data: { listed: false },
-      }),
-    );
+        select: { status: true, wawuUserId: true, listed: true },
+      });
+      if (!row) throw new NotFoundException('Application not found');
+      if (row.status !== 'approved') {
+        throw new ConflictException(
+          'Only an approved listing can be pulled from the directory.',
+        );
+      }
+
+      if (!(await standingTakedown(tx, id))) {
+        const takedown = {
+          wawuUserId: row.wawuUserId,
+          // The person's own choice as it stands now, put back on relist.
+          ownerListed: row.listed,
+          takenDownAt: new Date(),
+          takenDownByAdminId: admin.id,
+          takenDownByAdminEmail: admin.email,
+          takenDownByAdminRole: admin.role,
+          liftedAt: null,
+          liftedByAdminId: null,
+          liftedByAdminEmail: null,
+          liftedByAdminRole: null,
+        };
+        await tx.professionalTakedown.upsert({
+          where: { professionalId: id },
+          create: { professionalId: id, ...takedown },
+          update: takedown,
+        });
+      }
+
+      return this.toDecision(
+        await tx.professionalProfile.update({
+          where: { id },
+          data: { listed: false },
+        }),
+      );
+    });
+  }
+
+  /**
+   * List again a listing an admin took down (FIX-06): lifts the takedown,
+   * records who lifted it and when, and puts the listing back to what its
+   * owner had chosen (listed, unless they pressed Hide before or during the
+   * takedown). From then on the owner hides and shows it as before.
+   *
+   * Refused (409, reason.code `listing_not_taken_down`) when no takedown
+   * stands: a listing its owner hid is theirs to show, not an admin's.
+   */
+  async relist(
+    id: string,
+    admin: AdminActor,
+  ): Promise<AdminProfessionalDecisionView> {
+    return this.prisma.$transaction(async (tx) => {
+      if (!(await lockListing(tx, id))) {
+        throw new NotFoundException('Application not found');
+      }
+      const takedown = await standingTakedown(tx, id);
+      if (!takedown) {
+        throw new ConflictException({
+          message:
+            'This listing was not taken down by an admin, so there is nothing to lift. Its owner shows or hides it.',
+          reason: { code: LISTING_NOT_TAKEN_DOWN },
+        });
+      }
+      await tx.professionalTakedown.update({
+        where: { professionalId: id },
+        data: {
+          liftedAt: new Date(),
+          liftedByAdminId: admin.id,
+          liftedByAdminEmail: admin.email,
+          liftedByAdminRole: admin.role,
+        },
+      });
+      return this.toDecision(
+        await tx.professionalProfile.update({
+          where: { id },
+          data: { listed: takedown.ownerListed },
+        }),
+      );
+    });
   }
 }
