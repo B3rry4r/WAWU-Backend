@@ -76,6 +76,12 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   statement_rate_limited: 429,
   statement_busy: 503,
   recipient_search_rate_limited: 429,
+  // NUV-07 (R-42): the running provider's fees are settings not filled in
+  // yet; nothing is quoted or moved until they are. Not a provider failure.
+  fees_not_set: 503,
+  // Default (agent), owner may override: 403, as daily_limit_exceeded. The
+  // request is understood; this person may not move that much now.
+  limit_reached: 403,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */
@@ -99,6 +105,9 @@ export const DEBIT_GATE_ERRORS: MoneyErrorCode[] = [
   'amount_out_of_range',
   'quote_changed',
   'provider_unreachable',
+  // NUV-07: fees not set (R-42), and WAWU's or the provider's own limit.
+  'fees_not_set',
+  'limit_reached',
 ];
 
 /** The task that serves this route, written into the contract as `x-wawu-built-by`. */
