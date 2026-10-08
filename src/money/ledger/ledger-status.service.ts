@@ -4,6 +4,10 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import type { Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
+  DEFAULT_ROW_PROVIDER,
+  isRowOf,
+} from '../../wallet-provider/provider-rows';
+import {
   type ProviderHolder,
   type ProviderReconciliation,
   type ProviderRetryDecision,
@@ -136,6 +140,11 @@ export class LedgerStatusService {
    * `batch` rows per pass per server. A row that settles leaves the sweep;
    * one that does not is already scheduled.
    *
+   * Only rows of the provider the server runs are claimed (NUV-01): after
+   * a rollback, another provider's pending sends are never asked about
+   * here, so they are never failed as absent by a provider that never had
+   * them. They wait, untouched, for their own provider.
+   *
    * Order: rows recorded (or revived) within the last hour first, then the
    * rest; within each, the earliest due first. A backlog that Fintava never
    * settles (the orphan PENDING record of a refused bank send, money in that
@@ -201,6 +210,7 @@ export class LedgerStatusService {
           FROM "FintavaLedgerEntry"
          WHERE "status" = 'pending'
            AND "discrepancy" IS NULL
+           AND COALESCE("provider", ${DEFAULT_ROW_PROVIDER}) = ${this.provider.name}
            AND COALESCE("nextCheckAt",
                         GREATEST("createdAt", COALESCE("revivedAt", "createdAt"))
                           + ${afterMs}::float8 * interval '1 millisecond')
@@ -281,6 +291,16 @@ export class LedgerStatusService {
         decision: null,
         fintava: null,
         why: `already ${e.status}`,
+      };
+    }
+    // Another provider's row (NUV-01): never asked about here, never moved.
+    if (!isRowOf(this.provider.name, e.provider)) {
+      return {
+        outcome: 'skipped',
+        status: e.status,
+        decision: null,
+        fintava: null,
+        why: `recorded by another provider than ${this.provider.label}`,
       };
     }
     if (e.discrepancy) {
