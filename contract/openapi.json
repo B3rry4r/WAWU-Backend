@@ -20870,9 +20870,9 @@
             "name": "cursor",
             "required": false,
             "in": "query",
-            "description": "The `nextCursor` of the previous page: opaque, not to be built by hand.",
+            "description": "The `nextCursor` of the previous page: opaque, not to be built by hand,\nand never longer than the longest one this server gives out.",
             "schema": {
-              "maxLength": 1000,
+              "maxLength": 1498,
               "type": "string"
             }
           }
