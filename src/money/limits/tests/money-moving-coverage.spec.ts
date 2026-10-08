@@ -411,7 +411,7 @@ describe('NUV-07: every route that quotes or moves money answers fees_not_set fi
   );
   const declared = routesOf(controllersOf(MoneyContractModule));
 
-  it('finds the routes it checks, with the guards Nest runs (the walk itself works)', () => {
+  it('finds the routes it checks (the walk itself works)', () => {
     expect(mounted.map((r) => r.key)).toEqual(
       expect.arrayContaining([
         'GET money/fees/quote',
@@ -421,12 +421,6 @@ describe('NUV-07: every route that quotes or moves money answers fees_not_set fi
         'PUT money/pin',
       ]),
     );
-    const quote = mounted.find((r) => r.key === 'GET money/fees/quote')!;
-    expect(quote.guards).toEqual([
-      WawuAuthGuard,
-      FeesSetGuard,
-      WalletGateGuard,
-    ]);
     expect(
       declared
         .filter(movesMoney)
@@ -475,9 +469,14 @@ describe('NUV-07: every route that quotes or moves money answers fees_not_set fi
     );
   });
 
-  it('the fee quote runs it before the wallet gate; the read-only routes do not run it', () => {
+  it('the fee quote runs it before the wallet gate, its class guard (sign-in) read with it; the read-only routes do not run it', () => {
     const quote = mounted.find((r) => r.key === 'GET money/fees/quote')!;
     expect(quote.methodGuards).toEqual([FeesSetGuard, WalletGateGuard]);
+    expect(quote.guards).toEqual([
+      WawuAuthGuard,
+      FeesSetGuard,
+      WalletGateGuard,
+    ]);
     for (const key of [
       'GET money/wallet/balance',
       'GET money/transactions',
