@@ -1262,6 +1262,40 @@ describe('Phone push sender (INBOX-03)', () => {
       expect((await deliveriesOf(USER_A))[0].status).toBe('sent');
     });
 
+    it('a stale claim never puts a row on the wire while another instance holds it', async () => {
+      await register(USER_A);
+      await tip(USER_A);
+      await sender.enqueue();
+      const a = sender as unknown as {
+        claim(id: string, limit: number): Promise<Array<{ id: string }>>;
+        sendBatch(id: string, rows: unknown[], r: unknown): Promise<boolean>;
+      };
+      const held = await a.claim('instance-a', 10);
+      await ageLocks(USER_A);
+      expect(await sender.reapStuck()).toBe(1);
+      // instance B has just claimed it and is checking it
+      await prisma.pushDelivery.updateMany({
+        where: { userWawuId: USER_A },
+        data: {
+          status: 'claimed',
+          claimId: 'instance-b',
+          lockedAt: new Date(),
+        },
+      });
+      await a.sendBatch('instance-a', held, {
+        skipped: 0,
+        sent: 0,
+        failed: 0,
+        retried: 0,
+        tokensDisabled: 0,
+      });
+      expect(stand.sendRequests()).toHaveLength(0);
+      expect((await deliveriesOf(USER_A))[0]).toMatchObject({
+        status: 'claimed',
+        claimId: 'instance-b',
+      });
+    });
+
     it('an answer that comes back after the reaper took the row back changes nothing: the instance now sending it records its own ticket', async () => {
       await register(USER_A);
       await tip(USER_A);
