@@ -18,10 +18,8 @@ import {
 import type { IdentityHasher } from '../identity/identity-config';
 import { MoneyError } from '../money-error';
 import type { WalletReviewView } from '../money-view.type';
-import {
-  type OpenNairaWalletDto,
-  REVIEW_REQUIRED_FIELDS,
-} from './dto/open-wallet.dto';
+import type { OpenNairaWalletDto } from './dto/open-wallet.dto';
+import { REVIEW_REQUIRED_FIELDS } from './dto/open-wallet.dto';
 import {
   isDecision,
   numbersFailed,
