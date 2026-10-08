@@ -257,6 +257,31 @@ export class CommunityMessageService {
   }
 
   /**
+   * INBOX-05. What one message costs a sender who is not entitled to send
+   * free, in WAWU Credits: the price the app states on the Communities card
+   * (I24, "1 credit per message you send"). A count, never naira.
+   */
+  meteredMessageCost(): number {
+    return MESSAGE_COST_IN_CREDITS;
+  }
+
+  /**
+   * INBOX-05. What `senderWawuId` would spend on one message in this room,
+   * by the same rule `store` charges by: nothing for an entitled sender (the
+   * host), the metered cost for everyone else. The app's composer states it
+   * ("Message · 1 credit", "Send · 1"), so the price shown is the price paid.
+   */
+  async messageCostFor(
+    community: { hostWawuId: string; kind: CommunityKind },
+    senderWawuId: string,
+  ): Promise<number> {
+    const entitlement = await this.resolveEntitlement(community, senderWawuId);
+    return entitlement === 'credits'
+      ? MESSAGE_COST_IN_CREDITS
+      : FREE_MESSAGE_COST_IN_CREDITS;
+  }
+
+  /**
    * Membership gate. `CommunityMembership` and the join/leave endpoints
    * existed, but nothing consulted them: any authenticated user could read a
    * community's entire history and post into it without ever joining, and a

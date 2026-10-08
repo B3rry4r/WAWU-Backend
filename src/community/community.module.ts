@@ -17,7 +17,8 @@ import { CommunityMessageModule } from '../community-message/community-message.m
  * as a provider exactly as ContentPieceModule registers its own.
  *
  * INBOX-01: CommunityRoomsController comes FIRST so its fixed paths
- * (GET /communities/mine, GET /communities/links/:slug) are matched before
+ * (GET /communities/mine, GET /communities/links/:slug, and INBOX-05's
+ * GET /communities/suggested and /message-cost) are matched before
  * CommunityController's GET /communities/:id. NotificationModule supplies the
  * join-decision notifications; CommunityMessageModule supplies the sender
  * lookup for each room's last message.

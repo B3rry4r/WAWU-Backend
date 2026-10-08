@@ -11,13 +11,18 @@ import type { Paginated } from '../../common/interceptors/response.interceptor';
 import { CommunityMessageService } from '../../community-message/community-message.service';
 import { CommunityService } from '../community.service';
 import type { CreateCommunityDto } from '../dto/create-community.dto';
+import { Prisma } from '../../../generated/prisma/client';
 import { normaliseSlug, shareLink, slugBase } from './community-slug';
 import type {
   CommunityLastMessage,
   CommunityLinkView,
+  CommunityMessageCost,
   CommunityReadView,
   CommunityRoom,
+  CommunityRoomView,
+  CommunityViewerRole,
   MyCommunity,
+  SuggestedCommunity,
 } from './community-room.type';
 
 /** Prisma's unique-constraint refusal (P2002). */
@@ -45,6 +50,13 @@ const LINK_ATTEMPTS = 5;
  *   POST /communities/rooms         create a room the way the app does: a
  *                                   private room needs a cover, and the
  *                                   answer carries the share link
+ *
+ * INBOX-05 adds three reads for the app's Communities list and room:
+ *
+ *   GET  /communities/:id/room      a room as the caller sees it: role and
+ *                                   what one message costs them there
+ *   GET  /communities/message-cost  what one message costs a member
+ *   GET  /communities/suggested     rooms the caller could join
  */
 @Injectable()
 export class CommunityRoomsService {
@@ -296,6 +308,127 @@ export class CommunityRoomsService {
     );
 
     return { items, currentPage: page, perPage, total: ranked.length };
+  }
+
+  /**
+   * INBOX-05, GET /communities/:id/room. The room I25 draws: its counts and
+   * link, where the caller stands in it, and what one message costs them
+   * there. Anyone signed in may look (open rooms are joined from here), except
+   * that a room hosted by somebody hidden from the caller is a 404, as
+   * GET /communities/:id is, unless the caller is already in it.
+   */
+  async room(
+    communityId: string,
+    viewerWawuId: string,
+  ): Promise<CommunityRoomView> {
+    const community = await this.prisma.community.findUnique({
+      where: { id: communityId },
+    });
+    if (!community) {
+      throw new NotFoundException('Community not found');
+    }
+    await this.blockedAccounts.assertRoomVisible(
+      viewerWawuId,
+      community.hostWawuId,
+      community.id,
+    );
+
+    const [withCounts, slug, membership, messageCostInCredits] =
+      await Promise.all([
+        this.communities.withDerivedFields(community),
+        this.ensureLink(community.id, community.name),
+        community.hostWawuId === viewerWawuId
+          ? Promise.resolve(null)
+          : this.prisma.communityMembership.findUnique({
+              where: {
+                userWawuId_communityId: {
+                  userWawuId: viewerWawuId,
+                  communityId,
+                },
+              },
+              select: { status: true },
+            }),
+        this.messages.messageCostFor(community, viewerWawuId),
+      ]);
+
+    const role: CommunityViewerRole =
+      community.hostWawuId === viewerWawuId
+        ? 'host'
+        : membership?.status === 'joined'
+          ? 'member'
+          : membership?.status === 'pending'
+            ? 'pending'
+            : 'none';
+
+    return {
+      ...withCounts,
+      slug,
+      link: shareLink(slug),
+      role,
+      messageCostInCredits,
+    };
+  }
+
+  /** INBOX-05, GET /communities/message-cost. The price line on I24's card. */
+  messageCost(): CommunityMessageCost {
+    return { creditsPerMessage: this.messages.meteredMessageCost() };
+  }
+
+  /**
+   * INBOX-05, GET /communities/suggested. Rooms the caller could join: not
+   * one they host, not one they are in or have asked to join, and not one
+   * hosted by somebody hidden from them (SETTINGS-04). Most members first,
+   * then by name, then by id, so the order is total and a page never repeats
+   * or skips a room while nothing changes.
+   *
+   * Default (agent), owner may override: "suggested" is ranked by member
+   * count alone. There is no interest or follow signal for rooms yet.
+   */
+  async suggested(
+    viewerWawuId: string,
+    page: number,
+    perPage: number,
+  ): Promise<Paginated<SuggestedCommunity>> {
+    const hidden = await this.blockedAccounts.hiddenFrom(viewerWawuId);
+    const excludedHosts = [viewerWawuId, ...hidden];
+    const offset = (page - 1) * perPage;
+
+    const [rows, total] = await Promise.all([
+      this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT c."id"
+          FROM "Community" c
+         WHERE c."hostWawuId" <> ALL(${excludedHosts}::text[])
+           AND NOT EXISTS (
+                 SELECT 1 FROM "CommunityMembership" m
+                  WHERE m."communityId" = c."id"
+                    AND m."userWawuId" = ${viewerWawuId})
+         ORDER BY (SELECT COUNT(*) FROM "CommunityMembership" j
+                    WHERE j."communityId" = c."id"
+                      AND j."status" = 'joined') DESC,
+                  c."name" ASC,
+                  c."id" ASC
+         OFFSET ${offset}
+         LIMIT ${perPage}`),
+      this.prisma.community.count({
+        where: {
+          hostWawuId: { notIn: excludedHosts },
+          memberships: { none: { userWawuId: viewerWawuId } },
+        },
+      }),
+    ]);
+
+    const ids = rows.map((r) => r.id);
+    const found = await this.prisma.community.findMany({
+      where: { id: { in: ids } },
+    });
+    const byId = new Map(found.map((c) => [c.id, c]));
+    const items = await Promise.all(
+      ids.flatMap((id) => {
+        const community = byId.get(id);
+        return community ? [this.communities.withDerivedFields(community)] : [];
+      }),
+    );
+    return { items, currentPage: page, perPage, total };
   }
 
   /**

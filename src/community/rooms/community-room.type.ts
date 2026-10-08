@@ -55,3 +55,32 @@ export interface CommunityReadView {
   communityId: string;
   lastReadAt: Date;
 }
+
+/**
+ * INBOX-05. Where the caller stands in a room: `host` (they host it),
+ * `member` (let in), `pending` (asked to join a private room, waiting for the
+ * host) or `none`.
+ */
+export type CommunityViewerRole = 'host' | 'member' | 'pending' | 'none';
+
+/** INBOX-05, GET /communities/:id/room: a room as the caller sees it (I25). */
+export type CommunityRoomView = CommunityRoom & {
+  role: CommunityViewerRole;
+  /**
+   * WAWU Credits the caller spends to send one message here: 0 for the host,
+   * the metered cost for anyone else. A count, never naira.
+   */
+  messageCostInCredits: number;
+};
+
+/** INBOX-05, GET /communities/message-cost: the Communities card's price line (I24). */
+export interface CommunityMessageCost {
+  /** WAWU Credits one message costs a member. Reading costs nothing. */
+  creditsPerMessage: number;
+}
+
+/**
+ * INBOX-05, GET /communities/suggested: a room the caller could join, with its
+ * member count (I24, "2.1K members · open").
+ */
+export type SuggestedCommunity = CommunityResponse;
