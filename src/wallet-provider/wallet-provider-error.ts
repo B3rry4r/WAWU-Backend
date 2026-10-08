@@ -1,4 +1,8 @@
-import { HttpException, UnprocessableEntityException } from '@nestjs/common';
+import {
+  ConflictException,
+  HttpException,
+  UnprocessableEntityException,
+} from '@nestjs/common';
 import { MoneyError } from '../money/money-error';
 import type { WalletProviderName } from './wallet-provider.interface';
 
@@ -27,6 +31,12 @@ export const WALLET_PROVIDER_ERROR_KINDS = [
   'below_minimum',
   /** An identity check said no. */
   'identity_refused',
+  /**
+   * An identity check is with the provider's compliance review: not a
+   * refusal of the person and nothing to correct. Wait for the provider's
+   * decision; never send the details again meanwhile (NUV-01, lead ruling 4).
+   */
+  'under_review',
   /** The provider will not pay out right now. */
   'payouts_blocked',
   /** A 2xx on a write without the expected data in it: not proof either way. */
@@ -150,6 +160,12 @@ export function walletProviderErrorToHttp(
     case 'identity_refused':
       return new UnprocessableEntityException(
         'We could not confirm those identity details.',
+      );
+    case 'under_review':
+      // Default (agent), owner may override: a plain 409 like the plain
+      // 422 above, so no money reason code is added to the contract.
+      return new ConflictException(
+        'Your details are being reviewed. We will let you know when the review is done.',
       );
     case 'outcome_unknown':
     case 'not_confirmed':

@@ -15,6 +15,8 @@ import { LegalDeliverablesOpsController } from './legal-deliverables-ops.control
 import { LegalConsultationService } from './legal-consultation.service';
 import { LegalDeliverablesService } from './legal-deliverables.service';
 import { LegalPricesService } from './legal-prices.service';
+import { LegalDeliveryRule } from './legal-delivery-rule';
+import { LegalDeliverySettings } from './legal-delivery-settings';
 
 /**
  * AdminAuthModule is imported for its two exported GUARDS only — nothing else
@@ -50,6 +52,11 @@ import { LegalPricesService } from './legal-prices.service';
     LegalPricesService,
     LegalConsultationService,
     LegalDeliverablesService,
+    // FIX-24: which files may be delivered to whom. The settings read
+    // LEGAL_DELIVERY_UPLOADER_IDS once at boot and stop the server, naming
+    // it, when it is set but unusable.
+    LegalDeliverySettings,
+    LegalDeliveryRule,
     FlutterwaveCheckoutVerifier,
   ],
   exports: [LegalRequestsService, LegalPricesService],
