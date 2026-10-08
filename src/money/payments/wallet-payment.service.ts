@@ -16,7 +16,6 @@ import {
   safeKoboNumber,
   WALLET_PROVIDER,
   type WalletProvider,
-  type WalletProviderName,
 } from '../../wallet-provider/wallet-provider.interface';
 import {
   WalletProviderError,
@@ -1177,7 +1176,7 @@ export class WalletPaymentService implements OnModuleInit {
 
   /** The provider's available balance, or null when it did not answer (the quote shows no figure). */
   private async balanceOrNull(
-    wallet: Pick<OpenWallet, 'walletId'>,
+    wallet: Pick<OpenWallet, 'wawuUserId' | 'walletId'>,
   ): Promise<number | null> {
     try {
       return (await this.balances.balance(wallet)).availableKobo;
@@ -1215,9 +1214,10 @@ export class WalletPaymentService implements OnModuleInit {
       source: 'send' as const,
       occurredAt: p.sentAt ?? p.createdAt,
       failureReason: status === 'failed' ? p.failureReason : null,
-      // The payment's own provider on every row it writes, whichever one
-      // this server runs (lead ruling 6).
-      provider: p.provider as WalletProviderName,
+      // No provider here (lead ruling 6): NUV-01's LedgerService stamps the
+      // running provider on every row it creates, and that is this
+      // payment's own, since the sweep acts only on the running provider's
+      // payments (the rollback case goes to review and writes no row).
     };
     if (side === 'out') {
       return {

@@ -389,6 +389,31 @@ app.post("/internal/users/:userId/data-export", requireServiceKey, (req, res) =>
   });
   res.json({ data: { sent: true } });
 });
+// The PIN reset code by email under WALLET_PROVIDER=nuvion (NUV-01, R-39: no
+// SMS). Mirrors the route WAWU ID is to build (BACKEND_GAPS G-400):
+// POST /internal/users/:userId/pin-reset-code { code, expiresInMinutes }.
+// The Hub names the user and the code; WAWU ID owns the address and the
+// wording, so the mock records who was mailed which code and sends nothing.
+app.post("/internal/users/:userId/pin-reset-code", requireServiceKey, (req, res) => {
+  const user = Object.values(USERS).find((u) => u.sub === req.params.userId);
+  if (!user) return res.status(404).json({ message: "user not found" });
+  const { code, expiresInMinutes } = req.body ?? {};
+  if (typeof code !== "string" || !/^\d{6}$/.test(code)) {
+    return res.status(400).json({ message: "code must be 6 digits" });
+  }
+  if (!Number.isInteger(expiresInMinutes) || expiresInMinutes < 1) {
+    return res.status(400).json({ message: "expiresInMinutes must be a whole number" });
+  }
+  MAIL_OUTBOX.push({
+    kind: "pin-reset-code",
+    userId: user.sub,
+    to: user.email,
+    code,
+    expiresInMinutes,
+    sentAt: new Date().toISOString(),
+  });
+  res.json({ data: { sent: true } });
+});
 app.get("/internal/mail-outbox", requireServiceKey, (_req, res) => {
   res.json({ data: MAIL_OUTBOX });
 });

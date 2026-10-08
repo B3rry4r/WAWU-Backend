@@ -1285,10 +1285,14 @@ Fintava or on Nuvion, whichever the server runs.
   owed back by WAWU. A reversal of another amount than the price is a stop
   (review, the item claimed). A status word the provider has and we do not
   know is never read as failed: still `pending`, asked again later.
-- **The provider on every ledger row** (round 6, lead ruling 6): each
-  movement this task writes names its payment's provider
-  (`LedgerMovementInput.provider`), which the ledger writes to its
-  `provider` column once NUV-01 adds it.
+- **The provider on every ledger row** (round 6, lead ruling 6): NUV-01
+  merged first, so the ledger stamps the running provider on every row it
+  creates. For a payment that is always the payment's own provider: the
+  sweep acts only on the running provider's payments, and another
+  provider's pending payment goes to review without a ledger row. The
+  payer's wallet must be the running provider's too: NUV-01's balance read
+  answers `503 provider_unreachable` for a wallet another provider holds,
+  before anything is claimed or sent.
 - **One open payment per buyer and item** (D1.2). While a payment is
   `pending` (under review included), another for the same person, kind and
   target, under any Idempotency-Key and at any moment, is `409

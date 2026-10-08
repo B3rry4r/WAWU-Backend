@@ -161,21 +161,30 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
 
   type Person = { id: string; auth: string; account: NuvionAccount };
 
-  /** A person with an approved Nuvion entity and NGN account holding `kobo`, PIN set. */
-  async function buyer(kobo: number): Promise<Person> {
+  /**
+   * A person with an approved Nuvion entity and NGN account holding `kobo`,
+   * PIN set. `held` is the wallet row's provider: `fintava` stands for a
+   * wallet opened before a switch to Nuvion.
+   */
+  async function buyer(
+    kobo: number,
+    held: 'nuvion' | 'fintava' = 'nuvion',
+  ): Promise<Person> {
     const id = randomUUID();
     users.push(id);
     accountSeq += 1;
     const accountNumber = `81${String(Date.now()).slice(-6)}${String(accountSeq).padStart(2, '0')}`;
     const account = nuvion.openAccount(BigInt(kobo), accountNumber);
-    // The wallet table every provider writes (NUV-01 adds its `provider`
-    // column): the gate reads the person's ids from it.
+    // The wallet table every provider writes: the gate reads the person's
+    // ids from it, and its `provider` (NUV-01) says Nuvion holds this one,
+    // so the balance read asks the running provider about it.
     await prisma.fintavaWallet.create({
       data: {
         wawuUserId: id,
         customerId: account.entityId,
         walletId: account.accountId,
         accountNumber,
+        provider: held,
       },
     });
     const auth = `Bearer ${mintToken(id)}`;
@@ -482,6 +491,31 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     nuvion.platformOverride = null;
     nuvion.mode = 'successful';
     expect(body<PaymentView>(await pay(p, q)).data!.status).toBe('completed');
+  });
+
+  it("a payer whose wallet another provider holds (Fintava's, on a server switched to Nuvion): 503 from NUV-01's balance read, Nuvion never asked about that wallet, nothing claimed, nothing sent", async () => {
+    const p = await buyer(500_000, 'fintava');
+    const q = await quoted(p, 'content_unlock', 'n-foreign-wallet');
+    nuvion.mode = 'successful';
+    const res = await pay(p, q);
+    expect(res.status).toBe(503);
+    expect(body(res).reason).toMatchObject({ code: 'provider_unreachable' });
+    const askedOf = (method: string) =>
+      nuvion.calls.filter(
+        (c) =>
+          c.method === method &&
+          (c.args as { walletId?: string } | null)?.walletId ===
+            p.account.accountId,
+      ).length;
+    expect(askedOf('getBalance')).toBe(0);
+    expect(sendsFrom(p)).toHaveLength(0);
+    expect(
+      await prisma.walletPayment.count({ where: { payerWawuUserId: p.id } }),
+    ).toBe(0);
+    expect(
+      await prisma.moneyIdempotencyKey.count({ where: { wawuUserId: p.id } }),
+    ).toBe(0);
+    expect(p.account.availableKobo).toBe(500_000n);
   });
 
   // -------------------------------------------------------------------------
@@ -1113,13 +1147,23 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
 
   it("lead ruling 6: every ledger row this task wrote names its payment's provider; nothing reached the Fintava client; every payment of this file names Nuvion", async () => {
     expect(movements.length).toBeGreaterThan(0);
+    const ids = [...new Set(movements.map((m) => m.paymentId!))];
     const providers = await prisma.walletPayment.findMany({
-      where: { id: { in: [...new Set(movements.map((m) => m.paymentId!))] } },
+      where: { id: { in: ids } },
       select: { id: true, provider: true },
     });
     const byId = new Map(providers.map((r) => [r.id, r.provider]));
-    for (const m of movements) {
-      expect(m.provider).toBe(byId.get(m.paymentId!));
+    // The rows as stored: NUV-01's LedgerService stamps the running
+    // provider, which for every row here is the payment's own (the sweep
+    // acts only on the running provider's payments).
+    const entries = await prisma.fintavaLedgerEntry.findMany({
+      where: { paymentId: { in: ids } },
+      select: { paymentId: true, provider: true },
+    });
+    expect(entries.length).toBeGreaterThanOrEqual(ids.length);
+    for (const e of entries) {
+      expect(e.provider).toBe(byId.get(e.paymentId!));
+      expect(e.provider).toBe('nuvion');
     }
     expect(fintavaHits).toEqual([]);
     const rows = await prisma.walletPayment.findMany({

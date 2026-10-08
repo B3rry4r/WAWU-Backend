@@ -3899,6 +3899,11 @@ model FintavaWallet {
   /// `wallet.accountName` as Fintava answered when the account opened
   /// (MONEY-12, W1, A8). Null on a row written before the column existed.
   accountName   String?
+  /// Which wallet provider this row belongs to (NUV-01): `fintava` or
+  /// `nuvion`; null is Fintava (a row from before the column). A server acts
+  /// only on rows of the provider it runs, so after a rollback one
+  /// provider's ids are never sent to the other (MONEY-20 finding 2).
+  provider      String?  @default("fintava")
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
@@ -3949,6 +3954,10 @@ model FintavaWalletOpening {
   failure          String?
   /// When Fintava was last asked about a lost answer.
   checkedAt        DateTime?
+  /// Which wallet provider this opening is with (NUV-01): `fintava` or
+  /// `nuvion`; null is Fintava. The opening sweep reconciles only openings
+  /// of the provider the server runs.
+  provider         String?   @default("fintava")
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
@@ -4375,6 +4384,11 @@ model FintavaLedgerEntry {
   /// written on `discrepancy`, and the row stays in the sweep.
   revivedAt    DateTime?
   revivedBy    String?
+
+  /// Which wallet provider recorded this movement (NUV-01): `fintava` or
+  /// `nuvion`; null is Fintava. The pending sweep and the ledger consumer
+  /// act only on rows of the provider the server runs.
+  provider String? @default("fintava")
 
   references FintavaLedgerReference[]
 
@@ -5053,4 +5067,127 @@ model AdDailyTotal {
   skips      Int        @default(0)
 
   @@id([campaignId, day])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// NUVION WEBHOOK EVENTS (task NUV-01)
+///
+/// Every signed delivery Nuvion sends to `POST /api/hub/webhooks/nuvion`,
+/// stored once and acknowledged (Nuvion retries anything but a 2xx for 15
+/// minutes, then drops it). Nothing here moves money or touches a balance:
+/// the handler registry (src/nuvion/handlers/, one file per task NUV-02 to
+/// NUV-08) reads the `pending` rows of the events it handles and marks them
+/// `processed` or `failed`. Nuvion's balance stays the only balance.
+///
+/// Exactly once, twice over: `eventId` (`x-nuvion-event-id`) is unique, so a
+/// retry of the same event lands on the same row; and the signed pair
+/// (`signedAt`, `bodySha256`) is unique, so a captured delivery replayed
+/// inside the time window under another event id (the id is not signed)
+/// lands on the same row too. The insert is `ON CONFLICT DO NOTHING`; there
+/// is no read before the write.
+/// ─────────────────────────────────────────────────────────────────────────
+enum NuvionWebhookProcessing {
+  /// Stored; waiting for the handlers of its event (or for a handler to exist).
+  pending
+  /// Every handler of its event finished with it.
+  processed
+  /// A handler could not use it; `note` says why. Kept for review.
+  failed
+  /// Not one of Nuvion's documented events (or none). Kept for review.
+  unrecognised
+  /// Nuvion's own test delivery (`POST /webhook-tests`): `{event_group,
+  /// event_name}`, no data. Proves the signature works; nothing acts on it.
+  test
+}
+
+model NuvionWebhookEvent {
+  id String @id @default(uuid())
+
+  /// `x-nuvion-event-id` as sent: the event's own id.
+  eventId    String  @unique
+  /// The body's `event` (`inflows.completed`), trimmed and lower case; for a
+  /// test delivery `<event_group>.<event_name>`. Empty when it named none.
+  event      String
+  /// The id the event is about: `data.id`, else `data.account.id` or
+  /// `data.account_details.id` (accounts.created, account_details.created
+  /// wrap their object). Null when the delivery carries none.
+  resourceId String?
+  /// The entity the event is about (`data.entity_id`, or the wrapped
+  /// object's): which person, through NuvionEntity.
+  entityId   String?
+
+  /// `x-nuvion-event-timestamp` exactly as sent: the signature covers it.
+  signedAt   String
+  /// The SHA-256, hex, of `rawBody`.
+  bodySha256 String
+  /// The body exactly as delivered (the bytes the signature covers). Its
+  /// personal data stays here and in `payload`, never in a log.
+  rawBody    Bytes
+  /// The same body parsed, every NUL in a key or string replaced by U+FFFD
+  /// (Postgres json cannot hold one).
+  payload    Json
+
+  processingStatus NuvionWebhookProcessing @default(pending)
+  /// What the handlers did, or why they could not.
+  note             String?
+  /// Tries by the dispatcher so far.
+  attempts         Int                     @default(0)
+  /// Not tried again before this (backing off after a handler waited).
+  nextAttemptAt    DateTime?
+  /// A dispatcher holds the row until then: one worker at a time.
+  claimedUntil     DateTime?
+  receivedAt       DateTime                @default(now())
+  processedAt      DateTime?
+
+  @@unique([signedAt, bodySha256])
+  @@index([processingStatus, event, receivedAt])
+  @@index([event, resourceId])
+  @@index([entityId])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// ONE PERSON AT NUVION (task NUV-01; written by NUV-02 to NUV-04 and NUV-09)
+///
+/// The person as Nuvion knows them: their individual entity (a child of
+/// WAWU's parent entity), its review, and the one account opened for them
+/// once approved, with its account details. One row per person.
+///
+/// Never the BVN, the NIN, a document, an image, the date of birth or the
+/// address: Nuvion holds those; the rejection reasons are Nuvion's own
+/// words with digits masked to their last 4. The balance is never here: it
+/// is Nuvion's `available`, read when it is shown.
+/// ─────────────────────────────────────────────────────────────────────────
+model NuvionEntity {
+  wawuUserId           String    @id
+  /// Nuvion's entity id (`POST /individual-entities`), once created.
+  entityId             String?   @unique
+  /// The entity's person record (`person.id`): documents link to it.
+  personId             String?
+  /// Nuvion's review state: incomplete, pending, approved, rejected,
+  /// failed or suspended (Nuvion's own words).
+  status               String    @default("incomplete")
+  /// When Nuvion approved or rejected it.
+  decidedAt            DateTime?
+  /// Why Nuvion said no, in its words (masked); empty otherwise.
+  rejectionReasons     String[]  @default([])
+  /// The account opened after approval (`POST /accounts`).
+  accountId            String?   @unique
+  /// The account's `nuvion_ban`: book transfers go to it.
+  nuvionBan            String?   @unique
+  /// The account details (`POST /account-details`), provisioned later.
+  accountDetailsId     String?   @unique
+  /// `pending` until Nuvion makes the account number `active`.
+  accountDetailsStatus String?
+  /// The number people send money to, once active.
+  accountNumber        String?
+  /// The bank that issued it (`issuer.name`, `issuer.code`).
+  issuerBankName       String?
+  issuerBankCode       String?
+  /// The account's currency: NGN, or USD for people billed in dollars (NUV-09).
+  currency             String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([status])
+  @@index([accountNumber])
 }
