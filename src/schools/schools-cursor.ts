@@ -17,7 +17,7 @@ import { SCHOOL_LIMITS } from './school-admin.dto';
  * code unit that is not one. So ONE counted character is at worst:
  *
  * - 3 UTF-16 units: a surrogate pair plus a variation selector, as in the
- *   flag "🏳️" (U+1F3F3 U+FE0F). Nothing longer counts as one: a second
+ *   white flag emoji (U+1F3F3 U+FE0F). Nothing longer counts as one: a second
  *   selector in a row counts on its own, and every pair or selector that is
  *   discounted needs a unit of its own beside it.
  * - 9 bytes of JSON in UTF-8: a control character, which JSON writes as a
@@ -25,6 +25,11 @@ import { SCHOOL_LIMITS } from './school-admin.dto';
  *   0, 1), plus a variation selector (3 bytes). For comparison: a surrogate
  *   pair plus a selector is 7 bytes, a quote or a backslash 2 (escaped), any
  *   other character at most 4 (a pair) or 3 (one BMP unit).
+ *
+ * (Checked exhaustively for every string of up to six pieces drawn from a
+ * letter, a control character, a quote, a backslash, both selectors, a flag,
+ * a Han character, U+2028, a tab, an accented letter, a joiner and a
+ * combining mark: none is worse. SCHOOLS-04 round 3 report.)
  *
  * Worst case at the admin's 120: a name of 360 UTF-16 units, and a JSON name
  * of 1080 bytes; the cursor's JSON adds 2 + 3 + 36 (the id) + 2 = 43 bytes,

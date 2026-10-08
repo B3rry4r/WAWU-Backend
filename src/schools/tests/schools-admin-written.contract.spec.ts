@@ -43,9 +43,9 @@ const KEYS = ['ADMIN_JWT_SECRET', 'ADMIN_JWT_REFRESH_SECRET'];
 const REFUSED_CURSOR = 'cursor is not one this server gave out';
 
 /** Counts as one character to the admin; 9 bytes of JSON (\u0001 + U+FE0F). */
-const WORST_BYTES = '\u0001️';
+const WORST_BYTES = '\u0001\uFE0F';
 /** Counts as one character to the admin; 3 UTF-16 units (a flag). */
-const WORST_UNITS = '\u{1F3F3}️';
+const WORST_UNITS = '\u{1F3F3}\uFE0F';
 /** A Han ideograph past U+1F3F3: after both in byte order and in ICU's. */
 const LATER = '\u{20000}';
 
