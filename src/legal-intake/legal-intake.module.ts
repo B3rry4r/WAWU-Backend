@@ -11,6 +11,10 @@ import { LegalAssistantController } from './assistant/legal-assistant.controller
 import { LegalAssistantOpsController } from './assistant/legal-assistant-ops.controller';
 import { LegalAssistantService } from './assistant/legal-assistant.service';
 import { LegalAssistantAllowance } from './assistant/legal-assistant-allowance';
+import {
+  ASSISTANT_OPENER_WAIT_MS,
+  LEGAL_OPENER_WAIT_MS,
+} from './assistant/legal-assistant-config';
 
 /**
  * Legal profiling. AiModule supplies the Gemini client that writes the brief;
@@ -38,6 +42,8 @@ import { LegalAssistantAllowance } from './assistant/legal-assistant-allowance';
     LegalChatService,
     LegalAssistantAllowance,
     LegalAssistantService,
+    // FIX-11: how long a read waits for another read's opener.
+    { provide: LEGAL_OPENER_WAIT_MS, useValue: ASSISTANT_OPENER_WAIT_MS },
   ],
   exports: [LegalIntakeService, LegalChatService],
 })
