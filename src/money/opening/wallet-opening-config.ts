@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { readWalletProviderName } from '../../wallet-provider/wallet-provider-config';
+import type { WalletProviderName } from '../../wallet-provider/wallet-provider.interface';
 
 /**
  * Settings for opening a person's Fintava account and showing it (task
@@ -10,6 +12,27 @@ export const WALLET_OPENING_CONFIG_KEYS = {
   licenceLine: 'WALLET_LICENCE_LINE',
   depositInsuranceLine: 'WALLET_DEPOSIT_INSURANCE_LINE',
 } as const;
+
+/**
+ * The same three lines for wallets at Nuvion (NUV-01, MONEY-20 verifier
+ * finding 2): the bank, licence and deposit-insurance wording are facts of
+ * the provider that holds the money, so switching WALLET_PROVIDER switches
+ * them too and a rollback is still one setting. The owner fills them in
+ * (NUV-10). None is required; Nuvion's bank has no default (its docs name
+ * no issuing bank), so an unset name is shown empty.
+ */
+export const NUVION_WALLET_LINE_KEYS = {
+  bankName: 'NUVION_WALLET_BANK_NAME',
+  licenceLine: 'NUVION_WALLET_LICENCE_LINE',
+  depositInsuranceLine: 'NUVION_WALLET_DEPOSIT_INSURANCE_LINE',
+} as const;
+
+/** The lines shown with a wallet's account details, for one provider. */
+export interface WalletLines {
+  bankName: string;
+  licenceLine: string | null;
+  depositInsuranceLine: string | null;
+}
 
 /**
  * PROVISIONAL(WALLET-BANK-NAME, owner=YOU, why=Fintava's create answer names no bank and Fintava spells its bank three ways; R-1 leaves the wording to the owner)
@@ -55,7 +78,47 @@ function line(raw: string | undefined): string | null {
   return v === '' ? null : v;
 }
 
-/** Read once at boot. */
+/**
+ * The bank, licence and deposit-insurance lines of one provider's wallets:
+ * WALLET_* for Fintava (unchanged since MONEY-12), NUVION_WALLET_* for
+ * Nuvion. Shared by the wallet screens, receipts and About, so they never
+ * name different banks.
+ */
+export function walletLinesFor(
+  provider: WalletProviderName,
+  get: (key: string) => string | undefined,
+): WalletLines {
+  if (provider === 'nuvion') {
+    return {
+      bankName: line(get(NUVION_WALLET_LINE_KEYS.bankName)) ?? '',
+      licenceLine: line(get(NUVION_WALLET_LINE_KEYS.licenceLine)),
+      depositInsuranceLine: line(
+        get(NUVION_WALLET_LINE_KEYS.depositInsuranceLine),
+      ),
+    };
+  }
+  return {
+    bankName:
+      line(get(WALLET_OPENING_CONFIG_KEYS.bankName)) ??
+      DEFAULT_WALLET_BANK_NAME,
+    licenceLine: line(get(WALLET_OPENING_CONFIG_KEYS.licenceLine)),
+    depositInsuranceLine: line(
+      get(WALLET_OPENING_CONFIG_KEYS.depositInsuranceLine),
+    ),
+  };
+}
+
+/**
+ * The lines of the provider WALLET_PROVIDER runs (NUV-01). The seam's own
+ * reader, so a value it refuses stops the server with its message.
+ */
+export function runningWalletLines(
+  get: (key: string) => string | undefined,
+): WalletLines {
+  return walletLinesFor(readWalletProviderName(get('WALLET_PROVIDER')), get);
+}
+
+/** Read once at boot, for the provider WALLET_PROVIDER runs. */
 @Injectable()
 export class WalletOpeningSettings {
   readonly bankName: string;
@@ -65,13 +128,9 @@ export class WalletOpeningSettings {
   readonly depositInsuranceLine: string | null;
 
   constructor(config: ConfigService) {
-    const get = (key: string) => config.get<string>(key);
-    this.bankName =
-      line(get(WALLET_OPENING_CONFIG_KEYS.bankName)) ??
-      DEFAULT_WALLET_BANK_NAME;
-    this.licenceLine = line(get(WALLET_OPENING_CONFIG_KEYS.licenceLine));
-    this.depositInsuranceLine = line(
-      get(WALLET_OPENING_CONFIG_KEYS.depositInsuranceLine),
-    );
+    const lines = runningWalletLines((key) => config.get<string>(key));
+    this.bankName = lines.bankName;
+    this.licenceLine = lines.licenceLine;
+    this.depositInsuranceLine = lines.depositInsuranceLine;
   }
 }

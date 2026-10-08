@@ -138,6 +138,13 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'wawuUserId',
     disposition: 'OWNED',
   },
+  // The maker plan (TIER-01): the currency this person is billed in, the
+  // tier they hold and the event passes it issued. Each exists only because
+  // this account exists and names nobody else. The purchases that paid for
+  // them are their own task's (TIER-03) and are classified there.
+  { model: 'PersonBilling', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'MakerTier', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'EventPass', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'CreditLot', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CreditSpend', column: 'userWawuId', disposition: 'OWNED' },
   {
@@ -159,6 +166,8 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'KycSubmission', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'PendingCharge', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'HealthSubscription', column: 'wawuUserId', disposition: 'OWNED' },
+  // The files WAWU delivered on this person's legal requests (LEGAL-03).
+  { model: 'LegalDeliverable', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'LegalRequest', column: 'wawuUserId', disposition: 'OWNED' },
   // The assistant conversation on an intake (LEGAL-01): the client's own
   // words and the assistant's replies to them, removed before the intake.
@@ -171,6 +180,13 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // kept to enforce the hourly limit; holds no words of the conversation.
   {
     model: 'LegalAssistantCall',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
+  // One row per AI call that tried to write a matter thread's opener
+  // (FIX-11): the claim and the hourly count; holds no words.
+  {
+    model: 'LegalChatOpenerCall',
     column: 'wawuUserId',
     disposition: 'OWNED',
   },
@@ -250,6 +266,12 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'wawuUserId',
     disposition: 'OWNED',
   },
+  // The person as Nuvion knows them (NUV-01; written by NUV-02 to NUV-04):
+  // the ids of their entity, account and account details, the review's
+  // state and the account number. Like FintavaWallet, it is WAWU's pointer,
+  // not the account at Nuvion, which stays there; deletion needs an empty
+  // wallet first (R-17).
+  { model: 'NuvionEntity', column: 'wawuUserId', disposition: 'OWNED' },
   // This person's saved beneficiaries and payout account (WALLET-14): their
   // own list of where they send money, and the bank account their
   // withdrawals go to. Both go with them.
@@ -263,6 +285,15 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // public only beside a listing that goes with them.
   {
     model: 'ProfessionalLocation',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
+  // An admin's takedown of one of this person's professional listings, and
+  // the Hide or Show they had chosen (FIX-06). It exists only beside a
+  // listing that goes with them, as FeaturedCreator (an admin's choice about
+  // this account) does.
+  {
+    model: 'ProfessionalTakedown',
     column: 'wawuUserId',
     disposition: 'OWNED',
   },

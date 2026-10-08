@@ -620,6 +620,45 @@ export const EXPORT_SECTIONS: ExportSection[] = [
         orderBy: NEWEST,
       }),
   },
+  // The maker plan (TIER-01): the person's billing currency, the tier they
+  // hold and the event passes their tiers issued. The purchase reference is
+  // a payment reference, so it stays out (rule 3).
+  {
+    key: 'billingCurrency',
+    models: ['PersonBilling'],
+    load: (prisma, me) =>
+      prisma.personBilling.findUnique({
+        where: { wawuUserId: me },
+        select: { currency: true, fixedBy: true, fixedAt: true },
+      }),
+  },
+  {
+    key: 'makerTier',
+    models: ['MakerTier'],
+    load: (prisma, me) =>
+      prisma.makerTier.findUnique({
+        where: { wawuUserId: me },
+        select: {
+          tierId: true,
+          activeFrom: true,
+          activeUntil: true,
+          productsIncluded: true,
+          extraProducts: true,
+          pointsIncluded: true,
+          voiceIntroIncluded: true,
+        },
+      }),
+  },
+  {
+    key: 'eventPasses',
+    models: ['EventPass'],
+    load: (prisma, me) =>
+      prisma.eventPass.findMany({
+        where: { wawuUserId: me },
+        select: { type: true, createdAt: true },
+        orderBy: NEWEST,
+      }),
+  },
   {
     key: 'courseEnrollments',
     models: ['CourseEnrollment'],
@@ -689,6 +728,19 @@ export const EXPORT_SECTIONS: ExportSection[] = [
           reviewedAt: true,
         },
         orderBy: { submittedAt: 'desc' },
+      }),
+  },
+  {
+    key: 'professionalTakedowns',
+    models: ['ProfessionalTakedown'],
+    // When an admin took one of the person's listings down and when it was
+    // listed again (FIX-06). Which admin did it is not the person's data and
+    // is left out.
+    load: (prisma, me) =>
+      prisma.professionalTakedown.findMany({
+        where: { wawuUserId: me },
+        select: { professionalId: true, takenDownAt: true, liftedAt: true },
+        orderBy: { takenDownAt: 'desc' },
       }),
   },
   {
@@ -825,6 +877,15 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
       model: 'FintavaWallet',
       reason: 'A pointer to the account at Fintava, which holds the balance.',
     },
+    // NUV-01. NuvionWebhookEvent, the other table NUV-01 adds, has no
+    // person column (like FintavaWebhookEvent): it is Nuvion's record of
+    // events, not the person's, so neither the purge map nor this list
+    // names it.
+    {
+      model: 'NuvionEntity',
+      reason:
+        'A pointer to the person at Nuvion (entity, account and review state), which holds the balance and the identity documents.',
+    },
     {
       model: 'FintavaLedgerEntry',
       reason:
@@ -909,6 +970,11 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
         'Legal matters may be privileged; whether they are emailed is the owner call.',
     },
     {
+      model: 'LegalDeliverable',
+      reason:
+        'The documents delivered on a legal matter; legal matters may be privileged, so whether they are emailed is the owner call.',
+    },
+    {
       model: 'LegalIntake',
       reason:
         'Legal matters may be privileged; whether they are emailed is the owner call.',
@@ -922,5 +988,10 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
       model: 'LegalAssistantCall',
       reason:
         'A bookkeeping row for the assistant hourly limit (when a paid AI call was made, never what was said); nothing the person wrote.',
+    },
+    {
+      model: 'LegalChatOpenerCall',
+      reason:
+        'A bookkeeping row for the opener of a legal thread (when its paid AI call was made and how it ended, never what was said); nothing the person wrote.',
     },
   ];
