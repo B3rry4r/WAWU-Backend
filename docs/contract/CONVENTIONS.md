@@ -1163,8 +1163,9 @@ send `Cache-Control: no-store`, read our database only and never call Fintava.
 ## 15. A NUL, or other text Postgres cannot take (FIX-17)
 
 Postgres refuses a NUL (U+0000) in a text parameter (error 22021), so a `%00`
-that reached a query answered 500 on 23 routes. The code base had no single
-rule: a NUL was stripped (money searches, AI text), refused (legal documents,
+that reached a query answered 500: on the 23 routes FIX-07's verifier found
+and seven more FIX-17's sweep found. The code base had no single rule: a NUL
+was stripped (money searches, AI text), refused (legal documents,
 the assistant, the profile audience) or replaced with U+FFFD (the Fintava
 webhook). From FIX-17 on there is ONE rule, and it holds for every route,
 money routes included:
