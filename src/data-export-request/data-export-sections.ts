@@ -620,6 +620,45 @@ export const EXPORT_SECTIONS: ExportSection[] = [
         orderBy: NEWEST,
       }),
   },
+  // The maker plan (TIER-01): the person's billing currency, the tier they
+  // hold and the event passes their tiers issued. The purchase reference is
+  // a payment reference, so it stays out (rule 3).
+  {
+    key: 'billingCurrency',
+    models: ['PersonBilling'],
+    load: (prisma, me) =>
+      prisma.personBilling.findUnique({
+        where: { wawuUserId: me },
+        select: { currency: true, fixedBy: true, fixedAt: true },
+      }),
+  },
+  {
+    key: 'makerTier',
+    models: ['MakerTier'],
+    load: (prisma, me) =>
+      prisma.makerTier.findUnique({
+        where: { wawuUserId: me },
+        select: {
+          tierId: true,
+          activeFrom: true,
+          activeUntil: true,
+          productsIncluded: true,
+          extraProducts: true,
+          pointsIncluded: true,
+          voiceIntroIncluded: true,
+        },
+      }),
+  },
+  {
+    key: 'eventPasses',
+    models: ['EventPass'],
+    load: (prisma, me) =>
+      prisma.eventPass.findMany({
+        where: { wawuUserId: me },
+        select: { type: true, createdAt: true },
+        orderBy: NEWEST,
+      }),
+  },
   {
     key: 'courseEnrollments',
     models: ['CourseEnrollment'],
