@@ -10,6 +10,7 @@ import {
 } from 'class-validator';
 import { IsCleanText } from '../admin/legal-documents/policy-input';
 import { SCHOOL_CATEGORIES } from './school-admin.dto';
+import { CURSOR_MAX_LENGTH } from './schools-cursor';
 
 /** Upper bound on a search term, as GET /search has it. */
 export const MAX_SCHOOL_QUERY_LENGTH = 100;
@@ -48,9 +49,12 @@ export class ListPublicSchoolsDto {
   @Max(50)
   limit?: number;
 
-  /** The `nextCursor` of the previous page: opaque, not to be built by hand. */
+  /**
+   * The `nextCursor` of the previous page: opaque, not to be built by hand,
+   * and never longer than the longest one this server gives out.
+   */
   @IsOptional()
   @IsString()
-  @MaxLength(1000)
+  @MaxLength(CURSOR_MAX_LENGTH)
   cursor?: string;
 }

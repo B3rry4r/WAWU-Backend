@@ -1,12 +1,8 @@
-import {
-  BadRequestException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { isCleanText } from '../admin/legal-documents/policy-input';
 import type { ListPublicSchoolsDto } from './schools.dto';
+import { decodeCursor, encodeCursor } from './schools-cursor';
 import {
   courseCard,
   intakeView,
@@ -20,44 +16,19 @@ import {
 const DEFAULT_PAGE = 20;
 const MATCHED_COURSES = 3;
 
-/** Longest name a cursor may carry (a school name is far shorter). */
-const MAX_CURSOR_NAME = 300;
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** An opaque position: base64url of [name, id]. */
-export function encodeCursor(row: { name: string; id: string }): string {
-  return Buffer.from(JSON.stringify([row.name, row.id]), 'utf8').toString(
-    'base64url',
-  );
-}
-
-/** A cursor this server did not give out (or altered) is a 400, never a 500. */
-export function decodeCursor(cursor: string): { name: string; id: string } {
-  const bad = () =>
-    new BadRequestException('cursor is not one this server gave out');
-  if (!/^[A-Za-z0-9_-]{1,1000}$/.test(cursor)) throw bad();
-  let v: unknown;
-  try {
-    v = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
-  } catch {
-    throw bad();
-  }
-  if (
-    !Array.isArray(v) ||
-    v.length !== 2 ||
-    typeof v[0] !== 'string' ||
-    typeof v[1] !== 'string' ||
-    v[0].length > MAX_CURSOR_NAME ||
-    !isCleanText(v[0]) ||
-    !UUID_RE.test(v[1])
-  )
-    throw bad();
-  const name = v[0];
-  const id = v[1].toLowerCase();
-  if (encodeCursor({ name, id }) !== cursor) throw bad();
-  return { name, id };
-}
+/**
+ * Course creation order, then id: the order the school page lists courses
+ * in, and which matching courses a card names first.
+ */
+const COURSE_ORDER: Prisma.SchoolCourseOrderByWithRelationInput[] = [
+  { createdAt: 'asc' },
+  { id: 'asc' },
+];
+/** Soonest first, then id, so two intakes on one day always agree. */
+const INTAKE_ORDER: Prisma.CourseIntakeOrderByWithRelationInput[] = [
+  { startDate: 'asc' },
+  { id: 'asc' },
+];
 
 /** Rows the app may see: each level checked on its own (SCHOOLS-02). */
 const SHOWN = { hiddenAt: null } as const;
@@ -101,6 +72,7 @@ export class SchoolsPublicService {
       include: {
         courses: {
           ...SHOWN_COURSES,
+          orderBy: COURSE_ORDER,
           select: { title: true, priceKobo: true },
         },
       },
@@ -126,12 +98,10 @@ export class SchoolsPublicService {
 
   /** The `schools` tab of GET /search: the first page of the same match. */
   async searchTab(term: string): Promise<PublicSchoolCard[]> {
+    // A term with a NUL or a lone surrogate never reaches here: GET /search
+    // refuses it on every tab first (FIX-07, `refuseUnsearchableQuery`).
     const t = term.trim();
     if (t === '') return [];
-    if (!isCleanText(t))
-      throw new BadRequestException(
-        'q must have text in it, with no null characters or broken characters',
-      );
     return (await this.list({ q: t, limit: 20 })).items;
   }
 
@@ -142,9 +112,9 @@ export class SchoolsPublicService {
       include: {
         courses: {
           where: SHOWN,
-          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+          orderBy: COURSE_ORDER,
           include: {
-            intakes: { where: SHOWN, orderBy: { startDate: 'asc' } },
+            intakes: { where: SHOWN, orderBy: INTAKE_ORDER },
           },
         },
       },
@@ -164,10 +134,7 @@ export class SchoolsPublicService {
       where: { id, ...SHOWN, school: SHOWN },
       include: {
         school: true,
-        intakes: {
-          where: SHOWN,
-          orderBy: [{ startDate: 'asc' }, { id: 'asc' }],
-        },
+        intakes: { where: SHOWN, orderBy: INTAKE_ORDER },
       },
     });
     if (!row) throw new NotFoundException('Course not found');

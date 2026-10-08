@@ -231,8 +231,8 @@ describe('Public schools paging and boundaries (SCHOOLS-04 round 2)', () => {
       uid(5), // the old form: a bare school id
       hidden.id,
       'abc',
-      'A'.repeat(1000),
-      'A'.repeat(1001),
+      'A'.repeat(1498), // the longest cursor length (round 3, D2)
+      'A'.repeat(1499),
       '%00',
       'a%00b',
       '%ED%A0%80',
@@ -243,7 +243,7 @@ describe('Public schools paging and boundaries (SCHOOLS-04 round 2)', () => {
       Buffer.from('{"a":1}').toString('base64url'),
       Buffer.from('null').toString('base64url'),
       Buffer.from('["a","b","c"]').toString('base64url'),
-      Buffer.from(JSON.stringify(['x'.repeat(301), uid(1)])).toString(
+      Buffer.from(JSON.stringify(['x'.repeat(361), uid(1)])).toString(
         'base64url',
       ),
       `${cur(`${MARK} N03`, uid(7))}=`,
@@ -254,7 +254,7 @@ describe('Public schools paging and boundaries (SCHOOLS-04 round 2)', () => {
       const res = await get(`/schools?cursor=${c}`);
       expect([200, 400]).toContain(res.status);
     }
-    for (const c of ['abc', uid(5), cur('x', 'nope'), 'A'.repeat(1001)])
+    for (const c of ['abc', uid(5), cur('x', 'nope'), 'A'.repeat(1499)])
       await get(`/schools?cursor=${c}`).expect(400);
     await get('/schools?cursor=a&cursor=b').expect(400);
     // a well-formed position never reveals the hidden school
