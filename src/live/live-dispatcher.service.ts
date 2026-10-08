@@ -5,7 +5,7 @@ import { ChatService } from '../chat/chat.service';
 import { CommunityMessageService } from '../community-message/community-message.service';
 import { encodeLiveCursor } from './live-cursor';
 import { LiveConnections } from './live-connections.service';
-import type { LiveEvent } from './live-event.type';
+import type { LiveEvent, LiveLegalThreadEvent } from './live-event.type';
 import type { LiveSignal } from './live-signal.type';
 
 /**
@@ -21,6 +21,10 @@ import type { LiveSignal } from './live-signal.type';
  *  - a community message goes to the host and to members whose status is
  *    `joined`, and not to anyone who has blocked its sender or been blocked
  *    by them (the sender's own other phones still get it).
+ *
+ *  - a consultant's message on a legal matter goes to the client who owns the
+ *    matter, and to nobody else (`legal.thread`, LEGAL-02); it names the
+ *    matter, never the words.
  *
  * Signals about one room are handled in order, so a person sees a room's
  * messages in the order they were stored.
@@ -42,7 +46,11 @@ export class LiveDispatcher {
   handle(signal: LiveSignal): Promise<void> {
     if (this.connections.size === 0) return Promise.resolve();
     const room =
-      signal.kind === 'community.message' ? signal.communityId : signal.chatId;
+      signal.kind === 'community.message'
+        ? signal.communityId
+        : signal.kind === 'legal.thread'
+          ? signal.legalRequestId
+          : signal.chatId;
     const tail = this.tails.get(room) ?? Promise.resolve();
     const next = tail
       .then(() => this.dispatch(signal))
@@ -64,6 +72,8 @@ export class LiveDispatcher {
         return this.chatRead(signal.chatId, signal.readerWawuId);
       case 'community.message':
         return this.communityMessage(signal.communityId, signal.messageId);
+      case 'legal.thread':
+        return this.legalThread(signal.legalRequestId, signal.messageId);
     }
   }
 
@@ -93,6 +103,34 @@ export class LiveDispatcher {
         this.connections.send(wawuId, event);
       }),
     );
+  }
+
+  private async legalThread(
+    legalRequestId: string,
+    messageId: string,
+  ): Promise<void> {
+    const row = await this.prisma.legalChatMessage.findUnique({
+      where: { id: messageId },
+    });
+    // The signal is only ever sent for a consultant's message, and a row that
+    // is not one, or not on this matter, is not a reason to wake anyone.
+    if (
+      !row ||
+      row.legalRequestId !== legalRequestId ||
+      row.authorRole !== 'consultant'
+    )
+      return;
+    const request = await this.prisma.legalRequest.findUnique({
+      where: { id: legalRequestId },
+      select: { wawuUserId: true },
+    });
+    if (!request || !this.connections.has(request.wawuUserId)) return;
+    const event: LiveLegalThreadEvent = {
+      type: 'legal.thread',
+      cursor: encodeLiveCursor(row.createdAt),
+      legalRequestId,
+    };
+    this.connections.send(request.wawuUserId, event);
   }
 
   private async chatRead(chatId: string, readerWawuId: string): Promise<void> {

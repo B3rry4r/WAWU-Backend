@@ -10,6 +10,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { LivePublisher } from '../live/live-publisher.service';
 import {
   GEMINI_CLIENT,
   type GeminiClient,
@@ -102,6 +103,7 @@ export class LegalChatService {
     @Inject(GEMINI_CLIENT) private readonly gemini: GeminiClient,
     private readonly allowance: LegalAssistantAllowance,
     @Inject(LEGAL_OPENER_WAIT_MS) private readonly openerWaitMs: number,
+    private readonly live: LivePublisher,
   ) {}
 
   /**
@@ -259,7 +261,7 @@ export class LegalChatService {
 
     // Under the client's lock, so the handover is ordered against their
     // messages (see `LegalAssistantAllowance.writeAsConsultant`).
-    await this.allowance.writeAsConsultant(
+    const written = await this.allowance.writeAsConsultant(
       request.wawuUserId,
       (tx, createdAt) =>
         tx.legalChatMessage.create({
@@ -272,6 +274,13 @@ export class LegalChatService {
           },
         }),
     );
+    // LEGAL-02: the client's phone learns the conversation changed (no words
+    // travel); it reads them from the route. Never throws.
+    await this.live.publish({
+      kind: 'legal.thread',
+      legalRequestId: requestId,
+      messageId: written.id,
+    });
     return this.threadFor(request);
   }
 
