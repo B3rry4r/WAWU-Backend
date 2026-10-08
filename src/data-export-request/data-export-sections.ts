@@ -931,6 +931,11 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
         'Legal matters may be privileged; whether they are emailed is the owner call.',
     },
     {
+      model: 'LegalDeliverable',
+      reason:
+        'The documents delivered on a legal matter; legal matters may be privileged, so whether they are emailed is the owner call.',
+    },
+    {
       model: 'LegalIntake',
       reason:
         'Legal matters may be privileged; whether they are emailed is the owner call.',
@@ -944,5 +949,10 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
       model: 'LegalAssistantCall',
       reason:
         'A bookkeeping row for the assistant hourly limit (when a paid AI call was made, never what was said); nothing the person wrote.',
+    },
+    {
+      model: 'LegalChatOpenerCall',
+      reason:
+        'A bookkeeping row for the opener of a legal thread (when its paid AI call was made and how it ended, never what was said); nothing the person wrote.',
     },
   ];

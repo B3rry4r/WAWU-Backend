@@ -159,6 +159,8 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'KycSubmission', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'PendingCharge', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'HealthSubscription', column: 'wawuUserId', disposition: 'OWNED' },
+  // The files WAWU delivered on this person's legal requests (LEGAL-03).
+  { model: 'LegalDeliverable', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'LegalRequest', column: 'wawuUserId', disposition: 'OWNED' },
   // The assistant conversation on an intake (LEGAL-01): the client's own
   // words and the assistant's replies to them, removed before the intake.
@@ -171,6 +173,13 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // kept to enforce the hourly limit; holds no words of the conversation.
   {
     model: 'LegalAssistantCall',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
+  // One row per AI call that tried to write a matter thread's opener
+  // (FIX-11): the claim and the hourly count; holds no words.
+  {
+    model: 'LegalChatOpenerCall',
     column: 'wawuUserId',
     disposition: 'OWNED',
   },
