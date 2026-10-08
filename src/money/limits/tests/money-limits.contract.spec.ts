@@ -45,6 +45,9 @@ const LAGOS_MIDNIGHT_TODAY = new Date('2026-10-14T23:00:00.000Z');
 const LAST_LAGOS_MOMENT_LAST_MONTH = new Date('2026-09-30T22:59:59.999Z');
 const LAGOS_FIRST_OF_MONTH = new Date('2026-09-30T23:00:00.000Z');
 
+/** The spec's own fee on every out row (what a total adds to an amount). */
+const OUT_FEE_KOBO = 1575;
+
 const FEES = {
   [NUVION_FEE_CONFIG_KEYS.bookTransfer]: '100',
   [NUVION_FEE_CONFIG_KEYS.bankPayout]: '200',
@@ -107,7 +110,10 @@ function rowData(
     status: r.status ?? 'completed',
     category,
     amountKobo: BigInt(r.amountKobo),
-    totalKobo: BigInt(r.amountKobo),
+    // An out row's total carries its fees, so a limit read on the total
+    // instead of the amount is caught.
+    feeKobo: BigInt(r.direction === 'in' ? 0 : OUT_FEE_KOBO),
+    totalKobo: BigInt(r.amountKobo + (r.direction === 'in' ? 0 : OUT_FEE_KOBO)),
     counterpartyKind,
     linkKind: r.kind === 'paid_bill' ? 'bill' : (r.linkKind ?? null),
     source: 'send',
