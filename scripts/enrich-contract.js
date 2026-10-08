@@ -285,6 +285,7 @@ function buildObject(type, depth) {
     if (schema === null) continue; // pure undefined/void property
     if (declaredIn(type, NULLABLE_REF_AS_ALLOF_DIRS)) schema = nullableRefAsAllOf(schema);
     schema = koboAsInteger(prop.getName(), schema);
+    if (declaredIn(type, WHOLE_NUMBER_DIRS)) schema = numberAsInteger(schema);
     properties[prop.getName()] = schema;
     const optional = prop.flags & ts.SymbolFlags.Optional;
     if (!optional) required.push(prop.getName());
@@ -303,7 +304,7 @@ function buildObject(type, depth) {
  * keeps the null.
  *
  * Only for types declared under these folders (task MONEY-04's wallet
- * contract, task INBOX-06's chat and task INBOX-07's inbox), so no schema a served route already publishes changes shape in
+ * contract, task INBOX-06's chat, task INBOX-07's inbox and task TIER-01's plans), so no schema a served route already publishes changes shape in
  * the contract. The eleven served fields still written the old way are listed
  * in docs/contract/WALLET.md, section 5.
  */
@@ -318,6 +319,8 @@ const NULLABLE_REF_AS_ALLOF_DIRS = [
   path.join(ROOT, 'src', 'inbox') + path.sep,
   // The caller's own lists (task ME-10): new routes, so nothing published changes.
   path.join(ROOT, 'src', 'me') + path.sep,
+  // The maker plan (task TIER-01): new routes, so nothing published changes.
+  path.join(ROOT, 'src', 'plans') + path.sep,
   // Points (task POINTS-01): a new route, so nothing published changes.
   path.join(ROOT, 'src', 'points') + path.sep,
 ];
@@ -345,6 +348,22 @@ function nullableRefAsAllOf(schema) {
  */
 function koboAsInteger(name, schema) {
   if (!name.endsWith('Kobo') || !schema || schema.type !== 'number') return schema;
+  return { ...schema, type: 'integer' };
+}
+
+/**
+ * Types declared under these folders hold whole numbers only: every `number`
+ * field is written `integer`. The maker plan (task TIER-01) answers prices in
+ * minor units (`priceMinor`: kobo or cents), points, counts, days and a
+ * percent, all checked whole when the config loads, and none of them ends in
+ * `Kobo` (a dollar price is cents), so the name rule above cannot see them.
+ * As with that rule, the wire is unchanged and openapi-typescript generates
+ * `number` for both.
+ */
+const WHOLE_NUMBER_DIRS = [path.join(ROOT, 'src', 'plans') + path.sep];
+
+function numberAsInteger(schema) {
+  if (!schema || schema.type !== 'number') return schema;
   return { ...schema, type: 'integer' };
 }
 

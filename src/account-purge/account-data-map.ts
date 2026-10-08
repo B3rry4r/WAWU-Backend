@@ -138,6 +138,13 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'wawuUserId',
     disposition: 'OWNED',
   },
+  // The maker plan (TIER-01): the currency this person is billed in, the
+  // tier they hold and the event passes it issued. Each exists only because
+  // this account exists and names nobody else. The purchases that paid for
+  // them are their own task's (TIER-03) and are classified there.
+  { model: 'PersonBilling', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'MakerTier', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'EventPass', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'CreditLot', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CreditSpend', column: 'userWawuId', disposition: 'OWNED' },
   {
@@ -159,6 +166,8 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'KycSubmission', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'PendingCharge', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'HealthSubscription', column: 'wawuUserId', disposition: 'OWNED' },
+  // The files WAWU delivered on this person's legal requests (LEGAL-03).
+  { model: 'LegalDeliverable', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'LegalRequest', column: 'wawuUserId', disposition: 'OWNED' },
   // The assistant conversation on an intake (LEGAL-01): the client's own
   // words and the assistant's replies to them, removed before the intake.
@@ -171,6 +180,13 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // kept to enforce the hourly limit; holds no words of the conversation.
   {
     model: 'LegalAssistantCall',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
+  // One row per AI call that tried to write a matter thread's opener
+  // (FIX-11): the claim and the hourly count; holds no words.
+  {
+    model: 'LegalChatOpenerCall',
     column: 'wawuUserId',
     disposition: 'OWNED',
   },
