@@ -138,6 +138,13 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'wawuUserId',
     disposition: 'OWNED',
   },
+  // The maker plan (TIER-01): the currency this person is billed in, the
+  // tier they hold and the event passes it issued. Each exists only because
+  // this account exists and names nobody else. The purchases that paid for
+  // them are their own task's (TIER-03) and are classified there.
+  { model: 'PersonBilling', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'MakerTier', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'EventPass', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'CreditLot', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CreditSpend', column: 'userWawuId', disposition: 'OWNED' },
   {
@@ -259,6 +266,12 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'wawuUserId',
     disposition: 'OWNED',
   },
+  // The person as Nuvion knows them (NUV-01; written by NUV-02 to NUV-04):
+  // the ids of their entity, account and account details, the review's
+  // state and the account number. Like FintavaWallet, it is WAWU's pointer,
+  // not the account at Nuvion, which stays there; deletion needs an empty
+  // wallet first (R-17).
+  { model: 'NuvionEntity', column: 'wawuUserId', disposition: 'OWNED' },
   // This person's saved beneficiaries and payout account (WALLET-14): their
   // own list of where they send money, and the bank account their
   // withdrawals go to. Both go with them.

@@ -1,7 +1,16 @@
 import { randomUUID } from 'node:crypto';
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import {
+  DEFAULT_ROW_PROVIDER,
+  isRowOf,
+  rowsOf,
+} from '../../wallet-provider/provider-rows';
+import {
+  WALLET_PROVIDER,
+  type WalletProvider,
+} from '../../wallet-provider/wallet-provider.interface';
 import type { TransferStatus } from '../money-view.type';
 import type {
   LedgerDirection,
@@ -183,6 +192,21 @@ class LedgerRaceError extends Error {
   }
 }
 
+/**
+ * A sighting names a reference that another provider's row holds on the
+ * same wallet side (NUV-01, SHARED-CHANGES NUV-01 #2). A stop, never a
+ * fold: one provider's movement is never merged into another's row.
+ * Nothing is written; never run again on its own.
+ */
+export class LedgerProviderConflictError extends Error {
+  constructor(entryIds: readonly string[]) {
+    super(
+      `ledger: these references are held by another provider's row (${entryIds.join(', ')}); nothing was recorded (review)`,
+    );
+    this.name = 'LedgerProviderConflictError';
+  }
+}
+
 /** A deadlock, a write conflict, or LedgerRaceError: safe to run again. */
 function retryable(e: unknown): boolean {
   if (e instanceof LedgerRaceError) return true;
@@ -303,7 +327,18 @@ function sightingOfRow(row: EntryRow): Sighting {
 export class LedgerService {
   private readonly logger = new Logger(LedgerService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  /**
+   * NUV-01 (SHARED-CHANGES NUV-01 #2, lead ruling 8): every row this
+   * service creates is stamped with the running provider's name, and every
+   * lookup and fold here reads only that provider's rows (null is Fintava's,
+   * src/wallet-provider/provider-rows.ts). After a rollback, the other
+   * provider's rows are left alone: no lookup, fold, absent check or
+   * reversal here touches them.
+   */
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(WALLET_PROVIDER) private readonly provider: WalletProvider,
+  ) {}
 
   /** Records one side of one movement, or merges it into the row that has it. */
   async record(
@@ -323,7 +358,7 @@ export class LedgerService {
     }
   }
 
-  /** The row ids on one side that hold any of these references. */
+  /** The running provider's row ids on one side that hold any of these references. */
   async entriesFor(
     accountNumber: string,
     direction: LedgerDirection,
@@ -332,24 +367,52 @@ export class LedgerService {
   ): Promise<string[]> {
     if (references.length === 0) return [];
     const rows = await db.fintavaLedgerReference.findMany({
-      where: { accountNumber, direction, value: { in: [...references] } },
+      where: {
+        accountNumber,
+        direction,
+        value: { in: [...references] },
+        entry: rowsOf(this.provider.name),
+      },
       select: { entryId: true },
     });
     return [...new Set(rows.map((r) => r.entryId))];
   }
 
-  /** The `out` rows, on any wallet, that hold any of these references. */
+  /** The running provider's `out` rows, on any wallet, that hold any of these references. */
   async debitsFor(
     references: readonly string[],
     db: Db = this.prisma,
+  ): Promise<string[]> {
+    return this.debitsHolding(references, db, true);
+  }
+
+  /**
+   * The `out` rows another provider recorded that hold any of these
+   * references: for a caller that must stop rather than act (a reversal
+   * naming another provider's debit is left for review).
+   */
+  async foreignDebitsFor(
+    references: readonly string[],
+    db: Db = this.prisma,
+  ): Promise<string[]> {
+    return this.debitsHolding(references, db, false);
+  }
+
+  private async debitsHolding(
+    references: readonly string[],
+    db: Db,
+    own: boolean,
   ): Promise<string[]> {
     const refs = [...new Set(references.map((r) => r.trim()).filter(Boolean))];
     if (refs.length === 0) return [];
     const hits = await db.fintavaLedgerReference.findMany({
       where: { direction: 'out', value: { in: refs } },
-      select: { entryId: true },
+      select: { entryId: true, entry: { select: { provider: true } } },
     });
-    return [...new Set(hits.map((h) => h.entryId))].sort();
+    const ids = hits
+      .filter((h) => isRowOf(this.provider.name, h.entry.provider) === own)
+      .map((h) => h.entryId);
+    return [...new Set(ids)].sort();
   }
 
   /**
@@ -362,7 +425,9 @@ export class LedgerService {
    * - it is still `pending` with no disagreement recorded;
    * - nothing from Fintava was ever merged into it (no Fintava reference,
    *   transaction id or tagapay reference, no delivery that made it);
-   * - no stored delivery, consumed or not, names any of its references.
+   * - no stored delivery, consumed or not, names any of its references;
+   * - it is the running provider's row (NUV-01): one provider's silence is
+   *   never read as the other's.
    * Otherwise it is left alone (false) and the check asks again later.
    */
   async markAbsentFailed(entryId: string, version: string): Promise<boolean> {
@@ -370,6 +435,7 @@ export class LedgerService {
       const held = await tx.$queryRaw<Array<{ id: string }>>`
         SELECT "id" FROM "FintavaLedgerEntry"
          WHERE "id" = ${entryId} AND "status" = 'pending'
+           AND COALESCE("provider", ${DEFAULT_ROW_PROVIDER}) = ${this.provider.name}
            AND "discrepancy" IS NULL
            AND xmin::text = ${version}
            AND "fintavaReference" IS NULL
@@ -462,6 +528,7 @@ export class LedgerService {
         direction,
         ...s,
         completedAt: s.status === 'completed' ? now : null,
+        provider: this.provider.name,
       },
     });
 
@@ -512,6 +579,16 @@ export class LedgerService {
       } else {
         ownerIds = now;
       }
+    }
+    // Another provider's row holds one of these references on this side: a
+    // stop, never a fold (the transaction rolls back, nothing is written).
+    const foreign = holders.filter(
+      (h) => !isRowOf(this.provider.name, h.provider),
+    );
+    if (foreign.length > 0) {
+      const error = new LedgerProviderConflictError(foreign.map((h) => h.id));
+      this.logger.error(error.message);
+      throw error;
     }
     const [keeper, ...extra] = holders;
     if (!keeper) throw new LedgerRaceError();

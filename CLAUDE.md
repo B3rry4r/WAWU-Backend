@@ -72,6 +72,10 @@ matters most here:
   It never imports `src/fintava/` (a spec checks). `WALLET_PROVIDER=fintava`
   (the default) or `nuvion` picks the adapter at boot; rollback is that one
   setting and a restart. Provider quirks live in the provider's adapter.
+  The Nuvion adapter (NUV-01, `src/nuvion/`) hands each method to one area
+  file per task (`src/nuvion/areas/`), and Nuvion's webhooks to one handler
+  file per task (`src/nuvion/handlers/`); a server acts only on wallet,
+  opening and ledger rows of the provider it runs (their `provider` column).
 - What Fintava's API really does is in the mobile repo's `docs/fintava/`.
   Facts come from there and from real sandbox responses, never from the design.
 - **Money routes follow `docs/contract/CONVENTIONS.md`** (kobo, `+234`, one

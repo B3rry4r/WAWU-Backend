@@ -26318,6 +26318,50 @@
         ]
       }
     },
+    "/api/hub/plans": {
+      "get": {
+        "operationId": "PlansController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlansView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The plan as the caller pays for it. Every amount is whole minor units of\n`currency` (kobo for NGN, cents for USD); one currency per answer.\n`no-store`: the answer is the caller's own (their currency).",
+        "tags": [
+          "Plans"
+        ]
+      }
+    },
+    "/api/hub/me/tier": {
+      "get": {
+        "operationId": "MeTierController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyTierView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "`none`, `active`, `ending` or `ended`, with what the tier gives.\n`no-store`: the answer is the caller's own.",
+        "tags": [
+          "MeTier"
+        ]
+      }
+    },
     "/api/hub/webhooks/fintava": {
       "post": {
         "operationId": "FintavaWebhookController_receive",
@@ -26335,6 +26379,28 @@
           }
         },
         "summary": "Records one Fintava delivery and acknowledges it. Fintava's webhook,\nnever called by an app. The body is untyped on purpose: the global\nValidationPipe forbids unknown fields, and Fintava's payloads differ by\nevent and are not all published, so a DTO would refuse real deliveries.\nThe signature is checked over the raw bytes before this runs.",
+        "tags": [
+          "PaymentWebhook"
+        ]
+      }
+    },
+    "/api/hub/webhooks/nuvion": {
+      "post": {
+        "operationId": "NuvionWebhookController_receive",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NuvionWebhookAck"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Stores one Nuvion delivery and acknowledges it. Nuvion's webhook, never\ncalled by an app. The body is untyped on purpose: the global\nValidationPipe forbids unknown fields, and Nuvion's payloads differ by\nevent. The signature is checked over the raw bytes before this runs.",
         "tags": [
           "PaymentWebhook"
         ]
@@ -45232,6 +45298,343 @@
           "nextCursor"
         ]
       },
+      "PlanBadgeView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "numbered": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "numbered"
+        ]
+      },
+      "MyTierSummaryView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "badge": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PlanBadgeView"
+              }
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "badge"
+        ]
+      },
+      "PlanEventPassView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "MyTierView": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "none",
+              "ending",
+              "ended"
+            ]
+          },
+          "tier": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MyTierSummaryView"
+              }
+            ],
+            "nullable": true
+          },
+          "activeFrom": {
+            "type": "string",
+            "nullable": true
+          },
+          "activeUntil": {
+            "type": "string",
+            "nullable": true
+          },
+          "productsAllowed": {
+            "type": "integer"
+          },
+          "extraProducts": {
+            "type": "integer"
+          },
+          "pointsIncluded": {
+            "type": "integer"
+          },
+          "firstVoiceIntroIncluded": {
+            "type": "boolean"
+          },
+          "eventPass": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PlanEventPassView"
+              }
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "state",
+          "tier",
+          "activeFrom",
+          "activeUntil",
+          "productsAllowed",
+          "extraProducts",
+          "pointsIncluded",
+          "firstVoiceIntroIncluded",
+          "eventPass"
+        ]
+      },
+      "PlanTierView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "days": {
+            "type": "integer"
+          },
+          "products": {
+            "type": "integer"
+          },
+          "bonusPoints": {
+            "type": "integer"
+          },
+          "bonusPointsExpireDays": {
+            "type": "integer"
+          },
+          "priceMinor": {
+            "type": "integer"
+          },
+          "eventPass": {
+            "$ref": "#/components/schemas/PlanEventPassView"
+          },
+          "badge": {
+            "$ref": "#/components/schemas/PlanBadgeView"
+          },
+          "packBonusPercent": {
+            "type": "integer"
+          },
+          "firstVoiceIntroIncluded": {
+            "type": "boolean"
+          },
+          "preselected": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "days",
+          "products",
+          "bonusPoints",
+          "bonusPointsExpireDays",
+          "priceMinor",
+          "eventPass",
+          "badge",
+          "packBonusPercent",
+          "firstVoiceIntroIncluded",
+          "preselected"
+        ]
+      },
+      "PlanExtraProductsView": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "priceMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count",
+          "priceMinor"
+        ]
+      },
+      "PlanPackView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "points": {
+            "type": "integer"
+          },
+          "priceMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "points",
+          "priceMinor"
+        ]
+      },
+      "PlanCheckoutBumpView": {
+        "type": "object",
+        "properties": {
+          "points": {
+            "type": "integer"
+          },
+          "priceMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "points",
+          "priceMinor"
+        ]
+      },
+      "PlanActionView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "points": {
+            "type": "integer"
+          },
+          "per": {
+            "type": "string",
+            "enum": [
+              "use",
+              "minute",
+              "track",
+              "message",
+              "minute_per_language"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "points",
+          "per"
+        ]
+      },
+      "PlanCapsView": {
+        "type": "object",
+        "properties": {
+          "dailyPoints": {
+            "type": "integer"
+          },
+          "maxCharactersPerJob": {
+            "type": "integer"
+          },
+          "maxAudioMinutesPerJob": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dailyPoints",
+          "maxCharactersPerJob",
+          "maxAudioMinutesPerJob"
+        ]
+      },
+      "PlansView": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN",
+              "USD"
+            ]
+          },
+          "currencyFixed": {
+            "type": "boolean"
+          },
+          "tiers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanTierView"
+            }
+          },
+          "extraProducts": {
+            "$ref": "#/components/schemas/PlanExtraProductsView"
+          },
+          "packs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanPackView"
+            }
+          },
+          "checkoutBump": {
+            "$ref": "#/components/schemas/PlanCheckoutBumpView"
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanActionView"
+            }
+          },
+          "caps": {
+            "$ref": "#/components/schemas/PlanCapsView"
+          }
+        },
+        "required": [
+          "currency",
+          "currencyFixed",
+          "tiers",
+          "extraProducts",
+          "packs",
+          "checkoutBump",
+          "actions",
+          "caps"
+        ]
+      },
+      "NuvionWebhookAck": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "recorded",
+              "duplicate"
+            ]
+          },
+          "event": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "outcome",
+          "event"
+        ]
+      },
       "AdCreativeView": {
         "type": "object",
         "properties": {
@@ -45355,8 +45758,8 @@
               "live",
               "paused",
               "draft",
-              "scheduled",
-              "ended"
+              "ended",
+              "scheduled"
             ]
           },
           "phase": {
@@ -45442,8 +45845,8 @@
                   "live",
                   "paused",
                   "draft",
-                  "scheduled",
-                  "ended"
+                  "ended",
+                  "scheduled"
                 ],
                 "nullable": true
               },
@@ -45487,15 +45890,15 @@
               "live": {},
               "paused": {},
               "draft": {},
-              "scheduled": {},
-              "ended": {}
+              "ended": {},
+              "scheduled": {}
             },
             "required": [
               "live",
               "paused",
               "draft",
-              "scheduled",
-              "ended"
+              "ended",
+              "scheduled"
             ]
           },
           "deliveryByPlacement": {
@@ -45515,15 +45918,15 @@
               "live": {},
               "paused": {},
               "draft": {},
-              "scheduled": {},
-              "ended": {}
+              "ended": {},
+              "scheduled": {}
             },
             "required": [
               "live",
               "paused",
               "draft",
-              "scheduled",
-              "ended"
+              "ended",
+              "scheduled"
             ]
           },
           "byPlacement": {
@@ -45590,8 +45993,8 @@
               "live",
               "paused",
               "draft",
-              "scheduled",
-              "ended"
+              "ended",
+              "scheduled"
             ]
           },
           "startsAt": {
@@ -45626,8 +46029,8 @@
             "enum": [
               "paused",
               "updated",
-              "scheduled",
               "ended",
+              "scheduled",
               "created",
               "resumed",
               "deleted"
@@ -45639,8 +46042,8 @@
               "live",
               "paused",
               "draft",
-              "scheduled",
-              "ended"
+              "ended",
+              "scheduled"
             ],
             "nullable": true
           },
@@ -45650,8 +46053,8 @@
               "live",
               "paused",
               "draft",
-              "scheduled",
-              "ended"
+              "ended",
+              "scheduled"
             ],
             "nullable": true
           },
@@ -45736,8 +46139,8 @@
               "live",
               "paused",
               "draft",
-              "scheduled",
-              "ended"
+              "ended",
+              "scheduled"
             ]
           },
           "phase": {
