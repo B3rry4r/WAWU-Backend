@@ -298,7 +298,7 @@ export class PushSenderService {
       });
     }
     for (const [reason, ids] of skipped) {
-      report.skipped += await this.finish(ids, 'skipped', reason);
+      report.skipped += await this.finish(claimId, ids, 'skipped', reason);
     }
     if (outgoing.length === 0) return true;
 
@@ -319,11 +319,12 @@ export class PushSenderService {
 
     const outcome = await this.expo.send(chunk.map((c) => c.message));
     if (outcome.kind === 'tickets') {
-      await this.applyTickets(chunk, outcome.tickets, report);
+      await this.applyTickets(claimId, chunk, outcome.tickets, report);
       return true;
     }
     if (outcome.kind === 'retry') {
       await this.retryOrFail(
+        claimId,
         chunk.map((c) => c.delivery.id),
         outcome.reason,
         outcome.retryAfterSeconds,
@@ -339,6 +340,7 @@ export class PushSenderService {
         ? `send_unconfirmed_${outcome.reason}`
         : outcome.reason;
     report.failed += await this.finish(
+      claimId,
       chunk.map((c) => c.delivery.id),
       'failed',
       reason,
@@ -412,9 +414,13 @@ export class PushSenderService {
   /**
    * Records Expo's tickets the moment they arrive: every accepted one in a
    * single statement, so a stop right after the answer leaves nothing that
-   * looks unsent. Then the refusals, one by one.
+   * looks unsent. Then the refusals, one by one. Like every write after the
+   * claim, it touches only rows this claim still holds: an answer that comes
+   * back after the reaper took a row back (and another instance may be
+   * sending it) changes nothing.
    */
   private async applyTickets(
+    claimId: string,
     chunk: Outgoing[],
     tickets: ExpoTicket[],
     report: PushRunReport,
@@ -444,7 +450,7 @@ export class PushSenderService {
             "receiptDueAt" = ${NOW_UTC} + make_interval(secs => ${PUSH_RECEIPTS.firstCheckSeconds}),
             "lockedAt" = NULL, "claimId" = NULL, "updatedAt" = ${NOW_UTC}
         FROM unnest(${okIds}::text[], ${okTickets}::text[]) AS v("id", "ticket")
-        WHERE d."id" = v."id" AND d."status" = 'sending'`;
+        WHERE d."id" = v."id" AND d."status" = 'sending' AND d."claimId" = ${claimId}`;
     }
     for (const { delivery, code } of refused) {
       if (code === 'DeviceNotRegistered') {
@@ -455,10 +461,15 @@ export class PushSenderService {
           'Expo says the push credentials are invalid (FCM key not uploaded to Expo?).',
         );
       } else if (code === 'MessageRateExceeded') {
-        await this.retryOrFail([delivery.id], code, null, report);
+        await this.retryOrFail(claimId, [delivery.id], code, null, report);
         continue;
       }
-      report.failed += await this.finish([delivery.id], 'failed', code);
+      report.failed += await this.finish(
+        claimId,
+        [delivery.id],
+        'failed',
+        code,
+      );
     }
   }
 
@@ -467,6 +478,7 @@ export class PushSenderService {
    * of attempts. One statement, on the database's clock.
    */
   private async retryOrFail(
+    claimId: string,
     ids: string[],
     reason: string,
     retryAfterSeconds: number | null,
@@ -481,7 +493,7 @@ export class PushSenderService {
             ${retryAfterSeconds}::double precision,
             ${PUSH_RETRY.retryBaseSeconds}::double precision * power(2, GREATEST("attempts" - 1, 0)))),
           "lockedAt" = NULL, "claimId" = NULL, "updatedAt" = ${NOW_UTC}
-      WHERE "id" = ANY(${ids}::text[]) AND "status" = 'sending'
+      WHERE "id" = ANY(${ids}::text[]) AND "status" = 'sending' AND "claimId" = ${claimId}
       RETURNING "status"`;
     for (const r of rows) {
       if (r.status === 'failed') report.failed += 1;
@@ -489,8 +501,9 @@ export class PushSenderService {
     }
   }
 
-  /** Ends rows that are not ended yet. Returns how many it ended. */
+  /** Ends rows this claim still holds. Returns how many it ended. */
   private async finish(
+    claimId: string,
     ids: string[],
     status: string,
     reason: string,
@@ -499,7 +512,8 @@ export class PushSenderService {
       UPDATE "PushDelivery"
       SET "status" = ${status}, "reason" = ${reason}, "lockedAt" = NULL,
           "claimId" = NULL, "updatedAt" = ${NOW_UTC}
-      WHERE "id" = ANY(${ids}::text[]) AND "status" <> ALL(${TERMINAL}::text[])`;
+      WHERE "id" = ANY(${ids}::text[]) AND "claimId" = ${claimId}
+        AND "status" <> ALL(${TERMINAL}::text[])`;
   }
 
   /**

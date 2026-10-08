@@ -1262,6 +1262,62 @@ describe('Phone push sender (INBOX-03)', () => {
       expect((await deliveriesOf(USER_A))[0].status).toBe('sent');
     });
 
+    it('an answer that comes back after the reaper took the row back changes nothing: the instance now sending it records its own ticket', async () => {
+      await register(USER_A);
+      await tip(USER_A);
+      await sender.enqueue();
+      const gate = () => {
+        let open!: () => void;
+        const opened = new Promise<void>((r) => (open = r));
+        return { open, opened };
+      };
+      // instance A: its request reaches Expo, the answer is held up
+      const a = gate();
+      const aCalled = gate();
+      const spyA = jest
+        .spyOn(expoClient, 'send')
+        .mockImplementation(async (messages) => {
+          aCalled.open();
+          await a.opened;
+          return {
+            kind: 'tickets',
+            tickets: messages.map(() => ({ status: 'ok', id: 'late-from-a' })),
+          };
+        });
+      const passA = sender.runOnce();
+      await aCalled.opened;
+      // past the lock, instance B takes the row back and is mid-send itself
+      await ageLocks(USER_A);
+      const clientB = new ExpoPushClient();
+      const b = gate();
+      const bCalled = gate();
+      jest.spyOn(clientB, 'send').mockImplementation(async (messages) => {
+        bCalled.open();
+        await b.opened;
+        return {
+          kind: 'tickets',
+          tickets: messages.map(() => ({ status: 'ok', id: 'from-b' })),
+        };
+      });
+      const passB = new PushSenderService(
+        prisma,
+        notifications,
+        clientB,
+        blocks,
+      ).runOnce();
+      await bCalled.opened;
+      // A's late answer arrives while B holds the row
+      a.open();
+      await passA;
+      spyA.mockRestore();
+      let [d] = await deliveriesOf(USER_A);
+      expect(d).toMatchObject({ status: 'sending', ticketId: null });
+      b.open();
+      await passB;
+      [d] = await deliveriesOf(USER_A);
+      expect(d).toMatchObject({ status: 'sent', ticketId: 'from-b' });
+    });
+
     // Found in round 2: with the table's statistics taken while it was empty,
     // `WHERE id IN (SELECT ... LIMIT 100 FOR UPDATE SKIP LOCKED)` became a
     // nested loop that ran the subquery again per row and claimed 162 rows.
