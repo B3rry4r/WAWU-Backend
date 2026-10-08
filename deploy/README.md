@@ -117,7 +117,10 @@ WALLET_PROVIDER=fintava
 # NUVION_WEBHOOK_SECRET is shown once by Nuvion when NUV-10 registers
 #   https://<the API's public host>/api/hub/webhooks/nuvion
 # and is read under any WALLET_PROVIDER: without it every delivery is
-# refused with 401. NUVION_WALLET_* are the owner's bank, licence and
+# refused with 401. NUVION_HOSTED_LIVENESS is on or off (empty: off): the
+# selfie step of opening stays off until the sandbox shows Nuvion can start a
+# session for a child entity (NUV-03, R-39); NUVION_LIVENESS_REDIRECT_ORIGINS
+# lists the https origins its page may return to. NUVION_WALLET_* are the owner's bank, licence and
 # deposit-insurance lines for Nuvion wallets (empty hides them).
 # PIN reset codes go by email under nuvion (R-39): WAWU ID sends them
 # (WAWU_ID_BASE_URL and WAWU_ID_INTERNAL_SERVICE_KEY, BACKEND_GAPS G-400).
@@ -130,6 +133,8 @@ NUVION_TIMEOUT_MS=
 NUVION_MONEY_TIMEOUT_MS=
 NUVION_CHECK_TIMEOUT_MS=
 NUVION_RESEND_SAFETY_MS=
+NUVION_HOSTED_LIVENESS=
+NUVION_LIVENESS_REDIRECT_ORIGINS=
 NUVION_WALLET_BANK_NAME=
 NUVION_WALLET_LICENCE_LINE=
 NUVION_WALLET_DEPOSIT_INSURANCE_LINE=

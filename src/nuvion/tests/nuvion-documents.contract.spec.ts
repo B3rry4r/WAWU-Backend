@@ -67,8 +67,8 @@ import { NuvionWebhookModule } from '../webhook/nuvion-webhook.module';
 jest.setTimeout(90_000);
 
 const TIMEOUT_MS = 1_500;
-const RESEND_SAFETY_MS = 2_000;
-const RESEND_AFTER_MS = TIMEOUT_MS + RESEND_SAFETY_MS;
+const RESEND_SAFETY_MS = 2_000; // the client's own setting; documents wait only the call and its margin
+const RESEND_AFTER_MS = TIMEOUT_MS + 15_000;
 const MB = 1024 * 1024;
 
 const ENV: Record<string, string | undefined> = {
@@ -1090,7 +1090,9 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
       const b = body(other);
       expect(b.reason?.code).toBe('document_in_progress');
       expect(b.reason?.retryAfterSeconds).toBeGreaterThanOrEqual(1);
-      expect(b.reason?.retryAfterSeconds).toBeLessThanOrEqual(5);
+      expect(b.reason?.retryAfterSeconds).toBeLessThanOrEqual(
+        RESEND_AFTER_MS / 1000,
+      );
       expect(uploads()).toHaveLength(1);
     });
 
@@ -1790,7 +1792,8 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
 
     it('a refusal about a document: it reads "needs_new", the other stands, and replacing it sends the opening again once', async () => {
       const who = await opened();
-      await send(who, 'identity', png()).expect(200);
+      const idFile = png();
+      await send(who, 'identity', idFile).expect(200);
       await send(who, 'proof_of_address', pdf()).expect(200);
       await makeOld(who, 60_000);
       const held = nuvion.entities.get(who.held.id)!;
@@ -1825,8 +1828,10 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
       expect(submissions()).toHaveLength(1);
 
       const res = body<IdentityDocumentsView>(
-        await send(who, 'identity', png()).expect(200),
+        await send(who, 'identity', idFile).expect(200),
       ).data!;
+      // Even the same bytes: Nuvion refused that document, so it is sent again.
+      expect(uploads()).toHaveLength(3);
       expect(res.submitted).toBe(true);
       expect(res.documents.map((d) => d.state)).toEqual([
         'uploaded',
@@ -1872,7 +1877,7 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
       // Inside the window the row is left alone.
       await handler.handle(delivery(held));
       expect((await docRow(who, 'identity'))?.state).toBe('unknown');
-      await age(who, 'identity', TIMEOUT_MS + 12_000);
+      await age(who, 'identity', RESEND_AFTER_MS + 500);
       const r = await handler.handle(delivery(held));
       expect(r.outcome).toBe('done');
       expect(await docRow(who, 'identity')).toMatchObject({

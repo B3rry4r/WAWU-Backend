@@ -1231,3 +1231,66 @@ written here because the tasks that sell, spend and cash them out
   transaction, and never wait on a provider while you hold a person's points
   lock: this service's own transactions use Prisma's 5 s default, so a
   points call for that person would fail meanwhile.
+
+---
+
+## 17. Documents and the hosted selfie (NUV-03)
+
+Opening a wallet on Nuvion takes an ID document and a proof of address dated
+within 3 months (R-42), and Nuvion's hosted selfie when it is in use (R-39).
+The routes are part of opening, so they are not behind the wallet gate
+(section 7); a person with no opening started gets the same `409
+wallet_not_open` as every wallet route. The token is the person: no route
+takes a user id or a Nuvion id. Every answer is `Cache-Control: no-store`.
+Under a provider that reviews no documents (Fintava) the routes exist and say
+nothing is needed.
+
+| Route | What it does |
+|---|---|
+| `GET /money/identity/documents` | Both documents' state, whether uploads are open, what the opening waits for. When the documents are in and the opening is due to be sent (or its sending was lost), it sends it, once. |
+| `POST /money/identity/documents` | Multipart: `kind` (`identity` or `proof_of_address`), `file` (a PDF, JPG or PNG, 10 MB at most) and, for an ID with a back side, `file_back` of the same type. Sends the document to Nuvion once and answers the documents view. |
+| `GET /money/identity/liveness` | The hosted selfie: `enabled`, `state`, `url` while pending, `canStart`. Reads the result from Nuvion. |
+| `POST /money/identity/liveness` | JSON `{ redirectUrl? }` (https only). Starts the selfie, or answers the one already running, and returns the secure page to open. |
+
+- **One request per document.** Nuvion's `POST /documents` takes the front and
+  the back in one call and WAWU keeps no copy to hold a front until a back
+  arrives, so the two sides of an ID go in one request. A `side` field is
+  accepted only as `front`.
+- **WAWU keeps no file.** It goes to Nuvion; WAWU keeps the kind, the sides,
+  the state, Nuvion's document id, the time and a SHA-256 of the bytes (so the
+  same file sent twice is forwarded once). The type is read from the bytes,
+  never from what the client names it.
+- **The same file again** (a double tap, a retry after a lost answer) is the
+  answer it already got. **A different file** replaces the first while the
+  opening still takes documents.
+- **A document is `uploaded` only on Nuvion's answer.** An answer that was
+  lost leaves it `confirming`; nothing is sent again until the call's own
+  time has passed, and then Nuvion's list of the entity's documents is read
+  first. `not_accepted` means Nuvion refused the last file (send another);
+  `needs_new` means Nuvion's review said this document did not pass.
+- **The opening is sent for review once**, when both documents are `uploaded`
+  (and the selfie has passed, when it is in use), behind a claim taken before
+  `POST /onboarding-submissions`; `GET /money/wallet` then reads `checking`.
+  A submission Nuvion refused is not sent again for a minute, or until a
+  document changes. Corrected details after a refusal start it again.
+- **The selfie** is off unless `NUVION_HOSTED_LIVENESS=on`. When Nuvion will
+  not start a session for a child entity, the opening goes on without one and
+  `POST` answers `409 selfie_not_available`.
+
+| `reason.code` | HTTP | When | Extra fields |
+|---|---|---|---|
+| `wallet_not_open` | 409 | no opening started | |
+| `document_request_invalid` | 400 | no or unknown `kind`, no file, a field or part we do not read, `file_back` for a proof of address, a return address that is not https (or not one of `NUVION_LIVENESS_REDIRECT_ORIGINS`) | |
+| `document_file_invalid` | 422 | a file that is empty, over 10 MB, not a PDF, JPG or PNG, or two sides of different types; nothing is sent | |
+| `document_not_accepted` | 422 | Nuvion read the file or the details and refused them; nothing was kept | |
+| `documents_closed` | 409 | the opening is not taking documents now (sent, decided, stopped, or a refusal not yet corrected), or this wallet needs none | |
+| `document_in_progress` | 409 | the last upload of this kind is still being confirmed, or a selfie is being started | `retryAfterSeconds` |
+| `document_rate_limited` | 429 | too many uploads (or selfie starts) for now (`PROVISIONAL(NUVION-DOCUMENT-UPLOAD-LIMITS)`) | `retryAfterSeconds` |
+| `document_busy` | 503 | the server is busy with other uploads | `retryAfterSeconds` |
+| `selfie_not_available` | 409 | the selfie is not part of this opening | |
+| `identity_under_review` | 409 | Nuvion has the details with its compliance review | |
+| `provider_unreachable` | 503 | Nuvion did not answer, or the answer is not confirmed yet | `retryAfterSeconds` |
+
+The codes of this section are the task's own (`src/nuvion/documents/document-errors.ts`),
+not in the money contract's shared list; each route's entry in the contract
+lists the ones it can answer.

@@ -392,9 +392,14 @@ describe('NUV-01: the Nuvion adapter behind WALLET_PROVIDER', () => {
       // Filled by NUV-02 (its own spec, nuvion-opening.contract.spec.ts):
       // without the review details openWallet is refused before anything
       // is sent, and Nuvion keeps no phone lookup ("cannot tell").
+      // Filled by NUV-03 (nuvion-documents.spec.ts): the onboarding
+      // submission is a real call now, so it is not in this table of
+      // "sends nothing". The hosted selfie stays not_supported until
+      // NUVION_HOSTED_LIVENESS=on, and the selfie match for good.
       const FILLED: ReadonlyArray<keyof WalletProvider> = [
         'openWallet',
         'findCustomerByPhone',
+        'submitKyc',
       ];
       await expect(
         provider.openWallet({ firstName: 'A' } as never),

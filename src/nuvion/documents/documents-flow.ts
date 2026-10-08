@@ -37,8 +37,18 @@ import type {
 
 /** Our clock and Nuvion's may differ by this much (the opening uses the same). */
 const CLOCK_SKEW_MS = 5 * 60_000;
-/** A call's own time beyond Nuvion's money timeout (serialising 20 MB, the database). */
-const IN_FLIGHT_MARGIN_MS = 10_000;
+/**
+ * A call's own time beyond Nuvion's money timeout (serialising 20 MB, the
+ * database), and how long past it a call whose answer was lost is still
+ * waited for before Nuvion's own list is read to find out. Unlike a payment
+ * (NUV-02, NUV-05: the money timeout plus ten minutes), a document or a
+ * submission sent a second time costs nothing: Nuvion holds one more
+ * document, or refuses the second submission as "not incomplete" (and that
+ * refusal is read as "it has it"). So the wait is the call's own time and no
+ * more; the list is still read BEFORE anything is sent again.
+ * Default (agent), owner may override.
+ */
+const LOST_ANSWER_MARGIN_MS = 15_000;
 /** A session just claimed is not claimed again for this long. */
 const LIVENESS_CLAIM_MS = 60_000;
 /** A submission Nuvion refused is not sent again for this long (a changed document lifts it). */
@@ -160,13 +170,13 @@ export class DocumentsFlow {
     return this.area.livenessRedirectOrigins;
   }
 
-  private get resendAfterMs(): number {
-    const t = this.nuvion.timings;
-    return t.moneyTimeoutMs + t.resendSafetyMs;
+  /** How long a call may still be running, and a lost answer is waited for. */
+  private get inFlightMs(): number {
+    return this.nuvion.timings.moneyTimeoutMs + LOST_ANSWER_MARGIN_MS;
   }
 
-  private get inFlightMs(): number {
-    return this.nuvion.timings.moneyTimeoutMs + IN_FLIGHT_MARGIN_MS;
+  private get resendAfterMs(): number {
+    return this.inFlightMs;
   }
 
   async dbNow(): Promise<Date> {
@@ -327,7 +337,9 @@ export class DocumentsFlow {
     if (row?.fingerprint === fingerprint && row.entityId === entity.entityId) {
       const ageMs = now.getTime() - row.attemptStartedAt.getTime();
       if (
-        row.state === 'uploaded' ||
+        // A document Nuvion's review refused is replaced even by the same
+        // file (the refusal may have been about something it has fixed).
+        (row.state === 'uploaded' && !this.needsNew(input.kind, row, entity)) ||
         (row.state === 'sending' && ageMs < this.inFlightMs) ||
         (row.state === 'unknown' && ageMs < this.resendAfterMs)
       ) {

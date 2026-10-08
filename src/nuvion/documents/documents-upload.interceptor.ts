@@ -39,7 +39,7 @@ export interface UploadedPart {
  */
 @Injectable()
 export class DocumentUploadInterceptor implements NestInterceptor {
-  private readonly inner = new (FileFieldsInterceptor(
+  private readonly inner: NestInterceptor = new (FileFieldsInterceptor(
     [...DOCUMENT_UPLOAD_FIELDS],
     {
       limits: {
@@ -55,7 +55,7 @@ export class DocumentUploadInterceptor implements NestInterceptor {
         headerPairs: 40,
       },
     },
-  ))() as NestInterceptor;
+  ))();
 
   constructor(private readonly slots: DocumentUploadSlots) {}
 

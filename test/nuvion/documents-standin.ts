@@ -254,7 +254,7 @@ export class DocumentsNuvion {
           id: doc.id,
           entity_id: entity.id,
           key: doc.key,
-          description: String(b.description ?? ''),
+          description: typeof b.description === 'string' ? b.description : '',
           urls: {
             main: `https://files.example.invalid/entity-documents/${entity.id}/${doc.id}`,
           },
