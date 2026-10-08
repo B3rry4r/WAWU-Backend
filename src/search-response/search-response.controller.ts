@@ -5,6 +5,7 @@ import { OptionalWawuAuthGuard } from './guards/optional-wawu-auth.guard';
 import { SearchResponseService } from './search-response.service';
 import { SearchQueryDto } from './dto/search-query.dto';
 import { ClosestSearchQueryDto } from './dto/closest-search-query.dto';
+import { refuseUnsearchableQuery } from './searchable-query';
 
 /**
  * registry.json "SearchResponse" — `roles: ["any"]` on every endpoint,
@@ -24,6 +25,10 @@ export class SearchResponseController {
     @Query() query: SearchQueryDto,
     @CurrentUser() user: WawuJwtClaims | undefined,
   ) {
+    // FIX-07: a `q` with a NUL (or a lone surrogate) is a 400 naming `q` on
+    // every tab, before any query runs, never the 500 Postgres caused. A line
+    // comment, not JSDoc: the swagger plugin would copy JSDoc into the contract.
+    refuseUnsearchableQuery(query.q);
     return this.searchResponseService.search(
       query.q,
       query.tab ?? 'all',
@@ -44,6 +49,8 @@ export class SearchResponseController {
     @Query() query: ClosestSearchQueryDto,
     @CurrentUser() user: WawuJwtClaims | undefined,
   ) {
+    // FIX-07: the same refusal as GET /search, for the same reason.
+    refuseUnsearchableQuery(query.q);
     return this.searchResponseService.closest(query.q, user?.sub);
   }
 }

@@ -22,6 +22,25 @@ export interface ProfileWorkView {
   createdAt: string;
 }
 
+/**
+ * Whose works these are: the name and picture M34's header and M35's creator
+ * row draw. The same four fields the feed's creator line carries (FeedCreator),
+ * so a screen can show the person without a second request.
+ */
+export interface ProfileWorkOwnerView {
+  wawuId: string;
+  /** First and last name from WAWU ID, else the handle, else null. */
+  displayName: string | null;
+  handle: string | null;
+  /** A fresh signed link; never stored. */
+  avatarUrl: string | null;
+}
+
+/** One work opened on its own (M35): the work, and whose it is. */
+export interface ProfileWorkDetailView extends ProfileWorkView {
+  owner: ProfileWorkOwnerView;
+}
+
 /** One of M34's filter chips. */
 export interface ProfileWorkCategoryView {
   name: string;
@@ -37,6 +56,7 @@ export interface ProfileWorkCategoryView {
  * response envelope, which would drop `categories`.
  */
 export interface ProfileWorksView {
+  owner: ProfileWorkOwnerView;
   count: number;
   categories: ProfileWorkCategoryView[];
   works: ProfileWorkView[];

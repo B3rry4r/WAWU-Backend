@@ -6582,7 +6582,8 @@
                 "insurance_pensions",
                 "sports_fitness",
                 "government_public",
-                "social_impact"
+                "social_impact",
+                "engineering"
               ]
             }
           },
@@ -15704,6 +15705,12 @@
                           "bio": {
                             "type": "string"
                           },
+                          "languages": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
                           "tagline": {
                             "type": "string"
                           },
@@ -15728,12 +15735,6 @@
                           },
                           "sessions": {
                             "type": "number"
-                          },
-                          "languages": {
-                            "type": "array",
-                            "items": {
-                              "type": "string"
-                            }
                           }
                         },
                         "required": [
@@ -15743,14 +15744,14 @@
                           "category",
                           "handle",
                           "bio",
+                          "languages",
                           "tagline",
                           "field",
                           "topics",
                           "openForRequests",
                           "fullUntil",
                           "yearsExperience",
-                          "sessions",
-                          "languages"
+                          "sessions"
                         ]
                       }
                     },
@@ -15780,6 +15781,12 @@
                               "bio": {
                                 "type": "string"
                               },
+                              "languages": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
                               "tagline": {
                                 "type": "string"
                               },
@@ -15804,12 +15811,6 @@
                               },
                               "sessions": {
                                 "type": "number"
-                              },
-                              "languages": {
-                                "type": "array",
-                                "items": {
-                                  "type": "string"
-                                }
                               }
                             },
                             "required": [
@@ -15819,14 +15820,14 @@
                               "category",
                               "handle",
                               "bio",
+                              "languages",
                               "tagline",
                               "field",
                               "topics",
                               "openForRequests",
                               "fullUntil",
                               "yearsExperience",
-                              "sessions",
-                              "languages"
+                              "sessions"
                             ]
                           }
                         },
@@ -15898,6 +15899,12 @@
                     "bio": {
                       "type": "string"
                     },
+                    "languages": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
                     "tagline": {
                       "type": "string"
                     },
@@ -15922,12 +15929,6 @@
                     },
                     "sessions": {
                       "type": "number"
-                    },
-                    "languages": {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      }
                     }
                   },
                   "required": [
@@ -15937,14 +15938,14 @@
                     "category",
                     "handle",
                     "bio",
+                    "languages",
                     "tagline",
                     "field",
                     "topics",
                     "openForRequests",
                     "fullUntil",
                     "yearsExperience",
-                    "sessions",
-                    "languages"
+                    "sessions"
                   ]
                 }
               }
@@ -18019,6 +18020,9 @@
                     "headline": {
                       "type": "string"
                     },
+                    "about": {
+                      "type": "string"
+                    },
                     "submittedAt": {
                       "type": "string",
                       "format": "date-time"
@@ -18026,9 +18030,6 @@
                     "rejectionReason": {
                       "type": "string",
                       "nullable": true
-                    },
-                    "about": {
-                      "type": "string"
                     },
                     "services": {
                       "type": "array",
@@ -18064,9 +18065,9 @@
                     "documents",
                     "wawuUserId",
                     "headline",
+                    "about",
                     "submittedAt",
                     "rejectionReason",
-                    "about",
                     "services",
                     "credentialKind",
                     "licenceNumber",
@@ -18128,6 +18129,9 @@
                       "headline": {
                         "type": "string"
                       },
+                      "about": {
+                        "type": "string"
+                      },
                       "submittedAt": {
                         "type": "string",
                         "format": "date-time"
@@ -18135,9 +18139,6 @@
                       "rejectionReason": {
                         "type": "string",
                         "nullable": true
-                      },
-                      "about": {
-                        "type": "string"
                       },
                       "services": {
                         "type": "array",
@@ -18173,9 +18174,9 @@
                       "documents",
                       "wawuUserId",
                       "headline",
+                      "about",
                       "submittedAt",
                       "rejectionReason",
-                      "about",
                       "services",
                       "credentialKind",
                       "licenceNumber",
@@ -18255,6 +18256,9 @@
                     "headline": {
                       "type": "string"
                     },
+                    "about": {
+                      "type": "string"
+                    },
                     "submittedAt": {
                       "type": "string",
                       "format": "date-time"
@@ -18262,9 +18266,6 @@
                     "rejectionReason": {
                       "type": "string",
                       "nullable": true
-                    },
-                    "about": {
-                      "type": "string"
                     },
                     "services": {
                       "type": "array",
@@ -18300,9 +18301,9 @@
                     "documents",
                     "wawuUserId",
                     "headline",
+                    "about",
                     "submittedAt",
                     "rejectionReason",
-                    "about",
                     "services",
                     "credentialKind",
                     "licenceNumber",
@@ -18314,6 +18315,191 @@
             }
           }
         },
+        "tags": [
+          "Professional"
+        ]
+      }
+    },
+    "/api/hub/professionals/location": {
+      "get": {
+        "operationId": "ProfessionalController_location",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfessionalLocationView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Professional"
+        ]
+      },
+      "put": {
+        "operationId": "ProfessionalController_setLocation",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProfessionalLocationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfessionalLocationView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The city on your card and in the directory. A creator account only.",
+        "tags": [
+          "Professional"
+        ]
+      },
+      "delete": {
+        "operationId": "ProfessionalController_clearLocation",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfessionalLocationView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Professional"
+        ]
+      }
+    },
+    "/api/hub/professionals/fields": {
+      "get": {
+        "operationId": "ProfessionalController_fields",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProfessionalFieldView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Professional"
+        ]
+      }
+    },
+    "/api/hub/professionals/directory": {
+      "get": {
+        "operationId": "ProfessionalController_directory",
+        "parameters": [
+          {
+            "name": "field",
+            "required": false,
+            "in": "query",
+            "description": "A field id from GET /professionals/fields, for example `accounting_tax`.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "accounting_tax",
+                "legal_compliance",
+                "design_creative",
+                "technology_it",
+                "engineering",
+                "healthcare",
+                "business_consulting"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfessionalDirectoryPage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The directory filtered by field, with city, usual reply time and price.",
+        "tags": [
+          "Professional"
+        ]
+      }
+    },
+    "/api/hub/professionals/directory/{id}": {
+      "get": {
+        "operationId": "ProfessionalController_directoryProfile",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfessionalDirectoryProfile"
+                }
+              }
+            }
+          }
+        },
+        "summary": "One professional's profile, with city, usual reply time and price.",
         "tags": [
           "Professional"
         ]
@@ -18354,7 +18540,8 @@
                 "insurance_pensions",
                 "sports_fitness",
                 "government_public",
-                "social_impact"
+                "social_impact",
+                "engineering"
               ]
             }
           },
@@ -20343,7 +20530,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProfileWorkView"
+                  "$ref": "#/components/schemas/ProfileWorkDetailView"
                 }
               }
             }
@@ -24249,6 +24436,385 @@
         ]
       }
     },
+    "/api/hub/admin/schools": {
+      "get": {
+        "operationId": "AdminSchoolsController_list",
+        "parameters": [
+          {
+            "name": "category",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "tech",
+                "business",
+                "creative",
+                "languages",
+                "vocational"
+              ]
+            }
+          },
+          {
+            "name": "hidden",
+            "required": false,
+            "in": "query",
+            "description": "`true`: only hidden. `false`: only shown. Omitted: both.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "The `nextCursor` of the previous page: a school id.",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminSchoolsPage"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminSchools"
+        ]
+      },
+      "post": {
+        "operationId": "AdminSchoolsController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSchoolDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminSchoolDetail"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminSchools"
+        ]
+      }
+    },
+    "/api/hub/admin/schools/{id}": {
+      "get": {
+        "operationId": "AdminSchoolsController_get",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminSchoolDetail"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminSchools"
+        ]
+      },
+      "patch": {
+        "operationId": "AdminSchoolsController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSchoolDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminSchoolDetail"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminSchools"
+        ]
+      }
+    },
+    "/api/hub/admin/schools/{id}/courses": {
+      "post": {
+        "operationId": "AdminSchoolsController_createCourse",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCourseDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCourseView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminSchools"
+        ]
+      }
+    },
+    "/api/hub/admin/school-courses/{id}": {
+      "get": {
+        "operationId": "AdminSchoolsController_getCourse",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCourseView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminSchools"
+        ]
+      },
+      "patch": {
+        "operationId": "AdminSchoolsController_updateCourse",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCourseDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCourseView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminSchools"
+        ]
+      }
+    },
+    "/api/hub/admin/school-courses/{id}/intakes": {
+      "post": {
+        "operationId": "AdminSchoolsController_createIntake",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateIntakeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminIntakeView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminSchools"
+        ]
+      }
+    },
+    "/api/hub/admin/school-intakes/{id}": {
+      "get": {
+        "operationId": "AdminSchoolsController_getIntake",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminIntakeView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminSchools"
+        ]
+      },
+      "patch": {
+        "operationId": "AdminSchoolsController_updateIntake",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateIntakeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminIntakeView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminSchools"
+        ]
+      }
+    },
     "/api/hub/admin/featured-creators/{wawuId}": {
       "put": {
         "operationId": "AdminFeaturedCreatorsController_put",
@@ -24619,6 +25185,69 @@
         "summary": "Where to upload one photo, video or PDF for this chat.",
         "tags": [
           "Chat"
+        ]
+      }
+    },
+    "/api/hub/tgif/{date}": {
+      "get": {
+        "operationId": "TgifController_day",
+        "parameters": [
+          {
+            "name": "date",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TgifDayView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The five cards of the day, addressed to the caller by first name.",
+        "tags": [
+          "Tgif"
+        ]
+      }
+    },
+    "/api/hub/tgif/{date}/share-image": {
+      "get": {
+        "operationId": "TgifController_shareImage",
+        "parameters": [
+          {
+            "name": "date",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The day's verse on the TGIF card, as a PNG image.",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The verse of the day on the shared card, as a PNG (H35).",
+        "tags": [
+          "Tgif"
         ]
       }
     },
@@ -28658,7 +29287,8 @@
               "insurance_pensions",
               "sports_fitness",
               "government_public",
-              "social_impact"
+              "social_impact",
+              "engineering"
             ]
           },
           "headline": {
@@ -28719,6 +29349,20 @@
         },
         "required": [
           "listed"
+        ]
+      },
+      "UpdateProfessionalLocationDto": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string",
+            "description": "Where you work, as people will read it: \"Ikeja\", \"Port Harcourt\".",
+            "minLength": 2,
+            "maxLength": 60
+          }
+        },
+        "required": [
+          "city"
         ]
       },
       "CreateProfessionalReviewDto": {
@@ -30226,6 +30870,266 @@
           "effectiveDate",
           "sections"
         ]
+      },
+      "CreateSchoolDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "tech",
+              "business",
+              "creative",
+              "languages",
+              "vocational"
+            ]
+          },
+          "location": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "foundedYear": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 1800,
+            "maximum": 2026
+          },
+          "expertise": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "about": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "logo": {
+            "type": "string",
+            "nullable": true,
+            "description": "A storage URL. Empty or null clears it.",
+            "maxLength": 2000
+          },
+          "applyUrl": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 2000
+          },
+          "reportEmail": {
+            "type": "string",
+            "maxLength": 254
+          }
+        },
+        "required": [
+          "name",
+          "category",
+          "location",
+          "about",
+          "reportEmail"
+        ]
+      },
+      "UpdateSchoolDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "tech",
+              "business",
+              "creative",
+              "languages",
+              "vocational"
+            ]
+          },
+          "location": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "foundedYear": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 1800,
+            "maximum": 2026
+          },
+          "expertise": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "about": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "logo": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 2000
+          },
+          "applyUrl": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 2000
+          },
+          "reportEmail": {
+            "type": "string",
+            "maxLength": 254
+          },
+          "hidden": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CreateCourseDto": {
+        "type": "object",
+        "properties": {
+          "priceKobo": {
+            "type": "integer",
+            "description": "Whole kobo (CONVENTIONS section 1).",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 160
+          },
+          "weeks": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 520
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "online",
+              "in_person",
+              "hybrid"
+            ]
+          },
+          "syllabus": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "outcomes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "priceKobo",
+          "title",
+          "weeks",
+          "mode"
+        ]
+      },
+      "UpdateCourseDto": {
+        "type": "object",
+        "properties": {
+          "priceKobo": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 160
+          },
+          "weeks": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 520
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "online",
+              "in_person",
+              "hybrid"
+            ]
+          },
+          "syllabus": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "outcomes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "hidden": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CreateIntakeDto": {
+        "type": "object",
+        "properties": {
+          "startDate": {
+            "type": "string",
+            "description": "The day classes start, YYYY-MM-DD."
+          },
+          "schedule": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "location": {
+            "type": "string",
+            "nullable": true,
+            "description": "Null or empty for an online intake.",
+            "maxLength": 120
+          },
+          "capacity": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 100000
+          }
+        },
+        "required": [
+          "startDate",
+          "schedule",
+          "capacity"
+        ]
+      },
+      "UpdateIntakeDto": {
+        "type": "object",
+        "properties": {
+          "startDate": {
+            "type": "string"
+          },
+          "schedule": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "location": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 120
+          },
+          "capacity": {
+            "type": "number",
+            "description": "Never below the seats already taken.",
+            "minimum": 1,
+            "maximum": 100000
+          },
+          "hidden": {
+            "type": "boolean"
+          }
+        }
       },
       "PutFeaturedCreatorDto": {
         "type": "object",
@@ -38521,6 +39425,272 @@
           "sections"
         ]
       },
+      "AdminSchoolSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "business",
+              "tech",
+              "creative",
+              "languages",
+              "vocational"
+            ]
+          },
+          "location": {
+            "type": "string"
+          },
+          "logo": {
+            "type": "string",
+            "nullable": true
+          },
+          "hidden": {
+            "type": "boolean"
+          },
+          "courseCount": {
+            "type": "number"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "category",
+          "location",
+          "logo",
+          "hidden",
+          "courseCount",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "AdminSchoolsPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminSchoolSummary"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "AdminIntakeView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "courseId": {
+            "type": "string"
+          },
+          "startDate": {
+            "type": "string"
+          },
+          "schedule": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string",
+            "nullable": true
+          },
+          "capacity": {
+            "type": "number"
+          },
+          "seatsTaken": {
+            "type": "number"
+          },
+          "hidden": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "courseId",
+          "startDate",
+          "schedule",
+          "location",
+          "capacity",
+          "seatsTaken",
+          "hidden",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "AdminCourseView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "schoolId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "weeks": {
+            "type": "number"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "in_person",
+              "online",
+              "hybrid"
+            ]
+          },
+          "syllabus": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "outcomes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "hidden": {
+            "type": "boolean"
+          },
+          "intakes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminIntakeView"
+            }
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "schoolId",
+          "title",
+          "weeks",
+          "mode",
+          "syllabus",
+          "outcomes",
+          "priceKobo",
+          "hidden",
+          "intakes",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "AdminSchoolDetail": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "business",
+              "tech",
+              "creative",
+              "languages",
+              "vocational"
+            ]
+          },
+          "location": {
+            "type": "string"
+          },
+          "foundedYear": {
+            "type": "number",
+            "nullable": true
+          },
+          "expertise": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "about": {
+            "type": "string"
+          },
+          "logo": {
+            "type": "string",
+            "nullable": true
+          },
+          "applyUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "reportEmail": {
+            "type": "string"
+          },
+          "hidden": {
+            "type": "boolean"
+          },
+          "courses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminCourseView"
+            }
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "category",
+          "location",
+          "foundedYear",
+          "expertise",
+          "about",
+          "logo",
+          "applyUrl",
+          "reportEmail",
+          "hidden",
+          "courses",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
       "AdCardView": {
         "type": "object",
         "properties": {
@@ -39201,6 +40371,288 @@
           "following"
         ]
       },
+      "ProfessionalLocationView": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "city"
+        ]
+      },
+      "ProfessionalFieldView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "applyCategory": {
+            "type": "string"
+          },
+          "regulated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "categories",
+          "applyCategory",
+          "regulated"
+        ]
+      },
+      "ProfessionalFieldRef": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ]
+      },
+      "ProfessionalDirectoryEntry": {
+        "type": "object",
+        "properties": {
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          },
+          "name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "dmEnabled": {
+            "type": "boolean"
+          },
+          "dmResponseHours": {
+            "type": "number"
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "headline": {
+            "type": "string"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "wawuId": {
+            "type": "string"
+          },
+          "pieceCount": {
+            "type": "number"
+          },
+          "ratingAvg": {
+            "type": "number",
+            "nullable": true
+          },
+          "reviewCount": {
+            "type": "number"
+          },
+          "field": {
+            "$ref": "#/components/schemas/ProfessionalFieldRef",
+            "nullable": true
+          },
+          "city": {
+            "type": "string",
+            "nullable": true
+          },
+          "usualReplyMinutes": {
+            "type": "number",
+            "nullable": true
+          },
+          "answeredMessageCount": {
+            "type": "number"
+          },
+          "messagePriceKobo": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "verification",
+          "name",
+          "id",
+          "category",
+          "dmEnabled",
+          "dmResponseHours",
+          "avatarUrl",
+          "handle",
+          "headline",
+          "services",
+          "wawuId",
+          "pieceCount",
+          "ratingAvg",
+          "reviewCount",
+          "field",
+          "city",
+          "usualReplyMinutes",
+          "answeredMessageCount",
+          "messagePriceKobo"
+        ]
+      },
+      "ProfessionalDirectoryPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProfessionalDirectoryEntry"
+            }
+          },
+          "currentPage": {
+            "type": "number"
+          },
+          "perPage": {
+            "type": "number"
+          },
+          "total": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "items",
+          "currentPage",
+          "perPage",
+          "total"
+        ]
+      },
+      "ProfessionalDirectoryProfile": {
+        "type": "object",
+        "properties": {
+          "about": {
+            "type": "string"
+          },
+          "issuingBody": {
+            "type": "string",
+            "nullable": true
+          },
+          "credentialKind": {
+            "type": "string"
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          },
+          "name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "dmEnabled": {
+            "type": "boolean"
+          },
+          "dmResponseHours": {
+            "type": "number"
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "headline": {
+            "type": "string"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "wawuId": {
+            "type": "string"
+          },
+          "pieceCount": {
+            "type": "number"
+          },
+          "ratingAvg": {
+            "type": "number",
+            "nullable": true
+          },
+          "reviewCount": {
+            "type": "number"
+          },
+          "field": {
+            "$ref": "#/components/schemas/ProfessionalFieldRef",
+            "nullable": true
+          },
+          "city": {
+            "type": "string",
+            "nullable": true
+          },
+          "usualReplyMinutes": {
+            "type": "number",
+            "nullable": true
+          },
+          "answeredMessageCount": {
+            "type": "number"
+          },
+          "messagePriceKobo": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "about",
+          "issuingBody",
+          "credentialKind",
+          "verification",
+          "name",
+          "id",
+          "category",
+          "dmEnabled",
+          "dmResponseHours",
+          "avatarUrl",
+          "handle",
+          "headline",
+          "services",
+          "wawuId",
+          "pieceCount",
+          "ratingAvg",
+          "reviewCount",
+          "field",
+          "city",
+          "usualReplyMinutes",
+          "answeredMessageCount",
+          "messagePriceKobo"
+        ]
+      },
       "ProfessionalListItem": {
         "type": "object",
         "properties": {
@@ -39867,6 +41319,32 @@
           "communityCount"
         ]
       },
+      "ProfileWorkOwnerView": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string",
+            "nullable": true
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "wawuId",
+          "displayName",
+          "handle",
+          "avatarUrl"
+        ]
+      },
       "ProfileWorkCategoryView": {
         "type": "object",
         "properties": {
@@ -39963,6 +41441,9 @@
       "ProfileWorksView": {
         "type": "object",
         "properties": {
+          "owner": {
+            "$ref": "#/components/schemas/ProfileWorkOwnerView"
+          },
           "count": {
             "type": "number"
           },
@@ -39980,6 +41461,7 @@
           }
         },
         "required": [
+          "owner",
           "count",
           "categories",
           "works"
@@ -40016,6 +41498,68 @@
           "startYear",
           "endYear",
           "current"
+        ]
+      },
+      "ProfileWorkDetailView": {
+        "type": "object",
+        "properties": {
+          "owner": {
+            "$ref": "#/components/schemas/ProfileWorkOwnerView"
+          },
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "client": {
+            "type": "string",
+            "nullable": true
+          },
+          "year": {
+            "type": "number"
+          },
+          "link": {
+            "type": "string",
+            "nullable": true
+          },
+          "category": {
+            "type": "string",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "media": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProfileWorkMediaView"
+            }
+          },
+          "position": {
+            "type": "number"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "id",
+          "title",
+          "role",
+          "client",
+          "year",
+          "link",
+          "category",
+          "description",
+          "media",
+          "position",
+          "createdAt"
         ]
       },
       "EnrolResponse": {
@@ -41695,6 +43239,54 @@
         "required": [
           "uploadUrl",
           "key"
+        ]
+      },
+      "TgifDayView": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string"
+          },
+          "series": {
+            "type": "string"
+          },
+          "seriesTheme": {
+            "type": "string"
+          },
+          "verse": {
+            "type": "string"
+          },
+          "verseReference": {
+            "type": "string"
+          },
+          "reality": {
+            "type": "string"
+          },
+          "remember": {
+            "type": "string"
+          },
+          "prayer": {
+            "type": "string"
+          },
+          "takeaway": {
+            "type": "string"
+          },
+          "shareLink": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "date",
+          "series",
+          "seriesTheme",
+          "verse",
+          "verseReference",
+          "reality",
+          "remember",
+          "prayer",
+          "takeaway",
+          "shareLink"
         ]
       },
       "TgifCardStats": {
