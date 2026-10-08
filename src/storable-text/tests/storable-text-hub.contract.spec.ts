@@ -13,7 +13,9 @@ import { MetadataScanner, ModulesContainer } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { ThrottlerGuard } from '@nestjs/throttler';
 import { getMetadataStorage } from 'class-validator';
+import { readFileSync } from 'node:fs';
 import type { Server } from 'node:http';
+import { join } from 'node:path';
 import request from 'supertest';
 import { AppModule } from '../../app.module';
 import { applyHubHttpSettings } from '../../hub-app-options';
@@ -224,6 +226,20 @@ describe('Text Postgres cannot take, on every Hub route (FIX-17)', () => {
       .set('X-Forwarded-For', `10.17.${(n >> 8) & 255}.${n & 255}`);
     return token ? r.set('Authorization', `Bearer ${token}`) : r;
   };
+
+  it('src/main.ts installs the check after the ValidationPipe and before the Hub listens', () => {
+    // This file builds its app as main.ts does; the built Hub itself is
+    // checked by the recorded sweep. This pins the one line that wires it.
+    const main = readFileSync(join(__dirname, '../../main.ts'), 'utf8');
+    const at = (s: string) => main.indexOf(s);
+    expect(at('checkStorableTextOnEveryRoute(app);')).toBeGreaterThan(
+      at('app.useGlobalPipes('),
+    );
+    expect(at('app.useGlobalPipes(')).toBeGreaterThan(-1);
+    expect(at('await app.listen(')).toBeGreaterThan(
+      at('checkStorableTextOnEveryRoute(app);'),
+    );
+  });
 
   it('puts the check last, once, on every argument of every route the Hub mounts', () => {
     expect(routes.filter((r) => r.method === 'GET').length).toBeGreaterThan(
