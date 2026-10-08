@@ -2660,6 +2660,8 @@ model ProfessionalProfile {
   /// Hidden from the directory without deleting the record — a professional
   /// who is too busy to take work, or one an admin has pulled. Distinct from
   /// `status`: this is availability, that is whether they were ever approved.
+  /// Which of the two hid it is ProfessionalTakedown (FIX-06): while an
+  /// admin's takedown stands this is false and the person cannot set it.
   listed Boolean @default(true)
 
   reviews ProfessionalReview[]
@@ -2691,6 +2693,52 @@ model ProfessionalLocation {
   city       String
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+}
+
+/// An admin's takedown of one professional listing, kept apart from the
+/// person's own Hide (FIX-06).
+///
+/// Before this table, POST /admin/professionals/:id/unlist and the person's
+/// Hide (PATCH /professionals/applications/:id/listing) wrote the same
+/// `ProfessionalProfile.listed = false`, so the person's Show put back a
+/// listing an admin had pulled. A row here whose `liftedAt` is null is a
+/// takedown that stands: `listed` stays false, the person's Show is refused
+/// (409, reason.code `listing_taken_down`), and only an admin lifts it
+/// (POST /admin/professionals/:id/relist).
+///
+/// A SIDE TABLE, NOT A COLUMN, for ProfessionalLocation's reason:
+/// ProfessionalProfile rows go out whole on routes the web calls today, so a
+/// column there would add a key to each of those answers (the protected
+/// route list, hazard H-1).
+///
+/// One row per listing: the latest takedown, and who lifted it and when. A
+/// takedown after a lift replaces the row. Admin email and role are
+/// SNAPSHOTS, as in AdminOpsAudit: "who took this down" has to stay
+/// answerable after that admin is renamed, suspended or deleted. No FK,
+/// matching ProfessionalLocation.
+model ProfessionalTakedown {
+  /// The listing: a ProfessionalProfile id.
+  professionalId String  @id
+  /// Whose listing (ProfessionalProfile.wawuUserId when it was taken down),
+  /// so the account purge and the data export find the row by its owner.
+  wawuUserId     String
+  /// What the person themselves last chose: the listing's `listed` when the
+  /// admin took it down, then false if they press Hide while it is down.
+  /// Lifting the takedown puts the listing back to this.
+  ownerListed    Boolean
+
+  takenDownAt           DateTime  @default(now())
+  takenDownByAdminId    String
+  takenDownByAdminEmail String
+  takenDownByAdminRole  AdminRole
+
+  /// All null while the takedown stands.
+  liftedAt           DateTime?
+  liftedByAdminId    String?
+  liftedByAdminEmail String?
+  liftedByAdminRole  AdminRole?
+
+  @@index([wawuUserId])
 }
 
 /// One client's rating of one professional listing.

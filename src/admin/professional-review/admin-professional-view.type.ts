@@ -2,7 +2,9 @@ import type {
   ProfessionalCredentialKind,
   ReviewStatus,
   AccountType,
+  AdminRole,
 } from '../../../generated/prisma/enums';
+import type { ProfessionalListingVisibility } from '../../professional/professional-takedown';
 
 /**
  * The wire shapes for the admin professional-review surface.
@@ -97,4 +99,48 @@ export interface AdminProfessionalDecisionView {
   rejectionReason: string | null;
   reviewedAt: Date | null;
   listed: boolean;
+}
+
+/**
+ * The latest admin takedown on record for one listing (FIX-06), standing or
+ * lifted. Admin email and role are the snapshots taken when it happened.
+ */
+export interface AdminProfessionalTakedownRecordView {
+  /** True while it stands: the owner cannot show the listing. */
+  standing: boolean;
+  takenDownAt: Date;
+  takenDownByAdminId: string;
+  takenDownByAdminEmail: string;
+  takenDownByAdminRole: AdminRole;
+  /**
+   * What a relist puts back: `listed` (back in the directory) or `hidden`
+   * (the owner had hidden it themselves, before or during the takedown).
+   */
+  relistsAs: 'listed' | 'hidden';
+  /** All null while it stands. */
+  liftedAt: Date | null;
+  liftedByAdminId: string | null;
+  liftedByAdminEmail: string | null;
+  liftedByAdminRole: AdminRole | null;
+}
+
+/**
+ * GET /admin/professionals/:id/visibility (FIX-06): whether a listing is in
+ * the directory, hidden by its owner, or taken down by an admin, so the
+ * dashboard knows when to offer "List again". A new route: the protected
+ * queue and detail answers are not widened.
+ */
+export interface AdminProfessionalVisibilityView {
+  id: string;
+  status: ReviewStatus;
+  /**
+   * `listed`, `hidden` (by its owner) or `taken_down` (by an admin). Null for
+   * an application that is not approved and has no takedown standing: it is
+   * not a listing yet.
+   */
+  visibility: ProfessionalListingVisibility | null;
+  /** When the standing takedown was made. Null when none stands. */
+  takenDownAt: Date | null;
+  /** The latest takedown on record. Null when there has never been one. */
+  latestTakedown: AdminProfessionalTakedownRecordView | null;
 }
