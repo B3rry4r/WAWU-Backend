@@ -25960,6 +25960,28 @@
         ]
       }
     },
+    "/api/hub/me/points": {
+      "get": {
+        "operationId": "PointsController_mine",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyPointsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Balance, live lots with their end dates, the next end, the last 20 movements.",
+        "tags": [
+          "Points"
+        ]
+      }
+    },
     "/api/hub/webhooks/fintava": {
       "post": {
         "operationId": "FintavaWebhookController_receive",
@@ -43676,6 +43698,135 @@
           "chats",
           "paidDms",
           "communities"
+        ]
+      },
+      "PointNextExpiryView": {
+        "type": "object",
+        "properties": {
+          "points": {
+            "type": "number"
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "points",
+          "expiresAt"
+        ]
+      },
+      "PointLotView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "points": {
+            "type": "number"
+          },
+          "granted": {
+            "type": "number"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "tier_bonus",
+              "pack",
+              "bump",
+              "referral",
+              "shortfall",
+              "returned"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "points",
+          "granted",
+          "source",
+          "label",
+          "expiresAt"
+        ]
+      },
+      "PointMovementView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "points": {
+            "type": "number"
+          },
+          "label": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "hold",
+              "grant",
+              "release",
+              "expire"
+            ]
+          },
+          "pending": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "points",
+          "label",
+          "reason",
+          "pending",
+          "createdAt"
+        ]
+      },
+      "MyPointsView": {
+        "type": "object",
+        "properties": {
+          "balance": {
+            "type": "number"
+          },
+          "nextExpiry": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PointNextExpiryView"
+              }
+            ],
+            "nullable": true
+          },
+          "lots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PointLotView"
+            }
+          },
+          "lotCount": {
+            "type": "number"
+          },
+          "movements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PointMovementView"
+            }
+          }
+        },
+        "required": [
+          "balance",
+          "nextExpiry",
+          "lots",
+          "lotCount",
+          "movements"
         ]
       },
       "MeCountsView": {

@@ -318,6 +318,8 @@ const NULLABLE_REF_AS_ALLOF_DIRS = [
   path.join(ROOT, 'src', 'inbox') + path.sep,
   // The caller's own lists (task ME-10): new routes, so nothing published changes.
   path.join(ROOT, 'src', 'me') + path.sep,
+  // Points (task POINTS-01): a new route, so nothing published changes.
+  path.join(ROOT, 'src', 'points') + path.sep,
 ];
 
 function declaredIn(type, dirs) {
