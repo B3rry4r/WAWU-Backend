@@ -1,4 +1,5 @@
 import { Body, Controller, HttpCode, HttpStatus, Post, UseGuards } from '@nestjs/common';
+import { ApiGoneResponse } from '@nestjs/swagger';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
@@ -19,6 +20,10 @@ export class PaymentLinkController {
 
   @Post('hosted-link')
   @HttpCode(HttpStatus.OK)
+  @ApiGoneResponse({
+    description:
+      'reason.code: shop_retired. The txRef is a Shop order: Shop is retired (R-2, OPS-08), so no new payment page is opened for it.',
+  })
   create(@CurrentUser() user: WawuJwtClaims, @Body() dto: HostedLinkDto) {
     return this.links.create(user.sub, dto);
   }

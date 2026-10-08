@@ -10,6 +10,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { ApiParam } from '@nestjs/swagger';
 import { AdminRole } from '../../../generated/prisma/enums';
 import { AdminAuthGuard } from '../auth/guards/admin-auth.guard';
 import { AdminRolesGuard } from '../auth/guards/admin-roles.guard';
@@ -18,17 +19,23 @@ import { ShopAdminService } from '../../shop/shop-admin.service';
 import {
   AdminListProductsDto,
   UpdateFulfilmentDto,
-  UpsertProductDto,
 } from '../../shop/dto/shop.dto';
+import {
+  SHOP_CATALOGUE_RETIRED_MESSAGE,
+  ShopRetiredRoute,
+  shopCatalogueRetired,
+} from '../../shop/shop-retired';
 import type { ShopFulfilment } from '../../../generated/prisma/enums';
 
 /**
- * WAWU Commerce management — `/api/hub/admin/shop/*`.
+ * WAWU Shop management, `/api/hub/admin/shop/*`. The shop is retired (R-2,
+ * OPS-08): creating or editing a product answers 410; reading the catalogue,
+ * the order queue and dispatching a paid order stay.
  *
  * ── ROLE MATRIX ───────────────────────────────────────────────────────────
  *   read  (products, orders)     — superadmin, reviewer, support
- *   write (create/edit a product,
- *          dispatch an order)    — superadmin, reviewer
+ *   write (dispatch an order)    — superadmin, reviewer
+ *   create/edit a product        — 410 for every role (guards unchanged)
  *   finance                      — refused entirely
  *
  * The same shape as admin/content and admin/events, on purpose: an admin who
@@ -56,19 +63,21 @@ export class AdminShopController {
     return this.service.get(id);
   }
 
+  /** Retired with the shop: nothing new is stocked (R-2, OPS-08). */
+  @ShopRetiredRoute(SHOP_CATALOGUE_RETIRED_MESSAGE)
   @AdminRoles(AdminRole.superadmin, AdminRole.reviewer)
   @Post('products')
-  create(@Body() dto: UpsertProductDto) {
-    return this.service.create(dto);
+  create(): never {
+    throw shopCatalogueRetired();
   }
 
+  /** Retired with the shop: the catalogue is kept as it was, for past orders. */
+  @ShopRetiredRoute(SHOP_CATALOGUE_RETIRED_MESSAGE)
   @AdminRoles(AdminRole.superadmin, AdminRole.reviewer)
+  @ApiParam({ name: 'id', type: String })
   @Put('products/:id')
-  update(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: UpsertProductDto,
-  ) {
-    return this.service.update(id, dto);
+  update(): never {
+    throw shopCatalogueRetired();
   }
 
   /**
