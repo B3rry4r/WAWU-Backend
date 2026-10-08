@@ -278,6 +278,15 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'wawuUserId',
     disposition: 'OWNED',
   },
+  // An admin's takedown of one of this person's professional listings, and
+  // the Hide or Show they had chosen (FIX-06). It exists only beside a
+  // listing that goes with them, as FeaturedCreator (an admin's choice about
+  // this account) does.
+  {
+    model: 'ProfessionalTakedown',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
 
   // Which ads this person viewed, tapped or skipped on which day (ADS-05):
   // theirs, so the rows go with them. The daily totals the owner invoices from
