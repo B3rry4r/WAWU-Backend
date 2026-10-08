@@ -1246,7 +1246,7 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
         get: () => ({ name: 'fintava' }),
       } as unknown as ModuleRef;
       const isolated = new NuvionOpeningHandler(prisma, fintavaRef);
-      const e = { ...entities[0], id: ulid('01ENT') } as Held;
+      const e = { ...entities[0], id: ulid('01ENT') };
       const r = await isolated.handle(delivery(e));
       expect(r.outcome).toBe('wait');
       expect(standin.seen).toEqual([]);
