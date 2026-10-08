@@ -802,6 +802,21 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
       expect((await view(who)).submitted).toBe(true);
     });
 
+    it('two different files for one kind at the same moment: one goes, the other is told to wait, and Nuvion gets one call', async () => {
+      const who = await opened();
+      nuvion.uploadDelayMs = 500;
+      const [a, b] = await Promise.all([
+        send(who, 'identity', png()),
+        send(who, 'identity', png()),
+      ]);
+      expect([a.status, b.status].sort()).toEqual([200, 409]);
+      const lost = a.status === 409 ? a : b;
+      expect(body(lost).reason?.code).toBe('document_in_progress');
+      expect(body(lost).reason?.retryAfterSeconds).toBeGreaterThanOrEqual(1);
+      expect(uploads()).toHaveLength(1);
+      expect(nuvion.docs(who.held.id, 'identity')).toHaveLength(1);
+    });
+
     it('both documents at the same moment, and the same ones again at once: one submission', async () => {
       const who = await opened();
       nuvion.uploadDelayMs = 300;
@@ -890,6 +905,27 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
       expect(nuvion.entities.get(who.held.id)?.submissions).toBe(1);
       expect(sent('GET', /^\/entities\//).length).toBeGreaterThan(0);
       expect((await wallet(who)).review?.stage).toBe('checking');
+    });
+
+    it('an entity Nuvion still shows as rejected is not taken for a submission that landed', async () => {
+      const who = await opened();
+      await send(who, 'identity', png()).expect(200);
+      nuvion.submitMode = 'nothing_then_500';
+      await send(who, 'proof_of_address', pdf()).expect(200);
+      nuvion.submitMode = 'ok';
+      // Nuvion never moved the entity back to incomplete after a correction.
+      nuvion.entities.get(who.held.id)!.status = 'rejected';
+      await ageSubmission(who, RESEND_AFTER_MS + 500);
+      const after = await view(who);
+      expect(after.submitted).toBe(false);
+      expect((await onboarding(who))?.submittedAt).toBeNull();
+      expect((await entityRow(who)).status).toBe('incomplete');
+      // The same through a delivery.
+      const r = await handler.handle(
+        delivery(nuvion.entities.get(who.held.id)!),
+      );
+      expect(r.outcome).toBe('done');
+      expect((await onboarding(who))?.submittedAt).toBeNull();
     });
 
     it('a submission that never reached Nuvion is sent again once, after the window, behind a new claim', async () => {

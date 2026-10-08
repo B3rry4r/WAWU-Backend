@@ -164,7 +164,7 @@ export class NuvionDocumentsArea implements NuvionDocumentsMethods {
     return this.client.settings.livenessRedirectOrigins ?? [];
   }
 
-  /** Nuvion would not start a session for a child entity: the selfie is off for now. */
+  /** Nuvion would not start a session for a child entity: the selfie is off for an hour. */
   noteLivenessRefused(): void {
     this.livenessRefusedAt = this.now();
   }
@@ -301,8 +301,8 @@ export class NuvionDocumentsArea implements NuvionDocumentsMethods {
 
   /**
    * The seam's `submitKyc`: the entity already holds the person's details
-   * (NUV-02), so only `customerId` (the entity) is used; the rest of the
-   * submission is never read here.
+   * (NUV-02), so only `customerId` (the entity) is used and the rest of the
+   * submission is not used.
    */
   async submitKyc(input: ProviderKycSubmission): Promise<ProviderKycState> {
     const sent = await this.submitOnboarding(input.customerId);

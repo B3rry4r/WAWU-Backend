@@ -28,7 +28,7 @@ export const DOCUMENT_ERROR_STATUS = {
   documents_closed: 409,
   /** The last upload of this kind is still being confirmed; try again after `retryAfterSeconds`. */
   document_in_progress: 409,
-  /** The person has sent too many files for now. */
+  /** The person has sent too many files in a short time. */
   document_rate_limited: 429,
   /** The server is busy with other uploads. */
   document_busy: 503,

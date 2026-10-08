@@ -715,6 +715,19 @@ export class DocumentsFlow {
   }
 
   /**
+   * Nuvion's word says it has the submission: the entity is in review
+   * (`pending`) or already decided as approved. `incomplete` is "not sent";
+   * `rejected`, `failed` and `suspended` are an earlier decision (an entity
+   * Nuvion has not moved back to `incomplete` after the person corrected
+   * it), not proof that this submission landed.
+   */
+  private landed(status: string): boolean {
+    return !['incomplete', 'rejected', 'failed', 'suspended'].includes(
+      status.trim().toLowerCase(),
+    );
+  }
+
+  /**
    * Sends the opening for review when it is ready and not sent yet, once.
    * Safe to call from anywhere, any number of times at once: the answer is
    * what the call did, and a call with nothing to do does nothing.
@@ -802,7 +815,7 @@ export class DocumentsFlow {
       } catch {
         return 'pending'; // the claim stands: nothing is sent blindly
       }
-      if (read.status !== 'incomplete') {
+      if (this.landed(read.status)) {
         await this.markSubmitted(wawuUserId, read.status);
         return 'submitted';
       }
@@ -825,7 +838,7 @@ export class DocumentsFlow {
         // Already past `incomplete` at Nuvion: it has the submission.
         try {
           const read = await this.area.readDocuments(entityId);
-          if (read.status !== 'incomplete') {
+          if (this.landed(read.status)) {
             await this.markSubmitted(wawuUserId, read.status);
             return 'submitted';
           }
@@ -951,7 +964,7 @@ export class DocumentsFlow {
       onboarding &&
       !onboarding.submittedAt &&
       onboarding.submitRequestedAt &&
-      entityStatus.trim().toLowerCase() !== 'incomplete'
+      this.landed(entityStatus)
     ) {
       await this.markSubmitted(wawuUserId, entityStatus);
     }
