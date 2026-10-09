@@ -45,6 +45,6 @@ import {
     // FIX-11: how long a read waits for another read's opener.
     { provide: LEGAL_OPENER_WAIT_MS, useValue: ASSISTANT_OPENER_WAIT_MS },
   ],
-  exports: [LegalIntakeService, LegalChatService],
+  exports: [LegalIntakeService, LegalChatService, LegalAssistantAllowance],
 })
 export class LegalIntakeModule {}
