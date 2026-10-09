@@ -44,8 +44,7 @@ import { NuvionClient } from '../nuvion-client';
 import { NuvionWalletProvider } from '../nuvion-wallet-provider';
 import { DocumentUploadSlots } from '../documents/documents-slots';
 import { NuvionDocumentsModule } from '../documents/documents.module';
-import { NuvionDocumentsService } from '../documents/documents.service';
-import type { IdentityHasher } from '../../money/identity/identity-config';
+import { IdentityHasher } from '../../money/identity/identity-config';
 import type {
   IdentityDocumentsView,
   IdentityLivenessView,
@@ -2306,6 +2305,44 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
       },
     );
 
+    it('a second refusal, of the replacement, is a new refusal: the new file reads needs_new, nothing is sent with it, and a third file re-opens it', async () => {
+      const who = await opened();
+      await send(who, 'identity', png()).expect(200);
+      await send(who, 'proof_of_address', pdf()).expect(200);
+      nuvion.onCorrection = {
+        resetDocumentWords: true,
+        statusTo: 'incomplete',
+      };
+
+      // First round: refused, corrected, replaced and sent again.
+      await refuse(who, 'identity');
+      await correctDetails(who).expect(200);
+      await send(who, 'identity', png()).expect(200);
+      expect(submissions()).toHaveLength(2);
+      const replaced = await docRow(who, 'identity');
+      expect(replaced?.reviewRefusedAt).toBeNull();
+      expect((await wallet(who)).review?.stage).toBe('checking');
+
+      // Second round: Nuvion refuses the replacement too.
+      await refuse(who, 'identity');
+      expect((await wallet(who)).review?.stage).toBe('rejected');
+      const second = await docRow(who, 'identity');
+      expect(second?.reviewRefusedAt).toBeInstanceOf(Date);
+      expect(second?.reviewRefusedAt!.getTime()).toBeGreaterThan(
+        replaced!.uploadedAt!.getTime() - 1,
+      );
+      await correctDetails(who).expect(200);
+      const v = await view(who);
+      expect(states(v)).toEqual(['needs_new', 'uploaded']);
+      expect(v).toMatchObject({ open: true, waitingFor: ['identity'] });
+      expect(submissions()).toHaveLength(2);
+
+      // A third file re-opens it, once.
+      await send(who, 'identity', png()).expect(200);
+      expect(submissions()).toHaveLength(3);
+      expect((await docRow(who, 'identity'))?.reviewRefusedAt).toBeNull();
+    });
+
     it('the delivery that records the refusal puts it on the document row at once (NUV-02\u2019s handler, before anything reads the view)', async () => {
       const who = await opened();
       await send(who, 'identity', png()).expect(200);
@@ -2850,8 +2887,7 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
 
     it('with IDENTITY_HASH_KEY unset no upload is taken: 503, nothing sent, nothing kept', async () => {
       const who = await opened();
-      const service = moduleRef.get(NuvionDocumentsService);
-      const hasher = (service as unknown as { hasher: IdentityHasher }).hasher;
+      const hasher = moduleRef.get(IdentityHasher, { strict: false });
       Object.defineProperty(hasher, 'configured', {
         get: () => false,
         configurable: true,

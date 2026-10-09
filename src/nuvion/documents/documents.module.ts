@@ -2,7 +2,6 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
 import { PrismaModule } from '../../common/prisma/prisma.module';
-import { IdentityHasher } from '../../money/identity/identity-config';
 import { WalletProviderModule } from '../../wallet-provider/wallet-provider.module';
 import { NuvionDocumentsController } from './documents.controller';
 import { NuvionDocumentsService } from './documents.service';
@@ -24,9 +23,6 @@ import { DocumentUploadSlots } from './documents-slots';
   imports: [ConfigModule, PrismaModule, WalletProviderModule, WawuAuthModule],
   controllers: [NuvionDocumentsController],
   providers: [
-    // The fingerprint of an upload is an HMAC under IDENTITY_HASH_KEY, as
-    // the BVN's hash is (MoneyModule provides its own instance of this).
-    IdentityHasher,
     NuvionDocumentsService,
     DocumentUploadSlots,
     DocumentUploadInterceptor,

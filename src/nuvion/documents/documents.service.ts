@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { IdentityHasher } from '../../money/identity/identity-config';
 import {
@@ -58,15 +59,29 @@ export class NuvionDocumentsService {
   constructor(
     private readonly prisma: PrismaService,
     @Inject(WALLET_PROVIDER) private readonly provider: WalletProvider,
-    private readonly hasher: IdentityHasher,
+    private readonly moduleRef: ModuleRef,
   ) {}
+
+  /**
+   * The server's one IdentityHasher (MoneyModule provides it; the BVN's hash
+   * and this upload fingerprint are under the same key). Found when needed,
+   * not injected, so this module does not make a second one (its boot
+   * warning would then be written twice). Null when it cannot be found.
+   */
+  private hasher(): IdentityHasher | null {
+    try {
+      return this.moduleRef.get(IdentityHasher, { strict: false });
+    } catch {
+      return null;
+    }
+  }
 
   /** The flow when the running provider is Nuvion; null otherwise. */
   private flow(): DocumentsFlow | null {
     if (this.flowOf === undefined) {
       this.flowOf =
         this.provider instanceof NuvionWalletProvider
-          ? new DocumentsFlow(this.prisma, this.provider, this.hasher)
+          ? new DocumentsFlow(this.prisma, this.provider, () => this.hasher())
           : null;
     }
     return this.flowOf;

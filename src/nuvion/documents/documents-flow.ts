@@ -168,18 +168,19 @@ export class DocumentsFlow {
   private readonly logger = new Logger('NuvionDocuments');
 
   /**
-   * `hasher` is needed to upload (the fingerprint is keyed); the handler,
-   * which only reconciles, runs without it.
+   * `hasher` finds the server's IdentityHasher, needed to upload (the
+   * fingerprint is keyed); the handler, which only reconciles, runs without it.
    */
   constructor(
     private readonly prisma: PrismaService,
     private readonly nuvion: NuvionWalletProvider,
-    private readonly hasher: IdentityHasher | null = null,
+    private readonly hasher: () => IdentityHasher | null = () => null,
   ) {}
 
   /** The upload's fingerprint, or a plain refusal when the key is not there. */
   private fingerprint(front: Buffer, back: Buffer | null): string {
-    if (this.hasher === null || !this.hasher.configured) {
+    const hasher = this.hasher();
+    if (hasher === null || !hasher.configured) {
       this.logger.error(
         'documents: IDENTITY_HASH_KEY is not set; no upload can be taken',
       );
@@ -187,7 +188,7 @@ export class DocumentsFlow {
         retryAfterSeconds: this.nuvion.timings.retryAfterSeconds,
       });
     }
-    return fingerprintOf(this.hasher, front, back);
+    return fingerprintOf(hasher, front, back);
   }
 
   private get area() {
