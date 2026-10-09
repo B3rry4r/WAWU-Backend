@@ -58,10 +58,7 @@ type CoreNotificationKind =
   | 'paid_dm_paused'
   // LEGAL-03: documents WAWU delivered on a legal request.
   /** Documents were delivered on a legal request. Recipient: the client. */
-  | 'legal_delivered'
-  // NUV-02 round 2: the provider's review of the person's identity ended.
-  /** Approved, refused (with what to fix) or stopped. Recipient: the person. */
-  | 'identity_review';
+  | 'legal_delivered';
 
 /** Exactly the union in WAWU-Web/src/types/notification.ts. */
 export type NotificationTone =
@@ -195,19 +192,6 @@ type NotificationEventCore =
       requestId: string;
       serviceName: string;
       fileCount: number;
-    }
-  /**
-   * NUV-02 round 2 (D6). The wallet provider's review of the person's
-   * identity ended: `UNDER_REVIEW_MESSAGE` promises "We will let you know
-   * when the review is done", and this is how. Recipient: the person. Sent
-   * once per decision. `fixes` are our own sentences saying what to correct
-   * (never the provider's text, never a BVN, NIN or ID number).
-   */
-  | {
-      kind: 'identity_review';
-      userWawuId: string;
-      outcome: 'approved' | 'rejected' | 'stopped';
-      fixes?: readonly string[];
     };
 
 /** The row `emit()` will write, before it reaches Prisma. */
@@ -294,55 +278,6 @@ const MONTHS = [
 
 function formatDate(date: Date): string {
   return `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
-}
-
-/** NUV-02 round 2: the three endings of the provider's identity review. */
-function composeIdentityReview(
-  userWawuId: string,
-  outcome: 'approved' | 'rejected' | 'stopped',
-  fixes: readonly string[],
-): NotificationDraft {
-  const base = { userWawuId, kind: 'identity_review' } as const;
-  const none = {
-    amount: null,
-    creditsCount: null,
-    imageUrl: null,
-    actionHref: null,
-    campaignId: null,
-  };
-  switch (outcome) {
-    case 'approved':
-      return {
-        ...base,
-        title: 'Identity check passed',
-        body: 'Your identity check passed. Your account is being set up.',
-        tone: 'success',
-        actionLabel: null,
-        ...none,
-      };
-    case 'rejected':
-      return {
-        ...base,
-        title: 'Identity check needs a fix',
-        body: `We could not finish your identity check. ${
-          fixes.length > 0
-            ? fixes.join(' ')
-            : 'Check your details and send them again.'
-        }`,
-        tone: 'warning',
-        actionLabel: 'Fix details',
-        ...none,
-      };
-    case 'stopped':
-      return {
-        ...base,
-        title: 'Identity check stopped',
-        body: 'We could not finish your identity check. Contact support and we will help.',
-        tone: 'danger',
-        actionLabel: null,
-        ...none,
-      };
-  }
 }
 
 /**
@@ -630,17 +565,6 @@ export function composeNotification(
      * notification opens that matter: `/legal/requests/<id>`, built here from
      * the id and never from input.
      */
-    /**
-     * NUV-02 round 2 (D6). No matter, name or number in the copy: a lock
-     * screen shows it. The fixes are fixed sentences of ours.
-     */
-    case 'identity_review':
-      return composeIdentityReview(
-        event.userWawuId,
-        event.outcome,
-        event.fixes ?? [],
-      );
-
     case 'legal_delivered': {
       const one = event.fileCount === 1;
       return {
@@ -660,6 +584,66 @@ export function composeNotification(
         campaignId: null,
       };
     }
+
+    /**
+     * NUV-02 round 2 (D6). No matter, name or number in the copy: a lock
+     * screen shows it. The fixes are fixed sentences of ours.
+     */
+    case 'identity_review':
+      return composeIdentityReview(
+        event.userWawuId,
+        event.outcome,
+        event.fixes ?? [],
+      );
+  }
+}
+
+/** NUV-02 round 2: the three endings of the provider's identity review. */
+function composeIdentityReview(
+  userWawuId: string,
+  outcome: 'approved' | 'rejected' | 'stopped',
+  fixes: readonly string[],
+): NotificationDraft {
+  const base = { userWawuId, kind: 'identity_review' } as const;
+  const none = {
+    amount: null,
+    creditsCount: null,
+    imageUrl: null,
+    actionHref: null,
+    campaignId: null,
+  };
+  switch (outcome) {
+    case 'approved':
+      return {
+        ...base,
+        title: 'Identity check passed',
+        body: 'Your identity check passed. Your account is being set up.',
+        tone: 'success',
+        actionLabel: null,
+        ...none,
+      };
+    case 'rejected':
+      return {
+        ...base,
+        title: 'Identity check needs a fix',
+        body: `We could not finish your identity check. ${
+          fixes.length > 0
+            ? fixes.join(' ')
+            : 'Check your details and send them again.'
+        }`,
+        tone: 'warning',
+        actionLabel: 'Fix details',
+        ...none,
+      };
+    case 'stopped':
+      return {
+        ...base,
+        title: 'Identity check stopped',
+        body: 'We could not finish your identity check. Contact support and we will help.',
+        tone: 'danger',
+        actionLabel: null,
+        ...none,
+      };
   }
 }
 
@@ -672,7 +656,11 @@ export function composeNotification(
  * INBOX kinds) and ME-10's `review_received`. M31 and M32 list reviews
  * ("Sales, tips, paid questions and reviews show up here").
  */
-export type NotificationKind = CoreNotificationKind | 'review_received';
+export type NotificationKind =
+  | CoreNotificationKind
+  | 'review_received'
+  // NUV-02 round 2: the wallet provider's review of the person ended.
+  | 'identity_review';
 
 /**
  * ME-10. Somebody rated a piece for the first time (a changed rating is not
@@ -684,6 +672,20 @@ interface ReviewReceivedEvent {
   userWawuId: string;
   contentTitle: string;
   stars: number;
+}
+
+/**
+ * NUV-02 round 2 (D6). The wallet provider's review of the person's
+ * identity ended: `UNDER_REVIEW_MESSAGE` promises "We will let you know when
+ * the review is done", and this is how. Recipient: the person. Sent once per
+ * decision. `fixes` are our own sentences saying what to correct (never the
+ * provider's text, never a BVN, NIN or ID number).
+ */
+interface IdentityReviewEvent {
+  kind: 'identity_review';
+  userWawuId: string;
+  outcome: 'approved' | 'rejected' | 'stopped';
+  fixes?: readonly string[];
 }
 
 /**
@@ -713,7 +715,7 @@ export interface NotificationAbout {
  * which may also say what it is about (ME-10).
  */
 export type NotificationEvent = (
-  NotificationEventCore | ReviewReceivedEvent
+  NotificationEventCore | ReviewReceivedEvent | IdentityReviewEvent
 ) & {
   about?: NotificationAbout;
 };
