@@ -50,5 +50,45 @@ export const MSG = {
   sidesTogether: 'Send both sides of an ID in one request: file and file_back.',
   selfieOff: 'A selfie is not needed for this wallet.',
   selfieRefused: 'The selfie check is not available right now.',
+  selfieUnreachable:
+    'We could not start the selfie check right now. Try again in a moment.',
   badReturn: 'The address to return to must be a secure web address we know.',
 } as const;
+
+/**
+ * Whether a person's return address (where the hosted selfie page sends
+ * them back) is one the server lists (task NUV-03 round 2, D2). The list
+ * holds `origin` or `origin/path-prefix` entries (nuvion-config.ts). The
+ * address must be https, carry no credentials and no hidden dots or slashes
+ * in its path, share an entry's origin and be at or under its path prefix
+ * (on a whole segment: `/open` allows `/open` and `/open/x`, not `/opening`).
+ * An empty list allows nothing.
+ */
+export function returnAddressAllowed(
+  address: URL,
+  allowed: readonly string[],
+): boolean {
+  if (
+    address.protocol !== 'https:' ||
+    address.username !== '' ||
+    address.password !== '' ||
+    /%2e|%2f|%5c|\\/i.test(address.pathname)
+  ) {
+    return false;
+  }
+  return allowed.some((entry) => {
+    let e: URL;
+    try {
+      e = new URL(entry);
+    } catch {
+      return false;
+    }
+    const prefix = e.pathname.replace(/\/+$/, '');
+    return (
+      address.origin === e.origin &&
+      (prefix === '' ||
+        address.pathname === prefix ||
+        address.pathname.startsWith(`${prefix}/`))
+    );
+  });
+}

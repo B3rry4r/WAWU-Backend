@@ -1,9 +1,12 @@
 -- NUV-03: ID document, proof of address and the hosted selfie on Nuvion.
 -- Additive only: two new tables, no existing table is touched.
 --   NuvionDocument: one row per person and kind (identity, proof_of_address):
---     the state, the sides sent, Nuvion's document id, the time and a SHA-256
+--     the state, the sides sent, Nuvion's document id, the time and a keyed
 --     fingerprint of the bytes (so the same file sent twice is forwarded
---     once). Never the file, a copy of it, or a number read off it.
+--     once). Never the file, a copy of it, or a number read off it. The
+--     fingerprint is an HMAC under IDENTITY_HASH_KEY, cleared once the
+--     opening is submitted; reviewRefusedAt keeps Nuvion's refusal of an
+--     upload on the row itself, through a correction of the details.
 --   NuvionOnboarding: one row per person: the claim on the one onboarding
 --     submission, when it was made, and the hosted selfie's session and
 --     result in one word.
@@ -22,6 +25,7 @@ CREATE TABLE "NuvionDocument" (
     "attempts" INTEGER NOT NULL DEFAULT 1,
     "attemptStartedAt" TIMESTAMP(3) NOT NULL,
     "uploadedAt" TIMESTAMP(3),
+    "reviewRefusedAt" TIMESTAMP(3),
     "failure" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -44,7 +48,6 @@ CREATE TABLE "NuvionOnboarding" (
     "livenessState" TEXT,
     "livenessCheckedAt" TIMESTAMP(3),
     "livenessSessions" INTEGER NOT NULL DEFAULT 0,
-    "livenessRefusedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 

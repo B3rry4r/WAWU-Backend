@@ -247,6 +247,25 @@ export class IdentityHasher {
   }
 
   /**
+   * HMAC-SHA256, hex, over the bytes of an uploaded file (NUV-03), under the
+   * same key as `hash`. The bytes are never turned into a string, and the
+   * label keeps this use of the key apart from the others. What it gives is
+   * a fingerprint of a person's upload, so the same file sent twice is
+   * forwarded once; with the key unset it throws, as `hash` does.
+   */
+  hashBytes(kind: 'document', parts: ReadonlyArray<Buffer | string>): string {
+    if (!this.configured) {
+      throw new IdentityConfigError(
+        `${IDENTITY_CONFIG_KEYS.hashKey} is not set.`,
+      );
+    }
+    const h = createHmac('sha256', this.#key);
+    h.update(`${kind}:`);
+    for (const part of parts) h.update(part);
+    return h.digest('hex');
+  }
+
+  /**
    * A 32-byte key for one other purpose, derived from IDENTITY_HASH_KEY with
    * HKDF-SHA256 under `label` (RFC 5869: a distinct `info` gives an
    * independent key, so the derived key reveals nothing about the hashing

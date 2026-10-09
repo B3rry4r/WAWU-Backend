@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { IdentityHasher } from '../../money/identity/identity-config';
 import {
   WALLET_PROVIDER,
   type WalletProvider,
@@ -18,6 +19,7 @@ import {
   DOCUMENT_UPLOAD_WINDOWS,
   LIVENESS_START_WINDOWS,
   MSG,
+  returnAddressAllowed,
 } from './documents-config';
 import { DocumentsFlow } from './documents-flow';
 import type {
@@ -56,6 +58,7 @@ export class NuvionDocumentsService {
   constructor(
     private readonly prisma: PrismaService,
     @Inject(WALLET_PROVIDER) private readonly provider: WalletProvider,
+    private readonly hasher: IdentityHasher,
   ) {}
 
   /** The flow when the running provider is Nuvion; null otherwise. */
@@ -63,7 +66,7 @@ export class NuvionDocumentsService {
     if (this.flowOf === undefined) {
       this.flowOf =
         this.provider instanceof NuvionWalletProvider
-          ? new DocumentsFlow(this.prisma, this.provider)
+          ? new DocumentsFlow(this.prisma, this.provider, this.hasher)
           : null;
     }
     return this.flowOf;
@@ -188,7 +191,11 @@ export class NuvionDocumentsService {
     return flow.startLiveness(wawuUserId, returnTo);
   }
 
-  /** The return address: https, no credentials, and an origin we know when any are set. */
+  /**
+   * The return address: none is fine (nothing is sent); an address must be
+   * one the server lists, by origin and path prefix. An empty list allows
+   * no address at all.
+   */
   private returnAddress(
     flow: DocumentsFlow,
     value: string | undefined,
@@ -200,13 +207,7 @@ export class NuvionDocumentsService {
     } catch {
       throw new DocumentError('document_request_invalid', MSG.badReturn);
     }
-    const known = flow.livenessRedirectOrigins;
-    if (
-      url.protocol !== 'https:' ||
-      url.username !== '' ||
-      url.password !== '' ||
-      (known.length > 0 && !known.includes(url.origin))
-    ) {
+    if (!returnAddressAllowed(url, flow.livenessRedirectOrigins)) {
       throw new DocumentError('document_request_invalid', MSG.badReturn);
     }
     return url.toString();

@@ -39,6 +39,8 @@ export interface HeldEntity {
   phone: string;
   email: string;
   created: number;
+  /** Nuvion's own `updated` time: it moves when the entity changes, not when it is read. */
+  updated: number;
   documents: HeldDocument[];
   meta: Record<string, unknown>;
   documentStatus: string;
@@ -84,6 +86,34 @@ export class DocumentsNuvion {
   sessionMode: SessionMode = 'ok';
   /** The PATCH that saves `meta.liveness_check_id` answers this instead of 200. */
   linkRefuse: { refuse: string; status?: number } | null = null;
+  /**
+   * Refuses a session start for some people only: called with the request's
+   * body, answers a refusal or null (the start goes ahead). Beside
+   * `sessionMode`, which refuses every start.
+   */
+  sessionRefuseIf:
+    | ((b: {
+        entity_id?: string;
+        redirect_url?: string;
+      }) => { refuse: string; status?: number } | null)
+    | null = null;
+  /**
+   * What Nuvion does with a person's corrected details
+   * (`PATCH /individual-entities/{id}`): the docs' own PATCH sample answers
+   * with the documents' checks back at `pending`, and an entity may be moved
+   * back from `rejected` to `incomplete`. Both are off by default; a spec
+   * turns on the ones it needs (NUV-03 round 2, D1).
+   */
+  onCorrection: { resetDocumentWords: boolean; statusTo: string | null } = {
+    resetDocumentWords: false,
+    statusTo: null,
+  };
+  /**
+   * A submission is taken from an entity still shown as `rejected` (Nuvion
+   * keeping that word through a correction; its behaviour is unknown until
+   * the sandbox answers, BACKEND_GAPS G-473). Off: only from `incomplete`.
+   */
+  submitAcceptsRejected = false;
   /** What a submission moves an entity to (`pending`, or a decision at once). */
   submitStatus = 'pending';
   /** When set, `GET /entities` hides the documents (so a lost upload cannot be found). */
@@ -117,6 +147,9 @@ export class DocumentsNuvion {
     this.submitMode = 'ok';
     this.sessionMode = 'ok';
     this.linkRefuse = null;
+    this.sessionRefuseIf = null;
+    this.onCorrection = { resetDocumentWords: false, statusTo: null };
+    this.submitAcceptsRejected = false;
     this.submitStatus = 'pending';
     this.hideDocuments = false;
     this.uploadDelayMs = 0;
@@ -130,6 +163,7 @@ export class DocumentsNuvion {
       phone: '+2348000000000',
       email: 'person@example.com',
       created: Date.now(),
+      updated: Date.now(),
       documents: [],
       meta: {},
       documentStatus: 'pending',
@@ -163,7 +197,7 @@ export class DocumentsNuvion {
         user_id: '01HXYZ0003ABCDEFGHJKMNPQRS',
         creation_context: 'api',
         created: e.created,
-        updated: Date.now(),
+        updated: e.updated,
       },
       person: {
         id: e.personId,
@@ -296,7 +330,10 @@ export class DocumentsNuvion {
         body: errorBody('error_resource_not_found', 'Resource does not exist'),
       };
     }
-    if (entity.status !== 'incomplete') {
+    if (
+      entity.status !== 'incomplete' &&
+      !(this.submitAcceptsRejected && entity.status === 'rejected')
+    ) {
       return {
         status: 400,
         body: errorBody(
@@ -306,6 +343,7 @@ export class DocumentsNuvion {
       };
     }
     entity.status = this.submitStatus;
+    entity.updated = Date.now();
     entity.submissions += 1;
     const answer: StandinAnswer = {
       status: 201,
@@ -348,6 +386,17 @@ export class DocumentsNuvion {
     if (this.linkRefuse) return this.fail(this.linkRefuse);
     const meta = (req.body as { meta?: Record<string, unknown> } | null)?.meta;
     if (meta) Object.assign(e.meta, meta);
+    const isCorrection = !meta;
+    if (isCorrection) {
+      e.updated = Date.now();
+      if (this.onCorrection.resetDocumentWords) {
+        e.documentStatus = 'pending';
+        e.addressProofStatus = 'pending';
+      }
+      if (this.onCorrection.statusTo !== null) {
+        e.status = this.onCorrection.statusTo;
+      }
+    }
     return {
       status: 200,
       body: envelope(this.entityJson(e), 'Individual entity updated'),
@@ -361,6 +410,8 @@ export class DocumentsNuvion {
       return { status: 500, body: errorBody('error_system_internal_error') };
     }
     const b = (req.body ?? {}) as { entity_id?: string; redirect_url?: string };
+    const refusal = this.sessionRefuseIf?.(b) ?? null;
+    if (refusal) return this.fail(refusal);
     const id = ulid('01LIV');
     const session: HeldSession = {
       id,

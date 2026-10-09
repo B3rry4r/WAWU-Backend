@@ -19,6 +19,7 @@ import type { IdentityHasher } from '../identity/identity-config';
 import { MoneyError } from '../money-error';
 import type { WalletReviewView } from '../money-view.type';
 import { alignClaim, CLAIM_LOST, heldBvnHash } from './bvn-claim';
+import { noteDocumentRefusals } from './document-refusals';
 import type { OpenNairaWalletDto } from './dto/open-wallet.dto';
 import { REVIEW_REQUIRED_FIELDS } from './dto/open-wallet.dto';
 import { OpeningAttempts } from './opening-attempts';
@@ -746,6 +747,11 @@ export class ReviewedOpening {
     await this.attempts.assertLeft(row.wawuUserId);
     const next = row.attempts + 1;
     const startedAt = await this.host.dbNow();
+    // Nuvion may answer this correction with the documents' checks back at
+    // `pending`, and the answer's words replace the stored ones below. A
+    // document its review refused is kept on the document's own row first,
+    // so the person is still asked for a new file (NUV-03 round 2, D1).
+    await noteDocumentRefusals(prisma, row.wawuUserId, entity, startedAt);
     const numbersAgain = numbersFailed(entity);
     const claimHash = numbersAgain
       ? this.host.hasher.hash('bvn', send.bvn)

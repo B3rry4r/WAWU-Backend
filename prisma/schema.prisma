@@ -5104,7 +5104,11 @@ model NuvionDocument {
   /// Every Nuvion document id this row has ever recorded, so a look for an
   /// upload whose answer was lost never takes an earlier one for it.
   knownDocumentIds String[]  @default([])
-  /// SHA-256 (hex) of the bytes sent. Not the file.
+  /// HMAC-SHA256 (hex) of the bytes sent, keyed by IDENTITY_HASH_KEY as the
+  /// BVN's hash is, so the same file sent twice is forwarded once. Not the
+  /// file, and not a bare hash of it: nobody who can read this table can test
+  /// whether a person sent a given file. Cleared (null) once the opening is
+  /// submitted: after that nothing compares a file with it.
   fingerprint      String?
   /// Calls made so far for this kind (each a new attempt).
   attempts         Int       @default(1)
@@ -5112,6 +5116,12 @@ model NuvionDocument {
   /// money timeout plus the resend safety has passed since then.
   attemptStartedAt DateTime
   uploadedAt       DateTime?
+  /// When Nuvion's review was seen to refuse this upload (its word for the
+  /// document after the file was sent). It stays through a correction of the
+  /// person's details, which Nuvion may answer with the check back at
+  /// pending; only a new upload of this kind clears it. While it is set the
+  /// document reads `needs_new` and the opening is not submitted.
+  reviewRefusedAt  DateTime?
   /// Why the last attempt made nothing: our own word, never Nuvion's text.
   failure          String?
   createdAt        DateTime  @default(now())
@@ -5134,9 +5144,11 @@ model NuvionDocument {
 ///
 /// The selfie is Nuvion's hosted page: `livenessSessionId` is its session
 /// (`query_id`), saved on the entity as `meta.liveness_check_id`
-/// (`livenessLinkedAt`). `livenessRefusedAt` is set when Nuvion could not
-/// start a session for this person, and the opening then goes on without
-/// one (R-39). Never an image or a face; the result is one word.
+/// (`livenessLinkedAt`). Whether the selfie is a step at all is the
+/// server's one switch (NUVION_HOSTED_LIVENESS, and Nuvion saying the API is
+/// not available to us), never a row of one person: a refusal about one
+/// person's request or entity leaves the step required for them, and no one
+/// skips it. Never an image or a face; the result is one word.
 /// ─────────────────────────────────────────────────────────────────────────
 model NuvionOnboarding {
   wawuUserId        String    @id
@@ -5159,8 +5171,6 @@ model NuvionOnboarding {
   livenessCheckedAt DateTime?
   /// Sessions started for this person so far.
   livenessSessions  Int       @default(0)
-  /// Nuvion would not start a session for this person: no selfie needed.
-  livenessRefusedAt DateTime?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 

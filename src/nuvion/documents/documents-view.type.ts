@@ -11,13 +11,24 @@ export type DocumentKindView = 'identity' | 'proof_of_address';
  * - `missing`: nothing sent for it yet;
  * - `confirming`: sent, and Nuvion's answer is not known yet (look again; do
  *   not send it twice);
+ * - `send_again`: sent, no answer came, and once the wait was over Nuvion's
+ *   own list did not show the file (or could not be read): WAWU keeps no
+ *   copy, so ask the person for it again. Sending it is safe: the server
+ *   asks Nuvion once more first and never sends a file Nuvion already has;
  * - `uploaded`: Nuvion has it;
  * - `not_accepted`: Nuvion refused the last file, nothing was kept: send
  *   another;
- * - `needs_new`: Nuvion's review said this document did not pass: replace it.
+ * - `needs_new`: Nuvion's review said this document did not pass, and that
+ *   stays true after the person corrects their details: only a new file
+ *   clears it, and the opening is not sent again without one.
  */
 export type DocumentStateView =
-  'missing' | 'confirming' | 'uploaded' | 'not_accepted' | 'needs_new';
+  | 'missing'
+  | 'confirming'
+  | 'send_again'
+  | 'uploaded'
+  | 'not_accepted'
+  | 'needs_new';
 
 export interface IdentityDocumentView {
   kind: DocumentKindView;

@@ -946,7 +946,7 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
     {
       model: 'NuvionDocument',
       reason:
-        'A record that an ID document or proof of address was sent to Nuvion (kind, state, Nuvion id, a fingerprint of the bytes). WAWU keeps no copy of the file: Nuvion holds the document. Identity documents never travel by email.',
+        'A record that an ID document or proof of address was sent to Nuvion (kind, state, Nuvion id, whether its review refused it, and a keyed fingerprint of the bytes that is cleared once the opening is sent). WAWU keeps no copy of the file: Nuvion holds the document. Identity documents never travel by email.',
     },
     {
       model: 'NuvionOnboarding',

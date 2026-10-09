@@ -1,8 +1,9 @@
-import { createHash } from 'node:crypto';
 import { Logger } from '@nestjs/common';
 import type { PrismaService } from '../../common/prisma/prisma.service';
 import { NO_WALLET_MESSAGE } from '../../money/gate/wallet-gate';
+import type { IdentityHasher } from '../../money/identity/identity-config';
 import { MoneyError } from '../../money/money-error';
+import { noteDocumentRefusals } from '../../money/opening/document-refusals';
 import {
   isDecision,
   openingStateForStage,
@@ -22,7 +23,10 @@ import {
   type NuvionDocumentKind,
   type NuvionDocumentType,
 } from '../areas/documents';
-import { NUVION_LIVENESS_SESSION_MS } from '../areas/liveness';
+import {
+  livenessRefusalOf,
+  NUVION_LIVENESS_SESSION_MS,
+} from '../areas/liveness';
 import type { NuvionWalletProvider } from '../nuvion-wallet-provider';
 import { DocumentError } from './document-errors';
 import { MSG } from './documents-config';
@@ -53,17 +57,6 @@ const LOST_ANSWER_MARGIN_MS = 15_000;
 const LIVENESS_CLAIM_MS = 60_000;
 /** A submission Nuvion refused is not sent again for this long (a changed document lifts it). */
 const SUBMIT_REFUSED_BACKOFF_MS = 60_000;
-/** The words Nuvion uses for a check that did not pass. */
-const NOT_PASSED = new Set([
-  'rejected',
-  'failed',
-  'declined',
-  'not-approved',
-  'not_approved',
-  'invalid',
-  'unverified',
-]);
-
 const ENTITY_SELECT = {
   wawuUserId: true,
   entityId: true,
@@ -93,14 +86,24 @@ export interface FlowUpload {
   mimeType: NuvionDocumentType;
 }
 
-/** The SHA-256 (hex) of what one upload sends: to spot the same file sent twice. */
-export function fingerprintOf(front: Buffer, back: Buffer | null): string {
-  const h = createHash('sha256');
-  h.update('front:');
-  h.update(front);
-  h.update('\0back:');
-  if (back !== null) h.update(back);
-  return h.digest('hex');
+/**
+ * The fingerprint of what one upload sends, to spot the same file sent
+ * twice: an HMAC under IDENTITY_HASH_KEY (as the BVN's hash is), never a
+ * bare hash a reader of the table could test a file against. The two sides
+ * are length-labelled, so a front and a back cannot be moved to make
+ * another pair with the same fingerprint.
+ */
+export function fingerprintOf(
+  hasher: IdentityHasher,
+  front: Buffer,
+  back: Buffer | null,
+): string {
+  return hasher.hashBytes('document', [
+    `front:${front.length}:`,
+    front,
+    back === null ? 'back:none' : `back:${back.length}:`,
+    ...(back === null ? [] : [back]),
+  ]);
 }
 
 function kindOfError(e: unknown): string {
@@ -132,9 +135,10 @@ const REFUSAL_KINDS: readonly WalletProviderErrorKind[] = [
  *
  * What it keeps, and does not:
  * - a file goes to Nuvion in one call and nowhere else. Kept: the kind, the
- *   sides sent, the state, Nuvion's document id, the time, and a SHA-256
- *   fingerprint of the bytes (to forward the same file once). Never the
- *   file, a copy, a name, or a number read off it.
+ *   sides sent, the state, Nuvion's document id, the time, whether Nuvion's
+ *   review refused it, and an HMAC fingerprint of the bytes (to forward the
+ *   same file once; cleared once the opening is submitted). Never the file,
+ *   a copy, a name, or a number read off it.
  * - Nuvion's answer is the proof: a document is `uploaded` only when its
  *   answer names it. A call whose answer was lost is `unknown`; it is
  *   looked for on the entity's own document list before anything is sent
@@ -145,9 +149,16 @@ const REFUSAL_KINDS: readonly WalletProviderErrorKind[] = [
  *   so two uploads at once, a replayed delivery and a retry send one. A
  *   submission whose answer was lost is looked for (the entity no longer
  *   `incomplete`) before it is sent again.
+ * - a document Nuvion's review refused is never sent again unchanged: the
+ *   refusal is kept on the document's own row, through any correction of
+ *   the person's details (Nuvion may answer a correction with the check
+ *   back at pending), and only a new upload of that kind clears it and lets
+ *   the opening be submitted again.
  * - the hosted selfie, when in use, must have passed and be saved on the
- *   entity before the submission; when Nuvion will not start a session for
- *   a child entity the opening goes on without one (R-39).
+ *   entity before the submission. It is the server's one switch: only an
+ *   answer that says Nuvion's API is not available to us turns it off, for
+ *   everyone (R-39). A refusal about one person's request or entity is that
+ *   person's, and the step stays required of them.
  *
  * A disagreement between Nuvion and our record is never fixed silently:
  * an entity id another row already names, or a document id another row
@@ -156,10 +167,28 @@ const REFUSAL_KINDS: readonly WalletProviderErrorKind[] = [
 export class DocumentsFlow {
   private readonly logger = new Logger('NuvionDocuments');
 
+  /**
+   * `hasher` is needed to upload (the fingerprint is keyed); the handler,
+   * which only reconciles, runs without it.
+   */
   constructor(
     private readonly prisma: PrismaService,
     private readonly nuvion: NuvionWalletProvider,
+    private readonly hasher: IdentityHasher | null = null,
   ) {}
+
+  /** The upload's fingerprint, or a plain refusal when the key is not there. */
+  private fingerprint(front: Buffer, back: Buffer | null): string {
+    if (this.hasher === null || !this.hasher.configured) {
+      this.logger.error(
+        'documents: IDENTITY_HASH_KEY is not set; no upload can be taken',
+      );
+      throw new MoneyError('provider_unreachable', MSG.unreachable, {
+        retryAfterSeconds: this.nuvion.timings.retryAfterSeconds,
+      });
+    }
+    return fingerprintOf(this.hasher, front, back);
+  }
 
   private get area() {
     return this.nuvion.documents;
@@ -213,6 +242,14 @@ export class DocumentsFlow {
   /** Both documents, what is still needed, and whether uploads are open. */
   async view(wawuUserId: string): Promise<IdentityDocumentsView> {
     await this.requireEntity(wawuUserId);
+    // What a lost answer left is looked for at Nuvion once its window has
+    // passed (D3): an upload it took is recorded, one it never got reads
+    // `send_again`. A refusal of a document is put on the document's row.
+    await this.settleLost(wawuUserId).catch((e: unknown) => {
+      this.logger.warn(
+        `documents: a lost upload could not be looked for (${kindOfError(e)})`,
+      );
+    });
     // A ready opening is sent once, also when nothing was uploaded just now
     // (a correction, a webhook that never came, an answer that was lost).
     await this.advance(wawuUserId).catch((e: unknown) => {
@@ -236,15 +273,16 @@ export class DocumentsFlow {
       this.hasWallet(wawuUserId),
     ]);
     const stage = reviewStageOf(entity);
+    const now = await this.dbNow();
     const documents: IdentityDocumentView[] = NUVION_DOCUMENT_KINDS.map(
       (kind) => {
         const row = rows.find((r) => r.kind === kind);
-        const state = this.documentState(kind, row, entity);
+        const state = this.documentState(row, now);
         return {
           kind,
           state,
           sides:
-            row && row.state !== 'failed'
+            row && row.state !== 'failed' && state !== 'send_again'
               ? row.sides.filter(
                   (s): s is 'front' | 'back' => s === 'front' || s === 'back',
                 )
@@ -256,7 +294,7 @@ export class DocumentsFlow {
         };
       },
     );
-    const required = this.selfieRequired(onboarding);
+    const required = this.selfieRequired();
     const selfieDone = this.selfieDone(onboarding);
     const submitted = this.submissionCurrent(onboarding, entity);
     const waitingFor: DocumentStepView[] = [];
@@ -279,38 +317,43 @@ export class DocumentsFlow {
     };
   }
 
+  /**
+   * What the screens are told about one document.
+   * - `confirming`: the call went out and its answer is not known yet;
+   * - `send_again`: the window has passed and Nuvion's list (read when the
+   *   view was asked for) did not show it, or could not be read: the file is
+   *   not kept, so only the person can send it again, and the upload route
+   *   asks Nuvion once more before it sends (D3);
+   * - `needs_new`: Nuvion's review refused this upload (the row says so,
+   *   whatever Nuvion's word for the document is now).
+   */
   private documentState(
-    kind: NuvionDocumentKind,
     row:
-      | { state: string; failure: string | null; uploadedAt: Date | null }
+      | {
+          state: string;
+          failure: string | null;
+          attemptStartedAt: Date;
+          reviewRefusedAt: Date | null;
+        }
       | undefined,
-    entity: ReviewRecord,
+    now: Date,
   ): DocumentStateView {
     if (!row) return 'missing';
-    if (row.state === 'sending' || row.state === 'unknown') return 'confirming';
+    if (row.state === 'sending' || row.state === 'unknown') {
+      return now.getTime() - row.attemptStartedAt.getTime() < this.inFlightMs
+        ? 'confirming'
+        : 'send_again';
+    }
     if (row.state === 'failed') {
       return row.failure?.startsWith('refused') ? 'not_accepted' : 'missing';
     }
-    if (this.needsNew(kind, row, entity)) return 'needs_new';
+    if (this.needsNew(row)) return 'needs_new';
     return 'uploaded';
   }
 
-  /** Nuvion's review said the document did not pass, after it was uploaded. */
-  private needsNew(
-    kind: NuvionDocumentKind,
-    row: { uploadedAt: Date | null },
-    entity: ReviewRecord,
-  ): boolean {
-    const status =
-      kind === 'identity' ? entity.documentStatus : entity.addressProofStatus;
-    if (status === null || !NOT_PASSED.has(status.trim().toLowerCase())) {
-      return false;
-    }
-    // Only a refusal that came after this upload is about this upload.
-    return (
-      row.uploadedAt !== null &&
-      (entity.decidedAt === null || row.uploadedAt <= entity.decidedAt)
-    );
+  /** Nuvion's review refused this upload (kept on the row, D1). */
+  private needsNew(row: { reviewRefusedAt: Date | null }): boolean {
+    return row.reviewRefusedAt !== null;
   }
 
   // -------------------------------------------------------------------------
@@ -324,7 +367,7 @@ export class DocumentsFlow {
    */
   async upload(wawuUserId: string, input: FlowUpload): Promise<void> {
     const entity = await this.requireEntity(wawuUserId);
-    const fingerprint = fingerprintOf(input.front, input.back);
+    const fingerprint = this.fingerprint(input.front, input.back);
     const row = await this.prisma.nuvionDocument.findUnique({
       where: { wawuUserId_kind: { wawuUserId, kind: input.kind } },
     });
@@ -339,7 +382,7 @@ export class DocumentsFlow {
       if (
         // A document Nuvion's review refused is replaced even by the same
         // file (the refusal may have been about something it has fixed).
-        (row.state === 'uploaded' && !this.needsNew(input.kind, row, entity)) ||
+        (row.state === 'uploaded' && !this.needsNew(row)) ||
         (row.state === 'sending' && ageMs < this.inFlightMs) ||
         (row.state === 'unknown' && ageMs < this.resendAfterMs)
       ) {
@@ -480,6 +523,8 @@ export class DocumentsFlow {
       sides: input.back ? ['front', 'back'] : ['front'],
       fingerprint,
       attemptStartedAt: now,
+      // A new upload of this kind ends Nuvion's refusal of the old one (D1).
+      reviewRefusedAt: null,
       failure: null,
     };
     if (row === null) {
@@ -685,10 +730,14 @@ export class DocumentsFlow {
   // The submission
   // -------------------------------------------------------------------------
 
-  private selfieRequired(
-    onboarding: { livenessRefusedAt: Date | null } | null,
-  ): boolean {
-    return this.area.hostedLiveness && !onboarding?.livenessRefusedAt;
+  /**
+   * The hosted selfie is a step of this opening for everyone or for no one:
+   * the server's switch, and Nuvion saying its API is not there for us. It
+   * is never off for one person because of what that person sent or because
+   * Nuvion refused their entity (D2).
+   */
+  private selfieRequired(): boolean {
+    return this.area.hostedLiveness;
   }
 
   private selfieDone(
@@ -746,6 +795,16 @@ export class DocumentsFlow {
       select: ENTITY_SELECT,
     });
     if (!entity?.entityId) return 'closed';
+    // Nuvion's refusal of a document goes on the document's row from the
+    // words as they stand, before anything can overwrite them (D1): in
+    // every stage, so a person at `rejected` already has it when they
+    // correct their details.
+    await noteDocumentRefusals(
+      this.prisma,
+      wawuUserId,
+      entity,
+      await this.dbNow(),
+    );
     if (reviewStageOf(entity) !== 'needs_documents') return 'closed';
     if (await this.hasWallet(wawuUserId)) return 'closed';
     const entityId = entity.entityId;
@@ -778,15 +837,11 @@ export class DocumentsFlow {
     });
     for (const kind of NUVION_DOCUMENT_KINDS) {
       const row = rows.find((r) => r.kind === kind);
-      if (
-        !row ||
-        row.state !== 'uploaded' ||
-        this.needsNew(kind, row, entity)
-      ) {
+      if (!row || row.state !== 'uploaded' || this.needsNew(row)) {
         return 'waiting';
       }
     }
-    if (this.selfieRequired(onboarding) && !this.selfieDone(onboarding)) {
+    if (this.selfieRequired() && !this.selfieDone(onboarding)) {
       return 'waiting';
     }
 
@@ -913,6 +968,13 @@ export class DocumentsFlow {
         where: { wawuUserId, submittedAt: null },
         data: { submittedAt: now },
       });
+      // The files are with Nuvion's review now: nothing compares a file with
+      // a fingerprint any more, so none is kept. A later upload (a document
+      // the review refused) makes its own.
+      await tx.nuvionDocument.updateMany({
+        where: { wawuUserId },
+        data: { fingerprint: null },
+      });
       const before = await tx.nuvionEntity.findUnique({
         where: { wawuUserId },
         select: ENTITY_SELECT,
@@ -968,11 +1030,26 @@ export class DocumentsFlow {
     ) {
       await this.markSubmitted(wawuUserId, entityStatus);
     }
+    await this.settleLost(wawuUserId);
+    return this.advance(wawuUserId);
+  }
+
+  /**
+   * Uploads whose answer was lost and whose window has passed: Nuvion's own
+   * list of the entity's documents says whether it took the file. One it
+   * took is recorded (never sent again); one it never got stays as it is and
+   * the view reads it `send_again` (D3). A list that cannot be read changes
+   * nothing. Safe to run any
+   * number of times, from the documents view and from a delivery.
+   */
+  async settleLost(wawuUserId: string): Promise<void> {
     const lost = await this.prisma.nuvionDocument.findMany({
       where: { wawuUserId, state: { in: ['sending', 'unknown'] } },
     });
+    if (lost.length === 0) return;
+    const now = await this.dbNow();
     for (const row of lost) {
-      if (Date.now() - row.attemptStartedAt.getTime() < this.inFlightMs) {
+      if (now.getTime() - row.attemptStartedAt.getTime() < this.inFlightMs) {
         continue;
       }
       const found = await this.findMade(row);
@@ -988,12 +1065,11 @@ export class DocumentsFlow {
           state: 'uploaded',
           nuvionDocumentId: found.id,
           knownDocumentIds: { push: found.id },
-          uploadedAt: found.created ? new Date(found.created) : new Date(),
+          uploadedAt: found.created ? new Date(found.created) : now,
           failure: null,
         },
       });
     }
-    return this.advance(wawuUserId);
   }
 
   // -------------------------------------------------------------------------
@@ -1005,7 +1081,7 @@ export class DocumentsFlow {
     let onboarding = await this.prisma.nuvionOnboarding.findUnique({
       where: { wawuUserId },
     });
-    const enabled = this.selfieRequired(onboarding);
+    const enabled = this.selfieRequired();
     if (!onboarding?.livenessSessionId) {
       return this.livenessOut(enabled, null, onboarding, entity, null);
     }
@@ -1118,10 +1194,13 @@ export class DocumentsFlow {
   }
 
   /**
-   * Starts the hosted selfie, or answers the one already running. When
-   * Nuvion will not start one for this person, the opening goes on without
-   * a selfie (R-39): the refusal is recorded, the submission advanced, and
-   * the answer is `selfie_not_available`.
+   * Starts the hosted selfie, or answers the one already running. A refusal
+   * is read by who it is about (D2, `livenessRefusalOf`): only Nuvion saying
+   * its API is not available to us turns the selfie off, for everyone, and
+   * then the opening goes on without it (R-39) and this answers
+   * `selfie_not_available`; a return address Nuvion will not take is a
+   * plain 400 to that person; anything else about the person's request or
+   * entity is theirs to wait out or retry, and the step stays required.
    */
   async startLiveness(
     wawuUserId: string,
@@ -1135,7 +1214,7 @@ export class DocumentsFlow {
       throw new DocumentError('documents_closed', MSG.closed);
     }
     const onboarding = await this.ensureOnboarding(wawuUserId, entity.entityId);
-    if (!this.selfieRequired(onboarding)) {
+    if (!this.selfieRequired()) {
       throw new DocumentError('selfie_not_available', MSG.selfieOff);
     }
     if (this.submissionCurrent(onboarding, entity)) {
@@ -1181,30 +1260,7 @@ export class DocumentsFlow {
       started = await this.area.startLiveness(entity.entityId, redirectUrl);
     } catch (e) {
       await restore();
-      if (e instanceof WalletProviderError && e.recordMayExist) {
-        throw new MoneyError('provider_unreachable', MSG.unreachable, {
-          retryAfterSeconds: e.retryAfterSeconds,
-        });
-      }
-      if (
-        e instanceof WalletProviderError &&
-        (REFUSAL_KINDS.includes(e.kind) ||
-          e.kind === 'auth' ||
-          e.kind === 'not_supported')
-      ) {
-        // Nuvion will not start one for this person: no selfie (R-39).
-        this.area.noteLivenessRefused();
-        await this.prisma.nuvionOnboarding.updateMany({
-          where: { wawuUserId },
-          data: { livenessRefusedAt: now },
-        });
-        this.logger.warn(
-          `documents: Nuvion would not start a hosted selfie (${e.kind}); the opening goes on without one`,
-        );
-        await this.advance(wawuUserId).catch(() => undefined);
-        throw new DocumentError('selfie_not_available', MSG.selfieRefused);
-      }
-      throw this.refusalOf(e);
+      throw await this.afterRefusedStart(wawuUserId, e, redirectUrl !== null);
     }
     await this.prisma.nuvionOnboarding.updateMany({
       where: { wawuUserId, livenessClaimedAt: now },
@@ -1223,5 +1279,48 @@ export class DocumentsFlow {
       where: { wawuUserId },
     });
     return this.livenessOut(true, 'pending', fresh, entity, started.url);
+  }
+
+  /** What a refused or failed session start becomes: the error to throw. */
+  private async afterRefusedStart(
+    wawuUserId: string,
+    e: unknown,
+    sentReturnAddress: boolean,
+  ): Promise<Error> {
+    const verdict = livenessRefusalOf(e, sentReturnAddress);
+    const kind = kindOfError(e);
+    switch (verdict) {
+      case 'other':
+        return this.refusalOf(e);
+      case 'lost':
+        // A session may exist at Nuvion: the person tries again, and a
+        // lost answer is never a reason to turn anything off.
+        return new MoneyError('provider_unreachable', MSG.unreachable, {
+          retryAfterSeconds: (e as WalletProviderError).retryAfterSeconds,
+        });
+      case 'api_unavailable': {
+        // Nuvion says the API is not there for us at all: off for everyone
+        // on this server, for an hour, and said loudly. Never a row of one
+        // person: this person is not skipping anything, nobody has it.
+        this.area.noteLivenessRefused();
+        this.logger.error(
+          `documents: Nuvion says the hosted selfie API is not available to this key (${nuvionTypeOf(e) ?? kind}); the selfie is OFF FOR EVERYONE on this server for an hour and openings go on without it`,
+        );
+        await this.advance(wawuUserId).catch(() => undefined);
+        return new DocumentError('selfie_not_available', MSG.selfieRefused);
+      }
+      case 'already_off':
+        await this.advance(wawuUserId).catch(() => undefined);
+        return new DocumentError('selfie_not_available', MSG.selfieRefused);
+      case 'return_address':
+        return new DocumentError('document_request_invalid', MSG.badReturn);
+      case 'this_person':
+        this.logger.warn(
+          `documents: Nuvion would not start a hosted selfie for one person (${nuvionTypeOf(e) ?? kind}); they try again, the step stays required of them`,
+        );
+        return new MoneyError('provider_unreachable', MSG.selfieUnreachable, {
+          retryAfterSeconds: (e as WalletProviderError).retryAfterSeconds,
+        });
+    }
   }
 }

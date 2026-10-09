@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import type {
   ProviderKycState,
   ProviderKycSubmission,
@@ -44,10 +45,10 @@ const AREA = 'documents (NUV-03)';
  *   write.
  * - The hosted selfie (`startLivenessSession`, `getLivenessResult`,
  *   `readLiveness`, `linkLiveness`) is on only with `NUVION_HOSTED_LIVENESS=on`
- *   and answers `not_supported` (nothing sent) otherwise. A refusal that
- *   says Nuvion will not start a session for a child entity turns it off
- *   for an hour (`noteLivenessRefused`), so the opening goes on without a
- *   selfie.
+ *   and answers `not_supported` (nothing sent) otherwise. Only an answer
+ *   that says Nuvion's API is not available to us (not one about a person)
+ *   turns it off, for everyone and for an hour (`noteLivenessRefused`), so
+ *   the opening goes on without a selfie.
  * - `matchSelfie` stays `not_supported`: Nuvion matches no selfie against a
  *   BVN photo (capabilities.selfieMatch is false).
  */
@@ -75,9 +76,10 @@ export type NuvionDocumentType = (typeof NUVION_DOCUMENT_TYPES)[number];
 /**
  * PROVISIONAL(NUVION-LIVENESS-MEMO, owner=YOU, why=Nuvion's docs do not list the hosted selfie, so whether an API key may start one for a child entity is only known once the sandbox key works; one hour is how long a refusal is believed before asking again)
  *
- * How long after Nuvion refuses to start a hosted selfie for a child entity
- * the selfie is treated as unavailable for everyone (the opening goes on
- * without it).
+ * How long after Nuvion says its hosted selfie API is not available to us
+ * (an answer in `LIVENESS_API_UNAVAILABLE_TYPES`) the selfie is treated as
+ * unavailable for everyone (the opening goes on without it). It is the
+ * server's memory only, not a row of one person.
  */
 export const NUVION_LIVENESS_REFUSAL_MEMO_MS = 60 * 60_000;
 
@@ -146,12 +148,24 @@ export class NuvionDocumentsArea implements NuvionDocumentsMethods {
   /** The clock; a spec may replace it. */
   now: () => number = () => Date.now();
 
-  constructor(readonly client: NuvionClient) {}
+  constructor(readonly client: NuvionClient) {
+    if (
+      client.settings.hostedLiveness === true &&
+      (client.settings.livenessRedirectOrigins ?? []).length === 0
+    ) {
+      // An empty list allows no return address (D2): a person can start the
+      // selfie but cannot be sent back to the app or the website.
+      new Logger('NuvionDocuments').warn(
+        'NUVION_HOSTED_LIVENESS is on and NUVION_LIVENESS_REDIRECT_ORIGINS is empty: no return address is allowed, so the selfie page cannot send anyone back',
+      );
+    }
+  }
 
   /**
-   * Whether the hosted selfie is a step of opening now: switched on, and
-   * not refused by Nuvion within the last hour. The adapter's
-   * `capabilities.hostedLiveness` reads this.
+   * Whether the hosted selfie is a step of opening now, for everyone:
+   * switched on, and Nuvion has not said within the last hour that its API
+   * is not available to us. The adapter's `capabilities.hostedLiveness`
+   * reads this.
    */
   get hostedLiveness(): boolean {
     if (this.client.settings.hostedLiveness !== true) return false;
@@ -159,12 +173,16 @@ export class NuvionDocumentsArea implements NuvionDocumentsMethods {
     return at === null || this.now() - at >= NUVION_LIVENESS_REFUSAL_MEMO_MS;
   }
 
-  /** The https origins the selfie page may return to; empty means any https address. */
+  /** Where the selfie page may return to (`origin` or `origin/path-prefix`); empty allows no address. */
   get livenessRedirectOrigins(): readonly string[] {
     return this.client.settings.livenessRedirectOrigins ?? [];
   }
 
-  /** Nuvion would not start a session for a child entity: the selfie is off for an hour. */
+  /**
+   * Nuvion said its hosted selfie API is not available to us (an answer in
+   * `LIVENESS_API_UNAVAILABLE_TYPES`, never one about a person): the selfie
+   * is off for everyone on this server for an hour.
+   */
   noteLivenessRefused(): void {
     this.livenessRefusedAt = this.now();
   }

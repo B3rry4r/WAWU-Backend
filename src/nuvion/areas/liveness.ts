@@ -1,3 +1,4 @@
+import { WalletProviderError } from '../../wallet-provider/wallet-provider-error';
 import type { NuvionClient, NuvionOp } from '../nuvion-client';
 import { NuvionError } from '../nuvion-error';
 
@@ -11,7 +12,9 @@ import { NuvionError } from '../nuvion-error';
  *   session. The dashboard sends no `entity_id`; whether an API key can
  *   start one for a CHILD entity (`entity_id` in the body) is the open
  *   question the (key) check answers. Until then the selfie is off
- *   (`NUVION_HOSTED_LIVENESS`) and a refusal turns it off for the person.
+ *   (`NUVION_HOSTED_LIVENESS`); only an answer that says the API is not
+ *   there for us (`LIVENESS_API_UNAVAILABLE_TYPES`) turns it off, for
+ *   everyone.
  * - result: `GET /kyc/liveness/sessions/{query_id}` answers
  *   `capture_status` (`pending`, `completed`, `image-error`,
  *   `internal-error`), `verification_status` (`pending`, `approved`,
@@ -31,6 +34,68 @@ import { NuvionError } from '../nuvion-error';
  * How long a session may stay pending before a new one is started instead.
  */
 export const NUVION_LIVENESS_SESSION_MS = 30 * 60_000;
+
+/**
+ * What a refusal of a session start means (task NUV-03 round 2, D2). The
+ * hosted selfie is a step the whole server runs or does not, so only an
+ * answer about the API itself may turn it off, and then for everyone. An
+ * answer about one person's request or entity never does: it is that
+ * person's, they wait or retry, and the step stays required of them (a
+ * refusal that let a person skip the selfie would be a way past it).
+ *
+ * These are the only answers that say the API is not there for us at all,
+ * from Nuvion's errors page (the lead's scratchpad `nuvion/docs/errors.md`):
+ * - `error_endpoint_not_found` (404, "API endpoint does not exist"): the
+ *   path does not exist, whoever asks;
+ * - `error_auth_permission_denied` (403, "Insufficient permissions for this
+ *   action") and `error_auth_elevated_permission_required` (403, "Action
+ *   requires administrator permissions"): our key may not use it, the same
+ *   for every person.
+ * Everything else is about the request or the entity: `error_validation_*`
+ * (the body, such as a return address Nuvion will not take), `error_kyc_*`
+ * and `error_entity_*` (this person's review), `error_resource_not_found` (a
+ * record, not the path), `error_account_*`, a rate limit, a lost answer, a
+ * 5xx. No document says an answer of "a child entity cannot start one"; if
+ * the sandbox shows one, its type is one more line here (the (key) check).
+ */
+export const LIVENESS_API_UNAVAILABLE_TYPES: readonly string[] = [
+  'error_endpoint_not_found',
+  'error_auth_permission_denied',
+  'error_auth_elevated_permission_required',
+];
+
+/** Who a refused session start is about. */
+export type LivenessRefusal =
+  /** The answer was lost or unreadable: a session may exist; nothing is turned off. */
+  | 'lost'
+  /** Nuvion says the API is not available to us at all: off for everyone, loudly. */
+  | 'api_unavailable'
+  /** This adapter's own "not in use" (the switch is off or already memoed): nothing new. */
+  | 'already_off'
+  /** Nuvion refused the body and an address was sent: it is that person's address. */
+  | 'return_address'
+  /** About this person's request or entity: they wait or retry; the step stays. */
+  | 'this_person'
+  /** Not a provider failure at all: the caller rethrows it. */
+  | 'other';
+
+export function livenessRefusalOf(
+  e: unknown,
+  sentReturnAddress: boolean,
+): LivenessRefusal {
+  if (!(e instanceof WalletProviderError)) return 'other';
+  if (e.recordMayExist) return 'lost';
+  if (e.kind === 'not_supported') return 'already_off';
+  const type = (e as { nuvionType?: unknown }).nuvionType;
+  if (
+    typeof type === 'string' &&
+    LIVENESS_API_UNAVAILABLE_TYPES.includes(type)
+  ) {
+    return 'api_unavailable';
+  }
+  if (e.kind === 'validation' && sentReturnAddress) return 'return_address';
+  return 'this_person';
+}
 
 const START: NuvionOp = { name: 'start liveness session', call: 'write' };
 const READ: NuvionOp = { name: 'read liveness session', call: 'read' };

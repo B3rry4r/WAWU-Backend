@@ -14,6 +14,15 @@ import {
 import { WalletProviderError } from '../../wallet-provider/wallet-provider-error';
 import { sniffDocument } from '../documents/document-file';
 import { fingerprintOf } from '../documents/documents-flow';
+import { returnAddressAllowed } from '../documents/documents-config';
+import {
+  LIVENESS_API_UNAVAILABLE_TYPES,
+  livenessRefusalOf,
+} from '../areas/liveness';
+import { NuvionError } from '../nuvion-error';
+import { IdentityHasher } from '../../money/identity/identity-config';
+import { createHash, createHmac } from 'node:crypto';
+import type { ConfigService } from '@nestjs/config';
 
 /**
  * NUV-03, the parts that need no database: the file sniff, the fingerprint,
@@ -58,6 +67,9 @@ describe('sniffDocument: what an upload really is', () => {
     ['one byte', Buffer.from([0xff])],
     ['a PNG signature cut short', PNG_SIG.subarray(0, 7)],
     ['two JPEG marker bytes only', Buffer.from([0xff, 0xd8])],
+    // The third byte of a JPEG is 0xFF too (V02).
+    ['FF D8 and then not FF', Buffer.from([0xff, 0xd8, 0x00, 0xe0, 0, 0x10])],
+    ['FF D8 FE', Buffer.from([0xff, 0xd8, 0xfe, 0xe0, 0, 0x10])],
     ['a GIF', Buffer.from('GIF89a......')],
     ['a WebP', Buffer.from('RIFF....WEBPVP8 ')],
     ['HTML', Buffer.from('<!doctype html><html></html>')],
@@ -77,24 +89,68 @@ describe('sniffDocument: what an upload really is', () => {
   });
 });
 
-describe('fingerprintOf: the same file once', () => {
+describe('fingerprintOf: the same file once, and nothing a reader of the table could test a file against', () => {
+  const KEY = 'unit-identity-hash-key-0123456789abcdef0123456789';
+  const hasherFor = (key: string | undefined) =>
+    new IdentityHasher({
+      get: (k: string) => (k === 'IDENTITY_HASH_KEY' ? key : undefined),
+    } as unknown as ConfigService);
+  const hasher = hasherFor(KEY);
   const a = Buffer.from('front-a');
   const b = Buffer.from('back-b');
 
-  it('is a SHA-256 hex, the same for the same bytes', () => {
-    expect(fingerprintOf(a, null)).toMatch(/^[0-9a-f]{64}$/);
-    expect(fingerprintOf(a, null)).toBe(
-      fingerprintOf(Buffer.from('front-a'), null),
+  it('is an HMAC-SHA256 hex under IDENTITY_HASH_KEY, the same for the same bytes', () => {
+    expect(fingerprintOf(hasher, a, null)).toMatch(/^[0-9a-f]{64}$/);
+    expect(fingerprintOf(hasher, a, null)).toBe(
+      fingerprintOf(hasher, Buffer.from('front-a'), null),
     );
+    // Exactly the HMAC the key gives over the labelled bytes, so a reader
+    // with the key can reproduce it and a reader without cannot.
+    const expected = createHmac('sha256', KEY)
+      .update('document:')
+      .update('front:7:')
+      .update(a)
+      .update('back:none')
+      .digest('hex');
+    expect(fingerprintOf(hasher, a, null)).toBe(expected);
+  });
+
+  it('is not a bare SHA-256 of the bytes, and not the same under another key', () => {
+    const bare = createHash('sha256').update(a).digest('hex');
+    expect(fingerprintOf(hasher, a, null)).not.toBe(bare);
+    const labelled = createHash('sha256')
+      .update('front:')
+      .update(a)
+      .update('\0back:')
+      .digest('hex');
+    // The previous unkeyed form.
+    expect(fingerprintOf(hasher, a, null)).not.toBe(labelled);
+    expect(
+      fingerprintOf(
+        hasherFor('another-key-0123456789abcdef0123456789abc'),
+        a,
+        null,
+      ),
+    ).not.toBe(fingerprintOf(hasher, a, null));
   });
 
   it('differs for another file, for a back, and for the same bytes as a back', () => {
-    const base = fingerprintOf(a, null);
-    expect(fingerprintOf(b, null)).not.toBe(base);
-    expect(fingerprintOf(a, b)).not.toBe(base);
+    const base = fingerprintOf(hasher, a, null);
+    expect(fingerprintOf(hasher, b, null)).not.toBe(base);
+    expect(fingerprintOf(hasher, a, b)).not.toBe(base);
     // front "ab" + no back is not front "a" + back "b".
-    expect(fingerprintOf(Buffer.from('ab'), null)).not.toBe(
-      fingerprintOf(Buffer.from('a'), Buffer.from('b')),
+    expect(fingerprintOf(hasher, Buffer.from('ab'), null)).not.toBe(
+      fingerprintOf(hasher, Buffer.from('a'), Buffer.from('b')),
+    );
+    // A front that contains the label of the back cannot pass for a pair.
+    expect(fingerprintOf(hasher, Buffer.from('x\0back:y'), null)).not.toBe(
+      fingerprintOf(hasher, Buffer.from('x'), Buffer.from('y')),
+    );
+  });
+
+  it('cannot be made with the key unset', () => {
+    expect(() => fingerprintOf(hasherFor(undefined), a, null)).toThrow(
+      /IDENTITY_HASH_KEY/,
     );
   });
 });
@@ -133,33 +189,161 @@ describe('the two settings of the hosted selfie', () => {
     },
   );
 
-  it('NUVION_LIVENESS_REDIRECT_ORIGINS: none, or a list of https origins', () => {
+  it('NUVION_LIVENESS_REDIRECT_ORIGINS: none, or a list of https addresses, each an origin and an optional path prefix', () => {
     expect(read({}).livenessRedirectOrigins).toEqual([]);
     expect(
       read({
         NUVION_LIVENESS_REDIRECT_ORIGINS:
-          ' https://wawuafrica.example , https://app.wawu.example/, https://wawuafrica.example ',
+          ' https://wawuafrica.example , https://app.wawu.example/open/, https://wawuafrica.example ',
       }).livenessRedirectOrigins,
-    ).toEqual(['https://wawuafrica.example', 'https://app.wawu.example']);
+    ).toEqual(['https://wawuafrica.example', 'https://app.wawu.example/open']);
   });
 
   it.each([
     'http://wawuafrica.example',
-    'https://wawuafrica.example/path',
     'https://user:pw@wawuafrica.example',
+    'https://wawuafrica.example/open?x=1',
+    'https://wawuafrica.example/open#frag',
+    'https://wawuafrica.example/a%2fb',
+    'https://wawuafrica.example/a%2e%2e/b',
     'wawuafrica.example',
     'javascript:alert(1)',
     'https://ok.example, nope',
-  ])(
-    'NUVION_LIVENESS_REDIRECT_ORIGINS=%s stops the server naming the setting',
-    (value) => {
-      expect(() => read({ NUVION_LIVENESS_REDIRECT_ORIGINS: value })).toThrow(
-        new NuvionConfigError(
-          `${NUVION_CONFIG_KEYS.livenessRedirectOrigins} must list https origins.`,
-        ),
+  ])('NUVION_LIVENESS_REDIRECT_ORIGINS=%s stops the server', (value) => {
+    expect(() => read({ NUVION_LIVENESS_REDIRECT_ORIGINS: value })).toThrow(
+      NuvionConfigError,
+    );
+  });
+});
+
+describe('returnAddressAllowed: origin AND path prefix, and an empty list allows nothing', () => {
+  const ok = (url: string, allowed: string[]) =>
+    returnAddressAllowed(new URL(url), allowed);
+  const LIST = ['https://app.wawu.example/open', 'https://wawu.example'];
+
+  it('an empty list allows no address at all', () => {
+    expect(ok('https://app.wawu.example/open/done', [])).toBe(false);
+    expect(ok('https://wawu.example/', [])).toBe(false);
+  });
+
+  it('an address at or under an entry\u2019s path, on its origin', () => {
+    expect(ok('https://app.wawu.example/open', LIST)).toBe(true);
+    expect(ok('https://app.wawu.example/open/', LIST)).toBe(true);
+    expect(ok('https://app.wawu.example/open/selfie?done=1#x', LIST)).toBe(
+      true,
+    );
+    // An entry with no path is the whole origin.
+    expect(ok('https://wawu.example/any/where', LIST)).toBe(true);
+  });
+
+  it.each([
+    ['another path on the origin', 'https://app.wawu.example/evil'],
+    [
+      'a sibling that merely starts with the prefix',
+      'https://app.wawu.example/opening',
+    ],
+    ['the origin\u2019s root', 'https://app.wawu.example/'],
+    ['dot segments out of the prefix', 'https://app.wawu.example/open/../evil'],
+    ['encoded dots', 'https://app.wawu.example/open/%2e%2e/evil'],
+    ['an encoded slash', 'https://app.wawu.example/open%2fx'],
+    ['another origin', 'https://evil.example/open'],
+    ['a look-alike host', 'https://app.wawu.example.evil.example/open'],
+    ['a look-alike with @', 'https://app.wawu.example@evil.example/open'],
+    ['another port', 'https://app.wawu.example:8443/open'],
+    ['http', 'http://app.wawu.example/open'],
+    ['credentials', 'https://u:p@app.wawu.example/open'],
+  ])('%s is refused', (_name, url) => {
+    expect(ok(url, ['https://app.wawu.example/open'])).toBe(false);
+  });
+});
+
+describe('livenessRefusalOf: whom a refused selfie start is about (D2)', () => {
+  const err = (over: {
+    kind: ConstructorParameters<typeof NuvionError>[0]['kind'];
+    type?: string | null;
+    recordMayExist?: boolean;
+  }) =>
+    new NuvionError({
+      operation: 'start liveness session',
+      messages: [],
+      nuvionType: over.type ?? null,
+      ...over,
+    });
+
+  it('names the three answers that say the API is not there for us, and no others', () => {
+    expect([...LIVENESS_API_UNAVAILABLE_TYPES].sort()).toEqual([
+      'error_auth_elevated_permission_required',
+      'error_auth_permission_denied',
+      'error_endpoint_not_found',
+    ]);
+  });
+
+  it.each([
+    ['error_endpoint_not_found', 'refused'],
+    ['error_auth_permission_denied', 'auth'],
+    ['error_auth_elevated_permission_required', 'auth'],
+  ] as const)('%s turns it off for everyone', (type, kind) => {
+    expect(livenessRefusalOf(err({ kind, type }), false)).toBe(
+      'api_unavailable',
+    );
+    expect(livenessRefusalOf(err({ kind, type }), true)).toBe(
+      'api_unavailable',
+    );
+  });
+
+  it('a refused body with an address sent is that person\u2019s address; without one it is theirs to retry', () => {
+    const validation = err({
+      kind: 'validation',
+      type: 'error_validation_error',
+    });
+    expect(livenessRefusalOf(validation, true)).toBe('return_address');
+    expect(livenessRefusalOf(validation, false)).toBe('this_person');
+  });
+
+  it.each([
+    ['identity_refused', 'error_kyc_identity_verification_failed'],
+    ['refused', 'error_entity_status_not_incomplete'],
+    ['wallet_inactive', 'error_account_suspended'],
+    ['not_found', 'error_resource_not_found'],
+    ['auth', 'error_auth_credentials_invalid'],
+    ['auth', 'error_entity_user_has_no_access'],
+    ['rate_limited', 'error_auth_rate_limit_exceeded'],
+    ['validation', 'error_validation_value_not_supported'],
+  ] as const)(
+    'a %s answer (%s) is about this person: the step stays required of them',
+    (kind, type) => {
+      expect(livenessRefusalOf(err({ kind, type }), true)).not.toBe(
+        'api_unavailable',
       );
+      expect(livenessRefusalOf(err({ kind, type }), false)).toBe('this_person');
     },
   );
+
+  it('a lost answer, a 5xx and an unreadable answer turn nothing off', () => {
+    expect(
+      livenessRefusalOf(
+        err({ kind: 'outcome_unknown', recordMayExist: true }),
+        false,
+      ),
+    ).toBe('lost');
+    expect(
+      livenessRefusalOf(
+        err({
+          kind: 'outcome_unknown',
+          type: 'error_endpoint_not_found',
+          recordMayExist: true,
+        }),
+        false,
+      ),
+    ).toBe('lost');
+  });
+
+  it('this adapter\u2019s own "not in use" adds nothing, and a plain error is rethrown', () => {
+    expect(livenessRefusalOf(err({ kind: 'not_supported' }), false)).toBe(
+      'already_off',
+    );
+    expect(livenessRefusalOf(new Error('boom'), false)).toBe('other');
+  });
 });
 
 describe('the documents area against the Nuvion stand-in', () => {
@@ -402,6 +586,29 @@ describe('the documents area against the Nuvion stand-in', () => {
         kind: 'not_confirmed',
         recordMayExist: true,
       });
+    });
+
+    it('an answer that names another entity is not proof that this one was submitted (V20)', async () => {
+      const e = nuvion.addEntity();
+      const other = nuvion.addEntity();
+      standin.next({
+        status: 201,
+        body: envelope({
+          entity: { id: other.id, type: 'individual', status: 'pending' },
+        }),
+      });
+      await expect(area.submitOnboarding(e.id)).rejects.toMatchObject({
+        kind: 'not_confirmed',
+        recordMayExist: true,
+      });
+      // The same answer for the right entity is proof.
+      standin.next({
+        status: 201,
+        body: envelope({
+          entity: { id: e.id, type: 'individual', status: 'pending' },
+        }),
+      });
+      expect(await area.submitOnboarding(e.id)).toEqual({ status: 'pending' });
     });
 
     it('Nuvion saying the entity is no longer incomplete keeps its type, for the caller to read', async () => {

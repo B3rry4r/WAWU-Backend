@@ -50,9 +50,14 @@ export const NUVION_CONFIG_KEYS = {
    */
   hostedLiveness: 'NUVION_HOSTED_LIVENESS',
   /**
-   * NUV-03: the https origins the hosted selfie page may send the person
-   * back to (the app's link and the website), comma separated. Empty: any
-   * https address.
+   * NUV-03: where the hosted selfie page may send the person back to (the
+   * app's link and the website), comma separated. Each entry is an https
+   * origin and, usually, a path prefix: `https://app.example/open` allows
+   * `https://app.example/open` and anything under `/open/`, nothing else on
+   * that host. An entry with no path allows the whole origin. Empty: no
+   * address is allowed at all (a person can still start the selfie without
+   * one). The name keeps "ORIGINS" from the first round; an entry may carry
+   * a path.
    */
   livenessRedirectOrigins: 'NUVION_LIVENESS_REDIRECT_ORIGINS',
 } as const;
@@ -121,7 +126,10 @@ export interface NuvionSettings {
   retryAfterSeconds: number;
   /** NUV-03: the hosted selfie is a step of opening (`NUVION_HOSTED_LIVENESS=on`). */
   hostedLiveness?: boolean;
-  /** NUV-03: the https origins the selfie page may return to; empty means any https address. */
+  /**
+   * NUV-03: where the selfie page may return to, each `origin` or
+   * `origin/path-prefix` (normalised: no trailing slash); empty allows no address.
+   */
   livenessRedirectOrigins?: readonly string[];
 }
 
@@ -243,27 +251,37 @@ function switchSetting(raw: string | undefined, key: string): boolean {
   throw new NuvionConfigError(`${key} must be on or off.`);
 }
 
-/** A comma separated list of https origins (scheme and host, no path); unset: none. */
+/**
+ * A comma separated list of https return addresses, each an origin and an
+ * optional path prefix (no credentials, query or fragment); unset: none.
+ * Kept as `origin` or `origin/prefix`, no trailing slash.
+ */
 function origins(raw: string | undefined, key: string): string[] {
   const list = (raw ?? '')
     .split(',')
     .map((x) => x.trim())
     .filter((x) => x !== '');
+  const out: string[] = [];
   for (const item of list) {
     let url: URL;
     try {
       url = new URL(item);
     } catch {
-      throw new NuvionConfigError(`${key} must list https origins.`);
+      throw new NuvionConfigError(`${key} must list https addresses.`);
     }
     if (
       url.protocol !== 'https:' ||
-      url.origin !== item.replace(/\/+$/, '') ||
       url.username !== '' ||
-      url.password !== ''
+      url.password !== '' ||
+      url.search !== '' ||
+      url.hash !== '' ||
+      /%2e|%2f|%5c|\\/i.test(url.pathname)
     ) {
-      throw new NuvionConfigError(`${key} must list https origins.`);
+      throw new NuvionConfigError(
+        `${key} must list https addresses (an origin and, if wanted, a path), with no credentials, query or fragment.`,
+      );
     }
+    out.push(`${url.origin}${url.pathname.replace(/\/+$/, '')}`);
   }
-  return [...new Set(list.map((x) => new URL(x).origin))];
+  return [...new Set(out)];
 }

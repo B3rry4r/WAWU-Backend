@@ -6,6 +6,7 @@ import {
   CLAIM_LOST,
   type ClaimAlignment,
 } from '../../money/opening/bvn-claim';
+import { noteDocumentRefusals } from '../../money/opening/document-refusals';
 import {
   type DecisionNotice,
   isDecision,
@@ -233,6 +234,11 @@ export class NuvionOpeningHandler implements NuvionEventHandler {
         },
       });
       const stage = reviewStageOf(after);
+      // A document Nuvion's review refused goes on the document's own row
+      // in the same step that records the word, so a correction that is
+      // answered with the check back at `pending` cannot lose it (NUV-03
+      // round 2, D1).
+      await noteDocumentRefusals(tx, wawuUserId, after, now);
       await tx.fintavaWalletOpening.updateMany({
         where: {
           wawuUserId,

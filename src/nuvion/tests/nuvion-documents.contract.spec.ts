@@ -1,4 +1,4 @@
-import { createHash, randomInt, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomInt, randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -38,10 +38,14 @@ import type { WalletView } from '../../money/money-view.type';
 import { WALLET_PROVIDER } from '../../wallet-provider/wallet-provider.interface';
 import { NuvionDocumentsArea } from '../areas/documents';
 import { NuvionDocumentsHandler } from '../handlers/documents.handler';
+import { NuvionOpeningHandler } from '../handlers/opening.handler';
+import { DocumentsFlow } from '../documents/documents-flow';
 import { NuvionClient } from '../nuvion-client';
 import { NuvionWalletProvider } from '../nuvion-wallet-provider';
 import { DocumentUploadSlots } from '../documents/documents-slots';
 import { NuvionDocumentsModule } from '../documents/documents.module';
+import { NuvionDocumentsService } from '../documents/documents.service';
+import type { IdentityHasher } from '../../money/identity/identity-config';
 import type {
   IdentityDocumentsView,
   IdentityLivenessView,
@@ -163,6 +167,7 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
   let prisma: PrismaService;
   let provider: NuvionWalletProvider;
   let handler: NuvionDocumentsHandler;
+  let openingHandler: NuvionOpeningHandler;
   let slots: DocumentUploadSlots;
   const users: string[] = [];
   const previous: Record<string, string | undefined> = {};
@@ -428,6 +433,7 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
     await app.listen(0, '127.0.0.1');
     prisma = moduleRef.get(PrismaService);
     handler = moduleRef.get(NuvionDocumentsHandler);
+    openingHandler = moduleRef.get(NuvionOpeningHandler);
     slots = moduleRef.get(DocumentUploadSlots);
   });
 
@@ -767,17 +773,35 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
       });
     });
 
-    it('the last upload sent twice, one after the other: the second is the answer the first got, one document, one submission (V8)', async () => {
+    it('the first upload sent twice, one after the other: the second is the answer the first got, one document (V8)', async () => {
+      const who = await opened();
+      const id = png();
+      const a = body<IdentityDocumentsView>(
+        await send(who, 'identity', id).expect(200),
+      ).data!;
+      const b = body<IdentityDocumentsView>(
+        await send(who, 'identity', id).expect(200),
+      ).data!;
+      expect(b).toEqual(a);
+      expect(uploads()).toHaveLength(1);
+      expect(submissions()).toHaveLength(0);
+    });
+
+    it('the last upload sent twice, one after the other: one document, one submission, and the second is told the opening is sent (V8)', async () => {
       const who = await opened();
       await send(who, 'identity', png()).expect(200);
       const proof = pdf();
       const a = body<IdentityDocumentsView>(
         await send(who, 'proof_of_address', proof).expect(200),
       ).data!;
-      const b = body<IdentityDocumentsView>(
-        await send(who, 'proof_of_address', proof).expect(200),
-      ).data!;
-      expect(b).toEqual(a);
+      expect(a.submitted).toBe(true);
+      // The opening is with Nuvion's review, so no file is compared with a
+      // fingerprint any more (it was cleared): the same file again is the
+      // same as any other, a refused upload, and nothing is sent.
+      const calls = standin.seen.length;
+      const b = await send(who, 'proof_of_address', proof).expect(409);
+      expect(body(b).reason?.code).toBe('documents_closed');
+      expect(standin.seen).toHaveLength(calls);
       expect(uploads()).toHaveLength(2);
       expect(submissions()).toHaveLength(1);
     });
@@ -847,11 +871,18 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
       expect(submissions()).toHaveLength(before);
     });
 
-    it('a different file after the opening was sent is refused with documents_closed and nothing is sent; the same file is still the same answer', async () => {
+    it('any file after the opening was sent is refused with documents_closed and nothing is sent, the same file included (its fingerprint is gone)', async () => {
       const who = await opened();
       const id = png();
       await send(who, 'identity', id).expect(200);
       await send(who, 'proof_of_address', pdf()).expect(200);
+      expect(
+        (
+          await prisma.nuvionDocument.findMany({
+            where: { wawuUserId: who.id },
+          })
+        ).map((r) => r.fingerprint),
+      ).toEqual([null, null]);
       const calls = standin.seen.length;
       const refused = body(await send(who, 'identity', png()).expect(409));
       expect(refused.reason?.code).toBe('documents_closed');
@@ -859,9 +890,28 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
         'Your wallet is not taking documents right now. Check where your opening stands.',
       );
       expect(standin.seen).toHaveLength(calls);
-      const same = await send(who, 'identity', id).expect(200);
-      expect(body<IdentityDocumentsView>(same).data?.submitted).toBe(true);
+      const same = body(await send(who, 'identity', id).expect(409));
+      expect(same.reason?.code).toBe('documents_closed');
       expect(standin.seen).toHaveLength(calls);
+      expect((await view(who)).submitted).toBe(true);
+    });
+
+    it('a person whose submission stands cannot upload even when the entity still reads incomplete (a stale write put the old word back, U2); nothing is sent', async () => {
+      const who = await opened();
+      await send(who, 'identity', png()).expect(200);
+      await send(who, 'proof_of_address', pdf()).expect(200);
+      expect(submissions()).toHaveLength(1);
+      // A stale delivery wrote the old word back: the entity reads
+      // `incomplete` again while the submission stands.
+      await prisma.nuvionEntity.update({
+        where: { wawuUserId: who.id },
+        data: { status: 'incomplete' },
+      });
+      const calls = standin.seen.length;
+      const refused = body(await send(who, 'identity', png()).expect(409));
+      expect(refused.reason?.code).toBe('documents_closed');
+      expect(standin.seen).toHaveLength(calls);
+      expect(submissions()).toHaveLength(1);
     });
 
     it('a different file for a kind already in replaces it while the opening still takes documents: one more call, the submission waits', async () => {
@@ -1111,6 +1161,87 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
       expect((await view(who)).documents[0].state).toBe('confirming');
     });
 
+    it('an upload Nuvion never got reads confirming inside the window and send_again after it, never confirming for ever; sending the same file again goes once (D3)', async () => {
+      const who = await opened();
+      const file = png();
+      nuvion.uploadMode = 'nothing_then_500';
+      await send(who, 'identity', file).expect(503);
+      expect(nuvion.docs(who.held.id, 'identity')).toHaveLength(0);
+      expect((await view(who)).documents[0].state).toBe('confirming');
+
+      await age(who, 'identity', RESEND_AFTER_MS + 500);
+      const after = await view(who);
+      expect(after.documents[0]).toEqual({
+        kind: 'identity',
+        state: 'send_again',
+        sides: [],
+        uploadedAt: null,
+      });
+      expect(after.waitingFor).toEqual(['identity', 'proof_of_address']);
+      expect(after.open).toBe(true);
+      // The view asked Nuvion's list (a read) and sent no file.
+      expect(uploads()).toHaveLength(1);
+      expect(
+        sent('GET', new RegExp(`^/entities/${who.held.id}$`)).length,
+      ).toBeGreaterThanOrEqual(1);
+      // The row is left as it was, so the upload route still looks first.
+      expect(await docRow(who, 'identity')).toMatchObject({ state: 'unknown' });
+
+      nuvion.uploadMode = 'ok';
+      const again = await send(who, 'identity', file).expect(200);
+      expect(body<IdentityDocumentsView>(again).data?.documents[0].state).toBe(
+        'uploaded',
+      );
+      expect(uploads()).toHaveLength(2);
+      expect(nuvion.docs(who.held.id, 'identity')).toHaveLength(1);
+      expect(await docRow(who, 'identity')).toMatchObject({
+        state: 'uploaded',
+        attempts: 2,
+      });
+      // And once the second document is in, the opening is sent once.
+      await send(who, 'proof_of_address', pdf()).expect(200);
+      expect(submissions()).toHaveLength(1);
+    });
+
+    it('an upload Nuvion took reads uploaded from the view once the window has passed, and the same file is not sent again (D3, the stored one)', async () => {
+      const who = await opened();
+      const file = png();
+      nuvion.uploadMode = 'late';
+      await send(who, 'identity', file).expect(503);
+      nuvion.uploadMode = 'ok';
+      expect((await view(who)).documents[0].state).toBe('confirming');
+      await age(who, 'identity', RESEND_AFTER_MS + 500);
+      const after = await view(who);
+      expect(after.documents[0]).toMatchObject({
+        state: 'uploaded',
+        sides: ['front'],
+      });
+      expect(await docRow(who, 'identity')).toMatchObject({
+        state: 'uploaded',
+        nuvionDocumentId: nuvion.docs(who.held.id, 'identity')[0].id,
+      });
+      expect(uploads()).toHaveLength(1);
+    });
+
+    it('past the window with Nuvion unreadable the view says send_again and sends nothing; once it can be read the same file is looked for before it is sent', async () => {
+      const who = await opened();
+      const file = png();
+      nuvion.uploadMode = 'late';
+      await send(who, 'identity', file).expect(503);
+      nuvion.uploadMode = 'ok';
+      await age(who, 'identity', RESEND_AFTER_MS + 500);
+      standin.failNext('error_system_internal_error');
+      const blind = await view(who);
+      expect(blind.documents[0].state).toBe('send_again');
+      expect(uploads()).toHaveLength(1);
+      // Nuvion is readable again: it did take the file, so it is not sent.
+      const res = await send(who, 'identity', file).expect(200);
+      expect(body<IdentityDocumentsView>(res).data?.documents[0].state).toBe(
+        'uploaded',
+      );
+      expect(uploads()).toHaveLength(1);
+    });
+
     it('the same file again while the answer is unknown is not sent; a different file is told to wait with a retry time', async () => {
       const who = await opened();
       const file = png();
@@ -1213,6 +1344,91 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
         first.id,
         nuvion.docs(who.held.id, 'identity')[1].id,
       ]);
+    });
+
+    it('a document Nuvion holds for the entity from long before the attempt is never taken for a lost upload (V12)', async () => {
+      const who = await opened();
+      const file = png();
+      nuvion.uploadMode = 'nothing_then_500';
+      await send(who, 'identity', file).expect(503);
+      nuvion.uploadMode = 'ok';
+      // Nuvion's list holds an identity document made an hour before this
+      // attempt that this row never recorded (put there by someone else).
+      const old = {
+        id: ulid('01OLD'),
+        key: 'identity',
+        created: Date.now() - 60 * 60_000,
+        fileType: 'image/png',
+        hasBack: false,
+        personId: who.held.personId,
+        fileChars: 10,
+      };
+      nuvion.entities.get(who.held.id)!.documents.push(old);
+      await age(who, 'identity', RESEND_AFTER_MS + 500);
+      // The view looks and does not adopt it.
+      expect((await view(who)).documents[0].state).toBe('send_again');
+      // The upload route looks and does not adopt it: the file goes.
+      await send(who, 'identity', file).expect(200);
+      expect(uploads()).toHaveLength(2);
+      const row = await docRow(who, 'identity');
+      expect(row?.nuvionDocumentId).not.toBe(old.id);
+      expect(row?.knownDocumentIds).not.toContain(old.id);
+    });
+
+    it('a row left sending by a request that died is recovered after the window: the same file or another is looked for, then sent (V21)', async () => {
+      for (const same of [true, false]) {
+        const who = await opened();
+        const file = png();
+        nuvion.uploadMode = 'nothing_then_500';
+        await send(who, 'identity', file).expect(503);
+        nuvion.uploadMode = 'ok';
+        // The request that held it was killed before it heard anything.
+        await prisma.nuvionDocument.update({
+          where: {
+            wawuUserId_kind: { wawuUserId: who.id, kind: 'identity' },
+          },
+          data: { state: 'sending' },
+        });
+        // Inside the window it is still in progress.
+        const wait = await send(who, 'identity', same ? file : png());
+        expect(wait.status).toBe(same ? 200 : 409);
+        await age(who, 'identity', RESEND_AFTER_MS + 500);
+        const before = uploads().length;
+        const res = await send(who, 'identity', same ? file : png()).expect(
+          200,
+        );
+        expect(body<IdentityDocumentsView>(res).data?.documents[0].state).toBe(
+          'uploaded',
+        );
+        expect(uploads()).toHaveLength(before + 1);
+        expect(await docRow(who, 'identity')).toMatchObject({
+          state: 'uploaded',
+          attempts: 2,
+        });
+      }
+    });
+
+    it('a document recorded for an earlier entity is not the answer for the entity the person has now (V25)', async () => {
+      const who = await opened();
+      const file = png();
+      await send(who, 'identity', file).expect(200);
+      expect(uploads()).toHaveLength(1);
+      // The person\u2019s entity is another one now (a new opening after a rollback).
+      const second = nuvion.addEntity();
+      await prisma.nuvionEntity.update({
+        where: { wawuUserId: who.id },
+        data: { entityId: second.id, personId: second.personId },
+      });
+      await send(who, 'identity', file).expect(200);
+      expect(uploads()).toHaveLength(2);
+      expect((uploads()[1].body as { entity_id: string }).entity_id).toBe(
+        second.id,
+      );
+      expect(nuvion.docs(second.id, 'identity')).toHaveLength(1);
+      expect(await docRow(who, 'identity')).toMatchObject({
+        entityId: second.id,
+        state: 'uploaded',
+      });
     });
 
     it('a lost upload is never taken for a document of the other kind, or for another person\u2019s', async () => {
@@ -1396,6 +1612,10 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
     describe('switched on', () => {
       beforeEach(() => {
         settings().hostedLiveness = true;
+        // The server lists where the selfie page may send a person back to.
+        settings().livenessRedirectOrigins = [
+          'https://wawuafrica.example/return',
+        ];
       });
 
       it('a person starts it, is given the secure page, comes back, and the opening reads the result: pending, passed', async () => {
@@ -1595,31 +1815,54 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
         });
       });
 
-      it('the way back must be a secure address, and one of ours when some are set', async () => {
+      it('the way back must be an address the server lists, by origin AND path prefix; an empty list allows none (D2)', async () => {
         const who = await opened();
+        const refused = {
+          code: 'document_request_invalid',
+          message:
+            'The address to return to must be a secure web address we know.',
+        };
         for (const redirectUrl of [
           'http://wawuafrica.example/return',
           'javascript:alert(1)',
-          'https://user:pass@wawuafrica.example/x',
+          'https://user:pass@wawuafrica.example/return',
           'not a url',
+          // Our origin, but not our path.
+          'https://wawuafrica.example/',
+          'https://wawuafrica.example/elsewhere',
+          'https://wawuafrica.example/returned',
+          'https://wawuafrica.example/return/../elsewhere',
+          'https://wawuafrica.example/return/%2e%2e/elsewhere',
+          // Our path, not our origin.
+          'https://evil.example/return',
+          'https://wawuafrica.example.evil.example/return',
+          'https://wawuafrica.example@evil.example/return',
+          'https://wawuafrica.example:8443/return',
         ]) {
           const res = await startLiveness(who, { redirectUrl }).expect(400);
-          expect(body(res).reason).toEqual({
-            code: 'document_request_invalid',
-            message:
-              'The address to return to must be a secure web address we know.',
-          });
+          expect(body(res).reason).toEqual(refused);
         }
-        settings().livenessRedirectOrigins = ['https://app.wawu.example'];
-        await startLiveness(who, { redirectUrl: RETURN }).expect(400);
         expect(sessionStarts()).toHaveLength(0);
+        // An empty list allows no address at all (any https address used to pass).
+        settings().livenessRedirectOrigins = [];
+        for (const redirectUrl of [
+          RETURN,
+          'https://app.wawu.example/done',
+          'https://anywhere.example/x',
+        ]) {
+          const res = await startLiveness(who, { redirectUrl }).expect(400);
+          expect(body(res).reason).toEqual(refused);
+        }
+        expect(sessionStarts()).toHaveLength(0);
+        // Origin and path prefix: the entry's own path, and anything under it.
+        settings().livenessRedirectOrigins = ['https://app.wawu.example/open'];
         await startLiveness(who, {
-          redirectUrl: 'https://app.wawu.example/done?x=1',
+          redirectUrl: 'https://app.wawu.example/open/done?x=1',
         }).expect(200);
         expect(sessionStarts()).toHaveLength(1);
         expect(
           (sessionStarts()[0].body as { redirect_url: string }).redirect_url,
-        ).toBe('https://app.wawu.example/done?x=1');
+        ).toBe('https://app.wawu.example/open/done?x=1');
         // A body field we do not read is the validation pipe's plain 400.
         await startLiveness(who, { note: 'hi' }).expect(400);
       });
@@ -1652,9 +1895,12 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
       });
     });
 
-    describe('Nuvion will not start one for a child entity (R-39): the opening goes on without it', () => {
+    describe('Nuvion says its selfie API is not there for us (R-39): off for everyone, loudly, and the opening goes on without it', () => {
       beforeEach(() => {
         settings().hostedLiveness = true;
+        settings().livenessRedirectOrigins = [
+          'https://wawuafrica.example/return',
+        ];
       });
 
       it.each([
@@ -1663,14 +1909,18 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
           { refuse: 'error_auth_permission_denied', status: 403 },
         ],
         [
+          'administrator permission required',
+          { refuse: 'error_auth_elevated_permission_required', status: 403 },
+        ],
+        [
           'no such endpoint',
           { refuse: 'error_endpoint_not_found', status: 404 },
         ],
-        ['a refused body', { refuse: 'error_validation_error', status: 422 }],
       ])(
-        '%s: selfie_not_available, the capability goes off, and the documents alone send the opening',
+        '%s: selfie_not_available, the capability goes off for everyone, the documents alone send the opening, and no row of the person says so',
         async (_name, refuse) => {
           const who = await opened();
+          const other = await opened();
           await send(who, 'identity', png()).expect(200);
           const held = body<IdentityDocumentsView>(
             await send(who, 'proof_of_address', pdf()).expect(200),
@@ -1679,24 +1929,38 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
           expect(submissions()).toHaveLength(0);
 
           nuvion.sessionMode = refuse;
+          const before = captured.length;
           const res = await startLiveness(who).expect(409);
           expect(body(res).reason).toEqual({
             code: 'selfie_not_available',
             message: 'The selfie check is not available right now.',
           });
           expect(provider.capabilities.hostedLiveness).toBe(false);
-          expect(await onboarding(who)).toMatchObject({
-            livenessRefusedAt: expect.any(Date) as Date,
-            livenessSessionId: null,
-          });
-          // R-39: the opening goes on without a selfie.
+          // Not a row of one person: there is no such column to set.
+          const row = await onboarding(who);
+          expect(row).not.toHaveProperty('livenessRefusedAt');
+          expect(row).toMatchObject({ livenessSessionId: null });
+          // Loud: one error line, no person in it.
+          const loud = captured
+            .slice(before)
+            .filter((l) => /OFF FOR EVERYONE/.test(l));
+          expect(loud).toHaveLength(1);
+          expect(loud[0]).toContain(refuse.refuse);
+          expect(loud[0]).not.toContain(who.id);
+          expect(loud[0]).not.toContain(who.held.id);
+          // R-39: the opening goes on without a selfie, for this person...
           expect(submissions()).toHaveLength(1);
           expect((await view(who)).submitted).toBe(true);
           expect(await liveness(who)).toMatchObject({ enabled: false });
+          // ...and for everyone: the other person is not asked either.
+          expect(await liveness(other)).toMatchObject({
+            enabled: false,
+            state: 'not_in_use',
+          });
         },
       );
 
-      it('after one refusal Nuvion is not asked again for anyone, until the hour has passed', async () => {
+      it('after one such answer Nuvion is not asked again for anyone, until the hour has passed', async () => {
         const first = await opened();
         nuvion.sessionMode = {
           refuse: 'error_auth_permission_denied',
@@ -1729,6 +1993,115 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
         }
       });
 
+      it('a return address Nuvion will not take is that person\u2019s plain 400: the selfie stays on for everyone and stays required of them (D2, X1)', async () => {
+        const attacker = await opened();
+        const stranger1 = await opened();
+        await send(attacker, 'identity', png()).expect(200);
+        await send(attacker, 'proof_of_address', pdf()).expect(200);
+        nuvion.sessionRefuseIf = (b) =>
+          /refuse-me/.test(b.redirect_url ?? '')
+            ? { refuse: 'error_validation_error', status: 422 }
+            : null;
+        settings().livenessRedirectOrigins = [
+          'https://wawuafrica.example/return',
+        ];
+        const res = await startLiveness(attacker, {
+          redirectUrl: 'https://wawuafrica.example/return/refuse-me',
+        }).expect(400);
+        expect(body(res).reason).toEqual({
+          code: 'document_request_invalid',
+          message:
+            'The address to return to must be a secure web address we know.',
+        });
+        // Nothing was switched off, for anyone.
+        expect(provider.capabilities.hostedLiveness).toBe(true);
+        expect(await liveness(stranger1)).toMatchObject({
+          enabled: true,
+          state: 'not_started',
+          canStart: true,
+        });
+        // The refused person did not skip it: the documents wait for it.
+        const v = await view(attacker);
+        expect(v).toMatchObject({
+          submitted: false,
+          selfie: 'needed',
+          waitingFor: ['selfie'],
+        });
+        expect(submissions()).toHaveLength(0);
+        expect(await liveness(attacker)).toMatchObject({
+          enabled: true,
+          canStart: true,
+        });
+        // The next person starts as normal, and so can the refused one with a good address.
+        await startLiveness(stranger1, {
+          redirectUrl: 'https://wawuafrica.example/return',
+        }).expect(200);
+        await startLiveness(attacker, {
+          redirectUrl: 'https://wawuafrica.example/return/ok',
+        }).expect(200);
+        expect(submissions()).toHaveLength(0);
+      });
+
+      it.each([
+        ['identity_refused', 'error_kyc_identity_verification_failed', 422],
+        ['an entity not incomplete', 'error_entity_status_not_incomplete', 400],
+        ['a suspended account', 'error_account_suspended', 403],
+        ['a missing record', 'error_resource_not_found', 404],
+        ['bad credentials', 'error_auth_credentials_invalid', 401],
+        ['no access to the entity', 'error_entity_user_has_no_access', 403],
+        ['a value not supported', 'error_validation_value_not_supported', 422],
+        ['a rate limit', 'error_auth_rate_limit_exceeded', 429],
+      ])(
+        'Nuvion refusing one person\u2019s entity (%s): 503 for that person to wait out, the step stays required of them, and nobody else is touched (D2, X2)',
+        async (_name, refuse, status) => {
+          const stuck = await opened();
+          const other = await opened();
+          await send(stuck, 'identity', png()).expect(200);
+          await send(stuck, 'proof_of_address', pdf()).expect(200);
+          nuvion.sessionRefuseIf = (b) =>
+            b.entity_id === stuck.held.id ? { refuse, status } : null;
+
+          const res = await startLiveness(stuck).expect(503);
+          expect(body(res).reason).toMatchObject({
+            code: 'provider_unreachable',
+            message:
+              'We could not start the selfie check right now. Try again in a moment.',
+          });
+          expect(body(res).reason?.retryAfterSeconds).toBeGreaterThanOrEqual(1);
+          // Still on, for them and for everyone.
+          expect(provider.capabilities.hostedLiveness).toBe(true);
+          const row = await onboarding(stuck);
+          expect(row).not.toHaveProperty('livenessRefusedAt');
+          expect(row?.livenessSessionId).toBeNull();
+          // They did not get past it.
+          expect(await view(stuck)).toMatchObject({
+            submitted: false,
+            selfie: 'needed',
+            waitingFor: ['selfie'],
+          });
+          expect(await liveness(stuck)).toMatchObject({
+            enabled: true,
+            canStart: true,
+          });
+          expect(submissions()).toHaveLength(0);
+          // Asked again, it is asked again (they may retry as often as the hour allows).
+          await startLiveness(stuck).expect(503);
+          expect(
+            sessionStarts().filter(
+              (r) =>
+                r.body &&
+                (r.body as { entity_id: string }).entity_id === stuck.held.id,
+            ),
+          ).toHaveLength(2);
+          // The next person is not affected.
+          expect(await liveness(other)).toMatchObject({
+            enabled: true,
+            state: 'not_started',
+          });
+          await startLiveness(other).expect(200);
+        },
+      );
+
       it('a session start whose answer was lost: no session recorded, 503, and the person may try again', async () => {
         const who = await opened();
         nuvion.sessionMode = 'nothing_then_500';
@@ -1737,10 +2110,20 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
         expect(provider.capabilities.hostedLiveness).toBe(true);
         expect(await onboarding(who)).toMatchObject({
           livenessSessionId: null,
-          livenessRefusedAt: null,
         });
         nuvion.sessionMode = 'ok';
         await startLiveness(who).expect(200);
+      });
+
+      it('a 500 that carries an endpoint-not-found type is a lost answer, not the API saying it does not exist', async () => {
+        const who = await opened();
+        nuvion.sessionMode = {
+          refuse: 'error_endpoint_not_found',
+          status: 500,
+        };
+        await startLiveness(who).expect(503);
+        expect(provider.capabilities.hostedLiveness).toBe(true);
+        expect(await liveness(who)).toMatchObject({ enabled: true });
       });
     });
 
@@ -1781,6 +2164,249 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
       ).rejects.toMatchObject({ kind: 'not_supported' });
     });
   });
+  // =========================================================================
+  describe('D1: a document Nuvion refused is never sent again unchanged, whatever Nuvion answers a correction with', () => {
+    /** The details a person sends again (the real route; the numbers are not re-sent for a document refusal). */
+    const correctDetails = (who: Person) =>
+      http()
+        .post('/api/hub/money/wallet/open')
+        .set('Authorization', who.auth)
+        .send({
+          bvn: digits(11),
+          nin: digits(11),
+          firstName: 'Ada',
+          lastName: 'Documents',
+          dateOfBirth: '1991-04-12',
+          address: '14 Opebi Road',
+          city: 'Ikeja',
+          state: 'Lagos',
+          postalCode: '100001',
+          gender: 'female',
+          idType: 'international_passport',
+          idNumber: `A${digits(8)}`,
+          proofOfAddressType: 'utility_bill',
+        });
+    /** Nuvion's review refuses one document; its `entities.updated` is handled in the production order (NUV-02, then NUV-03). */
+    const refuse = async (
+      who: Person,
+      kind: 'identity' | 'proof_of_address',
+      only: 'opening' | 'both' = 'both',
+    ) => {
+      const held = nuvion.entities.get(who.held.id)!;
+      held.status = 'rejected';
+      held.updated = Date.now();
+      if (kind === 'identity') held.documentStatus = 'rejected';
+      else held.addressProofStatus = 'rejected';
+      expect((await openingHandler.handle(delivery(held))).outcome).toBe(
+        'done',
+      );
+      if (only === 'both') await handler.handle(delivery(held));
+      return held;
+    };
+    const states = (v: IdentityDocumentsView) =>
+      v.documents.map((d) => d.state);
+
+    it.each([
+      ['identity', true, 'incomplete', 'id_document_not_verified'],
+      ['identity', true, null, 'id_document_not_verified'],
+      ['identity', false, 'incomplete', 'id_document_not_verified'],
+      ['identity', false, null, 'id_document_not_verified'],
+      ['proof_of_address', true, 'incomplete', 'proof_of_address_not_verified'],
+      ['proof_of_address', true, null, 'proof_of_address_not_verified'],
+      [
+        'proof_of_address',
+        false,
+        'incomplete',
+        'proof_of_address_not_verified',
+      ],
+      ['proof_of_address', false, null, 'proof_of_address_not_verified'],
+    ] as const)(
+      'the real sequence for %s: refuse, correct, Nuvion answers the correction (documents back at pending: %s, entity moved to %s), read the view: a new file is asked for and the opening is not sent again',
+      async (kind, resetWords, statusTo, reasonCode) => {
+        const other = kind === 'identity' ? 'proof_of_address' : 'identity';
+        const who = await opened();
+        const idFile = png();
+        const poaFile = pdf();
+        await send(who, 'identity', idFile).expect(200);
+        await send(who, 'proof_of_address', poaFile).expect(200);
+        expect(submissions()).toHaveLength(1);
+        nuvion.onCorrection = { resetDocumentWords: resetWords, statusTo };
+        nuvion.submitAcceptsRejected = true;
+
+        // Nuvion refuses it.
+        const held = await refuse(who, kind);
+        const review = (await wallet(who)).review!;
+        expect(review.stage).toBe('rejected');
+        expect(review.reasons.map((r) => r.code)).toEqual([reasonCode]);
+        expect((await docRow(who, kind))?.reviewRefusedAt).toBeInstanceOf(Date);
+        expect((await docRow(who, other))?.reviewRefusedAt).toBeNull();
+        const refused = await view(who);
+        expect(refused.open).toBe(false);
+        expect(refused.documents.find((d) => d.kind === kind)?.state).toBe(
+          'needs_new',
+        );
+
+        // The person corrects their details (the real route); Nuvion answers
+        // the correction as it is set to.
+        await correctDetails(who).expect(200);
+        const entity = await entityRow(who);
+        expect(entity.correctedAt).toBeInstanceOf(Date);
+        const word =
+          kind === 'identity'
+            ? entity.documentStatus
+            : entity.addressProofStatus;
+        // What the stored word is now: the answer's, so the entity alone
+        // would call the file good again.
+        expect(word).toBe(resetWords ? 'pending' : 'rejected');
+        expect((await wallet(who)).review?.stage).toBe('needs_documents');
+
+        // The first read after the correction: the refused file is not good
+        // again, the opening is not sent, and the person is asked for a new one.
+        const subsBefore = submissions().length;
+        const v = await view(who);
+        expect(states(v)).toEqual(
+          kind === 'identity'
+            ? ['needs_new', 'uploaded']
+            : ['uploaded', 'needs_new'],
+        );
+        expect(v).toMatchObject({
+          open: true,
+          submitted: false,
+          waitingFor: [kind],
+        });
+        expect(submissions()).toHaveLength(subsBefore);
+        // Asking again, and Nuvion telling us again, change nothing.
+        await view(who);
+        await handler.handle(delivery(held));
+        await openingHandler.handle(delivery(held));
+        expect(submissions()).toHaveLength(subsBefore);
+        expect(uploads()).toHaveLength(2);
+
+        // A new file re-opens it: one more upload, one more submission.
+        const res = body<IdentityDocumentsView>(
+          await send(who, kind, kind === 'identity' ? png() : pdf()).expect(
+            200,
+          ),
+        ).data!;
+        expect(uploads()).toHaveLength(3);
+        expect(res.submitted).toBe(true);
+        expect(states(res)).toEqual(['uploaded', 'uploaded']);
+        expect(submissions()).toHaveLength(subsBefore + 1);
+        expect((await docRow(who, kind))?.reviewRefusedAt).toBeNull();
+        expect((await wallet(who)).review?.stage).toBe('checking');
+        // And the word Nuvion may still carry for the old file does not
+        // refuse the new one (it was sent after the decision).
+        await handler.handle(delivery(held));
+        await openingHandler.handle(delivery(held));
+        expect((await docRow(who, kind))?.reviewRefusedAt).toBeNull();
+        expect(submissions()).toHaveLength(subsBefore + 1);
+        // The unchanged document stood the whole time.
+        void idFile;
+        void poaFile;
+      },
+    );
+
+    it('the delivery that records the refusal puts it on the document row at once (NUV-02\u2019s handler, before anything reads the view)', async () => {
+      const who = await opened();
+      await send(who, 'identity', png()).expect(200);
+      await send(who, 'proof_of_address', pdf()).expect(200);
+      expect((await docRow(who, 'identity'))?.reviewRefusedAt).toBeNull();
+      await refuse(who, 'identity', 'opening');
+      expect((await docRow(who, 'identity'))?.reviewRefusedAt).toBeInstanceOf(
+        Date,
+      );
+      expect(
+        (await docRow(who, 'proof_of_address'))?.reviewRefusedAt,
+      ).toBeNull();
+    });
+
+    it('the correction itself puts a refusal it finds on the row before the answer overwrites the word', async () => {
+      const who = await opened();
+      await send(who, 'identity', png()).expect(200);
+      await send(who, 'proof_of_address', pdf()).expect(200);
+      await makeOld(who, 60_000);
+      // The entity row reads refused with nothing yet on the document row
+      // (a record written by an older reader).
+      const held = nuvion.entities.get(who.held.id)!;
+      held.status = 'rejected';
+      held.documentStatus = 'rejected';
+      await prisma.nuvionEntity.update({
+        where: { wawuUserId: who.id },
+        data: {
+          status: 'rejected',
+          decidedAt: new Date(Date.now() - 20_000),
+          documentStatus: 'rejected',
+        },
+      });
+      await prisma.fintavaWalletOpening.update({
+        where: { wawuUserId: who.id },
+        data: { state: 'review' },
+      });
+      expect((await docRow(who, 'identity'))?.reviewRefusedAt).toBeNull();
+      nuvion.onCorrection = {
+        resetDocumentWords: true,
+        statusTo: 'incomplete',
+      };
+      await correctDetails(who).expect(200);
+      expect((await entityRow(who)).documentStatus).toBe('pending');
+      expect((await docRow(who, 'identity'))?.reviewRefusedAt).toBeInstanceOf(
+        Date,
+      );
+      expect(states(await view(who))).toEqual(['needs_new', 'uploaded']);
+      expect(submissions()).toHaveLength(1);
+    });
+
+    it('reading the documents puts a refusal it finds on the row, in every stage', async () => {
+      const who = await opened();
+      await send(who, 'identity', png()).expect(200);
+      await send(who, 'proof_of_address', pdf()).expect(200);
+      await makeOld(who, 60_000);
+      await prisma.nuvionEntity.update({
+        where: { wawuUserId: who.id },
+        data: {
+          status: 'rejected',
+          decidedAt: new Date(Date.now() - 20_000),
+          documentStatus: 'rejected',
+        },
+      });
+      expect((await docRow(who, 'identity'))?.reviewRefusedAt).toBeNull();
+      // The stage is `rejected` (not taking documents): the read still notes it.
+      expect(states(await view(who))).toEqual(['needs_new', 'uploaded']);
+      expect((await docRow(who, 'identity'))?.reviewRefusedAt).toBeInstanceOf(
+        Date,
+      );
+    });
+
+    it('a file sent after the decision is not about the old refusal, and a refusal of the numbers marks no document', async () => {
+      const who = await opened();
+      await send(who, 'identity', png()).expect(200);
+      await send(who, 'proof_of_address', pdf()).expect(200);
+      const held = nuvion.entities.get(who.held.id)!;
+      held.status = 'rejected';
+      await prisma.nuvionEntity.update({
+        where: { wawuUserId: who.id },
+        data: { bvnStatus: 'rejected' },
+      });
+      await openingHandler.handle(delivery(held));
+      expect((await docRow(who, 'identity'))?.reviewRefusedAt).toBeNull();
+      expect(
+        (await docRow(who, 'proof_of_address'))?.reviewRefusedAt,
+      ).toBeNull();
+      // An old decision with a refused word, and an upload made after it.
+      const decided = new Date(Date.now() - 60_000);
+      await prisma.nuvionEntity.update({
+        where: { wawuUserId: who.id },
+        data: { decidedAt: decided, documentStatus: 'rejected' },
+      });
+      await prisma.nuvionDocument.update({
+        where: { wawuUserId_kind: { wawuUserId: who.id, kind: 'identity' } },
+        data: { uploadedAt: new Date() },
+      });
+      await handler.handle(delivery(held));
+      expect((await docRow(who, 'identity'))?.reviewRefusedAt).toBeNull();
+    });
+  });
+
   // =========================================================================
   describe('after a refusal: corrected details start the review again from the documents', () => {
     it('a refusal about the numbers: the documents stand, and once the details are corrected the opening is sent again, once', async () => {
@@ -1875,6 +2501,44 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
       ]);
       expect(submissions()).toHaveLength(2);
       expect(nuvion.entities.get(who.held.id)?.submissions).toBe(2);
+    });
+  });
+
+  // =========================================================================
+  describe('a submission recorded late never overwrites a decision recorded first', () => {
+    it('markSubmitted after the entity was approved (or refused) by a delivery leaves the word, the decision time and the opening as they are (V11)', async () => {
+      for (const decision of ['approved', 'rejected']) {
+        const who = await opened();
+        await send(who, 'identity', png()).expect(200);
+        await send(who, 'proof_of_address', pdf()).expect(200);
+        // A delivery recorded the decision before this flow heard its answer.
+        const decidedAt = new Date(Date.now() - 5_000);
+        await prisma.nuvionEntity.update({
+          where: { wawuUserId: who.id },
+          data: { status: decision, decidedAt },
+        });
+        await prisma.fintavaWalletOpening.update({
+          where: { wawuUserId: who.id },
+          data: { state: decision === 'approved' ? 'open' : 'review' },
+        });
+        await prisma.nuvionOnboarding.update({
+          where: { wawuUserId: who.id },
+          data: { submittedAt: null },
+        });
+        await new DocumentsFlow(prisma, provider).markSubmitted(
+          who.id,
+          'pending',
+        );
+        expect(await entityRow(who)).toMatchObject({
+          status: decision,
+          decidedAt,
+        });
+        expect(await openingRow(who)).toMatchObject({
+          state: decision === 'approved' ? 'open' : 'review',
+        });
+        // It did record that Nuvion has the submission.
+        expect((await onboarding(who))?.submittedAt).toBeInstanceOf(Date);
+      }
     });
   });
 
@@ -2107,6 +2771,7 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
           'kind',
           'knownDocumentIds',
           'nuvionDocumentId',
+          'reviewRefusedAt',
           'sides',
           'state',
           'updatedAt',
@@ -2114,7 +2779,9 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
           'wawuUserId',
         ].sort(),
       );
-      expect(row?.fingerprint).toMatch(/^[0-9a-f]{64}$/);
+      // The opening was sent: no fingerprint is kept of either file.
+      expect(row?.fingerprint).toBeNull();
+      expect((await docRow(who, 'proof_of_address'))?.fingerprint).toBeNull();
 
       // The storage table, the temporary folder, the logs and every answer.
       expect(
@@ -2137,16 +2804,66 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
       expect(guard.violations).toEqual([]);
     });
 
-    it('the fingerprint is the SHA-256 of the bytes sent, and the same file always has the same one', async () => {
+    it('the fingerprint is an HMAC under IDENTITY_HASH_KEY, the same for the same file, no bare hash of the bytes, and cleared once the opening is submitted', async () => {
       const who = await opened();
       const front = png();
-      await send(who, 'identity', front).expect(200);
-      const expected = createHash('sha256')
-        .update('front:')
-        .update(front)
-        .update('\0back:')
-        .digest('hex');
-      expect((await docRow(who, 'identity'))?.fingerprint).toBe(expected);
+      const back = png(500);
+      await send(who, 'identity', front, back).expect(200);
+      const keyed = (f: Buffer, b: Buffer | null) =>
+        createHmac('sha256', ENV.IDENTITY_HASH_KEY!)
+          .update('document:')
+          .update(`front:${f.length}:`)
+          .update(f)
+          .update(b === null ? 'back:none' : `back:${b.length}:`)
+          .update(b ?? Buffer.alloc(0))
+          .digest('hex');
+      const stored = (await docRow(who, 'identity'))?.fingerprint;
+      expect(stored).toBe(keyed(front, back));
+      // Not the bare SHA-256 of anything a reader of the table could test a
+      // file against: neither of the bytes, nor of the old labelled form.
+      const bare = [
+        createHash('sha256').update(front).digest('hex'),
+        createHash('sha256').update(front).update(back).digest('hex'),
+        createHash('sha256')
+          .update('front:')
+          .update(front)
+          .update('\0back:')
+          .update(back)
+          .digest('hex'),
+      ];
+      expect(bare).not.toContain(stored);
+      // The same file twice (the first not yet sent for review): the same
+      // answer, one document.
+      await send(who, 'identity', front, back).expect(200);
+      expect(uploads()).toHaveLength(1);
+      // Sent for review: the fingerprints go, both of them.
+      await send(who, 'proof_of_address', pdf()).expect(200);
+      expect(submissions()).toHaveLength(1);
+      expect(
+        (
+          await prisma.nuvionDocument.findMany({
+            where: { wawuUserId: who.id },
+          })
+        ).map((r) => r.fingerprint),
+      ).toEqual([null, null]);
+    });
+
+    it('with IDENTITY_HASH_KEY unset no upload is taken: 503, nothing sent, nothing kept', async () => {
+      const who = await opened();
+      const service = moduleRef.get(NuvionDocumentsService);
+      const hasher = (service as unknown as { hasher: IdentityHasher }).hasher;
+      Object.defineProperty(hasher, 'configured', {
+        get: () => false,
+        configurable: true,
+      });
+      try {
+        const res = await send(who, 'identity', png()).expect(503);
+        expect(body(res).reason?.code).toBe('provider_unreachable');
+        expect(uploads()).toHaveLength(0);
+        expect(await docRow(who, 'identity')).toBeNull();
+      } finally {
+        delete (hasher as unknown as Record<string, unknown>).configured;
+      }
     });
 
     it('nothing left this machine', () => {
