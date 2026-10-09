@@ -617,10 +617,20 @@ describe('NUV-01: Nuvion webhooks are received, checked and stored once', () => 
   describe('the handler registry hands a stored delivery to the handlers of its event, once', () => {
     let behaviour: (d: NuvionDelivery) => Promise<NuvionHandlerResult>;
     const seen: NuvionDelivery[] = [];
-    beforeAll(() => {
+    beforeAll(async () => {
+      // NUV-04 lists the inflow events, so the inflows the earlier tests
+      // stored are now due to a sweep; clear them so that the batch holds
+      // only what this block stores.
+      await prisma.nuvionWebhookEvent.deleteMany({
+        where: {
+          eventId: { startsWith: RUN },
+          processingStatus: 'pending',
+          event: { not: 'cards.deleted' },
+        },
+      });
       registry.add({
         task: 'SPEC',
-        events: ['inflows.failed'],
+        events: ['cards.deleted'],
         handle: (d) => {
           seen.push(d);
           return behaviour(d);
@@ -634,7 +644,7 @@ describe('NUV-01: Nuvion webhooks are received, checked and stored once', () => 
 
     async function stored(n: number) {
       const id = eventId();
-      const body = { ...inflow(n), event: 'inflows.failed' };
+      const body = { ...inflow(n), event: 'cards.deleted' };
       await deliver(JSON.stringify(body), { id }).expect(200);
       return prisma.nuvionWebhookEvent.findUniqueOrThrow({
         where: { eventId: id },
@@ -646,7 +656,7 @@ describe('NUV-01: Nuvion webhooks are received, checked and stored once', () => 
       expect(await dispatcher.dispatch(row.id)).toBe('processed');
       expect(seen).toHaveLength(1);
       expect(seen[0]).toMatchObject({
-        event: 'inflows.failed',
+        event: 'cards.deleted',
         eventId: row.eventId,
         attempts: 1,
       });

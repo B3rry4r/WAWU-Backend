@@ -164,3 +164,8 @@ export function initialsFor(name: string): string {
   const last = words.length > 1 ? (words[words.length - 1][0] ?? '') : '';
   return (first + last).toUpperCase();
 }
+
+/** GET /events/from-prices: what a person can pay now, per event asked about. */
+export interface EventFromPricesView {
+  prices: { eventId: string; priceFromNaira: number | null }[];
+}

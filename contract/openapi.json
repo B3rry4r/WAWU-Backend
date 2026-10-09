@@ -21008,7 +21008,8 @@
                 "all",
                 "content",
                 "creators",
-                "communities"
+                "communities",
+                "schools"
               ]
             }
           }
@@ -21078,6 +21079,133 @@
         },
         "tags": [
           "SearchResponse"
+        ]
+      }
+    },
+    "/api/hub/schools": {
+      "get": {
+        "operationId": "SchoolsPublicController_list",
+        "parameters": [
+          {
+            "name": "category",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "tech",
+                "business",
+                "creative",
+                "languages",
+                "vocational"
+              ]
+            }
+          },
+          {
+            "name": "q",
+            "required": false,
+            "in": "query",
+            "description": "Matches a school's name or place, or the title of one of its shown\ncourses, ignoring case. Wildcard characters mean themselves.",
+            "schema": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "The `nextCursor` of the previous page: opaque, not to be built by hand,\nand never longer than the longest one this server gives out.",
+            "schema": {
+              "maxLength": 1498,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicSchoolsPage"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "SchoolsPublic"
+        ]
+      }
+    },
+    "/api/hub/schools/courses/{id}": {
+      "get": {
+        "operationId": "SchoolsPublicController_course",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicCourseDetail"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "SchoolsPublic"
+        ]
+      }
+    },
+    "/api/hub/schools/{id}": {
+      "get": {
+        "operationId": "SchoolsPublicController_school",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicSchoolDetail"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "SchoolsPublic"
         ]
       }
     },
@@ -22164,6 +22292,43 @@
           }
         },
         "summary": "The label to show for each category, format and kind, beside the value to\nsend (EVENTS-02): \"Business & Finance\" is `business`. Declared before\n`:id` for the same reason `mine` is.",
+        "tags": [
+          "Event"
+        ]
+      }
+    },
+    "/api/hub/events/from-prices": {
+      "get": {
+        "operationId": "EventController_fromPrices",
+        "parameters": [
+          {
+            "name": "ids",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "maxItems": 50,
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventFromPricesView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The \"from\" price a person can actually pay, for a page of events at once\n(EVENTS-01, G-271): the cheapest tier on sale now and not sold out, null\nwhen none can be bought. `priceFromNaira` on the event keeps counting\nevery tier, because the web reads it that way. Declared before `:id`.",
         "tags": [
           "Event"
         ]
@@ -32727,6 +32892,14 @@
           },
           "beneficiaryCount": {
             "type": "number"
+          },
+          "accountNumberStatus": {
+            "type": "string",
+            "enum": [
+              "none",
+              "on_its_way",
+              "active"
+            ]
           }
         },
         "required": [
@@ -32735,7 +32908,8 @@
           "limits",
           "pin",
           "bankTransfers",
-          "beneficiaryCount"
+          "beneficiaryCount",
+          "accountNumberStatus"
         ]
       },
       "ApprovalDeviceView": {
@@ -43301,6 +43475,334 @@
           "items"
         ]
       },
+      "PublicSchoolCard": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "business",
+              "tech",
+              "creative",
+              "languages",
+              "vocational"
+            ]
+          },
+          "location": {
+            "type": "string"
+          },
+          "logo": {
+            "type": "string",
+            "nullable": true
+          },
+          "foundedYear": {
+            "type": "number",
+            "nullable": true
+          },
+          "expertise": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "courseCount": {
+            "type": "number"
+          },
+          "fromPriceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "matchedCourses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "category",
+          "location",
+          "logo",
+          "foundedYear",
+          "expertise",
+          "courseCount",
+          "fromPriceKobo",
+          "matchedCourses"
+        ]
+      },
+      "PublicSchoolsPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicSchoolCard"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "PublicIntakeView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "startDate": {
+            "type": "string"
+          },
+          "schedule": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string",
+            "nullable": true
+          },
+          "capacity": {
+            "type": "number"
+          },
+          "seatsLeft": {
+            "type": "number"
+          },
+          "full": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "startDate",
+          "schedule",
+          "location",
+          "capacity",
+          "seatsLeft",
+          "full"
+        ]
+      },
+      "PublicCourseDetail": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "weeks": {
+            "type": "number"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "in_person",
+              "online",
+              "hybrid"
+            ]
+          },
+          "syllabus": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "outcomes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "school": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "category": {
+                "type": "string",
+                "enum": [
+                  "business",
+                  "tech",
+                  "creative",
+                  "languages",
+                  "vocational"
+                ]
+              },
+              "location": {
+                "type": "string"
+              },
+              "logo": {
+                "type": "string",
+                "nullable": true
+              },
+              "applyUrl": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "category",
+              "location",
+              "logo",
+              "applyUrl"
+            ]
+          },
+          "intakes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicIntakeView"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "weeks",
+          "mode",
+          "syllabus",
+          "outcomes",
+          "priceKobo",
+          "school",
+          "intakes"
+        ]
+      },
+      "PublicSchoolCourseCard": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "weeks": {
+            "type": "number"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "in_person",
+              "online",
+              "hybrid"
+            ]
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "nextIntake": {
+            "$ref": "#/components/schemas/PublicIntakeView",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "weeks",
+          "mode",
+          "priceKobo",
+          "nextIntake"
+        ]
+      },
+      "PublicSchoolDetail": {
+        "type": "object",
+        "properties": {
+          "about": {
+            "type": "string"
+          },
+          "applyUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "courses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicSchoolCourseCard"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "business",
+              "tech",
+              "creative",
+              "languages",
+              "vocational"
+            ]
+          },
+          "location": {
+            "type": "string"
+          },
+          "logo": {
+            "type": "string",
+            "nullable": true
+          },
+          "foundedYear": {
+            "type": "number",
+            "nullable": true
+          },
+          "expertise": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "courseCount": {
+            "type": "number"
+          },
+          "fromPriceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "matchedCourses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "about",
+          "applyUrl",
+          "courses",
+          "id",
+          "name",
+          "category",
+          "location",
+          "logo",
+          "foundedYear",
+          "expertise",
+          "courseCount",
+          "fromPriceKobo",
+          "matchedCourses"
+        ]
+      },
       "CommunityJoinRequest": {
         "type": "object",
         "properties": {
@@ -43918,6 +44420,33 @@
           "categories",
           "formats",
           "types"
+        ]
+      },
+      "EventFromPricesView": {
+        "type": "object",
+        "properties": {
+          "prices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "eventId": {
+                  "type": "string"
+                },
+                "priceFromNaira": {
+                  "type": "number",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "eventId",
+                "priceFromNaira"
+              ]
+            }
+          }
+        },
+        "required": [
+          "prices"
         ]
       },
       "EventGoingView": {
@@ -45510,8 +46039,8 @@
           "state": {
             "type": "string",
             "enum": [
-              "active",
               "none",
+              "active",
               "ending",
               "ended"
             ]
