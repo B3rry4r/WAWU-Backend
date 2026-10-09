@@ -174,5 +174,9 @@ export const MONEY_ERROR_CODES = [
   // Opening a wallet on Nuvion (NUV-02): the person's details are with the
   // provider's compliance review; they wait, and nothing is sent again.
   'identity_under_review',
+  // A step Open your wallet used under Fintava that a provider reviewing
+  // the person itself does not have (NUV-02 round 2, U3): permanent, not
+  // "try again".
+  'step_not_used',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];

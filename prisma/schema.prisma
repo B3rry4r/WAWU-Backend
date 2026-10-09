@@ -5058,6 +5058,11 @@ model NuvionEntity {
   /// (`PATCH /individual-entities/{id}`): the review starts again from the
   /// documents (NUV-03) while this is after `decidedAt`.
   correctedAt          DateTime?
+  /// Nuvion's own `updated` time for the entity (its clock) as last read
+  /// back, and as the correction's answer gave it: a decision read with a
+  /// later time than this, after a correction, is a new decision, not the
+  /// echo of the correction itself (NUV-02 round 2, D3).
+  entityUpdatedAt      DateTime?
   /// The one naira account's claim: set just before `POST /accounts` is
   /// sent, so two deliveries never open two; the account is looked for
   /// (`GET /accounts`) before any second request.

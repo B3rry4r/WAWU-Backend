@@ -2,11 +2,21 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
+  alignClaim,
+  CLAIM_LOST,
+  type ClaimAlignment,
+} from '../../money/opening/bvn-claim';
+import {
+  type DecisionNotice,
   isDecision,
+  isNewDecision,
+  noticeOf,
   openingStateForStage,
   REVIEW_OPENING_STATES,
   reviewStageOf,
 } from '../../money/opening/review-stage';
+import type { WalletReviewStage } from '../../money/money-view.type';
+import { NotificationService } from '../../notification/notification.service';
 import {
   WALLET_PROVIDER,
   type WalletProvider,
@@ -30,6 +40,13 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+/** What recording a delivery left: the stage, the claim, who is to be told. */
+interface Recorded {
+  stage: WalletReviewStage;
+  claim: ClaimAlignment;
+  notice: DecisionNotice | null;
+}
+
 const done = (note: string): NuvionHandlerResult => ({ outcome: 'done', note });
 const wait = (note: string): NuvionHandlerResult => ({ outcome: 'wait', note });
 
@@ -42,10 +59,19 @@ const wait = (note: string): NuvionHandlerResult => ({ outcome: 'wait', note });
  * the docs advise acting on the resource, never on the delivery), then:
  * - **recorded**: NuvionEntity takes Nuvion's review word, each check's
  *   word (the BVN's, the NIN's, the ID document's, the proof of address's)
- *   and Nuvion's own words for a refusal, masked; `decidedAt` when the word
- *   becomes a decision. The person's opening follows the stage
- *   (src/money/opening/review-stage.ts), so the wallet gate and
- *   `GET /money/wallet` agree with Nuvion.
+ *   and Nuvion's own words for a refusal, masked; `decidedAt` when a decision
+ *   is new (the word became one, or the same word came after the person's
+ *   corrected details with Nuvion's own update time moved on; D3). The
+ *   person's opening follows the stage (src/money/opening/review-stage.ts),
+ *   so the wallet gate and `GET /money/wallet` agree with Nuvion.
+ * - **the claim on the BVN** follows the stage (src/money/opening/
+ *   bvn-claim.ts): let go on rejected and stopped, taken back otherwise. An
+ *   approval whose BVN another account holds meanwhile opens nothing: the
+ *   person is stopped and told to contact support.
+ * - **told**: a new decision (approved, rejected with what to fix, stopped)
+ *   writes one notification (NotificationService, kind `identity_review`),
+ *   after it is recorded and only by the delivery that recorded it, so a
+ *   replay or a second delivery of the same decision tells nobody twice.
  * - **adopted**: an entity no NuvionEntity row names yet is the one a create
  *   whose answer was lost made, when exactly one opening of ours that is
  *   still in flight or unknown has the entity's phone and was sent before
@@ -109,15 +135,25 @@ export class NuvionOpeningHandler implements NuvionEventHandler {
       where: { entityId: read.entityId },
       select: { wawuUserId: true, accountId: true },
     });
+    let recorded: Recorded;
     if (owner === null) {
       const adopted = await this.adopt(read);
       if (adopted === null) return done('not an opening of ours; left alone');
-      owner = { wawuUserId: adopted, accountId: null };
+      owner = { wawuUserId: adopted.wawuUserId, accountId: null };
+      recorded = adopted;
     } else {
-      await this.recordReview(owner.wawuUserId, read);
+      recorded = await this.recordReview(owner.wawuUserId, read);
     }
+    await this.tell(owner.wawuUserId, recorded.notice);
 
     if (read.status !== 'approved') return done(`recorded (${read.status})`);
+    if (recorded.claim === 'stopped' || recorded.claim === 'stopped_now') {
+      // Approved for a BVN another account holds: nothing is opened.
+      return {
+        outcome: 'failed',
+        note: 'approved, but the BVN is held by another account; no account opened, left for review',
+      };
+    }
     if (owner.accountId !== null) return done('approved; account already open');
     return this.ensureAccount(area, read.entityId, nuvion);
   }
@@ -137,57 +173,148 @@ export class NuvionOpeningHandler implements NuvionEventHandler {
     return provider instanceof NuvionWalletProvider ? provider : null;
   }
 
-  /** The review's words on the person's row, and their opening's stage. */
+  /**
+   * The review's words on the person's row, their opening's stage, and the
+   * claim on their BVN. A decision is recorded by a compare-and-set on the
+   * word and the decision time it was read with, so the one delivery that
+   * wins is the one that tells the person.
+   */
   private async recordReview(
     wawuUserId: string,
     read: NuvionEntityReading,
-  ): Promise<void> {
-    await this.prisma.$transaction(async (tx) => {
+  ): Promise<Recorded> {
+    // The database's clock, as the correction's time is (`correctedAt`), so
+    // "after the correction" never depends on a server's own clock.
+    const now = await this.dbNow();
+    const words = {
+      personId: read.personId ?? undefined,
+      status: read.status,
+      bvnStatus: read.bvnStatus,
+      ninStatus: read.ninStatus,
+      documentStatus: read.documentStatus,
+      addressProofStatus: read.addressProofStatus,
+      identificationStatus: read.identificationStatus,
+      rejectionReasons: read.reasons,
+      reviewReadAt: now,
+      ...(read.updated !== null
+        ? { entityUpdatedAt: new Date(read.updated) }
+        : {}),
+    };
+    const done = await this.prisma.$transaction(async (tx) => {
       const before = await tx.nuvionEntity.findUniqueOrThrow({
         where: { wawuUserId },
-        select: { status: true, decidedAt: true, correctedAt: true },
-      });
-      const now = new Date();
-      const decidedAt =
-        isDecision(read.status) &&
-        (before.status !== read.status || before.decidedAt === null)
-          ? now
-          : before.decidedAt;
-      const after = await tx.nuvionEntity.update({
-        where: { wawuUserId },
-        data: {
-          personId: read.personId ?? undefined,
-          status: read.status,
-          decidedAt,
-          bvnStatus: read.bvnStatus,
-          ninStatus: read.ninStatus,
-          documentStatus: read.documentStatus,
-          addressProofStatus: read.addressProofStatus,
-          identificationStatus: read.identificationStatus,
-          rejectionReasons: read.reasons,
-          reviewReadAt: now,
+        select: {
+          status: true,
+          decidedAt: true,
+          correctedAt: true,
+          entityUpdatedAt: true,
         },
       });
+      const fresh = isNewDecision(before, read);
+      const won = await tx.nuvionEntity.updateMany({
+        where: {
+          wawuUserId,
+          status: before.status,
+          decidedAt: before.decidedAt,
+        },
+        data: { ...words, ...(fresh ? { decidedAt: now } : {}) },
+      });
+      const after = await tx.nuvionEntity.findUniqueOrThrow({
+        where: { wawuUserId },
+        select: {
+          status: true,
+          decidedAt: true,
+          correctedAt: true,
+          bvnStatus: true,
+          ninStatus: true,
+          documentStatus: true,
+          addressProofStatus: true,
+          rejectionReasons: true,
+        },
+      });
+      const stage = reviewStageOf(after);
       await tx.fintavaWalletOpening.updateMany({
         where: {
           wawuUserId,
           provider: 'nuvion',
           state: { in: [...REVIEW_OPENING_STATES, 'unknown'] },
+          OR: [{ failure: null }, { failure: { not: CLAIM_LOST } }],
         },
-        data: {
-          state: openingStateForStage(reviewStageOf(after)),
-          failure: null,
-        },
+        data: { state: openingStateForStage(stage), failure: null },
       });
+      return {
+        stage,
+        notice: won.count === 1 && fresh ? noticeOf(after) : null,
+      };
+    });
+    return this.settleClaim(wawuUserId, done);
+  }
+
+  /**
+   * After the opening follows the stage, the claim on the BVN follows it too
+   * (let go on rejected and stopped, taken back otherwise). A BVN that is
+   * another account's now stops the opening, and the person is told that
+   * instead of anything else.
+   */
+  private async settleClaim(
+    wawuUserId: string,
+    recorded: { stage: WalletReviewStage; notice: DecisionNotice | null },
+  ): Promise<Recorded> {
+    const claim = await alignClaim(this.prisma, wawuUserId, recorded.stage);
+    if (claim === 'stopped_now') {
+      this.logger.error(
+        'nuvion opening: the BVN reviewed is held by another account now; the opening is stopped for review',
+      );
+      return { ...recorded, claim, notice: { outcome: 'stopped' } };
+    }
+    return {
+      ...recorded,
+      claim,
+      notice: claim === 'stopped' ? null : recorded.notice,
+    };
+  }
+
+  private async dbNow(): Promise<Date> {
+    const [r] = await this.prisma.$queryRaw<Array<{ now: Date | string }>>`
+      SELECT now() AS "now"
+    `;
+    return new Date(r.now);
+  }
+
+  /** One notification for a new decision; none when there is nothing new. */
+  private async tell(
+    wawuUserId: string,
+    notice: DecisionNotice | null,
+  ): Promise<void> {
+    if (notice === null) return;
+    let notifications: NotificationService;
+    try {
+      notifications = this.moduleRef.get(NotificationService, {
+        strict: false,
+      });
+    } catch {
+      this.logger.warn(
+        'nuvion opening: no notification service here; the person was not told',
+      );
+      return;
+    }
+    await notifications.emit({
+      kind: 'identity_review',
+      userWawuId: wawuUserId,
+      outcome: notice.outcome,
+      ...(notice.outcome === 'rejected' ? { fixes: notice.fixes } : {}),
     });
   }
 
   /**
    * The entity a lost create made, for the one opening it can be: a Nuvion
    * opening in flight or unknown, with the entity's phone, sent before the
-   * entity was made (less the clock skew). The person, or null.
+   * entity was made (less the clock skew). What was recorded for the person,
+   * or null.
    */
-  private async adopt(read: NuvionEntityReading): Promise<string | null> {
+  private async adopt(
+    read: NuvionEntityReading,
+  ): Promise<(Recorded & { wawuUserId: string }) | null> {
     if (read.phone === null) return null;
     const candidates = await this.prisma.fintavaWalletOpening.findMany({
       where: {
@@ -206,9 +333,10 @@ export class NuvionOpeningHandler implements NuvionEventHandler {
     );
     if (fits.length !== 1) return null;
     const [c] = fits;
-    const now = new Date();
+    const now = await this.dbNow();
+    let adopted: { stage: WalletReviewStage; notice: DecisionNotice | null };
     try {
-      await this.prisma.$transaction(async (tx) => {
+      adopted = await this.prisma.$transaction(async (tx) => {
         const held = await tx.nuvionEntity.findUnique({
           where: { wawuUserId: c.wawuUserId },
           select: { entityId: true },
@@ -231,6 +359,8 @@ export class NuvionOpeningHandler implements NuvionEventHandler {
             identificationStatus: read.identificationStatus,
             rejectionReasons: read.reasons,
             reviewReadAt: now,
+            entityUpdatedAt:
+              read.updated !== null ? new Date(read.updated) : null,
           },
           update: {
             entityId: read.entityId,
@@ -239,6 +369,7 @@ export class NuvionOpeningHandler implements NuvionEventHandler {
             reviewReadAt: now,
           },
         });
+        const stage = reviewStageOf(row);
         await tx.fintavaWalletOpening.updateMany({
           where: {
             wawuUserId: c.wawuUserId,
@@ -246,10 +377,11 @@ export class NuvionOpeningHandler implements NuvionEventHandler {
             state: { in: ['opening', 'unknown'] },
           },
           data: {
-            state: openingStateForStage(reviewStageOf(row)),
+            state: openingStateForStage(stage),
             failure: null,
           },
         });
+        return { stage, notice: noticeOf(row) };
       });
     } catch {
       this.logger.error(
@@ -260,7 +392,10 @@ export class NuvionOpeningHandler implements NuvionEventHandler {
     this.logger.log(
       'nuvion opening: an entity a lost answer made was recorded',
     );
-    return c.wawuUserId;
+    return {
+      wawuUserId: c.wawuUserId,
+      ...(await this.settleClaim(c.wawuUserId, adopted)),
+    };
   }
 
   /** The person's one naira account, opened once (see the class comment). */

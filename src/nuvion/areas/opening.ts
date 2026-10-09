@@ -136,6 +136,8 @@ export interface NuvionEntityReading {
   status: string;
   /** When Nuvion made it (Unix ms); null when not given. */
   created: number | null;
+  /** When Nuvion last changed it (Unix ms; its clock); null when not given. */
+  updated: number | null;
   phone: string | null;
   email: string | null;
   bvnStatus: string | null;
@@ -186,6 +188,7 @@ export function readNuvionEntity(data: unknown): NuvionEntityReading | null {
     personId: idOf(person?.id) ?? idOf(entity.person_id),
     status,
     created: millis(entity.created),
+    updated: millis(entity.updated),
     phone: nuvionPhoneE164(person?.phonenumber),
     email: email === '' ? null : email,
     bvnStatus: numberStatus('BVN'),
@@ -212,6 +215,7 @@ export function reviewStateOf(
     identificationStatus: r.identificationStatus,
     reasons: r.reasons,
     found,
+    updated: r.updated,
   };
 }
 
@@ -248,6 +252,13 @@ function unproven(why: string): NuvionError {
     messages: [why],
     recordMayExist: true,
   });
+}
+
+/** Nuvion's `m` or `f`; anything else is never guessed. */
+function genderOf(gender: unknown): 'm' | 'f' {
+  if (gender === 'male') return 'm';
+  if (gender === 'female') return 'f';
+  throw refusedBeforeSending(CREATE.name, 'the gender is not male or female');
 }
 
 function refusedBeforeSending(operation: string, why: string): NuvionError {
@@ -357,6 +368,9 @@ export class NuvionOpeningArea implements NuvionOpeningMethods {
       );
       if (found !== null) return this.provisioning(found, true);
     }
+    // The caller moves its claim on the BVN to the number about to go out
+    // (after the look above found nothing, so a found entity keeps its own).
+    if (review.beforeCreate) await review.beforeCreate();
     const answer = await this.client.post(
       CREATE,
       '/individual-entities',
@@ -503,7 +517,7 @@ export class NuvionOpeningArea implements NuvionOpeningMethods {
       date_of_birth: input.dateOfBirth,
       email: input.email,
       nationality: r.nationality,
-      gender: r.gender === 'male' ? 'm' : 'f',
+      gender: genderOf(r.gender),
       phonenumber: phone,
     };
     if (r.middleName) person.middle_name = r.middleName;

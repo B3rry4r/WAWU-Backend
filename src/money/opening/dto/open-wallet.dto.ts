@@ -25,6 +25,16 @@ import { CHECK_HANDLE_INVALID_MESSAGE } from '../../identity/dto/identity-reques
 const trim = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() : value;
 
+/**
+ * An explicit `null` is a missing field, exactly like leaving it out (NUV-02
+ * round 2, D2): without this `@IsOptional()` lets a `null` through every
+ * validator and a required field reaches the provider as `null`.
+ */
+const orMissing = ({ value }: { value: unknown }) =>
+  value === null ? undefined : value;
+const trimOrMissing = ({ value }: { value: unknown }) =>
+  value === null ? undefined : typeof value === 'string' ? value.trim() : value;
+
 /** A real calendar date, `YYYY-MM-DD`, from 1900 up to today. */
 export function isBirthDate(value: unknown): boolean {
   if (typeof value !== 'string') return false;
@@ -174,7 +184,7 @@ export class OpenNairaWalletDto {
   /** A middle name, when the person has one. */
   @ApiPropertyOptional()
   @IsOptional()
-  @Transform(trim)
+  @Transform(trimOrMissing)
   @IsString()
   @Matches(NAME, {
     message:
@@ -184,13 +194,14 @@ export class OpenNairaWalletDto {
 
   @ApiPropertyOptional({ enum: GENDERS })
   @IsOptional()
+  @Transform(orMissing)
   @IsIn(GENDERS, { message: 'gender must be male or female' })
   gender?: (typeof GENDERS)[number];
 
   /** A second address line (flat, estate), when there is one. */
   @ApiPropertyOptional({ maxLength: 100 })
   @IsOptional()
-  @Transform(trim)
+  @Transform(trimOrMissing)
   @IsString()
   @Matches(PLACE, {
     message: 'addressLine2 must be 1 to 100 characters and include a letter',
@@ -200,7 +211,7 @@ export class OpenNairaWalletDto {
   /** The town or city. */
   @ApiPropertyOptional({ maxLength: 100 })
   @IsOptional()
-  @Transform(trim)
+  @Transform(trimOrMissing)
   @IsString()
   @Matches(PLACE, {
     message: 'city must be 1 to 100 characters and include a letter',
@@ -210,7 +221,7 @@ export class OpenNairaWalletDto {
   /** The state (Lagos, FCT ...). */
   @ApiPropertyOptional({ maxLength: 100 })
   @IsOptional()
-  @Transform(trim)
+  @Transform(trimOrMissing)
   @IsString()
   @Matches(PLACE, {
     message: 'state must be 1 to 100 characters and include a letter',
@@ -220,7 +231,7 @@ export class OpenNairaWalletDto {
   /** The postal code, 1 to 20 letters, digits, spaces or dashes. */
   @ApiPropertyOptional({ maxLength: 20 })
   @IsOptional()
-  @Transform(trim)
+  @Transform(trimOrMissing)
   @IsString()
   @Matches(/^[A-Za-z0-9][A-Za-z0-9 -]{0,19}$/, {
     message: 'postalCode must be 1 to 20 letters, digits, spaces or dashes',
@@ -230,6 +241,7 @@ export class OpenNairaWalletDto {
   /** The ID document the person will upload (NUV-03). */
   @ApiPropertyOptional({ enum: ID_TYPES })
   @IsOptional()
+  @Transform(orMissing)
   @IsIn(ID_TYPES, {
     message:
       'idType must be international_passport, drivers_license or national_id',
@@ -239,6 +251,7 @@ export class OpenNairaWalletDto {
   /** Its number, as printed: 5 to 30 letters, digits or dashes. Never stored. */
   @ApiPropertyOptional({ minLength: 5, maxLength: 30 })
   @IsOptional()
+  @Transform(orMissing)
   @IsString()
   @Matches(/^[A-Za-z0-9][A-Za-z0-9-]{4,29}$/, {
     message: 'idNumber must be 5 to 30 letters, digits or dashes',
@@ -248,6 +261,7 @@ export class OpenNairaWalletDto {
   /** When it was issued, `YYYY-MM-DD`, when it says. */
   @ApiPropertyOptional()
   @IsOptional()
+  @Transform(orMissing)
   @ValidateBy({
     name: 'isPastDate',
     validator: {
@@ -260,6 +274,7 @@ export class OpenNairaWalletDto {
   /** When it expires, `YYYY-MM-DD`, when it says; not already passed. */
   @ApiPropertyOptional()
   @IsOptional()
+  @Transform(orMissing)
   @ValidateBy({
     name: 'isExpiryDate',
     validator: {
@@ -273,6 +288,7 @@ export class OpenNairaWalletDto {
   /** The proof of address the person will upload (NUV-03). */
   @ApiPropertyOptional({ enum: PROOF_OF_ADDRESS_TYPES })
   @IsOptional()
+  @Transform(orMissing)
   @IsIn(PROOF_OF_ADDRESS_TYPES, {
     message: 'proofOfAddressType must be utility_bill or bank_statement',
   })

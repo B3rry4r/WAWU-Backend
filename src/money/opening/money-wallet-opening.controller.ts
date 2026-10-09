@@ -67,9 +67,12 @@ export class MoneyWalletController {
     'account_not_opened',
     'phone_held_by_other_identity',
     'provider_unreachable',
-    // NUV-02, under a provider that reviews the person itself (Nuvion).
+    // NUV-02, under a provider that reviews the person itself (Nuvion):
+    // `identity_has_wallet` is then also the plain answer for a BVN another
+    // account holds, `identity_checks_exhausted` the day's tries (round 2).
     'phone_not_nigerian',
     'identity_under_review',
+    'identity_checks_exhausted',
   )
   open(
     @CurrentUser() user: WawuJwtClaims,

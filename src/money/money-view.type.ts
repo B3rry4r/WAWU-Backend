@@ -171,8 +171,9 @@ export type WalletOpeningFlow = 'check' | 'review';
  * approved:        approved; the account number is on its way (NUV-04).
  * rejected:        the review said no: `reasons` say why and what to fix,
  *                  and the details may be sent again.
- * stopped:         the review failed for good or was suspended: money
- *                  routes answer `wallet_not_open`; support can help.
+ * stopped:         the review failed for good or was suspended, or the BVN
+ *                  it reviewed is another account's now: money routes
+ *                  answer `wallet_not_open`; support can help.
  */
 export type WalletReviewStage =
   'needs_documents' | 'checking' | 'approved' | 'rejected' | 'stopped';

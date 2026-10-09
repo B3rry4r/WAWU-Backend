@@ -23386,7 +23386,7 @@
             }
           },
           "409": {
-            "description": "reason.code: wallet_already_open",
+            "description": "reason.code: wallet_already_open, step_not_used",
             "content": {
               "application/json": {
                 "schema": {
@@ -23655,6 +23655,16 @@
           },
           "422": {
             "description": "reason.code: account_not_opened, phone_not_nigerian",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "reason.code: identity_checks_exhausted",
             "content": {
               "application/json": {
                 "schema": {
@@ -31401,7 +31411,8 @@
               "recipient_search_rate_limited",
               "fees_not_set",
               "limit_reached",
-              "identity_under_review"
+              "identity_under_review",
+              "step_not_used"
             ],
             "type": "string"
           },

@@ -281,6 +281,15 @@ export interface ProviderReviewDetails {
   numbersAgain: boolean;
   /** When an earlier opening whose answer was lost was sent; null otherwise. */
   lostAttemptAt: Date | null;
+  /**
+   * Run just before a create goes out, after the look for an earlier one
+   * found none (NUV-02 round 2): the caller moves its claim on the BVN to
+   * the number about to be sent, so a claim follows exactly what the
+   * provider was told. Never run when the earlier create is found or the
+   * details correct a customer. If it throws, nothing is sent and the
+   * error reaches the caller as it is.
+   */
+  beforeCreate?: () => Promise<void>;
 }
 
 /**
@@ -301,6 +310,12 @@ export interface ProviderReviewState {
   reasons: string[];
   /** True when the customer was found (after a lost answer), not made now. */
   found: boolean;
+  /**
+   * The provider's own time for the customer's last change (Unix ms), when
+   * it gives one: a later decision is told from the echo of our own
+   * correction by this, never by our clock (NUV-02 round 2).
+   */
+  updated: number | null;
 }
 
 /**

@@ -34,8 +34,16 @@ import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { MoneyErrorReason } from '../../money/dto/money-error.dto';
 import { MoneyModule } from '../../money/money.module';
+import { NotificationModule } from '../../notification/notification.module';
 import type { WalletView } from '../../money/money-view.type';
+import { IdentityHasher } from '../../money/identity/identity-config';
+import { REVIEW_REASONS } from '../../money/opening/review-stage';
 import { WalletOpeningService } from '../../money/opening/wallet-opening.service';
+import {
+  UNDER_REVIEW_MESSAGE,
+  WalletProviderError,
+  walletProviderErrorToHttp,
+} from '../../wallet-provider/wallet-provider-error';
 import { WALLET_PROVIDER } from '../../wallet-provider/wallet-provider.interface';
 import { NuvionOpeningHandler } from '../handlers/opening.handler';
 import { NuvionClient } from '../nuvion-client';
@@ -142,6 +150,8 @@ type Held = {
   ninLast4: string;
   idLast4: string;
   created: number;
+  /** Nuvion's own `updated` (Unix ms): moves when the entity is written. */
+  updated: number;
   bvnStatus: string;
   ninStatus: string;
   documentStatus: string;
@@ -174,9 +184,14 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
   let entities: Held[] = [];
   let accounts: HeldAccount[] = [];
   let createMode:
-    'ok' | 'late' | 'made_then_500' | 'nothing_then_500' | { refuse: string } =
-    'ok';
-  let listMode: 'ok' | { refuse: string } = 'ok';
+    | 'ok'
+    | 'late'
+    | 'made_then_500'
+    | 'nothing_then_500'
+    | { refuse: string; message?: string } = 'ok';
+  /** Milliseconds a good create answer is held back (inside the timeout). */
+  let createDelayMs = 0;
+  let listMode: 'ok' | 'endless' | { refuse: string } = 'ok';
   let accountMode: 'ok' | 'late' | 'already_exists' | { refuse: string } = 'ok';
 
   const ms = () => Date.now();
@@ -192,7 +207,7 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
     creation_context: 'api',
     risk_level: 'medium',
     created: e.created,
-    updated: ms(),
+    updated: e.updated,
     ...e.extra,
   });
   const full = (e: Held) => ({
@@ -252,6 +267,7 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       ninLast4: String(person.nin).slice(-4),
       idLast4: id.number.slice(-4),
       created: ms(),
+      updated: ms(),
       bvnStatus: 'pending',
       ninStatus: 'pending',
       documentStatus: 'pending',
@@ -266,7 +282,10 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
     standin.on('POST', '/individual-entities', (req): StandinAnswer => {
       const mode = createMode;
       if (typeof mode === 'object') {
-        return { status: 422, body: errorBody(mode.refuse, 'Refused.') };
+        return {
+          status: 422,
+          body: errorBody(mode.refuse, mode.message ?? 'Refused.'),
+        };
       }
       if (mode === 'nothing_then_500') {
         return { status: 500, body: errorBody('error_system_internal_error') };
@@ -281,6 +300,7 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       return {
         status: 201,
         body: envelope(full(e), 'Individual entity created successfully'),
+        ...(createDelayMs > 0 ? { delayMs: createDelayMs } : {}),
       };
     });
     standin.on('PATCH', /^\/individual-entities\/[^/]+$/, (req) => {
@@ -290,6 +310,7 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       const person = (req.body as { person?: Record<string, string> }).person;
       if (person?.bvn) e.bvnLast4 = person.bvn.slice(-4);
       if (person?.nin) e.ninLast4 = person.nin.slice(-4);
+      e.updated = Math.max(ms(), e.updated + 1);
       return {
         status: 200,
         body: envelope(full(e), 'Individual entity updated successfully'),
@@ -309,6 +330,26 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
         return {
           status: 404,
           body: errorBody(listMode.refuse, 'API endpoint does not exist'),
+        };
+      }
+      if (listMode === 'endless') {
+        // Always one more page, each with a new cursor: longer than read.
+        const n = Number(String(req.query.cursor ?? 'c0').slice(1)) + 1;
+        return {
+          status: 200,
+          body: envelope({
+            data: [],
+            meta: {
+              pagination: {
+                order: 'asc',
+                has_next: true,
+                limit: 100,
+                has_previous: false,
+                next_cursor: `c${n}`,
+                previous_cursor: null,
+              },
+            },
+          }),
         };
       }
       const rows = entities
@@ -537,6 +578,7 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
         PassportModule.register({ defaultStrategy: 'wawu-jwt' }),
         PrismaModule,
         MoneyModule,
+        NotificationModule,
         NuvionWebhookModule,
       ],
       providers: [WawuJwtStrategy, WawuIdClient],
@@ -568,6 +610,7 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
     entities = [];
     accounts = [];
     createMode = 'ok';
+    createDelayMs = 0;
     listMode = 'ok';
     accountMode = 'ok';
     installNuvion();
@@ -578,6 +621,10 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       const where = { wawuUserId: { in: users } };
       await prisma.fintavaWalletOpening.deleteMany({ where });
       await prisma.nuvionEntity.deleteMany({ where });
+      await prisma.bvnCheckAttempt.deleteMany({ where });
+      await prisma.notification.deleteMany({
+        where: { userWawuId: { in: users } },
+      });
       await prisma.nuvionWebhookEvent.deleteMany({
         where: { event: { startsWith: 'entities.' } },
       });
@@ -1236,6 +1283,672 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
         expect(standin.seen).toEqual([]);
       },
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // Round 2: the verifier's defects D1 to D7, the unclear U2 and U3, and the
+  // mutants that survived (V4, V14, V19).
+  // -------------------------------------------------------------------------
+  const HELD =
+    "We can't use this BVN or phone number for a new wallet. If it's yours, contact support.";
+  const newBvn = (): string => {
+    const b = digits(11);
+    secrets.push(b);
+    return b;
+  };
+  type Words = Partial<
+    Pick<
+      Held,
+      'bvnStatus' | 'ninStatus' | 'documentStatus' | 'addressProofStatus'
+    >
+  >;
+  /** Nuvion changes the entity: its word and its own update time move. */
+  const decide = (e: Held, status: string, words: Words = {}): void => {
+    e.status = status;
+    Object.assign(e, words);
+    e.updated = Math.max(ms(), e.updated + 1);
+  };
+  const fresh = (): void => {
+    standin.reset();
+    installNuvion();
+  };
+  const approvedWords: Words = {
+    bvnStatus: 'approved',
+    ninStatus: 'approved',
+    documentStatus: 'approved',
+    addressProofStatus: 'approved',
+  };
+  /** The person opens, Nuvion rejects the entity (the BVN, or only the documents). */
+  async function opened(
+    x: Person,
+    rejectedFor?: 'bvn' | 'documents',
+  ): Promise<Held> {
+    await open(x).expect(200);
+    const e = entities[entities.length - 1];
+    if (rejectedFor) {
+      decide(
+        e,
+        'rejected',
+        rejectedFor === 'bvn'
+          ? { bvnStatus: 'rejected' }
+          : { documentStatus: 'rejected' },
+      );
+      await handler.handle(delivery(e));
+      expect((await wallet(x)).review?.stage).toBe('rejected');
+    }
+    return e;
+  }
+
+  describe('round 2, D1 and D4: who holds a BVN, and what Nuvion was told', () => {
+    it("X types Y's BVN and Nuvion rejects X: Y's own opening is refused no longer (D1)", async () => {
+      const x = person();
+      const y = person({ bvn: x.body.bvn });
+      await opened(x, 'bvn');
+      fresh();
+      const res = body<WalletView>(await open(y).expect(200));
+      expect(res.data?.review?.stage).toBe('needs_documents');
+      expect(creates()).toHaveLength(1);
+    });
+
+    it.each([
+      ['incomplete', 'documents still needed'],
+      ['pending', 'being checked'],
+      ['approved', 'approved'],
+    ])(
+      'while the opening is %s (%s) the BVN is held: one plain answer, nothing sent',
+      async (status) => {
+        const x = person();
+        const y = person({ bvn: x.body.bvn });
+        const e = await opened(x);
+        if (status !== 'incomplete') {
+          decide(
+            e,
+            status,
+            status === 'approved'
+              ? approvedWords
+              : { bvnStatus: 'pending', ninStatus: 'pending' },
+          );
+          await handler.handle(delivery(e));
+        }
+        fresh();
+        const res = await open(y).expect(409);
+        expect(body(res).reason).toEqual({
+          code: 'identity_has_wallet',
+          message: HELD,
+        });
+        expect(standin.seen).toEqual([]);
+        // The held opening itself is untouched by the probe.
+        expect((await wallet(x)).review?.stage).not.toBe('rejected');
+      },
+    );
+
+    it('a wallet and a check in progress are refused in exactly the same words (no existence oracle)', async () => {
+      const wallet1 = person();
+      const e1 = await opened(wallet1);
+      decide(e1, 'approved', approvedWords);
+      await handler.handle(delivery(e1));
+      expect(accounts).toHaveLength(1);
+      const checking = person();
+      await opened(checking);
+      fresh();
+      const a = await open(person({ bvn: wallet1.body.bvn })).expect(409);
+      const b = await open(person({ bvn: checking.body.bvn })).expect(409);
+      expect(body(a).reason).toEqual(body(b).reason);
+      expect(body(a).message).toBe(body(b).message);
+      expect(JSON.stringify(body(a))).not.toMatch(/wallet already|check/i);
+    });
+
+    it('Nuvion refusing the create releases the BVN at once', async () => {
+      const x = person();
+      const y = person({ bvn: x.body.bvn });
+      createMode = { refuse: 'error_validation_error' };
+      await open(x).expect(422);
+      expect(await row(x)).toMatchObject({ state: 'failed' });
+      createMode = 'ok';
+      await open(y).expect(200);
+      // X may try again with another BVN; the one Y holds is Y's.
+      await open(x, { ...x.body, bvn: newBvn() }).expect(200);
+      await open(x, { ...x.body, bvn: y.body.bvn }).expect(200);
+    });
+
+    it.each(['failed', 'suspended'])(
+      'a %s opening at Nuvion releases the BVN at once',
+      async (status) => {
+        const x = person();
+        const y = person({ bvn: x.body.bvn });
+        const e = await opened(x);
+        decide(e, status);
+        await handler.handle(delivery(e));
+        expect((await wallet(x)).review?.stage).toBe('stopped');
+        fresh();
+        await open(y).expect(200);
+        expect(creates()).toHaveLength(1);
+      },
+    );
+
+    it('a document-only rejection and a different BVN typed: Nuvion is sent no number, so the claim stays on the BVN it holds (D4)', async () => {
+      const x = person();
+      const b0 = x.body.bvn;
+      const b1 = newBvn();
+      const e = await opened(x, 'documents');
+      fresh();
+      await open(x, { ...x.body, bvn: b1 }).expect(200);
+      const patch = sent('PATCH', `/individual-entities/${e.id}`);
+      expect(patch).toHaveLength(1);
+      const p = (patch[0].body as { person: Record<string, unknown> }).person;
+      expect(p.bvn).toBeUndefined();
+      expect(p.nin).toBeUndefined();
+      expect((await wallet(x)).review?.stage).toBe('needs_documents');
+      fresh();
+      // The typed number was never sent, so nobody holds it for X ...
+      await open(person({ bvn: b1 })).expect(200);
+      // ... and the one Nuvion has is X's again, so it is held against others.
+      const res = await open(person({ bvn: b0 })).expect(409);
+      expect(body(res).reason?.message).toBe(HELD);
+      expect(creates()).toHaveLength(1);
+    });
+
+    it('the BVN named as refused and a new one typed: the new number goes to Nuvion in that step, and the claim moves with it', async () => {
+      const x = person();
+      const b0 = x.body.bvn;
+      const b1 = newBvn();
+      const e = await opened(x, 'bvn');
+      fresh();
+      await open(x, { ...x.body, bvn: b1 }).expect(200);
+      const p = (
+        sent('PATCH', `/individual-entities/${e.id}`)[0].body as {
+          person: Record<string, unknown>;
+        }
+      ).person;
+      expect(p.bvn).toBe(b1);
+      fresh();
+      await open(person({ bvn: b0 })).expect(200);
+      const res = await open(person({ bvn: b1 })).expect(409);
+      expect(body(res).reason?.message).toBe(HELD);
+    });
+
+    it("a correction cannot take a BVN another account holds: the plain answer, nothing sent, and X's own old BVN stays released", async () => {
+      const x = person();
+      const held = newBvn();
+      const holder = person({ bvn: held });
+      await open(holder).expect(200);
+      await opened(x, 'bvn');
+      fresh();
+      const res = await open(x, { ...x.body, bvn: held }).expect(409);
+      expect(body(res).reason).toEqual({
+        code: 'identity_has_wallet',
+        message: HELD,
+      });
+      expect(standin.seen).toEqual([]);
+      expect((await wallet(x)).review?.stage).toBe('rejected');
+      // X's refused BVN is still free for its real owner.
+      await open(person({ bvn: x.body.bvn })).expect(200);
+    });
+
+    it('a lost answer retried with another BVN, when Nuvion already has the entity: the claim stays on the BVN Nuvion was sent', async () => {
+      const x = person();
+      const b0 = x.body.bvn;
+      const b1 = newBvn();
+      createMode = 'late';
+      await open(x).expect(200);
+      expect(await row(x)).toMatchObject({ state: 'unknown' });
+      await sleep(LATE_MS - TIMEOUT_MS + 200);
+      createMode = 'ok';
+      await age(x, TIMEOUT_MS + RESEND_SAFETY_MS + 1_000);
+      await open(x, { ...x.body, bvn: b1 }).expect(200);
+      expect(creates()).toHaveLength(1);
+      expect(await row(x)).toMatchObject({ state: 'review' });
+      fresh();
+      expect(
+        body(await open(person({ bvn: b0 })).expect(409)).reason?.code,
+      ).toBe('identity_has_wallet');
+      await open(person({ bvn: b1 })).expect(200);
+    });
+
+    it('a lost answer retried with another BVN, when nothing was made: the create goes out with it and the claim moves to it', async () => {
+      const x = person();
+      const b0 = x.body.bvn;
+      const b1 = newBvn();
+      createMode = 'nothing_then_500';
+      await open(x).expect(200);
+      createMode = 'ok';
+      await age(x, TIMEOUT_MS + RESEND_SAFETY_MS + 1_000);
+      await open(x, { ...x.body, bvn: b1 }).expect(200);
+      expect(creates()).toHaveLength(2);
+      expect(
+        (creates()[1].body as { person: Record<string, unknown> }).person.bvn,
+      ).toBe(b1);
+      fresh();
+      await open(person({ bvn: b0 })).expect(200);
+      expect(
+        body(await open(person({ bvn: b1 })).expect(409)).reason?.code,
+      ).toBe('identity_has_wallet');
+    });
+
+    it("a lost answer retried with a BVN another account holds: nothing is made, X's old claim stands", async () => {
+      const x = person();
+      const b0 = x.body.bvn;
+      const held = newBvn();
+      await open(person({ bvn: held })).expect(200);
+      createMode = 'nothing_then_500';
+      await open(x).expect(200);
+      createMode = 'ok';
+      await age(x, TIMEOUT_MS + RESEND_SAFETY_MS + 1_000);
+      fresh();
+      const res = await open(x, { ...x.body, bvn: held }).expect(409);
+      expect(body(res).reason?.message).toBe(HELD);
+      expect(creates()).toHaveLength(0);
+      expect(await row(x)).toMatchObject({ state: 'unknown' });
+      expect(
+        body(await open(person({ bvn: b0 })).expect(409)).reason?.code,
+      ).toBe('identity_has_wallet');
+    });
+
+    it('Nuvion approves an entity whose BVN another account has taken since: no account is opened, the person is stopped', async () => {
+      const x = person();
+      const e = await opened(x, 'bvn');
+      const y = person({ bvn: x.body.bvn });
+      await open(y).expect(200);
+      fresh();
+      decide(e, 'approved', approvedWords);
+      const r = await handler.handle(delivery(e));
+      expect(r.outcome).not.toBe('done');
+      expect(sent('POST', '/accounts')).toHaveLength(0);
+      expect(accounts).toHaveLength(0);
+      const view = await wallet(x);
+      expect(view.state).toBe('not_open');
+      expect(view.review).toMatchObject({
+        stage: 'stopped',
+        canResubmit: false,
+      });
+      // Y's opening is untouched.
+      expect((await wallet(y)).review?.stage).toBe('needs_documents');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe('round 2, U2: at most 3 opening attempts a day that name a BVN or NIN', () => {
+    const attemptsOf = (who: Person) =>
+      prisma.bvnCheckAttempt.count({ where: { wawuUserId: who.id } });
+
+    it('three tries that Nuvion refuses, then a plain 429 with when to come back, and nothing sent', async () => {
+      const x = person();
+      createMode = { refuse: 'error_validation_error' };
+      for (let i = 0; i < 3; i += 1) await open(x).expect(422);
+      expect(creates()).toHaveLength(3);
+      createMode = 'ok';
+      const res = await open(x).expect(429);
+      expect(body(res).reason).toMatchObject({
+        code: 'identity_checks_exhausted',
+        retryAfterSeconds: expect.any(Number) as number,
+      });
+      expect(body(res).reason?.retryAfterSeconds).toBeGreaterThan(0);
+      expect(creates()).toHaveLength(3);
+      expect(await attemptsOf(x)).toBe(3);
+    });
+
+    it('answers that say the BVN is held count too: three, then the 429 (never a fourth answer about that BVN)', async () => {
+      const holder = person();
+      await open(holder).expect(200);
+      const prober = person({ bvn: holder.body.bvn });
+      for (let i = 0; i < 3; i += 1) {
+        expect(body(await open(prober).expect(409)).reason?.message).toBe(HELD);
+      }
+      const res = await open(prober).expect(429);
+      expect(body(res).reason?.code).toBe('identity_checks_exhausted');
+      expect(await row(prober)).toBeNull();
+    });
+
+    it('a burst of probes at once learns the answer at most 3 times', async () => {
+      const holder = person();
+      await open(holder).expect(200);
+      const prober = person({ bvn: holder.body.bvn });
+      const all = await Promise.all(
+        Array.from({ length: 8 }, () => open(prober)),
+      );
+      const held = all.filter((r) => r.status === 409).length;
+      const over = all.filter((r) => r.status === 429).length;
+      expect(held).toBeLessThanOrEqual(3);
+      expect(held + over).toBe(8);
+      expect(await attemptsOf(prober)).toBeLessThanOrEqual(3);
+    });
+
+    it('ten taps at once, and taps while it is being checked, use one try', async () => {
+      const x = person();
+      createMode = 'late';
+      await Promise.all(Array.from({ length: 10 }, () => open(x)));
+      await open(x).expect(200);
+      await open(x).expect(200);
+      expect(await attemptsOf(x)).toBe(1);
+    });
+
+    it('requests refused before anything is claimed (a bad body, no email) use none', async () => {
+      const x = person();
+      for (let i = 0; i < 5; i += 1) {
+        await open(x, { ...x.body, gender: undefined }).expect(400);
+      }
+      const noMail = person({ email: null });
+      for (let i = 0; i < 5; i += 1) await open(noMail).expect(422);
+      expect(await attemptsOf(x)).toBe(0);
+      expect(await attemptsOf(noMail)).toBe(0);
+      await open(x).expect(200);
+    });
+
+    it('a correction is a try', async () => {
+      const x = person();
+      await opened(x, 'documents');
+      expect(await attemptsOf(x)).toBe(1);
+      await open(x).expect(200);
+      expect(await attemptsOf(x)).toBe(2);
+    });
+
+    it('the tries are the setting BVN_CHECKS_PER_DAY, as the BVN check had', () => {
+      const hasher = moduleRef.get(IdentityHasher);
+      expect(hasher.checksPerDay).toBe(3);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe('round 2, D2: a null is a missing field', () => {
+    it.each([
+      'gender',
+      'city',
+      'state',
+      'postalCode',
+      'idType',
+      'idNumber',
+      'proofOfAddressType',
+    ])(
+      '%s: null is the same 400 as leaving it out, and nothing is sent',
+      async (field) => {
+        const who = person();
+        const res = await open(who, { ...who.body, [field]: null }).expect(400);
+        expect(body(res).message).toBe(
+          `${field} is required to open this wallet`,
+        );
+        expect(standin.seen).toEqual([]);
+        expect(await row(who)).toBeNull();
+      },
+    );
+
+    it.each(['middleName', 'addressLine2', 'idIssueDate', 'idExpiryDate'])(
+      '%s: null is the same as leaving it out (it is optional), and Nuvion gets no such field',
+      async (field) => {
+        const who = person();
+        await open(who, { ...who.body, [field]: null }).expect(200);
+        const sentBody = JSON.stringify(creates()[0].body);
+        expect(sentBody).not.toContain('null');
+        expect(sentBody).not.toContain('middle_name');
+        expect(sentBody).not.toContain('line_2');
+        expect(sentBody).not.toContain('issue_date');
+        if (field === 'idExpiryDate') {
+          expect(sentBody).not.toContain('expiry_date');
+        }
+      },
+    );
+
+    it('gender is never guessed: only male and female reach Nuvion', async () => {
+      const who = person();
+      await open(who, { ...who.body, gender: 'male' }).expect(200);
+      expect(
+        (creates()[0].body as { person: { gender: string } }).person.gender,
+      ).toBe('m');
+      for (const bad of [null, 'other', 7, '']) {
+        const other = person();
+        await open(other, { ...other.body, gender: bad }).expect(400);
+      }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe('round 2, D3: a second rejection after a correction is seen', () => {
+    it('Nuvion says no again before any pending is read: the person sees the rejection and may send again', async () => {
+      const x = person();
+      const e = await opened(x, 'bvn');
+      const first = (await wallet(x)).review!.decidedAt!;
+      fresh();
+      await open(x, { ...x.body, bvn: newBvn() }).expect(200);
+      expect((await wallet(x)).review?.stage).toBe('needs_documents');
+      await sleep(5);
+      // The review ran again and refused again; the word never changed.
+      decide(e, 'rejected', { bvnStatus: 'rejected' });
+      await handler.handle(delivery(e));
+      const view = (await wallet(x)).review!;
+      expect(view.stage).toBe('rejected');
+      expect(view.canResubmit).toBe(true);
+      expect(Date.parse(view.decidedAt!)).toBeGreaterThan(Date.parse(first));
+    });
+
+    it("the correction's own echo (Nuvion still says rejected, nothing newer) does not bring the rejection back", async () => {
+      const x = person();
+      const e = await opened(x, 'bvn');
+      fresh();
+      await open(x, { ...x.body, bvn: newBvn() }).expect(200);
+      await handler.handle(delivery(e));
+      await handler.handle(delivery(e));
+      expect((await wallet(x)).review?.stage).toBe('needs_documents');
+    });
+
+    it('the same decision sent again with no correction between changes nothing', async () => {
+      const x = person();
+      const e = await opened(x, 'bvn');
+      const first = (await wallet(x)).review!;
+      await sleep(5);
+      await handler.handle(delivery(e));
+      await handler.handle(delivery(e));
+      expect((await wallet(x)).review).toEqual(first);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe('round 2, D5: numbers Nuvion echoes in groups are masked', () => {
+    const GROUPED =
+      'BVN 2221 0003 123 and NIN 3331-0003-123 and ID 4441.0003.12 do not match';
+    const run = /\d(?:[ .-]?\d){4,}/;
+
+    it('before they are stored', async () => {
+      const x = person();
+      const e = await opened(x);
+      e.extra = { rejection_reason: GROUPED };
+      decide(e, 'rejected');
+      await handler.handle(delivery(e));
+      const stored = (await entityRow(x))!.rejectionReasons.join(' | ');
+      expect(stored).toContain('do not match');
+      expect(stored).not.toMatch(run);
+      expect(stored).toContain('3123');
+    });
+
+    it('before they are logged (the warning for a refused create)', async () => {
+      const x = person();
+      createMode = {
+        refuse: 'error_validation_error',
+        message: `${GROUPED}.`,
+      };
+      await open(x).expect(422);
+      const logs = captured.join('\n');
+      expect(logs).toContain('create individual entity');
+      expect(logs).not.toMatch(/2221[ .-]0003/);
+      expect(logs).not.toMatch(/3331[ .-]0003/);
+      expect(logs).not.toMatch(/4441[ .-]0003/);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe('round 2, D6: the person is told once, per decision', () => {
+    const notes = (who: Person) =>
+      prisma.notification.findMany({
+        where: { userWawuId: who.id, kind: 'identity_review' },
+        orderBy: { createdAt: 'asc' },
+      });
+    const clean = (n: { title: string; body: string }) => {
+      const text = `${n.title} ${n.body}`;
+      expect(text).not.toMatch(/\d{4}/);
+      expect(text).not.toMatch(/wallet|withdraw|cash ?out|payout|\u2014/i);
+      for (const s of secrets) expect(text.includes(s)).toBe(false);
+    };
+
+    it('approved: one notification, however many times the decision arrives', async () => {
+      const x = person();
+      const e = await opened(x);
+      decide(e, 'approved', approvedWords);
+      await Promise.all([
+        handler.handle(delivery(e)),
+        handler.handle(delivery(e)),
+        handler.handle(delivery(e)),
+      ]);
+      await handler.handle(delivery(e));
+      const got = await notes(x);
+      expect(got).toHaveLength(1);
+      expect(got[0]).toMatchObject({
+        title: 'Identity check passed',
+        body: 'Your identity check passed. Your account is being set up.',
+        tone: 'success',
+      });
+      clean(got[0]);
+    });
+
+    it('rejected: one notification that says what to fix, from our own words and never a number', async () => {
+      const x = person();
+      const e = await opened(x);
+      e.extra = {
+        rejection_reason: `The BVN ${x.body.bvn} and the NIN ${x.body.nin} were refused`,
+      };
+      decide(e, 'rejected', { bvnStatus: 'rejected', ninStatus: 'rejected' });
+      await handler.handle(delivery(e));
+      await handler.handle(delivery(e));
+      const got = await notes(x);
+      expect(got).toHaveLength(1);
+      expect(got[0].tone).toBe('warning');
+      expect(got[0].body).toContain(REVIEW_REASONS.bvn_not_verified.fix);
+      expect(got[0].body).toContain(REVIEW_REASONS.nin_not_verified.fix);
+      clean(got[0]);
+    });
+
+    it('a second rejection after a correction is another decision: another notification', async () => {
+      const x = person();
+      const e = await opened(x, 'bvn');
+      expect(await notes(x)).toHaveLength(1);
+      fresh();
+      await open(x, { ...x.body, bvn: newBvn() }).expect(200);
+      await handler.handle(delivery(e));
+      expect(await notes(x)).toHaveLength(1);
+      await sleep(5);
+      decide(e, 'rejected', { bvnStatus: 'rejected' });
+      await handler.handle(delivery(e));
+      expect(await notes(x)).toHaveLength(2);
+    });
+
+    it.each(['failed', 'suspended'])(
+      '%s: one notification that says to contact support',
+      async (status) => {
+        const x = person();
+        const e = await opened(x);
+        decide(e, status);
+        await handler.handle(delivery(e));
+        await handler.handle(delivery(e));
+        const got = await notes(x);
+        expect(got).toHaveLength(1);
+        expect(got[0].body).toContain('Contact support');
+        clean(got[0]);
+      },
+    );
+
+    it('nothing is sent for a review that is still going (incomplete, pending)', async () => {
+      const x = person();
+      const e = await opened(x);
+      await handler.handle(delivery(e, 'entities.created'));
+      decide(e, 'pending');
+      await handler.handle(delivery(e));
+      expect(await notes(x)).toHaveLength(0);
+    });
+
+    it('a person stopped because their BVN was taken is told once too', async () => {
+      const x = person();
+      const e = await opened(x, 'bvn');
+      await open(person({ bvn: x.body.bvn })).expect(200);
+      decide(e, 'approved', approvedWords);
+      await handler.handle(delivery(e));
+      await handler.handle(delivery(e));
+      const got = (await notes(x)).filter((n) =>
+        /Contact support/.test(n.body),
+      );
+      expect(got).toHaveLength(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe('round 2, U3: the Fintava BVN check is not used under Nuvion', () => {
+    it('POST /money/identity/bvn is a permanent refusal with its own code, not "try again"', async () => {
+      const who = person();
+      const res = await http()
+        .post('/api/hub/money/identity/bvn')
+        .set('Authorization', who.auth)
+        .send({ bvn: who.body.bvn, nin: who.body.nin })
+        .expect(409);
+      expect(body(res).reason?.code).toBe('step_not_used');
+      expect(body(res).reason?.retryAfterSeconds).toBeUndefined();
+      expect(standin.seen).toEqual([]);
+      expect(
+        await prisma.bvnCheckAttempt.count({ where: { wawuUserId: who.id } }),
+      ).toBe(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe('round 2, the mutants that survived', () => {
+    it("V4: an entity list longer than the pages read is not 'none made': nothing is created and the opening waits", async () => {
+      const x = person();
+      createMode = 'nothing_then_500';
+      await open(x).expect(200);
+      createMode = 'ok';
+      listMode = 'endless';
+      await age(x, TIMEOUT_MS + RESEND_SAFETY_MS + 1_000);
+      const view = body<WalletView>(await open(x).expect(200)).data!;
+      expect(view.state).toBe('opening');
+      expect(creates()).toHaveLength(1);
+      expect(entities).toHaveLength(0);
+      expect(sent('GET', '/entities')).toHaveLength(10);
+      expect(await row(x)).toMatchObject({ state: 'unknown' });
+    });
+
+    it('V14: a create that names an entity the person already holds another of never overwrites it', async () => {
+      const x = person();
+      createDelayMs = 700;
+      const pending = open(x).then((r) => r);
+      for (let i = 0; i < 100 && creates().length === 0; i += 1) {
+        await sleep(20);
+      }
+      expect(creates()).toHaveLength(1);
+      const other = ulid('01ENT');
+      await prisma.nuvionEntity.create({
+        data: { wawuUserId: x.id, entityId: other },
+      });
+      expect((await pending).status).toBe(200);
+      expect((await entityRow(x))?.entityId).toBe(other);
+      expect(await row(x)).toMatchObject({
+        state: 'conflict',
+        failure: 'entity_held_by_another_account',
+      });
+    });
+
+    it('V19: the seam maps the under_review kind to 409 identity_under_review for any route, with the sentence the person is promised', () => {
+      for (const e of [
+        walletProviderErrorToHttp('under_review'),
+        new WalletProviderError({
+          kind: 'under_review',
+          provider: 'nuvion',
+          operation: 'any money route',
+        }).toHttpException(),
+      ]) {
+        expect(e.getStatus()).toBe(409);
+        expect(e.getResponse()).toMatchObject({
+          reason: {
+            code: 'identity_under_review',
+            message: UNDER_REVIEW_MESSAGE,
+          },
+        });
+      }
+    });
   });
 
   // -------------------------------------------------------------------------
