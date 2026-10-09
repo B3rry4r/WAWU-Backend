@@ -3,6 +3,7 @@ import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import type { ListPublicSchoolsDto } from './schools.dto';
 import { decodeCursor, encodeCursor } from './schools-cursor';
+import { schoolOrderBy, schoolsAfter } from './schools-order';
 import {
   courseCard,
   intakeView,
@@ -47,28 +48,26 @@ export class SchoolsPublicService {
   async list(q: ListPublicSchoolsDto): Promise<PublicSchoolsPage> {
     const limit = q.limit ?? DEFAULT_PAGE;
     const after = q.cursor === undefined ? null : decodeCursor(q.cursor);
-    const filter = this.listWhere(q.category, q.q);
-    // Keyset paging on (name, id): the cursor holds the position, not a row
-    // that must still be shown, so hiding or filtering out the school a page
-    // ended on skips nothing. Both the comparison and the ORDER BY use the
-    // columns' own collation, so they agree.
-    const where: Prisma.SchoolWhereInput = after
-      ? {
-          AND: [
-            filter,
-            {
-              OR: [
-                { name: { gt: after.name } },
-                { name: after.name, id: { gt: after.id } },
-              ],
-            },
-          ],
-        }
-      : filter;
-    const rows = await this.prisma.school.findMany({
-      where,
-      orderBy: [{ name: 'asc' }, { id: 'asc' }],
-      take: limit + 1,
+    // Keyset paging on the name's sort key and the id: the cursor holds the
+    // position, not a row that must still be shown, so hiding or filtering
+    // out the school a page ended on skips nothing. The order is written
+    // into the query (schools-order.ts), so the page's ORDER BY and the
+    // cursor's comparison are the same on every database, whatever collation
+    // it was created with.
+    const place = await this.prisma.$queryRaw<{ id: string; name: string }[]>(
+      Prisma.sql`
+        SELECT s."id", s."name"
+          FROM "School" s
+         WHERE ${this.listWhere(q.category, q.q)}
+           AND ${after ? schoolsAfter(after) : Prisma.sql`true`}
+         ${schoolOrderBy()}
+         LIMIT ${limit + 1}`,
+    );
+    const more = place.length > limit;
+    const pageIds = (more ? place.slice(0, limit) : place).map((r) => r.id);
+    if (pageIds.length === 0) return { items: [], nextCursor: null };
+    const found = await this.prisma.school.findMany({
+      where: { id: { in: pageIds }, ...SHOWN },
       include: {
         courses: {
           ...SHOWN_COURSES,
@@ -77,8 +76,10 @@ export class SchoolsPublicService {
         },
       },
     });
-    const more = rows.length > limit;
-    const page = more ? rows.slice(0, limit) : rows;
+    // The page's own order, not the order the second read happened to give.
+    // A school hidden or removed between the two reads simply drops out.
+    const byId = new Map(found.map((r) => [r.id, r]));
+    const page = pageIds.flatMap((id) => byId.get(id) ?? []);
     const term = q.q?.toLowerCase();
     return {
       items: page.map((r) =>
@@ -92,7 +93,9 @@ export class SchoolsPublicService {
             : [],
         ),
       ),
-      nextCursor: more ? encodeCursor(page[page.length - 1]) : null,
+      // From the position the query gave, so a school that left the list
+      // after it was read still marks where the next page starts.
+      nextCursor: more ? encodeCursor(place[limit - 1]) : null,
     };
   }
 
@@ -158,32 +161,33 @@ export class SchoolsPublicService {
     };
   }
 
+  /** The rows the list may show: not hidden, in the category, matching the term. */
   private listWhere(
     category: ListPublicSchoolsDto['category'],
     term: string | undefined,
-  ): Prisma.SchoolWhereInput {
+  ): Prisma.Sql {
     // LIKE reads % and _ as wildcards and \ as its escape; the search term
     // means itself, so each is escaped.
-    const like = term?.replace(/[\\%_]/g, (c) => `\\${c}`);
-    return {
-      ...SHOWN,
-      ...(category ? { category } : {}),
-      ...(like
-        ? {
-            OR: [
-              { name: { contains: like, mode: 'insensitive' } },
-              { location: { contains: like, mode: 'insensitive' } },
-              {
-                courses: {
-                  some: {
-                    ...SHOWN,
-                    title: { contains: like, mode: 'insensitive' },
-                  },
-                },
-              },
-            ],
-          }
-        : {}),
-    };
+    const like =
+      term === undefined
+        ? null
+        : `%${term.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    return Prisma.sql`s."hiddenAt" IS NULL
+      AND ${
+        category
+          ? Prisma.sql`s."category" = ${category}::"SchoolCategory"`
+          : Prisma.sql`true`
+      }
+      AND ${
+        like === null
+          ? Prisma.sql`true`
+          : Prisma.sql`(s."name" ILIKE ${like}
+              OR s."location" ILIKE ${like}
+              OR EXISTS (
+                SELECT 1 FROM "SchoolCourse" c
+                 WHERE c."schoolId" = s."id"
+                   AND c."hiddenAt" IS NULL
+                   AND c."title" ILIKE ${like}))`
+      }`;
   }
 }

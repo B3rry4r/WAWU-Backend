@@ -21,7 +21,7 @@ caller from the token.
 
 | Method and path | Response (`data`) | Request | Served by |
 |---|---|---|---|
-| `GET /money/wallet` | `WalletView` | | MONEY-12 (served; `pin` from MONEY-09, `beneficiaryCount` from WALLET-14) |
+| `GET /money/wallet` | `WalletView` | | MONEY-12 (served; `pin` from MONEY-09, `beneficiaryCount` from WALLET-14, `accountNumberStatus` and each Nuvion wallet's own issuing bank from NUV-04) |
 | `POST /money/wallet/open` | `WalletView` | `OpenNairaWalletDto` | MONEY-12 (served; CONVENTIONS.md section 9) |
 | `GET /money/wallet/balance` | `WalletBalanceView` | | MONEY-11 (served) |
 | `GET /money/pin` | `PinStateView` | | MONEY-09 |
@@ -199,7 +199,7 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 | | what came back, a kept charge as its own row | `TransferView.reversal` → `returnedKobo`, `keptKobo`, `reversedAt` |
 | | reference, amount | `reference`, `totalKobo` |
 | | Try again | a new `POST /money/transfers/bank` with a new `Idempotency-Key` |
-| W15 Add money | account name, number, bank name; licence line | `GET /money/wallet` → `account` (`licenceLine`, `depositInsuranceLine` from config, null hides) |
+| W15 Add money | account name, number, bank name; licence line | `GET /money/wallet` → `account` (`licenceLine`, `depositInsuranceLine` from config, null hides); `accountNumberStatus: on_its_way` while the number is not active yet (NUV-04: under Nuvion `account` is filled only once Nuvion makes the number `active`) |
 | | card, USSD, from Dollar | after launch (WALLET-25, WALLET-26, WALLET-21): not in this contract |
 | W17 Withdraw | balance | `GET /money/wallet/balance` |
 | | default destination with bank code | `GET /money/payout-account` |
