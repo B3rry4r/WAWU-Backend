@@ -122,6 +122,7 @@ describe('The schools list is in one order on every database (FIX-27)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let made: Item[];
+  let hiddenId: string;
   const get = (p: string) =>
     request(app.getHttpServer() as Parameters<typeof request>[0]).get(
       `/api/hub${p}`,
@@ -192,6 +193,20 @@ describe('The schools list is in one order on every database (FIX-27)', () => {
       made.push({ id, name: names[k] });
     }
     expect(new Set(made.map((m) => m.id)).size).toBe(names.length);
+    // One hidden school in the middle of the list (it sorts among the "Dee"
+    // names). It is in no page, and it takes no place in one.
+    hiddenId = uid(0x7777);
+    await prisma.school.create({
+      data: {
+        id: hiddenId,
+        name: 'Dee Hidden Academy',
+        category: 'vocational',
+        location: LOC,
+        about: 'A hidden school this spec creates and removes.',
+        reportEmail: 'enrolments@school.example.com',
+        hiddenAt: new Date(),
+      },
+    });
   }, 120_000);
 
   afterAll(async () => {
@@ -211,6 +226,23 @@ describe('The schools list is in one order on every database (FIX-27)', () => {
       const seen = (await walk(limit)).map((s) => s.id);
       expect(new Set(seen).size).toBe(seen.length); // none twice
       expect(seen).toEqual(big); // none missing, same order
+    }
+  });
+
+  it('a hidden school takes no place in a page: every page but the last is full, and none shows it', async () => {
+    for (const limit of [1, 2, 3, 5, 7]) {
+      const sizes: number[] = [];
+      const ids: string[] = [];
+      let c: string | null = null;
+      do {
+        const p: Page = await page(`limit=${limit}${c ? `&cursor=${c}` : ''}`);
+        sizes.push(p.items.length);
+        ids.push(...p.items.map((s) => s.id));
+        c = p.nextCursor;
+      } while (c);
+      expect(ids).not.toContain(hiddenId);
+      expect(ids).toHaveLength(made.length);
+      expect(sizes.slice(0, -1).every((n) => n === limit)).toBe(true);
     }
   });
 
