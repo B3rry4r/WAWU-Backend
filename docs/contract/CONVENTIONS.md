@@ -439,6 +439,15 @@ one retry at a time per payment.
   which is the duplication G-1 asks to stop.
 - Short lists (banks, recipients, beneficiaries) are plain arrays with a
   stated maximum and no paging.
+- **A cursor page ordered by text names its collation in the query** (FIX-27).
+  A text column sorts by the collation its database was made with (CI's
+  `postgres:16` is `en_US.utf8`, a laptop `C.UTF-8`, an ICU database a third
+  way), so a list left to the column comes in a different order on each, and a
+  cursor compared against it can disagree with the page. Write `COLLATE "C"`
+  (built into every Postgres) on the `ORDER BY` and on the cursor's
+  comparison, built from the same expressions: the schools list does
+  (`src/schools/schools-order.ts`), the inbox does for its text key. Keys that
+  are times or uuids need nothing.
 
 ### The history (MONEY-15)
 
