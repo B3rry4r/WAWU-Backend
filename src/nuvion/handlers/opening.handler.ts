@@ -183,7 +183,9 @@ export class NuvionOpeningHandler implements NuvionEventHandler {
     wawuUserId: string,
     read: NuvionEntityReading,
   ): Promise<Recorded> {
-    const now = new Date();
+    // The database's clock, as the correction's time is (`correctedAt`), so
+    // "after the correction" never depends on a server's own clock.
+    const now = await this.dbNow();
     const words = {
       personId: read.personId ?? undefined,
       status: read.status,
@@ -272,6 +274,13 @@ export class NuvionOpeningHandler implements NuvionEventHandler {
     };
   }
 
+  private async dbNow(): Promise<Date> {
+    const [r] = await this.prisma.$queryRaw<Array<{ now: Date | string }>>`
+      SELECT now() AS "now"
+    `;
+    return new Date(r.now);
+  }
+
   /** One notification for a new decision; none when there is nothing new. */
   private async tell(
     wawuUserId: string,
@@ -324,7 +333,7 @@ export class NuvionOpeningHandler implements NuvionEventHandler {
     );
     if (fits.length !== 1) return null;
     const [c] = fits;
-    const now = new Date();
+    const now = await this.dbNow();
     let adopted: { stage: WalletReviewStage; notice: DecisionNotice | null };
     try {
       adopted = await this.prisma.$transaction(async (tx) => {
