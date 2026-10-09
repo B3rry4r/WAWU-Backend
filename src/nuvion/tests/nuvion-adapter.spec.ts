@@ -402,9 +402,10 @@ describe('NUV-01: the Nuvion adapter behind WALLET_PROVIDER', () => {
       await expect(
         provider.findCustomerByPhone('+2348031234567', () => 'd'),
       ).resolves.toEqual({ state: 'unknown', why: 'empty_answer' });
-      for (const [method, , args] of CALLS.filter(
-        ([m]) => !FILLED.includes(m),
-      )) {
+      // The accounts area is NUV-04's and no longer a stub (its own specs
+      // cover it): every other area still answers not_supported.
+      for (const [method, owner, args] of CALLS) {
+        if (owner === 'accounts' || FILLED.includes(method)) continue;
         const methods = provider as unknown as Record<
           string,
           (...a: unknown[]) => Promise<unknown>

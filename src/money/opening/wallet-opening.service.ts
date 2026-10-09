@@ -28,6 +28,7 @@ import type { OpenNairaWalletDto } from './dto/open-wallet.dto';
 import { visibleBeneficiaries } from '../saved-accounts/beneficiary.service';
 import { type IdentityStop, stoppedOnIdentity } from './opening-stops';
 import { ReviewedOpening } from './reviewed-opening';
+import { accountOnItsWay } from './review-stage';
 import {
   WALLET_OPENING_DEFAULTS,
   WalletOpeningSettings,
@@ -217,30 +218,77 @@ export class WalletOpeningService {
   // GET /money/wallet
   // -------------------------------------------------------------------------
 
-  /** The wallet as WAWU records it. Never calls Fintava. */
+  /**
+   * The wallet as WAWU records it. Never calls the provider.
+   *
+   * NUV-04, under Nuvion: the wallet row is written only once Nuvion makes
+   * the account number `active` (src/nuvion/handlers/accounts.ts), so
+   * `account` is never a pending number; until then `accountNumberStatus`
+   * says it is on its way. The bank a Nuvion wallet's number is at is the
+   * one Nuvion named for that account (its account details' issuer,
+   * recorded on NuvionEntity; BACKEND_GAPS G-401), and the running
+   * provider's configured bank name (`NUVION_WALLET_BANK_NAME`) only when
+   * Nuvion named none.
+   */
   async view(wawuUserId: string): Promise<WalletView> {
-    const [wallet, opening, pin] = await Promise.all([
+    const [wallet, opening, pin, nuvion] = await Promise.all([
       this.prisma.fintavaWallet.findUnique({
         where: { wawuUserId },
-        select: { accountNumber: true, accountName: true, createdAt: true },
+        select: {
+          accountNumber: true,
+          accountName: true,
+          createdAt: true,
+          provider: true,
+        },
       }),
       this.prisma.fintavaWalletOpening.findUnique({
         where: { wawuUserId },
         select: { state: true, failure: true },
       }),
       this.pins.state(wawuUserId),
+      this.prisma.nuvionEntity.findUnique({
+        where: { wawuUserId },
+        select: {
+          status: true,
+          accountId: true,
+          accountRequestedAt: true,
+          accountNumber: true,
+          issuerBankName: true,
+          issuerBankCode: true,
+        },
+      }),
     ]);
     // The wallet gate's own rule (MONEY-13), so this state and the code
     // every other wallet route refuses with always agree.
     const state: WalletState = walletStateOf(wallet !== null, opening);
+    // The issuer Nuvion named for this wallet's own number (NUV-04).
+    const issuer =
+      wallet &&
+      isRowOf('nuvion', wallet.provider) &&
+      nuvion?.accountNumber === wallet.accountNumber
+        ? nuvion
+        : null;
+    // NUV-02, under a provider that reviews the person: the number is on its
+    // way only once the account is requested after an approval. A person who
+    // is only being checked, rejected, or stopped (also for a BVN another
+    // account took) is told `none`; `opening` there is the review, not the
+    // account.
+    const review = this.reviewing
+      ? await this.reviewed.reviewOf(wawuUserId, opening)
+      : undefined;
+    const onItsWay = this.reviewing
+      ? accountOnItsWay(review?.stage ?? null, nuvion)
+      : state === 'opening' ||
+        nuvion?.status === 'approved' ||
+        (nuvion?.accountId ?? null) !== null;
     return {
       state,
       account: wallet
         ? {
             accountNumber: wallet.accountNumber,
             accountName: wallet.accountName ?? '',
-            bankName: this.settings.bankName,
-            bankCode: this.provider.walletBankCode,
+            bankName: issuer?.issuerBankName ?? this.settings.bankName,
+            bankCode: issuer?.issuerBankCode ?? this.provider.walletBankCode,
             licenceLine: this.settings.licenceLine,
             depositInsuranceLine: this.settings.depositInsuranceLine,
             openedAt: wallet.createdAt.toISOString(),
@@ -256,14 +304,12 @@ export class WalletOpeningService {
       beneficiaryCount: wallet
         ? (await visibleBeneficiaries(this.prisma, wawuUserId)).length
         : 0,
+      accountNumberStatus: wallet ? 'active' : onItsWay ? 'on_its_way' : 'none',
       // NUV-02, additive and only under a provider that reviews the person
       // itself: the answer under Fintava is exactly MONEY-12's (an absent
       // `openingFlow` is `check`).
-      ...(this.reviewing
-        ? {
-            openingFlow: 'review' as const,
-            review: await this.reviewed.reviewOf(wawuUserId, opening),
-          }
+      ...(review !== undefined
+        ? { openingFlow: 'review' as const, review }
         : {}),
     };
   }

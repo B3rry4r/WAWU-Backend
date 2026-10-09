@@ -143,6 +143,14 @@ export interface WalletView {
   bankTransfers: BankTransferAccessView;
   beneficiaryCount: number;
   /**
+   * Where the account number stands (W1, W15, A7; NUV-04): `active` once
+   * there is an account to pay into (`account` is filled); `on_its_way`
+   * while it is being opened or, at a provider that issues the number
+   * later (Nuvion), after approval until the number is active; `none`
+   * otherwise. `account` is never filled before `active`.
+   */
+  accountNumberStatus: WalletAccountNumberStatus;
+  /**
    * Which Open your wallet this server runs (NUV-02, additive; sent only
    * under a provider that reviews the person, so absent means `check`): `check`, the
    * BVN check and selfie match, then the account (Fintava, MONEY-12);
@@ -213,6 +221,9 @@ export interface WalletReviewView {
   /** When the provider decided (approved, rejected or stopped); else null. */
   decidedAt: string | null;
 }
+
+/** WalletView.accountNumberStatus (NUV-04). */
+export type WalletAccountNumberStatus = 'none' | 'on_its_way' | 'active';
 
 /**
  * GET /money/wallet/balance: Fintava's figure, fetched on every call

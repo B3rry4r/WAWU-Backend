@@ -33030,6 +33030,14 @@
           "beneficiaryCount": {
             "type": "number"
           },
+          "accountNumberStatus": {
+            "type": "string",
+            "enum": [
+              "none",
+              "on_its_way",
+              "active"
+            ]
+          },
           "openingFlow": {
             "type": "string",
             "enum": [
@@ -33053,7 +33061,8 @@
           "limits",
           "pin",
           "bankTransfers",
-          "beneficiaryCount"
+          "beneficiaryCount",
+          "accountNumberStatus"
         ]
       },
       "ApprovalDeviceView": {
@@ -46183,8 +46192,8 @@
           "state": {
             "type": "string",
             "enum": [
-              "active",
               "none",
+              "active",
               "ending",
               "ended"
             ]
