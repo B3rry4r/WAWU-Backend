@@ -85,6 +85,10 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   // NUV-02. Default (agent), owner may override: 409, as wallet_opening. The
   // request is understood; the person waits for the review to end.
   identity_under_review: 409,
+  // NUV-02 round 2, U3. Default (agent), owner may override: 409, as
+  // wallet_already_open. The request is understood; this wallet is opened
+  // another way, so asking again changes nothing.
+  step_not_used: 409,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */

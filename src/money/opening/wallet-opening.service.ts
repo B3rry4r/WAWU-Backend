@@ -262,7 +262,7 @@ export class WalletOpeningService {
       ...(this.reviewing
         ? {
             openingFlow: 'review' as const,
-            review: await this.reviewed.reviewOf(wawuUserId),
+            review: await this.reviewed.reviewOf(wawuUserId, opening),
           }
         : {}),
     };

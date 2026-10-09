@@ -443,12 +443,28 @@ function maskSecretRuns(text: string, secret: string): string {
 }
 
 /**
+ * Digits in one run or in groups: one or two spaces, dashes (also the
+ * typographic ones) or dots between a digit and the next.
+ */
+const DIGIT_GROUPS = /\d(?:[ \u00A0.\-\u2010-\u2015\u2212]{0,2}\d)+/g;
+
+/** A run of 7 or more digits (groups counted together) cut to its last 4. */
+function maskDigitGroup(run: string): string {
+  const digits = run.replace(/\D/g, '');
+  return digits.length < 7
+    ? run
+    : `${'*'.repeat(digits.length - 4)}${digits.slice(-4)}`;
+}
+
+/**
  * Masks what could identify a person or open the account in a text Nuvion
  * sent, before it reaches an error or a log: any run of 8 or more
  * characters of a given secret (the API key), any `Bearer` token, any run of
  * 40 or more base64 characters (a document or image echoed back), runs of 7
  * or more digits down to their last 4 (a BVN, NIN, phone or account
- * number), and an email down to its domain. Capped at 200 characters.
+ * number), also when the digits come in groups with a space, a dash or a dot
+ * between them (`2221 0003 123`, `3331-0003-123`; NUV-02 round 2, D5), and an
+ * email down to its domain. Capped at 200 characters.
  */
 export function maskNuvionText(text: string, secrets: string[] = []): string {
   let out = text.slice(0, 2000);
@@ -456,7 +472,7 @@ export function maskNuvionText(text: string, secrets: string[] = []): string {
   return out
     .replace(/bearer\s+\S+/gi, '[credential]')
     .replace(/[A-Za-z0-9+/]{40,}={0,2}/g, '[data]')
-    .replace(/\d{7,}/g, (d) => `${'*'.repeat(d.length - 4)}${d.slice(-4)}`)
+    .replace(DIGIT_GROUPS, maskDigitGroup)
     .replace(/[^\s@"']+@([^\s@"']+)/g, '***@$1')
     .slice(0, 200);
 }

@@ -206,3 +206,62 @@ export function isDecision(status: string): boolean {
     status.trim().toLowerCase(),
   );
 }
+
+/** What is held of the last decision, to tell a new one from the same again. */
+export interface DecisionHeld {
+  status: string;
+  decidedAt: Date | null;
+  correctedAt: Date | null;
+  /** Nuvion's own `updated` time as last recorded (its clock). */
+  entityUpdatedAt: Date | null;
+}
+
+/**
+ * Whether a re-read entity shows a decision we have not recorded (NUV-02
+ * round 2, D3): `read.status` must be a decision, and either none is held,
+ * or the word changed, or the same word came after the person's corrected
+ * details and Nuvion's own update time has moved past the one recorded with
+ * the correction (a decision read with no later time is the echo of the
+ * correction itself, which leaves the word as it was). When Nuvion gives no
+ * update time, a decision after a correction is taken as new. The same
+ * decision read again with no correction between is not new: nothing
+ * changes and nobody is told twice.
+ */
+export function isNewDecision(
+  held: DecisionHeld | null,
+  read: { status: string; updated: number | null },
+): boolean {
+  if (!isDecision(read.status)) return false;
+  if (held === null || held.decidedAt === null) return true;
+  if (held.status.trim().toLowerCase() !== read.status.trim().toLowerCase()) {
+    return true;
+  }
+  if (held.correctedAt === null || held.correctedAt <= held.decidedAt) {
+    return false;
+  }
+  if (read.updated === null || held.entityUpdatedAt === null) return true;
+  return read.updated > held.entityUpdatedAt.getTime();
+}
+
+/** What a decision tells the person (the notification), from our own words only. */
+export type DecisionNotice =
+  | { outcome: 'approved' }
+  | { outcome: 'rejected'; fixes: string[] }
+  | { outcome: 'stopped' };
+
+/** The notice for the stage a record is at; null while the review goes on. */
+export function noticeOf(r: ReviewRecord): DecisionNotice | null {
+  switch (reviewStageOf(r)) {
+    case 'approved':
+      return { outcome: 'approved' };
+    case 'rejected':
+      return {
+        outcome: 'rejected',
+        fixes: [...new Set(reviewReasonsOf(r).map((x) => x.fix))],
+      };
+    case 'stopped':
+      return { outcome: 'stopped' };
+    default:
+      return null;
+  }
+}
