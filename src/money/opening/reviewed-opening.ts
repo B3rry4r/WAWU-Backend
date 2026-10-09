@@ -748,8 +748,8 @@ export class ReviewedOpening {
     const next = row.attempts + 1;
     const startedAt = await this.host.dbNow();
     // Nuvion may answer this correction with the documents' checks back at
-    // `pending`, and the answer's words replace the stored ones below. A
-    // document its review refused is kept on the document's own row first,
+    // `pending`, and the stored words are then replaced by the answer's. A
+    // document its review refused is put on the document's own row first,
     // so the person is still asked for a new file (NUV-03 round 2, D1).
     await noteDocumentRefusals(prisma, row.wawuUserId, entity, startedAt);
     const numbersAgain = numbersFailed(entity);
