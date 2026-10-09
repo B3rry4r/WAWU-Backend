@@ -1039,8 +1039,8 @@ export class DocumentsFlow {
    * list of the entity's documents says whether it took the file. One it
    * took is recorded (never sent again); one it never got stays as it is and
    * the view reads it `send_again` (D3). A list that cannot be read changes
-   * nothing. Safe to run any
-   * number of times, from the documents view and from a delivery.
+   * nothing. Safe to run any number of times, from the documents view and
+   * from a delivery.
    */
   async settleLost(wawuUserId: string): Promise<void> {
     const lost = await this.prisma.nuvionDocument.findMany({
