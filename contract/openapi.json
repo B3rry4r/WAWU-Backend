@@ -24866,6 +24866,285 @@
         "x-wawu-max-items": 10
       }
     },
+    "/api/hub/money/identity/documents": {
+      "get": {
+        "operationId": "NuvionDocumentsController_getDocuments",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityDocumentsView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Where the opening's documents stand: both kinds, whether uploads are\nopen, what is still needed before the opening is sent for review. When\nthe documents are in and the opening is due to be sent (or its sending\nwas lost), this sends it, once.",
+        "tags": [
+          "NuvionDocuments"
+        ],
+        "x-wawu-built-by": "NUV-03"
+      },
+      "post": {
+        "operationId": "NuvionDocumentsController_uploadDocument",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "file"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "identity",
+                      "proof_of_address"
+                    ]
+                  },
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  },
+                  "file_back": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityDocumentsView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: document_request_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: documents_closed, document_in_progress, wallet_not_open, identity_under_review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reason.code: document_file_invalid, document_not_accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "reason.code: document_rate_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: document_busy, provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Sends one document to Nuvion, once: multipart with `kind` (`identity`\nor `proof_of_address`) and `file` (a PDF, JPG or PNG up to 10 MB). An\nID with a back side sends it as `file_back` in the same request, of\nthe same type. The same file sent twice is forwarded once; a different\nfile replaces the first while the opening is still taking documents.\nWhen both documents are in (and the selfie has passed, when in use) the\nopening is sent for review, once. WAWU keeps no copy of any file.\nAnswers the documents view.",
+        "tags": [
+          "NuvionDocuments"
+        ],
+        "x-wawu-built-by": "NUV-03"
+      }
+    },
+    "/api/hub/money/identity/liveness": {
+      "get": {
+        "operationId": "NuvionDocumentsController_getLiveness",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityLivenessView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The hosted selfie: whether it is in use, where it stands, and the\nsecure page to open or resume while it is pending. Reads the result\nfrom Nuvion; a pass is saved on the opening, which is then sent for\nreview when everything else is in.",
+        "tags": [
+          "NuvionDocuments"
+        ],
+        "x-wawu-built-by": "NUV-03"
+      },
+      "post": {
+        "operationId": "NuvionDocumentsController_startLiveness",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartLivenessDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityLivenessView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: document_request_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: documents_closed, document_in_progress, selfie_not_available, wallet_not_open",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "reason.code: document_rate_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Starts the hosted selfie (or answers the one already running) and\nreturns the secure page to open. `redirectUrl` is where that page sends\nthe person back: the app's link or the website, https only. When\nNuvion will not start a selfie for this person, the opening goes on\nwithout one and this answers `selfie_not_available`.",
+        "tags": [
+          "NuvionDocuments"
+        ],
+        "x-wawu-built-by": "NUV-03"
+      }
+    },
     "/api/hub/about": {
       "get": {
         "operationId": "AboutController_about",
@@ -31559,6 +31838,29 @@
           "message"
         ]
       },
+      "DocumentErrorEnvelope": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "object",
+            "nullable": true,
+            "example": null
+          }
+        },
+        "required": [
+          "data"
+        ]
+      },
+      "StartLivenessDto": {
+        "type": "object",
+        "properties": {
+          "redirectUrl": {
+            "type": "string",
+            "description": "Where the secure selfie page sends the person when it is done: a secure\n(https) web address, the app's link or the website. Optional.",
+            "maxLength": 2000
+          }
+        }
+      },
       "PolicySectionDto": {
         "type": "object",
         "properties": {
@@ -33487,6 +33789,148 @@
           "licenceLine",
           "lines",
           "issuedAt"
+        ]
+      },
+      "IdentityDocumentView": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "identity",
+              "proof_of_address"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "missing",
+              "confirming",
+              "uploaded",
+              "not_accepted",
+              "needs_new"
+            ]
+          },
+          "sides": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "front",
+                "back"
+              ]
+            }
+          },
+          "uploadedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "kind",
+          "state",
+          "sides",
+          "uploadedAt"
+        ]
+      },
+      "IdentityDocumentsView": {
+        "type": "object",
+        "properties": {
+          "required": {
+            "type": "boolean"
+          },
+          "open": {
+            "type": "boolean"
+          },
+          "documents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IdentityDocumentView"
+            }
+          },
+          "selfie": {
+            "type": "string",
+            "enum": [
+              "not_used",
+              "needed",
+              "done"
+            ]
+          },
+          "submitted": {
+            "type": "boolean"
+          },
+          "submittedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "waitingFor": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "identity",
+                "proof_of_address",
+                "selfie"
+              ]
+            }
+          },
+          "maxBytes": {
+            "type": "number"
+          },
+          "acceptedTypes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "required",
+          "open",
+          "documents",
+          "selfie",
+          "submitted",
+          "submittedAt",
+          "waitingFor",
+          "maxBytes",
+          "acceptedTypes"
+        ]
+      },
+      "IdentityLivenessView": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "not_in_use",
+              "not_started",
+              "passed",
+              "not_passed",
+              "expired"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "nullable": true
+          },
+          "startedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "canStart": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled",
+          "state",
+          "url",
+          "startedAt",
+          "canStart"
         ]
       },
       "AdminUserView": {
