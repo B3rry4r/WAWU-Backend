@@ -93,6 +93,13 @@ const AWKWARD = [
   'Twin School',
 ];
 
+/** Rising with the lower-case name first: the reverse of the promised order. */
+const TWIN_IDS: Record<string, string> = {
+  'case twin': uid(0x100),
+  'Case Twin': uid(0x200),
+  'CASE TWIN': uid(0x300),
+};
+
 type Item = { id: string; name: string };
 type Page = { items: Item[]; nextCursor: string | null };
 
@@ -168,7 +175,10 @@ describe('The schools list is in one order on every database (FIX-27)', () => {
     made = [];
     for (let i = 0; i < names.length; i++) {
       const k = (i * 17 + 5) % names.length;
-      const id = uid(0xf000 - k * 3);
+      // The three names that differ only in case get ids that rise the
+      // other way round to the promised order (capitals first), so only the
+      // exact-name step puts them right, never the id.
+      const id = TWIN_IDS[names[k]] ?? uid(0xf000 - k * 3);
       await prisma.school.create({
         data: {
           id,
