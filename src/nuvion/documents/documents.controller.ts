@@ -34,7 +34,11 @@ import type {
  * nobody can read or change another person's documents. These routes are
  * part of opening, so they are not behind the wallet gate (they are where
  * it leads); a person with no opening started gets the same
- * `409 wallet_not_open` every wallet route gives. Every answer is
+ * `409 wallet_not_open` every wallet route gives. That answer is written
+ * here and not in each route's `@DocumentErrors` on purpose: the wallet
+ * gate's coverage spec reads a route that documents `wallet_not_open` as
+ * one that runs the gate, and these routes run before a wallet exists
+ * (they are listed there as not gated, with that reason). Every answer is
  * `no-store`.
  */
 @ApiBearerAuth('wawu-id')
@@ -52,7 +56,7 @@ export class NuvionDocumentsController {
   @Get('documents')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('NUV-03')
-  @DocumentErrors('wallet_not_open', 'provider_unreachable')
+  @DocumentErrors('provider_unreachable')
   getDocuments(
     @CurrentUser() user: WawuJwtClaims,
   ): Promise<IdentityDocumentsView> {
@@ -94,7 +98,6 @@ export class NuvionDocumentsController {
     'document_in_progress',
     'document_rate_limited',
     'document_busy',
-    'wallet_not_open',
     'provider_unreachable',
     'identity_under_review',
   )
@@ -116,7 +119,7 @@ export class NuvionDocumentsController {
   @Get('liveness')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('NUV-03')
-  @DocumentErrors('wallet_not_open', 'provider_unreachable')
+  @DocumentErrors('provider_unreachable')
   getLiveness(
     @CurrentUser() user: WawuJwtClaims,
   ): Promise<IdentityLivenessView> {
@@ -140,7 +143,6 @@ export class NuvionDocumentsController {
     'document_in_progress',
     'document_rate_limited',
     'selfie_not_available',
-    'wallet_not_open',
     'provider_unreachable',
   )
   startLiveness(
