@@ -281,10 +281,14 @@ with `NUVION_WEBHOOK_SECRET` (a tunnel, as for Fintava below).
 Opening on Nuvion takes an ID document and a proof of address (NUV-03,
 `POST /api/hub/money/identity/documents`, a PDF, JPG or PNG up to 10 MB; the two
 sides of an ID go in one request as `file` and `file_back`). WAWU keeps no copy
-of any file: it goes to Nuvion, and WAWU keeps the kind, the state, Nuvion's id
-and a fingerprint. When both are in, the opening is sent for review once. The
-hosted selfie (`/api/hub/money/identity/liveness`) is off unless
-`NUVION_HOSTED_LIVENESS=on`; with it off the opening does not wait for one.
+of any file: it goes to Nuvion, and WAWU keeps the kind, the state, Nuvion's id,
+whether its review refused the file, and a keyed fingerprint (an HMAC under
+`IDENTITY_HASH_KEY`, cleared once the opening is sent). When both are in, the
+opening is sent for review once. The hosted selfie
+(`/api/hub/money/identity/liveness`) is off unless `NUVION_HOSTED_LIVENESS=on`
+(with `NUVION_LIVENESS_REDIRECT_ORIGINS` listing where its page may return to:
+an origin and a path prefix per entry, empty allows none); with it off the
+opening does not wait for one.
 
 Put the **sandbox** values in `wawu-backend/.env` and restart. Never the live
 ones: local testing is sandbox only, and `up.sh` refuses any Fintava URL but the sandbox

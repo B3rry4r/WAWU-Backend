@@ -1334,39 +1334,77 @@ nothing is needed.
   arrives, so the two sides of an ID go in one request. A `side` field is
   accepted only as `front`.
 - **WAWU keeps no file.** It goes to Nuvion; WAWU keeps the kind, the sides,
-  the state, Nuvion's document id, the time and a SHA-256 of the bytes (so the
-  same file sent twice is forwarded once). The type is read from the bytes,
-  never from what the client names it.
+  the state, Nuvion's document id, the time, whether Nuvion's review refused
+  it, and an HMAC-SHA256 of the bytes under `IDENTITY_HASH_KEY` (as the BVN's
+  hash is; so the same file sent twice is forwarded once, and nobody who can
+  read the table can test whether a person sent a given file). The
+  fingerprint is cleared once the opening is submitted: after that nothing is
+  compared with it, and any upload is `documents_closed` until the review
+  refuses a document and details are corrected. The type is read from the
+  bytes, never from what the client names it.
 - **The same file again** (a double tap, a retry after a lost answer) is the
-  answer it already got. **A different file** replaces the first while the
-  opening still takes documents.
+  answer it already got, until the opening is submitted. **A different file**
+  replaces the first while the opening still takes documents.
 - **A document is `uploaded` only on Nuvion's answer.** An answer that was
   lost leaves it `confirming`; nothing is sent again until the call's own
-  time has passed, and then Nuvion's list of the entity's documents is read
-  first. `not_accepted` means Nuvion refused the last file (send another);
-  `needs_new` means Nuvion's review said this document did not pass.
+  time has passed. Past that time `GET /money/identity/documents` reads
+  Nuvion's list of the entity's documents: a document it took reads
+  `uploaded`; one it never got, or a list that cannot be read, reads
+  `send_again` (WAWU keeps no copy: ask the person for the file again; the
+  upload route looks at Nuvion's list once more before it sends, so a file
+  Nuvion has is never sent twice). `not_accepted` means Nuvion refused the
+  last file (send another).
+- **A refused document stays refused.** `needs_new` means Nuvion's review
+  said this upload did not pass. The refusal is kept on the document's own
+  row, written where the entity's word for it is written (the delivery and
+  the correction of the details), so it survives a correction that Nuvion
+  answers with the check back at `pending` (as its own `PATCH
+  /individual-entities` sample does). The person is asked for a new file,
+  and the opening is not sent again without one: only a new upload of that
+  kind clears the refusal.
 - **The opening is sent for review once**, when both documents are `uploaded`
   (and the selfie has passed, when it is in use), behind a claim taken before
   `POST /onboarding-submissions`; `GET /money/wallet` then reads `checking`.
   A submission Nuvion refused is not sent again for a minute, or until a
   document changes. Corrected details after a refusal start it again.
-- **The selfie** is off unless `NUVION_HOSTED_LIVENESS=on`. When Nuvion will
-  not start a session for a child entity, the opening goes on without one and
-  `POST` answers `409 selfie_not_available`.
+- **The selfie** is off unless `NUVION_HOSTED_LIVENESS=on`, and it is the
+  server's one switch, never a row of one person. A refused session start is
+  read by whom it is about:
+  - Nuvion saying its API is not available to this key (`error_endpoint_not_found`,
+    404, "API endpoint does not exist"; `error_auth_permission_denied` or
+    `error_auth_elevated_permission_required`, 403) turns the selfie off for
+    everyone on that server for an hour, logged as an error without any
+    person in it; the opening goes on without it and `POST` answers `409
+    selfie_not_available`. These are the only such answers Nuvion's errors page
+    lists; if the sandbox shows another, it is one more line
+    (`LIVENESS_API_UNAVAILABLE_TYPES`).
+  - A return address Nuvion will not take (a refused body, with an address
+    sent) is that person's `400 document_request_invalid`.
+  - Anything else about the person's request or entity (an identity,
+    entity or account refusal, no such record, a rate limit, a refused
+    body with no address) is `503 provider_unreachable` with `retryAfterSeconds`
+    for that person to wait out or retry. The step stays required of them:
+    no one gets past the selfie by being refused.
+  - A lost answer or a 5xx turns nothing off and records nothing.
+  The return address must be https, with no credentials or encoded dots or
+  slashes, on an origin AND under a path prefix listed in
+  `NUVION_LIVENESS_REDIRECT_ORIGINS` (`https://app.example/open` allows `/open`
+  and `/open/...` there, not `/opening`); an empty list allows no address,
+  and no address at all is allowed (nothing is sent).
 
 | `reason.code` | HTTP | When | Extra fields |
 |---|---|---|---|
 | `wallet_not_open` | 409 | no opening started | |
-| `document_request_invalid` | 400 | no or unknown `kind`, no file, a field or part we do not read, `file_back` for a proof of address, a return address that is not https (or not one of `NUVION_LIVENESS_REDIRECT_ORIGINS`) | |
+| `document_request_invalid` | 400 | no or unknown `kind`, no file, a field or part we do not read, `file_back` for a proof of address, a return address that is not https or not one the server lists (origin and path prefix, `NUVION_LIVENESS_REDIRECT_ORIGINS`), or one Nuvion refused for that person | |
 | `document_file_invalid` | 422 | a file that is empty, over 10 MB, not a PDF, JPG or PNG, or two sides of different types; nothing is sent | |
 | `document_not_accepted` | 422 | Nuvion read the file or the details and refused them; nothing was kept | |
 | `documents_closed` | 409 | the opening is not taking documents now (sent, decided, stopped, or a refusal not yet corrected), or this wallet needs none | |
 | `document_in_progress` | 409 | the last upload of this kind is still being confirmed, or a selfie is being started | `retryAfterSeconds` |
 | `document_rate_limited` | 429 | too many uploads (or selfie starts) for now (`PROVISIONAL(NUVION-DOCUMENT-UPLOAD-LIMITS)`) | `retryAfterSeconds` |
 | `document_busy` | 503 | the server is busy with other uploads | `retryAfterSeconds` |
-| `selfie_not_available` | 409 | the selfie is not part of this opening | |
+| `selfie_not_available` | 409 | the selfie is not part of this opening (not in use, or Nuvion said its API is not available to us) | |
 | `identity_under_review` | 409 | Nuvion has the details with its compliance review | |
-| `provider_unreachable` | 503 | Nuvion did not answer, or the answer is not confirmed yet | `retryAfterSeconds` |
+| `provider_unreachable` | 503 | Nuvion did not answer, the answer is not confirmed yet, or it would not start this person's selfie (the step stays required) | `retryAfterSeconds` |
 
 The codes of this section are the task's own (`src/nuvion/documents/document-errors.ts`),
 not in the money contract's shared list; each route's entry in the contract

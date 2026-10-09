@@ -24891,16 +24891,6 @@
               }
             }
           },
-          "409": {
-            "description": "reason.code: wallet_not_open",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DocumentErrorEnvelope"
-                }
-              }
-            }
-          },
           "503": {
             "description": "reason.code: provider_unreachable",
             "content": {
@@ -24979,7 +24969,7 @@
             }
           },
           "409": {
-            "description": "reason.code: documents_closed, document_in_progress, wallet_not_open, identity_under_review",
+            "description": "reason.code: documents_closed, document_in_progress, identity_under_review",
             "content": {
               "application/json": {
                 "schema": {
@@ -25046,16 +25036,6 @@
               }
             }
           },
-          "409": {
-            "description": "reason.code: wallet_not_open",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DocumentErrorEnvelope"
-                }
-              }
-            }
-          },
           "503": {
             "description": "reason.code: provider_unreachable",
             "content": {
@@ -25113,7 +25093,7 @@
             }
           },
           "409": {
-            "description": "reason.code: documents_closed, document_in_progress, selfie_not_available, wallet_not_open",
+            "description": "reason.code: documents_closed, document_in_progress, selfie_not_available",
             "content": {
               "application/json": {
                 "schema": {
@@ -33826,6 +33806,7 @@
             "enum": [
               "missing",
               "confirming",
+              "send_again",
               "uploaded",
               "not_accepted",
               "needs_new"
