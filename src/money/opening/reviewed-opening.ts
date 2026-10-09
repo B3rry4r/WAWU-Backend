@@ -524,8 +524,9 @@ export class ReviewedOpening {
       });
     } catch (e) {
       if (!isUniqueViolation(e)) throw e;
-      await this.heldByAnother(wawuUserId);
-      return;
+      // This request's try is already spent (it won the claim); the number
+      // is another account's, so nothing goes out.
+      throw new MoneyError('identity_has_wallet', OPENING_HELD_MESSAGE);
     }
     if (moved.count !== 1) throw new ClaimMoved();
   }

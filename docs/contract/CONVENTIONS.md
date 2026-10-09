@@ -902,9 +902,12 @@ this applies and every answer is as in section 9.
   (`GET /entities/{id}`). A decision is new when it is the first, the word
   changed, or the same word came after corrected details with Nuvion's own
   `updated` time past the one recorded with the correction (the echo of the
-  correction itself has no later time and changes nothing). A new decision
-  sets `decidedAt`; a rejection after `correctedAt` reads `needs_documents`
-  until then. A new `approved`, `rejected` or stopped (`failed`, `suspended`)
+  correction itself has no later time and changes nothing; when Nuvion gives
+  no `updated` time, a decision after a correction is taken as new,
+  `NuvionEntity.entityUpdatedAt`). A new decision
+  sets `decidedAt`. A person whose details were corrected after the last
+  rejection reads `needs_documents` until a decision newer than the
+  correction is read. A new `approved`, `rejected` or stopped (`failed`, `suspended`)
   decision writes one `identity_review` notification (title and body of our
   own words; a rejection carries what to fix; never a BVN, NIN or ID number),
   by the one delivery that recorded it.

@@ -1,4 +1,13 @@
 import {
+  heldBvnHash,
+  isReleasedBvnHash,
+  releasedBvnHash,
+  stageHoldsBvn,
+} from '../../money/opening/bvn-claim';
+import {
+  type DecisionHeld,
+  isNewDecision,
+  noticeOf,
   numbersFailed,
   openingStateForStage,
   type ReviewRecord,
@@ -11,6 +20,7 @@ import {
   nuvionPhoneE164,
   readNuvionEntity,
 } from '../areas/opening';
+import { maskNuvionText } from '../nuvion-error';
 
 /**
  * NUV-02, pure parts: Nuvion's review words to a stage, the opening state
@@ -194,5 +204,201 @@ describe('NUV-02: reading an entity', () => {
       'licence ******45XY expired',
     );
     expect(maskReviewWords('no digits here')).toBe('no digits here');
+  });
+});
+
+describe('NUV-02 round 2: Nuvion text with numbers in groups (D5)', () => {
+  it.each([
+    ['BVN 2221 0003 123 refused', 'BVN *******3123 refused'],
+    ['NIN 3331-0003-123 refused', 'NIN *******3123 refused'],
+    ['ID 4441.0003.12 refused', 'ID ******0312 refused'],
+    ['phone +234 803 123 4567 refused', 'phone +*********4567 refused'],
+    ['mixed 2221 0003-123 refused', 'mixed *******3123 refused'],
+    ['two  spaces 2221  0003  123 refused', 'two  spaces *******3123 refused'],
+    ['contiguous 22210003123 refused', 'contiguous *******3123 refused'],
+  ])('%s', (text, masked) => {
+    expect(maskNuvionText(text)).toBe(masked);
+  });
+
+  it('short numbers and words are left alone', () => {
+    expect(maskNuvionText('step 2 of 3, 12 items, version 4.1')).toBe(
+      'step 2 of 3, 12 items, version 4.1',
+    );
+    expect(maskNuvionText('between 10 and 20 digits')).toBe(
+      'between 10 and 20 digits',
+    );
+  });
+
+  it('the stored reason words carry no group of 5 or more digits either', () => {
+    const out = maskReviewWords(
+      'BVN 2221 0003 123 and NIN 3331-0003-123 and licence AB 1234 567',
+    );
+    expect(out).not.toMatch(/\d(?:[ .-]?\d){4,}/);
+  });
+});
+
+describe('NUV-02 round 2: who holds a BVN (the stored form)', () => {
+  const user = '6f1f6f5e-0f6e-4f0c-9d4e-1a2b3c4d5e6f';
+  const hash = 'a'.repeat(64);
+
+  it('a released hash goes back to the hash it was made from, and is not a hash', () => {
+    const released = releasedBvnHash(user, hash);
+    expect(released).not.toBe(hash);
+    expect(isReleasedBvnHash(released)).toBe(true);
+    expect(isReleasedBvnHash(hash)).toBe(false);
+    expect(heldBvnHash(user, released)).toBe(hash);
+    expect(heldBvnHash(user, hash)).toBe(hash);
+    expect(releasedBvnHash(user, released)).toBe(released);
+  });
+
+  it('two accounts release the same BVN into different values (the unique key never meets)', () => {
+    expect(releasedBvnHash(user, hash)).not.toBe(
+      releasedBvnHash('another-user', hash),
+    );
+    expect(heldBvnHash('another-user', releasedBvnHash(user, hash))).not.toBe(
+      hash,
+    );
+  });
+
+  it.each([
+    ['needs_documents', true],
+    ['checking', true],
+    ['approved', true],
+    ['rejected', false],
+    ['stopped', false],
+  ] as const)('%s holds it: %s', (stage, holds) => {
+    expect(stageHoldsBvn(stage)).toBe(holds);
+  });
+});
+
+describe('NUV-02 round 2: is a decision read back a new one (D3)', () => {
+  const t = (n: number) => new Date(1_700_000_000_000 + n * 1000);
+  const held = (o: Partial<DecisionHeld> = {}): DecisionHeld => ({
+    status: 'rejected',
+    decidedAt: t(1),
+    correctedAt: null,
+    entityUpdatedAt: t(1),
+    ...o,
+  });
+
+  it('only a decision can be new', () => {
+    expect(isNewDecision(null, { status: 'pending', updated: 5 })).toBe(false);
+    expect(isNewDecision(null, { status: 'incomplete', updated: null })).toBe(
+      false,
+    );
+  });
+
+  it('the first decision, or a different word, is new', () => {
+    expect(isNewDecision(null, { status: 'rejected', updated: null })).toBe(
+      true,
+    );
+    expect(
+      isNewDecision(held({ decidedAt: null }), {
+        status: 'rejected',
+        updated: null,
+      }),
+    ).toBe(true);
+    expect(
+      isNewDecision(held({ status: 'pending', decidedAt: t(1) }), {
+        status: 'rejected',
+        updated: t(1).getTime(),
+      }),
+    ).toBe(true);
+    expect(
+      isNewDecision(held(), { status: 'approved', updated: t(1).getTime() }),
+    ).toBe(true);
+  });
+
+  it('the same word again, with no correction between, is the same decision', () => {
+    expect(
+      isNewDecision(held(), { status: 'rejected', updated: t(9).getTime() }),
+    ).toBe(false);
+    expect(
+      isNewDecision(held({ correctedAt: t(0) }), {
+        status: 'rejected',
+        updated: t(9).getTime(),
+      }),
+    ).toBe(false);
+  });
+
+  it('the same word after a correction is new only when Nuvion moved its own time on', () => {
+    const afterCorrection = held({ correctedAt: t(5), entityUpdatedAt: t(5) });
+    // The echo of the correction: Nuvion's time is the one the correction got.
+    expect(
+      isNewDecision(afterCorrection, {
+        status: 'rejected',
+        updated: t(5).getTime(),
+      }),
+    ).toBe(false);
+    // Reviewed again later.
+    expect(
+      isNewDecision(afterCorrection, {
+        status: 'rejected',
+        updated: t(6).getTime(),
+      }),
+    ).toBe(true);
+    // Nuvion gives no time (before or now): a decision after a correction is new.
+    expect(
+      isNewDecision(afterCorrection, { status: 'rejected', updated: null }),
+    ).toBe(true);
+    expect(
+      isNewDecision(held({ correctedAt: t(5), entityUpdatedAt: null }), {
+        status: 'rejected',
+        updated: t(5).getTime(),
+      }),
+    ).toBe(true);
+  });
+});
+
+describe('NUV-02 round 2: what a decision tells the person (D6)', () => {
+  it('approved, rejected with what to fix, stopped; nothing while it goes on', () => {
+    expect(noticeOf({ ...base, status: 'approved' })).toEqual({
+      outcome: 'approved',
+    });
+    expect(
+      noticeOf({
+        ...base,
+        status: 'rejected',
+        decidedAt: new Date(),
+        bvnStatus: 'rejected',
+        ninStatus: 'rejected',
+      }),
+    ).toEqual({
+      outcome: 'rejected',
+      fixes: [
+        'Check the 11 digits of your BVN and send your details again.',
+        'Check the 11 digits of your NIN and send your details again.',
+      ],
+    });
+    expect(noticeOf({ ...base, status: 'suspended' })).toEqual({
+      outcome: 'stopped',
+    });
+    expect(noticeOf({ ...base, status: 'pending' })).toBeNull();
+    expect(noticeOf({ ...base, status: 'incomplete' })).toBeNull();
+    // After corrected details the person is at "documents needed" again.
+    expect(
+      noticeOf({
+        ...base,
+        status: 'rejected',
+        decidedAt: new Date(1000),
+        correctedAt: new Date(2000),
+      }),
+    ).toBeNull();
+  });
+
+  it('the entity reader keeps Nuvion own update time', () => {
+    const r = readNuvionEntity({
+      entity: {
+        id: '01HXYZ0001ABCDEFGHJKMNPQRS',
+        status: 'rejected',
+        updated: 1_786_966_136_585,
+      },
+    });
+    expect(r?.updated).toBe(1_786_966_136_585);
+    expect(
+      readNuvionEntity({
+        entity: { id: '01HXYZ0001ABCDEFGHJKMNPQRS', status: 'rejected' },
+      })?.updated,
+    ).toBeNull();
   });
 });

@@ -1783,7 +1783,7 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
     const clean = (n: { title: string; body: string }) => {
       const text = `${n.title} ${n.body}`;
       expect(text).not.toMatch(/\d{4}/);
-      expect(text).not.toMatch(/wallet|withdraw|cash ?out|payout|—/i);
+      expect(text).not.toMatch(/wallet|withdraw|cash ?out|payout|\u2014/i);
       for (const s of secrets) expect(text.includes(s)).toBe(false);
     };
 
