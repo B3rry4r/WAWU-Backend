@@ -33,6 +33,10 @@ export const IDENTITY_HASH_KEY_MIN_LENGTH = 32;
  * answer, and caps what one account can cost at three charges a day
  * (₦5 each in the sandbox, `docs/fintava/sandbox/25-compliance-charges.md`
  * in the mobile repo). Overridable in config with BVN_CHECKS_PER_DAY.
+ *
+ * Under a provider that reviews the person itself (Nuvion) there is no BVN
+ * check; the same number and the same ledger are the day's opening tries
+ * that name a BVN or NIN (NUV-02, `src/money/opening/opening-attempts.ts`).
  */
 export const DEFAULT_BVN_CHECKS_PER_DAY = 3;
 
