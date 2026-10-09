@@ -247,6 +247,9 @@ describe('NUV-07: fees as settings over HTTP, Nuvion stood in at WALLET_PROVIDER
         walletId: randomUUID(),
         accountNumber: nuban(),
         accountName: null,
+        // A wallet Nuvion holds: since NUV-01 a server acts only on rows of
+        // the provider it runs, and a row without one is Fintava's.
+        provider: 'nuvion',
       },
     });
     return { id, auth: `Bearer ${mintToken(id)}` };

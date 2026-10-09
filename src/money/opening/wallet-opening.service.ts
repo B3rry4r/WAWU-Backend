@@ -1,6 +1,7 @@
 import { HttpException, Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { isRowOf, rowsOf } from '../../wallet-provider/provider-rows';
 import {
   type ProviderCustomer,
   type ProviderCustomerMatch,
@@ -60,6 +61,8 @@ type OpeningRow = {
   attemptStartedAt: Date;
   checkedAt: Date | null;
   failure: string | null;
+  /** Which provider the opening is with (NUV-01); null is Fintava. */
+  provider?: string | null;
 };
 
 const OPENING_SELECT = {
@@ -71,6 +74,7 @@ const OPENING_SELECT = {
   attemptStartedAt: true,
   checkedAt: true,
   failure: true,
+  provider: true,
 } as const;
 
 /** A refusal whose words say the record exists: never read as "nothing was made". */
@@ -186,30 +190,67 @@ export class WalletOpeningService {
   // GET /money/wallet
   // -------------------------------------------------------------------------
 
-  /** The wallet as WAWU records it. Never calls Fintava. */
+  /**
+   * The wallet as WAWU records it. Never calls the provider.
+   *
+   * NUV-04, under Nuvion: the wallet row is written only once Nuvion makes
+   * the account number `active` (src/nuvion/handlers/accounts.ts), so
+   * `account` is never a pending number; until then `accountNumberStatus`
+   * says it is on its way. The bank a Nuvion wallet's number is at is the
+   * one Nuvion named for that account (its account details' issuer,
+   * recorded on NuvionEntity; BACKEND_GAPS G-401), and the running
+   * provider's configured bank name (`NUVION_WALLET_BANK_NAME`) only when
+   * Nuvion named none.
+   */
   async view(wawuUserId: string): Promise<WalletView> {
-    const [wallet, opening, pin] = await Promise.all([
+    const [wallet, opening, pin, nuvion] = await Promise.all([
       this.prisma.fintavaWallet.findUnique({
         where: { wawuUserId },
-        select: { accountNumber: true, accountName: true, createdAt: true },
+        select: {
+          accountNumber: true,
+          accountName: true,
+          createdAt: true,
+          provider: true,
+        },
       }),
       this.prisma.fintavaWalletOpening.findUnique({
         where: { wawuUserId },
         select: { state: true, failure: true },
       }),
       this.pins.state(wawuUserId),
+      this.prisma.nuvionEntity.findUnique({
+        where: { wawuUserId },
+        select: {
+          status: true,
+          accountId: true,
+          accountNumber: true,
+          issuerBankName: true,
+          issuerBankCode: true,
+        },
+      }),
     ]);
     // The wallet gate's own rule (MONEY-13), so this state and the code
     // every other wallet route refuses with always agree.
     const state: WalletState = walletStateOf(wallet !== null, opening);
+    // The issuer Nuvion named for this wallet's own number (NUV-04).
+    const issuer =
+      wallet &&
+      isRowOf('nuvion', wallet.provider) &&
+      nuvion?.accountNumber === wallet.accountNumber
+        ? nuvion
+        : null;
+    const onItsWay =
+      state === 'opening' ||
+      nuvion?.status === 'approved' ||
+      (nuvion?.accountId ?? null) !== null;
     return {
       state,
       account: wallet
         ? {
             accountNumber: wallet.accountNumber,
             accountName: wallet.accountName ?? '',
-            bankName: this.settings.bankName,
-            bankCode: this.provider.walletBankCode,
+            bankName: issuer?.issuerBankName ?? this.settings.bankName,
+            bankCode: issuer?.issuerBankCode ?? this.provider.walletBankCode,
             licenceLine: this.settings.licenceLine,
             depositInsuranceLine: this.settings.depositInsuranceLine,
             openedAt: wallet.createdAt.toISOString(),
@@ -225,6 +266,7 @@ export class WalletOpeningService {
       beneficiaryCount: wallet
         ? (await visibleBeneficiaries(this.prisma, wawuUserId)).length
         : 0,
+      accountNumberStatus: wallet ? 'active' : onItsWay ? 'on_its_way' : 'none',
     };
   }
 
@@ -249,6 +291,15 @@ export class WalletOpeningService {
 
     let row = await this.opening(wawuUserId);
     if (stoppedOnIdentity(row)) throw this.phoneHeld();
+    // An opening with another provider (NUV-01: a rollback came between) is
+    // left exactly as it is, unless it failed, when this one takes it over.
+    if (
+      row &&
+      row.state !== 'failed' &&
+      !isRowOf(this.provider.name, row.provider)
+    ) {
+      return this.view(wawuUserId);
+    }
     if (row) row = await this.unstick(row, await this.dbNow());
     if (row && row.state !== 'failed') {
       if (row.state !== 'unknown') return this.view(wawuUserId);
@@ -390,12 +441,19 @@ export class WalletOpeningService {
       const now = await this.dbNow();
       const due = await this.prisma.fintavaWalletOpening.findMany({
         where: {
-          OR: [
-            { state: 'unknown' },
+          AND: [
             {
-              state: 'opening',
-              attemptStartedAt: { lt: this.stuckBefore(now) },
+              OR: [
+                { state: 'unknown' },
+                {
+                  state: 'opening',
+                  attemptStartedAt: { lt: this.stuckBefore(now) },
+                },
+              ],
             },
+            // Only openings with the provider the server runs (NUV-01):
+            // another provider's lost answer is never looked up here.
+            rowsOf(this.provider.name),
           ],
         },
         orderBy: { attemptStartedAt: 'asc' },
@@ -435,6 +493,7 @@ export class WalletOpeningService {
    */
   async reconcile(row: OpeningRow): Promise<OpeningReconciliation> {
     if (row.state !== 'unknown') return 'nothing_to_do';
+    if (!isRowOf(this.provider.name, row.provider)) return 'nothing_to_do';
     const now = await this.dbNow();
     // One asker at a time, and not more often than every few seconds.
     const asking = await this.prisma.fintavaWalletOpening.updateMany({
@@ -609,6 +668,7 @@ export class WalletOpeningService {
             state: 'opening',
             attempts: 1,
             attemptStartedAt: startedAt,
+            provider: this.provider.name,
             ...tie,
           },
         });
@@ -624,6 +684,7 @@ export class WalletOpeningService {
           attemptStartedAt: startedAt,
           failure: null,
           checkedAt: null,
+          provider: this.provider.name,
         },
       });
       return taken.count === 1 ? next : null;
@@ -671,6 +732,7 @@ export class WalletOpeningService {
             accountNumber: customer.accountNumber,
             accountName:
               customer.accountName === '' ? null : customer.accountName,
+            provider: this.provider.name,
           },
         });
       });

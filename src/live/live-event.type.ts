@@ -40,6 +40,18 @@ export interface LiveCommunityMessageEvent extends LiveEventBase {
   message: CommunityMessage;
 }
 
+/**
+ * A legal conversation changed (LEGAL-02): a consultant wrote in it. Socket only,
+ * and not part of `GET /live/catch-up` (a phone reads the conversation itself,
+ * `GET /legal/assistant/{id}`, when it reconnects). It carries no words and no
+ * name: the phone reads them from the route, which checks who it is. `cursor` is
+ * the message's time, as every event's is.
+ */
+export interface LiveLegalThreadEvent extends LiveEventBase {
+  type: 'legal.thread';
+  legalRequestId: string;
+}
+
 export type LiveEvent =
   LiveChatMessageEvent | LiveChatReadEvent | LiveCommunityMessageEvent;
 

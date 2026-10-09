@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import {
+  type OtpResetCode,
   type OtpSender,
   type ProviderAccountName,
   type ProviderAccountNameInput,
@@ -629,6 +630,9 @@ export class FintavaWalletProvider implements WalletProvider {
  */
 @Injectable()
 export class FintavaOtpSender implements OtpSender {
+  /** Fintava texts the code to the proved phone. */
+  readonly channel = 'sms' as const;
+
   constructor(private readonly client: FintavaClient) {}
 
   get configured(): boolean {
@@ -637,5 +641,10 @@ export class FintavaOtpSender implements OtpSender {
 
   sendText(phone: string, text: string): Promise<void> {
     return translated(() => this.client.sendSms(phone, text));
+  }
+
+  /** The same text to the same phone as before NUV-01: one SMS. */
+  sendResetCode(code: OtpResetCode): Promise<void> {
+    return this.sendText(code.phone ?? '', code.text);
   }
 }
