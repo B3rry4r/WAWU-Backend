@@ -2771,12 +2771,9 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
       expect(await state(who)).toBe('expired');
     });
 
-    it.each([
-      ['identity', 'the ID document'],
-      ['proof_of_address', 'the proof of address'],
-    ] as const)(
-      'an upload of %s (%s) after 15 idle days is progress: the sweep leaves the opening, and 14 days after that one it is idle again',
-      async (kind, _what) => {
+    it.each(['identity', 'proof_of_address'] as const)(
+      'an upload of %s after 15 idle days is progress: the sweep leaves the opening, and 15 days after that one it is idle again',
+      async (kind) => {
         const who = await opened();
         await idle(who);
         expect((await entityRow(who)).progressAt).toBeNull();
