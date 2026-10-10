@@ -27182,10 +27182,10 @@
             "description": "`reason.code` `code_not_found`: the same answer for a code that does not exist, is not paid, or is not tied to a phone or email the caller has proven."
           },
           "409": {
-            "description": "`reason.code` `contact_not_verified` (the account has no proven phone or email), `code_refunded` (an extra payment being refunded), `already_claimed` (by another account), `claimed_by_you` or `offer_unavailable`."
+            "description": "`reason.code` `contact_not_verified` (the account has no proven phone or email), `code_refunded` (an extra payment being refunded), `already_claimed` (by another account), `offer_unavailable`, or `claimed_by_you` (only for a claim made before its answer was kept; the same account asking again is otherwise answered 200)."
           }
         },
-        "summary": "Claim a paid registration with its launch access code. The caller must\nhold the registration's phone or email, proven to WAWU ID; the code alone\nis never enough. Gives what the registration's plan gives, its days\ncounted from now, once.",
+        "summary": "Claim a paid registration with its launch access code. The caller must\nhold the registration's phone or email, proven to WAWU ID; the code alone\nis never enough. Gives what the registration's plan gives, its days\ncounted from now, once. The account that made the claim and sends the\nsame code again is answered with the same plan (a 200, nothing granted\ntwice), so an answer that was lost on the way can be asked for again.",
         "tags": [
           "WaitlistClaim"
         ]
