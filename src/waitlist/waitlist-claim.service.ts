@@ -111,10 +111,10 @@ export class WaitlistClaimService {
       });
       if (claimed.count === 0) {
         // Lost the race to another tap: say who has it, exactly as above.
-        const now2 = await tx.waitlistRegistration.findUniqueOrThrow({
+        const current = await tx.waitlistRegistration.findUniqueOrThrow({
           where: { id: row.id },
         });
-        throw this.alreadyClaimed(user, now2);
+        throw this.alreadyClaimed(user, current);
       }
       return this.grants.grant(tx, {
         wawuUserId: user.sub,

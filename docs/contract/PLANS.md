@@ -113,8 +113,8 @@ the person holds, in the order of the config's `event_passes`).
 | Table | One row per | Written by |
 |---|---|---|
 | `PersonBilling` | person, once their currency is fixed | `fixAtFirstPurchase` (TIER-03) |
-| `MakerTier` | person who ever held a tier | TIER-03 (buy, renew, upgrade), TIER-04 (extra products) |
-| `EventPass` | purchase that issued a pass (`purchaseRef` unique) | TIER-03 |
+| `MakerTier` | person who ever held a tier | `TierGrantService` (JOIN-03's claim now; TIER-03's purchases call the same service), TIER-04 (extra products) |
+| `EventPass` | grant that issued a pass (`purchaseRef` unique) | `TierGrantService` |
 
 `MakerTier` copies what the tier gave when it was bought
 (`productsIncluded`, `pointsIncluded`), so a later change to the config never
@@ -122,3 +122,29 @@ takes away what a person paid for. `MakerTierService` is the one reader: GET
 /me/tier, the publishing gate (TIER-02, `hasActiveTier`) and the purchases ask
 it. All three tables are in the account purge (OWNED) and the data export
 (without payment references).
+
+## 6. Granting a tier (JOIN-03)
+
+`TierGrantService.grant(tx, { wawuUserId, tierId, sourceRef, days?, now? })`
+(`src/plans/tier-grant.service.ts`, exported by `PlansModule`) is the one place
+a tier is granted. Inside the caller's transaction it writes the tier and its
+dates on `MakerTier` (copying products and bonus points from the config), the
+`EventPass` (its `purchaseRef` is `sourceRef`), the first-Voice-Intro flag, and
+the bonus points as one `tier_bonus` lot through `PointsService.grant`
+(`sourceRef` again), last. One person's grants run one at a time (a transaction
+advisory lock on `tier:<wawuUserId>`), and a `sourceRef` grants once: asked
+again it finds its own pass and writes nothing (`granted: false`).
+
+Default (agent), owner may override: a person with no tier, or whose tier ended,
+gets the tier from the moment of the grant for `days` days (the tier's own days
+when omitted); a person whose tier has not ended keeps it, whichever tier it
+is, and the days are added to its current end. Upgrades, downgrades and the
+price are a purchase's rules (TIER-03) and sit on top.
+
+JOIN-03's `POST /waitlist/claims` calls it with `sourceRef` `join:<registration
+id>` and the offer's `tier_days`. It proves the caller holds the registration's
+phone or email as WAWU ID proved it: the access token's `phoneVerified` and
+`emailVerified` (BACKEND_GAPS G-629 in the mobile repo; WAWU ID sends neither
+until that change merges, and until then every claim answers
+`contact_not_verified`).
+
