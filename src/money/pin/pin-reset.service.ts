@@ -19,6 +19,12 @@ import {
   RESET_TRIES_PER_CODE,
   RESET_WINDOW_MS,
 } from './pin-reset-config';
+import { lockPinPerson } from './pin-person-lock';
+import {
+  okBody,
+  PinRequestKeys,
+  type PinRequestScope,
+} from './pin-request-keys.service';
 import { pinStateView } from './transaction-pin.service';
 
 const NOT_SET_MESSAGE = 'Create your transaction PIN first.';
@@ -83,6 +89,12 @@ function resetView(row: ResetRow, sentTo: string): PinResetView {
     resetId: row.id,
     sentTo,
     resendAvailableAt: row.resendAvailableAt.toISOString(),
+    // The server's own count, taken as it answers: the phone's clock is not
+    // asked (WALLET-06 round 2, D3).
+    resendInSeconds: Math.max(
+      0,
+      Math.ceil((row.resendAvailableAt.getTime() - Date.now()) / 1000),
+    ),
     expiresAt: row.expiresAt.toISOString(),
   };
 }
@@ -132,6 +144,7 @@ export class PinResetService {
     private readonly prisma: PrismaService,
     @Inject(OTP_SENDER) private readonly otp: OtpSender,
     private readonly settings: PinResetSettings,
+    private readonly keys: PinRequestKeys,
   ) {}
 
   /**
@@ -169,7 +182,7 @@ export class PinResetService {
     const claim = await this.prisma.$transaction(async (tx) => {
       // One start at a time per person: a double tap waits here and then
       // finds the reset the first tap made.
-      await tx.$queryRaw`SELECT 1 AS "locked" FROM pg_advisory_xact_lock(hashtextextended(${`pin-reset:${wawuUserId}`}, 0))`;
+      await lockPinPerson(tx, wawuUserId);
       const now = new Date();
       const live = await tx.transactionPinReset.findFirst({
         where: {
@@ -278,10 +291,15 @@ export class PinResetService {
     return resetView(row, sentTo(row));
   }
 
-  /** POST /money/pin/reset/confirm. */
+  /**
+   * POST /money/pin/reset/confirm. `key` is the request's Idempotency-Key,
+   * when it sent one: its answer is stored in the same transaction as the new
+   * PIN, so a repeat finds either both or neither (WALLET-06 round 2, D1).
+   */
   async confirm(
     wawuUserId: string,
     dto: ConfirmPinResetDto,
+    key?: PinRequestScope,
   ): Promise<PinStateView> {
     // Nothing secret is compared yet, so a mismatch uses no try of the code.
     if (dto.newPin !== dto.newPinConfirmation) {
@@ -296,6 +314,11 @@ export class PinResetService {
 
     const pinHash = await argon2.hash(dto.newPin, { type: argon2.argon2id });
     return this.prisma.$transaction(async (tx) => {
+      // The person's lock first, the one start() and a PIN change take
+      // (WALLET-06 round 2, D2): this took the reset row and then the PIN row
+      // while a change took the PIN row and then the reset rows, and one of
+      // the two could be refused as a deadlock.
+      await lockPinPerson(tx, wawuUserId);
       const now = new Date();
       // A code works once: of two right codes at the same moment, one wins.
       const used = await tx.transactionPinReset.updateMany({
@@ -317,7 +340,9 @@ export class PinResetService {
       const row = await tx.transactionPin.findUniqueOrThrow({
         where: { wawuUserId },
       });
-      return pinStateView(row, now);
+      const view = pinStateView(row, now);
+      if (key) await this.keys.finishIn(tx, key, 200, okBody(view));
+      return view;
     });
   }
 

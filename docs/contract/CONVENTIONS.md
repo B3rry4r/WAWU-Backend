@@ -289,6 +289,34 @@ after a send that failed (W14).
    top-up).
 7. Keys are kept for at least 24 hours (MONEY-17 sets the purge in config).
 
+**On the PIN routes (optional).** `PUT /money/pin` and `POST /money/pin/reset/confirm`
+move no money, so they do not need a key, but they take one if it is sent
+(WALLET-06 round 2). A phone whose answer to a PIN change or a reset was lost
+sends the same request again with the same key, instead of judging by whether
+`changedAt` moved (which is also true when someone else changed the PIN) or
+spending a wrong-PIN try to ask. Without the header nothing is stored and the
+routes answer as they always did. With it, rules 1, 2, 3, 4, 5, 6 and 7 above
+hold, with these differences:
+
+- The key is optional. One that is sent but is not 8 to 128 of `[A-Za-z0-9_-]`
+  is `400 idempotency_key_required` (refused, not ignored).
+- The replay is answered before the PIN guard, because the PIN a landed change
+  was sent under is no longer the PIN: a repeat uses no try. A repeat of a
+  change someone else has beaten is not a replay (nothing was stored): it runs,
+  and is refused for its PIN (`403 pin_incorrect`) or its dead code (`400
+  reset_code_invalid`).
+- The answer is stored in the same transaction that changes the PIN, so a
+  stored answer means the PIN changed and a claim older than a minute that
+  stored none means it did not (the claim is then taken over).
+- The fingerprint is an argon2id hash of the body, because the body holds the
+  new PIN; the stored answer is the PIN's state, never a PIN or a code.
+- Rows are kept 48 hours. The store is its own table (`MoneyPinRequestKey`);
+  the payments' one (MONEY-17) is on a branch that has not merged.
+- The two codes `idempotency_key_reused` and `idempotency_in_progress` are
+  documented in the header's description, not in the route's `reason.code`
+  lists: those lists are how `money-moving-coverage.spec.ts` tells a route
+  moves money, and these two do not.
+
 **Fintava has no Idempotency-Key** (`naira-api.md`). Ours is enforced here.
 The reference we send Fintava as `CustomerReference` is derived from our own
 transaction id, not from the app's key (which is only unique per person).

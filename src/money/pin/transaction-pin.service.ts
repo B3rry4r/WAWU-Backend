@@ -5,6 +5,12 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import type { ChangePinDto, SetPinDto } from '../dto/money-request.dto';
 import { MoneyError } from '../money-error';
 import type { PinStateView } from '../money-view.type';
+import { lockPinPerson } from './pin-person-lock';
+import {
+  okBody,
+  PinRequestKeys,
+  type PinRequestScope,
+} from './pin-request-keys.service';
 
 /**
  * Wrong tries in a row before the PIN locks. The ticket's number (MONEY-09,
@@ -120,6 +126,7 @@ export class TransactionPinService {
   constructor(
     private readonly prisma: PrismaService,
     config: ConfigService,
+    private readonly keys: PinRequestKeys,
   ) {
     this.lockMs =
       pinLockMinutes(config.get<string>(PIN_LOCK_MINUTES_KEY)) * 60_000;
@@ -161,8 +168,16 @@ export class TransactionPinService {
    * PUT /money/pin. The current PIN has already been checked by
    * TransactionPinGuard on the same request; this replaces it and ends any
    * PIN reset that is still open.
+   *
+   * `key` is the request's Idempotency-Key, when it sent one: its answer is
+   * stored in the same transaction as the change, so a repeat finds either
+   * both or neither (WALLET-06 round 2, D1).
    */
-  async change(wawuUserId: string, dto: ChangePinDto): Promise<PinStateView> {
+  async change(
+    wawuUserId: string,
+    dto: ChangePinDto,
+    key?: PinRequestScope,
+  ): Promise<PinStateView> {
     if (dto.newPin !== dto.newPinConfirmation) {
       throw new MoneyError('pin_mismatch', MISMATCH_MESSAGE);
     }
@@ -171,7 +186,12 @@ export class TransactionPinService {
       // One transaction: the new PIN and the end of every reset still open
       // (BACKEND_GAPS G-50). A code texted before this change must not work
       // afterwards: confirming it would overwrite the PIN just chosen.
-      const row = await this.prisma.$transaction(async (tx) => {
+      return await this.prisma.$transaction(async (tx) => {
+        // The person's lock first, the one a reset's start and confirm take
+        // (WALLET-06 round 2, D2): without it this took the PIN row and then
+        // the reset rows while a confirm took them the other way round, and
+        // one of the two could be refused as a deadlock.
+        await lockPinPerson(tx, wawuUserId);
         const now = new Date();
         const changed = await tx.transactionPin.update({
           where: { wawuUserId },
@@ -181,9 +201,10 @@ export class TransactionPinService {
           where: { wawuUserId, usedAt: null, supersededAt: null },
           data: { supersededAt: now },
         });
-        return changed;
+        const view = pinStateView(changed, new Date());
+        if (key) await this.keys.finishIn(tx, key, 200, okBody(view));
+        return view;
       });
-      return pinStateView(row, new Date());
     } catch (err) {
       if (isNoMatch(err)) throw new MoneyError('pin_not_set', NOT_SET_MESSAGE);
       throw err;

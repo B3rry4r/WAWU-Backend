@@ -3826,6 +3826,46 @@ model TransactionPinReset {
 }
 
 /// ─────────────────────────────────────────────────────────────────────────
+/// THE ANSWER TO A PIN CHANGE OR A PIN RESET, KEPT UNDER ITS KEY (task WALLET-06)
+///
+/// `PUT /money/pin` and `POST /money/pin/reset/confirm` take an optional
+/// `Idempotency-Key`. A phone whose answer was lost sends the same request
+/// again with the same key and gets the first outcome back, instead of
+/// guessing whether the PIN changed. One row per (person, route, key). The
+/// row is written `in_progress` before the PIN is checked (so a repeat that
+/// arrives while the first is running is told to wait, and spends no PIN
+/// try), and turned `done` with the answer in the SAME transaction that
+/// changes the PIN, so a `done` row means the PIN changed and an
+/// `in_progress` row older than a minute means it did not.
+///
+/// `fingerprint` is an argon2id hash of the request body (it holds the new
+/// PIN), never the body and never a fast hash of it. `responseBody` is the
+/// answer as first sent: the PIN's state (set, changed when, tries left),
+/// never a PIN or a code. Rows go after PIN_KEY_KEEP_HOURS, and with the
+/// account (account purge, OWNED).
+/// ─────────────────────────────────────────────────────────────────────────
+model MoneyPinRequestKey {
+  wawuUserId     String
+  /// `PUT /money/pin` or `POST /money/pin/reset/confirm`.
+  route          String
+  /// The caller's Idempotency-Key, 8 to 128 characters of [A-Za-z0-9_-].
+  key            String
+  /// argon2id of the request body as canonical JSON.
+  fingerprint    String
+  /// `in_progress` or `done`.
+  state          String   @default("in_progress")
+  /// Made by the request that holds the key: only it may finish or give it back.
+  claimId        String
+  responseStatus Int?
+  responseBody   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@id([wawuUserId, route, key])
+  @@index([updatedAt])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
 /// THE PHONE THAT MAY APPROVE WITH A FINGERPRINT OR A FACE (task MONEY-14)
 ///
 /// W11, W35 (R-26): a biometric approval on a known phone counts as the PIN.

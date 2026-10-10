@@ -248,6 +248,14 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   },
   { model: 'ApprovalDevice', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'ApprovalChallenge', column: 'wawuUserId', disposition: 'OWNED' },
+  // The answer to a PIN change or reset kept under its Idempotency-Key
+  // (WALLET-06 round 2): the PIN's state as first answered and a hash of the
+  // request, kept two days. This person's own, so it goes with them.
+  {
+    model: 'MoneyPinRequestKey',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
   // The pointer to this person's Fintava wallet (MONEY-11). Like
   // CreatorWallet above, removing it removes WAWU's pointer, not the account
   // at Fintava, which is why deletion needs an empty wallet first (R-17).

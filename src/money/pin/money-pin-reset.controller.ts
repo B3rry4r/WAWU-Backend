@@ -7,6 +7,14 @@ import { ConfirmPinResetDto } from '../dto/money-request.dto';
 import { RequireOpenWallet } from '../gate/wallet-gate';
 import { BuiltBy, MoneyErrors, WALLET_GATE_ERRORS } from '../money-contract';
 import type { PinResetView, PinStateView } from '../money-view.type';
+import {
+  CurrentPinRequestKey,
+  RequireOpenWalletWithKey,
+} from './pin-request-key';
+import {
+  PIN_RESET_CONFIRM_ROUTE,
+  type PinRequestScope,
+} from './pin-request-keys.service';
 import { PinResetService } from './pin-reset.service';
 
 /**
@@ -44,11 +52,14 @@ export class MoneyPinResetController {
     return this.resets.start(user.sub, { email: user.email ?? null });
   }
 
+  // An optional Idempotency-Key makes a repeat answer the first outcome
+  // (WALLET-06 round 2): a code works once, so without it the repeat of a
+  // reset that landed is refused as a dead code. See pin-request-keys.service.ts.
   /** The code and the new PIN. Clears the lock and the wrong-try count, and turns biometric approval off. */
   @Post('pin/reset/confirm')
   @HttpCode(200)
   @BuiltBy('MONEY-14')
-  @RequireOpenWallet()
+  @RequireOpenWalletWithKey(PIN_RESET_CONFIRM_ROUTE)
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'reset_code_invalid',
@@ -58,7 +69,8 @@ export class MoneyPinResetController {
   confirmReset(
     @CurrentUser() user: WawuJwtClaims,
     @Body() dto: ConfirmPinResetDto,
+    @CurrentPinRequestKey() key: PinRequestScope | undefined,
   ): Promise<PinStateView> {
-    return this.resets.confirm(user.sub, dto);
+    return this.resets.confirm(user.sub, dto, key);
   }
 }

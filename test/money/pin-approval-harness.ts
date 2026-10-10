@@ -259,6 +259,7 @@ export class Money14App {
       await this.prisma.approvalChallenge.deleteMany({ where });
       await this.prisma.approvalDevice.deleteMany({ where });
       await this.prisma.transactionPinReset.deleteMany({ where });
+      await this.prisma.moneyPinRequestKey.deleteMany({ where });
       await this.prisma.transactionPin.deleteMany({ where });
       await this.prisma.walletIdentity.deleteMany({ where });
       await this.prisma.bvnCheckAttempt.deleteMany({ where });

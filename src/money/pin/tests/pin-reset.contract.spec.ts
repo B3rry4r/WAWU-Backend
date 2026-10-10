@@ -53,6 +53,13 @@ beforeEach(() => t.installDefaults());
 /** Everything secret this file sent or was sent: codes and PINs. */
 const secrets = new Set<string>();
 
+/**
+ * Every phone number a person made here has: the one a code goes to. The app
+ * is shown it masked to its last four digits (`+234 *** *** 4412`); the whole
+ * number must not reach a log or an answer (WALLET-06 round 2, B13).
+ */
+const phones = new Set<string>();
+
 function start(who: Person) {
   return t.http().post(RESET).set('Authorization', who.auth);
 }
@@ -79,6 +86,7 @@ function confirm(
 async function holder(first: string = pin(), phone?: string): Promise<Person> {
   const who = t.person(phone);
   secrets.add(first);
+  phones.add(who.phone);
   await t.bvnChecked(who);
   await t.openWallet(who);
   await t.setPin(who, first);
@@ -667,6 +675,45 @@ describe('a PIN change ends an open reset (BACKEND_GAPS G-50)', () => {
   });
 });
 
+describe("Resend is counted in the server's seconds, never the phone's clock (WALLET-06 round 2, D3)", () => {
+  it('a new reset says how many seconds are left; asking again before then answers the same reset with fewer and sends nothing; after it, a new code and a full count', async () => {
+    const who = await holder();
+    const first = await resetOf(who);
+    expect(first.resendInSeconds).toBeGreaterThan(55);
+    expect(first.resendInSeconds).toBeLessThanOrEqual(60);
+    // It is the count at the moment of the answer: it agrees with the time.
+    expect(
+      Math.abs(
+        first.resendInSeconds -
+          (Date.parse(first.resendAvailableAt) - Date.now()) / 1000,
+      ),
+    ).toBeLessThan(10);
+    const textsAfterFirst = t.texts().length;
+
+    // Asked again at once: the same reset, no text, never more seconds than before.
+    const again = await resetOf(who);
+    expect(again.resetId).toBe(first.resetId);
+    expect(again.resendInSeconds).toBeLessThanOrEqual(first.resendInSeconds);
+    expect(again.resendInSeconds).toBeGreaterThan(0);
+    expect(t.texts().length).toBe(textsAfterFirst);
+
+    // Thirty seconds on, the same reset says about thirty seconds, not the full gap.
+    await age(first.resetId, 30_000);
+    const later = await resetOf(who);
+    expect(later.resetId).toBe(first.resetId);
+    expect(later.resendInSeconds).toBeGreaterThan(24);
+    expect(later.resendInSeconds).toBeLessThan(32);
+    expect(t.texts().length).toBe(textsAfterFirst);
+
+    // Once the gap has passed: a new reset, a new text, a full count again.
+    await age(first.resetId, 31_000);
+    const next = await resetOf(who);
+    expect(next.resetId).not.toBe(first.resetId);
+    expect(next.resendInSeconds).toBeGreaterThan(55);
+    expect(t.texts().length).toBe(textsAfterFirst + 1);
+  });
+});
+
 describe('nothing secret leaves the server', () => {
   it('no code and no PIN sent in this file is in any log line, any answer, or any stored column but a hash', async () => {
     expect(secrets.size).toBeGreaterThan(10);
@@ -707,5 +754,29 @@ describe('nothing secret leaves the server', () => {
     expect(leaks).toEqual([]);
     // The one refusal the client logs names the operation and status only.
     expect(logs).toContain('send SMS: refused HTTP 400');
+  });
+
+  it('no whole phone number is in any log line or any answer, in any of its forms (WALLET-06 round 2, B13)', () => {
+    expect(phones.size).toBeGreaterThan(5);
+    // Spaces and dashes between digits do not hide a number.
+    const squashed = (text: string) =>
+      text
+        .replace(
+          /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
+          'ID',
+        )
+        .replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g, 'TIME')
+        .replace(/(?<=\d)[\s-](?=\d)/g, '');
+    const logs = squashed(t.log.lines.join('\n'));
+    const answers = squashed(t.answered.join('\n'));
+    // `+2348031234412`, `2348031234412`, `08031234412` and `8031234412` all
+    // contain the ten digits after the country code.
+    const leaks = [...phones].filter((phone) => {
+      const national = phone.replace(/\D/g, '').slice(-10);
+      return logs.includes(national) || answers.includes(national);
+    });
+    expect(leaks).toEqual([]);
+    // The masked form is what an answer may carry: the last four digits.
+    expect(answers).toMatch(/\+234 \*\*\* \*\*\* \d{4}/);
   });
 });
