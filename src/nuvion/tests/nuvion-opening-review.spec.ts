@@ -631,45 +631,17 @@ describe('NUV-02 round 3: the view never offers a try the server would refuse (N
   });
 });
 
-describe('NUV-02 round 3: the account number is on its way only after an approval asked for one (merge with NUV-04)', () => {
-  const entity = (o = {}) => ({
-    accountId: null,
-    accountRequestedAt: null,
-    ...o,
-  });
-
+describe('NUV-02 round 3: the account number is on its way only after an approval (merge with NUV-04)', () => {
   it.each([
-    [
-      'being checked',
-      'checking',
-      entity({ accountRequestedAt: new Date() }),
-      false,
-    ],
-    ['documents needed', 'needs_documents', entity(), false],
-    ['refused', 'rejected', entity(), false],
-    [
-      'stopped (also for a BVN another account took)',
-      'stopped',
-      entity({ accountId: 'a' }),
-      false,
-    ],
-    ['expired', 'expired', entity(), false],
-    ['approved, no account requested yet', 'approved', entity(), false],
-    [
-      'approved, the account requested',
-      'approved',
-      entity({ accountRequestedAt: new Date() }),
-      true,
-    ],
-    [
-      'approved, the account made',
-      'approved',
-      entity({ accountId: 'a' }),
-      true,
-    ],
-    ['nothing recorded', null, null, false],
-  ] as const)('%s: %s', (_name, stage, e, onItsWay) => {
-    expect(accountOnItsWay(stage, e)).toBe(onItsWay);
+    ['being checked', 'checking', false],
+    ['documents needed', 'needs_documents', false],
+    ['refused', 'rejected', false],
+    ['stopped (also for a BVN another account took)', 'stopped', false],
+    ['expired', 'expired', false],
+    ['approved', 'approved', true],
+    ['nothing recorded', null, false],
+  ] as const)('%s: %s', (_name, stage, onItsWay) => {
+    expect(accountOnItsWay(stage)).toBe(onItsWay);
   });
 });
 

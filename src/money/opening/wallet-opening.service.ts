@@ -283,15 +283,14 @@ export class WalletOpeningService {
         ? nuvion
         : null;
     // NUV-02, under a provider that reviews the person: the number is on its
-    // way only once the account is requested after an approval. A person who
-    // is only being checked, rejected, or stopped (also for a BVN another
-    // account took) is told `none`; `opening` there is the review, not the
-    // account.
+    // way once the provider has approved them. A person who is only being
+    // checked, rejected, expired, or stopped (also for a BVN another account
+    // took) is told `none`; `opening` there is the review, not the account.
     const review = this.reviewing
       ? await this.reviewed.reviewOf(wawuUserId, opening, address)
       : undefined;
     const onItsWay = this.reviewing
-      ? accountOnItsWay(review?.stage ?? null, nuvion)
+      ? accountOnItsWay(review?.stage ?? null)
       : state === 'opening' ||
         nuvion?.status === 'approved' ||
         (nuvion?.accountId ?? null) !== null;

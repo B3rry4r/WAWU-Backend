@@ -356,18 +356,12 @@ export function noticeOf(r: ReviewRecord): DecisionNotice | null {
 /**
  * Whether the account number is on its way (WalletView.accountNumberStatus
  * `on_its_way`) for a person whose opening is reviewed by the provider: only
- * after an approval, once the account has been requested (or already made).
- * A person who is being checked, has documents to send, was rejected, or was
- * stopped (also for a BVN another account took) is not waiting for a number:
- * `none` until an account is requested (NUV-02 round 3, merge with NUV-04).
+ * once the provider has approved them (NUV-04's rule, whose spec on main
+ * holds an approved entity with nothing requested yet to read `on_its_way`).
+ * A person who is being checked, has documents to send, was rejected, was
+ * stopped (also for a BVN another account took) or whose opening expired is
+ * not waiting for a number: `none` (NUV-02 round 3, merge with NUV-04).
  */
-export function accountOnItsWay(
-  stage: WalletReviewStage | null,
-  entity: {
-    accountId: string | null;
-    accountRequestedAt: Date | null;
-  } | null,
-): boolean {
-  if (stage !== 'approved' || entity === null) return false;
-  return entity.accountRequestedAt !== null || entity.accountId !== null;
+export function accountOnItsWay(stage: WalletReviewStage | null): boolean {
+  return stage === 'approved';
 }

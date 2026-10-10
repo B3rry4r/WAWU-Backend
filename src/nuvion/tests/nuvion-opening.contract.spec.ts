@@ -2100,7 +2100,7 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
   const held = async (who: Person): Promise<boolean> =>
     !(await claimOf(who)).startsWith('released:');
 
-  describe('round 3, merge with NUV-04: accountNumberStatus is none until an account is requested', () => {
+  describe('round 3, merge with NUV-04: accountNumberStatus is none unless the person is approved', () => {
     const status = async (who: Person) =>
       (await wallet(who)).accountNumberStatus;
 
@@ -2136,7 +2136,7 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       expect(accounts).toHaveLength(0);
     });
 
-    it('an approval whose account was requested reads on_its_way; a refused request that released its claim reads none', async () => {
+    it('an approval reads on_its_way (NUV-04), also when the account request was refused and will be tried again', async () => {
       const x = person();
       const e = await opened(x);
       decide(e, 'approved', approvedWords);
@@ -2149,7 +2149,7 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       decide(e2, 'approved', approvedWords);
       await handler.handle(delivery(e2));
       expect((await entityRow(y))!.accountRequestedAt).toBeNull();
-      expect(await status(y)).toBe('none');
+      expect(await status(y)).toBe('on_its_way');
     });
   });
 

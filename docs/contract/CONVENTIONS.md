@@ -880,9 +880,9 @@ this applies and every answer is as in section 9.
   while the server would answer 429** (round 3): when the person's day, or
   the address the request comes from, has no try left, `canResubmit` is
   false and `canResubmitAt` says when a try opens (otherwise `null`).
-  `accountNumberStatus` (NUV-04) is `on_its_way` only after an approval whose
-  account was requested; a person only being checked, refused, stopped or
-  expired reads `none` until then.
+  `accountNumberStatus` (NUV-04) is `on_its_way` once Nuvion has approved
+  the person; a person only being checked, refused, stopped (also for a BVN
+  another account took) or expired reads `none`.
 - **The body.** `bvn` and `nin` (11 digits each; a `checkHandle` is a plain
   `400`), the section 9 fields, and what Nuvion needs: `gender` (`male` or
   `female`), `city`, `state`, `postalCode`, `idType` (`international_passport`,
