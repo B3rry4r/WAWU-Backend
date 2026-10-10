@@ -530,12 +530,17 @@ describe('MONEY-17 follow-ups (D8-1, N2) on Fintava', () => {
   function holdFirstComplete() {
     const inner = payments as unknown as {
       complete: (...a: unknown[]) => Promise<unknown>;
+      completeFromRecord: (...a: unknown[]) => Promise<unknown>;
     };
     const complete = inner.complete.bind(payments);
+    const completeFromRecord = inner.completeFromRecord.bind(payments);
     let first = true;
     let reached = false;
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
+    // The whole of the held path, so a test can wait for it to end (its note
+    // is written after `complete()` returns) instead of for a time.
+    let heldPath: Promise<unknown> = Promise.resolve();
     const spy = jest
       .spyOn(inner, 'complete')
       .mockImplementation(async (...a: unknown[]) => {
@@ -546,10 +551,25 @@ describe('MONEY-17 follow-ups (D8-1, N2) on Fintava', () => {
         }
         return complete(...a);
       });
+    let tracked = false;
+    const pathSpy = jest
+      .spyOn(inner, 'completeFromRecord')
+      .mockImplementation((...a: unknown[]) => {
+        const run = completeFromRecord(...a);
+        if (!tracked) {
+          tracked = true;
+          heldPath = run;
+        }
+        return run;
+      });
     return {
       reached: () => reached,
       release,
-      restore: () => spy.mockRestore(),
+      finished: () => heldPath,
+      restore: () => {
+        spy.mockRestore();
+        pathSpy.mockRestore();
+      },
     };
   }
 
@@ -566,6 +586,7 @@ describe('MONEY-17 follow-ups (D8-1, N2) on Fintava', () => {
         await payments.settle(paid.id, new Date(), true);
         held.release();
         await consuming;
+        await held.finished();
         await until(async () => (await rowOf(paid.id)).fulfilledAt !== null);
       } finally {
         held.restore();

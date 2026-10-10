@@ -930,6 +930,25 @@ export class WalletPaymentService implements OnModuleInit {
     p: PaymentRow,
     note: string,
   ): Promise<PaymentRow> {
+    // The ledger row first: if this stops between the two, the next path
+    // finds the charge untrusted again and finishes (the note is joined once).
+    if (!p.chargeReviewSince) {
+      try {
+        const out = await this.prisma.fintavaLedgerEntry.findFirst({
+          where: {
+            customerReference: p.customerReference,
+            direction: 'out',
+            walletKind: 'user',
+          },
+          select: { id: true },
+        });
+        if (out) await this.ledger.noteDiscrepancy(out.id, note);
+      } catch (e) {
+        this.logger.error(
+          `payment ${p.id}: the ledger row could not be marked (${e instanceof Error ? e.name : 'error'})`,
+        );
+      }
+    }
     const now = new Date();
     const discrepancy = joinNotes(p.discrepancy, note);
     const { count } = await this.prisma.walletPayment.updateMany({
@@ -950,21 +969,6 @@ export class WalletPaymentService implements OnModuleInit {
       this.logger.error(
         `payment ${p.id}: ${note}; sent to review, nothing is delivered at it`,
       );
-      try {
-        const out = await this.prisma.fintavaLedgerEntry.findFirst({
-          where: {
-            customerReference: p.customerReference,
-            direction: 'out',
-            walletKind: 'user',
-          },
-          select: { id: true },
-        });
-        if (out) await this.ledger.noteDiscrepancy(out.id, note);
-      } catch (e) {
-        this.logger.error(
-          `payment ${p.id}: the ledger row could not be marked (${e instanceof Error ? e.name : 'error'})`,
-        );
-      }
     }
     return this.prisma.walletPayment.findUniqueOrThrow({ where: { id: p.id } });
   }
