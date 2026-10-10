@@ -4,6 +4,7 @@ import { NO_WALLET_MESSAGE } from '../../money/gate/wallet-gate';
 import type { IdentityHasher } from '../../money/identity/identity-config';
 import { MoneyError } from '../../money/money-error';
 import { noteDocumentRefusals } from '../../money/opening/document-refusals';
+import { recordOpeningProgress } from '../../money/opening/identity-hold';
 import {
   isDecision,
   openingStateForStage,
@@ -207,6 +208,24 @@ export class DocumentsFlow {
 
   private get resendAfterMs(): number {
     return this.inFlightMs;
+  }
+
+  /**
+   * The person did something on their opening (a document sent, the selfie
+   * started or passed): NUV-02's expiry sweep and support see it as progress,
+   * so an opening that is being worked on is not closed for being idle
+   * (NUV-02 G-497, round 4 N17). A failure to write it never fails the step.
+   */
+  private async progressed(wawuUserId: string): Promise<void> {
+    try {
+      await recordOpeningProgress(this.prisma, wawuUserId, {
+        now: await this.dbNow(),
+      });
+    } catch (e) {
+      this.logger.warn(
+        `documents: progress could not be recorded (${kindOfError(e)})`,
+      );
+    }
   }
 
   async dbNow(): Promise<Date> {
@@ -413,6 +432,8 @@ export class DocumentsFlow {
       now,
     );
     if (attempt === null) return; // an earlier upload was found at Nuvion and is the same file
+    // The person is sending a document: progress, whatever Nuvion answers.
+    await this.progressed(wawuUserId);
 
     let receipt;
     try {
@@ -463,6 +484,7 @@ export class DocumentsFlow {
       });
       throw e;
     }
+    await this.progressed(wawuUserId);
     // A changed document is a reason to try the submission again at once.
     await this.prisma.nuvionOnboarding.updateMany({
       where: { wawuUserId },
@@ -981,6 +1003,10 @@ export class DocumentsFlow {
         select: ENTITY_SELECT,
       });
       if (!before || reviewStageOf(before) !== 'needs_documents') return;
+      // The submit call is progress and a submission for review, so a
+      // refusal read after it can be a new decision (NUV-02 round 3, N4;
+      // G-497). Only while the entity is still where this flow left it.
+      await recordOpeningProgress(tx, wawuUserId, { submitted: true, now });
       const moved = await tx.nuvionEntity.updateMany({
         where: { wawuUserId, status: before.status },
         data: {
@@ -1086,6 +1112,7 @@ export class DocumentsFlow {
     if (!onboarding?.livenessSessionId) {
       return this.livenessOut(enabled, null, onboarding, entity, null);
     }
+    const wasPassed = onboarding.livenessState === 'passed';
     let url: string | null = null;
     let state = onboarding.livenessState;
     if (this.area.hostedLiveness && state !== 'passed') {
@@ -1112,6 +1139,8 @@ export class DocumentsFlow {
       }
     }
     if (state === 'passed') {
+      // The selfie came back passed: the person finished a step.
+      if (!wasPassed) await this.progressed(wawuUserId);
       onboarding = await this.linkLiveness(wawuUserId, entity.entityId);
       await this.advance(wawuUserId).catch((e: unknown) => {
         this.logger.warn(
@@ -1275,6 +1304,7 @@ export class DocumentsFlow {
         livenessSessions: { increment: 1 },
       },
     });
+    await this.progressed(wawuUserId);
     await this.linkLiveness(wawuUserId, entity.entityId);
     const fresh = await this.prisma.nuvionOnboarding.findUniqueOrThrow({
       where: { wawuUserId },

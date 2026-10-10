@@ -35,6 +35,44 @@ const orMissing = ({ value }: { value: unknown }) =>
 const trimOrMissing = ({ value }: { value: unknown }) =>
   value === null ? undefined : typeof value === 'string' ? value.trim() : value;
 
+/**
+ * The words a client that wrote out a missing value (`String(null)`, a
+ * template with nothing in it) sends in place of the value: refused like an
+ * empty field in every required text field (NUV-02 round 3, N9), the same
+ * 400 and the same sentence. Any case, once trimmed.
+ */
+export function isStringifiedNull(value: unknown): boolean {
+  return (
+    typeof value === 'string' && /^(?:null|undefined)$/i.test(value.trim())
+  );
+}
+
+/**
+ * Refuses those two words in a required text field, with the field's own
+ * sentence (the one its pattern gives for an empty or malformed value). A
+ * validator of its own, so the patterns the contract shows stay as they are.
+ */
+function NotAWordForNothing(message: string): PropertyDecorator {
+  return ValidateBy({
+    name: 'isNotAWordForNothing',
+    validator: {
+      validate: (value: unknown) => !isStringifiedNull(value),
+      defaultMessage: () => message,
+    },
+  });
+}
+
+/**
+ * A stringified missing value in an OPTIONAL text field is the same as
+ * leaving it out (as a JSON `null` is), so nothing reaches the provider.
+ */
+const trimOrMissingText = ({ value }: { value: unknown }) =>
+  value === null || isStringifiedNull(value)
+    ? undefined
+    : typeof value === 'string'
+      ? value.trim()
+      : value;
+
 /** A real calendar date, `YYYY-MM-DD`, from 1900 up to today. */
 export function isBirthDate(value: unknown): boolean {
   if (typeof value !== 'string') return false;
@@ -140,6 +178,9 @@ export class OpenNairaWalletDto {
     message:
       'firstName must be 1 to 50 letters, spaces, dots, dashes or apostrophes',
   })
+  @NotAWordForNothing(
+    'firstName must be 1 to 50 letters, spaces, dots, dashes or apostrophes',
+  )
   firstName!: string;
 
   /** A5's last name, as the BVN check prefilled it. */
@@ -149,6 +190,9 @@ export class OpenNairaWalletDto {
     message:
       'lastName must be 1 to 50 letters, spaces, dots, dashes or apostrophes',
   })
+  @NotAWordForNothing(
+    'lastName must be 1 to 50 letters, spaces, dots, dashes or apostrophes',
+  )
   lastName!: string;
 
   /** A5's date of birth, `YYYY-MM-DD`. */
@@ -171,6 +215,9 @@ export class OpenNairaWalletDto {
   @Matches(/^(?=.*\p{L})[^\p{Cc}<>]{5,200}$/u, {
     message: 'address must be 5 to 200 characters and include a letter',
   })
+  @NotAWordForNothing(
+    'address must be 5 to 200 characters and include a letter',
+  )
   address!: string;
 
   // -------------------------------------------------------------------------
@@ -184,7 +231,7 @@ export class OpenNairaWalletDto {
   /** A middle name, when the person has one. */
   @ApiPropertyOptional()
   @IsOptional()
-  @Transform(trimOrMissing)
+  @Transform(trimOrMissingText)
   @IsString()
   @Matches(NAME, {
     message:
@@ -201,7 +248,7 @@ export class OpenNairaWalletDto {
   /** A second address line (flat, estate), when there is one. */
   @ApiPropertyOptional({ maxLength: 100 })
   @IsOptional()
-  @Transform(trimOrMissing)
+  @Transform(trimOrMissingText)
   @IsString()
   @Matches(PLACE, {
     message: 'addressLine2 must be 1 to 100 characters and include a letter',
@@ -216,6 +263,7 @@ export class OpenNairaWalletDto {
   @Matches(PLACE, {
     message: 'city must be 1 to 100 characters and include a letter',
   })
+  @NotAWordForNothing('city must be 1 to 100 characters and include a letter')
   city?: string;
 
   /** The state (Lagos, FCT ...). */
@@ -226,6 +274,7 @@ export class OpenNairaWalletDto {
   @Matches(PLACE, {
     message: 'state must be 1 to 100 characters and include a letter',
   })
+  @NotAWordForNothing('state must be 1 to 100 characters and include a letter')
   state?: string;
 
   /** The postal code, 1 to 20 letters, digits, spaces or dashes. */
@@ -236,6 +285,9 @@ export class OpenNairaWalletDto {
   @Matches(/^[A-Za-z0-9][A-Za-z0-9 -]{0,19}$/, {
     message: 'postalCode must be 1 to 20 letters, digits, spaces or dashes',
   })
+  @NotAWordForNothing(
+    'postalCode must be 1 to 20 letters, digits, spaces or dashes',
+  )
   postalCode?: string;
 
   /** The ID document the person will upload (NUV-03). */
@@ -256,6 +308,7 @@ export class OpenNairaWalletDto {
   @Matches(/^[A-Za-z0-9][A-Za-z0-9-]{4,29}$/, {
     message: 'idNumber must be 5 to 30 letters, digits or dashes',
   })
+  @NotAWordForNothing('idNumber must be 5 to 30 letters, digits or dashes')
   idNumber?: string;
 
   /** When it was issued, `YYYY-MM-DD`, when it says. */

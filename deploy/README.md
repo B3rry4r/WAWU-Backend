@@ -170,6 +170,12 @@ FINTAVA_RESEND_SAFETY_MS=
 IDENTITY_HASH_KEY=
 BVN_CHECKS_PER_DAY=
 SELFIE_CHECKS_PER_DAY=
+# Under WALLET_PROVIDER=nuvion (NUV-02 round 3), both may stay empty
+# (provisional): IDENTITY_HOLD_DAYS, how long an unfinished opening holds its
+# BVN (14), and OPEN_ATTEMPTS_PER_ADDRESS_PER_HOUR, the opening tries one
+# address may make in an hour (10).
+IDENTITY_HOLD_DAYS=
+OPEN_ATTEMPTS_PER_ADDRESS_PER_HOUR=
 # Opening the account (MONEY-12) needs IDENTITY_HASH_KEY and the FINTAVA_*
 # settings above. The wallet's bank name (empty: "Loma Bank", provisional)
 # and the owner's licence and deposit-insurance lines (empty: hidden).

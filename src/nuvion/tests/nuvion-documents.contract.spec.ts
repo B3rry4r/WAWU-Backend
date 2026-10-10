@@ -34,6 +34,7 @@ import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { NO_WALLET_MESSAGE } from '../../money/gate/wallet-gate';
 import { MoneyModule } from '../../money/money.module';
+import { WalletOpeningService } from '../../money/opening/wallet-opening.service';
 import type { WalletView } from '../../money/money-view.type';
 import { WALLET_PROVIDER } from '../../wallet-provider/wallet-provider.interface';
 import { NuvionDocumentsArea } from '../areas/documents';
@@ -2746,6 +2747,234 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
       } finally {
         await fintavaApp.close();
       }
+    });
+  });
+
+  // =========================================================================
+  describe('NUV-02 G-497 / N17: the document, address and selfie steps are progress, so the expiry sweep leaves an opening being worked on', () => {
+    const sweep = () =>
+      moduleRef.get(WalletOpeningService, { strict: false }).expireIdleHolds();
+    /** As if the person last did anything `days` ago: every time their opening and entity keep. */
+    async function idle(who: Person, days = 15): Promise<void> {
+      await prisma.$executeRaw`UPDATE "FintavaWalletOpening" SET "attemptStartedAt" = now() - make_interval(days => ${days}) WHERE "wawuUserId" = ${who.id}`;
+      await prisma.$executeRaw`UPDATE "NuvionEntity" SET
+        "progressAt" = NULL, "submittedAt" = NULL, "correctedAt" = NULL,
+        "decidedAt" = CASE WHEN "decidedAt" IS NULL THEN NULL ELSE now() - make_interval(days => ${days}) END
+        WHERE "wawuUserId" = ${who.id}`;
+    }
+    const state = async (who: Person) => (await openingRow(who)).state;
+
+    it('control: an opening idle for 15 days with nothing done is expired by the sweep', async () => {
+      const who = await opened();
+      await idle(who);
+      expect(await sweep()).toBeGreaterThanOrEqual(1);
+      expect(await state(who)).toBe('expired');
+    });
+
+    it.each([
+      ['identity', 'the ID document'],
+      ['proof_of_address', 'the proof of address'],
+    ] as const)(
+      'an upload of %s (%s) after 15 idle days is progress: the sweep leaves the opening, and 14 days after that one it is idle again',
+      async (kind, _what) => {
+        const who = await opened();
+        await idle(who);
+        expect((await entityRow(who)).progressAt).toBeNull();
+        await send(who, kind, kind === 'identity' ? png() : pdf()).expect(200);
+        const worked = await entityRow(who);
+        expect(worked.progressAt).toBeInstanceOf(Date);
+        // Progress is written when the upload is accepted for sending and
+        // again when Nuvion has the file: the last is not before the
+        // document's own time.
+        expect(worked.progressAt!.getTime()).toBeGreaterThanOrEqual(
+          (await docRow(who, kind))!.uploadedAt!.getTime(),
+        );
+        await sweep();
+        expect(await state(who)).toBe('review');
+        expect((await wallet(who)).review?.stage).toBe('needs_documents');
+        // The last thing done is what counts: 15 days after it, the hold runs out.
+        await prisma.$executeRaw`UPDATE "NuvionEntity" SET "progressAt" = now() - interval '15 days' WHERE "wawuUserId" = ${who.id}`;
+        await sweep();
+        expect(await state(who)).toBe('expired');
+      },
+    );
+
+    it('an upload Nuvion refuses is still the person working on it: progress is recorded', async () => {
+      const who = await opened();
+      await idle(who);
+      nuvion.uploadMode = { refuse: 'error_validation_error', status: 422 };
+      expect((await send(who, 'identity', png())).status).not.toBe(200);
+      expect((await entityRow(who)).progressAt).toBeInstanceOf(Date);
+      await sweep();
+      expect(await state(who)).toBe('review');
+    });
+
+    it('the submit call is progress and a submission: progressAt and submittedAt are set with the word, once', async () => {
+      const who = await opened();
+      await idle(who);
+      await send(who, 'identity', png()).expect(200);
+      const before = await entityRow(who);
+      expect(before.submittedAt).toBeNull();
+      await send(who, 'proof_of_address', pdf()).expect(200);
+      expect(submissions()).toHaveLength(1);
+      const after = await entityRow(who);
+      expect(after).toMatchObject({ status: 'pending' });
+      expect(after.submittedAt).toBeInstanceOf(Date);
+      expect(after.progressAt!.getTime()).toBeGreaterThanOrEqual(
+        before.progressAt!.getTime(),
+      );
+      expect(after.submittedAt!.getTime()).toBeGreaterThan(Date.now() - 60_000);
+      // Being checked, it never expires.
+      await prisma.$executeRaw`UPDATE "NuvionEntity" SET "progressAt" = now() - interval '40 days' WHERE "wawuUserId" = ${who.id}`;
+      await sweep();
+      expect(await state(who)).toBe('open');
+    });
+
+    it('a submission recorded late never counts as a submission (the decision stands first): the entity keeps its submission time', async () => {
+      const who = await opened();
+      await send(who, 'identity', png()).expect(200);
+      await send(who, 'proof_of_address', pdf()).expect(200);
+      const decidedAt = new Date(Date.now() - 5_000);
+      await prisma.nuvionEntity.update({
+        where: { wawuUserId: who.id },
+        data: { status: 'rejected', decidedAt, submittedAt: null },
+      });
+      await prisma.nuvionOnboarding.update({
+        where: { wawuUserId: who.id },
+        data: { submittedAt: null },
+      });
+      await new DocumentsFlow(prisma, provider).markSubmitted(
+        who.id,
+        'pending',
+      );
+      expect((await entityRow(who)).submittedAt).toBeNull();
+    });
+
+    describe('the selfie', () => {
+      beforeEach(() => {
+        settings().hostedLiveness = true;
+        settings().livenessRedirectOrigins = [
+          'https://wawuafrica.example/return',
+        ];
+      });
+
+      it('starting it, and its coming back passed, are each progress', async () => {
+        const who = await opened();
+        await idle(who);
+        await startLiveness(who, {
+          redirectUrl: 'https://wawuafrica.example/return',
+        }).expect(200);
+        const started = (await entityRow(who)).progressAt;
+        expect(started).toBeInstanceOf(Date);
+        await sweep();
+        expect(await state(who)).toBe('review');
+
+        await prisma.$executeRaw`UPDATE "NuvionEntity" SET "progressAt" = now() - interval '15 days' WHERE "wawuUserId" = ${who.id}`;
+        const session = [...nuvion.sessions.values()][0];
+        session.captureStatus = 'completed';
+        session.verificationStatus = 'approved';
+        expect(await liveness(who)).toMatchObject({ state: 'passed' });
+        const passed = (await entityRow(who)).progressAt!;
+        expect(Date.now() - passed.getTime()).toBeLessThan(60_000);
+        await sweep();
+        expect(await state(who)).toBe('review');
+        // Reading a result already passed is not new progress.
+        await prisma.$executeRaw`UPDATE "NuvionEntity" SET "progressAt" = now() - interval '15 days' WHERE "wawuUserId" = ${who.id}`;
+        await liveness(who);
+        expect(
+          Date.now() - (await entityRow(who)).progressAt!.getTime(),
+        ).toBeGreaterThan(14 * 24 * 3600_000);
+      });
+    });
+  });
+
+  // =========================================================================
+  describe('NUV-02 into NUV-03: starting again after an expiry still keeps the refusal of a document on its own row', () => {
+    const sweep = () =>
+      moduleRef.get(WalletOpeningService, { strict: false }).expireIdleHolds();
+    const correctDetails = (who: Person) =>
+      http()
+        .post('/api/hub/money/wallet/open')
+        .set('Authorization', who.auth)
+        .send({
+          bvn: digits(11),
+          nin: digits(11),
+          firstName: 'Ada',
+          lastName: 'Documents',
+          dateOfBirth: '1991-04-12',
+          address: '14 Opebi Road',
+          city: 'Ikeja',
+          state: 'Lagos',
+          postalCode: '100001',
+          gender: 'female',
+          idType: 'international_passport',
+          idNumber: `A${digits(8)}`,
+          proofOfAddressType: 'utility_bill',
+        });
+
+    it('refuse the ID, idle 15 days, expire, start again (the real route, Nuvion answers the correction with the checks back at pending): the refused file is asked for anew and the opening is not sent again', async () => {
+      const who = await opened();
+      await send(who, 'identity', png()).expect(200);
+      await send(who, 'proof_of_address', pdf()).expect(200);
+      expect(submissions()).toHaveLength(1);
+      nuvion.onCorrection = {
+        resetDocumentWords: true,
+        statusTo: 'incomplete',
+      };
+      nuvion.submitAcceptsRejected = true;
+
+      const held = nuvion.entities.get(who.held.id)!;
+      held.status = 'rejected';
+      held.documentStatus = 'rejected';
+      held.updated = Date.now();
+      expect((await openingHandler.handle(delivery(held))).outcome).toBe(
+        'done',
+      );
+      await handler.handle(delivery(held));
+      expect((await wallet(who)).review?.stage).toBe('rejected');
+      expect((await docRow(who, 'identity'))?.reviewRefusedAt).toBeInstanceOf(
+        Date,
+      );
+
+      // Nothing from the person for 15 days: the hold runs out.
+      await prisma.$executeRaw`UPDATE "FintavaWalletOpening" SET "attemptStartedAt" = now() - interval '15 days' WHERE "wawuUserId" = ${who.id}`;
+      await prisma.$executeRaw`UPDATE "NuvionEntity" SET "progressAt" = now() - interval '15 days', "submittedAt" = now() - interval '15 days', "decidedAt" = now() - interval '15 days' WHERE "wawuUserId" = ${who.id}`;
+      expect(await sweep()).toBeGreaterThanOrEqual(1);
+      expect((await wallet(who)).review?.stage).toBe('expired');
+
+      // Starting again corrects the same entity; the answer puts the
+      // document check back at pending, and the refused file is still the
+      // one that was refused.
+      await correctDetails(who).expect(200);
+      const entity = await entityRow(who);
+      expect(entity.correctedAt).toBeInstanceOf(Date);
+      expect(entity.documentStatus).toBe('pending');
+      expect((await docRow(who, 'identity'))?.reviewRefusedAt).toBeInstanceOf(
+        Date,
+      );
+      expect((await wallet(who)).review?.stage).toBe('needs_documents');
+      const subsBefore = submissions().length;
+      const v = await view(who);
+      expect(v.documents.map((d) => d.state)).toEqual([
+        'needs_new',
+        'uploaded',
+      ]);
+      expect(v).toMatchObject({
+        open: true,
+        submitted: false,
+        waitingFor: ['identity'],
+      });
+      expect(submissions()).toHaveLength(subsBefore);
+      // Starting again was progress: the opening is not idle.
+      await sweep();
+      expect((await openingRow(who)).state).toBe('review');
+
+      // A new file re-opens it: one more submission.
+      const res = body<IdentityDocumentsView>(
+        await send(who, 'identity', png()).expect(200),
+      ).data!;
+      expect(res.submitted).toBe(true);
+      expect(submissions()).toHaveLength(subsBefore + 1);
     });
   });
 

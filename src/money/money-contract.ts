@@ -89,6 +89,9 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   // wallet_already_open. The request is understood; this wallet is opened
   // another way, so asking again changes nothing.
   step_not_used: 409,
+  // NUV-02 round 3. Default (lead), owner may override: 429, as
+  // identity_checks_exhausted, with retryAfterSeconds.
+  open_address_limited: 429,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */

@@ -2294,6 +2294,8 @@ enum AdminOpsResource {
   service_application
   bill_payment
   health_subscription
+  /// A person's hold on a BVN during a Nuvion wallet opening (NUV-02 round 3).
+  wallet_identity_hold
 }
 
 /// Every consequential ops action that used to be anonymous behind
@@ -2322,6 +2324,9 @@ enum AdminOpsAction {
   bill_refund_recorded
   care_enrolment_retried
   care_refund_recorded
+  /// Support released one person's BVN hold at once (NUV-02 round 3). `detail`
+  /// carries the opening's state before and after, never a BVN or its hash.
+  wallet_identity_hold_released
 }
 
 /// Attribution for the operator surfaces that moved from AdminKeyGuard onto
@@ -4108,9 +4113,16 @@ model BvnCheckAttempt {
   /// `pending` while Fintava is being asked; then `verified`,
   /// `phone_mismatch`, `refused` or `unavailable`.
   outcome    String   @default("pending")
+  /// NUV-02 round 3 (migration 20261018110000): under a provider that
+  /// reviews the person, the opening tries are counted per address too (at
+  /// most OPEN_ATTEMPTS_PER_ADDRESS_PER_HOUR from one place an hour). A keyed
+  /// hash of the caller's address, never the address; null for a Fintava
+  /// check and for a try with no client address.
+  addressKey String?
   createdAt  DateTime @default(now())
 
   @@index([wawuUserId, createdAt])
+  @@index([addressKey, createdAt])
 }
 
 /// One row per selfie match sent (or about to be sent) to Fintava (task
@@ -5041,7 +5053,7 @@ model NuvionEntity {
   issuerBankCode       String?
   /// The account's currency: NGN, or USD for people billed in dollars (NUV-09).
   currency             String?
-  /// NUV-02 (migration 20261016220000): each check of Nuvion's review, in
+  /// NUV-02 (migration 20261018110000): each check of Nuvion's review, in
   /// Nuvion's own words (`identification.identity_numbers[].verification_status`
   /// for the BVN and the NIN, `identification.document` and
   /// `identification.proof_of_address` for the two documents, and the
@@ -5063,6 +5075,21 @@ model NuvionEntity {
   /// later time than this, after a correction, is a new decision, not the
   /// echo of the correction itself (NUV-02 round 2, D3).
   entityUpdatedAt      DateTime?
+  /// NUV-02 round 3: when the person last submitted something for Nuvion's
+  /// review: corrected details sent after a refusal (here) or the submit
+  /// call (NUV-03 sets it). A refusal read again is a new decision only
+  /// when it came after this and Nuvion's check words moved to a verdict
+  /// (N4): `isNewDecision`, src/money/opening/review-stage.ts.
+  submittedAt          DateTime?
+  /// NUV-02 round 3: when the person last did something that moves the
+  /// opening along (sent details, corrected them, uploaded a document,
+  /// submitted: NUV-03 calls `recordOpeningProgress`). An opening idle for
+  /// IDENTITY_HOLD_DAYS has its BVN hold released (N3).
+  progressAt           DateTime?
+  /// NUV-02 round 3: when the opening was marked expired (idle too long, or
+  /// support released the hold): its BVN is let go, the person is told once
+  /// and starts again. Nothing is deleted at Nuvion.
+  holdExpiredAt        DateTime?
   /// The one naira account's claim: set just before `POST /accounts` is
   /// sent, so two deliveries never open two; the account is looked for
   /// (`GET /accounts`) before any second request.
@@ -5314,4 +5341,58 @@ model PointLedger {
   @@index([wawuUserId, seq])
   @@index([lotId])
   @@index([holdId])
+}
+
+enum WaitlistStatus {
+  pending
+  paid
+  failed
+}
+
+/// One person's registration for an event offer, paid by Flutterwave checkout
+/// (JOIN-01, R-48). A waiting list, not an account: nothing here is a WAWU ID
+/// account, and no row names one until the person signs up in the app and
+/// claims it (JOIN-03 writes `claimedByWawuId` and `claimedAt`).
+///
+/// `reference` is the Flutterwave tx_ref, random and at least 128 bits. The
+/// price is copied into `amountKobo` when the person registers, so a later
+/// change to the offer never decides whether their payment counts. `phone` is
+/// E.164 and `email` lower case, both normalised by the server.
+///
+/// Also in the database, and NOT expressible here (Prisma has no partial
+/// unique index): at most one `paid` row per offer and phone, and one per
+/// offer and email (`WaitlistRegistration_one_paid_phone_key`,
+/// `WaitlistRegistration_one_paid_email_key`), and the CHECKs in the
+/// migration. `failed` is only ever a second payment for a person who is
+/// already registered (kept so it can be refunded); a payment Flutterwave
+/// does not confirm leaves the row `pending`.
+model WaitlistRegistration {
+  id              String         @id @default(uuid())
+  offerId         String
+  fullName        String
+  phone           String
+  email           String
+  state           String?
+  makes           String?
+  consentAt       DateTime
+  reference       String         @unique
+  status          WaitlistStatus @default(pending)
+  amountKobo      Int
+  currency        String         @default("NGN")
+  /// Flutterwave's transaction id; set once, when the payment is accepted
+  /// (or recorded as a duplicate), and never shared by two rows.
+  flutterwaveTxId String?        @unique
+  /// What Flutterwave confirmed was paid, in kobo.
+  paidKobo        Int?
+  paidAt          DateTime?
+  /// The WAWU ID account that claimed this payment in the app (JOIN-03).
+  claimedByWawuId String?
+  claimedAt       DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([offerId, status, createdAt])
+  @@index([phone])
+  @@index([email])
+  @@index([claimedByWawuId])
 }

@@ -598,10 +598,13 @@ export function composeNotification(
   }
 }
 
-/** NUV-02 round 2: the three endings of the provider's identity review. */
+/**
+ * NUV-02 round 2: the three endings of the provider's identity review, and
+ * (round 3) an unfinished one closed after too long.
+ */
 function composeIdentityReview(
   userWawuId: string,
-  outcome: 'approved' | 'rejected' | 'stopped',
+  outcome: 'approved' | 'rejected' | 'stopped' | 'expired',
   fixes: readonly string[],
 ): NotificationDraft {
   const base = { userWawuId, kind: 'identity_review' } as const;
@@ -644,6 +647,15 @@ function composeIdentityReview(
         actionLabel: null,
         ...none,
       };
+    case 'expired':
+      return {
+        ...base,
+        title: 'Identity check closed',
+        body: 'Your identity check was not finished, so we closed it. Send your details again to start a new one.',
+        tone: 'warning',
+        actionLabel: 'Start again',
+        ...none,
+      };
   }
 }
 
@@ -684,7 +696,7 @@ interface ReviewReceivedEvent {
 interface IdentityReviewEvent {
   kind: 'identity_review';
   userWawuId: string;
-  outcome: 'approved' | 'rejected' | 'stopped';
+  outcome: 'approved' | 'rejected' | 'stopped' | 'expired';
   fixes?: readonly string[];
 }
 

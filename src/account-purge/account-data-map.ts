@@ -145,6 +145,18 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'PersonBilling', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'MakerTier', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'EventPass', column: 'wawuUserId', disposition: 'OWNED' },
+  // An event registration this account claimed in the app (JOIN-01; claimed by
+  // JOIN-03): its name, phone, email and the payment that bought the plan. It
+  // names this account only after the claim, so it goes with the claimer. An
+  // unclaimed registration names no account and is not touched here: an
+  // unpaid one is deleted after a week, a paid one waits for its person.
+  // Default (agent), owner may override: the payment record goes with the
+  // account, like VerificationPurchase above.
+  {
+    model: 'WaitlistRegistration',
+    column: 'claimedByWawuId',
+    disposition: 'OWNED',
+  },
   { model: 'CreditLot', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CreditSpend', column: 'userWawuId', disposition: 'OWNED' },
   {

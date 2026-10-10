@@ -182,9 +182,18 @@ export type WalletOpeningFlow = 'check' | 'review';
  * stopped:         the review failed for good or was suspended, or the BVN
  *                  it reviewed is another account's now: money routes
  *                  answer `wallet_not_open`; support can help.
+ * expired:         the opening sat unfinished for too long (or support
+ *                  closed it) and its BVN was let go; the person was told
+ *                  and may send their details again to start a new one
+ *                  (NUV-02 round 3).
  */
 export type WalletReviewStage =
-  'needs_documents' | 'checking' | 'approved' | 'rejected' | 'stopped';
+  | 'needs_documents'
+  | 'checking'
+  | 'approved'
+  | 'rejected'
+  | 'stopped'
+  | 'expired';
 
 /** Why a review said no, in plain words, and what to fix (NUV-02). */
 export interface WalletReviewReasonView {
@@ -201,6 +210,7 @@ export interface WalletReviewReasonView {
  * bvn_phone_mismatch: the provider named the phone as not the BVN's (A14).
  * details_not_verified: the provider gave no reason we can name.
  * review_stopped: the review failed for good or was suspended.
+ * review_expired: the opening was left unfinished too long and was closed.
  */
 export type WalletReviewReasonCode =
   | 'bvn_not_verified'
@@ -209,16 +219,29 @@ export type WalletReviewReasonCode =
   | 'proof_of_address_not_verified'
   | 'bvn_phone_mismatch'
   | 'details_not_verified'
-  | 'review_stopped';
+  | 'review_stopped'
+  | 'review_expired';
 
 /** The provider's review of the person, as GET /money/wallet tells it (NUV-02). */
 export interface WalletReviewView {
   stage: WalletReviewStage;
   /** Why, when `stage` is `rejected` or `stopped`; empty otherwise. */
   reasons: WalletReviewReasonView[];
-  /** True when corrected details may be sent (POST /money/wallet/open). */
+  /**
+   * True when corrected details may be sent (POST /money/wallet/open). False
+   * while the day's tries are used up, however the review stands (round 3,
+   * N6): `canResubmitAt` then says when they open again.
+   */
   canResubmit: boolean;
-  /** When the provider decided (approved, rejected or stopped); else null. */
+  /**
+   * When the tries open again, while `canResubmit` is false only because
+   * the person's day or this address's hour is used up; else null.
+   */
+  canResubmitAt: string | null;
+  /**
+   * When the provider decided (approved, rejected or stopped), or the
+   * opening expired; else null.
+   */
   decidedAt: string | null;
 }
 

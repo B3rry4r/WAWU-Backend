@@ -15,6 +15,8 @@ import { ShopService } from '../shop/shop.service';
 import { EventTicketingService } from '../event-ticketing/event-ticketing.service';
 import { WalletService } from '../wallet/wallet.service';
 import { LegalRequestsService } from '../legal/legal.service';
+import { REFERENCE_PREFIX as WAITLIST_REFERENCE_PREFIX } from '../waitlist/waitlist-config';
+import { WaitlistService } from '../waitlist/waitlist.service';
 
 /**
  * The event Flutterwave fires when a checkout completes. Everything else
@@ -153,6 +155,7 @@ export class PaymentWebhookService {
     private readonly shop: ShopService,
     private readonly tickets: EventTicketingService,
     private readonly wallet: WalletService,
+    private readonly waitlist: WaitlistService,
   ) {}
 
   /** Narrow the untrusted body by hand — no DTO, because Flutterwave sends far
@@ -610,6 +613,22 @@ export class PaymentWebhookService {
         settle: () =>
           this.tickets.verifyOrder(eventOrder.buyerWawuId, eventOrder.id, dto),
       };
+    }
+
+    // The event registration link (JOIN-01): its tx_ref is the registration's
+    // own random reference. A payer whose browser never came back is settled
+    // here, by the same checks the browser's verify applies.
+    if (txRef.startsWith(WAITLIST_REFERENCE_PREFIX)) {
+      const registration = await this.prisma.waitlistRegistration.findUnique({
+        where: { reference: txRef },
+        select: { reference: true },
+      });
+      if (registration) {
+        return {
+          flow: 'event-registration',
+          settle: () => this.waitlist.settleFromWebhook(txRef, transactionId),
+        };
+      }
     }
 
     return null;
