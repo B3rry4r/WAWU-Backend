@@ -1,0 +1,885 @@
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import type { Prisma } from '../../../generated/prisma/client';
+import { PrismaService } from '../../common/prisma/prisma.service';
+import { isRowOf } from '../../wallet-provider/provider-rows';
+import {
+  type ProviderReconciliation,
+  type ProviderTransferReceipt,
+  safeKoboNumber,
+  WALLET_PROVIDER,
+  type WalletProvider,
+} from '../../wallet-provider/wallet-provider.interface';
+import { WalletProviderError } from '../../wallet-provider/wallet-provider-error';
+import { WalletProviderLimitError } from '../../wallet-provider/wallet-provider-limit';
+import type { PaymentKind } from '../dto/money-enums';
+import { FeeQuoteService } from '../fees/fee-quote.service';
+import type { LedgerMovementInput } from '../ledger/ledger.interface';
+import { koboNumber, LedgerService } from '../ledger/ledger.service';
+import { PaymentSettings } from '../payments/payment-config';
+import { joinNotes } from '../payments/payment-figures';
+import {
+  type HoldAction,
+  type HoldRef,
+  HoldRequestError,
+  type HoldSettlement,
+  type HoldSettlementState,
+  type HoldWaiting,
+  holdReference,
+  REFUND_NARRATION,
+  RELEASE_NARRATION,
+  transferFor,
+  WALLET_WAITS,
+} from './hold-rules';
+
+type HoldRow = Prisma.WalletHoldGetPayload<object>;
+
+const MINUTE = 60_000;
+/** Holds per page of the sweep, and pages per pass. */
+const SWEEP_PAGE = 50;
+const SWEEP_PAGES = 20;
+
+/** The rest before the next try or question: 1, 2, 4 ... minutes, at most an hour. */
+function restMs(count: number): number {
+  return Math.min(60, 2 ** Math.min(Math.max(count, 0), 6)) * MINUTE;
+}
+
+/**
+ * Hold, release and refund (task MONEY-18, R-19).
+ *
+ * A paid DM, an event ticket or a bill is paid into WAWU's own account at the
+ * wallet provider (MONEY-17); the payment's completion writes a `WalletHold`
+ * for it. The price then waits there until the owning feature says what
+ * happened:
+ *
+ * - **`release`** (a DM answered, an event that took place, a bill
+ *   delivered): the payee's 85% moves from WAWU's account to the payee's
+ *   wallet. The 15% is WAWU's and stays where it is; with no payee (a bill)
+ *   nothing moves and the whole price is WAWU's (R-5).
+ * - **`refund`** (no answer in time, an event called off, a biller failure):
+ *   the price moves back to the payer's wallet. The provider's charge on the
+ *   original payment is not returned (R-10).
+ *
+ * The provider's charge on either move is WAWU's, paid from its 15% (R-31);
+ * the payee and the payer receive the full figure.
+ *
+ * **Once.** A hold is settled once, one way. The owning feature's request
+ * sets `action` in one conditional update (the first request wins; the same
+ * request again is the same hold, and the other request is a
+ * `HoldRequestError`), and the database refuses to change an action or leave
+ * a settled state (the migration's trigger). The move itself goes out under
+ * one reference of ours (`wawu-rel-<id>` or `wawu-ref-<id>`), so the
+ * provider refuses a repeat, and it is handed over by a lease (`sentAt`)
+ * only one caller wins. The hold id is therefore the Idempotency-Key of the
+ * movement: asking again, from the feature, the sweep or a second server,
+ * never moves it twice.
+ *
+ * **The provider's record is the truth.** The hold is `released` or
+ * `refunded` only when the provider confirmed the move, from its answer to
+ * the send, or from its record of our reference when the answer was lost. A
+ * move whose outcome is unknown (a timeout, a 5xx, a transfer accepted and
+ * not finished, a repeated reference) is asked about, backing off to
+ * hourly, and is never sent again and never read as "nothing moved"; past
+ * PAYMENT_REVIEW_AFTER_HOURS it goes to a person. Only the provider's own
+ * record that the move failed starts a new try, under a new reference. A
+ * balance is never added up from holds: the provider's is the only one.
+ *
+ * **Waiting is not failing.** A person with no wallet yet (R-11: the money
+ * waits and lands within a minute of the wallet opening), a frozen wallet
+ * (BACKEND_GAPS G-10: paid on unfreeze), WAWU's own account short of money
+ * (an error in the log every try), the provider out of reach: the hold
+ * stays `held`, the money stays in WAWU's account, and the sweep tries
+ * again. Nothing is ever refunded because a release is stuck, or the other
+ * way round.
+ *
+ * Through the provider seam only (MONEY-20): a server acts only on holds of
+ * the provider it runs.
+ */
+@Injectable()
+export class WalletHoldService {
+  private readonly logger = new Logger(WalletHoldService.name);
+  private sweeping = false;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(WALLET_PROVIDER) private readonly provider: WalletProvider,
+    private readonly ledger: LedgerService,
+    private readonly fees: FeeQuoteService,
+    private readonly settings: PaymentSettings,
+  ) {}
+
+  // -------------------------------------------------------------------------
+  // What an owning feature calls
+  // -------------------------------------------------------------------------
+
+  /** The payee gets the payee's share (the condition was met). Safe to ask again. */
+  release(ref: HoldRef, reason?: string): Promise<HoldSettlement> {
+    return this.request('release', ref, reason);
+  }
+
+  /** The payer gets the price back (the condition will not be met). Safe to ask again. */
+  refund(ref: HoldRef, reason?: string): Promise<HoldSettlement> {
+    return this.request('refund', ref, reason);
+  }
+
+  /**
+   * What is held now, for the nightly check (MONEY-16): the holds still
+   * `held` of the provider this server runs, counted and summed in kobo.
+   * Money whose release or refund the provider has not confirmed is still
+   * held. Compared with the provider's own balance by MONEY-16, never shown
+   * as a balance.
+   */
+  async openTotals(): Promise<{ count: number; amountKobo: bigint }> {
+    const rows = await this.prisma.walletHold.aggregate({
+      where: { status: 'held', provider: this.provider.name },
+      _count: { _all: true },
+      _sum: { amountKobo: true },
+    });
+    return {
+      count: rows._count._all,
+      amountKobo: rows._sum.amountKobo ?? 0n,
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // The request
+  // -------------------------------------------------------------------------
+
+  private async request(
+    action: HoldAction,
+    ref: HoldRef,
+    reason?: string,
+  ): Promise<HoldSettlement> {
+    const hold = await this.find(ref);
+    if (!hold) {
+      throw new HoldRequestError(
+        'no_such_hold',
+        'There is no hold for that payment.',
+      );
+    }
+    if (hold.action && hold.action !== action) {
+      throw new HoldRequestError(
+        'other_action_chosen',
+        `This hold was already ${hold.action === 'release' ? 'released' : 'refunded'} or is being; it cannot also be ${action === 'release' ? 'released' : 'refunded'}.`,
+      );
+    }
+    if (!hold.action) {
+      const now = new Date();
+      const amount = transferFor(action, hold);
+      const nothingToMove =
+        amount <= 0n || (action === 'release' && !hold.payeeWawuUserId);
+      const base = {
+        action,
+        actionReason: reason ? reason.slice(0, 200) : null,
+        actionAt: now,
+      };
+      const { count } = await this.prisma.walletHold.updateMany({
+        where: { id: hold.id, status: 'held', action: null },
+        data: nothingToMove
+          ? // Nobody to pay and nothing to return: WAWU's own share stays in
+            // its account and the hold is over, with no movement to confirm.
+            { ...base, status: 'released', settledAt: now }
+          : {
+              ...base,
+              transferKobo: amount,
+              customerReference: holdReference(action, hold.id, 1),
+              attempt: 1,
+            },
+      });
+      if (count === 0) {
+        // Another request got there first: it is this hold's now.
+        const again = await this.load(hold.id);
+        if (again.action && again.action !== action) {
+          throw new HoldRequestError(
+            'other_action_chosen',
+            'This hold was settled the other way a moment ago.',
+          );
+        }
+      } else if (nothingToMove) {
+        // Nobody to pay, or a share too small to move (nothing owed): the
+        // payee's share is as paid as it will ever be.
+        if (hold.payeeWawuUserId) await this.markPayeeSettled(hold);
+        return this.settlementOf(await this.load(hold.id));
+      }
+    }
+    return this.drive(hold.id);
+  }
+
+  private find(ref: HoldRef): Promise<HoldRow | null> {
+    return 'holdId' in ref
+      ? this.prisma.walletHold.findUnique({ where: { id: ref.holdId } })
+      : this.prisma.walletHold.findUnique({
+          where: { paymentId: ref.paymentId },
+        });
+  }
+
+  private load(id: string): Promise<HoldRow> {
+    return this.prisma.walletHold.findUniqueOrThrow({ where: { id } });
+  }
+
+  // -------------------------------------------------------------------------
+  // The sweep
+  // -------------------------------------------------------------------------
+
+  /**
+   * Every minute: every hold whose action was chosen and whose move is not
+   * confirmed, not under review and due (a hold waiting for a wallet is due
+   * every pass), of the provider this server runs.
+   */
+  @Cron(CronExpression.EVERY_MINUTE, { name: 'money-hold-settle' })
+  async sweep(
+    now = new Date(),
+  ): Promise<{ checked: number; settled: number }> {
+    const counts = { checked: 0, settled: 0 };
+    if (this.sweeping) return counts;
+    this.sweeping = true;
+    try {
+      let after: { at: Date; id: string } | null = null;
+      for (let page = 0; page < SWEEP_PAGES; page += 1) {
+        const where: Prisma.WalletHoldWhereInput = {
+          status: 'held',
+          action: { not: null },
+          reviewSince: null,
+          provider: this.provider.name,
+          OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
+          ...(after
+            ? {
+                AND: [
+                  {
+                    OR: [
+                      { actionAt: { gt: after.at } },
+                      { actionAt: after.at, id: { gt: after.id } },
+                    ],
+                  },
+                ],
+              }
+            : {}),
+        };
+        const due = await this.prisma.walletHold.findMany({
+          where,
+          orderBy: [{ actionAt: 'asc' }, { id: 'asc' }],
+          take: SWEEP_PAGE,
+          select: { id: true, actionAt: true },
+        });
+        for (const { id } of due) {
+          counts.checked += 1;
+          try {
+            const s = await this.drive(id, now);
+            if (s.state === 'settled') counts.settled += 1;
+          } catch (e) {
+            this.logger.error(
+              `hold ${id}: the sweep could not drive it (${e instanceof Error ? e.name : 'error'})`,
+            );
+          }
+        }
+        if (due.length < SWEEP_PAGE) break;
+        const last = due[due.length - 1];
+        after = { at: last.actionAt!, id: last.id };
+      }
+    } catch (e) {
+      this.logger.error(
+        `hold sweep failed: ${e instanceof Error ? e.message : 'unknown'}`,
+      );
+    } finally {
+      this.sweeping = false;
+    }
+    return counts;
+  }
+
+  /**
+   * Moves a hold one step: asks the provider about a move that was handed
+   * over, or hands it over. Never sends a move whose outcome is unknown.
+   */
+  async drive(holdId: string, now = new Date()): Promise<HoldSettlement> {
+    const hold = await this.load(holdId);
+    if (hold.status !== 'held' || !hold.action) return this.settlementOf(hold);
+    if (hold.reviewSince) return this.settlementOf(hold);
+    // Not yet due: a lease on a call in flight, or a back-off.
+    if (hold.nextAttemptAt && hold.nextAttemptAt.getTime() > now.getTime()) {
+      return this.settlementOf(hold);
+    }
+    if (!isRowOf(this.provider.name, hold.provider)) {
+      // Another provider holds this money (written before a switch of
+      // WALLET_PROVIDER): this one's silence says nothing and it sends
+      // nothing. It waits for its own provider.
+      return this.waitFor(hold, 'provider', now, true);
+    }
+    return hold.sentAt ? this.reconcile(hold, now) : this.send(hold, now);
+  }
+
+  // -------------------------------------------------------------------------
+  // Sending
+  // -------------------------------------------------------------------------
+
+  private async send(hold: HoldRow, now: Date): Promise<HoldSettlement> {
+    const action = hold.action as HoldAction;
+    const amount = hold.transferKobo!;
+    const cap = this.fees.providerFees.merchantMaxPerTxnKobo;
+    if (cap !== null && amount > BigInt(cap)) {
+      // Refuse, never split (WALLET.md, lead ruling 1): a person decides.
+      return this.toReview(
+        hold,
+        `${action} of ${amount} kobo is above the cap of ${cap} kobo on one move through WAWU's account`,
+      );
+    }
+
+    const destination = await this.destination(hold);
+    if (destination.kind === 'wait') {
+      return this.waitFor(hold, destination.waiting, now);
+    }
+    if (destination.kind === 'review') {
+      return this.toReview(hold, destination.note);
+    }
+    if (await this.isWawuAccount(hold.merchantAccountNumber, destination.account)) {
+      return this.toReview(
+        hold,
+        `the ${action} would move money from WAWU's account to WAWU's account`,
+      );
+    }
+
+    // The lease: only the caller that wins it hands the move to the provider.
+    // `sentAt` set means a record may exist at the provider from here on.
+    const leaseUntil = new Date(
+      now.getTime() +
+        this.provider.timings.moneyTimeoutMs +
+        this.provider.timings.resendSafetyMs,
+    );
+    const leased = await this.prisma.walletHold.updateMany({
+      where: {
+        id: hold.id,
+        status: 'held',
+        action,
+        reviewSince: null,
+        sentAt: null,
+        OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
+      },
+      data: {
+        sentAt: now,
+        nextAttemptAt: leaseUntil,
+        attempts: { increment: 1 },
+        waiting: null,
+        destinationAccountNumber: destination.account,
+      },
+    });
+    if (leased.count === 0) {
+      return this.settlementOf(await this.load(hold.id));
+    }
+
+    let receipt: ProviderTransferReceipt;
+    try {
+      receipt = await this.provider.walletToWallet({
+        fromAccountNumber: hold.merchantAccountNumber,
+        toAccountNumber: destination.account,
+        amountKobo: amount,
+        reference: hold.customerReference!,
+        narration: action === 'release' ? RELEASE_NARRATION : REFUND_NARRATION,
+      });
+    } catch (e) {
+      return this.afterRefusal(hold, e, now);
+    }
+    return this.afterReceipt(
+      { ...hold, destinationAccountNumber: destination.account },
+      receipt,
+    );
+  }
+
+  /** Where the money goes, or why it cannot go yet. */
+  private async destination(
+    hold: HoldRow,
+  ): Promise<
+    | { kind: 'ok'; account: string }
+    | { kind: 'wait'; waiting: HoldWaiting }
+    | { kind: 'review'; note: string }
+  > {
+    const release = hold.action === 'release';
+    const person = release ? hold.payeeWawuUserId : hold.payerWawuUserId;
+    if (!person) {
+      // The payer's account is gone (a refund has nobody to go to) or the
+      // payee has none: WAWU keeps the money until a person decides.
+      return {
+        kind: 'review',
+        note: release
+          ? 'the payee is not on record'
+          : "the payer's account was deleted, so there is nowhere to refund to",
+      };
+    }
+    const wallet = await this.prisma.fintavaWallet.findUnique({
+      where: { wawuUserId: person },
+      select: { accountNumber: true, provider: true },
+    });
+    if (!wallet || !isRowOf(this.provider.name, wallet.provider)) {
+      return {
+        kind: 'wait',
+        waiting: release ? 'payee_wallet' : 'payer_wallet',
+      };
+    }
+    return { kind: 'ok', account: wallet.accountNumber };
+  }
+
+  /**
+   * Whether the destination is WAWU's own account at the provider, however
+   * the provider names it (the seam's `isSameAccount`, when it has one).
+   */
+  private async isWawuAccount(
+    merchant: string,
+    destination: string,
+  ): Promise<boolean> {
+    if (merchant === destination) return true;
+    if (!this.provider.isSameAccount) return false;
+    try {
+      return await this.provider.isSameAccount(destination, merchant);
+    } catch {
+      // It cannot say: the sender and the receiver are both read from our
+      // own records, so the move is not stopped on a silent answer.
+      return false;
+    }
+  }
+
+  /** The provider did not take the move, or we do not know whether it did. */
+  private async afterRefusal(
+    hold: HoldRow,
+    e: unknown,
+    now: Date,
+  ): Promise<HoldSettlement> {
+    const refusal = e instanceof WalletProviderError ? e : null;
+    if (!refusal || refusal.recordMayExist) {
+      // Money may have moved (a lost answer, a transfer accepted and not
+      // finished, a repeated reference): asked about, never sent again.
+      this.logger.warn(
+        `hold ${hold.id}: the ${hold.action} outcome is unknown (${refusal?.kind ?? 'error'}); asking ${this.provider.label} about it`,
+      );
+      await this.schedule(hold, now, 1);
+      return this.settlementOf(await this.load(hold.id));
+    }
+    // A refusal that moved nothing: the lease is given back, the same
+    // reference is used again (a refused send does not use it up).
+    let waiting: HoldWaiting;
+    if (refusal instanceof WalletProviderLimitError) waiting = 'provider';
+    else if (refusal.kind === 'insufficient_funds') waiting = 'funds';
+    else if (refusal.kind === 'wallet_inactive') waiting = 'recipient_frozen';
+    else if (
+      [
+        'auth',
+        'not_configured',
+        'merchant_inactive',
+        'rate_limited',
+        'unavailable',
+        'not_supported',
+        'bad_response',
+      ].includes(refusal.kind)
+    ) {
+      waiting = 'provider';
+    } else {
+      waiting = 'refused';
+    }
+    if (waiting === 'funds') {
+      this.logger.error(
+        `hold ${hold.id}: ${this.provider.label} says WAWU's own account cannot cover the ${hold.action} (${hold.transferKobo} kobo): held money is not where it should be`,
+      );
+    } else if (waiting === 'refused') {
+      this.logger.error(
+        `hold ${hold.id}: ${this.provider.label} refused the ${hold.action} (${refusal.kind}); nothing moved`,
+      );
+    }
+    await this.prisma.walletHold.updateMany({
+      where: { id: hold.id, status: 'held', sentAt: { not: null } },
+      data: {
+        sentAt: null,
+        waiting,
+        nextAttemptAt: new Date(now.getTime() + restMs(hold.attempts + 1)),
+      },
+    });
+    return this.settlementOf(await this.load(hold.id));
+  }
+
+  /** The provider confirmed the move in its answer. */
+  private async afterReceipt(
+    hold: HoldRow,
+    receipt: ProviderTransferReceipt,
+  ): Promise<HoldSettlement> {
+    if (receipt.amountKobo !== hold.transferKobo) {
+      // It moved another amount than asked: a stop. The ledger is not
+      // written with a figure we did not ask for; a person looks.
+      return this.toReview(
+        hold,
+        `${this.provider.label} moved ${receipt.amountKobo} kobo for a ${hold.action} of ${hold.transferKobo} kobo`,
+      );
+    }
+    return this.settle(hold, {
+      feeKobo: receipt.feeKobo,
+      refs: {
+        fintavaReference: receipt.providerReference,
+        tagapayTransRef: receipt.secondaryReference,
+        fintavaTransactionId: receipt.transactionId,
+      },
+      occurredAt: null,
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Asking the provider about a move that was handed over
+  // -------------------------------------------------------------------------
+
+  private async reconcile(hold: HoldRow, now: Date): Promise<HoldSettlement> {
+    let answer: ProviderReconciliation | null = null;
+    try {
+      answer = await this.provider.reconcileSend(
+        hold.customerReference!,
+        { kind: 'merchant' },
+        hold.sentAt ?? hold.actionAt ?? hold.createdAt,
+      );
+    } catch (e) {
+      this.logger.warn(
+        `hold ${hold.id}: ${this.provider.label} could not be asked (${e instanceof WalletProviderError ? e.kind : 'error'})`,
+      );
+    }
+    if (answer?.state === 'found') {
+      const t = answer.transaction;
+      if (t.outcome === 'completed') {
+        if (t.amountKobo !== hold.transferKobo) {
+          return this.toReview(
+            hold,
+            `${this.provider.label} moved ${t.amountKobo} kobo for a ${hold.action} of ${hold.transferKobo} kobo`,
+          );
+        }
+        const tagapay =
+          t.secondaryReference ??
+          (await this.provider.secondaryReferenceOf(t).catch(() => null));
+        return this.settle(hold, {
+          // Fintava's lookups carry no charge; Nuvion's record does.
+          feeKobo: t.feeKobo ?? null,
+          refs: {
+            fintavaReference: t.providerReference,
+            tagapayTransRef: tagapay,
+            fintavaTransactionId: t.id,
+          },
+          occurredAt: Number.isNaN(Date.parse(t.createdAt))
+            ? null
+            : new Date(t.createdAt),
+        });
+      }
+      if (t.outcome === 'failed') {
+        // The provider's own record: the move did not happen and the money is
+        // where it was. Only this starts a new try, under a new reference.
+        return this.retryAfterFailure(hold, now);
+      }
+      if (t.outcome === 'reversed') {
+        return this.toReview(
+          hold,
+          `${this.provider.label} moved the ${hold.action} and then reversed it; WAWU's account holds the money again`,
+        );
+      }
+      // Pending, or a word we do not know: neither says no money moved.
+    }
+    return this.stillUnknown(hold, now);
+  }
+
+  /** Still unknown: asked again later, or sent to a person past the bound. */
+  private async stillUnknown(
+    hold: HoldRow,
+    now: Date,
+  ): Promise<HoldSettlement> {
+    const since = (hold.sentAt ?? hold.actionAt ?? hold.createdAt).getTime();
+    if (now.getTime() - since >= this.settings.reviewAfterHours * 3_600_000) {
+      return this.toReview(
+        hold,
+        `no answer from ${this.provider.label} about the ${hold.action} after ${this.settings.reviewAfterHours} hours; it may have moved`,
+      );
+    }
+    await this.schedule(hold, now, hold.checks + 1);
+    return this.settlementOf(await this.load(hold.id));
+  }
+
+  /** The next question to the provider, with the rest doubling each time. */
+  private async schedule(
+    hold: HoldRow,
+    now: Date,
+    checks: number,
+  ): Promise<void> {
+    await this.prisma.walletHold.updateMany({
+      where: { id: hold.id, status: 'held' },
+      data: {
+        checks: { increment: 1 },
+        nextAttemptAt: new Date(now.getTime() + restMs(checks)),
+      },
+    });
+  }
+
+  /** The provider's record says the move failed: a new try, a new reference. */
+  private async retryAfterFailure(
+    hold: HoldRow,
+    now: Date,
+  ): Promise<HoldSettlement> {
+    const attempt = hold.attempt + 1;
+    this.logger.warn(
+      `hold ${hold.id}: ${this.provider.label} says the ${hold.action} failed; trying again as attempt ${attempt}`,
+    );
+    await this.prisma.walletHold.updateMany({
+      where: {
+        id: hold.id,
+        status: 'held',
+        sentAt: { not: null },
+        customerReference: hold.customerReference,
+      },
+      data: {
+        attempt,
+        customerReference: holdReference(
+          hold.action as HoldAction,
+          hold.id,
+          attempt,
+        ),
+        sentAt: null,
+        checks: 0,
+        waiting: 'refused',
+        nextAttemptAt: new Date(now.getTime() + restMs(attempt)),
+      },
+    });
+    return this.settlementOf(await this.load(hold.id));
+  }
+
+  // -------------------------------------------------------------------------
+  // Settling
+  // -------------------------------------------------------------------------
+
+  /**
+   * The provider confirmed the move: the ledger gets both sides, the hold
+   * becomes `released` or `refunded`, and a release marks the payment's
+   * payee share as paid (so WALLET-16 never lands it again).
+   */
+  private async settle(
+    hold: HoldRow,
+    fig: {
+      feeKobo: bigint | null;
+      refs: {
+        fintavaReference?: string | null;
+        tagapayTransRef?: string | null;
+        fintavaTransactionId?: string | null;
+      };
+      occurredAt: Date | null;
+    },
+  ): Promise<HoldSettlement> {
+    const action = hold.action as HoldAction;
+    // A negative charge is nothing a provider charges: the move stands, the
+    // charge is not recorded as a figure, and the hold says why.
+    const fee = fig.feeKobo !== null && fig.feeKobo >= 0n ? fig.feeKobo : null;
+    await this.writeLedger(hold, fee, fig.refs, fig.occurredAt);
+    const now = new Date();
+    const { count } = await this.prisma.walletHold.updateMany({
+      where: { id: hold.id, status: 'held', action },
+      data: {
+        status: action === 'release' ? 'released' : 'refunded',
+        settledAt: now,
+        refundedKobo: action === 'refund' ? hold.amountKobo : null,
+        providerFeeKobo: fee,
+        waiting: null,
+        nextAttemptAt: null,
+        ...(fig.feeKobo !== null && fee === null
+          ? {
+              discrepancy: joinNotes(
+                hold.discrepancy,
+                `${this.provider.label} reported a charge of ${fig.feeKobo} kobo on the ${action}`,
+              ),
+            }
+          : {}),
+      },
+    });
+    if (count > 0 && action === 'release') await this.markPayeeSettled(hold);
+    return this.settlementOf(await this.load(hold.id));
+  }
+
+  /** WALLET-16 lands the payee share of an ordinary payment; a released hold's is paid. */
+  private async markPayeeSettled(hold: HoldRow): Promise<void> {
+    await this.prisma.walletPayment.updateMany({
+      where: { id: hold.paymentId, payeeSettledAt: null },
+      data: { payeeSettledAt: new Date() },
+    });
+  }
+
+  /**
+   * Both sides of the move in the ledger: WAWU's account (money out) and the
+   * person's wallet (money in), under our reference. Best effort, like every
+   * ledger write after the money moved: the signed delivery and the status
+   * check write them too, and the hold's own state is the provider's record.
+   */
+  private async writeLedger(
+    hold: HoldRow,
+    fee: bigint | null,
+    refs: {
+      fintavaReference?: string | null;
+      tagapayTransRef?: string | null;
+      fintavaTransactionId?: string | null;
+    },
+    occurredAt: Date | null,
+  ): Promise<void> {
+    const action = hold.action as HoldAction;
+    const dest = hold.destinationAccountNumber;
+    if (!dest || !hold.customerReference) return;
+    const amount = koboNumber(hold.transferKobo!);
+    const person = action === 'release' ? hold.payeeWawuUserId : hold.payerWawuUserId;
+    if (!person) return;
+    const category = action === 'release' ? ('earning' as const) : ('refund' as const);
+    const link = { kind: hold.kind as PaymentKind, targetId: hold.targetId, title: hold.title };
+    const common = {
+      status: 'completed' as const,
+      category,
+      link,
+      narration: action === 'release' ? RELEASE_NARRATION : REFUND_NARRATION,
+      references: { customerReference: hold.customerReference, ...refs },
+      // Our own move, known to us: the category, link and counterparty are
+      // ours to set, however the ledger first heard of it.
+      source: 'send' as const,
+      ...(occurredAt ? { occurredAt } : {}),
+    };
+    // What the provider took from WAWU's account on top (R-31). A record that
+    // carries no charge (Fintava's lookups) leaves the figures the row holds
+    // standing; the schedule's charge only creates a row that is not there.
+    const expected = this.expectedFeeKobo(hold.transferKobo!);
+    const takenFee = fee ?? expected ?? 0n;
+    const out: LedgerMovementInput = {
+      ...common,
+      wallet: { kind: 'merchant', accountNumber: hold.merchantAccountNumber },
+      direction: 'out',
+      amountKobo: amount,
+      feeKobo: koboNumber(takenFee),
+      totalKobo: amount + koboNumber(takenFee),
+      providerFeeKobo: koboNumber(takenFee),
+      wawuFeeKobo: 0,
+      figuresStand: fee === null,
+      counterparty: {
+        kind: 'wawu_user',
+        name: null,
+        wawuUserId: person,
+        accountNumber: dest,
+      },
+    };
+    const inn: LedgerMovementInput = {
+      ...common,
+      wallet: { kind: 'user', wawuUserId: person, accountNumber: dest },
+      direction: 'in',
+      amountKobo: amount,
+      feeKobo: 0,
+      totalKobo: amount,
+      // The earning comes from the person who paid for it; a refund comes
+      // from WAWU. Neither carries anyone's account number.
+      counterparty:
+        action === 'release' && hold.payerWawuUserId
+          ? {
+              kind: 'wawu_user',
+              name: null,
+              wawuUserId: hold.payerWawuUserId,
+              accountNumber: null,
+            }
+          : { kind: 'wawu', name: null },
+    };
+    for (const movement of [out, inn]) {
+      try {
+        await this.ledger.record(movement, undefined, { quiet: true });
+      } catch (e) {
+        this.logger.error(
+          `hold ${hold.id}: the ledger could not record the ${action} (${e instanceof Error ? e.name : 'error'})`,
+        );
+      }
+    }
+  }
+
+  /** The schedule's charge on a move, or null when fees are not set. */
+  private expectedFeeKobo(amount: bigint): bigint | null {
+    if (!this.fees.feesSet) return null;
+    try {
+      return BigInt(
+        this.fees.providerFees.walletToWalletKobo(safeKoboNumber(amount)),
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Waiting and review
+  // -------------------------------------------------------------------------
+
+  /**
+   * Nothing has moved and the reason is a person's wallet, a frozen wallet,
+   * a provider out of reach or a refusal. A hold waiting for a wallet is
+   * tried every minute; the rest back off to hourly.
+   */
+  private async waitFor(
+    hold: HoldRow,
+    waiting: HoldWaiting,
+    now: Date,
+    slow = false,
+  ): Promise<HoldSettlement> {
+    const walletWait = WALLET_WAITS.includes(waiting);
+    if (hold.waiting !== waiting) {
+      this.logger.warn(
+        `hold ${hold.id}: the ${hold.action} waits (${waiting}); the money stays in WAWU's account`,
+      );
+    }
+    // The review bound applies to a refusal with nothing moved (a person has
+    // to look at why); a missing wallet or a frozen one waits for as long as
+    // it takes (R-11, G-10), and the provider being away is transient.
+    if (
+      waiting === 'refused' &&
+      now.getTime() - (hold.actionAt ?? hold.createdAt).getTime() >=
+        this.settings.reviewAfterHours * 3_600_000
+    ) {
+      return this.toReview(
+        hold,
+        `the ${hold.action} has been refused for ${this.settings.reviewAfterHours} hours`,
+      );
+    }
+    await this.prisma.walletHold.updateMany({
+      where: { id: hold.id, status: 'held', sentAt: null },
+      data: {
+        waiting,
+        nextAttemptAt: walletWait
+          ? null
+          : new Date(
+              now.getTime() +
+                (slow ? 60 * MINUTE : restMs(Math.max(hold.attempts, 1))),
+            ),
+      },
+    });
+    return this.settlementOf(await this.load(hold.id));
+  }
+
+  /** Out of the sweep, for a person to look at. The money stays where it is. */
+  private async toReview(
+    hold: HoldRow,
+    note: string,
+  ): Promise<HoldSettlement> {
+    const { count } = await this.prisma.walletHold.updateMany({
+      where: { id: hold.id, status: 'held', reviewSince: null },
+      data: {
+        reviewSince: new Date(),
+        nextAttemptAt: null,
+        discrepancy: joinNotes(hold.discrepancy, note),
+      },
+    });
+    if (count > 0) {
+      this.logger.error(`hold ${hold.id}: ${note}; sent to review`);
+    }
+    return this.settlementOf(await this.load(hold.id));
+  }
+
+  // -------------------------------------------------------------------------
+  // What the caller is told
+  // -------------------------------------------------------------------------
+
+  private settlementOf(hold: HoldRow): HoldSettlement {
+    let state: HoldSettlementState;
+    if (hold.status !== 'held') state = 'settled';
+    else if (hold.reviewSince) state = 'review';
+    else if (hold.sentAt) state = 'pending';
+    else state = 'waiting';
+    return {
+      holdId: hold.id,
+      paymentId: hold.paymentId,
+      action: (hold.action ?? 'release') as HoldAction,
+      state,
+      waiting:
+        state === 'waiting' ? ((hold.waiting as HoldWaiting | null) ?? null) : null,
+      status: hold.status as HoldSettlement['status'],
+    };
+  }
+}
