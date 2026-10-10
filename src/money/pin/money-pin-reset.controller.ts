@@ -41,7 +41,7 @@ export class MoneyPinResetController {
     'provider_unreachable',
   )
   startReset(@CurrentUser() user: WawuJwtClaims): Promise<PinResetView> {
-    return this.resets.start(user.sub);
+    return this.resets.start(user.sub, { email: user.email ?? null });
   }
 
   /** The code and the new PIN. Clears the lock and the wrong-try count, and turns biometric approval off. */

@@ -40,6 +40,17 @@ export function maskPhone(e164: string): string {
   return `+234 *** *** ${digits.slice(-4)}`;
 }
 
+/**
+ * W37's "sent to" when the code goes by email (NUV-01, R-39): the first
+ * letter and the domain, `a***@example.com`. WAWU ID picks the address (the
+ * account's own); this only names it back to its owner from their token.
+ */
+export function maskEmail(email: string | null): string {
+  const at = email ? email.lastIndexOf('@') : -1;
+  if (!email || at < 1 || at === email.length - 1) return 'your email address';
+  return `${email[0]}***@${email.slice(at + 1)}`;
+}
+
 /** The text that carries the code. Copy the canvas does not draw (listed in the task file). */
 export function resetCodeText(code: string, minutes: number): string {
   return `Your Who Made This code to reset your transaction PIN is ${code}. It expires in ${minutes} minutes. Never share it with anyone.`;
@@ -67,10 +78,10 @@ type ResetRow = {
   resendAvailableAt: Date;
 };
 
-function resetView(row: ResetRow): PinResetView {
+function resetView(row: ResetRow, sentTo: string): PinResetView {
   return {
     resetId: row.id,
-    sentTo: maskPhone(row.phone),
+    sentTo,
     resendAvailableAt: row.resendAvailableAt.toISOString(),
     expiresAt: row.expiresAt.toISOString(),
   };
@@ -123,8 +134,14 @@ export class PinResetService {
     private readonly settings: PinResetSettings,
   ) {}
 
-  /** POST /money/pin/reset. */
-  async start(wawuUserId: string): Promise<PinResetView> {
+  /**
+   * POST /money/pin/reset. `contact.email` is the caller's token's address,
+   * named back to them (masked) when the code goes by email.
+   */
+  async start(
+    wawuUserId: string,
+    contact: { email: string | null } = { email: null },
+  ): Promise<PinResetView> {
     const pin = await this.prisma.transactionPin.findUnique({
       where: { wawuUserId },
       select: { wawuUserId: true },
@@ -135,8 +152,16 @@ export class PinResetService {
       where: { wawuUserId },
       select: { verifiedPhone: true, bvnVerifiedAt: true },
     });
-    const phone = identity?.bvnVerifiedAt ? identity.verifiedPhone : null;
-    if (!phone) throw new MoneyError('wallet_not_open', NO_PHONE_MESSAGE);
+    const proved = identity?.bvnVerifiedAt ? identity.verifiedPhone : null;
+    // By email (Nuvion, R-39) the code goes to the account's address, so no
+    // proved phone is needed; by SMS it goes only to the proved phone.
+    const byEmail = this.otp.channel === 'email';
+    if (!byEmail && !proved) {
+      throw new MoneyError('wallet_not_open', NO_PHONE_MESSAGE);
+    }
+    const phone = proved ?? '';
+    const sentTo = (row: ResetRow) =>
+      byEmail ? maskEmail(contact.email) : maskPhone(row.phone);
 
     const code = newCode();
     const codeHash = await argon2.hash(code, { type: argon2.argon2id });
@@ -161,7 +186,7 @@ export class PinResetService {
       const since = new Date(now.getTime() - RESET_WINDOW_MS);
       const counted = await tx.transactionPinReset.findMany({
         where: {
-          OR: [{ wawuUserId }, { phone }],
+          OR: [{ wawuUserId }, ...(phone === '' ? [] : [{ phone }])],
           createdAt: { gt: since },
           sendState: { not: 'failed' },
         },
@@ -202,12 +227,18 @@ export class PinResetService {
         retryAfterSeconds: claim.retryAfterSeconds,
       });
     }
-    if (claim.kind === 'again') return resetView(claim.row);
+    if (claim.kind === 'again') return resetView(claim.row, sentTo(claim.row));
 
     const row = claim.row;
     const minutes = Math.max(1, Math.round(this.settings.codeMs / 60_000));
     try {
-      await this.otp.sendText(phone, resetCodeText(code, minutes));
+      await this.otp.sendResetCode({
+        wawuUserId,
+        phone: phone === '' ? null : phone,
+        code,
+        minutes,
+        text: resetCodeText(code, minutes),
+      });
     } catch (err) {
       if (!(err instanceof WalletProviderError)) throw err;
       const resendIn = Math.max(
@@ -244,7 +275,7 @@ export class PinResetService {
       where: { id: row.id, sendState: 'sending' },
       data: { sendState: 'sent' },
     });
-    return resetView(row);
+    return resetView(row, sentTo(row));
   }
 
   /** POST /money/pin/reset/confirm. */

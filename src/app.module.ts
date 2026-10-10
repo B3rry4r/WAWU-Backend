@@ -80,7 +80,10 @@ import { TgifModule } from './tgif/tgif.module';
 import { LiveModule } from './live/live.module';
 import { InboxModule } from './inbox/inbox.module';
 import { MeModule } from './me/me.module';
+import { PlansModule } from './plans/plans.module';
+import { WaitlistModule } from './waitlist/waitlist.module';
 import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
+import { NuvionWebhookModule } from './nuvion/webhook/nuvion-webhook.module';
 import { PaymentWebhookModule } from './payment-webhook/payment-webhook.module';
 import { AdminAdsModule } from './admin/ads/admin-ads.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
@@ -88,6 +91,7 @@ import { HUB_THROTTLERS } from './hub-throttlers';
 import { HUB_THROTTLER_STORAGE } from './hub-throttler-storage';
 import { APP_GUARD } from '@nestjs/core';
 import { AdsEventsModule } from './ads/ads-events.module';
+import { PushModule } from './push/push.module';
 // Phase 5 build (waves 0-3, all 39 registry resources) is now complete.
 // The deferred Flutterwave webhook has now shipped as PaymentWebhookModule
 // (POST /api/hub/webhooks/flutterwave) alongside the scheduled-job cron pass,
@@ -379,10 +383,26 @@ import { AdsEventsModule } from './ads/ads-events.module';
     // notifications and this month's earnings. `me` is a first segment nothing
     // else declares.
     MeModule,
+    // The maker plan (task TIER-01): GET /plans and GET /me/tier, from
+    // src/plans/plans.config.json, which a bad edit stops at boot. `plans` is a
+    // first segment nothing else declares; `me/tier` is a literal leaf.
+    PlansModule,
+    // The event registration link (task JOIN-01): `waitlist/offers/current`,
+    // `waitlist/registrations` (register, verify, status) and the team's
+    // `admin/waitlist/registrations` (list, export). `waitlist` and
+    // `admin/waitlist` are segments no other controller declares. Declares
+    // the routes only; its service is WaitlistCoreModule's, which the
+    // Flutterwave webhook imports without moving any route.
+    WaitlistModule,
     // Fintava's webhooks (task MONEY-07): POST /webhooks/fintava, recorded
     // once, no money moved. `webhooks/fintava` is a fixed path no other
     // controller declares, beside the unchanged `webhooks/flutterwave`.
     FintavaWebhookModule,
+    // Nuvion's webhooks (task NUV-01): POST /webhooks/nuvion, stored once and handed
+    // to the area handlers by a 30-second sweep. Mounted under every WALLET_PROVIDER
+    // so a rollback never loses a delivery. `webhooks/nuvion` is a fixed path no
+    // other controller declares.
+    NuvionWebhookModule,
     // Admin ad management (task ADS-06): `admin/ads`, a second segment no other
     // controller declares, so it cannot shadow or be shadowed wherever it sits.
     AdminAdsModule,
@@ -391,6 +411,11 @@ import { AdsEventsModule } from './ads/ads-events.module';
     // POST /ads/:id/events. Same `ads` first segment as AdsModule, with a
     // literal tail after the id, so it cannot shadow GET /ads.
     AdsEventsModule,
+
+    // Phone push (task INBOX-03): POST and DELETE /push-tokens, and the sender
+    // behind NotificationService. `push-tokens` is a first segment nothing else
+    // declares.
+    PushModule,
 
     // LAST on purpose. PaymentWebhookModule imports every money module so it
     // can reuse their /verify settlement, and every one of them is already

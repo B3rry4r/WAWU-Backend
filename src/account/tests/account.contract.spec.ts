@@ -1,3 +1,4 @@
+import type { Server } from 'http';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
@@ -33,6 +34,9 @@ describe('Account (contract)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let accessToken: string;
+  // INBOX-03: DELETE /account marks the account so phone push stops. The
+  // spec removes that mark afterwards if it was not there before it ran.
+  let hadPushStop = false;
   const mockGateway: jest.Mocked<WawuIdAccountGateway> = {
     scheduleAccountDeletion: jest.fn().mockResolvedValue({ scheduled: true }),
     finalizeAccountDeletion: jest.fn().mockResolvedValue({ finalized: true }),
@@ -79,9 +83,18 @@ describe('Account (contract)', () => {
     app.useGlobalFilters(new AllExceptionsFilter());
     app.useGlobalInterceptors(new ResponseInterceptor());
     await app.init();
+    hadPushStop =
+      (await prisma.pushStoppedAccount.count({
+        where: { userWawuId: PLAIN_USER_SUB },
+      })) > 0;
   });
 
   afterAll(async () => {
+    if (!hadPushStop) {
+      await prisma.pushStoppedAccount.deleteMany({
+        where: { userWawuId: PLAIN_USER_SUB },
+      });
+    }
     await app.close();
   });
 
@@ -146,6 +159,33 @@ describe('Account (contract)', () => {
         expect(piece.status).toBe('removed');
       } finally {
         await prisma.contentPiece.delete({ where: { id } });
+      }
+    });
+
+    it("forgets the caller's phones for push and stops push to the account (INBOX-03)", async () => {
+      const token = `ExponentPushToken[account-contract-${Date.now().toString(36)}]`;
+      await prisma.pushToken.create({
+        data: {
+          userWawuId: PLAIN_USER_SUB,
+          expoPushToken: token,
+          platform: 'android',
+        },
+      });
+      try {
+        await request(app.getHttpServer() as Server)
+          .delete('/api/hub/account')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .expect(200);
+        expect(
+          await prisma.pushToken.count({ where: { expoPushToken: token } }),
+        ).toBe(0);
+        expect(
+          await prisma.pushStoppedAccount.count({
+            where: { userWawuId: PLAIN_USER_SUB },
+          }),
+        ).toBe(1);
+      } finally {
+        await prisma.pushToken.deleteMany({ where: { expoPushToken: token } });
       }
     });
 

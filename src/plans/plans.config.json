@@ -1,0 +1,118 @@
+{
+  "provisional": {
+    "PLAN-PRICES": "R-43: every figure in this file is the owner's example value from the Developer Brief v2.0 of 5 Oct 2026, kept until the owner sends final prices and rules.",
+    "PLAN-CASHOUT-MINIMUM": "The brief gives no cash-out minimum and PT6 draws one. 1,000 points is the unit the cash-out rate is quoted in.",
+    "PLAN-BOUGHT-POINTS-DAYS": "The brief does not say how long bought points last. 365 days is the longest period the plan uses.",
+    "PLAN-ENDING-DAYS": "VF14 draws a tier ending in 3 days but gives no window. 7 days gives a week to renew."
+  },
+  "event_passes": [
+    { "id": "watch_apply", "name": "Watch live, apply" },
+    { "id": "maker_pass", "name": "Maker Pass" },
+    { "id": "maker_pass_priority", "name": "Maker Pass, priority" }
+  ],
+  "tiers": [
+    {
+      "id": "verify",
+      "name": "Verify",
+      "days": 30,
+      "products": 3,
+      "bonus_points": 100,
+      "bonus_expiry_days": 90,
+      "price": { "kobo": 100000, "cents": 300 },
+      "event_pass": "watch_apply",
+      "badge": { "id": "verified", "numbered": false },
+      "pack_bonus_pct": 0,
+      "first_voice_intro": true
+    },
+    {
+      "id": "plus",
+      "name": "Verify Plus",
+      "days": 180,
+      "products": 6,
+      "bonus_points": 300,
+      "bonus_expiry_days": 180,
+      "price": { "kobo": 300000, "cents": 900 },
+      "event_pass": "maker_pass",
+      "badge": { "id": "verified", "numbered": false },
+      "pack_bonus_pct": 0,
+      "first_voice_intro": true
+    },
+    {
+      "id": "founding",
+      "name": "Founding Maker",
+      "days": 365,
+      "products": 10,
+      "bonus_points": 600,
+      "bonus_expiry_days": 365,
+      "price": { "kobo": 500000, "cents": 1500 },
+      "event_pass": "maker_pass_priority",
+      "badge": { "id": "founding", "numbered": true },
+      "pack_bonus_pct": 10,
+      "first_voice_intro": true
+    }
+  ],
+  "event_offers": [
+    {
+      "id": "event-oct-2026",
+      "name": "WAWU event registration",
+      "price_kobo": 200000,
+      "tier": "verify",
+      "tier_days": 30,
+      "open_from": "2026-10-10T00:00:00+01:00"
+    }
+  ],
+  "preselected_tier": "founding",
+  "tier_ending_days": 7,
+  "extra_products": { "count": 5, "price": { "kobo": 150000, "cents": 300 } },
+  "packs": [
+    { "id": "s", "points": { "NGN": 1000, "USD": 2500 }, "price": { "kobo": 100000, "cents": 300 } },
+    { "id": "m", "points": { "NGN": 2750, "USD": 7000 }, "price": { "kobo": 250000, "cents": 800 } },
+    { "id": "l", "points": { "NGN": 6000, "USD": 14000 }, "price": { "kobo": 500000, "cents": 1500 } }
+  ],
+  "checkout_bump": { "points": { "NGN": 1000, "USD": 1500 }, "price": { "kobo": 80000, "cents": 150 } },
+  "points": {
+    "price_per_1000_points": { "kobo": 100000, "cents": 120 },
+    "bought_expiry_days": 365
+  },
+  "cash_out": {
+    "per_1000_points": { "kobo": 50000, "cents": 50 },
+    "minimum_points": 1000
+  },
+  "action_points": {
+    "say_my_name": { "points": 5, "per": "use" },
+    "voice_intro": { "points": 200, "per": "use" },
+    "voiceover_per_min": { "points": 250, "per": "minute" },
+    "quick_voice_per_min": { "points": 125, "per": "minute" },
+    "captions_per_min": { "points": 15, "per": "minute" },
+    "clean_audio_per_min": { "points": 400, "per": "minute" },
+    "music_per_track": { "points": 500, "per": "track" },
+    "sfx": { "points": 75, "per": "use" },
+    "dub_standard_per_min_lang": { "points": 1500, "per": "minute_per_language" },
+    "dub_premium_per_min_lang": { "points": 6500, "per": "minute_per_language" },
+    "receptionist_message": { "points": 20, "per": "message" },
+    "receptionist_voice_per_min": { "points": 400, "per": "minute" }
+  },
+  "caps": {
+    "daily_points_per_user": 10000,
+    "max_chars_per_job": 5000,
+    "max_audio_min_per_job": 10
+  },
+  "referral": {
+    "one_level_only": true,
+    "referrer_must_be_verified": true,
+    "hold_days": 7,
+    "base_points": { "verify": 100, "plus": 300, "founding": 500 },
+    "levels": [
+      { "min": 1, "x": 1.0 },
+      { "min": 3, "x": 1.25 },
+      { "min": 6, "x": 1.5 },
+      { "min": 11, "x": 2.0 },
+      { "min": 26, "x": 3.0 }
+    ],
+    "milestones": [
+      { "count": 5, "points": 500 },
+      { "count": 10, "points": 1500 },
+      { "count": 25, "points": 5000 }
+    ]
+  }
+}

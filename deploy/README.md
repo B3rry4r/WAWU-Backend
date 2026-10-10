@@ -99,13 +99,40 @@ FLUTTERWAVE_SECRET_KEY=
 FLUTTERWAVE_PUBLIC_KEY=
 FLUTTERWAVE_WEBHOOK_HASH=
 
-# Which company holds the naira wallets (MONEY-20): fintava, or empty for
-# fintava. `nuvion` is reserved and stops the server at boot with a clear
-# message until its adapter task lands; any other value stops it too.
+# Which company holds the naira wallets (MONEY-20, NUV-01): fintava (or
+# empty), or nuvion, which needs the NUVION_* values below; any other value
+# stops the server.
 # ROLLBACK between providers = change this one value, then
 # `sudo systemctl restart wawu-hub-api`. Nothing else is edited, no migration
-# runs, and the FINTAVA_* values below stay in place either way.
+# runs, and the FINTAVA_* and NUVION_* values stay in place either way: the
+# server acts only on the wallets, openings and ledger rows of the provider
+# it runs, and both webhook receivers stay mounted.
 WALLET_PROVIDER=fintava
+# Nuvion (NUV-01; read only when WALLET_PROVIDER=nuvion). Put here by NUV-10:
+# NUVION_BASE_URL is exactly https://api.nuvion.co in production
+# (https://api.nuvion.dev is the sandbox); anything else stops the server.
+# NUVION_API_VERSION may stay empty (pinned to 2026-02-06). Under nuvion a
+# missing NUVION_BASE_URL, NUVION_API_KEY, NUVION_WEBHOOK_SECRET or
+# NUVION_OPERATIONAL_ACCOUNT_ID stops the server at boot, naming it.
+# NUVION_WEBHOOK_SECRET is shown once by Nuvion when NUV-10 registers
+#   https://<the API's public host>/api/hub/webhooks/nuvion
+# and is read under any WALLET_PROVIDER: without it every delivery is
+# refused with 401. NUVION_WALLET_* are the owner's bank, licence and
+# deposit-insurance lines for Nuvion wallets (empty hides them).
+# PIN reset codes go by email under nuvion (R-39): WAWU ID sends them
+# (WAWU_ID_BASE_URL and WAWU_ID_INTERNAL_SERVICE_KEY, BACKEND_GAPS G-400).
+NUVION_BASE_URL=
+NUVION_API_KEY=
+NUVION_API_VERSION=
+NUVION_WEBHOOK_SECRET=
+NUVION_OPERATIONAL_ACCOUNT_ID=
+NUVION_TIMEOUT_MS=
+NUVION_MONEY_TIMEOUT_MS=
+NUVION_CHECK_TIMEOUT_MS=
+NUVION_RESEND_SAFETY_MS=
+NUVION_WALLET_BANK_NAME=
+NUVION_WALLET_LICENCE_LINE=
+NUVION_WALLET_DEPOSIT_INSURANCE_LINE=
 # Fintava (naira wallets; src/fintava/, MONEY-06). Production must name the
 # live base URL here: the client never assumes live, and refuses any host
 # other than Fintava's. The timeouts may stay empty (defaults in
@@ -143,6 +170,16 @@ SELFIE_CHECKS_PER_DAY=
 WALLET_BANK_NAME=
 WALLET_LICENCE_LINE=
 WALLET_DEPOSIT_INSURANCE_LINE=
+# Phone push (INBOX-03, docs/contract/PUSH.md). OFF unless PUSH_ENABLED is
+# exactly `true`: with it empty nothing is sent to Expo, so staging and a copy
+# of production never push by accident. Android needs the owner's FCM
+# credentials uploaded to Expo first (owner input). EXPO_ACCESS_TOKEN is
+# needed only if the Expo project turned on enhanced push security.
+# EXPO_PUSH_BASE_URL may stay empty (https://exp.host); any other host stops
+# the server at boot.
+PUSH_ENABLED=
+EXPO_ACCESS_TOKEN=
+EXPO_PUSH_BASE_URL=
 # Receipts (WALLET-18): the address a receipt's code opens, without the
 # code: https://<the API's public host>/api/hub/r. Empty: receipts print
 # wawu/r/<code> with no link. Receipts print WALLET_BANK_NAME and
@@ -155,6 +192,34 @@ RECEIPT_RENDER_CONCURRENCY=
 # About: where "Contact support" sends mail (SETTINGS-02). The owner's fact, no default
 # (empty: the row says "Not available yet").
 SUPPORT_EMAIL=
+# Nuvion's charges (NUV-07, R-42), read only when WALLET_PROVIDER=nuvion. No
+# default: the owner fills them in from Nuvion's written NGN fees (NUV-10).
+# While any is empty under nuvion, every fee quote and every money-moving
+# route answers 503 fees_not_set and nothing is sent to Nuvion (the balance,
+# history and account number keep working). Kobo: one whole number, or
+# from:fee bands such as 0:<fee>,<from>:<fee>. A bad value stops the server
+# at boot. Set them, then `sudo systemctl restart wawu-hub-api`. A rollback to
+# fintava ignores them (Fintava's ruled fees apply, .env.example).
+NUVION_FEE_BOOK_TRANSFER=
+NUVION_FEE_BANK_PAYOUT=
+NUVION_FEE_INFLOW=
+# WAWU's own limits on moving money (NUV-07), per person and per kind, under
+# either provider. Whole kobo, 1 or more; empty = no WAWU limit. Above one,
+# 403 limit_reached naming the limit, before anything is sent. The owner sets
+# them (NUV-10); a bad value, or a per-transaction limit above its daily one
+# (or a daily above its monthly), stops the server at boot.
+WAWU_LIMIT_WAWU_TRANSFER_PER_TRANSACTION_KOBO=
+WAWU_LIMIT_WAWU_TRANSFER_DAILY_KOBO=
+WAWU_LIMIT_WAWU_TRANSFER_MONTHLY_KOBO=
+WAWU_LIMIT_BANK_TRANSFER_PER_TRANSACTION_KOBO=
+WAWU_LIMIT_BANK_TRANSFER_DAILY_KOBO=
+WAWU_LIMIT_BANK_TRANSFER_MONTHLY_KOBO=
+WAWU_LIMIT_PURCHASE_PER_TRANSACTION_KOBO=
+WAWU_LIMIT_PURCHASE_DAILY_KOBO=
+WAWU_LIMIT_PURCHASE_MONTHLY_KOBO=
+WAWU_LIMIT_BILL_PER_TRANSACTION_KOBO=
+WAWU_LIMIT_BILL_DAILY_KOBO=
+WAWU_LIMIT_BILL_MONTHLY_KOBO=
 
 GEMINI_API_KEY=
 

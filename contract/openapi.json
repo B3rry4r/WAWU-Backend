@@ -3615,61 +3615,20 @@
                               "medium": {
                                 "type": "string",
                                 "enum": [
-                                  "chat"
-                                ]
-                              },
-                              "label": {
-                                "type": "string",
-                                "enum": [
-                                  "Chat"
-                                ]
-                              },
-                              "minutes": {
-                                "type": "number",
-                                "enum": [
-                                  60
-                                ]
-                              },
-                              "feeNaira": {
-                                "type": "number",
-                                "enum": [
-                                  25000
-                                ]
-                              }
-                            },
-                            "required": [
-                              "medium",
-                              "label",
-                              "minutes",
-                              "feeNaira"
-                            ]
-                          },
-                          {
-                            "type": "object",
-                            "properties": {
-                              "medium": {
-                                "type": "string",
-                                "enum": [
+                                  "chat",
                                   "zoom"
                                 ]
                               },
                               "label": {
-                                "type": "string",
-                                "enum": [
-                                  "Zoom call"
-                                ]
+                                "type": "string"
                               },
                               "minutes": {
                                 "type": "number",
-                                "enum": [
-                                  60
-                                ]
+                                "nullable": true
                               },
                               "feeNaira": {
                                 "type": "number",
-                                "enum": [
-                                  45000
-                                ]
+                                "nullable": true
                               }
                             },
                             "required": [
@@ -4418,20 +4377,7 @@
                               "type": "string"
                             },
                             "amount": {
-                              "oneOf": [
-                                {
-                                  "type": "number",
-                                  "enum": [
-                                    25000
-                                  ]
-                                },
-                                {
-                                  "type": "number",
-                                  "enum": [
-                                    45000
-                                  ]
-                                }
-                              ]
+                              "type": "number"
                             },
                             "currency": {
                               "type": "string"
@@ -5878,6 +5824,315 @@
         ]
       }
     },
+    "/api/hub/legal/consultation/options": {
+      "get": {
+        "operationId": "LegalConsultationController_options",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsultationOptionsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The kinds of consultation WAWU has priced and switched on.",
+        "tags": [
+          "LegalConsultation"
+        ]
+      }
+    },
+    "/api/hub/legal/consultation/slots": {
+      "get": {
+        "operationId": "LegalConsultationController_slots",
+        "parameters": [
+          {
+            "name": "medium",
+            "required": true,
+            "in": "query",
+            "description": "A video or phone call. An in-person consultation has no calendar.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "zoom",
+                "phone"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsultationSlotsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The calendar for a video or phone call, at that call's length.",
+        "tags": [
+          "LegalConsultation"
+        ]
+      }
+    },
+    "/api/hub/legal/requests/{id}/booking": {
+      "post": {
+        "operationId": "LegalConsultationController_book",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BookConsultationSlotDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsultationBookingView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Holds the picked hour on the person's request (nothing is charged yet).",
+        "tags": [
+          "LegalConsultation"
+        ]
+      },
+      "get": {
+        "operationId": "LegalConsultationController_booking",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsultationBookingView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "LegalConsultation"
+        ]
+      }
+    },
+    "/api/hub/legal/requests/{id}/deliverables": {
+      "get": {
+        "operationId": "LegalConsultationController_delivered",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalDeliverablesView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Every file delivered on the person's request.",
+        "tags": [
+          "LegalConsultation"
+        ]
+      }
+    },
+    "/api/hub/legal/ops/prices": {
+      "get": {
+        "operationId": "LegalPricesOpsController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminLegalPricesView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Every consultation kind and every fixed-price service, set or not.",
+        "tags": [
+          "LegalPricesOps"
+        ]
+      }
+    },
+    "/api/hub/legal/ops/prices/consultations/{medium}": {
+      "put": {
+        "operationId": "LegalPricesOpsController_setConsultation",
+        "parameters": [
+          {
+            "name": "medium",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "enum": [
+                "chat",
+                "zoom",
+                "physical",
+                "phone"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetConsultationPriceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminConsultationPriceView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Sets one kind of consultation: its price, its length and its switch.",
+        "tags": [
+          "LegalPricesOps"
+        ]
+      }
+    },
+    "/api/hub/legal/ops/prices/services/{serviceCode}": {
+      "put": {
+        "operationId": "LegalPricesOpsController_setService",
+        "parameters": [
+          {
+            "name": "serviceCode",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetServicePriceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminServicePriceView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Sets, or with a null price clears, the fixed price of a service.",
+        "tags": [
+          "LegalPricesOps"
+        ]
+      }
+    },
+    "/api/hub/legal/ops/requests/{id}/deliverables": {
+      "post": {
+        "operationId": "LegalDeliverablesOpsController_deliver",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeliverFilesDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliverFilesResultView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Each file is posted into the client's chat and the client is notified.",
+        "tags": [
+          "LegalDeliverablesOps"
+        ]
+      }
+    },
     "/api/hub/admin/content/queue": {
       "get": {
         "operationId": "AdminContentReviewController_queue",
@@ -6657,6 +6912,37 @@
         ]
       }
     },
+    "/api/hub/admin/professionals/{id}/visibility": {
+      "get": {
+        "operationId": "AdminProfessionalReviewController_visibility",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminProfessionalVisibilityView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Whether a listing is in the directory, hidden by its owner or taken down\nby an admin, and the latest takedown on record (FIX-06).",
+        "tags": [
+          "AdminProfessionalReview"
+        ]
+      }
+    },
     "/api/hub/admin/professionals/{id}/document-url": {
       "post": {
         "operationId": "AdminProfessionalReviewController_documentUrl",
@@ -6793,7 +7079,41 @@
             }
           }
         },
-        "summary": "Pull an approved listing without erasing that it was approved.",
+        "summary": "Pull an approved listing without erasing that it was approved. It stays\nout until an admin lists it again: the owner's Show is refused (FIX-06).",
+        "tags": [
+          "AdminProfessionalReview"
+        ]
+      }
+    },
+    "/api/hub/admin/professionals/{id}/relist": {
+      "post": {
+        "operationId": "AdminProfessionalReviewController_relist",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminProfessionalDecisionView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused (reason.code listing_not_taken_down): no admin takedown stands on this listing, so its owner shows or hides it."
+          }
+        },
+        "summary": "List again a listing an admin took down (FIX-06). It goes back to what\nits owner had chosen, and the owner hides and shows it as before.",
         "tags": [
           "AdminProfessionalReview"
         ]
@@ -12832,6 +13152,98 @@
         ]
       }
     },
+    "/api/hub/events/tickets/held": {
+      "get": {
+        "operationId": "EventHeldTicketsController_list",
+        "parameters": [
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "view",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "default": "upcoming",
+              "type": "string",
+              "enum": [
+                "upcoming",
+                "past"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/HeldTicketGroup"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "My tickets, upcoming or past, one row per order and tier.",
+        "tags": [
+          "EventHeldTickets"
+        ]
+      }
+    },
+    "/api/hub/events/tickets/held/{ticketId}": {
+      "get": {
+        "operationId": "EventHeldTicketsController_one",
+        "parameters": [
+          {
+            "name": "ticketId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeldTicketView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "One of my tickets, with the code the door scans.",
+        "tags": [
+          "EventHeldTickets"
+        ]
+      }
+    },
     "/api/hub/admin/creators": {
       "get": {
         "operationId": "AdminCreatorsController_listCreators",
@@ -14271,6 +14683,68 @@
         },
         "tags": [
           "Account"
+        ]
+      }
+    },
+    "/api/hub/push-tokens": {
+      "post": {
+        "operationId": "PushTokenController_register",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterPushTokenDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushTokenRegistered"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Register this phone for the signed-in person. Idempotent: call it on every\nstart. `registered` is false, and nothing is stored, when the account's\ndeletion has been asked for.",
+        "tags": [
+          "PushToken"
+        ]
+      },
+      "delete": {
+        "operationId": "PushTokenController_remove",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemovePushTokenDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushTokenRemoved"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Remove this phone (sign-out). Removing a token twice, or one that is not yours, is a 200 with `removed: false`.",
+        "tags": [
+          "PushToken"
         ]
       }
     },
@@ -18005,6 +18479,9 @@
                       "format": "date-time",
                       "nullable": true
                     },
+                    "listed": {
+                      "type": "boolean"
+                    },
                     "category": {
                       "type": "string"
                     },
@@ -18052,15 +18529,13 @@
                     "issuingBody": {
                       "type": "string",
                       "nullable": true
-                    },
-                    "listed": {
-                      "type": "boolean"
                     }
                   },
                   "required": [
                     "id",
                     "status",
                     "reviewedAt",
+                    "listed",
                     "category",
                     "documents",
                     "wawuUserId",
@@ -18071,8 +18546,7 @@
                     "services",
                     "credentialKind",
                     "licenceNumber",
-                    "issuingBody",
-                    "listed"
+                    "issuingBody"
                   ]
                 }
               }
@@ -18113,6 +18587,9 @@
                         "type": "string",
                         "format": "date-time",
                         "nullable": true
+                      },
+                      "listed": {
+                        "type": "boolean"
                       },
                       "category": {
                         "type": "string"
@@ -18161,15 +18638,13 @@
                       "issuingBody": {
                         "type": "string",
                         "nullable": true
-                      },
-                      "listed": {
-                        "type": "boolean"
                       }
                     },
                     "required": [
                       "id",
                       "status",
                       "reviewedAt",
+                      "listed",
                       "category",
                       "documents",
                       "wawuUserId",
@@ -18180,8 +18655,7 @@
                       "services",
                       "credentialKind",
                       "licenceNumber",
-                      "issuingBody",
-                      "listed"
+                      "issuingBody"
                     ]
                   }
                 }
@@ -18189,6 +18663,31 @@
             }
           }
         },
+        "tags": [
+          "Professional"
+        ]
+      }
+    },
+    "/api/hub/professionals/applications/mine/visibility": {
+      "get": {
+        "operationId": "ProfessionalController_myVisibility",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProfessionalListingVisibilityView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "Each approved listing of yours and where it stands: listed, hidden by\nyou, or taken down by an admin (FIX-06). P8 reads it beside .../mine.",
         "tags": [
           "Professional"
         ]
@@ -18241,6 +18740,9 @@
                       "format": "date-time",
                       "nullable": true
                     },
+                    "listed": {
+                      "type": "boolean"
+                    },
                     "category": {
                       "type": "string"
                     },
@@ -18288,15 +18790,13 @@
                     "issuingBody": {
                       "type": "string",
                       "nullable": true
-                    },
-                    "listed": {
-                      "type": "boolean"
                     }
                   },
                   "required": [
                     "id",
                     "status",
                     "reviewedAt",
+                    "listed",
                     "category",
                     "documents",
                     "wawuUserId",
@@ -18307,12 +18807,14 @@
                     "services",
                     "credentialKind",
                     "licenceNumber",
-                    "issuingBody",
-                    "listed"
+                    "issuingBody"
                   ]
                 }
               }
             }
+          },
+          "409": {
+            "description": "Refused: the listing is not approved, or (reason.code listing_taken_down, with reason.takenDownAt) an admin took it down and only an admin lists it again (FIX-06). A Hide on a taken-down listing is accepted."
           }
         },
         "tags": [
@@ -20660,7 +21162,8 @@
                 "all",
                 "content",
                 "creators",
-                "communities"
+                "communities",
+                "schools"
               ]
             }
           }
@@ -20730,6 +21233,133 @@
         },
         "tags": [
           "SearchResponse"
+        ]
+      }
+    },
+    "/api/hub/schools": {
+      "get": {
+        "operationId": "SchoolsPublicController_list",
+        "parameters": [
+          {
+            "name": "category",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "tech",
+                "business",
+                "creative",
+                "languages",
+                "vocational"
+              ]
+            }
+          },
+          {
+            "name": "q",
+            "required": false,
+            "in": "query",
+            "description": "Matches a school's name or place, or the title of one of its shown\ncourses, ignoring case. Wildcard characters mean themselves.",
+            "schema": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "The `nextCursor` of the previous page: opaque, not to be built by hand,\nand never longer than the longest one this server gives out.",
+            "schema": {
+              "maxLength": 1498,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicSchoolsPage"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "SchoolsPublic"
+        ]
+      }
+    },
+    "/api/hub/schools/courses/{id}": {
+      "get": {
+        "operationId": "SchoolsPublicController_course",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicCourseDetail"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "SchoolsPublic"
+        ]
+      }
+    },
+    "/api/hub/schools/{id}": {
+      "get": {
+        "operationId": "SchoolsPublicController_school",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicSchoolDetail"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "SchoolsPublic"
         ]
       }
     },
@@ -21917,6 +22547,43 @@
           }
         },
         "summary": "The label to show for each category, format and kind, beside the value to\nsend (EVENTS-02): \"Business & Finance\" is `business`. Declared before\n`:id` for the same reason `mine` is.",
+        "tags": [
+          "Event"
+        ]
+      }
+    },
+    "/api/hub/events/from-prices": {
+      "get": {
+        "operationId": "EventController_fromPrices",
+        "parameters": [
+          {
+            "name": "ids",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "maxItems": 50,
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventFromPricesView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The \"from\" price a person can actually pay, for a page of events at once\n(EVENTS-01, G-271): the cheapest tier on sale now and not sold out, null\nwhen none can be bought. `priceFromNaira` on the event keeps counting\nevery tier, because the web reads it that way. Declared before `:id`.",
         "tags": [
           "Event"
         ]
@@ -24026,7 +24693,7 @@
             }
           },
           "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
+            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable",
             "content": {
               "application/json": {
                 "schema": {
@@ -24044,6 +24711,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "reason.code: fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -24051,7 +24728,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "What a send, a withdrawal, a purchase or a bill will cost, before the\nPIN (W10, W17, H14): Fintava's charge plus WAWU's fee from config\n(R-10, R-31), each charge as its own part, the total, and a signed\nquote the paying request can send back. Nothing is reserved and\nFintava is not asked. A purchase or bill whose total is above\nMERCHANT_MAX_PER_TXN_KOBO is amount_out_of_range with maximumKobo.",
+        "summary": "What a send, a withdrawal, a purchase or a bill will cost, before the\nPIN (W10, W17, H14): Fintava's charge plus WAWU's fee from config\n(R-10, R-31), each charge as its own part, the total, and a signed\nquote the paying request can send back. Nothing is reserved and\nFintava is not asked. A purchase or bill whose total is above\nMERCHANT_MAX_PER_TXN_KOBO is amount_out_of_range with maximumKobo.\n\nNUV-07: the provider's charge comes from the running provider's\nsettings. While any of them is unset (Nuvion's, until the owner fills\nthem in) every quote is fees_not_set, before the wallet gate; under\nNuvion, which has no bill payments, a bill is target_not_payable.",
         "tags": [
           "MoneyFees"
         ],
@@ -26061,6 +26738,336 @@
         ]
       }
     },
+    "/api/hub/me/points": {
+      "get": {
+        "operationId": "PointsController_mine",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyPointsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Balance, live lots with their end dates, the next end, the last 20 movements.",
+        "tags": [
+          "Points"
+        ]
+      }
+    },
+    "/api/hub/plans": {
+      "get": {
+        "operationId": "PlansController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlansView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The plan as the caller pays for it. Every amount is whole minor units of\n`currency` (kobo for NGN, cents for USD); one currency per answer.\n`no-store`: the answer is the caller's own (their currency).",
+        "tags": [
+          "Plans"
+        ]
+      }
+    },
+    "/api/hub/me/tier": {
+      "get": {
+        "operationId": "MeTierController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyTierView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "`none`, `active`, `ending` or `ended`, with what the tier gives.\n`no-store`: the answer is the caller's own.",
+        "tags": [
+          "MeTier"
+        ]
+      }
+    },
+    "/api/hub/waitlist/offers/current": {
+      "get": {
+        "operationId": "WaitlistPublicController_currentOffer",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaitlistOfferView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`reason.code` `no_open_offer`: no offer is open now."
+          }
+        },
+        "summary": "The offer open for registration.",
+        "tags": [
+          "WaitlistPublic"
+        ]
+      }
+    },
+    "/api/hub/waitlist/registrations": {
+      "post": {
+        "operationId": "WaitlistPublicController_register",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWaitlistRegistrationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaitlistRegistrationStartView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`reason.code` `phone_invalid`, `email_invalid`, `name_invalid` or `consent_required`; a malformed body has no `reason`."
+          },
+          "404": {
+            "description": "`reason.code` `no_open_offer`: no offer has this id."
+          },
+          "409": {
+            "description": "`reason.code` `offer_closed` (closed or not open yet) or `already_registered` (this phone or email already paid; nothing is charged)."
+          },
+          "503": {
+            "description": "`reason.code` `payments_unavailable`: payments are not set up."
+          }
+        },
+        "summary": "Register and get the checkout settings. Every call that passes the checks\nadds a new registration with a new reference, even for the same offer,\nphone and email, so each checkout has its own reference.\nNothing is charged here: the payment happens in the Flutterwave checkout\nwith the answer's `flutterwaveConfig`, and counts only after\nPOST /waitlist/registrations/verify (or Flutterwave's own notice).",
+        "tags": [
+          "WaitlistPublic"
+        ]
+      }
+    },
+    "/api/hub/waitlist/registrations/verify": {
+      "post": {
+        "operationId": "WaitlistPublicController_verify",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyWaitlistRegistrationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaitlistRegistrationStatusView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`reason.code` `not_found`: no registration has this reference."
+          },
+          "409": {
+            "description": "`reason.code` `payment_not_confirmed` (Flutterwave does not say it succeeded yet: check again, never pay again), `transaction_already_used` or `already_registered`."
+          },
+          "422": {
+            "description": "`reason.code` `payment_mismatch`: the payment is not this registration's (amount, currency or reference)."
+          },
+          "503": {
+            "description": "`reason.code` `payment_check_unavailable`: Flutterwave could not be reached; try the check again."
+          }
+        },
+        "summary": "Confirm a payment. The server asks Flutterwave itself (succeeded, this\nregistration's reference, naira, not less than the fee) before it marks\nthe registration paid, so the transaction id is only a claim. Idempotent:\na paid registration answers the same result again.",
+        "tags": [
+          "WaitlistPublic"
+        ]
+      }
+    },
+    "/api/hub/waitlist/registrations/{reference}": {
+      "get": {
+        "operationId": "WaitlistPublicController_status",
+        "parameters": [
+          {
+            "name": "reference",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaitlistRegistrationStatusView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`reason.code` `not_found`: the same answer for a reference that does not exist and one that was never issued."
+          }
+        },
+        "summary": "Where a registration stands: status and first name only, never a phone or email.",
+        "tags": [
+          "WaitlistPublic"
+        ]
+      }
+    },
+    "/api/hub/admin/waitlist/registrations": {
+      "get": {
+        "operationId": "WaitlistAdminController_list",
+        "parameters": [
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "offerId",
+            "required": false,
+            "in": "query",
+            "description": "Only this offer. Omitted means every offer.",
+            "schema": {
+              "maxLength": 60,
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "Only this status. Omitted means every status.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "paid",
+                "failed"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminWaitlistRegistrationView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "Registrations, newest first, every status unless `status` is given\n(`pending`, `paid` or `failed`; a `failed` row is a second payment kept\nfor a refund). `offerId` narrows to one offer.",
+        "tags": [
+          "WaitlistAdmin"
+        ]
+      }
+    },
+    "/api/hub/admin/waitlist/registrations/export": {
+      "get": {
+        "operationId": "WaitlistAdminController_export",
+        "parameters": [
+          {
+            "name": "offerId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "maxLength": 60,
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "paid",
+                "failed"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminWaitlistExportView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The same rows as a CSV file, oldest first, inside the usual envelope\n(`content` is the file; save it as `fileName`). A byte-order mark first,\nso a spreadsheet opens it as UTF-8 and shows the naira sign.",
+        "tags": [
+          "WaitlistAdmin"
+        ]
+      }
+    },
     "/api/hub/webhooks/fintava": {
       "post": {
         "operationId": "FintavaWebhookController_receive",
@@ -26078,6 +27085,28 @@
           }
         },
         "summary": "Records one Fintava delivery and acknowledges it. Fintava's webhook,\nnever called by an app. The body is untyped on purpose: the global\nValidationPipe forbids unknown fields, and Fintava's payloads differ by\nevent and are not all published, so a DTO would refuse real deliveries.\nThe signature is checked over the raw bytes before this runs.",
+        "tags": [
+          "PaymentWebhook"
+        ]
+      }
+    },
+    "/api/hub/webhooks/nuvion": {
+      "post": {
+        "operationId": "NuvionWebhookController_receive",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NuvionWebhookAck"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Stores one Nuvion delivery and acknowledges it. Nuvion's webhook, never\ncalled by an app. The body is untyped on purpose: the global\nValidationPipe forbids unknown fields, and Nuvion's payloads differ by\nevent. The signature is checked over the raw bytes before this runs.",
         "tags": [
           "PaymentWebhook"
         ]
@@ -26800,7 +27829,7 @@
             }
           },
           "403": {
-            "description": "reason.code: pin_required, pin_incorrect, daily_limit_exceeded, recipient_blocked",
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, daily_limit_exceeded, recipient_blocked",
             "content": {
               "application/json": {
                 "schema": {
@@ -26840,7 +27869,7 @@
             }
           },
           "503": {
-            "description": "reason.code: provider_unreachable",
+            "description": "reason.code: provider_unreachable, fees_not_set",
             "content": {
               "application/json": {
                 "schema": {
@@ -26931,7 +27960,7 @@
             }
           },
           "403": {
-            "description": "reason.code: pin_required, pin_incorrect, daily_limit_exceeded, bank_transfers_blocked",
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, daily_limit_exceeded, bank_transfers_blocked",
             "content": {
               "application/json": {
                 "schema": {
@@ -26971,7 +28000,7 @@
             }
           },
           "503": {
-            "description": "reason.code: provider_unreachable",
+            "description": "reason.code: provider_unreachable, fees_not_set",
             "content": {
               "application/json": {
                 "schema": {
@@ -27242,7 +28271,7 @@
             }
           },
           "403": {
-            "description": "reason.code: pin_required, pin_incorrect, daily_limit_exceeded",
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, daily_limit_exceeded",
             "content": {
               "application/json": {
                 "schema": {
@@ -27282,7 +28311,7 @@
             }
           },
           "503": {
-            "description": "reason.code: provider_unreachable",
+            "description": "reason.code: provider_unreachable, fees_not_set",
             "content": {
               "application/json": {
                 "schema": {
@@ -27676,6 +28705,7 @@
               "community/image",
               "community/message",
               "event/speaker",
+              "event/banner",
               "profile/work"
             ]
           },
@@ -28085,6 +29115,113 @@
         },
         "required": [
           "reason"
+        ]
+      },
+      "BookConsultationSlotDto": {
+        "type": "object",
+        "properties": {
+          "medium": {
+            "type": "string",
+            "enum": [
+              "zoom",
+              "phone",
+              "physical"
+            ]
+          },
+          "scheduledFor": {
+            "type": "string",
+            "description": "The start of the hour the person picked, exactly as `GET\n/legal/consultation/slots` gave it. Required for a video or phone call;\nan in-person consultation is arranged directly and books no hour.",
+            "pattern": "T\\d{2}(?::?\\d{2}(?::?\\d{2}(?:[.,]\\d+)?)?)?(?:Z|[+-]\\d{2}:?\\d{2})$"
+          }
+        },
+        "required": [
+          "medium"
+        ]
+      },
+      "SetConsultationPriceDto": {
+        "type": "object",
+        "properties": {
+          "priceKobo": {
+            "type": "integer",
+            "nullable": true,
+            "description": "The price in kobo, whole naira only (a multiple of 100), or null to leave\nthe kind unpriced so the app does not offer it. Always null for an\nin-person consultation.",
+            "minimum": 100,
+            "maximum": 1000000000,
+            "multipleOf": 100
+          },
+          "minutes": {
+            "type": "number",
+            "nullable": true,
+            "description": "How long it runs, in minutes, or null to leave the kind unset. Null for in person.",
+            "minimum": 5,
+            "maximum": 480
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Switch the kind off without losing its price. Defaults to on."
+          }
+        },
+        "required": [
+          "priceKobo",
+          "minutes"
+        ]
+      },
+      "SetServicePriceDto": {
+        "type": "object",
+        "properties": {
+          "priceKobo": {
+            "type": "integer",
+            "nullable": true,
+            "description": "The price in kobo, whole naira only, or null to quote the service instead.",
+            "minimum": 100,
+            "maximum": 1000000000,
+            "multipleOf": 100
+          }
+        },
+        "required": [
+          "priceKobo"
+        ]
+      },
+      "DeliveredFileDto": {
+        "type": "object",
+        "properties": {
+          "fileName": {
+            "type": "string",
+            "description": "What the file is called in the chat and on the delivery screen.",
+            "maxLength": 200,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "url": {
+            "type": "string",
+            "description": "The file's `fileUrl` or `key` from POST /uploads/presign: a link on WAWU\nstorage or a bare key, under `legal/document/`, uploaded by the client\nthis request belongs to or by one of the legal team's accounts\n(`LEGAL_DELIVERY_UPLOADER_IDS`). Anything else, including another\nclient's document and a key nobody uploaded, is refused with a 400 naming\nthis field (N1, FIX-24).",
+            "maxLength": 600,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "pages": {
+            "type": "number",
+            "description": "Page count, when it is known.",
+            "minimum": 1,
+            "maximum": 100000
+          }
+        },
+        "required": [
+          "fileName",
+          "url"
+        ]
+      },
+      "DeliverFilesDto": {
+        "type": "object",
+        "properties": {
+          "files": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeliveredFileDto"
+            }
+          }
+        },
+        "required": [
+          "files"
         ]
       },
       "RejectContentDto": {
@@ -29105,6 +30242,49 @@
       "DeleteAccountDto": {
         "type": "object",
         "properties": {}
+      },
+      "RegisterPushTokenDto": {
+        "type": "object",
+        "properties": {
+          "expoPushToken": {
+            "type": "string",
+            "description": "The phone's Expo push token, `ExponentPushToken[...]` or `ExpoPushToken[...]`, exactly as the app got it.",
+            "maxLength": 300
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "android",
+              "ios"
+            ]
+          },
+          "deviceId": {
+            "type": "string",
+            "description": "The phone's own id, if the app has one.",
+            "maxLength": 200
+          },
+          "deviceLabel": {
+            "type": "string",
+            "description": "A name for the phone (\"Pixel 8\"), if the app has one.",
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "expoPushToken",
+          "platform"
+        ]
+      },
+      "RemovePushTokenDto": {
+        "type": "object",
+        "properties": {
+          "expoPushToken": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "expoPushToken"
+        ]
       },
       "CreateCommentDto": {
         "type": "object",
@@ -30502,7 +31682,9 @@
               "statement_too_large",
               "statement_rate_limited",
               "statement_busy",
-              "recipient_search_rate_limited"
+              "recipient_search_rate_limited",
+              "fees_not_set",
+              "limit_reached"
             ],
             "type": "string"
           },
@@ -30552,6 +31734,15 @@
               "kyc_pending",
               "kyc_rejected",
               "kyc_not_submitted"
+            ],
+            "type": "string"
+          },
+          "limit": {
+            "description": "limit_reached: which limit the movement passes (NUV-07), WAWU's own or the provider's.",
+            "enum": [
+              "per_transaction",
+              "daily",
+              "monthly"
             ],
             "type": "string"
           },
@@ -31290,6 +32481,74 @@
         },
         "required": [
           "card"
+        ]
+      },
+      "CreateWaitlistRegistrationDto": {
+        "type": "object",
+        "properties": {
+          "offerId": {
+            "type": "string",
+            "description": "The offer the page showed (`GET /waitlist/offers/current`).",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "fullName": {
+            "type": "string",
+            "description": "Full name, as the person writes it.",
+            "minLength": 2,
+            "maxLength": 100
+          },
+          "phone": {
+            "type": "string",
+            "description": "Phone. A Nigerian mobile in any common form (`08031234567`,\n`8031234567`, `2348031234567`, `+2348031234567`), or a number from\nelsewhere written with its country code. The server stores E.164.",
+            "maxLength": 30
+          },
+          "email": {
+            "type": "string",
+            "description": "Email. The server stores it in lower case.",
+            "maxLength": 254
+          },
+          "state": {
+            "type": "string",
+            "description": "The state they are in (optional, up to 60 characters).",
+            "maxLength": 60
+          },
+          "makes": {
+            "type": "string",
+            "description": "What they make (optional, up to 60 characters).",
+            "maxLength": 60
+          },
+          "consent": {
+            "type": "boolean",
+            "description": "The consent line (with the privacy link) was accepted. Must be true."
+          }
+        },
+        "required": [
+          "offerId",
+          "fullName",
+          "phone",
+          "email",
+          "consent"
+        ]
+      },
+      "VerifyWaitlistRegistrationDto": {
+        "type": "object",
+        "properties": {
+          "reference": {
+            "type": "string",
+            "description": "The reference POST /waitlist/registrations gave.",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "transactionId": {
+            "type": "string",
+            "description": "The transaction id the payment modal handed back (digits).",
+            "pattern": "^[0-9]{1,20}$"
+          }
+        },
+        "required": [
+          "reference",
+          "transactionId"
         ]
       },
       "CreateAdCreativeDto": {
@@ -32264,6 +33523,14 @@
           },
           "beneficiaryCount": {
             "type": "number"
+          },
+          "accountNumberStatus": {
+            "type": "string",
+            "enum": [
+              "none",
+              "on_its_way",
+              "active"
+            ]
           }
         },
         "required": [
@@ -32272,7 +33539,8 @@
           "limits",
           "pin",
           "bankTransfers",
-          "beneficiaryCount"
+          "beneficiaryCount",
+          "accountNumberStatus"
         ]
       },
       "ApprovalDeviceView": {
@@ -34407,6 +35675,116 @@
           "submittedAt",
           "reviewedAt",
           "otherCategories"
+        ]
+      },
+      "AdminProfessionalTakedownRecordView": {
+        "type": "object",
+        "properties": {
+          "standing": {
+            "type": "boolean"
+          },
+          "takenDownAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "takenDownByAdminId": {
+            "type": "string"
+          },
+          "takenDownByAdminEmail": {
+            "type": "string"
+          },
+          "takenDownByAdminRole": {
+            "type": "string",
+            "enum": [
+              "superadmin",
+              "reviewer",
+              "support",
+              "finance"
+            ]
+          },
+          "relistsAs": {
+            "type": "string",
+            "enum": [
+              "listed",
+              "hidden"
+            ]
+          },
+          "liftedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "liftedByAdminId": {
+            "type": "string",
+            "nullable": true
+          },
+          "liftedByAdminEmail": {
+            "type": "string",
+            "nullable": true
+          },
+          "liftedByAdminRole": {
+            "type": "string",
+            "enum": [
+              "superadmin",
+              "reviewer",
+              "support",
+              "finance"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "standing",
+          "takenDownAt",
+          "takenDownByAdminId",
+          "takenDownByAdminEmail",
+          "takenDownByAdminRole",
+          "relistsAs",
+          "liftedAt",
+          "liftedByAdminId",
+          "liftedByAdminEmail",
+          "liftedByAdminRole"
+        ]
+      },
+      "AdminProfessionalVisibilityView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "rejected",
+              "approved"
+            ]
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "listed",
+              "hidden",
+              "taken_down"
+            ],
+            "nullable": true
+          },
+          "takenDownAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "latestTakedown": {
+            "$ref": "#/components/schemas/AdminProfessionalTakedownRecordView",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "visibility",
+          "takenDownAt",
+          "latestTakedown"
         ]
       },
       "AdminProfessionalDocumentUrlView": {
@@ -36710,8 +38088,8 @@
             "type": "string",
             "enum": [
               "live",
-              "draft",
-              "hidden"
+              "hidden",
+              "draft"
             ]
           },
           "createdAt": {
@@ -37125,6 +38503,823 @@
           "totals"
         ]
       },
+      "HeldTicketEventView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "startsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endsAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "timezone": {
+            "type": "string",
+            "nullable": true
+          },
+          "timeLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "format": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          },
+          "venueName": {
+            "type": "string",
+            "nullable": true
+          },
+          "bannerUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "cancelledAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "startsAt",
+          "endsAt",
+          "timezone",
+          "timeLabel",
+          "format",
+          "location",
+          "venueName",
+          "bannerUrl",
+          "status",
+          "cancelledAt"
+        ]
+      },
+      "HeldTicketStub": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "valid",
+              "checked_in",
+              "void"
+            ]
+          },
+          "checkedInAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "checkedInAt"
+        ]
+      },
+      "HeldTicketGroup": {
+        "type": "object",
+        "properties": {
+          "orderId": {
+            "type": "string"
+          },
+          "ticketTypeId": {
+            "type": "string"
+          },
+          "tierName": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "number"
+          },
+          "event": {
+            "$ref": "#/components/schemas/HeldTicketEventView"
+          },
+          "tickets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeldTicketStub"
+            }
+          }
+        },
+        "required": [
+          "orderId",
+          "ticketTypeId",
+          "tierName",
+          "quantity",
+          "event",
+          "tickets"
+        ]
+      },
+      "HeldTicketView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "orderId": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "valid",
+              "checked_in",
+              "void"
+            ]
+          },
+          "checkedInAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "tierName": {
+            "type": "string"
+          },
+          "holderName": {
+            "type": "string",
+            "nullable": true
+          },
+          "event": {
+            "$ref": "#/components/schemas/HeldTicketEventView"
+          },
+          "siblings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeldTicketStub"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "orderId",
+          "code",
+          "status",
+          "checkedInAt",
+          "tierName",
+          "holderName",
+          "event",
+          "siblings"
+        ]
+      },
+      "QuestionOption": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "label"
+        ]
+      },
+      "IntakeQuestion": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "step": {
+            "type": "number"
+          },
+          "stepTitle": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "text",
+              "documents",
+              "single",
+              "multi",
+              "date"
+            ]
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "required",
+              "optional"
+            ]
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuestionOption"
+            },
+            "nullable": true
+          },
+          "placeholder": {
+            "type": "string",
+            "nullable": true
+          },
+          "suggestions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "helper": {
+            "type": "string",
+            "nullable": true
+          },
+          "showIf": {
+            "type": "object",
+            "properties": {
+              "questionId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "questionId"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "step",
+          "stepTitle",
+          "prompt",
+          "kind",
+          "level"
+        ]
+      },
+      "GeminiBrief": {
+        "type": "object",
+        "properties": {
+          "summary": {
+            "type": "string"
+          },
+          "keyIssues": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "questionsToClarify": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "risks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "summary",
+          "keyIssues",
+          "questionsToClarify",
+          "risks"
+        ]
+      },
+      "LegalBrief": {
+        "type": "object",
+        "properties": {
+          "matter": {
+            "type": "string"
+          },
+          "matterLabel": {
+            "type": "string"
+          },
+          "facts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "question": {
+                  "type": "string"
+                },
+                "answer": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "question",
+                "answer"
+              ]
+            }
+          },
+          "documentCount": {
+            "type": "number"
+          },
+          "analysis": {
+            "$ref": "#/components/schemas/GeminiBrief"
+          },
+          "generatedBy": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "matter",
+          "matterLabel",
+          "facts",
+          "documentCount",
+          "analysis",
+          "generatedBy",
+          "generatedAt"
+        ]
+      },
+      "IntakeView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "matter": {
+            "type": "string"
+          },
+          "matterLabel": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "answers": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "documents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntakeQuestion"
+            }
+          },
+          "outstandingRequired": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "brief": {
+            "$ref": "#/components/schemas/LegalBrief",
+            "nullable": true
+          },
+          "legalRequestId": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "matter",
+          "matterLabel",
+          "status",
+          "answers",
+          "documents",
+          "questions",
+          "outstandingRequired",
+          "brief",
+          "legalRequestId"
+        ]
+      },
+      "ChatMessageView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "authorRole": {
+            "type": "string",
+            "enum": [
+              "client",
+              "ai",
+              "consultant"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "authorRole",
+          "body",
+          "createdAt"
+        ]
+      },
+      "ChatThreadView": {
+        "type": "object",
+        "properties": {
+          "legalRequestId": {
+            "type": "string"
+          },
+          "serviceName": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "consultantJoined": {
+            "type": "boolean"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatMessageView"
+            }
+          }
+        },
+        "required": [
+          "legalRequestId",
+          "serviceName",
+          "status",
+          "consultantJoined",
+          "messages"
+        ]
+      },
+      "IntakeQueueItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "wawuUserId": {
+            "type": "string"
+          },
+          "clientName": {
+            "type": "string"
+          },
+          "matter": {
+            "type": "string"
+          },
+          "matterLabel": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "documentCount": {
+            "type": "number"
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "waitingHours": {
+            "type": "number"
+          },
+          "urgency": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "wawuUserId",
+          "clientName",
+          "matter",
+          "matterLabel",
+          "status",
+          "summary",
+          "documentCount",
+          "completedAt",
+          "waitingHours",
+          "urgency"
+        ]
+      },
+      "IntakeDetailView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "wawuUserId": {
+            "type": "string"
+          },
+          "clientName": {
+            "type": "string"
+          },
+          "matter": {
+            "type": "string"
+          },
+          "matterLabel": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "documents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "brief": {
+            "$ref": "#/components/schemas/LegalBrief",
+            "nullable": true
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "legalRequestId": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "wawuUserId",
+          "clientName",
+          "matter",
+          "matterLabel",
+          "status",
+          "documents",
+          "brief",
+          "completedAt",
+          "legalRequestId"
+        ]
+      },
+      "LegalAssistantTopic": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "matter": {
+            "type": "string"
+          },
+          "matterLabel": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "matter",
+          "matterLabel"
+        ]
+      },
+      "LegalAssistantMessage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "authorRole": {
+            "type": "string",
+            "enum": [
+              "client",
+              "consultant",
+              "assistant"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "consultantName": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "authorRole",
+          "body",
+          "createdAt",
+          "consultantName"
+        ]
+      },
+      "LegalAssistantQuickReply": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ]
+      },
+      "LegalAssistantBriefRow": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "value"
+        ]
+      },
+      "LegalAssistantBrief": {
+        "type": "object",
+        "properties": {
+          "matter": {
+            "type": "string"
+          },
+          "matterLabel": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LegalAssistantBriefRow"
+            }
+          },
+          "ready": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "matter",
+          "matterLabel",
+          "rows",
+          "ready"
+        ]
+      },
+      "LegalAssistantConsultant": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "joinedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "name",
+          "joinedAt"
+        ]
+      },
+      "LegalAssistantThread": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "profiling",
+              "brief_ready",
+              "sent"
+            ]
+          },
+          "matter": {
+            "type": "string"
+          },
+          "matterLabel": {
+            "type": "string"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LegalAssistantMessage"
+            }
+          },
+          "quickReplies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LegalAssistantQuickReply"
+            }
+          },
+          "brief": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LegalAssistantBrief"
+              }
+            ],
+            "nullable": true
+          },
+          "awaitingReply": {
+            "type": "boolean"
+          },
+          "legalRequestId": {
+            "type": "string",
+            "nullable": true
+          },
+          "requestStatus": {
+            "type": "string",
+            "nullable": true
+          },
+          "consultant": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LegalAssistantConsultant"
+              }
+            ],
+            "nullable": true
+          },
+          "assistantStopped": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "stage",
+          "matter",
+          "matterLabel",
+          "messages",
+          "quickReplies",
+          "brief",
+          "awaitingReply",
+          "legalRequestId",
+          "requestStatus",
+          "consultant",
+          "assistantStopped"
+        ]
+      },
+      "LegalAssistantTranscript": {
+        "type": "object",
+        "properties": {
+          "intakeId": {
+            "type": "string"
+          },
+          "legalRequestId": {
+            "type": "string",
+            "nullable": true
+          },
+          "brief": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LegalAssistantBrief"
+              }
+            ],
+            "nullable": true
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LegalAssistantMessage"
+            }
+          }
+        },
+        "required": [
+          "intakeId",
+          "legalRequestId",
+          "brief",
+          "messages"
+        ]
+      },
       "DayAvailability": {
         "type": "object",
         "properties": {
@@ -37170,8 +39365,8 @@
           "path": {
             "type": "string",
             "enum": [
-              "simple",
-              "consultation"
+              "consultation",
+              "simple"
             ]
           },
           "blurb": {
@@ -37197,6 +39392,367 @@
           "path",
           "blurb",
           "priceNaira"
+        ]
+      },
+      "ConsultationOptionView": {
+        "type": "object",
+        "properties": {
+          "medium": {
+            "type": "string",
+            "enum": [
+              "zoom",
+              "physical",
+              "phone"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "minutes": {
+            "type": "number",
+            "nullable": true
+          },
+          "priceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "onRequest": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "medium",
+          "label",
+          "minutes",
+          "priceKobo",
+          "onRequest"
+        ]
+      },
+      "ConsultationOptionsView": {
+        "type": "object",
+        "properties": {
+          "timeZone": {
+            "type": "string"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConsultationOptionView"
+            }
+          }
+        },
+        "required": [
+          "timeZone",
+          "options"
+        ]
+      },
+      "ConsultationSlotView": {
+        "type": "object",
+        "properties": {
+          "startsAt": {
+            "type": "string"
+          },
+          "available": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "startsAt",
+          "available"
+        ]
+      },
+      "ConsultationDayView": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string"
+          },
+          "slots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConsultationSlotView"
+            }
+          }
+        },
+        "required": [
+          "date",
+          "slots"
+        ]
+      },
+      "ConsultationSlotsView": {
+        "type": "object",
+        "properties": {
+          "medium": {
+            "type": "string",
+            "enum": [
+              "zoom",
+              "physical",
+              "phone"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "minutes": {
+            "type": "number"
+          },
+          "timeZone": {
+            "type": "string"
+          },
+          "horizonDays": {
+            "type": "number"
+          },
+          "days": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConsultationDayView"
+            }
+          }
+        },
+        "required": [
+          "medium",
+          "label",
+          "minutes",
+          "timeZone",
+          "horizonDays",
+          "days"
+        ]
+      },
+      "ConsultationBookingView": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "medium": {
+            "type": "string",
+            "enum": [
+              "chat",
+              "zoom",
+              "physical",
+              "phone"
+            ],
+            "nullable": true
+          },
+          "label": {
+            "type": "string",
+            "nullable": true
+          },
+          "minutes": {
+            "type": "number",
+            "nullable": true
+          },
+          "priceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "scheduledFor": {
+            "type": "string",
+            "nullable": true
+          },
+          "holdExpiresAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "paid": {
+            "type": "boolean"
+          },
+          "paidAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "requestId",
+          "status",
+          "medium",
+          "label",
+          "minutes",
+          "priceKobo",
+          "scheduledFor",
+          "holdExpiresAt",
+          "paid",
+          "paidAt"
+        ]
+      },
+      "LegalDeliverableView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "nullable": true
+          },
+          "pages": {
+            "type": "number",
+            "nullable": true
+          },
+          "chatMessageId": {
+            "type": "string",
+            "nullable": true
+          },
+          "postedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "fileName",
+          "url",
+          "pages",
+          "chatMessageId",
+          "postedAt"
+        ]
+      },
+      "LegalDeliverablesView": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LegalDeliverableView"
+            }
+          }
+        },
+        "required": [
+          "requestId",
+          "status",
+          "items"
+        ]
+      },
+      "AdminConsultationPriceView": {
+        "type": "object",
+        "properties": {
+          "medium": {
+            "type": "string",
+            "enum": [
+              "chat",
+              "zoom",
+              "physical",
+              "phone"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "priceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "minutes": {
+            "type": "number",
+            "nullable": true
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "offered": {
+            "type": "boolean"
+          },
+          "updatedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "medium",
+          "label",
+          "priceKobo",
+          "minutes",
+          "enabled",
+          "offered",
+          "updatedAt"
+        ]
+      },
+      "AdminServicePriceView": {
+        "type": "object",
+        "properties": {
+          "serviceCode": {
+            "type": "string"
+          },
+          "serviceName": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "priceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "updatedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "serviceCode",
+          "serviceName",
+          "category",
+          "priceKobo",
+          "updatedAt"
+        ]
+      },
+      "AdminLegalPricesView": {
+        "type": "object",
+        "properties": {
+          "consultations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminConsultationPriceView"
+            }
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminServicePriceView"
+            }
+          }
+        },
+        "required": [
+          "consultations",
+          "services"
+        ]
+      },
+      "DeliverFilesResultView": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "deliveredAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LegalDeliverableView"
+            }
+          }
+        },
+        "required": [
+          "requestId",
+          "status",
+          "deliveredAt",
+          "items"
         ]
       },
       "WebhookResult": {
@@ -39219,8 +41775,8 @@
             "enum": [
               "failed",
               "draft",
-              "sending",
-              "sent"
+              "sent",
+              "sending"
             ]
           },
           "recipientCount": {
@@ -39740,6 +42296,28 @@
         },
         "required": [
           "deletionScheduledAt"
+        ]
+      },
+      "PushTokenRegistered": {
+        "type": "object",
+        "properties": {
+          "registered": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "registered"
+        ]
+      },
+      "PushTokenRemoved": {
+        "type": "object",
+        "properties": {
+          "removed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "removed"
         ]
       },
       "CommentAuthor": {
@@ -40365,6 +42943,36 @@
           "pieceCount",
           "verification",
           "following"
+        ]
+      },
+      "ProfessionalListingVisibilityView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "listed",
+              "hidden",
+              "taken_down"
+            ]
+          },
+          "takenDownAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "category",
+          "visibility",
+          "takenDownAt"
         ]
       },
       "ProfessionalLocationView": {
@@ -41698,6 +44306,334 @@
           "items"
         ]
       },
+      "PublicSchoolCard": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "business",
+              "tech",
+              "creative",
+              "languages",
+              "vocational"
+            ]
+          },
+          "location": {
+            "type": "string"
+          },
+          "logo": {
+            "type": "string",
+            "nullable": true
+          },
+          "foundedYear": {
+            "type": "number",
+            "nullable": true
+          },
+          "expertise": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "courseCount": {
+            "type": "number"
+          },
+          "fromPriceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "matchedCourses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "category",
+          "location",
+          "logo",
+          "foundedYear",
+          "expertise",
+          "courseCount",
+          "fromPriceKobo",
+          "matchedCourses"
+        ]
+      },
+      "PublicSchoolsPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicSchoolCard"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "PublicIntakeView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "startDate": {
+            "type": "string"
+          },
+          "schedule": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string",
+            "nullable": true
+          },
+          "capacity": {
+            "type": "number"
+          },
+          "seatsLeft": {
+            "type": "number"
+          },
+          "full": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "startDate",
+          "schedule",
+          "location",
+          "capacity",
+          "seatsLeft",
+          "full"
+        ]
+      },
+      "PublicCourseDetail": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "weeks": {
+            "type": "number"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "in_person",
+              "online",
+              "hybrid"
+            ]
+          },
+          "syllabus": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "outcomes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "school": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "category": {
+                "type": "string",
+                "enum": [
+                  "business",
+                  "tech",
+                  "creative",
+                  "languages",
+                  "vocational"
+                ]
+              },
+              "location": {
+                "type": "string"
+              },
+              "logo": {
+                "type": "string",
+                "nullable": true
+              },
+              "applyUrl": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "category",
+              "location",
+              "logo",
+              "applyUrl"
+            ]
+          },
+          "intakes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicIntakeView"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "weeks",
+          "mode",
+          "syllabus",
+          "outcomes",
+          "priceKobo",
+          "school",
+          "intakes"
+        ]
+      },
+      "PublicSchoolCourseCard": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "weeks": {
+            "type": "number"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "in_person",
+              "online",
+              "hybrid"
+            ]
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "nextIntake": {
+            "$ref": "#/components/schemas/PublicIntakeView",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "weeks",
+          "mode",
+          "priceKobo",
+          "nextIntake"
+        ]
+      },
+      "PublicSchoolDetail": {
+        "type": "object",
+        "properties": {
+          "about": {
+            "type": "string"
+          },
+          "applyUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "courses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicSchoolCourseCard"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "business",
+              "tech",
+              "creative",
+              "languages",
+              "vocational"
+            ]
+          },
+          "location": {
+            "type": "string"
+          },
+          "logo": {
+            "type": "string",
+            "nullable": true
+          },
+          "foundedYear": {
+            "type": "number",
+            "nullable": true
+          },
+          "expertise": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "courseCount": {
+            "type": "number"
+          },
+          "fromPriceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "matchedCourses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "about",
+          "applyUrl",
+          "courses",
+          "id",
+          "name",
+          "category",
+          "location",
+          "logo",
+          "foundedYear",
+          "expertise",
+          "courseCount",
+          "fromPriceKobo",
+          "matchedCourses"
+        ]
+      },
       "CommunityJoinRequest": {
         "type": "object",
         "properties": {
@@ -42304,6 +45240,68 @@
           "lastDecisionReason"
         ]
       },
+      "EventTicketRulesView": {
+        "type": "object",
+        "properties": {
+          "hostSharePercent": {
+            "type": "number"
+          },
+          "minPriceNaira": {
+            "type": "number"
+          },
+          "maxPriceNaira": {
+            "type": "number"
+          },
+          "minQuantity": {
+            "type": "number"
+          },
+          "maxQuantity": {
+            "type": "number"
+          },
+          "nameMinLength": {
+            "type": "number"
+          },
+          "nameMaxLength": {
+            "type": "number"
+          },
+          "maxTypes": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "hostSharePercent",
+          "minPriceNaira",
+          "maxPriceNaira",
+          "minQuantity",
+          "maxQuantity",
+          "nameMinLength",
+          "nameMaxLength",
+          "maxTypes"
+        ]
+      },
+      "EventFieldLimitsView": {
+        "type": "object",
+        "properties": {
+          "nameMax": {
+            "type": "number"
+          },
+          "descriptionMax": {
+            "type": "number"
+          },
+          "hostOrgMax": {
+            "type": "number"
+          },
+          "addressMax": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "nameMax",
+          "descriptionMax",
+          "hostOrgMax",
+          "addressMax"
+        ]
+      },
       "EventOptionsView": {
         "type": "object",
         "properties": {
@@ -42386,12 +45384,47 @@
                 "label"
               ]
             }
+          },
+          "tickets": {
+            "$ref": "#/components/schemas/EventTicketRulesView"
+          },
+          "fields": {
+            "$ref": "#/components/schemas/EventFieldLimitsView"
           }
         },
         "required": [
           "categories",
           "formats",
-          "types"
+          "types",
+          "tickets",
+          "fields"
+        ]
+      },
+      "EventFromPricesView": {
+        "type": "object",
+        "properties": {
+          "prices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "eventId": {
+                  "type": "string"
+                },
+                "priceFromNaira": {
+                  "type": "number",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "eventId",
+                "priceFromNaira"
+              ]
+            }
+          }
+        },
+        "required": [
+          "prices"
         ]
       },
       "EventGoingView": {
@@ -42426,645 +45459,6 @@
         "required": [
           "eventId",
           "userSaved"
-        ]
-      },
-      "QuestionOption": {
-        "type": "object",
-        "properties": {
-          "value": {
-            "type": "string"
-          },
-          "label": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "value",
-          "label"
-        ]
-      },
-      "IntakeQuestion": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "step": {
-            "type": "number"
-          },
-          "stepTitle": {
-            "type": "string"
-          },
-          "prompt": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "text",
-              "documents",
-              "single",
-              "multi",
-              "date"
-            ]
-          },
-          "level": {
-            "type": "string",
-            "enum": [
-              "required",
-              "optional"
-            ]
-          },
-          "options": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/QuestionOption"
-            },
-            "nullable": true
-          },
-          "placeholder": {
-            "type": "string",
-            "nullable": true
-          },
-          "suggestions": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "nullable": true
-          },
-          "helper": {
-            "type": "string",
-            "nullable": true
-          },
-          "showIf": {
-            "type": "object",
-            "properties": {
-              "questionId": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "questionId"
-            ],
-            "nullable": true
-          }
-        },
-        "required": [
-          "id",
-          "step",
-          "stepTitle",
-          "prompt",
-          "kind",
-          "level"
-        ]
-      },
-      "GeminiBrief": {
-        "type": "object",
-        "properties": {
-          "summary": {
-            "type": "string"
-          },
-          "keyIssues": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "questionsToClarify": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "risks": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "required": [
-          "summary",
-          "keyIssues",
-          "questionsToClarify",
-          "risks"
-        ]
-      },
-      "LegalBrief": {
-        "type": "object",
-        "properties": {
-          "matter": {
-            "type": "string"
-          },
-          "matterLabel": {
-            "type": "string"
-          },
-          "facts": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "question": {
-                  "type": "string"
-                },
-                "answer": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "question",
-                "answer"
-              ]
-            }
-          },
-          "documentCount": {
-            "type": "number"
-          },
-          "analysis": {
-            "$ref": "#/components/schemas/GeminiBrief"
-          },
-          "generatedBy": {
-            "type": "string"
-          },
-          "generatedAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "matter",
-          "matterLabel",
-          "facts",
-          "documentCount",
-          "analysis",
-          "generatedBy",
-          "generatedAt"
-        ]
-      },
-      "IntakeView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "matter": {
-            "type": "string"
-          },
-          "matterLabel": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          },
-          "answers": {
-            "type": "object",
-            "additionalProperties": {}
-          },
-          "documents": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "questions": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/IntakeQuestion"
-            }
-          },
-          "outstandingRequired": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "brief": {
-            "$ref": "#/components/schemas/LegalBrief",
-            "nullable": true
-          },
-          "legalRequestId": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "id",
-          "matter",
-          "matterLabel",
-          "status",
-          "answers",
-          "documents",
-          "questions",
-          "outstandingRequired",
-          "brief",
-          "legalRequestId"
-        ]
-      },
-      "ChatMessageView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "authorRole": {
-            "type": "string",
-            "enum": [
-              "client",
-              "ai",
-              "consultant"
-            ]
-          },
-          "body": {
-            "type": "string"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          }
-        },
-        "required": [
-          "id",
-          "authorRole",
-          "body",
-          "createdAt"
-        ]
-      },
-      "ChatThreadView": {
-        "type": "object",
-        "properties": {
-          "legalRequestId": {
-            "type": "string"
-          },
-          "serviceName": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          },
-          "consultantJoined": {
-            "type": "boolean"
-          },
-          "messages": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ChatMessageView"
-            }
-          }
-        },
-        "required": [
-          "legalRequestId",
-          "serviceName",
-          "status",
-          "consultantJoined",
-          "messages"
-        ]
-      },
-      "IntakeQueueItem": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "wawuUserId": {
-            "type": "string"
-          },
-          "clientName": {
-            "type": "string"
-          },
-          "matter": {
-            "type": "string"
-          },
-          "matterLabel": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          },
-          "summary": {
-            "type": "string"
-          },
-          "documentCount": {
-            "type": "number"
-          },
-          "completedAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
-          },
-          "waitingHours": {
-            "type": "number"
-          },
-          "urgency": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "id",
-          "wawuUserId",
-          "clientName",
-          "matter",
-          "matterLabel",
-          "status",
-          "summary",
-          "documentCount",
-          "completedAt",
-          "waitingHours",
-          "urgency"
-        ]
-      },
-      "IntakeDetailView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "wawuUserId": {
-            "type": "string"
-          },
-          "clientName": {
-            "type": "string"
-          },
-          "matter": {
-            "type": "string"
-          },
-          "matterLabel": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          },
-          "documents": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "brief": {
-            "$ref": "#/components/schemas/LegalBrief",
-            "nullable": true
-          },
-          "completedAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
-          },
-          "legalRequestId": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "id",
-          "wawuUserId",
-          "clientName",
-          "matter",
-          "matterLabel",
-          "status",
-          "documents",
-          "brief",
-          "completedAt",
-          "legalRequestId"
-        ]
-      },
-      "LegalAssistantTopic": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "label": {
-            "type": "string"
-          },
-          "matter": {
-            "type": "string"
-          },
-          "matterLabel": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "label",
-          "matter",
-          "matterLabel"
-        ]
-      },
-      "LegalAssistantMessage": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "authorRole": {
-            "type": "string",
-            "enum": [
-              "client",
-              "consultant",
-              "assistant"
-            ]
-          },
-          "body": {
-            "type": "string"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "consultantName": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "id",
-          "authorRole",
-          "body",
-          "createdAt",
-          "consultantName"
-        ]
-      },
-      "LegalAssistantQuickReply": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "label": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "label"
-        ]
-      },
-      "LegalAssistantBriefRow": {
-        "type": "object",
-        "properties": {
-          "label": {
-            "type": "string"
-          },
-          "value": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "label",
-          "value"
-        ]
-      },
-      "LegalAssistantBrief": {
-        "type": "object",
-        "properties": {
-          "matter": {
-            "type": "string"
-          },
-          "matterLabel": {
-            "type": "string"
-          },
-          "rows": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/LegalAssistantBriefRow"
-            }
-          },
-          "ready": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "matter",
-          "matterLabel",
-          "rows",
-          "ready"
-        ]
-      },
-      "LegalAssistantConsultant": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "nullable": true
-          },
-          "joinedAt": {
-            "type": "string",
-            "format": "date-time"
-          }
-        },
-        "required": [
-          "name",
-          "joinedAt"
-        ]
-      },
-      "LegalAssistantThread": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "stage": {
-            "type": "string",
-            "enum": [
-              "sent",
-              "profiling",
-              "brief_ready"
-            ]
-          },
-          "matter": {
-            "type": "string"
-          },
-          "matterLabel": {
-            "type": "string"
-          },
-          "messages": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/LegalAssistantMessage"
-            }
-          },
-          "quickReplies": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/LegalAssistantQuickReply"
-            }
-          },
-          "brief": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/LegalAssistantBrief"
-              }
-            ],
-            "nullable": true
-          },
-          "awaitingReply": {
-            "type": "boolean"
-          },
-          "legalRequestId": {
-            "type": "string",
-            "nullable": true
-          },
-          "requestStatus": {
-            "type": "string",
-            "nullable": true
-          },
-          "consultant": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/LegalAssistantConsultant"
-              }
-            ],
-            "nullable": true
-          },
-          "assistantStopped": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "id",
-          "stage",
-          "matter",
-          "matterLabel",
-          "messages",
-          "quickReplies",
-          "brief",
-          "awaitingReply",
-          "legalRequestId",
-          "requestStatus",
-          "consultant",
-          "assistantStopped"
-        ]
-      },
-      "LegalAssistantTranscript": {
-        "type": "object",
-        "properties": {
-          "intakeId": {
-            "type": "string"
-          },
-          "legalRequestId": {
-            "type": "string",
-            "nullable": true
-          },
-          "brief": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/LegalAssistantBrief"
-              }
-            ],
-            "nullable": true
-          },
-          "messages": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/LegalAssistantMessage"
-            }
-          }
-        },
-        "required": [
-          "intakeId",
-          "legalRequestId",
-          "brief",
-          "messages"
         ]
       },
       "ChatPerson": {
@@ -43856,6 +46250,135 @@
           "communities"
         ]
       },
+      "PointNextExpiryView": {
+        "type": "object",
+        "properties": {
+          "points": {
+            "type": "number"
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "points",
+          "expiresAt"
+        ]
+      },
+      "PointLotView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "points": {
+            "type": "number"
+          },
+          "granted": {
+            "type": "number"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "tier_bonus",
+              "pack",
+              "bump",
+              "referral",
+              "shortfall",
+              "returned"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "points",
+          "granted",
+          "source",
+          "label",
+          "expiresAt"
+        ]
+      },
+      "PointMovementView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "points": {
+            "type": "number"
+          },
+          "label": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "hold",
+              "grant",
+              "release",
+              "expire"
+            ]
+          },
+          "pending": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "points",
+          "label",
+          "reason",
+          "pending",
+          "createdAt"
+        ]
+      },
+      "MyPointsView": {
+        "type": "object",
+        "properties": {
+          "balance": {
+            "type": "number"
+          },
+          "nextExpiry": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PointNextExpiryView"
+              }
+            ],
+            "nullable": true
+          },
+          "lots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PointLotView"
+            }
+          },
+          "lotCount": {
+            "type": "number"
+          },
+          "movements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PointMovementView"
+            }
+          }
+        },
+        "required": [
+          "balance",
+          "nextExpiry",
+          "lots",
+          "lotCount",
+          "movements"
+        ]
+      },
       "MeCountsView": {
         "type": "object",
         "properties": {
@@ -44433,6 +46956,578 @@
           "nextCursor"
         ]
       },
+      "PlanBadgeView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "numbered": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "numbered"
+        ]
+      },
+      "MyTierSummaryView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "badge": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PlanBadgeView"
+              }
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "badge"
+        ]
+      },
+      "PlanEventPassView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "MyTierView": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "none",
+              "active",
+              "ending",
+              "ended"
+            ]
+          },
+          "tier": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MyTierSummaryView"
+              }
+            ],
+            "nullable": true
+          },
+          "activeFrom": {
+            "type": "string",
+            "nullable": true
+          },
+          "activeUntil": {
+            "type": "string",
+            "nullable": true
+          },
+          "productsAllowed": {
+            "type": "integer"
+          },
+          "extraProducts": {
+            "type": "integer"
+          },
+          "pointsIncluded": {
+            "type": "integer"
+          },
+          "firstVoiceIntroIncluded": {
+            "type": "boolean"
+          },
+          "eventPass": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PlanEventPassView"
+              }
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "state",
+          "tier",
+          "activeFrom",
+          "activeUntil",
+          "productsAllowed",
+          "extraProducts",
+          "pointsIncluded",
+          "firstVoiceIntroIncluded",
+          "eventPass"
+        ]
+      },
+      "PlanTierView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "days": {
+            "type": "integer"
+          },
+          "products": {
+            "type": "integer"
+          },
+          "bonusPoints": {
+            "type": "integer"
+          },
+          "bonusPointsExpireDays": {
+            "type": "integer"
+          },
+          "priceMinor": {
+            "type": "integer"
+          },
+          "eventPass": {
+            "$ref": "#/components/schemas/PlanEventPassView"
+          },
+          "badge": {
+            "$ref": "#/components/schemas/PlanBadgeView"
+          },
+          "packBonusPercent": {
+            "type": "integer"
+          },
+          "firstVoiceIntroIncluded": {
+            "type": "boolean"
+          },
+          "preselected": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "days",
+          "products",
+          "bonusPoints",
+          "bonusPointsExpireDays",
+          "priceMinor",
+          "eventPass",
+          "badge",
+          "packBonusPercent",
+          "firstVoiceIntroIncluded",
+          "preselected"
+        ]
+      },
+      "PlanExtraProductsView": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "priceMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count",
+          "priceMinor"
+        ]
+      },
+      "PlanPackView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "points": {
+            "type": "integer"
+          },
+          "priceMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "points",
+          "priceMinor"
+        ]
+      },
+      "PlanCheckoutBumpView": {
+        "type": "object",
+        "properties": {
+          "points": {
+            "type": "integer"
+          },
+          "priceMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "points",
+          "priceMinor"
+        ]
+      },
+      "PlanActionView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "points": {
+            "type": "integer"
+          },
+          "per": {
+            "type": "string",
+            "enum": [
+              "use",
+              "minute",
+              "track",
+              "message",
+              "minute_per_language"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "points",
+          "per"
+        ]
+      },
+      "PlanCapsView": {
+        "type": "object",
+        "properties": {
+          "dailyPoints": {
+            "type": "integer"
+          },
+          "maxCharactersPerJob": {
+            "type": "integer"
+          },
+          "maxAudioMinutesPerJob": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dailyPoints",
+          "maxCharactersPerJob",
+          "maxAudioMinutesPerJob"
+        ]
+      },
+      "PlansView": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN",
+              "USD"
+            ]
+          },
+          "currencyFixed": {
+            "type": "boolean"
+          },
+          "tiers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanTierView"
+            }
+          },
+          "extraProducts": {
+            "$ref": "#/components/schemas/PlanExtraProductsView"
+          },
+          "packs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanPackView"
+            }
+          },
+          "checkoutBump": {
+            "$ref": "#/components/schemas/PlanCheckoutBumpView"
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanActionView"
+            }
+          },
+          "caps": {
+            "$ref": "#/components/schemas/PlanCapsView"
+          }
+        },
+        "required": [
+          "currency",
+          "currencyFixed",
+          "tiers",
+          "extraProducts",
+          "packs",
+          "checkoutBump",
+          "actions",
+          "caps"
+        ]
+      },
+      "AdminWaitlistRegistrationView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "offerId": {
+            "type": "string"
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "nullable": true
+          },
+          "makes": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "failed",
+              "paid"
+            ]
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "paidKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "paidAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "reference": {
+            "type": "string"
+          },
+          "accessCode": {
+            "type": "string"
+          },
+          "flutterwaveTransactionId": {
+            "type": "string",
+            "nullable": true
+          },
+          "claimedByWawuId": {
+            "type": "string",
+            "nullable": true
+          },
+          "claimedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "offerId",
+          "fullName",
+          "phone",
+          "email",
+          "state",
+          "makes",
+          "status",
+          "amountKobo",
+          "paidKobo",
+          "paidAt",
+          "reference",
+          "accessCode",
+          "flutterwaveTransactionId",
+          "claimedByWawuId",
+          "claimedAt",
+          "createdAt"
+        ]
+      },
+      "AdminWaitlistExportView": {
+        "type": "object",
+        "properties": {
+          "fileName": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "rowCount": {
+            "type": "number"
+          },
+          "content": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "fileName",
+          "contentType",
+          "rowCount",
+          "content",
+          "generatedAt"
+        ]
+      },
+      "WaitlistOfferView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "tierName": {
+            "type": "string"
+          },
+          "products": {
+            "type": "number"
+          },
+          "days": {
+            "type": "number"
+          },
+          "closesAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "priceKobo",
+          "tierName",
+          "products",
+          "days",
+          "closesAt"
+        ]
+      },
+      "WaitlistCheckoutView": {
+        "type": "object",
+        "properties": {
+          "publicKey": {
+            "type": "string"
+          },
+          "txRef": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "number"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN"
+            ]
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "customerEmail": {
+            "type": "string"
+          },
+          "customerPhone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "publicKey",
+          "txRef",
+          "amount",
+          "currency",
+          "customerName",
+          "customerEmail",
+          "customerPhone"
+        ]
+      },
+      "WaitlistRegistrationStartView": {
+        "type": "object",
+        "properties": {
+          "reference": {
+            "type": "string"
+          },
+          "offerId": {
+            "type": "string"
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "flutterwaveConfig": {
+            "$ref": "#/components/schemas/WaitlistCheckoutView"
+          }
+        },
+        "required": [
+          "reference",
+          "offerId",
+          "amountKobo",
+          "flutterwaveConfig"
+        ]
+      },
+      "WaitlistRegistrationStatusView": {
+        "type": "object",
+        "properties": {
+          "reference": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "failed",
+              "paid"
+            ]
+          },
+          "firstName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reference",
+          "status",
+          "firstName"
+        ]
+      },
+      "NuvionWebhookAck": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "recorded",
+              "duplicate"
+            ]
+          },
+          "event": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "outcome",
+          "event"
+        ]
+      },
       "AdCreativeView": {
         "type": "object",
         "properties": {
@@ -44556,8 +47651,8 @@
               "live",
               "paused",
               "draft",
-              "scheduled",
-              "ended"
+              "ended",
+              "scheduled"
             ]
           },
           "phase": {
@@ -44643,8 +47738,8 @@
                   "live",
                   "paused",
                   "draft",
-                  "scheduled",
-                  "ended"
+                  "ended",
+                  "scheduled"
                 ],
                 "nullable": true
               },
@@ -44688,15 +47783,15 @@
               "live": {},
               "paused": {},
               "draft": {},
-              "scheduled": {},
-              "ended": {}
+              "ended": {},
+              "scheduled": {}
             },
             "required": [
               "live",
               "paused",
               "draft",
-              "scheduled",
-              "ended"
+              "ended",
+              "scheduled"
             ]
           },
           "deliveryByPlacement": {
@@ -44716,15 +47811,15 @@
               "live": {},
               "paused": {},
               "draft": {},
-              "scheduled": {},
-              "ended": {}
+              "ended": {},
+              "scheduled": {}
             },
             "required": [
               "live",
               "paused",
               "draft",
-              "scheduled",
-              "ended"
+              "ended",
+              "scheduled"
             ]
           },
           "byPlacement": {
@@ -44791,8 +47886,8 @@
               "live",
               "paused",
               "draft",
-              "scheduled",
-              "ended"
+              "ended",
+              "scheduled"
             ]
           },
           "startsAt": {
@@ -44827,8 +47922,8 @@
             "enum": [
               "paused",
               "updated",
-              "scheduled",
               "ended",
+              "scheduled",
               "created",
               "resumed",
               "deleted"
@@ -44840,8 +47935,8 @@
               "live",
               "paused",
               "draft",
-              "scheduled",
-              "ended"
+              "ended",
+              "scheduled"
             ],
             "nullable": true
           },
@@ -44851,8 +47946,8 @@
               "live",
               "paused",
               "draft",
-              "scheduled",
-              "ended"
+              "ended",
+              "scheduled"
             ],
             "nullable": true
           },
@@ -44937,8 +48032,8 @@
               "live",
               "paused",
               "draft",
-              "scheduled",
-              "ended"
+              "ended",
+              "scheduled"
             ]
           },
           "phase": {
