@@ -14038,6 +14038,7 @@
             "wawu-id": []
           }
         ],
+        "summary": "Change the PIN. The current PIN is X-Transaction-Pin.",
         "tags": [
           "MoneyPin"
         ],
@@ -14253,6 +14254,7 @@
             "wawu-id": []
           }
         ],
+        "summary": "The code and the new PIN. Clears the lock and the wrong-try count, and turns biometric approval off.",
         "tags": [
           "MoneyPinReset"
         ],
