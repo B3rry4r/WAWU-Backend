@@ -10,6 +10,7 @@ import { HealthPlanModule } from '../health-plan/health-plan.module';
 import { ShopModule } from '../shop/shop.module';
 import { EventTicketingModule } from '../event-ticketing/event-ticketing.module';
 import { LegalModule } from '../legal/legal.module';
+import { WaitlistModule } from '../waitlist/waitlist.module';
 import { PaymentWebhookController } from './payment-webhook.controller';
 import { PaymentWebhookService } from './payment-webhook.service';
 import { FlutterwaveSignatureGuard } from './guards/flutterwave-signature.guard';
@@ -43,6 +44,7 @@ import { WalletModule } from '../wallet/wallet.module';
     LegalModule,
     ShopModule,
     EventTicketingModule,
+    WaitlistModule,
   ],
   controllers: [PaymentWebhookController],
   providers: [PaymentWebhookService, FlutterwaveSignatureGuard],

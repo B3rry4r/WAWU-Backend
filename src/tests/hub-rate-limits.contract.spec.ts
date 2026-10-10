@@ -51,6 +51,7 @@ import {
   STATEMENT_WAIT_MS,
   StatementSlots,
 } from '../money/statements/statement-config';
+import { WaitlistPublicController } from '../waitlist/waitlist-public.controller';
 
 /**
  * OPS-11: behind nginx, every caller gets its own rate-limit bucket, and no
@@ -272,7 +273,7 @@ describe('Rate limits behind nginx (OPS-11)', () => {
       );
     });
 
-    it('only the three payment webhooks (Flutterwave, Fintava, Nuvion: NUV-01) skip the limits; the only other overrides are admin login and refresh, the BVN check (KYC-01), the selfie match (KYC-02), the public receipt check and the receipt image and PDF (WALLET-18), and the recipient search (WALLET-08), once each', () => {
+    it('only the three payment webhooks (Flutterwave, Fintava, Nuvion: NUV-01) skip the limits; the only other overrides are admin login and refresh, the BVN check (KYC-01), the selfie match (KYC-02), the public receipt check and the receipt image and PDF (WALLET-18), the recipient search (WALLET-08), and the four public event registration routes (JOIN-01), once each', () => {
       const root = join(__dirname, '..');
       const files: string[] = [];
       const walk = (dir: string) => {
@@ -305,6 +306,7 @@ describe('Rate limits behind nginx (OPS-11)', () => {
         'money/receipts/money-receipt.controller.ts': 2,
         'money/receipts/public-receipt.controller.ts': 1,
         'money/recipients/money-recipient.controller.ts': 1,
+        'waitlist/waitlist-public.controller.ts': 1,
       });
     });
 
@@ -347,6 +349,7 @@ describe('Rate limits behind nginx (OPS-11)', () => {
         MoneyReceiptController,
         PublicReceiptController,
         MoneyRecipientController,
+        WaitlistPublicController,
       ]) {
         const proto = controller.prototype as unknown as Record<
           string,
@@ -388,6 +391,7 @@ describe('Rate limits behind nginx (OPS-11)', () => {
         'MoneyReceiptController.pdf',
         'MoneyRecipientController.search',
         'PublicReceiptController.page',
+        'WaitlistPublicController',
       ]);
       // WALLET-18: the public receipt check, and drawing a receipt as an
       // image or a PDF, each set exactly these per-address limits: 10 a
@@ -449,6 +453,24 @@ describe('Rate limits behind nginx (OPS-11)', () => {
           name: 'short',
           limit: 20,
           ttl: 60_000,
+          blockDuration: undefined,
+        },
+      ]);
+      // JOIN-01: the four public event registration routes (offer, register,
+      // verify, status) share one class-level override, and the guard counts
+      // each route apart, so one address (a whole event venue on one Wi-Fi)
+      // may make 120 calls to each in 10 minutes. Only `medium` is changed
+      // (it is tightened from 200 a minute); `short` keeps its 20 a second.
+      expect(
+        overrides
+          .filter((o) => o.on === 'WaitlistPublicController')
+          .sort((a, b) => a.name.localeCompare(b.name)),
+      ).toEqual([
+        {
+          on: 'WaitlistPublicController',
+          name: 'medium',
+          limit: 120,
+          ttl: 600_000,
           blockDuration: undefined,
         },
       ]);

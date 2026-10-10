@@ -494,20 +494,34 @@ class Check {
    * so no reader has to guess a time zone.
    */
   instant(v: unknown, path: string): Date {
-    if (
-      typeof v !== 'string' ||
-      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(
-        v,
-      )
-    )
+    const m =
+      typeof v === 'string'
+        ? /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](\d{2}):(\d{2}))$/.exec(
+            v,
+          )
+        : null;
+    if (m === null)
       this.fail(
         path,
         `must be a date and time with its offset, like 2026-10-10T00:00:00+01:00 (it is ${show(v)})`,
       );
-    const d = new Date(v);
-    if (Number.isNaN(d.getTime()))
+    // Date() rolls 31 February over to March and 24:00 over to the next day,
+    // so the wall-clock parts are built into a date and read back: any part
+    // that moved was not real.
+    const [y, mo, d, h, mi, sec] = m.slice(1).map(Number);
+    const wall = new Date(Date.UTC(y, mo - 1, d, h, mi, sec));
+    const parsed = new Date(v as string);
+    if (
+      wall.getUTCFullYear() !== y ||
+      wall.getUTCMonth() !== mo - 1 ||
+      wall.getUTCDate() !== d ||
+      wall.getUTCHours() !== h ||
+      wall.getUTCMinutes() !== mi ||
+      wall.getUTCSeconds() !== sec ||
+      Number.isNaN(parsed.getTime())
+    )
       this.fail(path, `is not a real date and time (it is ${show(v)})`);
-    return d;
+    return parsed;
   }
 
   oneOf<T extends string>(v: unknown, path: string, allowed: readonly T[]): T {
