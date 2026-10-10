@@ -16,8 +16,8 @@ export interface WaitlistOfferView {
   products: number;
   /** How many days the plan lasts. */
   days: number;
-  /** When registration closes (ISO 8601, UTC). */
-  closesAt: string;
+  /** When registration closes (ISO 8601, UTC); null when the offer has no closing date. */
+  closesAt: string | null;
 }
 
 /** The Flutterwave checkout settings the page opens the payment with. */

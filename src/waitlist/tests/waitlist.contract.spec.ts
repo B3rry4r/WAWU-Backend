@@ -5,6 +5,7 @@ import request, { type Response } from 'supertest';
 import type { App } from 'supertest/types';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { PlansConfig } from '../../plans/plans-config';
+import { WaitlistService } from '../waitlist.service';
 import { WaitlistSweepService } from '../waitlist-sweep.service';
 import {
   bootWaitlist,
@@ -146,7 +147,7 @@ describe('Event registration link (JOIN-01) over HTTP', () => {
         tierName: tier.name,
         products: tier.products,
         days: offer.tierDays,
-        closesAt: offer.openUntil.toISOString(),
+        closesAt: offer.openUntil!.toISOString(),
       });
       expect(res.headers['cache-control']).toBe('no-store');
     });
@@ -190,6 +191,89 @@ describe('Event registration link (JOIN-01) over HTTP', () => {
         } finally {
           await other.close();
         }
+      }
+    });
+
+    it('an offer with no open_until (absent or null) is open from open_from with no end: closesAt is null', async () => {
+      const now = Date.now();
+      for (const [label, over] of [
+        ['absent', { open_until: undefined }],
+        ['null', { open_until: null }],
+      ] as const) {
+        const other = await bootWaitlist(
+          configWith((raw) => (raw.event_offers = [openOffer(over)])),
+          fake,
+        );
+        try {
+          const res = await request(other.getHttpServer())
+            .get('/api/hub/waitlist/offers/current')
+            .expect(200);
+          expect({ label, offer: data(res) }).toEqual({
+            label,
+            offer: expect.objectContaining({ id: OFFER_ID, closesAt: null }),
+          });
+          // Open forever after open_from: still open a century from now, and
+          // a registration then is taken (the service takes the moment).
+          const service = other.get(WaitlistService);
+          const later = new Date(now + 100 * 365 * DAY);
+          expect(service.currentOffer(later).closesAt).toBeNull();
+          const started = await service.register(person(), later);
+          expect(started.reference).toMatch(/^wawu-join-[0-9a-f]{36}$/);
+        } finally {
+          await other.close();
+        }
+      }
+    });
+
+    it('an offer with no open_until is still not open before open_from', async () => {
+      const now = Date.now();
+      const other = await bootWaitlist(
+        configWith(
+          (raw) =>
+            (raw.event_offers = [
+              openOffer({
+                open_from: new Date(now + DAY).toISOString(),
+                open_until: undefined,
+              }),
+            ]),
+        ),
+        fake,
+      );
+      try {
+        const res = await request(other.getHttpServer())
+          .get('/api/hub/waitlist/offers/current')
+          .expect(404);
+        expect(reason(res).code).toBe('no_open_offer');
+        await request(other.getHttpServer())
+          .post('/api/hub/waitlist/registrations')
+          .send(person())
+          .expect(409);
+      } finally {
+        await other.close();
+      }
+    });
+
+    it('with one offer that closes and one with no closing date, the one that closes is answered first, and the other once it has closed', async () => {
+      const now = Date.now();
+      const other = await bootWaitlist(
+        configWith((raw) => {
+          raw.event_offers = [
+            openOffer({ id: 'forever', open_until: undefined }),
+            openOffer({
+              id: 'dated',
+              open_until: new Date(now + 2 * DAY).toISOString(),
+            }),
+          ];
+        }),
+        fake,
+      );
+      try {
+        const service = other.get(WaitlistService);
+        expect(service.currentOffer(new Date(now)).id).toBe('dated');
+        const after = service.currentOffer(new Date(now + 3 * DAY));
+        expect([after.id, after.closesAt]).toEqual(['forever', null]);
+      } finally {
+        await other.close();
       }
     });
 

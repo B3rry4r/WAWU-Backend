@@ -5,17 +5,24 @@
  * `src/plans/plans.config.json` under `event_offers`, never here. What is
  * here is how the routes and sweeps behave.
  *
- * PROVISIONAL(WAITLIST-LIMITS, owner=YOU, why=no ruling names how often one address may call the public registration routes; a whole event venue shares one Wi-Fi address)
+ * PROVISIONAL(WAITLIST-LIMITS, owner=YOU, why=no ruling names how often one address may call the public registration routes; the lead ruled these on 10 Oct 2026 because Nigerian mobile networks put many phones behind one address and a venue shares one Wi-Fi address)
  *
- * Each public route (`/waitlist/...`) is limited per address to
- * `WAITLIST_THROTTLE.medium.limit` calls in `ttl` milliseconds, on the app's
- * own `medium` throttler (which it only ever tightens). The guard counts
- * each route apart, so one venue address can register this many people and
- * poll this many payment checks in the window. The global `short` limit
- * (20 a second) still applies.
+ * Each public route (`/waitlist/...`) is limited per address on the app's own
+ * `medium` throttler, in a 10 minute window: the two reads (the offer and a
+ * registration's status) `WAITLIST_THROTTLE_READ.medium.limit` calls, the
+ * two writes (register and verify) `WAITLIST_THROTTLE_WRITE.medium.limit`.
+ * The guard counts each route apart, so one venue address can register this
+ * many people and poll this many payment checks in the window. The global
+ * `short` limit (20 a second per route) still applies. Both figures are
+ * above `medium`'s own 200 a minute count, so a burst inside one minute is
+ * allowed further than elsewhere; the sustained rate (calls a second over the
+ * window) is below it, and hub-rate-limits.contract.spec.ts holds exactly that.
  */
-export const WAITLIST_THROTTLE = {
-  medium: { limit: 120, ttl: 10 * 60_000 },
+export const WAITLIST_THROTTLE_READ = {
+  medium: { limit: 600, ttl: 10 * 60_000 },
+};
+export const WAITLIST_THROTTLE_WRITE = {
+  medium: { limit: 300, ttl: 10 * 60_000 },
 };
 
 /**

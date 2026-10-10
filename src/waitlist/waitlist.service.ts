@@ -121,11 +121,23 @@ export class WaitlistService {
 
   // ---- the offer ----------------------------------------------------------
 
-  /** The offers open at `now`, the one closing soonest first. */
+  /** Whether `offer` is open at `now`: after `openFrom`, and before `openUntil` when it has one. */
+  private isOpen(offer: EventOffer, now: Date): boolean {
+    return (
+      offer.openFrom <= now &&
+      (offer.openUntil === null || now <= offer.openUntil)
+    );
+  }
+
+  /** The offers open at `now`, the one closing soonest first (one with no closing date last). */
   private openOffers(now: Date): EventOffer[] {
     return this.plans.eventOffers
-      .filter((o) => o.openFrom <= now && now <= o.openUntil)
-      .sort((a, b) => a.openUntil.getTime() - b.openUntil.getTime());
+      .filter((o) => this.isOpen(o, now))
+      .sort(
+        (a, b) =>
+          (a.openUntil?.getTime() ?? Infinity) -
+          (b.openUntil?.getTime() ?? Infinity),
+      );
   }
 
   private offerView(offer: EventOffer): WaitlistOfferView {
@@ -137,7 +149,7 @@ export class WaitlistService {
       tierName: tier.name,
       products: tier.products,
       days: offer.tierDays,
-      closesAt: offer.openUntil.toISOString(),
+      closesAt: offer.openUntil === null ? null : offer.openUntil.toISOString(),
     };
   }
 
@@ -165,7 +177,7 @@ export class WaitlistService {
         'no_open_offer',
         'There is no event registration open right now.',
       );
-    if (now < offer.openFrom || now > offer.openUntil)
+    if (!this.isOpen(offer, now))
       throw new WaitlistError(
         'offer_closed',
         now < offer.openFrom

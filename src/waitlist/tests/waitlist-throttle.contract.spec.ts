@@ -7,7 +7,10 @@ import request from 'supertest';
 import type { App } from 'supertest/types';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { HUB_THROTTLERS } from '../../hub-throttlers';
-import { WAITLIST_THROTTLE } from '../waitlist-config';
+import {
+  WAITLIST_THROTTLE_READ,
+  WAITLIST_THROTTLE_WRITE,
+} from '../waitlist-config';
 import {
   bootWaitlist,
   configWith,
@@ -17,12 +20,14 @@ import {
 } from './waitlist-harness';
 
 /**
- * JOIN-01: the four public routes are limited per address, and the limit is
- * one a whole event venue on one Wi-Fi address will not hit by registering:
- * 120 calls to each route in 10 minutes (WAITLIST_THROTTLE, listed in
- * hub-rate-limits.contract.spec.ts). The app's own throttlers are used
- * unchanged (HUB_THROTTLERS) behind the same global guard, so the global
- * 20 a second still applies and the spec sends in groups under it.
+ * JOIN-01 (round 2): the four public routes are limited per address, and the
+ * limit is one a whole event venue on one Wi-Fi address, or many phones behind
+ * one mobile-network address, will not hit: 600 calls in 10 minutes to each
+ * read route (the offer, a registration's status) and 300 to each write route
+ * (register, verify). The app's own throttlers are used unchanged
+ * (HUB_THROTTLERS) behind the same global guard, so the global 20 a second per
+ * route still applies and the spec sends in groups under it. The four routes
+ * are counted apart, so the spec fills them side by side.
  */
 
 const MARK = 'join01-throttle-spec';
@@ -66,9 +71,17 @@ describe('Event registration routes are throttled per address (JOIN-01)', () => 
     return statuses;
   }
 
-  it('a venue of 120 registers, and the 121st call from that address is 429 on that route only', async () => {
-    const limit = WAITLIST_THROTTLE.medium.limit;
-    expect([limit, WAITLIST_THROTTLE.medium.ttl]).toEqual([120, 600_000]);
+  it('the figures are 600 for the reads and 300 for the writes, in 10 minutes', () => {
+    expect(WAITLIST_THROTTLE_READ).toEqual({
+      medium: { limit: 600, ttl: 600_000 },
+    });
+    expect(WAITLIST_THROTTLE_WRITE).toEqual({
+      medium: { limit: 300, ttl: 600_000 },
+    });
+  });
+
+  it('a venue of 300 registers, and the 301st call from that address is 429 on that route only', async () => {
+    const limit = WAITLIST_THROTTLE_WRITE.medium.limit;
     let n = 0;
     const body = () => {
       n += 1;
@@ -96,7 +109,11 @@ describe('Event registration routes are throttled per address (JOIN-01)', () => 
     expect(over.status).toBe(429);
     expect(over.headers['retry-after-medium']).toMatch(/^\d+$/);
     // The same address can still use the other routes: each is counted apart.
-    await http().get('/api/hub/waitlist/offers/current').expect(200);
+    const offer = await http().get('/api/hub/waitlist/offers/current');
+    expect(offer.status).toBe(200);
+    expect(offer.headers['x-ratelimit-limit-medium']).toBe(
+      String(WAITLIST_THROTTLE_READ.medium.limit),
+    );
     await http()
       .get('/api/hub/waitlist/registrations/wawu-join-nope')
       .expect(404);
@@ -104,31 +121,32 @@ describe('Event registration routes are throttled per address (JOIN-01)', () => 
       .post('/api/hub/waitlist/registrations/verify')
       .send({ reference: 'wawu-join-nope', transactionId: '1' })
       .expect(404);
-  }, 60_000);
+  }, 120_000);
 
-  it('the offer, verify and status routes carry the same limit', async () => {
+  it('the offer and status routes allow 600 each, and verify 300, side by side', async () => {
     // The first test already made one call to each of these three routes.
-    const limit = WAITLIST_THROTTLE.medium.limit - 1;
-    const offers = await many(limit, () =>
-      http().get('/api/hub/waitlist/offers/current'),
-    );
-    expect(offers.filter((s) => s === 200)).toHaveLength(limit);
+    const reads = WAITLIST_THROTTLE_READ.medium.limit - 1;
+    const writes = WAITLIST_THROTTLE_WRITE.medium.limit - 1;
+    const [offers, statuses, verifies] = await Promise.all([
+      many(reads, () => http().get('/api/hub/waitlist/offers/current')),
+      many(reads, () =>
+        http().get('/api/hub/waitlist/registrations/wawu-join-x'),
+      ),
+      many(writes, () =>
+        http()
+          .post('/api/hub/waitlist/registrations/verify')
+          .send({ reference: 'wawu-join-x', transactionId: '1' }),
+      ),
+    ]);
+    expect(offers.filter((s) => s === 200)).toHaveLength(reads);
+    expect(statuses.filter((s) => s === 404)).toHaveLength(reads);
+    expect(verifies.filter((s) => s === 404)).toHaveLength(writes);
     expect((await http().get('/api/hub/waitlist/offers/current')).status).toBe(
       429,
     );
-    const statuses = await many(limit, () =>
-      http().get('/api/hub/waitlist/registrations/wawu-join-x'),
-    );
-    expect(statuses.filter((s) => s === 404)).toHaveLength(limit);
     expect(
       (await http().get('/api/hub/waitlist/registrations/wawu-join-x')).status,
     ).toBe(429);
-    const verifies = await many(limit, () =>
-      http()
-        .post('/api/hub/waitlist/registrations/verify')
-        .send({ reference: 'wawu-join-x', transactionId: '1' }),
-    );
-    expect(verifies.filter((s) => s === 404)).toHaveLength(limit);
     expect(
       (
         await http()
@@ -136,5 +154,5 @@ describe('Event registration routes are throttled per address (JOIN-01)', () => 
           .send({ reference: 'wawu-join-x', transactionId: '1' })
       ).status,
     ).toBe(429);
-  }, 120_000);
+  }, 180_000);
 });

@@ -47029,7 +47029,8 @@
             "type": "number"
           },
           "closesAt": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [

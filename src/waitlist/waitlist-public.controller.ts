@@ -14,7 +14,10 @@ import {
   CreateWaitlistRegistrationDto,
   VerifyWaitlistRegistrationDto,
 } from './dto/waitlist.dto';
-import { WAITLIST_THROTTLE } from './waitlist-config';
+import {
+  WAITLIST_THROTTLE_READ,
+  WAITLIST_THROTTLE_WRITE,
+} from './waitlist-config';
 import { WaitlistService } from './waitlist.service';
 import type {
   WaitlistOfferView,
@@ -30,17 +33,18 @@ import type {
  *
  * Every refusal is the one error shape with a stable `reason.code`
  * (waitlist-error.ts); the website switches on the code, never on the message.
- * All four routes are throttled per address on the app's `medium` throttler
- * (WAITLIST_THROTTLE): a whole event venue shares one Wi-Fi address. Every
- * answer is `no-store`.
+ * All four routes are throttled per address on the app's `medium` throttler,
+ * each with its own override (the reads WAITLIST_THROTTLE_READ, the writes
+ * WAITLIST_THROTTLE_WRITE): a whole event venue shares one Wi-Fi address, and
+ * so do many phones on one mobile network. Every answer is `no-store`.
  */
-@Throttle(WAITLIST_THROTTLE)
 @Controller('waitlist')
 export class WaitlistPublicController {
   constructor(private readonly waitlist: WaitlistService) {}
 
   /** The offer open for registration. */
   @Get('offers/current')
+  @Throttle(WAITLIST_THROTTLE_READ)
   @Header('Cache-Control', 'no-store')
   @ApiResponse({
     status: 404,
@@ -58,6 +62,7 @@ export class WaitlistPublicController {
    * POST /waitlist/registrations/verify (or Flutterwave's own notice).
    */
   @Post('registrations')
+  @Throttle(WAITLIST_THROTTLE_WRITE)
   @HttpCode(HttpStatus.OK)
   @Header('Cache-Control', 'no-store')
   @ApiResponse({
@@ -92,6 +97,7 @@ export class WaitlistPublicController {
    * a paid registration answers the same result again.
    */
   @Post('registrations/verify')
+  @Throttle(WAITLIST_THROTTLE_WRITE)
   @HttpCode(HttpStatus.OK)
   @Header('Cache-Control', 'no-store')
   @ApiResponse({
@@ -122,6 +128,7 @@ export class WaitlistPublicController {
 
   /** Where a registration stands: status and first name only, never a phone or email. */
   @Get('registrations/:reference')
+  @Throttle(WAITLIST_THROTTLE_READ)
   @Header('Cache-Control', 'no-store')
   @ApiResponse({
     status: 404,

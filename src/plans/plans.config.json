@@ -58,8 +58,7 @@
       "price_kobo": 200000,
       "tier": "verify",
       "tier_days": 30,
-      "open_from": "2026-10-10T00:00:00+01:00",
-      "open_until": "2026-10-31T23:59:59+01:00"
+      "open_from": "2026-10-10T00:00:00+01:00"
     }
   ],
   "preselected_tier": "founding",

@@ -306,7 +306,7 @@ describe('Rate limits behind nginx (OPS-11)', () => {
         'money/receipts/money-receipt.controller.ts': 2,
         'money/receipts/public-receipt.controller.ts': 1,
         'money/recipients/money-recipient.controller.ts': 1,
-        'waitlist/waitlist-public.controller.ts': 1,
+        'waitlist/waitlist-public.controller.ts': 4,
       });
     });
 
@@ -391,7 +391,10 @@ describe('Rate limits behind nginx (OPS-11)', () => {
         'MoneyReceiptController.pdf',
         'MoneyRecipientController.search',
         'PublicReceiptController.page',
-        'WaitlistPublicController',
+        'WaitlistPublicController.currentOffer',
+        'WaitlistPublicController.register',
+        'WaitlistPublicController.status',
+        'WaitlistPublicController.verify',
       ]);
       // WALLET-18: the public receipt check, and drawing a receipt as an
       // image or a PDF, each set exactly these per-address limits: 10 a
@@ -456,23 +459,29 @@ describe('Rate limits behind nginx (OPS-11)', () => {
           blockDuration: undefined,
         },
       ]);
-      // JOIN-01: the four public event registration routes (offer, register,
-      // verify, status) share one class-level override, and the guard counts
-      // each route apart, so one address (a whole event venue on one Wi-Fi)
-      // may make 120 calls to each in 10 minutes. Only `medium` is changed
-      // (it is tightened from 200 a minute); `short` keeps its 20 a second.
+      // JOIN-01 (round 2, lead ruling of 10 Oct 2026: many Nigerian phones sit
+      // behind one mobile-network address and a venue shares one Wi-Fi
+      // address): the four public event registration routes each set their own
+      // `medium` override and the guard counts each route apart. The two reads
+      // (the offer, a registration's status) allow 600 calls per address in 10
+      // minutes, the two writes (register, verify) 300. Only `medium` is
+      // changed; `short` keeps its 20 a second.
+      const waitlist = (on: string, limit: number) => ({
+        on: `WaitlistPublicController.${on}`,
+        name: 'medium',
+        limit,
+        ttl: 600_000,
+        blockDuration: undefined,
+      });
       expect(
         overrides
-          .filter((o) => o.on === 'WaitlistPublicController')
-          .sort((a, b) => a.name.localeCompare(b.name)),
+          .filter((o) => o.on.startsWith('WaitlistPublicController.'))
+          .sort((a, b) => a.on.localeCompare(b.on)),
       ).toEqual([
-        {
-          on: 'WaitlistPublicController',
-          name: 'medium',
-          limit: 120,
-          ttl: 600_000,
-          blockDuration: undefined,
-        },
+        waitlist('currentOffer', 600),
+        waitlist('register', 300),
+        waitlist('status', 600),
+        waitlist('verify', 300),
       ]);
       // KYC-02: the selfie match is charged per attempt, like the BVN check,
       // and sets exactly these per-address limits: 3 a minute and 20 an hour,
@@ -497,6 +506,16 @@ describe('Rate limits behind nginx (OPS-11)', () => {
           blockDuration: undefined,
         },
       ]);
+      // The four event registration routes are the one deliberate exception to
+      // "no more requests": 600 and 300 are above `medium`'s 200, in a window
+      // 10 times as long. They must still be no faster over their own window
+      // than `medium` is over its (600 in 600 s is 1 a second against 3.3 a
+      // second), and `short` is not touched.
+      const LONGER_WINDOW = new Set(
+        overrides
+          .filter((o) => o.on.startsWith('WaitlistPublicController.'))
+          .map((o) => o.on),
+      );
       for (const o of overrides) {
         const base = HUB_THROTTLERS.find((t) => t.name === o.name);
         // A name the app does not register would be silently ignored.
@@ -507,13 +526,19 @@ describe('Rate limits behind nginx (OPS-11)', () => {
         });
         const limit = o.limit ?? base!.limit;
         const ttl = o.ttl ?? base!.ttl;
+        const slowerOverItsWindow =
+          o.name === 'medium' &&
+          LONGER_WINDOW.has(o.on) &&
+          ttl > base!.ttl &&
+          limit / ttl <= base!.limit / base!.ttl;
         expect({
           on: o.on,
           name: o.name,
           tightens:
-            limit <= base!.limit &&
-            ttl >= base!.ttl &&
-            (o.blockDuration === undefined || o.blockDuration >= ttl),
+            slowerOverItsWindow ||
+            (limit <= base!.limit &&
+              ttl >= base!.ttl &&
+              (o.blockDuration === undefined || o.blockDuration >= ttl)),
         }).toEqual({ on: o.on, name: o.name, tightens: true });
       }
     });

@@ -163,8 +163,12 @@ export interface EventOffer {
   tierDays: number;
   /** Registration opens at this instant. */
   openFrom: Date;
-  /** Registration closes at this instant. */
-  openUntil: Date;
+  /**
+   * Registration closes at this instant. `null` is no closing date: the
+   * offer stays open until the file is changed (`open_until` set, then a
+   * restart).
+   */
+  openUntil: Date | null;
 }
 
 export interface PlansConfig {
@@ -585,14 +589,10 @@ const TOP = [
   'referral',
 ] as const;
 
-const OFFER_KEYS = [
-  'id',
-  'name',
-  'price_kobo',
-  'tier',
-  'open_from',
-  'open_until',
-] as const;
+const OFFER_KEYS = ['id', 'name', 'price_kobo', 'tier', 'open_from'] as const;
+
+/** Optional on an offer: `open_until` (absent or null means no closing date) and `tier_days`. */
+const OFFER_OPTIONAL_KEYS = ['tier_days', 'open_until'] as const;
 
 const TIER_KEYS = [
   'id',
@@ -667,11 +667,15 @@ export function parsePlansConfig(raw: unknown, file: string): PlansConfig {
   const eventOffers = (top.event_offers as unknown[]).map(
     (v, i): EventOffer => {
       const p = `event_offers[${i}]`;
-      const o = c.object(v, p, OFFER_KEYS, ['tier_days']);
+      const o = c.object(v, p, OFFER_KEYS, OFFER_OPTIONAL_KEYS);
       const tier = c.oneOf(o.tier, `${p}.tier`, tierIds);
       const openFrom = c.instant(o.open_from, `${p}.open_from`);
-      const openUntil = c.instant(o.open_until, `${p}.open_until`);
-      if (openUntil.getTime() <= openFrom.getTime())
+      // Absent or null: no closing date. A value is checked exactly as before.
+      const openUntil =
+        o.open_until === undefined || o.open_until === null
+          ? null
+          : c.instant(o.open_until, `${p}.open_until`);
+      if (openUntil !== null && openUntil.getTime() <= openFrom.getTime())
         c.fail(`${p}.open_until`, 'must be after open_from');
       return {
         id: c.offerId(o.id, `${p}.id`),

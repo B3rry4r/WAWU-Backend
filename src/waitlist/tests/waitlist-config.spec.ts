@@ -37,7 +37,7 @@ function stop(edit: (raw: any) => void): string {
 }
 
 describe('event_offers in plans.config.json (JOIN-01)', () => {
-  it('the shipped file carries the default offer: id, name, 200000 kobo, the Verify tier for 30 days, open 10 to 31 Oct 2026 (Lagos)', () => {
+  it('the shipped file carries the default offer: id, name, 200000 kobo, the Verify tier for 30 days, open from 10 Oct 2026 (Lagos) with no closing date', () => {
     const config = loadPlansConfig();
     expect(config.eventOffers).toHaveLength(1);
     const o = config.eventOffers[0];
@@ -49,7 +49,28 @@ describe('event_offers in plans.config.json (JOIN-01)', () => {
       tierDays: 30,
     });
     expect(o.openFrom.toISOString()).toBe('2026-10-09T23:00:00.000Z');
-    expect(o.openUntil.toISOString()).toBe('2026-10-31T22:59:59.000Z');
+    expect(o.openUntil).toBeNull();
+  });
+
+  it('open_until is optional: absent or null is no closing date, and a value is still checked as before', () => {
+    const absent = shippedRaw();
+    delete absent.event_offers[0].open_until;
+    expect(
+      parsePlansConfig(absent, PLANS_CONFIG_FILE).eventOffers[0].openUntil,
+    ).toBeNull();
+    const nulled = shippedRaw();
+    nulled.event_offers[0].open_until = null;
+    expect(
+      parsePlansConfig(nulled, PLANS_CONFIG_FILE).eventOffers[0].openUntil,
+    ).toBeNull();
+    const dated = shippedRaw();
+    dated.event_offers[0].open_until = '2026-10-31T23:59:59+01:00';
+    expect(
+      parsePlansConfig(
+        dated,
+        PLANS_CONFIG_FILE,
+      ).eventOffers[0].openUntil?.toISOString(),
+    ).toBe('2026-10-31T22:59:59.000Z');
   });
 
   it("without tier_days the offer lasts the tier's own days", () => {
