@@ -46,6 +46,8 @@ export interface ScriptedPayment {
   amount: number;
   currency: string;
   txRef: string;
+  /** The transaction id Flutterwave reports, when it differs from the one asked about. */
+  id?: string;
 }
 
 /**
@@ -61,6 +63,8 @@ export class ScriptedFlutterwave
   readonly payments = new Map<string, ScriptedPayment>();
   readonly byReference = new Map<string, ScriptedPayment & { id: string }>();
   readonly lookupFails = new Set<string>();
+  /** A transaction id whose verify answers only once its promise settles (to put one call behind another). */
+  readonly holds = new Map<string, Promise<void>>();
   verifyCalls: VerifyChargeParams[] = [];
   initCalls: InitChargeParams[] = [];
   lookupCalls: string[] = [];
@@ -80,13 +84,15 @@ export class ScriptedFlutterwave
     const p = this.payments.get(params.transactionId);
     if (!p)
       return Promise.reject(new Error('Flutterwave does not know that id'));
-    return Promise.resolve({
-      status: p.status,
-      amount: p.amount,
-      currency: p.currency,
-      txRef: p.txRef,
-      transactionId: params.transactionId,
-    });
+    return (this.holds.get(params.transactionId) ?? Promise.resolve()).then(
+      () => ({
+        status: p.status,
+        amount: p.amount,
+        currency: p.currency,
+        txRef: p.txRef,
+        transactionId: p.id ?? params.transactionId,
+      }),
+    );
   }
 
   findByReference(txRef: string): Promise<FlutterwaveVerifyResult | null> {
@@ -108,6 +114,7 @@ export class ScriptedFlutterwave
     this.payments.clear();
     this.byReference.clear();
     this.lookupFails.clear();
+    this.holds.clear();
     this.verifyCalls = [];
     this.initCalls = [];
     this.lookupCalls = [];

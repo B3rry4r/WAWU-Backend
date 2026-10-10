@@ -31,14 +31,15 @@ export const WAITLIST_THROTTLE_WRITE = {
  * A `pending` registration is re-checked with Flutterwave by its reference
  * once it is `RECHECK_AFTER_MS` old (the payer has had time to finish) and
  * until it is `RECHECK_UNTIL_MS` old, `RECHECK_EVERY` is a cron expression,
- * and at most `RECHECK_BATCH` rows are looked at per run. A `pending` row
+ * and EVERY row in that window is looked at in each run, `RECHECK_PAGE` rows
+ * read at a time (a page size, never a cap on the run). A `pending` row
  * older than `UNPAID_KEEP_MS` is deleted: no personal data is kept for
  * people who did not pay.
  */
 export const RECHECK_AFTER_MS = 5 * 60_000;
 export const RECHECK_UNTIL_MS = 48 * 60 * 60_000;
 export const RECHECK_EVERY = '*/5 * * * *';
-export const RECHECK_BATCH = 200;
+export const RECHECK_PAGE = 200;
 export const UNPAID_KEEP_MS = 7 * 24 * 60 * 60_000;
 export const UNPAID_PURGE_EVERY = '17 3 * * *';
 

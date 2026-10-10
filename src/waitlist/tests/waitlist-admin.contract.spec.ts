@@ -114,7 +114,12 @@ describe('Event registrations, the team view (JOIN-01)', () => {
     for (let i = 1; i <= 8; i++) {
       const r = await register(
         i,
-        i === 2 ? { fullName: `=HYPERLINK("http://x","click") ${MARK}` } : {},
+        i === 2
+          ? { fullName: `=HYPERLINK("http://x","click") ${MARK}` }
+          : // The two free-text fields come from people too.
+            i === 3
+            ? { state: '+SUM(1+1)', makes: '@SUM(2+2)' }
+            : {},
       );
       if (i <= 5) {
         tx += 1;
@@ -260,6 +265,31 @@ describe('Event registrations, the team view (JOIN-01)', () => {
         .split('\r\n')
         .filter((l) => l.includes(MARK)),
     ).toHaveLength(5);
+  });
+
+  it('neutralises a formula typed into the state or what-they-make field too, not only the name', async () => {
+    const res = await http()
+      .get(`/api/hub/admin/waitlist/registrations/export?offerId=${OFFER_ID}`)
+      .set(as('finance'))
+      .expect(200);
+    const lines = (res.body.data.content as string).split('\r\n');
+    const line = lines.find((l) => l.includes(paidRefs[2]))!;
+    // None of these cells holds a comma or a quote, so a plain split keeps the columns.
+    const cells = line.split(',');
+    const header = lines.find((l) => l.includes('Registered at'))!.split(',');
+    expect(cells[header.indexOf('State')]).toBe("'+SUM(1+1)");
+    expect(cells[header.indexOf('What they make')]).toBe("'@SUM(2+2)");
+    // The list (JSON) still gives the real text; only the CSV is guarded.
+    const list = await http()
+      .get(
+        `/api/hub/admin/waitlist/registrations?offerId=${OFFER_ID}&perPage=100`,
+      )
+      .set(as('finance'))
+      .expect(200);
+    const row = (list.body.data as any[]).find(
+      (r) => r.reference === paidRefs[2],
+    );
+    expect([row.state, row.makes]).toEqual(['+SUM(1+1)', '@SUM(2+2)']);
   });
 
   it('refuses a reviewer on the list and the export, and refuses a user token and no token on every route', async () => {
