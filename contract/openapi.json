@@ -16022,6 +16022,158 @@
         "x-wawu-built-by": "MONEY-17"
       }
     },
+    "/api/hub/money/holds": {
+      "get": {
+        "operationId": "MoneyHoldsController_list",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Rows per page, 1 to 100.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "role",
+            "required": true,
+            "in": "query",
+            "description": "payer: money I paid that is held. payee: money held for me.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "payer",
+                "payee"
+              ]
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "`nextCursor` from the previous page. Opaque: send it back as given. Absent for the first page.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HoldPage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Holds the caller paid (role=payer) or is owed (role=payee), newest first.",
+        "tags": [
+          "MoneyHolds"
+        ],
+        "x-wawu-built-by": "MONEY-18"
+      }
+    },
+    "/api/hub/money/holds/{id}": {
+      "get": {
+        "operationId": "MoneyHoldsController_detail",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HoldView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One hold. Its payer and its payee can read it; nobody else.",
+        "tags": [
+          "MoneyHolds"
+        ],
+        "x-wawu-built-by": "MONEY-18"
+      }
+    },
     "/api/hub/money/transactions/{id}/receipt": {
       "post": {
         "operationId": "MoneyReceiptController_issue",
@@ -28618,162 +28770,6 @@
         "description": "Declared by MONEY-04, not served yet: MONEY-19 serves it.",
         "x-wawu-served": false
       }
-    },
-    "/api/hub/money/holds": {
-      "get": {
-        "operationId": "MoneyPaymentController_holds",
-        "parameters": [
-          {
-            "name": "limit",
-            "required": false,
-            "in": "query",
-            "description": "Rows per page, 1 to 100.",
-            "schema": {
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20,
-              "type": "integer"
-            }
-          },
-          {
-            "name": "role",
-            "required": true,
-            "in": "query",
-            "description": "payer: money I paid that is held. payee: money held for me.",
-            "schema": {
-              "type": "string",
-              "enum": [
-                "payer",
-                "payee"
-              ]
-            }
-          },
-          {
-            "name": "cursor",
-            "required": false,
-            "in": "query",
-            "description": "`nextCursor` from the previous page. Opaque: send it back as given. Absent for the first page.",
-            "schema": {
-              "minLength": 1,
-              "maxLength": 200,
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HoldPage"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Holds the caller paid (role=payer) or is owed (role=payee), newest first.",
-        "tags": [
-          "MoneyPayment"
-        ],
-        "x-wawu-built-by": "MONEY-18",
-        "description": "Declared by MONEY-04, not served yet: MONEY-18 serves it.",
-        "x-wawu-served": false
-      }
-    },
-    "/api/hub/money/holds/{id}": {
-      "get": {
-        "operationId": "MoneyPaymentController_hold",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HoldView"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "reason.code: not_found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "One hold. Its payer and its payee can read it; nobody else.",
-        "tags": [
-          "MoneyPayment"
-        ],
-        "x-wawu-built-by": "MONEY-18",
-        "description": "Declared by MONEY-04, not served yet: MONEY-18 serves it.",
-        "x-wawu-served": false
-      }
     }
   },
   "info": {
@@ -34244,6 +34240,104 @@
           "updatedAt"
         ]
       },
+      "HoldView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "paymentId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "bill",
+              "content_unlock",
+              "tip",
+              "credit_pack",
+              "verification",
+              "legal_fee",
+              "school_fee",
+              "paid_dm",
+              "event_ticket"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "held",
+              "released",
+              "refunded"
+            ]
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "releaseCondition": {
+            "type": "string",
+            "enum": [
+              "dm_answered",
+              "event_took_place",
+              "bill_delivered"
+            ]
+          },
+          "payer": {
+            "$ref": "#/components/schemas/MoneyPartyView"
+          },
+          "payee": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MoneyPartyView"
+              }
+            ],
+            "nullable": true
+          },
+          "heldAt": {
+            "type": "string"
+          },
+          "settledAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "refundedKobo": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "paymentId",
+          "kind",
+          "status",
+          "amountKobo",
+          "releaseCondition",
+          "payer",
+          "payee",
+          "heldAt",
+          "settledAt",
+          "refundedKobo"
+        ]
+      },
+      "HoldPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HoldView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
       "PaymentQuoteView": {
         "type": "object",
         "properties": {
@@ -34324,85 +34418,6 @@
           "remainingTodayKobo",
           "quoteToken",
           "expiresAt"
-        ]
-      },
-      "HoldView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "paymentId": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "bill",
-              "content_unlock",
-              "tip",
-              "credit_pack",
-              "verification",
-              "legal_fee",
-              "school_fee",
-              "paid_dm",
-              "event_ticket"
-            ]
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "held",
-              "released",
-              "refunded"
-            ]
-          },
-          "amountKobo": {
-            "type": "integer"
-          },
-          "releaseCondition": {
-            "type": "string",
-            "enum": [
-              "dm_answered",
-              "event_took_place",
-              "bill_delivered"
-            ]
-          },
-          "payer": {
-            "$ref": "#/components/schemas/MoneyPartyView"
-          },
-          "payee": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/MoneyPartyView"
-              }
-            ],
-            "nullable": true
-          },
-          "heldAt": {
-            "type": "string"
-          },
-          "settledAt": {
-            "type": "string",
-            "nullable": true
-          },
-          "refundedKobo": {
-            "type": "integer",
-            "nullable": true
-          }
-        },
-        "required": [
-          "id",
-          "paymentId",
-          "kind",
-          "status",
-          "amountKobo",
-          "releaseCondition",
-          "payer",
-          "payee",
-          "heldAt",
-          "settledAt",
-          "refundedKobo"
         ]
       },
       "PaymentView": {
@@ -48986,25 +49001,6 @@
         "required": [
           "campaignId",
           "audit"
-        ]
-      },
-      "HoldPage": {
-        "type": "object",
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HoldView"
-            }
-          },
-          "nextCursor": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "items",
-          "nextCursor"
         ]
       },
       "BankView": {
