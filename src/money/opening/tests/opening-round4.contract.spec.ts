@@ -1,7 +1,7 @@
 import { randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { MoneyError } from '../../money-error';
-import { EXPIRED_STATE } from '../bvn-claim';
+import { EXPIRED_IDLE, EXPIRED_LIFETIME, EXPIRED_STATE } from '../bvn-claim';
 import {
   expireIdleOpenings,
   HOLD_SWEEP_BATCH,
@@ -193,6 +193,40 @@ describe('NUV-02 round 4: the address limit is one atomic step (N12), the sweep 
       expect(
         await one.bvnCheckAttempt.count({ where: { addressKey: key } }),
       ).toBe(1);
+    });
+
+    it('R4-3: a place the same account holds on another address is no sign of a double tap: the request is let through, and the other place is untouched', async () => {
+      const a = new OpeningAttempts(one, 3, 10);
+      const keyA = newKey();
+      const keyB = newKey();
+      const id = newUser();
+      const first = await a.reservePlace(id, keyA);
+      expect(first.place).not.toBeNull();
+      // Inside the minute, from another address: not concurrent, its own place.
+      const second = await a.reservePlace(id, keyB);
+      expect(second.concurrent).toBe(false);
+      expect(second.place).not.toBeNull();
+      expect(second.place!.id).not.toBe(first.place!.id);
+      const rows = await one.bvnCheckAttempt.findMany({
+        where: { wawuUserId: id },
+        orderBy: { createdAt: 'asc' },
+      });
+      expect(rows.map((r) => [r.addressKey, r.outcome])).toEqual([
+        [keyA, OPENING_PLACE_OUTCOME],
+        [keyB, OPENING_PLACE_OUTCOME],
+      ]);
+      // The double tap is still the double tap, on either address.
+      expect((await a.reservePlace(id, keyA)).concurrent).toBe(true);
+      expect((await a.reservePlace(id, keyB)).concurrent).toBe(true);
+    });
+
+    it('R4-3: another account\u2019s fresh place on the address is no double tap either', async () => {
+      const a = new OpeningAttempts(one, 3, 10);
+      const key = newKey();
+      expect((await a.reservePlace(newUser(), key)).place).not.toBeNull();
+      const other = await a.reservePlace(newUser(), key);
+      expect(other.concurrent).toBe(false);
+      expect(other.place).not.toBeNull();
     });
 
     it('a place older than a request can last is no sign of a request in flight, but it still counts against the address', async () => {
@@ -397,6 +431,156 @@ describe('NUV-02 round 4: the address limit is one atomic step (N12), the sweep 
       } while (after !== null && passes < 20);
       for (const id of ids) expect(told.has(id)).toBe(true);
       expect((await stateOf(ids)).every((s) => s === EXPIRED_STATE)).toBe(true);
+    });
+  });
+
+  describe('NUV-03 round 4, R4-2: the sweep releases a hold that has outlived its lifetime, whatever the person did', () => {
+    const daysAgo = (d: number) => new Date(Date.now() - d * DAY);
+    interface Planted {
+      claimDays: number;
+      /** Days since the person last did anything (the idle rule's clock). */
+      workedDays: number;
+      entity?: { status: string; bvnStatus?: string; documentStatus?: string };
+    }
+    async function plantHolds(count: number, o: Planted): Promise<string[]> {
+      const ids = Array.from({ length: count }, newUser);
+      await one.fintavaWalletOpening.createMany({
+        data: ids.map((id, k) => ({
+          wawuUserId: id,
+          state: 'review',
+          bvnHash: `planted-${id}`,
+          bvnVerifiedAt: daysAgo(o.claimDays),
+          phone: `+23481${String(randomInt(10_000_000, 99_999_999))}${k}`,
+          attemptStartedAt: daysAgo(o.workedDays),
+          provider: 'nuvion',
+        })),
+      });
+      await one.nuvionEntity.createMany({
+        data: ids.map((id) => ({
+          wawuUserId: id,
+          entityId: `01ENT${id.replace(/-/g, '').toUpperCase()}`.slice(0, 26),
+          status: o.entity?.status ?? 'incomplete',
+          bvnStatus: o.entity?.bvnStatus ?? null,
+          documentStatus: o.entity?.documentStatus ?? null,
+          decidedAt:
+            o.entity?.status === 'rejected' ? daysAgo(o.workedDays) : null,
+          progressAt: daysAgo(o.workedDays),
+        })),
+      });
+      return ids;
+    }
+    const rowsOf = (ids: string[]) =>
+      one.fintavaWalletOpening.findMany({
+        where: { wawuUserId: { in: ids } },
+        select: { wawuUserId: true, state: true, failure: true, bvnHash: true },
+      });
+    const pass = (
+      lifetimeDays: number | null | undefined,
+      opts: { after?: SweepCursor | null; budgetMs?: number } = {},
+    ) =>
+      one.$transaction(
+        (tx) =>
+          expireIdleOpenings(tx, 14, new Date(), { ...opts, lifetimeDays }),
+        { timeout: 60_000 },
+      );
+
+    it('a claim older than the lifetime is released whatever was done an hour ago; a younger one, and the idle rule alone, are as they were', async () => {
+      const [old] = await plantHolds(1, { claimDays: 31, workedDays: 0.04 });
+      const [young] = await plantHolds(1, { claimDays: 29, workedDays: 0.04 });
+      const [idle] = await plantHolds(1, { claimDays: 20, workedDays: 15 });
+      const out = await pass(30);
+      expect(out.told).toContain(old);
+      expect(out.told).toContain(idle);
+      expect(out.told).not.toContain(young);
+      const rows = new Map(
+        (await rowsOf([old, young, idle])).map((r) => [r.wawuUserId, r]),
+      );
+      expect(rows.get(old)).toMatchObject({
+        state: EXPIRED_STATE,
+        failure: EXPIRED_LIFETIME,
+      });
+      expect(rows.get(old)!.bvnHash).toMatch(/^released:/);
+      expect(rows.get(idle)).toMatchObject({
+        state: EXPIRED_STATE,
+        failure: EXPIRED_IDLE,
+      });
+      expect(rows.get(young)).toMatchObject({ state: 'review', failure: null });
+    });
+
+    it('left out or null, no lifetime applies: only the idle rule releases', async () => {
+      const [old] = await plantHolds(1, { claimDays: 400, workedDays: 0.04 });
+      expect((await pass(undefined)).told).not.toContain(old);
+      expect((await pass(null)).told).not.toContain(old);
+      expect((await rowsOf([old]))[0].state).toBe('review');
+      expect((await pass(30)).told).toContain(old);
+    });
+
+    it('both due: it is the idle rule that releases it', async () => {
+      const [both] = await plantHolds(1, { claimDays: 40, workedDays: 20 });
+      await pass(30);
+      expect((await rowsOf([both]))[0]).toMatchObject({
+        state: EXPIRED_STATE,
+        failure: EXPIRED_IDLE,
+      });
+    });
+
+    it('the edge is the lifetime to the second: an hour over is released, an hour under is not', async () => {
+      const [over] = await plantHolds(1, {
+        claimDays: 30 + 1 / 24,
+        workedDays: 0.04,
+      });
+      const [under] = await plantHolds(1, {
+        claimDays: 30 - 1 / 24,
+        workedDays: 0.04,
+      });
+      const out = await pass(30);
+      expect(out.told).toContain(over);
+      expect(out.told).not.toContain(under);
+    });
+
+    it('only a hold that can be released is released: a refusal on the BVN holds nothing, one on the documents still does; being checked or approved never', async () => {
+      const [bvn] = await plantHolds(1, {
+        claimDays: 90,
+        workedDays: 0.04,
+        entity: { status: 'rejected', bvnStatus: 'rejected' },
+      });
+      const [docs] = await plantHolds(1, {
+        claimDays: 90,
+        workedDays: 0.04,
+        entity: { status: 'rejected', documentStatus: 'rejected' },
+      });
+      const [checking] = await plantHolds(1, {
+        claimDays: 90,
+        workedDays: 0.04,
+        entity: { status: 'pending' },
+      });
+      const [approved] = await plantHolds(1, {
+        claimDays: 90,
+        workedDays: 0.04,
+        entity: { status: 'approved' },
+      });
+      const out = await pass(30);
+      expect(out.told).toContain(docs);
+      for (const id of [bvn, checking, approved]) {
+        expect(out.told).not.toContain(id);
+      }
+    });
+
+    it('250 holds past their lifetime at one instant are all released across passes of one page: the cursor skips none', async () => {
+      const ids = await plantHolds(250, { claimDays: 45, workedDays: 0.04 });
+      let after: SweepCursor | null = null;
+      const told = new Set<string>();
+      let passes = 0;
+      do {
+        const out = await pass(30, { after, budgetMs: 0 });
+        passes += 1;
+        for (const id of out.told) told.add(id);
+        after = out.resumeAfter;
+      } while (after !== null && passes < 20);
+      for (const id of ids) expect(told.has(id)).toBe(true);
+      expect(
+        (await rowsOf(ids)).every((r) => r.failure === EXPIRED_LIFETIME),
+      ).toBe(true);
     });
   });
 });

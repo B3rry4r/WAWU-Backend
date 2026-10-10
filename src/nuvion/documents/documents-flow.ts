@@ -3,6 +3,7 @@ import type { PrismaService } from '../../common/prisma/prisma.service';
 import { NO_WALLET_MESSAGE } from '../../money/gate/wallet-gate';
 import type { IdentityHasher } from '../../money/identity/identity-config';
 import { MoneyError } from '../../money/money-error';
+import { EXPIRED_STATE } from '../../money/opening/bvn-claim';
 import { noteDocumentRefusals } from '../../money/opening/document-refusals';
 import { recordOpeningProgress } from '../../money/opening/identity-hold';
 import {
@@ -259,6 +260,19 @@ export class DocumentsFlow {
       .then((r) => r !== null);
   }
 
+  /**
+   * The opening was closed by the sweep (idle too long, or its hold ran out)
+   * and the person has not started again: the wallet view says so, and this
+   * flow takes no document, starts no selfie and sends nothing to Nuvion
+   * until they do (round 4, R4-1). Starting again corrects the entity and
+   * moves the opening back to `review`.
+   */
+  private expired(wawuUserId: string): Promise<boolean> {
+    return this.prisma.fintavaWalletOpening
+      .findUnique({ where: { wawuUserId }, select: { state: true } })
+      .then((r) => r?.state === EXPIRED_STATE);
+  }
+
   /** Both documents, what is still needed, and whether uploads are open. */
   async view(wawuUserId: string): Promise<IdentityDocumentsView> {
     await this.requireEntity(wawuUserId);
@@ -283,7 +297,7 @@ export class DocumentsFlow {
   /** The documents view as it stands, sending nothing. */
   async snapshot(wawuUserId: string): Promise<IdentityDocumentsView> {
     const { entityId } = await this.requireEntity(wawuUserId);
-    const [entity, rows, onboarding, wallet] = await Promise.all([
+    const [entity, rows, onboarding, wallet, expired] = await Promise.all([
       this.prisma.nuvionEntity.findUniqueOrThrow({
         where: { wawuUserId },
         select: ENTITY_SELECT,
@@ -291,6 +305,7 @@ export class DocumentsFlow {
       this.prisma.nuvionDocument.findMany({ where: { wawuUserId, entityId } }),
       this.prisma.nuvionOnboarding.findUnique({ where: { wawuUserId } }),
       this.hasWallet(wawuUserId),
+      this.expired(wawuUserId),
     ]);
     const stage = reviewStageOf(entity);
     const now = await this.dbNow();
@@ -324,7 +339,7 @@ export class DocumentsFlow {
     if (required && !selfieDone) waitingFor.push('selfie');
     return {
       required: true,
-      open: !wallet && stage === 'needs_documents' && !submitted,
+      open: !wallet && !expired && stage === 'needs_documents' && !submitted,
       documents,
       selfie: selfieDone ? 'done' : required ? 'needed' : 'not_used',
       submitted,
@@ -387,6 +402,11 @@ export class DocumentsFlow {
    */
   async upload(wawuUserId: string, input: FlowUpload): Promise<void> {
     const entity = await this.requireEntity(wawuUserId);
+    // An expired opening takes nothing, a file Nuvion already has included
+    // (round 4, R4-1): the person is told what the wallet view says.
+    if (await this.expired(wawuUserId)) {
+      throw new DocumentError('documents_closed', MSG.expired);
+    }
     const fingerprint = this.fingerprint(input.front, input.back);
     const row = await this.prisma.nuvionDocument.findUnique({
       where: { wawuUserId_kind: { wawuUserId, kind: input.kind } },
@@ -830,6 +850,9 @@ export class DocumentsFlow {
     );
     if (reviewStageOf(entity) !== 'needs_documents') return 'closed';
     if (await this.hasWallet(wawuUserId)) return 'closed';
+    // An expired opening is never sent for review, whatever is in (round 4,
+    // R4-1): the person starts again first, which corrects the entity.
+    if (await this.expired(wawuUserId)) return 'closed';
     const entityId = entity.entityId;
 
     let onboarding = await this.ensureOnboarding(wawuUserId, entityId);
@@ -1105,12 +1128,13 @@ export class DocumentsFlow {
 
   async livenessView(wawuUserId: string): Promise<IdentityLivenessView> {
     const entity = await this.requireEntity(wawuUserId);
+    const expired = await this.expired(wawuUserId);
     let onboarding = await this.prisma.nuvionOnboarding.findUnique({
       where: { wawuUserId },
     });
     const enabled = this.selfieRequired();
     if (!onboarding?.livenessSessionId) {
-      return this.livenessOut(enabled, null, onboarding, entity, null);
+      return this.livenessOut(enabled, null, onboarding, entity, null, expired);
     }
     const wasPassed = onboarding.livenessState === 'passed';
     let url: string | null = null;
@@ -1138,8 +1162,10 @@ export class DocumentsFlow {
         );
       }
     }
-    if (state === 'passed') {
-      // The selfie came back passed: the person finished a step.
+    if (state === 'passed' && !expired) {
+      // The selfie came back passed: the person finished a step. (Nothing
+      // is written to the entity or sent for an expired opening; the result
+      // is kept, and the person starts again first, R4-1.)
       if (!wasPassed) await this.progressed(wawuUserId);
       onboarding = await this.linkLiveness(wawuUserId, entity.entityId);
       await this.advance(wawuUserId).catch((e: unknown) => {
@@ -1151,7 +1177,14 @@ export class DocumentsFlow {
     const fresh = await this.prisma.nuvionOnboarding.findUnique({
       where: { wawuUserId },
     });
-    return this.livenessOut(enabled, state, fresh ?? onboarding, entity, url);
+    return this.livenessOut(
+      enabled,
+      state,
+      fresh ?? onboarding,
+      entity,
+      url,
+      expired,
+    );
   }
 
   private livenessOut(
@@ -1165,6 +1198,7 @@ export class DocumentsFlow {
     } | null,
     entity: ReviewRecord,
     url: string | null,
+    expired = false,
   ): IdentityLivenessView {
     const startedAt = onboarding?.livenessStartedAt ?? null;
     const done = onboarding?.livenessState === 'passed' || state === 'passed';
@@ -1179,7 +1213,7 @@ export class DocumentsFlow {
     ) {
       view = 'expired';
     } else view = 'pending';
-    const open = reviewStageOf(entity) === 'needs_documents';
+    const open = !expired && reviewStageOf(entity) === 'needs_documents';
     return {
       enabled: enabled || done,
       state: view,
@@ -1237,6 +1271,9 @@ export class DocumentsFlow {
     redirectUrl: string | null,
   ): Promise<IdentityLivenessView> {
     const entity = await this.requireEntity(wawuUserId);
+    if (await this.expired(wawuUserId)) {
+      throw new DocumentError('documents_closed', MSG.expired);
+    }
     if (
       (await this.hasWallet(wawuUserId)) ||
       reviewStageOf(entity) !== 'needs_documents'

@@ -29,14 +29,21 @@ import {
  *   the NIN let a stranger take an approved BVN);
  * - **let go by time**: an opening that sits at "documents needed", or was
  *   refused only for its documents, with nothing from the person for
- *   IDENTITY_HOLD_DAYS is marked `expired` (src/money/opening/
- *   identity-hold.ts); support can release one person's hold at once.
+ *   IDENTITY_HOLD_DAYS, or that has held the number for
+ *   IDENTITY_HOLD_LIFETIME_DAYS whatever the person has done since, is
+ *   marked `expired` (src/money/opening/identity-hold.ts); support can
+ *   release one person's hold at once.
  *
  * The claim follows exactly what the provider was told: it moves to a new
  * number only in the step that sends that number.
  *
- * The claim is `FintavaWalletOpening.bvnHash` (the keyed hash, unique). A
- * released opening keeps the hash of the BVN the provider has, in a form no
+ * The claim is `FintavaWalletOpening.bvnHash` (the keyed hash, unique), and
+ * under Nuvion `FintavaWalletOpening.bvnVerifiedAt` is when the account took
+ * it: set whenever the claim is taken or moves to another number (a first
+ * send, a send after a refusal, a start again after an expiry, a number
+ * taken back), and never moved by anything the person does while the same
+ * number stays held. That is the time the hold's lifetime is counted from
+ * (NUV-03 round 4, R4-2). A released opening keeps the hash of the BVN the provider has, in a form no
  * other row can hold and no BVN hashes to:
  * `released:<wawuUserId>:<hash>`. Holding it again is taking the hash back,
  * which the unique index lets only one account do. Fintava's rows are never
@@ -67,6 +74,11 @@ export const EXPIRED_STATE = 'expired';
 
 /** `FintavaWalletOpening.failure` of an expired opening, by cause. */
 export const EXPIRED_IDLE = 'hold_expired';
+/**
+ * The hold ran out because the account had held the BVN for the whole of
+ * IDENTITY_HOLD_LIFETIME_DAYS, whatever it did meanwhile (NUV-03 round 4).
+ */
+export const EXPIRED_LIFETIME = 'hold_lifetime_ended';
 export const EXPIRED_BY_SUPPORT = 'hold_released_by_support';
 
 /** What decides whether an opening still holds its BVN. */
@@ -223,7 +235,11 @@ export async function alignClaim(
   try {
     await prisma.fintavaWalletOpening.updateMany({
       where: { wawuUserId, bvnHash: row.bvnHash },
-      data: { bvnHash: next },
+      // Taking a released number back is a new claim, and its lifetime
+      // starts now (R4-2); letting one go leaves the time as it was.
+      data: hold
+        ? { bvnHash: next, bvnVerifiedAt: new Date() }
+        : { bvnHash: next },
     });
   } catch (e) {
     if (!isUniqueViolation(e)) throw e;
