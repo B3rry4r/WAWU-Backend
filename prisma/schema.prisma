@@ -3763,22 +3763,31 @@ model WalletWithdrawal {
 /// one. docs/contract/CONVENTIONS.md section 5 is the contract.
 /// ─────────────────────────────────────────────────────────────────────────
 model TransactionPin {
-  wawuUserId  String    @id
+  wawuUserId   String    @id
   /// argon2id, encoded with its own random salt (a fresh one on every set or
   /// change, so no two people share one). The PIN itself is never stored,
   /// logged or returned.
-  pinHash     String
-  /// Wrong tries in a row. A try is counted before the hash is compared, so
-  /// tries sent at the same moment cannot get past the limit together. Back
-  /// to 0 on a right PIN, a new PIN, or once a lock has ended.
-  failedTries Int       @default(0)
+  pinHash      String
+  /// Wrong tries in a row, counted when the comparison is over. Back to 0 on
+  /// a right PIN, a new PIN, or once a lock has ended.
+  failedTries  Int       @default(0)
   /// Set when the last allowed try was wrong; null when not locked. A lock
   /// that has passed is treated as no lock (and cleared on the next try).
-  lockedUntil DateTime?
+  lockedUntil  DateTime?
+  /// Checks reserved and not yet finished (MONEY-17 round 3). A check takes a
+  /// slot in one conditional update (`failedTries + pendingTries` below the
+  /// limit) BEFORE the hash is compared, compares with no transaction and no
+  /// row lock open, and gives the slot back in one more update. So wrong PINs
+  /// sent at the same moment cannot be compared past the limit, a right PIN
+  /// never uses up a try, and no database connection waits on argon2.
+  pendingTries Int       @default(0)
+  /// When the newest slot was taken. A slot older than 30 seconds belongs to a
+  /// check that died (a restart mid-compare) and counts as free.
+  pendingSince DateTime?
   /// When the PIN was set or last changed (W35 "last changed").
-  setAt       DateTime  @default(now())
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  setAt        DateTime  @default(now())
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 }
 
 /// ─────────────────────────────────────────────────────────────────────────
@@ -4419,6 +4428,141 @@ model FintavaLedgerReference {
   @@id([accountNumber, direction, value])
   @@index([entryId])
   @@index([value])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// IDEMPOTENCY KEYS ON MONEY-MOVING REQUESTS (task MONEY-17)
+///
+/// One row per (person, method, route, Idempotency-Key): the primary key is
+/// the lock (docs/contract/CONVENTIONS.md section 4). The row is written in
+/// the same transaction as the payment it guards, once every check made
+/// before money moves has passed (wallet, PIN, body, quote, funds), so a
+/// refusal before that point stores nothing and the key can be sent again.
+/// `fingerprint` is the SHA-256 of the request body as canonical JSON (keys
+/// sorted); headers are not part of it, so the PIN is not either.
+///
+/// `state`:
+///   in_progress  the request that wrote it is still running (or died after
+///                writing it: `resourceId` names the payment, and a later
+///                request answers from that payment's record)
+///   done         `responseStatus` and `responseBody` are the answer, sent
+///                again byte for byte to every repeat
+/// Kept at least 24 hours (IDEMPOTENCY_KEY_HOURS), then purged.
+/// ─────────────────────────────────────────────────────────────────────────
+model MoneyIdempotencyKey {
+  wawuUserId     String
+  method         String
+  route          String
+  key            String
+  fingerprint    String
+  state          String
+  /// Which request holds the key (a random id per claim), so a request that
+  /// gives a key back never frees a later request's claim on it.
+  claimId        String?
+  /// The payment (or transfer) this request made.
+  resourceId     String?
+  responseStatus Int?
+  /// The JSON answer as sent, kept as text so a replay is the same bytes.
+  responseBody   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@id([wawuUserId, method, route, key])
+  @@index([updatedAt])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// A PAYMENT FROM A WALLET (task MONEY-17)
+///
+/// One row per payment for anything WAWU sells: the buyer's wallet pays WAWU's
+/// Fintava merchant wallet (R-19) the price, and Fintava takes its
+/// balance-transfer charge on top (R-10), as quoted. The split is recorded
+/// here with the payment, of the price only (R-10, R-5: one 85/15 split):
+/// `payeeShareKobo` is the creator's 85% (floor), `wawuShareKobo` WAWU's 15%
+/// (the rest); with no payee (WAWU itself is paid) the whole price is WAWU's.
+/// Nothing here moves the payee's share: WALLET-16 lands it in their wallet
+/// (R-11) and sets `payeeSettledAt`.
+///
+/// The ledger rows of the movement (FintavaLedgerEntry, buyer `out` and
+/// merchant `in`) carry this row's id as `paymentId` and its
+/// `customerReference`. `status` follows Fintava: `pending` until the debit is
+/// confirmed (the answer was lost: the ledger's status check settles it,
+/// never a blind resend), `completed`, `failed` (no money left the wallet),
+/// `reversed`. Every figure is integer kobo.
+/// ─────────────────────────────────────────────────────────────────────────
+model WalletPayment {
+  id                    String    @id @default(uuid())
+  /// Null once the payer's account is deleted: the payment stays (the
+  /// payee's share may be unpaid), the payer side is anonymised.
+  payerWawuUserId       String?
+  /// A PaymentKind of the wallet contract and the owning feature's id for it.
+  kind                  String
+  targetId              String
+  title                 String
+  /// Who the price is for; null when WAWU itself is paid.
+  payeeWawuUserId       String?
+  priceKobo             BigInt
+  /// Fintava's charge as quoted, WAWU's fee (0 on a purchase) and the total.
+  providerFeeKobo       BigInt
+  wawuFeeKobo           BigInt
+  totalKobo             BigInt
+  /// The 85/15 split of the price (R-5).
+  payeeShareKobo        BigInt
+  wawuShareKobo         BigInt
+  payeeSettledAt        DateTime?
+  /// OUR reference at the wallet provider, derived from this row's id.
+  customerReference     String    @unique
+  payerAccountNumber    String?
+  /// WAWU's own account at the provider the money went to (Fintava's
+  /// merchant wallet, Nuvion's operational account).
+  merchantAccountNumber String
+  /// The wallet provider that took the payment (WALLET_PROVIDER at the time:
+  /// `fintava` or `nuvion`). The sweep asks only the provider the server
+  /// runs about its own payments, so a rollback never asks one provider
+  /// about the other's transfers (MONEY-20 finding 2).
+  provider              String    @default("fintava")
+  status                String
+  /// `<payer>:<kind>:<targetId>` while the payment is `pending`, null once
+  /// it is settled: the unique key is the rule "one open payment per buyer
+  /// and item" (a second answers `409 payment_in_progress`).
+  openKey               String?   @unique
+  /// The sweep's schedule for a `pending` payment: when Fintava is next
+  /// asked, how many times it has been, and when it went to manual review
+  /// (past PAYMENT_REVIEW_AFTER_HOURS with no answer; still pending, never
+  /// "no money moved").
+  nextCheckAt           DateTime?
+  checks                Int       @default(0)
+  reviewSince           DateTime?
+  failureReason         String?
+  /// Fintava's record of the debit disagreed with the quote (a fee, an
+  /// amount): kept for review, as on the ledger row (MONEY-16 reports it).
+  discrepancy           String?
+  /// When the provider was found to have debited more than the quoted total
+  /// (lead ruling 5, 8 Oct 2026): the payment then records and answers the
+  /// real fee and total, `discrepancy` names both figures, and NUV-08
+  /// reconciles it with the provider. Null: the debit was as quoted or less.
+  debitReviewSince      DateTime?
+  /// A tip's message.
+  note                  String?
+  /// When the debit was first sent to Fintava (the reconcile window).
+  sentAt                DateTime?
+  completedAt           DateTime?
+  /// When the owning feature delivered what was paid for.
+  fulfilledAt           DateTime?
+  /// The sweep's schedule for a `completed` payment not yet delivered (MONEY-17
+  /// round 4): the same capped backoff as the check (1, 2, 4 ... 60 minutes),
+  /// its own attempt count and next attempt; past PAYMENT_REVIEW_AFTER_HOURS it
+  /// goes to review (`reviewSince`), still claimed, and the sweep stops.
+  deliveryAttempts      Int       @default(0)
+  nextDeliveryAt        DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([payerWawuUserId, createdAt])
+  @@index([status, createdAt])
+  @@index([kind, targetId])
+  @@index([status, reviewSince, nextCheckAt, id])
+  @@index([status, fulfilledAt, reviewSince, nextDeliveryAt])
 }
 
 /// ─────────────────────────────────────────────────────────────────────────

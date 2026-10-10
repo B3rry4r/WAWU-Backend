@@ -34,6 +34,16 @@ import { PIN_MAX_TRIES } from '../transaction-pin.service';
  * the provisional default.
  */
 
+/**
+ * argon2's own module object (what the service calls), so a test can watch
+ * or hold a compare; a TypeScript namespace import of it is read-only.
+ */
+const argon2 = jest.requireActual<typeof import('argon2')>('argon2');
+
+// 40 PIN checks at once are 40 argon2 compares, five at a time; on a busy
+// machine that passes jest's 5 seconds.
+jest.setTimeout(60_000);
+
 const LOCK_MINUTES = 7;
 const BASE = '/api/hub/money/pin';
 const HEADER = 'X-Transaction-Pin';
@@ -435,6 +445,309 @@ describe('Transaction PIN (MONEY-09) over HTTP', () => {
     });
   });
 
+  describe('checks sent at the same moment (MONEY-17 round 3: reserved, compared with nothing held, recorded)', () => {
+    const rowOf = (id: string) =>
+      prisma.transactionPin.findUniqueOrThrow({ where: { wawuUserId: id } });
+
+    it('40 right PINs at once: every one passes, no try is used, nothing locks, no slot is left reserved', async () => {
+      const user = await withPin('2468');
+      const results = await Promise.all(
+        Array.from({ length: 40 }, () => verify(user.auth, '2468')),
+      );
+      expect(results.map((r) => r.status)).toEqual(Array(40).fill(200));
+      const row = await rowOf(user.id);
+      expect(row).toMatchObject({
+        failedTries: 0,
+        lockedUntil: null,
+        pendingTries: 0,
+        pendingSince: null,
+      });
+    });
+
+    it('40 wrong PINs at once: exactly five are compared and counted, four 403 then the lock, thirty-six 423', async () => {
+      const user = await withPin('8642');
+      const compare = jest.spyOn(argon2, 'verify');
+      let compared: number;
+      try {
+        const results = await Promise.all(
+          Array.from({ length: 40 }, () => verify(user.auth, '1111')),
+        );
+        compared = compare.mock.calls.length;
+        const codes = results.map((r) => r.status);
+        expect(codes.filter((c) => c === 403)).toHaveLength(4);
+        expect(codes.filter((c) => c === 423)).toHaveLength(36);
+      } finally {
+        compare.mockRestore();
+      }
+      expect(compared).toBe(PIN_MAX_TRIES);
+      const row = await rowOf(user.id);
+      expect(row.failedTries).toBe(PIN_MAX_TRIES);
+      expect(row.lockedUntil).not.toBeNull();
+      expect(row.pendingTries).toBe(0);
+      await verify(user.auth, '8642').expect(423);
+    });
+
+    it('a few wrong PINs among many right ones at once never lock it, and the wrong ones are told how many tries are left', async () => {
+      const user = await withPin('1357');
+      // 33 checks, a wrong one at every eleventh place.
+      const pins = Array.from({ length: 33 }, (_, i) =>
+        i % 11 === 5 ? '0000' : '1357',
+      );
+      const results = await Promise.all(
+        pins.map((pin) => verify(user.auth, pin)),
+      );
+      const wrong = results.filter((_, i) => pins[i] === '0000');
+      const right = results.filter((_, i) => pins[i] === '1357');
+      expect(right.map((r) => r.status)).toEqual(Array(30).fill(200));
+      expect(wrong.map((r) => r.status)).toEqual([403, 403, 403]);
+      expect((await rowOf(user.id)).lockedUntil).toBeNull();
+    });
+
+    it('while a PIN is being compared nothing is held in the database: no row lock, no open transaction, and another person is answered', async () => {
+      const user = await withPin('9753');
+      const other = await withPin('3579');
+      let release!: (v: boolean) => void;
+      const slow = new Promise<boolean>((r) => (release = r));
+      let started!: () => void;
+      const comparing = new Promise<void>((r) => (started = r));
+      const compare = jest.spyOn(argon2, 'verify').mockImplementation(() => {
+        started();
+        return slow;
+      });
+      try {
+        const held = verify(user.auth, '9753').then((r) => r);
+        await comparing;
+        // The PIN row can be locked by someone else right now: nothing holds it.
+        await prisma.$transaction(
+          async (tx) => {
+            await tx.$queryRaw`SELECT 1 FROM "TransactionPin" WHERE "wawuUserId" = ${user.id} FOR UPDATE NOWAIT`;
+          },
+          { timeout: 5_000 },
+        );
+        // No connection is sitting in a transaction on this database.
+        const open = await prisma.$queryRaw<Array<{ n: bigint }>>`
+          SELECT count(*) AS n FROM pg_stat_activity
+          WHERE datname = current_database() AND state LIKE 'idle in transaction%'`;
+        expect(Number(open[0].n)).toBe(0);
+        // Someone else's PIN route answers while this one is still comparing.
+        const t0 = Date.now();
+        await state(other.auth).expect(200);
+        expect(Date.now() - t0).toBeLessThan(2_000);
+        // The reserved slot is visible while it runs, and gone when it ends.
+        expect((await rowOf(user.id)).pendingTries).toBe(1);
+        release(true);
+        expect((await held).status).toBe(200);
+      } finally {
+        release(true);
+        compare.mockRestore();
+      }
+      expect((await rowOf(user.id)).pendingTries).toBe(0);
+    });
+
+    it('a check that finds every slot taken by running checks waits (holding nothing), then goes on when one frees; it does not lock', async () => {
+      const user = await withPin('2580');
+      await prisma.transactionPin.update({
+        where: { wawuUserId: user.id },
+        data: { pendingTries: PIN_MAX_TRIES, pendingSince: new Date() },
+      });
+      let answered = false;
+      const waiting = verify(user.auth, '2580').then((r) => {
+        answered = true;
+        return r;
+      });
+      await new Promise((r) => setTimeout(r, 600));
+      expect(answered).toBe(false);
+      await prisma.transactionPin.update({
+        where: { wawuUserId: user.id },
+        data: { pendingTries: 0, pendingSince: null },
+      });
+      expect((await waiting).status).toBe(200);
+      expect(await rowOf(user.id)).toMatchObject({
+        failedTries: 0,
+        lockedUntil: null,
+        pendingTries: 0,
+      });
+    });
+
+    it('slots left by checks that died (older than 30 seconds) count as free', async () => {
+      const user = await withPin('0864');
+      await prisma.transactionPin.update({
+        where: { wawuUserId: user.id },
+        data: {
+          pendingTries: PIN_MAX_TRIES,
+          pendingSince: new Date(Date.now() - 31_000),
+        },
+      });
+      await verify(user.auth, '0864').expect(200);
+      expect((await rowOf(user.id)).pendingTries).toBe(0);
+    });
+
+    /**
+     * Holds every compare of the PIN service until the test lets it go (then
+     * it is the real compare). Compares are numbered in the order they start.
+     */
+    function holdCompares() {
+      const real = argon2.verify.bind(argon2);
+      const held: Array<() => void> = [];
+      const spy = jest
+        .spyOn(argon2, 'verify')
+        .mockImplementation((hash, pin) => {
+          return new Promise<boolean>((resolve, reject) => {
+            held.push(() => {
+              real(hash, pin as string).then(resolve, reject);
+            });
+          });
+        });
+      return {
+        held,
+        spy,
+        async started(n: number) {
+          for (let i = 0; i < 400 && held.length < n; i += 1) {
+            await new Promise((r) => setTimeout(r, 25));
+          }
+          expect(held.length).toBeGreaterThanOrEqual(n);
+        },
+        release(from: number, to: number) {
+          for (let i = from; i < to; i += 1) held[i]();
+        },
+      };
+    }
+
+    const codes = (rs: Response[]) =>
+      rs.map(
+        (r) => `${r.status}${r.status === 200 ? '' : ':' + reason(r).code}`,
+      );
+
+    it('R3-2: a check held up past the slot staleness, then a second batch admitted on its slots: at most four are answered "wrong", a right PIN is never answered 200 once the PIN is locked, and a late wrong one does not extend the lock', async () => {
+      const user = await withPin('1928');
+      const hold = holdCompares();
+      try {
+        // Batch 1: five wrong PINs, compares started and held.
+        const batch1 = Promise.all(
+          Array.from({ length: 5 }, () => verify(user.auth, '0000')),
+        );
+        await hold.started(5);
+        // They have been held so long their slots read as free.
+        await prisma.transactionPin.update({
+          where: { wawuUserId: user.id },
+          data: { pendingSince: new Date(Date.now() - 31_000) },
+        });
+        // Batch 2, admitted on the reclaimed slots: the right PIN, four wrong.
+        const batch2 = Promise.all([
+          verify(user.auth, '1928'),
+          ...Array.from({ length: 4 }, () => verify(user.auth, '1111')),
+        ]);
+        await hold.started(10);
+        // Batch 1's results are recorded first: the fifth wrong one locks it.
+        hold.release(0, 5);
+        const first = await batch1;
+        const lockAfterFirst = (
+          await prisma.transactionPin.findUniqueOrThrow({
+            where: { wawuUserId: user.id },
+          })
+        ).lockedUntil;
+        expect(lockAfterFirst).not.toBeNull();
+        expect(codes(first).sort()).toEqual([
+          '403:pin_incorrect',
+          '403:pin_incorrect',
+          '403:pin_incorrect',
+          '403:pin_incorrect',
+          '423:pin_locked',
+        ]);
+        // Batch 2's compares finish after the lock was set: all 423, the
+        // right PIN included, none "wrong, N tries left".
+        hold.release(5, 10);
+        const second = await batch2;
+        expect(codes(second)).toEqual(Array(5).fill('423:pin_locked'));
+        const row = await prisma.transactionPin.findUniqueOrThrow({
+          where: { wawuUserId: user.id },
+        });
+        expect(row.failedTries).toBe(PIN_MAX_TRIES);
+        expect(row.lockedUntil!.getTime()).toBe(lockAfterFirst!.getTime());
+        expect(row.pendingTries).toBe(0);
+      } finally {
+        hold.release(0, hold.held.length);
+        hold.spy.mockRestore();
+      }
+    });
+
+    it('R3-2: ten wrong compares in the other order (the second batch recorded first): still four "wrong" answers in all, then the lock', async () => {
+      const user = await withPin('5731');
+      const hold = holdCompares();
+      try {
+        const batch1 = Promise.all(
+          Array.from({ length: 5 }, () => verify(user.auth, '0000')),
+        );
+        await hold.started(5);
+        await prisma.transactionPin.update({
+          where: { wawuUserId: user.id },
+          data: { pendingSince: new Date(Date.now() - 31_000) },
+        });
+        const batch2 = Promise.all(
+          Array.from({ length: 5 }, () => verify(user.auth, '1111')),
+        );
+        await hold.started(10);
+        hold.release(5, 10);
+        const second = await batch2;
+        hold.release(0, 5);
+        const first = await batch1;
+        const all = codes([...first, ...second]);
+        expect(all.filter((c) => c === '403:pin_incorrect')).toHaveLength(4);
+        expect(all.filter((c) => c === '423:pin_locked')).toHaveLength(6);
+        expect(all.some((c) => c === '200')).toBe(false);
+      } finally {
+        hold.release(0, hold.held.length);
+        hold.spy.mockRestore();
+      }
+    });
+
+    it('V13: a wrong result for a PIN that was changed while it was compared is not counted against the new PIN', async () => {
+      const user = await withPin('2046');
+      const hold = holdCompares();
+      try {
+        const wrong = verify(user.auth, '0000').then((r) => r);
+        await hold.started(1);
+        // The PIN is changed under the check (a reset by code, say).
+        const fresh = await argon2.hash('7777', { type: argon2.argon2id });
+        await prisma.transactionPin.update({
+          where: { wawuUserId: user.id },
+          data: { pinHash: fresh, failedTries: 0, lockedUntil: null },
+        });
+        hold.release(0, 1);
+        const res = await wrong;
+        expect(res.status).toBe(403);
+        // Told how many tries the new PIN has, which the old one's miss did not use.
+        expect(reason(res).triesLeft).toBe(PIN_MAX_TRIES);
+        const row = await prisma.transactionPin.findUniqueOrThrow({
+          where: { wawuUserId: user.id },
+        });
+        expect(row.failedTries).toBe(0);
+        expect(row.pendingTries).toBe(0);
+      } finally {
+        hold.release(0, hold.held.length);
+        hold.spy.mockRestore();
+      }
+    });
+
+    it('a compare that fails outright gives its slot back and uses no try', async () => {
+      const user = await withPin('4680');
+      const compare = jest
+        .spyOn(argon2, 'verify')
+        .mockRejectedValueOnce(new Error('damaged hash'));
+      try {
+        await verify(user.auth, '4680').expect(500);
+      } finally {
+        compare.mockRestore();
+      }
+      expect(await rowOf(user.id)).toMatchObject({
+        failedTries: 0,
+        pendingTries: 0,
+        lockedUntil: null,
+      });
+      await verify(user.auth, '4680').expect(200);
+    });
+  });
+
   describe('PUT /money/pin (change)', () => {
     function change(auth: string, current: string | undefined, body: object) {
       const req = request(app.getHttpServer())
@@ -583,9 +896,11 @@ describe('Transaction PIN (MONEY-09) over HTTP', () => {
         }
         responses.push(await verify(user.auth, newPin));
         // A request that fails inside the app (not a refusal): the database
-        // is unreachable for one call, so the exception filter logs it.
+        // is unreachable for one call, so the exception filter logs it. The
+        // check starts by reserving a slot with a raw conditional update
+        // (MONEY-17 round 3), so that is where it fails.
         const spy = jest
-          .spyOn(prisma.transactionPin, 'updateMany')
+          .spyOn(prisma, '$queryRaw')
           .mockRejectedValueOnce(new Error('database went away'));
         responses.push(await verify(user.auth, newPin));
         spy.mockRestore();

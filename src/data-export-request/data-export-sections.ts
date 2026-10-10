@@ -1019,6 +1019,11 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
     },
     { model: 'MoneyPayoutAccount', reason: 'A bank account number.' },
     {
+      model: 'MoneyIdempotencyKey',
+      reason:
+        'The stored answer to one money request, kept a day or two so a repeat is answered the same; it holds the response and account numbers, and wallet transactions are not exported (G-130).',
+    },
+    {
       model: 'MoneyReceipt',
       reason:
         'A receipt code for one wallet transaction; it holds the account number, and wallet transactions are not exported (G-130).',
