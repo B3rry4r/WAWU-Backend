@@ -96,7 +96,7 @@ export function openingStateForStage(
 export const REVIEW_OPENING_STATES = ['review', 'open', 'stopped'] as const;
 
 /** The words Nuvion uses for a check that did not pass. */
-const NOT_PASSED = new Set([
+export const NOT_PASSED = new Set([
   'rejected',
   'failed',
   'declined',

@@ -1,4 +1,4 @@
-import type { PrismaClient } from '../../../generated/prisma/client';
+import { Prisma, type PrismaClient } from '../../../generated/prisma/client';
 import type { PrismaService } from '../../common/prisma/prisma.service';
 import {
   EXPIRED_BY_SUPPORT,
@@ -10,7 +10,7 @@ import {
   isReleasedBvnHash,
   releasedBvnHash,
 } from './bvn-claim';
-import { numbersFailed, reviewStageOf } from './review-stage';
+import { NOT_PASSED, numbersFailed, reviewStageOf } from './review-stage';
 
 /**
  * How long an unfinished opening may hold a BVN, and the ways it lets go
@@ -39,8 +39,11 @@ const DAY_MS = 24 * 60 * 60_000;
 /** The advisory lock key of the expiry pass: one pass at a time across servers. */
 export const HOLD_SWEEP_LOCK = 'nuvion-identity-hold-expiry';
 
-/** The opening rows the sweep looks at in one pass. */
+/** The opening rows the sweep reads at a time. */
 export const HOLD_SWEEP_BATCH = 100;
+
+/** The most opening rows one pass looks at (the rest wait for the next pass). */
+export const HOLD_SWEEP_MAX_EXAMINED = 500;
 
 /** What the sweep reads of an opening. */
 export interface IdleOpening {
@@ -79,16 +82,22 @@ export function idleSince(
   return new Date(Math.max(...times.map((t) => t.getTime())));
 }
 
-/** The client a pass runs on: the service, or a transaction of it. */
+/** The client a pass runs on: a transaction of the service. */
 export type HoldClient = Pick<
   PrismaClient,
-  'fintavaWalletOpening' | 'nuvionEntity' | 'fintavaWallet'
+  'fintavaWalletOpening' | 'nuvionEntity' | 'fintavaWallet' | '$queryRaw'
 >;
 
 /**
  * Marks one opening expired if it is still as it was read (a conditional
  * update on its attempt and its claim), letting go of its BVN. True when
  * this call did it, so exactly one caller tells the person.
+ *
+ * Run inside a transaction: the opening's row is locked first (a send or a
+ * correction by the person waits for it and then finds the opening expired),
+ * and what the person did is read again under the lock. With an
+ * `idleCutoff` the opening is expired only if it is still idle since before
+ * that time, so a person who moved after the sweep read them is left alone.
  */
 export async function expireOpening(
   db: HoldClient,
@@ -96,13 +105,33 @@ export async function expireOpening(
   cause: typeof EXPIRED_IDLE | typeof EXPIRED_BY_SUPPORT,
   now: Date,
   allowedStates: readonly string[] = ['review'],
+  idleCutoff: Date | null = null,
 ): Promise<boolean> {
+  await db.$queryRaw`SELECT 1 FROM "FintavaWalletOpening" WHERE "wawuUserId" = ${wawuUserId} FOR UPDATE`;
   const row = await db.fintavaWalletOpening.findUnique({
     where: { wawuUserId },
-    select: { bvnHash: true, provider: true, state: true, attempts: true },
+    select: {
+      bvnHash: true,
+      provider: true,
+      state: true,
+      attempts: true,
+      attemptStartedAt: true,
+    },
   });
   if (!row || row.provider !== 'nuvion' || !allowedStates.includes(row.state)) {
     return false;
+  }
+  if (idleCutoff !== null) {
+    const entity = await db.nuvionEntity.findUnique({
+      where: { wawuUserId },
+      select: HOLD_ENTITY_SELECT,
+    });
+    const wallet = await db.fintavaWallet.findUnique({
+      where: { wawuUserId },
+      select: { wawuUserId: true },
+    });
+    const since = idleSince(row, entity, wallet !== null);
+    if (since === null || since >= idleCutoff) return false;
   }
   const moved = await db.fintavaWalletOpening.updateMany({
     where: {
@@ -128,11 +157,62 @@ export async function expireOpening(
   return true;
 }
 
+/** One opening the sweep may expire, as the candidate query reads it. */
+interface IdleCandidate {
+  wawuUserId: string;
+  state: string;
+  attemptStartedAt: Date;
+}
+
+/**
+ * The openings that could have run out, oldest first, after a place in that
+ * order: at documents needed or refused (not with the provider reviewing,
+ * not with an account or a wallet, not refused on the BVN or the NIN, which
+ * hold nothing and would otherwise fill every page for ever), with nothing
+ * from the person since before the cutoff. A superset of the openings
+ * `idleSince` accepts: it never leaves one out, and `idleSince` decides.
+ */
+async function idleCandidates(
+  db: HoldClient,
+  cutoff: Date,
+  after: { at: Date; id: string } | null,
+): Promise<IdleCandidate[]> {
+  const notPassed = Prisma.join([...NOT_PASSED]);
+  return db.$queryRaw<IdleCandidate[]>(Prisma.sql`
+    SELECT o."wawuUserId", o."state", o."attemptStartedAt"
+      FROM "FintavaWalletOpening" o
+      JOIN "NuvionEntity" e ON e."wawuUserId" = o."wawuUserId"
+     WHERE o."provider" = 'nuvion'
+       AND o."state" = 'review'
+       AND e."entityId" IS NOT NULL
+       AND e."accountId" IS NULL
+       AND e."accountRequestedAt" IS NULL
+       AND lower(btrim(e."status")) IN ('incomplete', 'rejected')
+       AND COALESCE(lower(btrim(e."bvnStatus")), '') NOT IN (${notPassed})
+       AND COALESCE(lower(btrim(e."ninStatus")), '') NOT IN (${notPassed})
+       AND NOT EXISTS (
+         SELECT 1 FROM "FintavaWallet" w WHERE w."wawuUserId" = o."wawuUserId"
+       )
+       AND GREATEST(
+             o."attemptStartedAt", e."correctedAt", e."submittedAt", e."progressAt"
+           ) < ${cutoff}
+       ${
+         after === null
+           ? Prisma.empty
+           : Prisma.sql`AND (o."attemptStartedAt", o."wawuUserId") > (${after.at}, ${after.id})`
+       }
+     ORDER BY o."attemptStartedAt" ASC, o."wawuUserId" ASC
+     LIMIT ${HOLD_SWEEP_BATCH}
+  `);
+}
+
 /**
  * The openings whose hold has run out, expired in one pass. Run inside a
  * transaction that holds the pass's advisory lock, so one sweep runs at a
  * time across servers; every opening is still marked by a conditional
  * update, so a second pass finds it done. The people to tell, in order.
+ * Pages through the candidates (at most `HOLD_SWEEP_MAX_EXAMINED` a pass), so
+ * a page of openings that cannot expire never hides the ones behind it.
  */
 export async function expireIdleOpenings(
   db: HoldClient,
@@ -140,33 +220,43 @@ export async function expireIdleOpenings(
   now: Date,
 ): Promise<string[]> {
   const cutoff = new Date(now.getTime() - holdDays * DAY_MS);
-  const candidates = await db.fintavaWalletOpening.findMany({
-    where: {
-      provider: 'nuvion',
-      state: 'review',
-      attemptStartedAt: { lt: cutoff },
-    },
-    orderBy: { attemptStartedAt: 'asc' },
-    take: HOLD_SWEEP_BATCH,
-    select: { wawuUserId: true, state: true, attemptStartedAt: true },
-  });
   const told: string[] = [];
-  for (const c of candidates) {
-    const [entity, wallet] = await Promise.all([
-      db.nuvionEntity.findUnique({
-        where: { wawuUserId: c.wawuUserId },
-        select: HOLD_ENTITY_SELECT,
-      }),
-      db.fintavaWallet.findUnique({
-        where: { wawuUserId: c.wawuUserId },
-        select: { wawuUserId: true },
-      }),
-    ]);
-    const since = idleSince(c, entity, wallet !== null);
-    if (since === null || since >= cutoff) continue;
-    if (await expireOpening(db, c.wawuUserId, EXPIRED_IDLE, now)) {
-      told.push(c.wawuUserId);
+  let after: { at: Date; id: string } | null = null;
+  let examined = 0;
+  while (examined < HOLD_SWEEP_MAX_EXAMINED) {
+    const page = await idleCandidates(db, cutoff, after);
+    for (const c of page) {
+      const [entity, wallet] = await Promise.all([
+        db.nuvionEntity.findUnique({
+          where: { wawuUserId: c.wawuUserId },
+          select: HOLD_ENTITY_SELECT,
+        }),
+        db.fintavaWallet.findUnique({
+          where: { wawuUserId: c.wawuUserId },
+          select: { wawuUserId: true },
+        }),
+      ]);
+      const since = idleSince(c, entity, wallet !== null);
+      if (since === null || since >= cutoff) continue;
+      // Read again under the opening's lock: a person who sent, corrected or
+      // uploaded since the read above is not expired.
+      if (
+        await expireOpening(
+          db,
+          c.wawuUserId,
+          EXPIRED_IDLE,
+          now,
+          ['review'],
+          cutoff,
+        )
+      ) {
+        told.push(c.wawuUserId);
+      }
     }
+    examined += page.length;
+    if (page.length < HOLD_SWEEP_BATCH) break;
+    const last = page[page.length - 1];
+    after = { at: last.attemptStartedAt, id: last.wawuUserId };
   }
   return told;
 }

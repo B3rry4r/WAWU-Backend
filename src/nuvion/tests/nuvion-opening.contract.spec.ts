@@ -42,7 +42,11 @@ import {
   identityHoldDays,
   openAttemptsPerAddressPerHour,
 } from '../../money/identity/identity-config';
-import { recordOpeningProgress } from '../../money/opening/identity-hold';
+import {
+  expireOpening,
+  recordOpeningProgress,
+} from '../../money/opening/identity-hold';
+import { EXPIRED_IDLE } from '../../money/opening/bvn-claim';
 import { REVIEW_REASONS } from '../../money/opening/review-stage';
 import { WalletOpeningService } from '../../money/opening/wallet-opening.service';
 import {
@@ -2494,6 +2498,136 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
         failure: 'hold_expired',
       });
       expect(await held(x)).toBe(false);
+    });
+
+    it('a person who moved after the sweep read them is not expired: it reads them again under the opening lock', async () => {
+      const x = person();
+      await opened(x);
+      await ageOpening(x, 15);
+      const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60_000);
+      await recordOpeningProgress(prisma, x.id);
+      const expired = await prisma.$transaction((tx) =>
+        expireOpening(tx, x.id, EXPIRED_IDLE, new Date(), ['review'], cutoff),
+      );
+      expect(expired).toBe(false);
+      expect((await row(x))!.state).toBe('review');
+      expect(await held(x)).toBe(true);
+      expect(await notes3(x)).toHaveLength(0);
+    });
+
+    it('a correction that arrives while the sweep holds the opening waits for it and finds it expired: nothing is sent to Nuvion', async () => {
+      const x = person();
+      await opened(x, 'documents');
+      await ageOpening(x, 15);
+      fresh();
+      let release!: () => void;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60_000);
+      const sweeping = prisma.$transaction(
+        async (tx) => {
+          await tx.$queryRaw`SELECT 1 FROM "FintavaWalletOpening" WHERE "wawuUserId" = ${x.id} FOR UPDATE`;
+          await gate;
+          return expireOpening(
+            tx,
+            x.id,
+            EXPIRED_IDLE,
+            new Date(),
+            ['review'],
+            cutoff,
+          );
+        },
+        { timeout: 30_000 },
+      );
+      await sleep(300);
+      let answered = false;
+      const correction = open(x).then((r) => {
+        answered = true;
+        return r.status;
+      });
+      await sleep(600);
+      expect(answered).toBe(false);
+      release();
+      expect(await sweeping).toBe(true);
+      expect(await correction).toBe(200);
+      expect(standin.seen).toEqual([]);
+      expect((await row(x))!.state).toBe('expired');
+    });
+
+    /** An opening and its entity written straight to the tables, `days` old. */
+    async function plant(
+      days: number,
+      entity: {
+        status: string;
+        bvnStatus?: string;
+        documentStatus?: string;
+        decidedAgoDays?: number;
+      },
+    ): Promise<string> {
+      const id = randomUUID();
+      users.push(id);
+      const then = new Date(Date.now() - days * 24 * 60 * 60_000);
+      await prisma.fintavaWalletOpening.create({
+        data: {
+          wawuUserId: id,
+          state: 'review',
+          bvnHash: `planted-${id}`,
+          bvnVerifiedAt: then,
+          phone: `+23481${digits(8)}`,
+          attemptStartedAt: then,
+          provider: 'nuvion',
+        },
+      });
+      await prisma.nuvionEntity.create({
+        data: {
+          wawuUserId: id,
+          entityId: ulid('01ENT'),
+          status: entity.status,
+          bvnStatus: entity.bvnStatus ?? null,
+          documentStatus: entity.documentStatus ?? null,
+          decidedAt:
+            entity.decidedAgoDays === undefined
+              ? null
+              : new Date(Date.now() - entity.decidedAgoDays * 24 * 60 * 60_000),
+        },
+      });
+      return id;
+    }
+
+    it('openings refused on the BVN hold nothing and never fill the sweep: an expirable one behind a page of them still expires', async () => {
+      // More than one pass may look at (HOLD_SWEEP_MAX_EXAMINED): only the
+      // candidate query's own filter keeps them out of the way.
+      for (let i = 0; i < 520; i += 1) {
+        await plant(60, { status: 'rejected', bvnStatus: 'rejected' });
+      }
+      const real = person();
+      await opened(real);
+      await ageOpening(real, 15);
+      await openingSvc().expireIdleHolds();
+      expect((await row(real))!.state).toBe('expired');
+    });
+
+    it('a page of openings the candidate query cannot tell from expirable ones (told yesterday) does not hide the one behind it', async () => {
+      const kept: string[] = [];
+      for (let i = 0; i < 105; i += 1) {
+        kept.push(
+          await plant(60, {
+            status: 'rejected',
+            documentStatus: 'rejected',
+            decidedAgoDays: 1,
+          }),
+        );
+      }
+      const real = person();
+      await opened(real);
+      await ageOpening(real, 15);
+      await openingSvc().expireIdleHolds();
+      expect((await row(real))!.state).toBe('expired');
+      const still = await prisma.fintavaWalletOpening.count({
+        where: { wawuUserId: { in: kept }, state: 'review' },
+      });
+      expect(still).toBe(105);
     });
 
     it('the sweep runs one pass at a time across servers (an advisory lock) and tells once', async () => {
