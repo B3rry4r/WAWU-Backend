@@ -26641,6 +26641,270 @@
         ]
       }
     },
+    "/api/hub/waitlist/offers/current": {
+      "get": {
+        "operationId": "WaitlistPublicController_currentOffer",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaitlistOfferView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`reason.code` `no_open_offer`: no offer is open now."
+          }
+        },
+        "summary": "The offer people can register for now.",
+        "tags": [
+          "WaitlistPublic"
+        ]
+      }
+    },
+    "/api/hub/waitlist/registrations": {
+      "post": {
+        "operationId": "WaitlistPublicController_register",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWaitlistRegistrationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaitlistRegistrationStartView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`reason.code` `phone_invalid`, `email_invalid`, `name_invalid` or `consent_required`; a malformed body has no `reason`."
+          },
+          "404": {
+            "description": "`reason.code` `no_open_offer`: no offer has this id."
+          },
+          "409": {
+            "description": "`reason.code` `offer_closed` (closed or not open yet) or `already_registered` (this phone or email already paid; nothing is charged)."
+          },
+          "503": {
+            "description": "`reason.code` `payments_unavailable`: payments are not set up."
+          }
+        },
+        "summary": "Register and get the checkout settings. Reuses this person's own unpaid\nregistration (same offer, phone and email) rather than adding another.\nNothing is charged here: the payment happens in the Flutterwave checkout\nwith the answer's `flutterwaveConfig`, and counts only after\nPOST /waitlist/registrations/verify (or Flutterwave's own notice).",
+        "tags": [
+          "WaitlistPublic"
+        ]
+      }
+    },
+    "/api/hub/waitlist/registrations/verify": {
+      "post": {
+        "operationId": "WaitlistPublicController_verify",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyWaitlistRegistrationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaitlistRegistrationStatusView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`reason.code` `not_found`: no registration has this reference."
+          },
+          "409": {
+            "description": "`reason.code` `payment_not_confirmed` (Flutterwave does not say it succeeded yet: check again, never pay again), `transaction_already_used` or `already_registered`."
+          },
+          "422": {
+            "description": "`reason.code` `payment_mismatch`: the payment is not this registration's (amount, currency or reference)."
+          },
+          "503": {
+            "description": "`reason.code` `payment_check_unavailable`: Flutterwave could not be reached; try the check again."
+          }
+        },
+        "summary": "Confirm a payment. The server asks Flutterwave itself (succeeded, this\nregistration's reference, naira, not less than the fee) before it marks\nthe registration paid, so the transaction id is only a claim. Idempotent:\na paid registration answers the same result again.",
+        "tags": [
+          "WaitlistPublic"
+        ]
+      }
+    },
+    "/api/hub/waitlist/registrations/{reference}": {
+      "get": {
+        "operationId": "WaitlistPublicController_status",
+        "parameters": [
+          {
+            "name": "reference",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaitlistRegistrationStatusView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`reason.code` `not_found`: the same answer for a reference that does not exist and one that was never issued."
+          }
+        },
+        "summary": "Where a registration stands: status and first name only, never a phone or email.",
+        "tags": [
+          "WaitlistPublic"
+        ]
+      }
+    },
+    "/api/hub/admin/waitlist/registrations": {
+      "get": {
+        "operationId": "WaitlistAdminController_list",
+        "parameters": [
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "offerId",
+            "required": false,
+            "in": "query",
+            "description": "Only this offer. Omitted means every offer.",
+            "schema": {
+              "maxLength": 60,
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "Only this status. Omitted means every status.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "paid",
+                "failed"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminWaitlistRegistrationView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "Registrations, newest first, every status unless `status` is given\n(`pending`, `paid` or `failed`; a `failed` row is a second payment kept\nfor a refund). `offerId` narrows to one offer.",
+        "tags": [
+          "WaitlistAdmin"
+        ]
+      }
+    },
+    "/api/hub/admin/waitlist/registrations/export": {
+      "get": {
+        "operationId": "WaitlistAdminController_export",
+        "parameters": [
+          {
+            "name": "offerId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "maxLength": 60,
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "paid",
+                "failed"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminWaitlistExportView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The same rows as a CSV file, oldest first, inside the usual envelope\n(`content` is the file; save it as `fileName`). A byte-order mark first,\nso a spreadsheet opens it as UTF-8 and shows the naira sign.",
+        "tags": [
+          "WaitlistAdmin"
+        ]
+      }
+    },
     "/api/hub/webhooks/fintava": {
       "post": {
         "operationId": "FintavaWebhookController_receive",
@@ -32010,6 +32274,74 @@
         },
         "required": [
           "card"
+        ]
+      },
+      "CreateWaitlistRegistrationDto": {
+        "type": "object",
+        "properties": {
+          "offerId": {
+            "type": "string",
+            "description": "The offer the page showed (`GET /waitlist/offers/current`).",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "fullName": {
+            "type": "string",
+            "description": "Full name, as the person writes it.",
+            "minLength": 2,
+            "maxLength": 100
+          },
+          "phone": {
+            "type": "string",
+            "description": "Phone. A Nigerian mobile in any common form (`08031234567`,\n`8031234567`, `2348031234567`, `+2348031234567`), or a number from\nelsewhere written with its country code. The server stores E.164.",
+            "maxLength": 30
+          },
+          "email": {
+            "type": "string",
+            "description": "Email. The server stores it in lower case.",
+            "maxLength": 254
+          },
+          "state": {
+            "type": "string",
+            "description": "The state they are in (optional, up to 60 characters).",
+            "maxLength": 60
+          },
+          "makes": {
+            "type": "string",
+            "description": "What they make (optional, up to 60 characters).",
+            "maxLength": 60
+          },
+          "consent": {
+            "type": "boolean",
+            "description": "The consent line (with the privacy link) was accepted. Must be true."
+          }
+        },
+        "required": [
+          "offerId",
+          "fullName",
+          "phone",
+          "email",
+          "consent"
+        ]
+      },
+      "VerifyWaitlistRegistrationDto": {
+        "type": "object",
+        "properties": {
+          "reference": {
+            "type": "string",
+            "description": "The reference POST /waitlist/registrations gave.",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "transactionId": {
+            "type": "string",
+            "description": "The transaction id the payment modal handed back (digits).",
+            "pattern": "^[0-9]{1,20}$"
+          }
+        },
+        "required": [
+          "reference",
+          "transactionId"
         ]
       },
       "CreateAdCreativeDto": {
@@ -46563,6 +46895,236 @@
           "checkoutBump",
           "actions",
           "caps"
+        ]
+      },
+      "AdminWaitlistRegistrationView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "offerId": {
+            "type": "string"
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "nullable": true
+          },
+          "makes": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "failed",
+              "paid"
+            ]
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "paidKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "paidAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "reference": {
+            "type": "string"
+          },
+          "flutterwaveTransactionId": {
+            "type": "string",
+            "nullable": true
+          },
+          "claimedByWawuId": {
+            "type": "string",
+            "nullable": true
+          },
+          "claimedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "offerId",
+          "fullName",
+          "phone",
+          "email",
+          "state",
+          "makes",
+          "status",
+          "amountKobo",
+          "paidKobo",
+          "paidAt",
+          "reference",
+          "flutterwaveTransactionId",
+          "claimedByWawuId",
+          "claimedAt",
+          "createdAt"
+        ]
+      },
+      "AdminWaitlistExportView": {
+        "type": "object",
+        "properties": {
+          "fileName": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "rowCount": {
+            "type": "number"
+          },
+          "content": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "fileName",
+          "contentType",
+          "rowCount",
+          "content",
+          "generatedAt"
+        ]
+      },
+      "WaitlistOfferView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "tierName": {
+            "type": "string"
+          },
+          "products": {
+            "type": "number"
+          },
+          "days": {
+            "type": "number"
+          },
+          "closesAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "priceKobo",
+          "tierName",
+          "products",
+          "days",
+          "closesAt"
+        ]
+      },
+      "WaitlistCheckoutView": {
+        "type": "object",
+        "properties": {
+          "publicKey": {
+            "type": "string"
+          },
+          "txRef": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "number"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN"
+            ]
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "customerEmail": {
+            "type": "string"
+          },
+          "customerPhone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "publicKey",
+          "txRef",
+          "amount",
+          "currency",
+          "customerName",
+          "customerEmail",
+          "customerPhone"
+        ]
+      },
+      "WaitlistRegistrationStartView": {
+        "type": "object",
+        "properties": {
+          "reference": {
+            "type": "string"
+          },
+          "offerId": {
+            "type": "string"
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "flutterwaveConfig": {
+            "$ref": "#/components/schemas/WaitlistCheckoutView"
+          }
+        },
+        "required": [
+          "reference",
+          "offerId",
+          "amountKobo",
+          "flutterwaveConfig"
+        ]
+      },
+      "WaitlistRegistrationStatusView": {
+        "type": "object",
+        "properties": {
+          "reference": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "failed",
+              "paid"
+            ]
+          },
+          "firstName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reference",
+          "status",
+          "firstName"
         ]
       },
       "NuvionWebhookAck": {

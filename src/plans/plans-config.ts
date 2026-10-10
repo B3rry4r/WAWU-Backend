@@ -146,12 +146,35 @@ export interface PlanReferralMilestone {
   points: number;
 }
 
+/**
+ * One event registration offer (JOIN-01, R-48): what a person at an event
+ * pays to join the waiting list, and the tier that payment becomes when they
+ * sign up in the app. The price is `priceKobo` and nowhere else.
+ */
+export interface EventOffer {
+  /** Lower-case letters, digits and hyphens, for example `event-oct-2026`. */
+  id: string;
+  name: string;
+  /** Whole kobo. Naira only. */
+  priceKobo: number;
+  /** A `tiers` id: the plan the payment turns into. */
+  tier: string;
+  /** How many days the plan lasts; the tier's own `days` when the file omits it. */
+  tierDays: number;
+  /** Registration opens at this instant. */
+  openFrom: Date;
+  /** Registration closes at this instant. */
+  openUntil: Date;
+}
+
 export interface PlansConfig {
   /** Marker id to why, as the file states it. */
   provisional: Readonly<Record<string, string>>;
   /** Lowest first: the reader shows a person's highest pass. */
   eventPasses: readonly PlanEventPass[];
   tiers: readonly PlanTier[];
+  /** Event registration offers (JOIN-01); the list may be empty. */
+  eventOffers: readonly EventOffer[];
   /** The tier VF5 shows selected. */
   preselectedTier: string;
   /** A tier is `ending` this many days or fewer before it ends (VF14). */
@@ -356,13 +379,22 @@ class Check {
     throw new PlansConfigError(path || '(the file)', problem, this.file);
   }
 
-  /** An object with exactly these keys: one missing or one unknown stops it. */
-  object(v: unknown, path: string, keys: readonly string[]): Obj {
+  /**
+   * An object with exactly these keys: one missing or one unknown stops it.
+   * `optional` keys may be left out but are still known.
+   */
+  object(
+    v: unknown,
+    path: string,
+    keys: readonly string[],
+    optional: readonly string[] = [],
+  ): Obj {
     if (typeof v !== 'object' || v === null || Array.isArray(v))
       this.fail(path, 'must be an object');
     const o = v as Obj;
     for (const k of Object.keys(o))
-      if (!keys.includes(k)) this.fail(join2(path, k), 'is not a known field');
+      if (!keys.includes(k) && !optional.includes(k))
+        this.fail(join2(path, k), 'is not a known field');
     for (const k of keys)
       if (!(k in o)) this.fail(join2(path, k), 'is missing');
     return o;
@@ -447,6 +479,37 @@ class Check {
     return v;
   }
 
+  /** An offer id: lower-case letters, digits and hyphens, starting with a letter. */
+  offerId(v: unknown, path: string): string {
+    if (typeof v !== 'string' || !/^[a-z][a-z0-9-]*$/.test(v) || v.length > 60)
+      this.fail(
+        path,
+        `must be an id of lower-case letters, digits and - (it is ${show(v)})`,
+      );
+    return v;
+  }
+
+  /**
+   * A moment with its UTC offset written out (`2026-10-10T00:00:00+01:00`),
+   * so no reader has to guess a time zone.
+   */
+  instant(v: unknown, path: string): Date {
+    if (
+      typeof v !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(
+        v,
+      )
+    )
+      this.fail(
+        path,
+        `must be a date and time with its offset, like 2026-10-10T00:00:00+01:00 (it is ${show(v)})`,
+      );
+    const d = new Date(v);
+    if (Number.isNaN(d.getTime()))
+      this.fail(path, `is not a real date and time (it is ${show(v)})`);
+    return d;
+  }
+
   oneOf<T extends string>(v: unknown, path: string, allowed: readonly T[]): T {
     if (typeof v !== 'string' || !(allowed as readonly string[]).includes(v))
       this.fail(
@@ -495,6 +558,7 @@ const TOP = [
   'provisional',
   'event_passes',
   'tiers',
+  'event_offers',
   'preselected_tier',
   'tier_ending_days',
   'extra_products',
@@ -505,6 +569,15 @@ const TOP = [
   'action_points',
   'caps',
   'referral',
+] as const;
+
+const OFFER_KEYS = [
+  'id',
+  'name',
+  'price_kobo',
+  'tier',
+  'open_from',
+  'open_until',
 ] as const;
 
 const TIER_KEYS = [
@@ -574,6 +647,36 @@ export function parsePlansConfig(raw: unknown, file: string): PlansConfig {
     'tiers',
   );
   const tierIds = tiers.map((t) => t.id);
+
+  if (!Array.isArray(top.event_offers))
+    c.fail('event_offers', 'must be a list (it may be empty)');
+  const eventOffers = (top.event_offers as unknown[]).map(
+    (v, i): EventOffer => {
+      const p = `event_offers[${i}]`;
+      const o = c.object(v, p, OFFER_KEYS, ['tier_days']);
+      const tier = c.oneOf(o.tier, `${p}.tier`, tierIds);
+      const openFrom = c.instant(o.open_from, `${p}.open_from`);
+      const openUntil = c.instant(o.open_until, `${p}.open_until`);
+      if (openUntil.getTime() <= openFrom.getTime())
+        c.fail(`${p}.open_until`, 'must be after open_from');
+      return {
+        id: c.offerId(o.id, `${p}.id`),
+        name: c.text(o.name, `${p}.name`),
+        priceKobo: c.whole(o.price_kobo, `${p}.price_kobo`, 1),
+        tier,
+        tierDays:
+          o.tier_days === undefined
+            ? tiers.find((t) => t.id === tier)!.days
+            : c.whole(o.tier_days, `${p}.tier_days`, 1),
+        openFrom,
+        openUntil,
+      };
+    },
+  );
+  eventOffers.forEach((offer, i) => {
+    if (eventOffers.findIndex((x) => x.id === offer.id) !== i)
+      c.fail(`event_offers[${i}].id`, `repeats "${offer.id}"`);
+  });
 
   const preselectedTier = c.oneOf(
     top.preselected_tier,
@@ -737,6 +840,7 @@ export function parsePlansConfig(raw: unknown, file: string): PlansConfig {
     provisional,
     eventPasses,
     tiers,
+    eventOffers,
     preselectedTier,
     tierEndingDays,
     extraProducts,
