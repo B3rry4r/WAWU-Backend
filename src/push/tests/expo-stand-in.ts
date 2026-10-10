@@ -60,6 +60,8 @@ export type SendBehaviour = (messages: StandInMessage[]) => {
   status: number;
   body: unknown;
   delayMs?: number;
+  /** Extra response headers, e.g. `Retry-After` on a 429. */
+  headers?: Record<string, string>;
 };
 
 export class ExpoStandIn {
@@ -130,8 +132,12 @@ export class ExpoStandIn {
   ): Promise<void> {
     const json: unknown = raw ? JSON.parse(raw) : null;
     this.requests.push({ path: req.url ?? '', headers: req.headers, json });
-    const reply = (status: number, body: unknown) => {
-      res.writeHead(status, { 'content-type': 'application/json' });
+    const reply = (
+      status: number,
+      body: unknown,
+      headers: Record<string, string> = {},
+    ) => {
+      res.writeHead(status, { 'content-type': 'application/json', ...headers });
       res.end(JSON.stringify(body));
     };
 
@@ -165,7 +171,7 @@ export class ExpoStandIn {
       if (this.sendBehaviour) {
         const out = this.sendBehaviour(messages);
         if (out.delayMs) await new Promise((r) => setTimeout(r, out.delayMs));
-        return reply(out.status, out.body);
+        return reply(out.status, out.body, out.headers);
       }
       const tickets = messages.map((m) => {
         const error = this.ticketErrors.get(m.to);

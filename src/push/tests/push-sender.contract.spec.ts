@@ -35,6 +35,7 @@ import {
   PUSH_MAX_TOKENS_PER_USER,
   PUSH_RECEIPTS,
   PUSH_RETRY,
+  PUSH_TTL_SECONDS,
 } from '../push-config';
 import { EXPO_SHAPES, ExpoStandIn } from './expo-stand-in';
 
@@ -464,6 +465,36 @@ describe('Phone push sender (INBOX-03)', () => {
       expect(stand.sendRequests()).toHaveLength(0);
     });
 
+    // Round 3 mutant M13: with `isPushed()` always true nothing failed, since
+    // the sweep never queues a held kind. This is the second lock: a kind
+    // moved from `send` to `hold` after its rows were queued.
+    it('a delivery queued for a kind that is held when it comes to be sent is skipped, not sent', async () => {
+      const token = await register(USER_A);
+      const row = (await notifications.emit({
+        kind: 'credits_low',
+        userWawuId: USER_A,
+        creditsCount: 1,
+      }))!;
+      const phone = await prisma.pushToken.findFirstOrThrow({
+        where: { expoPushToken: token },
+      });
+      await prisma.pushDelivery.create({
+        data: {
+          notificationId: row.id,
+          userWawuId: USER_A,
+          pushTokenId: phone.id,
+          nextAttemptAt: new Date(Date.now() - 1000),
+        },
+      });
+      const report = await sender.runOnce();
+      expect(report.skipped).toBe(1);
+      expect(stand.sendRequests()).toHaveLength(0);
+      expect((await deliveriesOf(USER_A))[0]).toMatchObject({
+        status: 'skipped',
+        reason: 'kind_held',
+      });
+    });
+
     it('a notification already read in the app is not pushed', async () => {
       await register(USER_A);
       const row = (await tip(USER_A))!;
@@ -666,6 +697,109 @@ describe('Phone push sender (INBOX-03)', () => {
       );
       expect(failed!.reason).toBe('retries_exhausted_http_500');
       expect(failed!.attempts).toBe(PUSH_RETRY.maxAttempts);
+    });
+
+    describe('a Retry-After header from Expo is capped, and a bad one is ignored (round 4, S2)', () => {
+      /** One 429 with this header on a fresh delivery; how long until the retry. */
+      const answer429 = async (
+        header: string,
+        ageSeconds = 0,
+      ): Promise<{ status: string; reason: string | null; wait: number }> => {
+        await register(USER_A);
+        await tip(USER_A);
+        if (ageSeconds > 0) {
+          // the delivery exists once the sweep has seen the notification
+          stand.sendBehaviour = () => ({ status: 500, body: {} });
+          await sender.runOnce();
+          await prisma.pushDelivery.updateMany({
+            where: { userWawuId: USER_A },
+            data: { createdAt: new Date(Date.now() - ageSeconds * 1000) },
+          });
+          await makeRetriesDue();
+        }
+        stand.sendBehaviour = () => ({
+          status: 429,
+          body: EXPO_SHAPES.rateLimited,
+          headers: { 'retry-after': header },
+        });
+        await sender.runOnce();
+        const [d] = await deliveriesOf(USER_A);
+        return {
+          status: d.status,
+          reason: d.reason,
+          wait: (d.nextAttemptAt.getTime() - Date.now()) / 1000,
+        };
+      };
+      /** The normal backoff for a first failure: retryBaseSeconds. */
+      const BACKOFF = PUSH_RETRY.retryBaseSeconds;
+
+      it('a sensible value is honoured', async () => {
+        const r = await answer429('30');
+        expect(r).toMatchObject({ status: 'pending', reason: 'http_429' });
+        expect(r.wait).toBeGreaterThan(25);
+        expect(r.wait).toBeLessThanOrEqual(30);
+      });
+
+      it.each(['100000', '99999999999999999999'])(
+        'a value past one hour (%s) waits one hour, not a day',
+        async (header) => {
+          const r = await answer429(header);
+          expect(r).toMatchObject({ status: 'pending', reason: 'http_429' });
+          expect(r.wait).toBeGreaterThan(PUSH_RETRY.retryAfterMaxSeconds - 30);
+          expect(r.wait).toBeLessThanOrEqual(PUSH_RETRY.retryAfterMaxSeconds);
+        },
+      );
+
+      it.each([
+        ['1e20', 'scientific notation'],
+        ['-5', 'negative'],
+        ['0', 'zero'],
+        ['abc', 'text'],
+        ['', 'empty'],
+        ['Wed, 21 Oct 2099 07:28:00 GMT', 'an HTTP date'],
+        ['1'.repeat(400), 'too many digits for a number'],
+      ])(
+        'a value that is not a plain number of seconds (%s, %s) falls back to the normal backoff, and the pass does not fail',
+        async (header) => {
+          const r = await answer429(header);
+          expect(r).toMatchObject({ status: 'pending', reason: 'http_429' });
+          expect(r.wait).toBeGreaterThan(0);
+          expect(r.wait).toBeLessThanOrEqual(BACKOFF);
+          // the next pass still runs: nothing was left half done in `sending`
+          expect(
+            await prisma.pushDelivery.count({
+              where: { userWawuId: USER_A, status: 'sending' },
+            }),
+          ).toBe(0);
+        },
+      );
+
+      it("never waits past the delivery's own time to live", async () => {
+        const r = await answer429('3000', PUSH_TTL_SECONDS - 100);
+        expect(r).toMatchObject({ status: 'pending', reason: 'http_429' });
+        expect(r.wait).toBeGreaterThan(80);
+        expect(r.wait).toBeLessThanOrEqual(100);
+      });
+
+      it('a delivery past its time to live is retried at the next pass, not parked', async () => {
+        const r = await answer429('3000', PUSH_TTL_SECONDS + 600);
+        expect(r).toMatchObject({ status: 'pending', reason: 'http_429' });
+        expect(r.wait).toBeLessThanOrEqual(1);
+      });
+
+      it('no header at all keeps the normal backoff', async () => {
+        await register(USER_A);
+        await tip(USER_A);
+        stand.sendBehaviour = () => ({
+          status: 429,
+          body: EXPO_SHAPES.rateLimited,
+        });
+        await sender.runOnce();
+        const [d] = await deliveriesOf(USER_A);
+        const wait = (d.nextAttemptAt.getTime() - Date.now()) / 1000;
+        expect(wait).toBeGreaterThan(0);
+        expect(wait).toBeLessThanOrEqual(BACKOFF);
+      });
     });
 
     it('a request Expo refuses (4xx) fails the deliveries and is not retried', async () => {

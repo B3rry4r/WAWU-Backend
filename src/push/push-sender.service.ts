@@ -19,6 +19,7 @@ import {
   PUSH_PRUNE_EVERY_MINUTES,
   PUSH_RECEIPTS,
   PUSH_RETRY,
+  PUSH_TTL_SECONDS,
   loadPushSettings,
 } from './push-config';
 import {
@@ -475,7 +476,10 @@ export class PushSenderService {
 
   /**
    * Puts rows back to be sent again after the backoff, or fails the ones out
-   * of attempts. One statement, on the database's clock.
+   * of attempts. One statement, on the database's clock. An Expo `Retry-After`
+   * replaces the backoff but is held to PUSH_RETRY.retryAfterMaxSeconds and to
+   * what is left of the delivery's time to live (never below zero), so no
+   * value from outside can park a push for a day or overflow a timestamp.
    */
   private async retryOrFail(
     claimId: string,
@@ -489,9 +493,16 @@ export class PushSenderService {
       SET "status" = CASE WHEN "attempts" >= ${PUSH_RETRY.maxAttempts} THEN 'failed' ELSE 'pending' END,
           "reason" = CASE WHEN "attempts" >= ${PUSH_RETRY.maxAttempts}
                        THEN ${`retries_exhausted_${reason}`} ELSE ${reason} END,
-          "nextAttemptAt" = ${NOW_UTC} + make_interval(secs => COALESCE(
-            ${retryAfterSeconds}::double precision,
-            ${PUSH_RETRY.retryBaseSeconds}::double precision * power(2, GREATEST("attempts" - 1, 0)))),
+          "nextAttemptAt" = ${NOW_UTC} + make_interval(secs => CASE
+            WHEN ${retryAfterSeconds}::double precision IS NULL
+              THEN ${PUSH_RETRY.retryBaseSeconds}::double precision * power(2, GREATEST("attempts" - 1, 0))
+            ELSE LEAST(
+              ${retryAfterSeconds}::double precision,
+              ${PUSH_RETRY.retryAfterMaxSeconds}::double precision,
+              GREATEST(EXTRACT(EPOCH FROM (
+                "createdAt" + make_interval(secs => ${PUSH_TTL_SECONDS}::double precision) - ${NOW_UTC}
+              ))::double precision, 0))
+            END),
           "lockedAt" = NULL, "claimId" = NULL, "updatedAt" = ${NOW_UTC}
       WHERE "id" = ANY(${ids}::text[]) AND "status" = 'sending' AND "claimId" = ${claimId}
       RETURNING "status"`;

@@ -80,8 +80,18 @@ export const PUSH_LOOKBACK_MINUTES = 15;
  * again after `retryBaseSeconds` doubled for each earlier attempt, up to
  * `maxAttempts` tries in all. Past that the delivery is `failed`. The same cap
  * stops a delivery that keeps being taken by an instance that then stops.
+ *
+ * When Expo (or something in front of it) sends a `Retry-After` of whole
+ * seconds, that wait is used instead, but never longer than
+ * `retryAfterMaxSeconds` and never longer than what is left of the
+ * delivery's own life (PUSH_TTL_SECONDS from the day it was queued). Anything
+ * else in that header is ignored and the doubling above applies.
  */
-export const PUSH_RETRY = { maxAttempts: 5, retryBaseSeconds: 5 } as const;
+export const PUSH_RETRY = {
+  maxAttempts: 5,
+  retryBaseSeconds: 5,
+  retryAfterMaxSeconds: 3_600,
+} as const;
 
 /**
  * PROVISIONAL(PUSH-RECEIPTS, owner=YOU, why=the task asks for a receipt within a minute and Expo gives no time)

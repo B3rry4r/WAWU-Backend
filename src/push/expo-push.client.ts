@@ -161,12 +161,10 @@ export class ExpoPushClient {
     }
 
     if (response.status === 429 || response.status >= 500) {
-      const header = Number(response.headers.get('retry-after'));
       return {
         kind: 'retry',
         reason: `http_${response.status}`,
-        retryAfterSeconds:
-          Number.isFinite(header) && header > 0 ? header : null,
+        retryAfterSeconds: parseRetryAfter(response.headers.get('retry-after')),
       };
     }
 
@@ -193,6 +191,26 @@ export class ExpoPushClient {
     }
     return { kind: 'rejected', reason: code };
   }
+}
+
+/**
+ * The wait a `Retry-After` header asks for, in seconds, or null to use the
+ * normal backoff. Only the header's plain form counts: whole seconds, digits
+ * only (RFC 9110 delay-seconds). Anything else is ignored rather than
+ * guessed at: text, a negative or zero value, a fraction, scientific notation
+ * ("1e20"), a number too long to be one, and an HTTP date (reading one would
+ * need this server's clock, and the push tables run on the database's alone).
+ *
+ * A long wait is returned as it is: the sender caps it, on the database's
+ * clock, at PUSH_RETRY.retryAfterMaxSeconds and at what is left of the
+ * delivery's own time to live.
+ */
+export function parseRetryAfter(header: string | null): number | null {
+  if (header === null) return null;
+  const text = header.trim();
+  if (!/^\d+$/.test(text)) return null;
+  const seconds = Number(text);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
 }
 
 function errorCode(error: unknown): string {
