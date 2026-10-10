@@ -1,6 +1,13 @@
-import { HttpException, Inject, Injectable, Logger } from '@nestjs/common';
+import {
+  HttpException,
+  Inject,
+  Injectable,
+  Logger,
+  Optional,
+} from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { NotificationService } from '../../notification/notification.service';
 import { isRowOf, rowsOf } from '../../wallet-provider/provider-rows';
 import {
   type ProviderCustomer,
@@ -27,6 +34,8 @@ import { TransactionPinService } from '../pin/transaction-pin.service';
 import type { OpenNairaWalletDto } from './dto/open-wallet.dto';
 import { visibleBeneficiaries } from '../saved-accounts/beneficiary.service';
 import { type IdentityStop, stoppedOnIdentity } from './opening-stops';
+import { ReviewedOpening } from './reviewed-opening';
+import { accountOnItsWay } from './review-stage';
 import {
   WALLET_OPENING_DEFAULTS,
   WalletOpeningSettings,
@@ -175,6 +184,13 @@ function uniqueTarget(e: UniqueViolation): string {
 export class WalletOpeningService {
   private readonly logger = new Logger(WalletOpeningService.name);
   private sweeping = false;
+  /**
+   * Opening with a provider that reviews the person itself (NUV-02:
+   * `capabilities.separateKyc`, Nuvion): reviewed-opening.ts. Fintava's
+   * path below is unchanged.
+   */
+  private readonly reviewed: ReviewedOpening;
+  private expiring = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -184,7 +200,30 @@ export class WalletOpeningService {
     private readonly selfie: SelfieMatchService,
     private readonly pins: TransactionPinService,
     private readonly settings: WalletOpeningSettings,
-  ) {}
+    // NUV-02 round 3: tells a person whose opening expired (kind
+    // `identity_review`). Absent in a module without notifications.
+    @Optional() private readonly notifications?: NotificationService,
+  ) {
+    this.reviewed = new ReviewedOpening({
+      prisma,
+      provider,
+      hasher,
+      dbNow: () => this.dbNow(),
+      opening: (id) => this.opening(id),
+      unstick: (row, now) => this.unstick(row, now),
+      hasWallet: (id) => this.hasWallet(id),
+      mayHaveOpened: (e) => this.mayHaveOpened(e),
+      refusal: (e) => this.refusal(e),
+      unavailable: () => this.unavailable(),
+      resendAfterMs: () => this.resendAfterMs(),
+      recheckAfterMs: WALLET_OPENING_DEFAULTS.recheckAfterMs,
+    });
+  }
+
+  /** True when the running provider reviews the person itself (Nuvion). */
+  private get reviewing(): boolean {
+    return this.provider.capabilities.separateKyc;
+  }
 
   // -------------------------------------------------------------------------
   // GET /money/wallet
@@ -202,7 +241,10 @@ export class WalletOpeningService {
    * provider's configured bank name (`NUVION_WALLET_BANK_NAME`) only when
    * Nuvion named none.
    */
-  async view(wawuUserId: string): Promise<WalletView> {
+  async view(
+    wawuUserId: string,
+    address: string | null = null,
+  ): Promise<WalletView> {
     const [wallet, opening, pin, nuvion] = await Promise.all([
       this.prisma.fintavaWallet.findUnique({
         where: { wawuUserId },
@@ -223,6 +265,7 @@ export class WalletOpeningService {
         select: {
           status: true,
           accountId: true,
+          accountRequestedAt: true,
           accountNumber: true,
           issuerBankName: true,
           issuerBankCode: true,
@@ -239,10 +282,18 @@ export class WalletOpeningService {
       nuvion?.accountNumber === wallet.accountNumber
         ? nuvion
         : null;
-    const onItsWay =
-      state === 'opening' ||
-      nuvion?.status === 'approved' ||
-      (nuvion?.accountId ?? null) !== null;
+    // NUV-02, under a provider that reviews the person: the number is on its
+    // way once the provider has approved them. A person who is only being
+    // checked, rejected, expired, or stopped (also for a BVN another account
+    // took) is told `none`; `opening` there is the review, not the account.
+    const review = this.reviewing
+      ? await this.reviewed.reviewOf(wawuUserId, opening, address)
+      : undefined;
+    const onItsWay = this.reviewing
+      ? accountOnItsWay(review?.stage ?? null)
+      : state === 'opening' ||
+        nuvion?.status === 'approved' ||
+        (nuvion?.accountId ?? null) !== null;
     return {
       state,
       account: wallet
@@ -267,6 +318,12 @@ export class WalletOpeningService {
         ? (await visibleBeneficiaries(this.prisma, wawuUserId)).length
         : 0,
       accountNumberStatus: wallet ? 'active' : onItsWay ? 'on_its_way' : 'none',
+      // NUV-02, additive and only under a provider that reviews the person
+      // itself: the answer under Fintava is exactly MONEY-12's (an absent
+      // `openingFlow` is `check`).
+      ...(review !== undefined
+        ? { openingFlow: 'review' as const, review }
+        : {}),
     };
   }
 
@@ -283,7 +340,17 @@ export class WalletOpeningService {
     wawuUserId: string,
     email: string | null | undefined,
     input: OpenNairaWalletDto,
+    phone?: string | null,
+    // The caller's address as the proxy gives it, null when there is none:
+    // under a reviewing provider the tries are limited per address too.
+    address: string | null = null,
   ): Promise<WalletView> {
+    if (this.reviewing) {
+      // NUV-02: the details, the BVN and the NIN go to the provider's own
+      // review; no BVN check or selfie match comes before (reviewed-opening.ts).
+      await this.reviewed.open(wawuUserId, { email, phone }, input, address);
+      return this.view(wawuUserId, address);
+    }
     if (!this.hasher.configured || !this.provider.configured) {
       throw this.unavailable();
     }
@@ -415,6 +482,79 @@ export class WalletOpeningService {
   }
 
   // -------------------------------------------------------------------------
+  // Holds that run out (NUV-02 round 3, N3), and support releasing one
+  // -------------------------------------------------------------------------
+
+  /**
+   * Under a provider that reviews the person: an opening at "documents
+   * needed", or refused only about documents or details, with no progress
+   * from the person for IDENTITY_HOLD_DAYS is marked expired. Its BVN is let
+   * go and the person is told once; nothing is sent to the provider. One pass
+   * at a time per process, and across servers (an advisory lock and a
+   * conditional update per opening). Where ScheduleModule.forRoot() is
+   * loaded (AppModule); a spec calls it directly.
+   */
+  @Cron(CronExpression.EVERY_MINUTE, { name: 'wallet-identity-hold-expiry' })
+  async expireIdleHolds(): Promise<number> {
+    if (!this.reviewing || this.expiring) return 0;
+    this.expiring = true;
+    try {
+      const expired = await this.reviewed.expireIdle();
+      for (const wawuUserId of expired) await this.tellExpired(wawuUserId);
+      if (expired.length > 0) {
+        this.logger.log(
+          `wallet opening: ${expired.length} unfinished openings expired and let go of their BVN`,
+        );
+      }
+      return expired.length;
+    } catch (e) {
+      // The name only; the next pass picks up whatever this one did not.
+      this.logger.error(
+        `wallet opening: the hold expiry pass failed (${(e as Error).name ?? 'Error'})`,
+      );
+      return 0;
+    } finally {
+      this.expiring = false;
+    }
+  }
+
+  /**
+   * Support lets go of one person's hold at once (the admin route): the
+   * opening is marked expired and the person is told once. The BVN is never
+   * read or returned. `before` is the opening's state before, for the audit.
+   */
+  async releaseIdentityHold(wawuUserId: string): Promise<{
+    outcome:
+      | 'released'
+      | 'no_opening'
+      | 'already_released'
+      | 'not_held'
+      | 'in_review'
+      | 'has_wallet';
+    before: string | null;
+  }> {
+    const done = await this.reviewed.releaseHold(wawuUserId);
+    if (done.outcome === 'released') await this.tellExpired(wawuUserId);
+    return done;
+  }
+
+  /** The one notification that an opening was closed (at most once: after the marking). */
+  private async tellExpired(wawuUserId: string): Promise<void> {
+    if (!this.notifications) return;
+    try {
+      await this.notifications.emit({
+        kind: 'identity_review',
+        userWawuId: wawuUserId,
+        outcome: 'expired',
+      });
+    } catch {
+      this.logger.warn(
+        'wallet opening: the person was not told their opening closed',
+      );
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // The sweep: lost answers, every 30 seconds
   // -------------------------------------------------------------------------
 
@@ -494,6 +634,9 @@ export class WalletOpeningService {
   async reconcile(row: OpeningRow): Promise<OpeningReconciliation> {
     if (row.state !== 'unknown') return 'nothing_to_do';
     if (!isRowOf(this.provider.name, row.provider)) return 'nothing_to_do';
+    // NUV-02: a reviewing provider's lost create is settled from its
+    // delivery (NuvionEntity), never created again from here.
+    if (this.reviewing) return this.reviewed.reconcile(row);
     const now = await this.dbNow();
     // One asker at a time, and not more often than every few seconds.
     const asking = await this.prisma.fintavaWalletOpening.updateMany({

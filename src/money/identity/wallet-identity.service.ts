@@ -37,6 +37,14 @@ export const PHONE_NOT_NIGERIAN_MESSAGE =
   'A Naira wallet needs a Nigerian phone number on your account.';
 export const CHECKS_EXHAUSTED_MESSAGE =
   'You have used today’s BVN checks. Try again later.';
+/**
+ * `POST /money/identity/bvn` under a provider with no BVN lookup (Nuvion,
+ * NUV-02 round 2, U3): the BVN is checked inside the provider's review when
+ * the person's details are sent to open the wallet, so this step is never
+ * used. A permanent answer, not "try again".
+ */
+export const STEP_NOT_USED_MESSAGE =
+  'This step is not used for your wallet. Your BVN is checked when you send your details to open it.';
 export const IDENTITY_UNAVAILABLE_MESSAGE =
   'We could not check your BVN right now. Try again in a moment.';
 export const BVN_NOT_CHECKED_MESSAGE = 'Confirm your BVN first.';
@@ -196,6 +204,10 @@ export class WalletIdentityService {
     accountPhone: string | null | undefined,
     input: BvnCheckDto,
   ): Promise<BvnCheckView> {
+    // Before anything is hashed, counted or asked: nothing here can change.
+    if (!this.provider.capabilities.identityLookup) {
+      throw new MoneyError('step_not_used', STEP_NOT_USED_MESSAGE);
+    }
     if (!this.hasher.configured || !this.provider.configured) {
       throw this.unavailable();
     }

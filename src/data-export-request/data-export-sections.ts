@@ -986,6 +986,16 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
         'A pointer to the person at Nuvion (entity, account and review state), which holds the balance and the identity documents.',
     },
     {
+      model: 'NuvionDocument',
+      reason:
+        'A record that an ID document or proof of address was sent to Nuvion (kind, state, Nuvion id, whether its review refused it, and a keyed fingerprint of the bytes that is cleared once the opening is sent). WAWU keeps no copy of the file: Nuvion holds the document. Identity documents never travel by email.',
+    },
+    {
+      model: 'NuvionOnboarding',
+      reason:
+        "A record that the opening was sent to Nuvion for review and of the hosted selfie session (ids and one status word). The selfie itself is Nuvion's, never held here.",
+    },
+    {
       model: 'FintavaLedgerEntry',
       reason:
         'Wallet transactions carry the other side bank details. Statements are an after-launch task (BACKEND_GAPS G-130).',

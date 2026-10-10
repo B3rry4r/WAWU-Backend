@@ -1,6 +1,8 @@
 import { Transform } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsIn,
+  IsOptional,
   IsString,
   Matches,
   MaxLength,
@@ -23,6 +25,54 @@ import { CHECK_HANDLE_INVALID_MESSAGE } from '../../identity/dto/identity-reques
 const trim = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() : value;
 
+/**
+ * An explicit `null` is a missing field, exactly like leaving it out (NUV-02
+ * round 2, D2): without this `@IsOptional()` lets a `null` through every
+ * validator and a required field reaches the provider as `null`.
+ */
+const orMissing = ({ value }: { value: unknown }) =>
+  value === null ? undefined : value;
+const trimOrMissing = ({ value }: { value: unknown }) =>
+  value === null ? undefined : typeof value === 'string' ? value.trim() : value;
+
+/**
+ * The words a client that wrote out a missing value (`String(null)`, a
+ * template with nothing in it) sends in place of the value: refused like an
+ * empty field in every required text field (NUV-02 round 3, N9), the same
+ * 400 and the same sentence. Any case, once trimmed.
+ */
+export function isStringifiedNull(value: unknown): boolean {
+  return (
+    typeof value === 'string' && /^(?:null|undefined)$/i.test(value.trim())
+  );
+}
+
+/**
+ * Refuses those two words in a required text field, with the field's own
+ * sentence (the one its pattern gives for an empty or malformed value). A
+ * validator of its own, so the patterns the contract shows stay as they are.
+ */
+function NotAWordForNothing(message: string): PropertyDecorator {
+  return ValidateBy({
+    name: 'isNotAWordForNothing',
+    validator: {
+      validate: (value: unknown) => !isStringifiedNull(value),
+      defaultMessage: () => message,
+    },
+  });
+}
+
+/**
+ * A stringified missing value in an OPTIONAL text field is the same as
+ * leaving it out (as a JSON `null` is), so nothing reaches the provider.
+ */
+const trimOrMissingText = ({ value }: { value: unknown }) =>
+  value === null || isStringifiedNull(value)
+    ? undefined
+    : typeof value === 'string'
+      ? value.trim()
+      : value;
+
 /** A real calendar date, `YYYY-MM-DD`, from 1900 up to today. */
 export function isBirthDate(value: unknown): boolean {
   if (typeof value !== 'string') return false;
@@ -41,6 +91,46 @@ export function isBirthDate(value: unknown): boolean {
 }
 
 const NAME = /^\p{L}[\p{L}\p{M}' .-]{0,49}$/u;
+
+/** A town, a state or an address line: 1 to 100 characters with a letter in it. */
+const PLACE = /^(?=.*\p{L})[^\p{Cc}<>]{1,100}$/u;
+
+/** NUV-02: what a reviewing provider takes (Nuvion's `gender` is m or f). */
+export const GENDERS = ['male', 'female'] as const;
+/** NUV-02: Nuvion's `identification.document.type`. */
+export const ID_TYPES = [
+  'international_passport',
+  'drivers_license',
+  'national_id',
+] as const;
+/** NUV-02: Nuvion's `identification.proof_of_address.type`. */
+export const PROOF_OF_ADDRESS_TYPES = [
+  'utility_bill',
+  'bank_statement',
+] as const;
+
+/** A real calendar date, `YYYY-MM-DD`, today or later, before 2100. */
+export function isUnexpiredDate(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!m) return false;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const date = new Date(Date.UTC(y, mo - 1, d));
+  if (
+    date.getUTCFullYear() !== y ||
+    date.getUTCMonth() !== mo - 1 ||
+    date.getUTCDate() !== d
+  ) {
+    return false;
+  }
+  const today = new Date();
+  const startOfToday = Date.UTC(
+    today.getUTCFullYear(),
+    today.getUTCMonth(),
+    today.getUTCDate(),
+  );
+  return y < 2100 && date.getTime() >= startOfToday;
+}
 
 const sendsNumbers = (o: OpenNairaWalletDto) =>
   o.checkHandle === undefined || o.bvn !== undefined || o.nin !== undefined;
@@ -88,6 +178,9 @@ export class OpenNairaWalletDto {
     message:
       'firstName must be 1 to 50 letters, spaces, dots, dashes or apostrophes',
   })
+  @NotAWordForNothing(
+    'firstName must be 1 to 50 letters, spaces, dots, dashes or apostrophes',
+  )
   firstName!: string;
 
   /** A5's last name, as the BVN check prefilled it. */
@@ -97,6 +190,9 @@ export class OpenNairaWalletDto {
     message:
       'lastName must be 1 to 50 letters, spaces, dots, dashes or apostrophes',
   })
+  @NotAWordForNothing(
+    'lastName must be 1 to 50 letters, spaces, dots, dashes or apostrophes',
+  )
   lastName!: string;
 
   /** A5's date of birth, `YYYY-MM-DD`. */
@@ -119,5 +215,149 @@ export class OpenNairaWalletDto {
   @Matches(/^(?=.*\p{L})[^\p{Cc}<>]{5,200}$/u, {
     message: 'address must be 5 to 200 characters and include a letter',
   })
+  @NotAWordForNothing(
+    'address must be 5 to 200 characters and include a letter',
+  )
   address!: string;
+
+  // -------------------------------------------------------------------------
+  // NUV-02, additive: what a provider that reviews the person itself
+  // (Nuvion) needs. Each is checked when sent; under such a provider the
+  // opening asks for the ones it needs (a plain 400 naming the first one
+  // missing), and `address` is then the street line. A server on Fintava
+  // takes none of them and sends none on. None is stored or logged.
+  // -------------------------------------------------------------------------
+
+  /** A middle name, when the person has one. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(trimOrMissingText)
+  @IsString()
+  @Matches(NAME, {
+    message:
+      'middleName must be 1 to 50 letters, spaces, dots, dashes or apostrophes',
+  })
+  middleName?: string;
+
+  @ApiPropertyOptional({ enum: GENDERS })
+  @IsOptional()
+  @Transform(orMissing)
+  @IsIn(GENDERS, { message: 'gender must be male or female' })
+  gender?: (typeof GENDERS)[number];
+
+  /** A second address line (flat, estate), when there is one. */
+  @ApiPropertyOptional({ maxLength: 100 })
+  @IsOptional()
+  @Transform(trimOrMissingText)
+  @IsString()
+  @Matches(PLACE, {
+    message: 'addressLine2 must be 1 to 100 characters and include a letter',
+  })
+  addressLine2?: string;
+
+  /** The town or city. */
+  @ApiPropertyOptional({ maxLength: 100 })
+  @IsOptional()
+  @Transform(trimOrMissing)
+  @IsString()
+  @Matches(PLACE, {
+    message: 'city must be 1 to 100 characters and include a letter',
+  })
+  @NotAWordForNothing('city must be 1 to 100 characters and include a letter')
+  city?: string;
+
+  /** The state (Lagos, FCT ...). */
+  @ApiPropertyOptional({ maxLength: 100 })
+  @IsOptional()
+  @Transform(trimOrMissing)
+  @IsString()
+  @Matches(PLACE, {
+    message: 'state must be 1 to 100 characters and include a letter',
+  })
+  @NotAWordForNothing('state must be 1 to 100 characters and include a letter')
+  state?: string;
+
+  /** The postal code, 1 to 20 letters, digits, spaces or dashes. */
+  @ApiPropertyOptional({ maxLength: 20 })
+  @IsOptional()
+  @Transform(trimOrMissing)
+  @IsString()
+  @Matches(/^[A-Za-z0-9][A-Za-z0-9 -]{0,19}$/, {
+    message: 'postalCode must be 1 to 20 letters, digits, spaces or dashes',
+  })
+  @NotAWordForNothing(
+    'postalCode must be 1 to 20 letters, digits, spaces or dashes',
+  )
+  postalCode?: string;
+
+  /** The ID document the person will upload (NUV-03). */
+  @ApiPropertyOptional({ enum: ID_TYPES })
+  @IsOptional()
+  @Transform(orMissing)
+  @IsIn(ID_TYPES, {
+    message:
+      'idType must be international_passport, drivers_license or national_id',
+  })
+  idType?: (typeof ID_TYPES)[number];
+
+  /** Its number, as printed: 5 to 30 letters, digits or dashes. Never stored. */
+  @ApiPropertyOptional({ minLength: 5, maxLength: 30 })
+  @IsOptional()
+  @Transform(orMissing)
+  @IsString()
+  @Matches(/^[A-Za-z0-9][A-Za-z0-9-]{4,29}$/, {
+    message: 'idNumber must be 5 to 30 letters, digits or dashes',
+  })
+  @NotAWordForNothing('idNumber must be 5 to 30 letters, digits or dashes')
+  idNumber?: string;
+
+  /** When it was issued, `YYYY-MM-DD`, when it says. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(orMissing)
+  @ValidateBy({
+    name: 'isPastDate',
+    validator: {
+      validate: isBirthDate,
+      defaultMessage: () => 'idIssueDate must be a real date, YYYY-MM-DD',
+    },
+  })
+  idIssueDate?: string;
+
+  /** When it expires, `YYYY-MM-DD`, when it says; not already passed. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(orMissing)
+  @ValidateBy({
+    name: 'isExpiryDate',
+    validator: {
+      validate: isUnexpiredDate,
+      defaultMessage: () =>
+        'idExpiryDate must be a real date, YYYY-MM-DD, that has not passed',
+    },
+  })
+  idExpiryDate?: string;
+
+  /** The proof of address the person will upload (NUV-03). */
+  @ApiPropertyOptional({ enum: PROOF_OF_ADDRESS_TYPES })
+  @IsOptional()
+  @Transform(orMissing)
+  @IsIn(PROOF_OF_ADDRESS_TYPES, {
+    message: 'proofOfAddressType must be utility_bill or bank_statement',
+  })
+  proofOfAddressType?: (typeof PROOF_OF_ADDRESS_TYPES)[number];
 }
+
+/**
+ * The fields a reviewing provider needs (NUV-02), in the order a missing
+ * one is named.
+ */
+export const REVIEW_REQUIRED_FIELDS = [
+  'gender',
+  'city',
+  'state',
+  'postalCode',
+  'idType',
+  'idNumber',
+  'proofOfAddressType',
+] as const;

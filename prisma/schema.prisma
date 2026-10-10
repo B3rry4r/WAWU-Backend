@@ -2313,6 +2313,8 @@ enum AdminOpsResource {
   service_application
   bill_payment
   health_subscription
+  /// A person's hold on a BVN during a Nuvion wallet opening (NUV-02 round 3).
+  wallet_identity_hold
 }
 
 /// Every consequential ops action that used to be anonymous behind
@@ -2341,6 +2343,9 @@ enum AdminOpsAction {
   bill_refund_recorded
   care_enrolment_retried
   care_refund_recorded
+  /// Support released one person's BVN hold at once (NUV-02 round 3). `detail`
+  /// carries the opening's state before and after, never a BVN or its hash.
+  wallet_identity_hold_released
 }
 
 /// Attribution for the operator surfaces that moved from AdminKeyGuard onto
@@ -4127,9 +4132,16 @@ model BvnCheckAttempt {
   /// `pending` while Fintava is being asked; then `verified`,
   /// `phone_mismatch`, `refused` or `unavailable`.
   outcome    String   @default("pending")
+  /// NUV-02 round 3 (migration 20261019110000): under a provider that
+  /// reviews the person, the opening tries are counted per address too (at
+  /// most OPEN_ATTEMPTS_PER_ADDRESS_PER_HOUR from one place an hour). A keyed
+  /// hash of the caller's address, never the address; null for a Fintava
+  /// check and for a try with no client address.
+  addressKey String?
   createdAt  DateTime @default(now())
 
   @@index([wawuUserId, createdAt])
+  @@index([addressKey, createdAt])
 }
 
 /// One row per selfie match sent (or about to be sent) to Fintava (task
@@ -5147,11 +5159,155 @@ model NuvionEntity {
   issuerBankCode       String?
   /// The account's currency: NGN, or USD for people billed in dollars (NUV-09).
   currency             String?
+  /// NUV-02 (migration 20261019110000): each check of Nuvion's review, in
+  /// Nuvion's own words (`identification.identity_numbers[].verification_status`
+  /// for the BVN and the NIN, `identification.document` and
+  /// `identification.proof_of_address` for the two documents, and the
+  /// identification's overall status), as the last `GET /entities/{id}`
+  /// read them. Never the numbers themselves.
+  bvnStatus            String?
+  ninStatus            String?
+  documentStatus       String?
+  addressProofStatus   String?
+  identificationStatus String?
+  /// When the entity was last read back from Nuvion (`GET /entities/{id}`).
+  reviewReadAt         DateTime?
+  /// When the person last sent corrected details after a refusal
+  /// (`PATCH /individual-entities/{id}`): the review starts again from the
+  /// documents (NUV-03) while this is after `decidedAt`.
+  correctedAt          DateTime?
+  /// Nuvion's own `updated` time for the entity (its clock) as last read
+  /// back, and as the correction's answer gave it: a decision read with a
+  /// later time than this, after a correction, is a new decision, not the
+  /// echo of the correction itself (NUV-02 round 2, D3).
+  entityUpdatedAt      DateTime?
+  /// NUV-02 round 3: when the person last submitted something for Nuvion's
+  /// review: corrected details sent after a refusal (here) or the submit
+  /// call (NUV-03 sets it). A refusal read again is a new decision only
+  /// when it came after this and Nuvion's check words moved to a verdict
+  /// (N4): `isNewDecision`, src/money/opening/review-stage.ts.
+  submittedAt          DateTime?
+  /// NUV-02 round 3: when the person last did something that moves the
+  /// opening along (sent details, corrected them, uploaded a document,
+  /// submitted: NUV-03 calls `recordOpeningProgress`). An opening idle for
+  /// IDENTITY_HOLD_DAYS has its BVN hold released (N3).
+  progressAt           DateTime?
+  /// NUV-02 round 3: when the opening was marked expired (idle too long, or
+  /// support released the hold): its BVN is let go, the person is told once
+  /// and starts again. Nothing is deleted at Nuvion.
+  holdExpiredAt        DateTime?
+  /// The one naira account's claim: set just before `POST /accounts` is
+  /// sent, so two deliveries never open two; the account is looked for
+  /// (`GET /accounts`) before any second request.
+  accountRequestedAt   DateTime?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
   @@index([status])
   @@index([accountNumber])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// THE DOCUMENTS SENT TO NUVION (task NUV-03, R-42)
+///
+/// One row per person and kind (`identity`: the ID document; `proof_of_
+/// address`). The file goes to Nuvion and nowhere else: this table keeps
+/// which kind and which sides went in the one call, the state, Nuvion's
+/// document id, the time, and a SHA-256 fingerprint of the bytes so the
+/// same file sent twice (a double tap, a retry after a lost answer) is
+/// forwarded once. Never the file, a base64 copy of it, a number read off
+/// it, or a file name.
+///
+/// `state`: `sending` (claimed, the call is out), `uploaded` (Nuvion
+/// accepted it), `unknown` (the call went out and no answer came back: it
+/// is looked for at Nuvion before anything is sent again), `failed`
+/// (Nuvion refused it; nothing was made).
+/// ─────────────────────────────────────────────────────────────────────────
+model NuvionDocument {
+  wawuUserId       String
+  /// `identity` or `proof_of_address` (Nuvion's `key`).
+  kind             String
+  /// The Nuvion entity the file was sent for.
+  entityId         String
+  /// Which sides went in the call: `front`, and `back` when there was one.
+  sides            String[]  @default([])
+  state            String
+  /// Nuvion's id for the document (`data.document.id`), once it answered.
+  nuvionDocumentId String?
+  /// Every Nuvion document id this row has ever recorded, so a look for an
+  /// upload whose answer was lost never takes an earlier one for it.
+  knownDocumentIds String[]  @default([])
+  /// HMAC-SHA256 (hex) of the bytes sent, keyed by IDENTITY_HASH_KEY as the
+  /// BVN's hash is, so the same file sent twice is forwarded once. Not the
+  /// file, and not a bare hash of it: nobody who can read this table can test
+  /// whether a person sent a given file. Cleared (null) once the opening is
+  /// submitted: after that nothing compares a file with it.
+  fingerprint      String?
+  /// Calls made so far for this kind (each a new attempt).
+  attempts         Int       @default(1)
+  /// When the current attempt started: nothing is sent again before the
+  /// money timeout plus the resend safety has passed since then.
+  attemptStartedAt DateTime
+  uploadedAt       DateTime?
+  /// When Nuvion's review was seen to refuse this upload (its word for the
+  /// document after the file was sent). It stays through a correction of the
+  /// person's details, which Nuvion may answer with the check back at
+  /// pending; only a new upload of this kind clears it. While it is set the
+  /// document reads `needs_new` and the opening is not submitted.
+  reviewRefusedAt  DateTime?
+  /// Why the last attempt made nothing: our own word, never Nuvion's text.
+  failure          String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@id([wawuUserId, kind])
+  @@index([entityId])
+  @@index([state, attemptStartedAt])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// THE SUBMISSION AND THE HOSTED SELFIE (task NUV-03, R-39, R-42)
+///
+/// One row per person. `submitRequestedAt` is the claim taken before
+/// `POST /onboarding-submissions` is sent, so two uploads at once, a
+/// replayed delivery and a retry send it once; `submittedAt` is when Nuvion
+/// is known to have it (its answer, or the entity moving past `incomplete`).
+/// A submission older than the person's last correction (NuvionEntity.
+/// correctedAt) is no longer current, and the review starts again.
+///
+/// The selfie is Nuvion's hosted page: `livenessSessionId` is its session
+/// (`query_id`), saved on the entity as `meta.liveness_check_id`
+/// (`livenessLinkedAt`). Whether the selfie is a step at all is the
+/// server's one switch (NUVION_HOSTED_LIVENESS, and Nuvion saying the API is
+/// not available to us), never a row of one person: a refusal about one
+/// person's request or entity leaves the step required for them, and no one
+/// skips it. Never an image or a face; the result is one word.
+/// ─────────────────────────────────────────────────────────────────────────
+model NuvionOnboarding {
+  wawuUserId        String    @id
+  entityId          String
+  submitRequestedAt DateTime?
+  submittedAt       DateTime?
+  submitAttempts    Int       @default(0)
+  /// Nuvion read the last submission and refused it (nothing was made): not
+  /// sent again for a minute, or until a document changes.
+  submitRefusedAt   DateTime?
+  /// Nuvion's liveness session (`query_id`); null until one was started.
+  livenessSessionId String?
+  /// Taken just before a session is started, so two starts at once make one.
+  livenessClaimedAt DateTime?
+  livenessStartedAt DateTime?
+  /// When the session id was saved on the entity (`meta.liveness_check_id`).
+  livenessLinkedAt  DateTime?
+  /// `pending`, `passed` or `not_passed`, in our words, from Nuvion's.
+  livenessState     String?
+  livenessCheckedAt DateTime?
+  /// Sessions started for this person so far.
+  livenessSessions  Int       @default(0)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([submittedAt])
 }
 
 // -----------------------------------------------------------------------------
