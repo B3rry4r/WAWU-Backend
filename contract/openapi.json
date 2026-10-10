@@ -2070,6 +2070,85 @@
         ]
       }
     },
+    "/api/hub/bills/electricity/billers": {
+      "get": {
+        "operationId": "BillsCatalogueController_billers",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ElectricityBillersView"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code provider_unreachable: Fintava did not answer. Try again after retryAfterSeconds."
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "S2 and S3. Every company Fintava lists as available, one row per company and plan, each with its own minimum and\nmaximum in kobo and the quick amounts that fit them. `available: false` is S13: Fintava lists none, or its bills\nservice cannot be used. Fintava not answering at all is `503 provider_unreachable`, with `retryAfterSeconds`.",
+        "tags": [
+          "BillsCatalogue"
+        ]
+      }
+    },
+    "/api/hub/bills/electricity/meter-preview": {
+      "post": {
+        "operationId": "BillsCatalogueController_meterPreview",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeterPreviewDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeterPreviewView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code biller_not_found: the code is not on the list now."
+          },
+          "422": {
+            "description": "reason.code meter_not_found: Fintava does not know this meter for this company."
+          },
+          "429": {
+            "description": "reason.code bills_rate_limited, with retryAfterSeconds."
+          },
+          "503": {
+            "description": "reason.code bills_unavailable (bills are not switched on) or provider_unreachable (Fintava did not answer)."
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "S4 and S10. The name and address Fintava holds for a meter. 422 `meter_not_found` is S10. 404 `biller_not_found` is a\n`code` that is not on the list now. 503 `bills_unavailable` is S13. 429 `bills_rate_limited` carries\n`retryAfterSeconds` (and `Retry-After`). Answers are `no-store`: they name someone else.",
+        "tags": [
+          "BillsCatalogue"
+        ]
+      }
+    },
     "/api/hub/care/plans": {
       "get": {
         "operationId": "HealthPlanController_plans",
@@ -28745,6 +28824,24 @@
           "refreshToken"
         ]
       },
+      "MeterPreviewDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "maxLength": 80,
+            "pattern": "^[A-Za-z0-9_]+$"
+          },
+          "meterNumber": {
+            "type": "string",
+            "pattern": "^[0-9]{1,20}$"
+          }
+        },
+        "required": [
+          "code",
+          "meterNumber"
+        ]
+      },
       "InitHealthSubscriptionDto": {
         "type": "object",
         "properties": {
@@ -37520,6 +37617,95 @@
           "documentCount",
           "certificateExpectedBy",
           "latestUpdateLabel"
+        ]
+      },
+      "ElectricityBillerView": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "plan": {
+            "type": "string",
+            "enum": [
+              "prepaid",
+              "postpaid"
+            ]
+          },
+          "minimumKobo": {
+            "type": "integer"
+          },
+          "maximumKobo": {
+            "type": "integer"
+          },
+          "presetsKobo": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "plan",
+          "minimumKobo",
+          "maximumKobo",
+          "presetsKobo"
+        ]
+      },
+      "ElectricityBillersView": {
+        "type": "object",
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "billers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ElectricityBillerView"
+            }
+          }
+        },
+        "required": [
+          "available",
+          "billers"
+        ]
+      },
+      "MeterPreviewView": {
+        "type": "object",
+        "properties": {
+          "meterNumber": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "plan": {
+            "type": "string",
+            "enum": [
+              "prepaid",
+              "postpaid"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "address": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "meterNumber",
+          "code",
+          "plan",
+          "name",
+          "address"
         ]
       },
       "BillCategory": {

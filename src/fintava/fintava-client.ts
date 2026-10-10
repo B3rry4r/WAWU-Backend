@@ -131,6 +131,46 @@ function scalars(o: Obj): Scalars {
   return out;
 }
 
+/** A key as compared: lower case, with every non-letter and non-digit taken out (`Customer_Name` is `customername`). */
+function keyForm(key: string): string {
+  return key.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+const METER_NAME_KEYS = [
+  'customername',
+  'name',
+  'accountname',
+  'consumername',
+  'fullname',
+  'customerfullname',
+];
+const METER_ADDRESS_KEYS = [
+  'address',
+  'customeraddress',
+  'consumeraddress',
+  'serviceaddress',
+];
+
+/**
+ * The name and address on a meter preview's success body. Its shape has not
+ * been seen (no sandbox meter is known, question 11), so the first key of
+ * each list that holds text is taken, whatever its capitals or separators.
+ * Anything else is left unread: a body that names no owner gives nulls.
+ */
+function readMeterOwner(o: Obj): {
+  name: string | null;
+  address: string | null;
+} {
+  const byKey = new Map<string, string>();
+  for (const [k, v] of Object.entries(o)) {
+    if (typeof v === 'string' && v.trim() !== '')
+      byKey.set(keyForm(k), v.trim());
+  }
+  const first = (keys: string[]) =>
+    keys.map((k) => byKey.get(k)).find((v) => v !== undefined) ?? null;
+  return { name: first(METER_NAME_KEYS), address: first(METER_ADDRESS_KEYS) };
+}
+
 function readTransaction(v: unknown): FintavaTransaction {
   const o = obj(v, 'transaction');
   const customer = isObj(o.customer) ? o.customer : null;
@@ -1763,9 +1803,17 @@ export class FintavaClient {
       }
       throw e;
     }
-    return this.read(op, answer, (data) => ({
-      details: scalars(obj(data, 'data')),
-    }));
+    // A 2xx is a meter Fintava knows (a meter it does not know is a 400), so
+    // a body without a `data` object is still a found meter, with no owner.
+    return this.read(op, answer, (data, body) => {
+      const record = isObj(data) ? data : body;
+      const owner = readMeterOwner(record);
+      return {
+        details: scalars(record),
+        ownerName: owner.name,
+        ownerAddress: owner.address,
+      };
+    });
   }
 
   /**

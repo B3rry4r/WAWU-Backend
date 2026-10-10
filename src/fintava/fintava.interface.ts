@@ -435,6 +435,14 @@ export interface FintavaMeterPreviewInput {
  */
 export interface FintavaMeterPreview {
   details: Record<string, string | number | boolean | null>;
+  /**
+   * The name and address the meter is registered to, read from the keys
+   * `readMeterOwner` knows (a guess until a sandbox meter shows the real
+   * ones: question 11). Null when the body carries none. The address is read
+   * here on purpose and is not in `details`, which drops address fields.
+   */
+  ownerName: string | null;
+  ownerAddress: string | null;
 }
 
 export interface FintavaElectricityInput extends FintavaMeterPreviewInput {
