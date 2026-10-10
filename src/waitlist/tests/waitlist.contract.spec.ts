@@ -539,32 +539,50 @@ describe('Event registration link (JOIN-01) over HTTP', () => {
       await register({}).expect(400);
     });
 
-    it("reuses this person's own unpaid row instead of piling up duplicates, and refreshes what they typed", async () => {
+    it('every start is a new registration: the same details twice give two rows with two different references, and the first row is not touched', async () => {
       const first = await started({ state: 'Lagos' });
-      const again = await register({
-        ...first.body,
-        fullName: `Corrected Name ${MARK}`,
-        state: 'Abuja',
-      }).expect(200);
-      expect(data(again).reference).toBe(first.reference);
+      const before = await rowOf(first.reference);
+      const again = data(
+        await register({
+          ...first.body,
+          fullName: `Corrected Name ${MARK}`,
+          state: 'Abuja',
+        }).expect(200),
+      );
+      expect(again.reference).not.toBe(first.reference);
+      expect(again.reference).toMatch(/^wawu-join-[0-9a-f]{36}$/);
+      // Each checkout carries its own reference as the Flutterwave tx_ref.
+      expect(first.flutterwaveConfig.txRef).toBe(first.reference);
+      expect(again.flutterwaveConfig.txRef).toBe(again.reference);
       const rows = await prisma.waitlistRegistration.findMany({
         where: { phone: first.body.phone, offerId: OFFER_ID },
+        orderBy: { createdAt: 'asc' },
       });
-      expect(rows).toHaveLength(1);
-      expect(rows[0]).toMatchObject({
+      expect(rows.map((r) => [r.reference, r.status])).toEqual([
+        [first.reference, 'pending'],
+        [again.reference, 'pending'],
+      ]);
+      expect(rows[1]).toMatchObject({
         fullName: `Corrected Name ${MARK}`,
         state: 'Abuja',
-        status: 'pending',
       });
-      // Same phone, another email: another person, another row.
+      // Nothing the second start did touched the first row: not what was
+      // typed, not the time it was made (a reused row kept its first
+      // createdAt, which the re-check window and the purge both count from).
+      expect(await rowOf(first.reference)).toEqual(before);
+      expect(rows[0].createdAt.getTime()).toBeLessThan(
+        rows[1].createdAt.getTime(),
+      );
+      // Same phone, another email: another person, as before.
       const other = await register({
         ...first.body,
         email: `${MARK}-other-${n}@test.wawu.dev`,
       }).expect(200);
       expect(data(other).reference).not.toBe(first.reference);
+      expect(data(other).reference).not.toBe(again.reference);
     });
 
-    it("a person's own unpaid row is charged today's fee when they register again after the price was changed", async () => {
+    it("a start after the price was changed asks today's fee on its own new row, and the earlier row keeps the fee it asked", async () => {
       const first = await started();
       expect(first.amountKobo).toBe(config.eventOffers[0].priceKobo);
       const dearer = configWith((raw) => {
@@ -572,20 +590,25 @@ describe('Event registration link (JOIN-01) over HTTP', () => {
       });
       const other = await bootWaitlist(dearer, fake);
       try {
-        const again = await request(other.getHttpServer())
-          .post('/api/hub/waitlist/registrations')
-          .send(first.body)
-          .expect(200);
-        // The same row (no duplicate), now asking the new figure everywhere.
-        expect(data(again).reference).toBe(first.reference);
-        expect(data(again).amountKobo).toBe(350_000);
-        expect(data(again).flutterwaveConfig.amount).toBe(3500);
-        expect((await rowOf(first.reference)).amountKobo).toBe(350_000);
-        // And that figure is what a payment must now meet.
-        const short = pay(first.reference, { amount: 2000 });
+        const again = data(
+          await request(other.getHttpServer())
+            .post('/api/hub/waitlist/registrations')
+            .send(first.body)
+            .expect(200),
+        );
+        // A new row asking the new figure everywhere; the first is as it was.
+        expect(again.reference).not.toBe(first.reference);
+        expect(again.amountKobo).toBe(350_000);
+        expect(again.flutterwaveConfig.amount).toBe(3500);
+        expect((await rowOf(again.reference)).amountKobo).toBe(350_000);
+        expect((await rowOf(first.reference)).amountKobo).toBe(
+          config.eventOffers[0].priceKobo,
+        );
+        // And that figure is what a payment on the new row must meet.
+        const short = pay(again.reference, { amount: 2000 });
         const res = await request(other.getHttpServer())
           .post('/api/hub/waitlist/registrations/verify')
-          .send({ reference: first.reference, transactionId: short })
+          .send({ reference: again.reference, transactionId: short })
           .expect(422);
         expect(reason(res).code).toBe('payment_mismatch');
       } finally {
@@ -1132,6 +1155,133 @@ describe('Event registration link (JOIN-01) over HTTP', () => {
         code: 'P2002',
       });
       expect((await rowOf(b.reference)).status).toBe('pending');
+    });
+  });
+
+  describe('starting again with the same details (a new reference every time)', () => {
+    const aged = (reference: string, minutes: number) =>
+      prisma.waitlistRegistration.update({
+        where: { reference },
+        data: { createdAt: new Date(Date.now() - minutes * 60_000) },
+      });
+    const lookup = (reference: string) =>
+      fake.byReference.set(reference, {
+        id: String(++txSeq),
+        status: 'successful',
+        amount: config.eventOffers[0].priceKobo / 100,
+        currency: 'NGN',
+        txRef: reference,
+      });
+
+    it('a person who pays on two references is registered once: the first to settle is paid, the second is kept failed with its transaction id for a refund', async () => {
+      const a = await started();
+      const b = data(await register(a.body).expect(200));
+      expect(b.reference).not.toBe(a.reference);
+      const txA = pay(a.reference);
+      const txB = pay(b.reference);
+      await verify(a.reference, txA).expect(200);
+      const second = await verify(b.reference, txB).expect(409);
+      expect(reason(second).code).toBe('already_registered');
+      expect(reason(second).message).toBe(AFTER_CHARGE_WORDS);
+      expect(await rowOf(a.reference)).toMatchObject({
+        status: 'paid',
+        flutterwaveTxId: txA,
+      });
+      // Kept for the refund, with the money it holds, and never purged.
+      expect(await rowOf(b.reference)).toMatchObject({
+        status: 'failed',
+        flutterwaveTxId: txB,
+        paidKobo: config.eventOffers[0].priceKobo,
+      });
+      const status = await http()
+        .get(`/api/hub/waitlist/registrations/${b.reference}`)
+        .expect(200);
+      expect(data(status).status).toBe('failed');
+      // Exactly one paid row for the person, one failed.
+      const rows = await prisma.waitlistRegistration.findMany({
+        where: { phone: a.body.phone, offerId: OFFER_ID },
+      });
+      expect(rows.map((r) => r.status).sort()).toEqual(['failed', 'paid']);
+    });
+
+    it('both payments reaching the re-check leave one paid row and one failed row, each found by its own reference', async () => {
+      const a = await started();
+      const b = data(await register(a.body).expect(200));
+      await aged(a.reference, 20);
+      await aged(b.reference, 10);
+      lookup(a.reference);
+      lookup(b.reference);
+      expect(await sweep.recheckPending()).toEqual(
+        expect.objectContaining({ paid: 1 }),
+      );
+      expect(fake.lookupCalls).toEqual(
+        expect.arrayContaining([a.reference, b.reference]),
+      );
+      const rows = await prisma.waitlistRegistration.findMany({
+        where: { phone: a.body.phone, offerId: OFFER_ID },
+        orderBy: { createdAt: 'asc' },
+      });
+      expect(rows.map((r) => [r.reference, r.status])).toEqual([
+        [a.reference, 'paid'],
+        [b.reference, 'failed'],
+      ]);
+      expect(rows[1].flutterwaveTxId).not.toBeNull();
+      expect(rows[1].paidKobo).toBe(config.eventOffers[0].priceKobo);
+    });
+
+    it('a payment made on the first reference, never confirmed, is still found by that reference after the person started again', async () => {
+      const a = await started();
+      // The person paid, did not hear back, and started again.
+      const b = data(await register(a.body).expect(200));
+      await aged(a.reference, 20);
+      await aged(b.reference, 10);
+      lookup(a.reference);
+      // Flutterwave has nothing under the second reference.
+      expect(await sweep.recheckPending()).toEqual(
+        expect.objectContaining({ paid: 1 }),
+      );
+      expect((await rowOf(a.reference)).status).toBe('paid');
+      expect((await rowOf(b.reference)).status).toBe('pending');
+      // They are registered, so a third start is refused before any charge.
+      const early = await register(a.body).expect(409);
+      expect(reason(early).code).toBe('already_registered');
+    });
+
+    it('20 starts by one person leave 20 pending rows with 20 references; the re-check looks up every one by its own reference and the purge removes the unpaid ones after 7 days', async () => {
+      const body = person();
+      const references: string[] = [];
+      for (let i = 0; i < 20; i += 1)
+        references.push(data(await register(body).expect(200)).reference);
+      expect(new Set(references).size).toBe(20);
+      const where = { phone: body.phone, offerId: OFFER_ID };
+      expect(
+        await prisma.waitlistRegistration.count({
+          where: { ...where, status: 'pending' },
+        }),
+      ).toBe(20);
+      for (const reference of references) await aged(reference, 12);
+      // One of the twenty was paid at Flutterwave.
+      lookup(references[6]);
+      fake.lookupCalls = [];
+      const run = await sweep.recheckPending();
+      expect(run.paid).toBe(1);
+      expect(
+        fake.lookupCalls.filter((r) => references.includes(r)).sort(),
+      ).toEqual([...references].sort());
+      expect((await rowOf(references[6])).status).toBe('paid');
+      expect(
+        await prisma.waitlistRegistration.count({
+          where: { ...where, status: 'pending' },
+        }),
+      ).toBe(19);
+      // A week later the 19 unpaid rows are gone; the paid one is kept.
+      await prisma.waitlistRegistration.updateMany({
+        where: { ...where, status: 'pending' },
+        data: { createdAt: new Date(Date.now() - 8 * DAY) },
+      });
+      expect(await sweep.purgeUnpaid()).toBeGreaterThanOrEqual(19);
+      const left = await prisma.waitlistRegistration.findMany({ where });
+      expect(left.map((r) => r.reference)).toEqual([references[6]]);
     });
   });
 

@@ -273,41 +273,29 @@ export class WaitlistService {
         'Payments are not available right now. Please try again later.',
       );
 
-    // This person's own unpaid row is reused rather than piled up: the same
-    // offer, phone and email (a different email is a different person here).
-    const mine = await this.prisma.waitlistRegistration.findFirst({
-      where: {
+    // Every start is a new registration with its own random reference, which
+    // is the Flutterwave tx_ref of that one checkout. An unpaid row is never
+    // reused, even for the same offer, phone and email: a reference that
+    // came back for a second checkout would hold two transactions, and the
+    // re-check, which finds a payment by its reference, could settle only
+    // one of them and would never show the other. Unpaid rows pile up (the
+    // throttle bounds it), the re-check walks each by its own reference, and
+    // the purge deletes them after a week. When two of one person's checkouts
+    // both succeed, the second to settle becomes `failed` and is kept for a
+    // refund (settle and refuseDuplicate).
+    const row = await this.prisma.waitlistRegistration.create({
+      data: {
         offerId: offer.id,
+        fullName,
         phone,
         email,
-        status: WaitlistStatus.pending,
+        state,
+        makes,
+        consentAt: now,
+        reference: newReference(),
+        amountKobo: offer.priceKobo,
       },
-      orderBy: { createdAt: 'desc' },
     });
-    const row = mine
-      ? await this.prisma.waitlistRegistration.update({
-          where: { id: mine.id },
-          data: {
-            fullName,
-            state,
-            makes,
-            consentAt: now,
-            amountKobo: offer.priceKobo,
-          },
-        })
-      : await this.prisma.waitlistRegistration.create({
-          data: {
-            offerId: offer.id,
-            fullName,
-            phone,
-            email,
-            state,
-            makes,
-            consentAt: now,
-            reference: newReference(),
-            amountKobo: offer.priceKobo,
-          },
-        });
 
     return {
       reference: row.reference,
