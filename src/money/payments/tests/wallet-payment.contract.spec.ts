@@ -2326,6 +2326,99 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
     ]);
   });
 
+  it("R7-1 race: a status check that read the buyer's row before the signed webhook was reported lands after the payment completed at the real charge, and does not put the row back to pending", async () => {
+    const { p, paid } = await lostAnswerTaking(1500, 'once-r8-race-check');
+    const out0 = (await ledgerRows(paid.reference)).find(
+      (r) => r.direction === 'out',
+    )!;
+    // Fintava's lookup is held until the test lets it go: the check has read
+    // the row (at the quote) and is waiting on Fintava.
+    let reached = 0;
+    let letGo!: () => void;
+    const gate = new Promise<void>((r) => (letGo = r));
+    double.on('GET', `/transaction/reference/${paid.reference}`, async () => {
+      reached += 1;
+      await gate;
+      return {
+        status: 200,
+        body: recordFor(paid.reference, 'SUCCESS', '1000.00'),
+      };
+    });
+    const check = statusChecks.check(
+      out0.id,
+      new Date(Date.now() + 10 * 60_000),
+    );
+    await until(() => Promise.resolve(reached === 1));
+    // Meanwhile the signed report arrives and the payment completes at it.
+    expect(await consumer.consume(await deliverWebhook(p, paid.id))).toBe(
+      'processed',
+    );
+    await until(async () => (await rowOf(paid.id)).fulfilledAt !== null);
+    expect((await rowOf(paid.id)).totalKobo).toBe(101_500n);
+    letGo();
+    await check;
+    const out = (await ledgerRows(paid.reference)).find(
+      (r) => r.direction === 'out',
+    )!;
+    expect([out.status, out.feeKobo, out.totalKobo]).toEqual([
+      'completed',
+      1500n,
+      101_500n,
+    ]);
+    expect(out.discrepancy ?? '').not.toContain('put back to pending');
+    expect(deliveryCalls.get(paid.id)).toBe(1);
+  });
+
+  it("R7-1 race: the payment sweep's lookup (which carries no charge) lands after the signed webhook completed the payment at the real charge, and does not put the buyer's row back to pending", async () => {
+    const { p, paid } = await lostAnswerTaking(1500, 'once-r8-race-sweep');
+    // The sweep's first write of the buyer's row is held, after the sweep read
+    // the payment at the quote and Fintava's lookup answered.
+    let held = false;
+    let reached = 0;
+    let letGo!: () => void;
+    const gate = new Promise<void>((r) => (letGo = r));
+    const record = ledger.record.bind(ledger);
+    const spy = jest
+      .spyOn(ledger, 'record')
+      .mockImplementation(async (input, db, options) => {
+        if (
+          !held &&
+          input.paymentId === paid.id &&
+          input.source === 'lookup' &&
+          input.direction === 'out'
+        ) {
+          held = true;
+          reached += 1;
+          await gate;
+        }
+        return record(input, db, options);
+      });
+    try {
+      const sweep = payments.settle(paid.id, new Date(), true);
+      await until(() => Promise.resolve(reached === 1));
+      expect(await consumer.consume(await deliverWebhook(p, paid.id))).toBe(
+        'processed',
+      );
+      await until(async () => (await rowOf(paid.id)).fulfilledAt !== null);
+      expect((await rowOf(paid.id)).totalKobo).toBe(101_500n);
+      letGo();
+      await sweep;
+    } finally {
+      spy.mockRestore();
+    }
+    const out = (await ledgerRows(paid.reference)).find(
+      (r) => r.direction === 'out',
+    )!;
+    expect([out.status, out.feeKobo, out.totalKobo]).toEqual([
+      'completed',
+      1500n,
+      101_500n,
+    ]);
+    expect(out.discrepancy ?? '').not.toContain('put back to pending');
+    expect(deliveryCalls.get(paid.id)).toBe(1);
+    expect((await rowOf(paid.id)).totalKobo).toBe(101_500n);
+  });
+
   it('R7-1: a signed webhook that still says PENDING, at another charge, completes nothing: the payment waits for Fintava to say it is done', async () => {
     const { p, paid } = await lostAnswerTaking(3000, 'once-r8-pending');
     const event = await deliverWebhook(p, paid.id, { status: 'PENDING' });
