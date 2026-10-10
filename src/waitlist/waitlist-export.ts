@@ -47,23 +47,34 @@ export function waitlistHeaderLine(): string {
  * with the time beside it.
  */
 export function waitlistLine(r: WaitlistRegistration): string {
-  return csvLine([
-    r.createdAt.toISOString(),
-    textCell(r.offerId),
-    r.status,
-    textCell(r.fullName),
-    textCell(r.phone),
-    textCell(r.email),
-    textCell(r.state),
-    textCell(r.makes),
-    nairaText(r.amountKobo),
-    r.paidKobo === null || r.status === 'failed' ? '' : nairaText(r.paidKobo),
-    r.paidKobo !== null && r.status === 'failed' ? nairaText(r.paidKobo) : '',
-    r.paidAt?.toISOString() ?? '',
-    textCell(accessCodeLabel(r.accessCode)),
-    textCell(r.reference),
-    textCell(r.flutterwaveTxId),
-    r.claimedByWawuId === null ? 'no' : 'yes',
-    r.claimedAt?.toISOString() ?? '',
-  ]);
+  return csvLine(WAITLIST_EXPORT_COLUMNS.map((column) => CELLS[column](r)));
 }
+
+type Column = (typeof WAITLIST_EXPORT_COLUMNS)[number];
+
+/**
+ * One cell per header, keyed by the header itself, so a row is built FROM the
+ * header list and cannot drift from it: add a column to the list and the
+ * compiler asks for its cell; move one and its cell moves with it.
+ */
+const CELLS: Record<Column, (r: WaitlistRegistration) => string> = {
+  'Registered at': (r) => r.createdAt.toISOString(),
+  Offer: (r) => textCell(r.offerId),
+  Status: (r) => r.status,
+  'Full name': (r) => textCell(r.fullName),
+  Phone: (r) => textCell(r.phone),
+  Email: (r) => textCell(r.email),
+  State: (r) => textCell(r.state),
+  'What they make': (r) => textCell(r.makes),
+  'Fee (₦)': (r) => nairaText(r.amountKobo),
+  'Paid (₦)': (r) =>
+    r.paidKobo === null || r.status === 'failed' ? '' : nairaText(r.paidKobo),
+  'Refund due (₦)': (r) =>
+    r.paidKobo !== null && r.status === 'failed' ? nairaText(r.paidKobo) : '',
+  'Paid at': (r) => r.paidAt?.toISOString() ?? '',
+  'Access code': (r) => textCell(accessCodeLabel(r.accessCode)),
+  Reference: (r) => textCell(r.reference),
+  'Transaction id': (r) => textCell(r.flutterwaveTxId),
+  Claimed: (r) => (r.claimedByWawuId === null ? 'no' : 'yes'),
+  'Claimed at': (r) => r.claimedAt?.toISOString() ?? '',
+};

@@ -72,6 +72,19 @@ export class VerifyWaitlistRegistrationDto {
   transactionId!: string;
 }
 
+/**
+ * What a body with no code, an empty code, a code that is not text or a code
+ * far too long is told (JOIN-03 round 2, N5). The app never sends one; a
+ * person reading it should not meet the validator's "must be shorter than or
+ * equal to 40 characters". The first message is the one the error shape
+ * carries, and the validator checks the length rules first, so every rule
+ * gives the same words for the same fault.
+ */
+const ENTER_CODE = 'Enter your access code.';
+const CODE_TOO_LONG = 'Type the 8 letters and numbers of your access code.';
+const codeWords = ({ value }: { value?: unknown }): string =>
+  typeof value === 'string' && value.length > 0 ? CODE_TOO_LONG : ENTER_CODE;
+
 /** POST /waitlist/claims (JOIN-03). */
 export class ClaimWaitlistRegistrationDto {
   /**
@@ -79,9 +92,9 @@ export class ClaimWaitlistRegistrationDto {
    * (0 to 9, A to F), written "XXXX XXXX". Spaces, dashes and lower case are
    * accepted; the server reads it without them.
    */
-  @IsString()
-  @MinLength(1)
-  @MaxLength(40)
+  @IsString({ message: codeWords })
+  @MinLength(1, { message: codeWords })
+  @MaxLength(40, { message: codeWords })
   code!: string;
 }
 

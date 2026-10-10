@@ -144,7 +144,7 @@ price are a purchase's rules (TIER-03) and sit on top.
 JOIN-03's `POST /waitlist/claims` calls it with `sourceRef` `join:<registration
 id>` and the offer's `tier_days`. It proves the caller holds the registration's
 phone or email as WAWU ID proved it: the access token's `phoneVerified` and
-`emailVerified` (BACKEND_GAPS G-629 in the mobile repo; WAWU ID sends neither
+`emailVerified` (BACKEND_GAPS G-634 in the mobile repo; WAWU ID sends neither
 until that change merges, and until then every claim answers
 `contact_not_verified`).
 

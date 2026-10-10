@@ -10,6 +10,10 @@ import {
   readAccessCode,
   verifiedContactsOf,
 } from './waitlist-claim-proof';
+import {
+  readStoredClaimResult,
+  type StoredClaimResult,
+} from './waitlist-claim-result';
 import { WaitlistError } from './waitlist-error';
 import type { WaitlistClaimView } from './waitlist-view.type';
 
@@ -48,14 +52,22 @@ const WORDS = {
  * from the claim, through TierGrantService: the one place a plan is granted.
  * A `failed` row (a second payment kept for a refund) is refused.
  *
- * ── ONCE ─────────────────────────────────────────────────────────────────
+ * ── ONCE, AND SAFE TO REPEAT ─────────────────────────────────────────────
  * The first statement of the transaction marks the row claimed with a
  * conditional UPDATE (`status` paid and not yet claimed). Two taps at once, on
  * one server or two, queue on that row in Postgres: the second finds it
- * claimed (READ COMMITTED re-checks the condition), changes nothing, and is
- * refused. The grant is in the same transaction, so a grant that fails leaves
- * the code unclaimed, and a claim is never marked without its grant. The
- * grant's own references (`join:<registration id>`) are unique too.
+ * claimed (READ COMMITTED re-checks the condition) and changes nothing. The
+ * grant is in the same transaction, so a grant that fails leaves the code
+ * unclaimed, and a claim is never marked without its grant. The grant's own
+ * references (`join:<registration id>`) are unique too.
+ *
+ * What the claim answered is stored on the row in that same transaction
+ * (`claimResult`). The account that made the claim and sends the same code
+ * again, because the answer never reached the phone or a second tap came in,
+ * gets that answer back as a 200 and nothing is written: a claim is idempotent
+ * for its own claimer. Anyone else is told the code is used (`already_claimed`).
+ * A row claimed before the column existed has no stored answer and keeps
+ * answering its claimer `claimed_by_you` (409).
  */
 @Injectable()
 export class WaitlistClaimService {
@@ -101,13 +113,13 @@ export class WaitlistClaimService {
     // From here the caller has proven the registration is theirs.
     if (row.status === WaitlistStatus.failed)
       throw new WaitlistError('code_refunded', WORDS.refunded);
-    if (row.claimedByWawuId !== null) throw this.alreadyClaimed(user, row);
+    if (row.claimedByWawuId !== null) return this.answerClaimed(user, row, now);
 
     const offer = this.plans.eventOffers.find((o) => o.id === row.offerId);
     if (offer === undefined)
       throw new WaitlistError('offer_unavailable', WORDS.offerGone);
 
-    const granted = await this.prisma.$transaction(async (tx) => {
+    const outcome = await this.prisma.$transaction(async (tx) => {
       const claimed = await tx.waitlistRegistration.updateMany({
         where: {
           id: row.id,
@@ -117,38 +129,58 @@ export class WaitlistClaimService {
         data: { claimedByWawuId: user.sub, claimedAt: now },
       });
       if (claimed.count === 0) {
-        // Lost the race to another tap: say who has it, exactly as above.
-        const current = await tx.waitlistRegistration.findUniqueOrThrow({
-          where: { id: row.id },
-        });
-        throw this.alreadyClaimed(user, current);
+        // Lost the race to another tap: the row is claimed now, and by whom
+        // decides the answer below. Nothing was written here.
+        return {
+          kind: 'taken' as const,
+          current: await tx.waitlistRegistration.findUniqueOrThrow({
+            where: { id: row.id },
+          }),
+        };
       }
-      return this.grants.grant(tx, {
+      const granted = await this.grants.grant(tx, {
         wawuUserId: user.sub,
         tierId: offer.tier,
         sourceRef: `join:${row.id}`,
         days: offer.tierDays,
         now,
       });
+      const told: StoredClaimResult = {
+        offerName: offer.name,
+        days: granted.daysAdded,
+        extended: granted.extended,
+        pointsGranted: granted.pointsGranted,
+        pointsExpireAt: granted.pointsExpireAt?.toISOString() ?? null,
+      };
+      await tx.waitlistRegistration.update({
+        where: { id: row.id },
+        data: { claimResult: told },
+      });
+      return { kind: 'claimed' as const, told };
     });
 
+    if (outcome.kind === 'taken')
+      return this.answerClaimed(user, outcome.current, now);
     this.logger.log(`Registration ${row.id} claimed by an account.`);
-    return {
-      offerName: offer.name,
-      days: granted.daysAdded,
-      extended: granted.extended,
-      pointsGranted: granted.pointsGranted,
-      pointsExpireAt: granted.pointsExpireAt?.toISOString() ?? null,
-      tier: await this.tiers.myTier(user.sub, now),
-    };
+    return { ...outcome.told, tier: await this.tiers.myTier(user.sub, now) };
   }
 
-  private alreadyClaimed(
+  /**
+   * The row is claimed already. The account that claimed it is given what it
+   * was first told (a 200, nothing written); anyone else is told the code is
+   * used. A claim from before the answer was stored is refused its claimer
+   * with `claimed_by_you`.
+   */
+  private async answerClaimed(
     user: WawuJwtClaims,
-    row: { claimedByWawuId: string | null },
-  ): WaitlistError {
-    return row.claimedByWawuId === user.sub
-      ? new WaitlistError('claimed_by_you', WORDS.claimedByYou)
-      : new WaitlistError('already_claimed', WORDS.claimed);
+    row: { claimedByWawuId: string | null; claimResult: unknown },
+    now: Date,
+  ): Promise<WaitlistClaimView> {
+    if (row.claimedByWawuId !== user.sub)
+      throw new WaitlistError('already_claimed', WORDS.claimed);
+    const told = readStoredClaimResult(row.claimResult);
+    if (told === null)
+      throw new WaitlistError('claimed_by_you', WORDS.claimedByYou);
+    return { ...told, tier: await this.tiers.myTier(user.sub, now) };
   }
 }

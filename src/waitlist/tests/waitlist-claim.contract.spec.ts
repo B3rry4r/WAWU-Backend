@@ -6,6 +6,7 @@ import { INestApplication } from '@nestjs/common';
 import * as jwt from 'jsonwebtoken';
 import request, { type Response } from 'supertest';
 import type { App } from 'supertest/types';
+import { Prisma } from '../../../generated/prisma/client';
 import { AccountPurgeService } from '../../account-purge/account-purge.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { EXPORT_SECTIONS } from '../../data-export-request/data-export-sections';
@@ -31,7 +32,7 @@ import {
  *
  * The tokens carry `phoneVerified` and `emailVerified`, the two flags the
  * claim's proof reads (waitlist-claim-proof.ts). WAWU ID does not send them
- * yet (BACKEND_GAPS G-629); a token without them is its own test.
+ * yet (BACKEND_GAPS G-634); a token without them is its own test.
  */
 
 const MARK = 'join03-claim-spec';
@@ -337,6 +338,206 @@ describe('Claiming a paid event registration in the app (JOIN-03) over HTTP', ()
     });
   });
 
+  describe('a claim repeated by the account that made it (round 2, N3)', () => {
+    it('answers the first result even after the plans file changed: the offer gone, other days', async () => {
+      const cfg = configWith((raw) => {
+        raw.event_offers = [openOffer({ tier_days: 45 })];
+      });
+      const early = await bootWaitlist(cfg, fake);
+      const who = person();
+      const row = await registration(who);
+      let first: Response;
+      try {
+        first = await request(early.getHttpServer())
+          .post('/api/hub/waitlist/claims')
+          .set('Authorization', `Bearer ${mint(who)}`)
+          .send({ code: row.accessCode })
+          .expect(200);
+      } finally {
+        await early.close();
+      }
+      expect(data(first).days).toBe(45);
+      // The main app's file says 30 days for this offer: the replay still says 45.
+      const replay = await claim(mint(who), row.accessCode).expect(200);
+      expect(data(replay)).toEqual(data(first));
+      expect(data(replay).days).toBe(45);
+      // The offer left the file altogether: the claimer is still answered.
+      await prisma.waitlistRegistration.update({
+        where: { id: row.id },
+        data: { offerId: 'event-removed-later' },
+      });
+      const gone = await claim(mint(who), row.accessCode).expect(200);
+      expect(data(gone)).toEqual(data(first));
+    });
+
+    it('tells an extended plan as extended again, with the days it added', async () => {
+      const who = person();
+      await prisma.makerTier.create({
+        data: {
+          wawuUserId: who.sub,
+          tierId: 'founding',
+          activeFrom: new Date(Date.now() - 10 * DAY),
+          activeUntil: new Date(Date.now() + 100 * DAY),
+          productsIncluded: 10,
+          extraProducts: 0,
+          pointsIncluded: 600,
+          voiceIntroIncluded: false,
+        },
+      });
+      const row = await registration(who);
+      const first = await claim(mint(who), row.accessCode).expect(200);
+      const again = await claim(mint(who), row.accessCode).expect(200);
+      expect(data(first)).toMatchObject({ extended: true, days: OFFER_DAYS });
+      expect(data(again)).toEqual(data(first));
+      expect(
+        await prisma.makerTier.findUniqueOrThrow({
+          where: { wawuUserId: who.sub },
+        }),
+      ).toMatchObject({
+        activeUntil: new Date(new Date(data(first).tier.activeUntil).getTime()),
+      });
+    });
+
+    it('shows the plan as it is now, not as it was: a second code claimed since moves the end', async () => {
+      const who = person();
+      const first = await registration(who);
+      const second = await registration(who, { offerId: SECOND_OFFER_ID });
+      const r1 = await claim(mint(who), first.accessCode).expect(200);
+      const r2 = await claim(mint(who), second.accessCode).expect(200);
+      const replay = await claim(mint(who), first.accessCode).expect(200);
+      // What the first claim gave is as it was told; the tier is the person's now.
+      expect(data(replay)).toMatchObject({
+        days: data(r1).days,
+        extended: false,
+        pointsGranted: data(r1).pointsGranted,
+        pointsExpireAt: data(r1).pointsExpireAt,
+      });
+      expect(data(replay).tier).toEqual(data(r2).tier);
+    });
+
+    it('still needs the proof: the claimer whose token proves nothing, or not the registration, is refused as before', async () => {
+      const who = person();
+      const row = await registration(who);
+      await claim(mint(who), row.accessCode).expect(200);
+      const unproven = await claim(mint(who, {}), row.accessCode).expect(409);
+      expect(reason(unproven).code).toBe('contact_not_verified');
+      const moved: Who = {
+        ...who,
+        phone: `+23481${next().slice(-8)}`,
+        email: `${MARK}-${next()}@test.wawu.dev`,
+      };
+      const notTheirs = await claim(mint(moved), row.accessCode).expect(404);
+      expect(reason(notTheirs).code).toBe('code_not_found');
+    });
+
+    it('a claim made before the answer was kept still tells its claimer `claimed_by_you`, and writes nothing', async () => {
+      const who = person();
+      const row = await registration(who);
+      await claim(mint(who), row.accessCode).expect(200);
+      await prisma.waitlistRegistration.update({
+        where: { id: row.id },
+        data: { claimResult: Prisma.DbNull },
+      });
+      const res = await claim(mint(who), row.accessCode).expect(409);
+      expect(reason(res).code).toBe('claimed_by_you');
+      expect(
+        await prisma.eventPass.count({ where: { wawuUserId: who.sub } }),
+      ).toBe(1);
+      // A stored answer that is not one this code wrote is treated the same way.
+      await prisma.waitlistRegistration.update({
+        where: { id: row.id },
+        data: { claimResult: { days: 'many' } },
+      });
+      const odd = await claim(mint(who), row.accessCode).expect(409);
+      expect(reason(odd).code).toBe('claimed_by_you');
+    });
+
+    it('stores the answer in the claim’s own transaction, and nothing is stored for a refused claim', async () => {
+      const who = person();
+      const row = await registration(who);
+      const stranger = await claim(mint(person()), row.accessCode).expect(404);
+      expect(reason(stranger).code).toBe('code_not_found');
+      const untouched = await prisma.waitlistRegistration.findUniqueOrThrow({
+        where: { id: row.id },
+      });
+      expect(untouched.claimResult).toBeNull();
+      const res = await claim(mint(who), row.accessCode).expect(200);
+      const stored = await prisma.waitlistRegistration.findUniqueOrThrow({
+        where: { id: row.id },
+      });
+      expect(stored.claimResult).toEqual({
+        offerName: data(res).offerName,
+        days: data(res).days,
+        extended: data(res).extended,
+        pointsGranted: data(res).pointsGranted,
+        pointsExpireAt: data(res).pointsExpireAt,
+      });
+      // It carries nothing about anybody.
+      const json = JSON.stringify(stored.claimResult);
+      for (const s of [
+        who.phone,
+        who.email,
+        who.sub,
+        row.fullName,
+        row.reference,
+      ])
+        expect(json).not.toContain(s);
+    });
+  });
+
+  describe('the answer is never cached, and a body without a code is told so (round 2, H4, N5)', () => {
+    it('sends Cache-Control: no-store on a success and on every refusal', async () => {
+      const who = person();
+      const row = await registration(who);
+      const stranger = person();
+      const answers = [
+        await claim(mint(who), row.accessCode), // 200
+        await claim(mint(who), row.accessCode), // 200, repeated
+        await claim(mint(stranger), row.accessCode), // 404
+        await claim(mint({ ...who, sub: `${who.sub}-t` }), row.accessCode), // 409, used
+        await claim(mint(who, {}), row.accessCode), // 409, nothing proven
+        await claim(mint(who), 'ABC'), // 400, code_invalid
+      ];
+      expect(answers.map((r) => r.status)).toEqual([
+        200, 200, 404, 409, 409, 400,
+      ]);
+      for (const r of answers)
+        expect(r.headers['cache-control']).toBe('no-store');
+    });
+
+    it('tells a missing, empty, non-text or oversized code in plain words, not the validator’s', async () => {
+      const who = person();
+      const token = mint(who);
+      const post = (body: unknown) =>
+        http()
+          .post('/api/hub/waitlist/claims')
+          .set('Authorization', `Bearer ${token}`)
+          .send(body as object);
+      for (const body of [
+        {},
+        { code: null },
+        { code: 12345678 },
+        { code: ['5F6C15E4'] },
+        { code: { a: 1 } },
+        { code: true },
+        { code: '' },
+      ]) {
+        const res = await post(body).expect(400);
+        expect(res.body.message).toBe('Enter your access code.');
+      }
+      const long = await post({ code: 'F'.repeat(50) }).expect(400);
+      expect(long.body.message).toBe(
+        'Type the 8 letters and numbers of your access code.',
+      );
+      // A code of the wrong shape but within bounds is the claim's own refusal.
+      const odd = await post({ code: 'ZZZZ ZZZZ' }).expect(400);
+      expect(reason(odd).code).toBe('code_invalid');
+      // No validator wording reaches a person.
+      for (const res of [long])
+        expect(res.body.message).not.toMatch(/must be|characters than/);
+    });
+  });
+
   describe('who may claim: the code alone is never enough', () => {
     it('refuses a person whose phone and email are not proven, and writes nothing (WAWU ID sends no flags today)', async () => {
       const who = person();
@@ -578,12 +779,24 @@ describe('Claiming a paid event registration in the app (JOIN-03) over HTTP', ()
       await claim(mint(who), good.accessCode).expect(200);
     });
 
-    it('refuses a second claim, and says who: you, or someone else (the owner of the same phone on another account), and tells a stranger nothing', async () => {
+    it('a second claim by the account that made it answers 200 with the first result and writes nothing; the same phone on another account is told the code is used; a stranger is told nothing (round 2, N3)', async () => {
       const who = person();
       const row = await registration(who);
-      await claim(mint(who), row.accessCode).expect(200);
-      const again = await claim(mint(who), row.accessCode).expect(409);
-      expect(reason(again).code).toBe('claimed_by_you');
+      const first = await claim(mint(who), row.accessCode).expect(200);
+      const claimedBefore = await prisma.waitlistRegistration.findUniqueOrThrow(
+        { where: { id: row.id } },
+      );
+      const again = await claim(mint(who), row.accessCode).expect(200);
+      // The same plan, byte for byte: the offer, the days, the points and the tier.
+      expect(data(again)).toEqual(data(first));
+      expect(again.headers['cache-control']).toBe('no-store');
+      // The days were not added a second time and nothing was written.
+      expect(data(again).tier.activeUntil).toBe(data(first).tier.activeUntil);
+      const claimedAfter = await prisma.waitlistRegistration.findUniqueOrThrow({
+        where: { id: row.id },
+      });
+      expect(claimedAfter.claimedAt).toEqual(claimedBefore.claimedAt);
+      expect(claimedAfter.claimResult).toEqual(claimedBefore.claimResult);
       // The same phone on a second account (a person with two WAWU IDs).
       const twin: Who = { ...who, sub: `${who.sub}-twin` };
       subs.add(twin.sub);
@@ -598,6 +811,9 @@ describe('Claiming a paid event registration in the app (JOIN-03) over HTTP', ()
       ).toBe(1);
       expect(
         await prisma.pointLot.count({ where: { wawuUserId: who.sub } }),
+      ).toBe(1);
+      expect(
+        await prisma.pointLedger.count({ where: { wawuUserId: who.sub } }),
       ).toBe(1);
       expect(
         await prisma.makerTier.count({ where: { wawuUserId: twin.sub } }),
@@ -641,7 +857,7 @@ describe('Claiming a paid event registration in the app (JOIN-03) over HTTP', ()
   });
 
   describe('once, even under two taps at once on two servers', () => {
-    it('6 taps at once on one server, and 6 on two servers, leave one claim, one tier, one pass, one lot', async () => {
+    it('6 taps at once on one server, and 6 on two servers, are all answered the one plan and leave one claim, one tier, one pass, one lot', async () => {
       for (const servers of [[app], [app, second]]) {
         const who = person();
         const row = await registration(who);
@@ -653,10 +869,12 @@ describe('Claiming a paid event registration in the app (JOIN-03) over HTTP', ()
             .send({ code: row.accessCode }),
         );
         const results = await Promise.all(calls);
-        const statuses = results.map((r) => r.status).sort();
-        expect(statuses).toEqual([200, 409, 409, 409, 409, 409]);
-        for (const r of results.filter((x) => x.status !== 200))
-          expect(reason(r).code).toBe('claimed_by_you');
+        // The account's own taps are all answered the one plan (round 2, N3):
+        // six 200s with the same body, one claim written.
+        expect(results.map((r) => r.status)).toEqual([
+          200, 200, 200, 200, 200, 200,
+        ]);
+        for (const r of results) expect(data(r)).toEqual(data(results[0]));
         expect(
           await prisma.eventPass.count({ where: { wawuUserId: who.sub } }),
         ).toBe(1);
@@ -687,12 +905,23 @@ describe('Claiming a paid event registration in the app (JOIN-03) over HTTP', ()
         claim(mint(a), row.accessCode),
         claim(mint(b), row.accessCode),
       ]);
-      expect(results.filter((r) => r.status === 200)).toHaveLength(1);
       const winner = (
         await prisma.waitlistRegistration.findUniqueOrThrow({
           where: { id: row.id },
         })
       ).claimedByWawuId!;
+      // The winner's two taps are answered the plan; the other account's two
+      // are told the code is used. One claim in all.
+      const mine = winner === a.sub ? [0, 2] : [1, 3];
+      results.forEach((r, i) => {
+        if (mine.includes(i)) {
+          expect(r.status).toBe(200);
+          expect(data(r)).toEqual(data(results[mine[0]]));
+        } else {
+          expect(r.status).toBe(409);
+          expect(reason(r).code).toBe('already_claimed');
+        }
+      });
       expect([a.sub, b.sub]).toContain(winner);
       expect(
         await prisma.makerTier.count({

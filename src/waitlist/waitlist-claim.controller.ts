@@ -38,7 +38,9 @@ export class WaitlistClaimController {
    * Claim a paid registration with its launch access code. The caller must
    * hold the registration's phone or email, proven to WAWU ID; the code alone
    * is never enough. Gives what the registration's plan gives, its days
-   * counted from now, once.
+   * counted from now, once. The account that made the claim and sends the
+   * same code again is answered with the same plan (a 200, nothing granted
+   * twice), so an answer that was lost on the way can be asked for again.
    */
   @Post('claims')
   @HttpCode(HttpStatus.OK)
@@ -56,7 +58,7 @@ export class WaitlistClaimController {
   @ApiResponse({
     status: 409,
     description:
-      '`reason.code` `contact_not_verified` (the account has no proven phone or email), `code_refunded` (an extra payment being refunded), `already_claimed` (by another account), `claimed_by_you` or `offer_unavailable`.',
+      '`reason.code` `contact_not_verified` (the account has no proven phone or email), `code_refunded` (an extra payment being refunded), `already_claimed` (by another account), `offer_unavailable`, or `claimed_by_you` (only for a claim made before its answer was kept; the same account asking again is otherwise answered 200).',
   })
   claim(
     @CurrentUser() user: WawuJwtClaims,

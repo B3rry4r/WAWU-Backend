@@ -23,7 +23,7 @@ import { normaliseEmail, normalisePhone } from './waitlist-contact';
  * typed can even be taken by a newer sign-up (AUTH-07). So `phone` and `email`
  * alone prove nothing: a typed phone that equals the registration's is refused
  * like any other contact that is not the caller's. A token without the flags
- * (WAWU ID today sends neither, BACKEND_GAPS G-629) proves no email and no
+ * (WAWU ID today sends neither, BACKEND_GAPS G-634) proves no email and no
  * phone by the first route, so the claim fails closed rather than trusting a
  * typed number.
  *
