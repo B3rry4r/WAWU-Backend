@@ -4113,7 +4113,7 @@ model BvnCheckAttempt {
   /// `pending` while Fintava is being asked; then `verified`,
   /// `phone_mismatch`, `refused` or `unavailable`.
   outcome    String   @default("pending")
-  /// NUV-02 round 3 (migration 20261018110000): under a provider that
+  /// NUV-02 round 3 (migration 20261019110000): under a provider that
   /// reviews the person, the opening tries are counted per address too (at
   /// most OPEN_ATTEMPTS_PER_ADDRESS_PER_HOUR from one place an hour). A keyed
   /// hash of the caller's address, never the address; null for a Fintava
@@ -5140,7 +5140,7 @@ model NuvionEntity {
   issuerBankCode       String?
   /// The account's currency: NGN, or USD for people billed in dollars (NUV-09).
   currency             String?
-  /// NUV-02 (migration 20261018110000): each check of Nuvion's review, in
+  /// NUV-02 (migration 20261019110000): each check of Nuvion's review, in
   /// Nuvion's own words (`identification.identity_numbers[].verification_status`
   /// for the BVN and the NIN, `identification.document` and
   /// `identification.proof_of_address` for the two documents, and the
