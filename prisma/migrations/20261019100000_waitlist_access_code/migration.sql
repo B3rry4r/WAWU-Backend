@@ -27,7 +27,7 @@
 -- Rollback (nothing else references the column; also in rollback.sql):
 --   DROP INDEX "WaitlistRegistration_accessCode_key";
 --   ALTER TABLE "WaitlistRegistration" DROP COLUMN "accessCode";
---   DELETE FROM "_prisma_migrations" WHERE migration_name = '20261018140000_waitlist_access_code';
+--   DELETE FROM "_prisma_migrations" WHERE migration_name = '20261019100000_waitlist_access_code';
 
 -- AlterTable: a stored generated column; Postgres computes it for every existing row.
 ALTER TABLE "WaitlistRegistration"
