@@ -23,6 +23,7 @@ import {
   verdictMoved,
   withTriesUsedUp,
 } from '../../money/opening/review-stage';
+import { addressPlaceOf } from '../../money/opening/opening-attempts';
 import {
   maskReviewWords,
   nuvionPhoneE164,
@@ -308,6 +309,20 @@ describe('NUV-02 round 3: numbers in any form are masked, in a log and in what i
     expect(maskNuvionText('phone (0803) 123-4567 refused')).toBe(
       'phone (*******4567 refused',
     );
+  });
+
+  it('a gap of any length between the groups does not hide a number', () => {
+    for (const gap of [
+      ' '.repeat(9),
+      ' '.repeat(40),
+      '-'.repeat(12),
+      ' \n\t '.repeat(5),
+    ]) {
+      const text = `BVN ${groups(BVN, gap)} is not valid`;
+      for (const out of [maskNuvionText(text), maskReviewWords(text)]) {
+        expect(out.replace(/\D/g, '')).toBe('0137');
+      }
+    }
   });
 
   it('a short number, a date part or a list of words is left alone', () => {
@@ -731,5 +746,29 @@ describe('NUV-02 round 2: what a decision tells the person (D6)', () => {
         entity: { id: '01HXYZ0001ABCDEFGHJKMNPQRS', status: 'rejected' },
       })?.updated,
     ).toBeNull();
+  });
+});
+
+describe('NUV-02 round 3: the place an address stands for (the per-address limit)', () => {
+  it('an IPv4 address is itself; an IPv4-mapped IPv6 address is its IPv4 address', () => {
+    expect(addressPlaceOf('203.0.113.9')).toBe('203.0.113.9');
+    expect(addressPlaceOf(' ::ffff:203.0.113.9 ')).toBe('203.0.113.9');
+  });
+
+  it('an IPv6 address is its /64: every address of the block is one place', () => {
+    const place = addressPlaceOf('2001:db8:1:2::1');
+    expect(place).toBe('2001:0db8:0001:0002/64');
+    expect(addressPlaceOf('2001:DB8:1:2:ffff:ffff:ffff:ffff')).toBe(place);
+    expect(addressPlaceOf('2001:db8:1:2:0:0:0:7')).toBe(place);
+    expect(addressPlaceOf('2001:db8:1:2::')).toBe(place);
+    expect(addressPlaceOf('fe80::1%eth0')).toBe('fe80:0000:0000:0000/64');
+  });
+
+  it('another block is another place; something that is no address is kept as it is', () => {
+    expect(addressPlaceOf('2001:db8:1:3::1')).not.toBe(
+      addressPlaceOf('2001:db8:1:2::1'),
+    );
+    expect(addressPlaceOf('::')).toBe('0000:0000:0000:0000/64');
+    expect(addressPlaceOf('not-an-address')).toBe('not-an-address');
   });
 });

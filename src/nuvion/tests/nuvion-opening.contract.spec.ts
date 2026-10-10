@@ -2385,6 +2385,60 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       await open(y).expect(200);
     });
 
+    it('Nuvion approving an opening that expired makes it live again: the hold comes back and the one account opens', async () => {
+      const x = person();
+      const y = person({ bvn: x.body.bvn });
+      const e = await opened(x);
+      await ageOpening(x, 15);
+      await openingSvc().expireIdleHolds();
+      expect((await row(x))!.state).toBe('expired');
+      expect(await held(x)).toBe(false);
+      decide(e, 'approved', approvedWords);
+      await handler.handle(delivery(e));
+      expect(await row(x)).toMatchObject({ state: 'open', failure: null });
+      expect(await held(x)).toBe(true);
+      expect((await entityRow(x))!.holdExpiredAt).toBeNull();
+      expect(accounts).toHaveLength(1);
+      expect((await wallet(x)).review?.stage).toBe('approved');
+      fresh();
+      await open(y).expect(409);
+    });
+
+    it('Nuvion checking an opening that expired makes it live again too; a refusal on documents leaves it expired', async () => {
+      const x = person();
+      const z = person();
+      const eX = await opened(x);
+      const eZ = await opened(z);
+      await ageOpening(x, 15);
+      await ageOpening(z, 15);
+      await openingSvc().expireIdleHolds();
+      decide(eX, 'pending', { bvnStatus: 'pending', ninStatus: 'pending' });
+      await handler.handle(delivery(eX));
+      expect((await row(x))!.state).toBe('open');
+      expect(await held(x)).toBe(true);
+      expect((await wallet(x)).review?.stage).toBe('checking');
+      decide(eZ, 'rejected', { documentStatus: 'rejected' });
+      await handler.handle(delivery(eZ));
+      expect((await row(z))!.state).toBe('expired');
+      expect(await held(z)).toBe(false);
+    });
+
+    it('an approval for an opening that expired, whose BVN another account took meanwhile, stops it and opens nothing', async () => {
+      const x = person();
+      const y = person({ bvn: x.body.bvn });
+      const e = await opened(x);
+      await ageOpening(x, 15);
+      await openingSvc().expireIdleHolds();
+      await open(y).expect(200);
+      decide(e, 'approved', approvedWords);
+      await handler.handle(delivery(e));
+      expect(await row(x)).toMatchObject({
+        state: 'stopped',
+        failure: 'bvn_held_by_another_account',
+      });
+      expect(accounts).toHaveLength(0);
+    });
+
     it('starting again corrects the same entity with the details sent now, BVN and NIN included, and takes the BVN back', async () => {
       const x = person();
       const e = await opened(x);
@@ -2496,6 +2550,29 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       await open(y).expect(200);
     });
 
+    it('an opening held for a hand look (conflict) is not released here, and one that holds nothing (failed) changes nothing', async () => {
+      const held1 = person();
+      await opened(held1);
+      await prisma.fintavaWalletOpening.update({
+        where: { wawuUserId: held1.id },
+        data: { state: 'conflict', failure: 'entity_held_by_another_account' },
+      });
+      expect(await openingSvc().releaseIdentityHold(held1.id)).toEqual({
+        outcome: 'in_review',
+        before: 'conflict',
+      });
+      expect(await held(held1)).toBe(true);
+      expect((await row(held1))!.state).toBe('conflict');
+      const none = person();
+      createMode = { refuse: 'error_validation_error' };
+      await open(none).expect(422);
+      createMode = 'ok';
+      expect((await openingSvc().releaseIdentityHold(none.id)).outcome).toBe(
+        'not_held',
+      );
+      expect(await row(none)).toMatchObject({ state: 'failed' });
+    });
+
     it('refused while Nuvion is reviewing the person, for a person with a wallet, and for one with no opening', async () => {
       const checking = person();
       const e = await opened(checking);
@@ -2578,6 +2655,23 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       expect(all.filter((r) => r.status === 429).length).toBeGreaterThanOrEqual(
         5,
       );
+    });
+
+    it('the addresses of one IPv6 /64 are one place', async () => {
+      const block = `2001:db8:${randomInt(1, 60000).toString(16)}:${randomInt(1, 60000).toString(16)}`;
+      for (let i = 1; i <= 4; i += 1) {
+        await openFrom(person(), `${block}::${i}`).expect(200);
+      }
+      const over = await openFrom(
+        person(),
+        `${block}:${randomInt(1, 60000).toString(16)}:1:2:3`,
+      ).expect(429);
+      expect(body(over).reason?.code).toBe('open_address_limited');
+      // The next block is another place.
+      await openFrom(
+        person(),
+        `2001:db8:${randomInt(1, 60000).toString(16)}:${randomInt(1, 60000).toString(16)}::1`,
+      ).expect(200);
     });
 
     it('a request that names no client address (a call on the server itself) is not counted by address', async () => {

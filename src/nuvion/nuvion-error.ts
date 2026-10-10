@@ -445,14 +445,14 @@ function maskSecretRuns(text: string, secret: string): string {
 
 /**
  * A number in a text, however it is written: a digit, then more digits
- * joined by up to 8 separators each time. A separator is any character that
+ * joined by any number of separators each time. A separator is any character that
  * is not a letter or a digit (spaces and tabs and newlines of every width,
  * punctuation, slashes, underscores, brackets, dashes of every kind,
  * zero-width and other format characters) or the letter x or X, which some
  * people write between groups ("2221x739x0137"; the receipts' number
  * reading takes the same). Run over text whose digits are already ASCII.
  */
-const DIGIT_RUN = /\d(?:(?:[^\p{L}\d]|[xX]){0,8}\d)+/gu;
+const DIGIT_RUN = /\d(?:(?:[^\p{L}\d]|[xX])*\d)+/gu;
 
 /** A run of 7 or more digits (every separator dropped) cut to its last 4. */
 function maskDigitRun(run: string): string {

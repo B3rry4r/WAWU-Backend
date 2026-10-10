@@ -5,6 +5,7 @@ import {
   alignClaim,
   CLAIM_LOST,
   type ClaimAlignment,
+  EXPIRED_STATE,
 } from '../../money/opening/bvn-claim';
 import {
   type DecisionNotice,
@@ -60,14 +61,19 @@ const wait = (note: string): NuvionHandlerResult => ({ outcome: 'wait', note });
  * - **recorded**: NuvionEntity takes Nuvion's review word, each check's
  *   word (the BVN's, the NIN's, the ID document's, the proof of address's)
  *   and Nuvion's own words for a refusal, masked; `decidedAt` when a decision
- *   is new (the word became one, or the same word came after the person's
- *   corrected details with Nuvion's own update time moved on; D3). The
- *   person's opening follows the stage (src/money/opening/review-stage.ts),
- *   so the wallet gate and `GET /money/wallet` agree with Nuvion.
- * - **the claim on the BVN** follows the stage (src/money/opening/
- *   bvn-claim.ts): let go on rejected and stopped, taken back otherwise. An
- *   approval whose BVN another account holds meanwhile opens nothing: the
- *   person is stopped and told to contact support.
+ *   is new (`isNewDecision`: the word became one, or the same word after the
+ *   person submitted since the last decision with a check that came to a
+ *   verdict; Nuvion's own `updated` time is not read; N4). The person's
+ *   opening follows the stage (src/money/opening/review-stage.ts), so the
+ *   wallet gate and `GET /money/wallet` agree with Nuvion. An opening that
+ *   expired and that Nuvion is checking or has approved is live again.
+ * - **the claim on the BVN** follows what the entity still carries
+ *   (src/money/opening/bvn-claim.ts, `holdsBvn`): held while it is with
+ *   Nuvion, approved, refused only on documents, or has an account; let go
+ *   by a refusal of the BVN or NIN themselves and by a failed or suspended
+ *   entity with no account. An approval whose BVN another account holds
+ *   meanwhile opens nothing: the person is stopped and told to contact
+ *   support (once).
  * - **told**: a new decision (approved, rejected with what to fix, stopped)
  *   writes one notification (NotificationService, kind `identity_review`),
  *   after it is recorded and only by the delivery that recorded it, so a
@@ -241,6 +247,24 @@ export class NuvionOpeningHandler implements NuvionEventHandler {
         },
       });
       const stage = reviewStageOf(after);
+      // An opening that expired (idle too long, or released by support) and
+      // that Nuvion is nevertheless checking or has approved is live again:
+      // the entity carries the BVN in a live state, so the hold comes back
+      // (`alignClaim` below; if another account took the number meanwhile,
+      // the opening is stopped and nothing is opened). A refusal or a wait
+      // for documents leaves it expired: the person starts again.
+      if (stage === 'checking' || stage === 'approved') {
+        const revived = await tx.fintavaWalletOpening.updateMany({
+          where: { wawuUserId, provider: 'nuvion', state: EXPIRED_STATE },
+          data: { state: openingStateForStage(stage), failure: null },
+        });
+        if (revived.count === 1) {
+          await tx.nuvionEntity.updateMany({
+            where: { wawuUserId },
+            data: { holdExpiredAt: null },
+          });
+        }
+      }
       await tx.fintavaWalletOpening.updateMany({
         where: {
           wawuUserId,

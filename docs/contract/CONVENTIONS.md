@@ -935,7 +935,12 @@ this applies and every answer is as in section 9.
   details to `POST /money/wallet/open` as for a correction: the same entity
   at Nuvion is corrected, BVN and NIN included, the claim is taken on the BVN
   typed (the plain `409` if another account holds it by then), and the review
-  reads `needs_documents`.
+  reads `needs_documents`. If Nuvion nevertheless starts checking or approves
+  the entity of an opening that expired, the opening is live again: its BVN
+  is held again (or, if another account took the number meanwhile, the
+  opening is stopped and nothing is opened) and, once approved, the one
+  account is opened as for any approval. A refusal about documents leaves it
+  expired.
 - **Support lets go of a hold at once.** `POST /admin/identity-holds/{wawuUserId}/release`
   (roles `superadmin` and `support`; `reviewer` and `finance` are refused):
   the holder's opening is marked expired exactly as an idle one is, and the
@@ -944,7 +949,10 @@ this applies and every answer is as in section 9.
   state }`); it is audited (`AdminOpsAudit`: admin, account, the state
   before) and logged by account and admin id only. `404` for an account with
   no opening; `409` while Nuvion is still reviewing the person (`open`,
-  `opening`, `unknown`) and for an account with a wallet. Safe to repeat.
+  `opening`, `unknown`), for an opening held for a hand look (`conflict`) and
+  for an account with a wallet. It releases an opening at documents needed,
+  refused or stopped; a repeat, or an opening that holds nothing, changes
+  nothing. Safe to repeat.
 - **Tries.** At most 3 opening tries a day per account (`BVN_CHECKS_PER_DAY`,
   PROVISIONAL, 24 hours rolling, the ledger `BvnCheckAttempt` with outcome
   `opening`, written by KYC-01's `reserveDailyAttempt`): a request that takes
@@ -959,9 +967,10 @@ this applies and every answer is as in section 9.
   a rolling hour across every account: the next is `429 open_address_limited`
   with `retryAfterSeconds`, before anything is claimed. The address is the
   caller's as the proxy gives it (`X-Forwarded-For`, as the BVN check's
-  limit reads it) and is stored only as a keyed hash on the try
-  (`BvnCheckAttempt.addressKey`); a call with no client address is not
-  counted by address.
+  limit reads it); an IPv6 address stands for its /64, so rotating through
+  the addresses of one connection is still one place. It is stored only as a
+  keyed hash on the try (`BvnCheckAttempt.addressKey`); a call with no client
+  address is not counted by address.
 - **A decision.** Nuvion's entity is read back before anything is recorded
   (`GET /entities/{id}`). A decision is new when it is the first, or the word
   changed (the entity went through `pending`, or from one decision to
@@ -986,8 +995,9 @@ this applies and every answer is as in section 9.
   validation; a malformed body gets the validation pipe's `400` first.
 - **Nuvion's words are masked** before they are stored or logged: any run of
   7 or more digits is cut to its last 4 after every separator is removed
-  from between the digits (any width of space, tab, newline, punctuation,
-  slash, underscore, bracket, dash, zero-width character, or the letter x)
+  from between the digits, however many there are (any width of space, tab,
+  newline, punctuation, slash, underscore, bracket, dash, zero-width
+  character, or the letter x)
   and every Unicode decimal digit is read as 0 to 9 (full-width and
   Arabic-Indic digits too). A letter or digit glued to the number is cut
   with it where the stored words are masked.

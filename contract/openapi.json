@@ -13803,6 +13803,2353 @@
         ]
       }
     },
+    "/api/hub/admin/identity-holds/{wawuUserId}/release": {
+      "post": {
+        "operationId": "AdminIdentityHoldsController_release",
+        "parameters": [
+          {
+            "name": "wawuUserId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityHoldReleaseView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Lets go of one account's hold on its BVN at once. The opening is marked\nexpired and the person is told once; nothing is deleted at Nuvion.\nRefused (409) while Nuvion is still reviewing the person, or when the\naccount has a wallet. Safe to repeat: a second call changes nothing.\n\n`@HttpCode(200)`: nothing is created, and the ResponseInterceptor stamps\n`statusCode: 200` into the body regardless (hazard H-3).",
+        "tags": [
+          "AdminIdentityHolds"
+        ]
+      }
+    },
+    "/api/hub/money/pin": {
+      "get": {
+        "operationId": "MoneyPinController_state",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PinStateView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Is a PIN set, when it last changed, tries left, and the lock if any.",
+        "tags": [
+          "MoneyPin"
+        ],
+        "x-wawu-built-by": "MONEY-09"
+      },
+      "post": {
+        "operationId": "MoneyPinController_set",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPinDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PinStateView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: pin_mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, pin_already_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Set the first PIN (A9, A10, W36). Both entries in one request; a difference is pin_mismatch.",
+        "tags": [
+          "MoneyPin"
+        ],
+        "x-wawu-built-by": "MONEY-09"
+      },
+      "put": {
+        "operationId": "MoneyPinController_change",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN. Only ever in this header: never in a URL, a body or a log.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePinDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PinStateView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: pin_mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Change the PIN. The current PIN is X-Transaction-Pin.",
+        "tags": [
+          "MoneyPin"
+        ],
+        "x-wawu-built-by": "MONEY-09"
+      }
+    },
+    "/api/hub/money/pin/verify": {
+      "post": {
+        "operationId": "MoneyPinController_verify",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN. Only ever in this header: never in a URL, a body or a log.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PinStateView"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Check the PIN without moving money, for a screen that must confirm the\nperson before it changes something. A wrong PIN counts toward the lock\nexactly as it does on a debit.",
+        "tags": [
+          "MoneyPin"
+        ],
+        "x-wawu-built-by": "MONEY-09"
+      }
+    },
+    "/api/hub/money/pin/reset": {
+      "post": {
+        "operationId": "MoneyPinResetController_startReset",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PinResetView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "reason.code: reset_codes_exhausted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Forgot PIN (W37): send a code to the phone on file. Asked again before\nresendAvailableAt, it answers the same reset and sends nothing; after\nit, a new code (the old one stops working).",
+        "tags": [
+          "MoneyPinReset"
+        ],
+        "x-wawu-built-by": "MONEY-14"
+      }
+    },
+    "/api/hub/money/pin/reset/confirm": {
+      "post": {
+        "operationId": "MoneyPinResetController_confirmReset",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmPinResetDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PinStateView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: reset_code_invalid, pin_mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The code and the new PIN. Clears the lock and the wrong-try count, and turns biometric approval off.",
+        "tags": [
+          "MoneyPinReset"
+        ],
+        "x-wawu-built-by": "MONEY-14"
+      }
+    },
+    "/api/hub/money/device": {
+      "get": {
+        "operationId": "MoneyDeviceController_device",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalDeviceView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Which phone, if any, may approve with a fingerprint or face (W35's switch).",
+        "tags": [
+          "MoneyDevice"
+        ],
+        "x-wawu-built-by": "MONEY-14"
+      },
+      "put": {
+        "operationId": "MoneyDeviceController_register",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN. Only ever in this header: never in a URL, a body or a log.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterApprovalDeviceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalDeviceView"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Turn it on for this phone (W35): its public key, with the current PIN in\nX-Transaction-Pin. Replaces any other phone: one per person.",
+        "tags": [
+          "MoneyDevice"
+        ],
+        "x-wawu-built-by": "MONEY-14"
+      },
+      "delete": {
+        "operationId": "MoneyDeviceController_remove",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalDeviceView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Turn it off (W35). Needs no PIN: it only takes a way to approve away.",
+        "tags": [
+          "MoneyDevice"
+        ],
+        "x-wawu-built-by": "MONEY-14"
+      }
+    },
+    "/api/hub/money/device/challenge": {
+      "post": {
+        "operationId": "MoneyDeviceController_challenge",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalChallengeView"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: device_approval_refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One challenge for one approval, for the registered phone to sign with the request.",
+        "tags": [
+          "MoneyDevice"
+        ],
+        "x-wawu-built-by": "MONEY-14"
+      }
+    },
+    "/api/hub/money/approval/verify": {
+      "post": {
+        "operationId": "MoneyDeviceController_verify",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PinStateView"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, device_approval_refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Check an approval, the PIN or a fingerprint or face, without moving\nmoney: what every debit asks for, for a screen that must confirm the\nperson first (and for W35 to confirm the phone's key works). A PIN try\ncounts as on a debit; a refused biometric approval uses none.",
+        "tags": [
+          "MoneyDevice"
+        ],
+        "x-wawu-built-by": "MONEY-14"
+      }
+    },
+    "/api/hub/money/wallet/balance": {
+      "get": {
+        "operationId": "MoneyBalanceController_balance",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletBalanceView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Fintava's available balance, asked for on every call (W1, W9, W13).\n503 provider_unreachable when the bank does not answer (W6): never a 0.",
+        "tags": [
+          "MoneyBalance"
+        ],
+        "x-wawu-built-by": "MONEY-11"
+      }
+    },
+    "/api/hub/money/identity": {
+      "get": {
+        "operationId": "MoneyIdentityController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletIdentityView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Where the person's identity step stands: last 4 digits only, and checks left today.",
+        "tags": [
+          "MoneyIdentity"
+        ],
+        "x-wawu-built-by": "KYC-01"
+      }
+    },
+    "/api/hub/money/identity/bvn": {
+      "post": {
+        "operationId": "MoneyIdentityController_checkBvn",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BvnCheckDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BvnCheckView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_already_open, step_not_used",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reason.code: bvn_not_confirmed, bvn_phone_mismatch, phone_not_nigerian",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "reason.code: identity_checks_exhausted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Checks the BVN with Fintava (charged per check) and keeps the NIN given\nwith it for account opening. The BVN's phone must be the account's phone\n(A14: `bvn_phone_mismatch`). On a pass, answers A5's prefill once; it is\nnot stored. Limited per person per day (`identity_checks_exhausted`) and\nper address by the app's throttler.",
+        "tags": [
+          "MoneyIdentity"
+        ],
+        "x-wawu-built-by": "KYC-01"
+      }
+    },
+    "/api/hub/money/identity/selfie": {
+      "get": {
+        "operationId": "MoneyIdentityController_getSelfie",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelfieMatchView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The selfie step: whether the selfie has matched the BVN photo, and matches left today.",
+        "tags": [
+          "MoneyIdentity"
+        ],
+        "x-wawu-built-by": "KYC-02"
+      },
+      "post": {
+        "operationId": "MoneyIdentityController_matchSelfie",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelfieMatchDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelfieMatchView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: selfie_already_matched, bvn_not_checked, wallet_already_open",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reason.code: selfie_not_matched",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "reason.code: selfie_checks_exhausted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "A6: matches the selfie against the BVN record's photo with Fintava\n(charged per match, a failed one too). A face match, not a liveness\ncheck. Needs a passed BVN check, and the BVN it passed with\n(`bvn_not_checked` otherwise). A failed match is A16\n(`selfie_not_matched`, with matches left today); the fourth in 24 hours\nis `selfie_checks_exhausted`, and Fintava is not asked. Only an explicit\nmatch from Fintava passes: an answer with no verdict is\n`provider_unreachable` and still counts. A match counts only for the\nBVN check it was compared against (`bvn_not_checked` if another check\npassed meanwhile). Neither the\nselfie nor the BVN photo is stored or logged. Limited per address by the\napp's throttler, as the BVN check is.",
+        "tags": [
+          "MoneyIdentity"
+        ],
+        "x-wawu-built-by": "KYC-02"
+      }
+    },
+    "/api/hub/money/identity/occupation": {
+      "put": {
+        "operationId": "MoneyIdentityController_setOccupation",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IdentityOccupationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletIdentityView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: bvn_not_checked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "A5: stores the occupation the person typed. Needs a passed BVN check first.",
+        "tags": [
+          "MoneyIdentity"
+        ],
+        "x-wawu-built-by": "KYC-01"
+      }
+    },
+    "/api/hub/money/wallet": {
+      "get": {
+        "operationId": "MoneyWalletController_wallet",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The wallet as WAWU records it: state, account details, limits, PIN state.\nNever calls Fintava and never carries a balance. With no wallet it answers\n200 with state not_open (R-6), so the Wallet tab can lead to Open your\nwallet; while the account is being opened, state opening (A7); once\nopen, the account number Fintava gave (W1, A8).",
+        "tags": [
+          "MoneyWallet"
+        ],
+        "x-wawu-built-by": "MONEY-12"
+      }
+    },
+    "/api/hub/money/wallet/open": {
+      "post": {
+        "operationId": "MoneyWalletController_open",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenNairaWalletDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: bvn_not_checked, selfie_required, identity_has_wallet, phone_held_by_other_identity, identity_under_review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reason.code: account_not_opened, phone_not_nigerian",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "reason.code: identity_checks_exhausted, open_address_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The end of Open your wallet (A7): opens the person's account at Fintava\nwith the BVN and NIN whose check passed (KYC-01), after a selfie that\nmatched against that check (KYC-02), A5's name and date of birth, the\naddress typed, and the account's email. None of these is stored.\n\nSafe to repeat: one account per person, whatever the number of taps.\nAnswers the wallet: `open` with its account number, or `opening` while\nFintava's answer is being confirmed (a lost answer is checked with\nFintava, never sent again blindly; GET /money/wallet shows when it\nsettles). An open wallet is answered as it is, with nothing sent.",
+        "tags": [
+          "MoneyWallet"
+        ],
+        "x-wawu-built-by": "MONEY-12"
+      }
+    },
+    "/api/hub/money/beneficiaries": {
+      "get": {
+        "operationId": "MoneySavedAccountsController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BeneficiaryView"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Saved beneficiaries, newest first (W8). Their number is WalletView.beneficiaryCount (W35).",
+        "tags": [
+          "MoneySavedAccounts"
+        ],
+        "x-wawu-built-by": "WALLET-14"
+      },
+      "post": {
+        "operationId": "MoneySavedAccountsController_add",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBeneficiaryDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BeneficiaryView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: self_transfer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: recipient_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, recipient_has_no_wallet, beneficiary_limit_reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reason.code: name_check_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Save a beneficiary (W12 \"Save as beneficiary\"): a WAWU user with a\nwallet, or a bank account the bank confirms by name check (the name\nsaved is the bank's). Saving one already saved answers the existing one.\nAt most BENEFICIARIES_MAX per person (`beneficiary_limit_reached`).",
+        "tags": [
+          "MoneySavedAccounts"
+        ],
+        "x-wawu-built-by": "WALLET-14"
+      }
+    },
+    "/api/hub/money/beneficiaries/{id}": {
+      "delete": {
+        "operationId": "MoneySavedAccountsController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Remove a saved beneficiary. Removing one already gone, or not the caller's, is a 200 that removes nothing.",
+        "tags": [
+          "MoneySavedAccounts"
+        ],
+        "x-wawu-built-by": "WALLET-14"
+      }
+    },
+    "/api/hub/money/payout-account": {
+      "get": {
+        "operationId": "MoneySavedAccountsController_getPayoutAccount",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/PayoutAccountView"
+                    }
+                  ],
+                  "nullable": true
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The payout account (A21, W17's default destination), or null when none is saved.",
+        "tags": [
+          "MoneySavedAccounts"
+        ],
+        "x-wawu-built-by": "WALLET-14"
+      },
+      "put": {
+        "operationId": "MoneySavedAccountsController_setPayoutAccount",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PayoutAccountDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PayoutAccountView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reason.code: name_check_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Save or replace the payout account. The server name-checks it with the\nbank and compares the bank's name with the BVN name: an account in\nanother name is saved and flagged (`matchesBvnName: false`).",
+        "tags": [
+          "MoneySavedAccounts"
+        ],
+        "x-wawu-built-by": "WALLET-14"
+      }
+    },
+    "/api/hub/money/transactions": {
+      "get": {
+        "operationId": "MoneyHistoryController_list",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Rows per page, 1 to 100.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "filter",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": "all",
+              "type": "string",
+              "enum": [
+                "all",
+                "money_in",
+                "money_out",
+                "bills",
+                "content"
+              ]
+            }
+          },
+          {
+            "name": "month",
+            "required": false,
+            "in": "query",
+            "description": "Only rows from this month, YYYY-MM in Africa/Lagos time (W28 \"Bills in September\").",
+            "schema": {
+              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "required": false,
+            "in": "query",
+            "description": "Free-text search over the counterparty's name, the description, the\nnote and the reference. Spaces around it are dropped first; what is\nleft must be 2 to 60 characters.",
+            "schema": {
+              "minLength": 2,
+              "maxLength": 60,
+              "type": "string"
+            }
+          },
+          {
+            "name": "group",
+            "required": false,
+            "in": "query",
+            "description": "A grouped row's `group.key`: lists the movements it stands for, one per\nrow, instead of the history. Opaque: send it back as given.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "`nextCursor` from the previous page. Opaque: send it back as given. Absent for the first page.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionPage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "W26, W28: search, filter chips, an optional month. W1's recent rows are the first page with limit=3.",
+        "tags": [
+          "MoneyHistory"
+        ],
+        "x-wawu-built-by": "MONEY-15"
+      }
+    },
+    "/api/hub/money/transactions/summary": {
+      "get": {
+        "operationId": "MoneyHistoryController_summary",
+        "parameters": [
+          {
+            "name": "month",
+            "required": true,
+            "in": "query",
+            "description": "YYYY-MM in Africa/Lagos time.",
+            "schema": {
+              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MonthlySummaryView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "W26's In and Out for one month. Declared before transactions/{id} so the literal path wins.",
+        "tags": [
+          "MoneyHistory"
+        ],
+        "x-wawu-built-by": "MONEY-15"
+      }
+    },
+    "/api/hub/money/transactions/{id}": {
+      "get": {
+        "operationId": "MoneyHistoryController_detail",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One row as a receipt (W27). Only the wallet's owner can read it.",
+        "tags": [
+          "MoneyHistory"
+        ],
+        "x-wawu-built-by": "MONEY-15"
+      }
+    },
+    "/api/hub/money/statements": {
+      "get": {
+        "operationId": "MoneyStatementController_statement",
+        "parameters": [
+          {
+            "name": "from",
+            "required": true,
+            "in": "query",
+            "description": "The first day of the statement, YYYY-MM-DD in Africa/Lagos time, included.",
+            "schema": {
+              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$",
+              "example": "2026-09-01",
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": true,
+            "in": "query",
+            "description": "The last day of the statement, YYYY-MM-DD in Africa/Lagos time,\nincluded. On or after `from`, not after today in Lagos, and at most\n366 days from `from`, both days counted (STATEMENT_MAX_DAYS).",
+            "schema": {
+              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$",
+              "example": "2026-09-30",
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "required": true,
+            "in": "query",
+            "description": "The file. Only `csv` today: Fintava issues no stamped statement\n(WALLET-27, BACKEND_GAPS G-68), so there is no `pdf`.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "csv"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatementView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: statement_too_large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "reason.code: statement_rate_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: statement_busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One statement. `from` and `to` are calendar days in Africa/Lagos time\nand BOTH are included: from 00:00 on `from` to 23:59:59.999 on `to`,\nLagos time. A day that does not exist, `from` after `to`, `to` after\ntoday in Lagos, or more than 366 days is a 400; a period with more than\n50,000 movements is `400 statement_too_large`. The app's global\nper-address limits apply as on every route; on top, one person may ask\nfor 5 a minute and 30 an hour (`429 statement_rate_limited`, counted\nhere, after the token is verified), and two statements are built at\nonce in the process (`503 statement_busy` after 5 s of waiting).\nThe route's own 400s never count: the period is checked before the\nperson is counted, and `statement_too_large` gives the place back.",
+        "tags": [
+          "MoneyStatement"
+        ],
+        "x-wawu-built-by": "WALLET-27"
+      }
+    },
+    "/api/hub/money/fees/quote": {
+      "get": {
+        "operationId": "MoneyFeesController_feeQuote",
+        "parameters": [
+          {
+            "name": "kind",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "wawu_transfer",
+                "bank_transfer",
+                "purchase",
+                "bill"
+              ]
+            }
+          },
+          {
+            "name": "amountKobo",
+            "required": true,
+            "in": "query",
+            "description": "In kobo: what the recipient gets on a send, the price on a purchase,\nthe bill's own amount on a bill. Fees are added on top, never taken\nout of it. Digits only: `100.00` (a naira decimal), `1e4` or `10,000`\nis a 400, never read as some other number of kobo.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "billCategory",
+            "required": false,
+            "in": "query",
+            "description": "Required when kind is `bill`; any other kind with it is a 400.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "electricity",
+                "cable",
+                "airtime",
+                "data"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeeQuoteView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "What a send, a withdrawal, a purchase or a bill will cost, before the\nPIN (W10, W17, H14): Fintava's charge plus WAWU's fee from config\n(R-10, R-31), each charge as its own part, the total, and a signed\nquote the paying request can send back. Nothing is reserved and\nFintava is not asked. A purchase or bill whose total is above\nMERCHANT_MAX_PER_TXN_KOBO is amount_out_of_range with maximumKobo.\n\nNUV-07: the provider's charge comes from the running provider's\nsettings. While any of them is unset (Nuvion's, until the owner fills\nthem in) every quote is fees_not_set, before the wallet gate; under\nNuvion, which has no bill payments, a bill is target_not_payable.",
+        "tags": [
+          "MoneyFees"
+        ],
+        "x-wawu-built-by": "WALLET-15"
+      }
+    },
+    "/api/hub/money/transactions/{id}/receipt": {
+      "post": {
+        "operationId": "MoneyReceiptController_issue",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReceiptView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "W41: the receipt and its code. The same code every time.",
+        "tags": [
+          "MoneyReceipt"
+        ],
+        "x-wawu-built-by": "WALLET-18"
+      }
+    },
+    "/api/hub/money/transactions/{id}/receipt/image": {
+      "get": {
+        "operationId": "MoneyReceiptController_image",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The receipt as a PNG image.",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Receipts are busy right now. Try again in a few seconds."
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "W42: the receipt as a PNG, always a white document.",
+        "tags": [
+          "MoneyReceipt"
+        ],
+        "x-wawu-built-by": "WALLET-18"
+      }
+    },
+    "/api/hub/money/transactions/{id}/receipt/pdf": {
+      "get": {
+        "operationId": "MoneyReceiptController_pdf",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The receipt as a one-page A4 PDF.",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Receipts are busy right now. Try again in a few seconds."
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "W43: the receipt as a one-page A4 PDF.",
+        "tags": [
+          "MoneyReceipt"
+        ],
+        "x-wawu-built-by": "WALLET-18"
+      }
+    },
+    "/api/hub/r/{code}": {
+      "get": {
+        "operationId": "PublicReceiptController_page",
+        "parameters": [
+          {
+            "name": "code",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The receipt check page: amount, date, status, both sides masked, reference.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No receipt has this code. The same page for every miss.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "PublicReceipt"
+        ]
+      }
+    },
+    "/api/hub/money/recipients": {
+      "get": {
+        "operationId": "MoneyRecipientController_search",
+        "parameters": [
+          {
+            "name": "q",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minLength": 2,
+              "maxLength": 60,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RecipientView"
+                  },
+                  "maxItems": 20
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "q is missing, repeated, shorter than 2 characters (not counting a leading @) or longer than 60, or another field was sent. No `reason`: a malformed field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyPlainErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "reason.code: recipient_search_rate_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "WAWU users with an open wallet, by name, @handle or phone (W7). Blocked people never appear. At most 20.",
+        "tags": [
+          "MoneyRecipient"
+        ],
+        "x-wawu-built-by": "WALLET-08",
+        "x-wawu-max-items": 20
+      }
+    },
+    "/api/hub/money/recipients/recent": {
+      "get": {
+        "operationId": "MoneyRecipientController_recentRecipients",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RecipientView"
+                  },
+                  "maxItems": 10
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The people this user sent money to most recently, newest first (W7). At most 10.",
+        "tags": [
+          "MoneyRecipient"
+        ],
+        "x-wawu-built-by": "WALLET-08",
+        "x-wawu-max-items": 10
+      }
+    },
     "/api/hub/admin/events": {
       "get": {
         "operationId": "AdminEventsController_list",
@@ -22652,2322 +24999,6 @@
         ]
       }
     },
-    "/api/hub/money/pin": {
-      "get": {
-        "operationId": "MoneyPinController_state",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PinStateView"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Is a PIN set, when it last changed, tries left, and the lock if any.",
-        "tags": [
-          "MoneyPin"
-        ],
-        "x-wawu-built-by": "MONEY-09"
-      },
-      "post": {
-        "operationId": "MoneyPinController_set",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SetPinDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PinStateView"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "reason.code: pin_mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, pin_already_set",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Set the first PIN (A9, A10, W36). Both entries in one request; a difference is pin_mismatch.",
-        "tags": [
-          "MoneyPin"
-        ],
-        "x-wawu-built-by": "MONEY-09"
-      },
-      "put": {
-        "operationId": "MoneyPinController_change",
-        "parameters": [
-          {
-            "name": "X-Transaction-Pin",
-            "in": "header",
-            "description": "The four-digit transaction PIN. Only ever in this header: never in a URL, a body or a log.",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[0-9]{4}$"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ChangePinDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PinStateView"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "reason.code: pin_mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "reason.code: pin_required, pin_incorrect",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen, pin_locked",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Change the PIN. The current PIN is X-Transaction-Pin.",
-        "tags": [
-          "MoneyPin"
-        ],
-        "x-wawu-built-by": "MONEY-09"
-      }
-    },
-    "/api/hub/money/pin/verify": {
-      "post": {
-        "operationId": "MoneyPinController_verify",
-        "parameters": [
-          {
-            "name": "X-Transaction-Pin",
-            "in": "header",
-            "description": "The four-digit transaction PIN. Only ever in this header: never in a URL, a body or a log.",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[0-9]{4}$"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PinStateView"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "reason.code: pin_required, pin_incorrect",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen, pin_locked",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Check the PIN without moving money, for a screen that must confirm the\nperson before it changes something. A wrong PIN counts toward the lock\nexactly as it does on a debit.",
-        "tags": [
-          "MoneyPin"
-        ],
-        "x-wawu-built-by": "MONEY-09"
-      }
-    },
-    "/api/hub/money/pin/reset": {
-      "post": {
-        "operationId": "MoneyPinResetController_startReset",
-        "parameters": [],
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PinResetView"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "reason.code: reset_codes_exhausted",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "reason.code: provider_unreachable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Forgot PIN (W37): send a code to the phone on file. Asked again before\nresendAvailableAt, it answers the same reset and sends nothing; after\nit, a new code (the old one stops working).",
-        "tags": [
-          "MoneyPinReset"
-        ],
-        "x-wawu-built-by": "MONEY-14"
-      }
-    },
-    "/api/hub/money/pin/reset/confirm": {
-      "post": {
-        "operationId": "MoneyPinResetController_confirmReset",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ConfirmPinResetDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PinStateView"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "reason.code: reset_code_invalid, pin_mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "The code and the new PIN. Clears the lock and the wrong-try count, and turns biometric approval off.",
-        "tags": [
-          "MoneyPinReset"
-        ],
-        "x-wawu-built-by": "MONEY-14"
-      }
-    },
-    "/api/hub/money/device": {
-      "get": {
-        "operationId": "MoneyDeviceController_device",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApprovalDeviceView"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Which phone, if any, may approve with a fingerprint or face (W35's switch).",
-        "tags": [
-          "MoneyDevice"
-        ],
-        "x-wawu-built-by": "MONEY-14"
-      },
-      "put": {
-        "operationId": "MoneyDeviceController_register",
-        "parameters": [
-          {
-            "name": "X-Transaction-Pin",
-            "in": "header",
-            "description": "The four-digit transaction PIN. Only ever in this header: never in a URL, a body or a log.",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[0-9]{4}$"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RegisterApprovalDeviceDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApprovalDeviceView"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "reason.code: pin_required, pin_incorrect",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen, pin_locked",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Turn it on for this phone (W35): its public key, with the current PIN in\nX-Transaction-Pin. Replaces any other phone: one per person.",
-        "tags": [
-          "MoneyDevice"
-        ],
-        "x-wawu-built-by": "MONEY-14"
-      },
-      "delete": {
-        "operationId": "MoneyDeviceController_remove",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApprovalDeviceView"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Turn it off (W35). Needs no PIN: it only takes a way to approve away.",
-        "tags": [
-          "MoneyDevice"
-        ],
-        "x-wawu-built-by": "MONEY-14"
-      }
-    },
-    "/api/hub/money/device/challenge": {
-      "post": {
-        "operationId": "MoneyDeviceController_challenge",
-        "parameters": [],
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApprovalChallengeView"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "reason.code: device_approval_refused",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "One challenge for one approval, for the registered phone to sign with the request.",
-        "tags": [
-          "MoneyDevice"
-        ],
-        "x-wawu-built-by": "MONEY-14"
-      }
-    },
-    "/api/hub/money/approval/verify": {
-      "post": {
-        "operationId": "MoneyDeviceController_verify",
-        "parameters": [
-          {
-            "name": "X-Transaction-Pin",
-            "in": "header",
-            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "pattern": "^[0-9]{4}$"
-            }
-          },
-          {
-            "name": "X-Device-Approval",
-            "in": "header",
-            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PinStateView"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "reason.code: pin_required, pin_incorrect, device_approval_refused",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen, pin_locked",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Check an approval, the PIN or a fingerprint or face, without moving\nmoney: what every debit asks for, for a screen that must confirm the\nperson first (and for W35 to confirm the phone's key works). A PIN try\ncounts as on a debit; a refused biometric approval uses none.",
-        "tags": [
-          "MoneyDevice"
-        ],
-        "x-wawu-built-by": "MONEY-14"
-      }
-    },
-    "/api/hub/money/wallet/balance": {
-      "get": {
-        "operationId": "MoneyBalanceController_balance",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WalletBalanceView"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "reason.code: provider_unreachable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Fintava's available balance, asked for on every call (W1, W9, W13).\n503 provider_unreachable when the bank does not answer (W6): never a 0.",
-        "tags": [
-          "MoneyBalance"
-        ],
-        "x-wawu-built-by": "MONEY-11"
-      }
-    },
-    "/api/hub/money/identity": {
-      "get": {
-        "operationId": "MoneyIdentityController_get",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WalletIdentityView"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Where the person's identity step stands: last 4 digits only, and checks left today.",
-        "tags": [
-          "MoneyIdentity"
-        ],
-        "x-wawu-built-by": "KYC-01"
-      }
-    },
-    "/api/hub/money/identity/bvn": {
-      "post": {
-        "operationId": "MoneyIdentityController_checkBvn",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/BvnCheckDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BvnCheckView"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_already_open, step_not_used",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "reason.code: bvn_not_confirmed, bvn_phone_mismatch, phone_not_nigerian",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "reason.code: identity_checks_exhausted",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "reason.code: provider_unreachable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Checks the BVN with Fintava (charged per check) and keeps the NIN given\nwith it for account opening. The BVN's phone must be the account's phone\n(A14: `bvn_phone_mismatch`). On a pass, answers A5's prefill once; it is\nnot stored. Limited per person per day (`identity_checks_exhausted`) and\nper address by the app's throttler.",
-        "tags": [
-          "MoneyIdentity"
-        ],
-        "x-wawu-built-by": "KYC-01"
-      }
-    },
-    "/api/hub/money/identity/selfie": {
-      "get": {
-        "operationId": "MoneyIdentityController_getSelfie",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SelfieMatchView"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "The selfie step: whether the selfie has matched the BVN photo, and matches left today.",
-        "tags": [
-          "MoneyIdentity"
-        ],
-        "x-wawu-built-by": "KYC-02"
-      },
-      "post": {
-        "operationId": "MoneyIdentityController_matchSelfie",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SelfieMatchDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SelfieMatchView"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: selfie_already_matched, bvn_not_checked, wallet_already_open",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "reason.code: selfie_not_matched",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "reason.code: selfie_checks_exhausted",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "reason.code: provider_unreachable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "A6: matches the selfie against the BVN record's photo with Fintava\n(charged per match, a failed one too). A face match, not a liveness\ncheck. Needs a passed BVN check, and the BVN it passed with\n(`bvn_not_checked` otherwise). A failed match is A16\n(`selfie_not_matched`, with matches left today); the fourth in 24 hours\nis `selfie_checks_exhausted`, and Fintava is not asked. Only an explicit\nmatch from Fintava passes: an answer with no verdict is\n`provider_unreachable` and still counts. A match counts only for the\nBVN check it was compared against (`bvn_not_checked` if another check\npassed meanwhile). Neither the\nselfie nor the BVN photo is stored or logged. Limited per address by the\napp's throttler, as the BVN check is.",
-        "tags": [
-          "MoneyIdentity"
-        ],
-        "x-wawu-built-by": "KYC-02"
-      }
-    },
-    "/api/hub/money/identity/occupation": {
-      "put": {
-        "operationId": "MoneyIdentityController_setOccupation",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/IdentityOccupationDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WalletIdentityView"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: bvn_not_checked",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "A5: stores the occupation the person typed. Needs a passed BVN check first.",
-        "tags": [
-          "MoneyIdentity"
-        ],
-        "x-wawu-built-by": "KYC-01"
-      }
-    },
-    "/api/hub/money/wallet": {
-      "get": {
-        "operationId": "MoneyWalletController_wallet",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WalletView"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "The wallet as WAWU records it: state, account details, limits, PIN state.\nNever calls Fintava and never carries a balance. With no wallet it answers\n200 with state not_open (R-6), so the Wallet tab can lead to Open your\nwallet; while the account is being opened, state opening (A7); once\nopen, the account number Fintava gave (W1, A8).",
-        "tags": [
-          "MoneyWallet"
-        ],
-        "x-wawu-built-by": "MONEY-12"
-      }
-    },
-    "/api/hub/money/wallet/open": {
-      "post": {
-        "operationId": "MoneyWalletController_open",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OpenNairaWalletDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WalletView"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: bvn_not_checked, selfie_required, identity_has_wallet, phone_held_by_other_identity, identity_under_review",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "reason.code: account_not_opened, phone_not_nigerian",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "reason.code: identity_checks_exhausted",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "reason.code: provider_unreachable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "The end of Open your wallet (A7): opens the person's account at Fintava\nwith the BVN and NIN whose check passed (KYC-01), after a selfie that\nmatched against that check (KYC-02), A5's name and date of birth, the\naddress typed, and the account's email. None of these is stored.\n\nSafe to repeat: one account per person, whatever the number of taps.\nAnswers the wallet: `open` with its account number, or `opening` while\nFintava's answer is being confirmed (a lost answer is checked with\nFintava, never sent again blindly; GET /money/wallet shows when it\nsettles). An open wallet is answered as it is, with nothing sent.",
-        "tags": [
-          "MoneyWallet"
-        ],
-        "x-wawu-built-by": "MONEY-12"
-      }
-    },
-    "/api/hub/money/beneficiaries": {
-      "get": {
-        "operationId": "MoneySavedAccountsController_list",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/BeneficiaryView"
-                  }
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Saved beneficiaries, newest first (W8). Their number is WalletView.beneficiaryCount (W35).",
-        "tags": [
-          "MoneySavedAccounts"
-        ],
-        "x-wawu-built-by": "WALLET-14"
-      },
-      "post": {
-        "operationId": "MoneySavedAccountsController_add",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateBeneficiaryDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BeneficiaryView"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "reason.code: self_transfer",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "reason.code: recipient_not_found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, recipient_has_no_wallet, beneficiary_limit_reached",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "reason.code: name_check_failed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "reason.code: provider_unreachable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Save a beneficiary (W12 \"Save as beneficiary\"): a WAWU user with a\nwallet, or a bank account the bank confirms by name check (the name\nsaved is the bank's). Saving one already saved answers the existing one.\nAt most BENEFICIARIES_MAX per person (`beneficiary_limit_reached`).",
-        "tags": [
-          "MoneySavedAccounts"
-        ],
-        "x-wawu-built-by": "WALLET-14"
-      }
-    },
-    "/api/hub/money/beneficiaries/{id}": {
-      "delete": {
-        "operationId": "MoneySavedAccountsController_remove",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": ""
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Remove a saved beneficiary. Removing one already gone, or not the caller's, is a 200 that removes nothing.",
-        "tags": [
-          "MoneySavedAccounts"
-        ],
-        "x-wawu-built-by": "WALLET-14"
-      }
-    },
-    "/api/hub/money/payout-account": {
-      "get": {
-        "operationId": "MoneySavedAccountsController_getPayoutAccount",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "allOf": [
-                    {
-                      "$ref": "#/components/schemas/PayoutAccountView"
-                    }
-                  ],
-                  "nullable": true
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "The payout account (A21, W17's default destination), or null when none is saved.",
-        "tags": [
-          "MoneySavedAccounts"
-        ],
-        "x-wawu-built-by": "WALLET-14"
-      },
-      "put": {
-        "operationId": "MoneySavedAccountsController_setPayoutAccount",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PayoutAccountDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PayoutAccountView"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "reason.code: name_check_failed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "reason.code: provider_unreachable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Save or replace the payout account. The server name-checks it with the\nbank and compares the bank's name with the BVN name: an account in\nanother name is saved and flagged (`matchesBvnName: false`).",
-        "tags": [
-          "MoneySavedAccounts"
-        ],
-        "x-wawu-built-by": "WALLET-14"
-      }
-    },
-    "/api/hub/money/transactions": {
-      "get": {
-        "operationId": "MoneyHistoryController_list",
-        "parameters": [
-          {
-            "name": "limit",
-            "required": false,
-            "in": "query",
-            "description": "Rows per page, 1 to 100.",
-            "schema": {
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20,
-              "type": "integer"
-            }
-          },
-          {
-            "name": "filter",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "default": "all",
-              "type": "string",
-              "enum": [
-                "all",
-                "money_in",
-                "money_out",
-                "bills",
-                "content"
-              ]
-            }
-          },
-          {
-            "name": "month",
-            "required": false,
-            "in": "query",
-            "description": "Only rows from this month, YYYY-MM in Africa/Lagos time (W28 \"Bills in September\").",
-            "schema": {
-              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
-              "type": "string"
-            }
-          },
-          {
-            "name": "q",
-            "required": false,
-            "in": "query",
-            "description": "Free-text search over the counterparty's name, the description, the\nnote and the reference. Spaces around it are dropped first; what is\nleft must be 2 to 60 characters.",
-            "schema": {
-              "minLength": 2,
-              "maxLength": 60,
-              "type": "string"
-            }
-          },
-          {
-            "name": "group",
-            "required": false,
-            "in": "query",
-            "description": "A grouped row's `group.key`: lists the movements it stands for, one per\nrow, instead of the history. Opaque: send it back as given.",
-            "schema": {
-              "minLength": 1,
-              "maxLength": 200,
-              "type": "string"
-            }
-          },
-          {
-            "name": "cursor",
-            "required": false,
-            "in": "query",
-            "description": "`nextCursor` from the previous page. Opaque: send it back as given. Absent for the first page.",
-            "schema": {
-              "minLength": 1,
-              "maxLength": 200,
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TransactionPage"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "W26, W28: search, filter chips, an optional month. W1's recent rows are the first page with limit=3.",
-        "tags": [
-          "MoneyHistory"
-        ],
-        "x-wawu-built-by": "MONEY-15"
-      }
-    },
-    "/api/hub/money/transactions/summary": {
-      "get": {
-        "operationId": "MoneyHistoryController_summary",
-        "parameters": [
-          {
-            "name": "month",
-            "required": true,
-            "in": "query",
-            "description": "YYYY-MM in Africa/Lagos time.",
-            "schema": {
-              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MonthlySummaryView"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "W26's In and Out for one month. Declared before transactions/{id} so the literal path wins.",
-        "tags": [
-          "MoneyHistory"
-        ],
-        "x-wawu-built-by": "MONEY-15"
-      }
-    },
-    "/api/hub/money/transactions/{id}": {
-      "get": {
-        "operationId": "MoneyHistoryController_detail",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TransactionView"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "reason.code: not_found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "One row as a receipt (W27). Only the wallet's owner can read it.",
-        "tags": [
-          "MoneyHistory"
-        ],
-        "x-wawu-built-by": "MONEY-15"
-      }
-    },
-    "/api/hub/money/statements": {
-      "get": {
-        "operationId": "MoneyStatementController_statement",
-        "parameters": [
-          {
-            "name": "from",
-            "required": true,
-            "in": "query",
-            "description": "The first day of the statement, YYYY-MM-DD in Africa/Lagos time, included.",
-            "schema": {
-              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$",
-              "example": "2026-09-01",
-              "type": "string"
-            }
-          },
-          {
-            "name": "to",
-            "required": true,
-            "in": "query",
-            "description": "The last day of the statement, YYYY-MM-DD in Africa/Lagos time,\nincluded. On or after `from`, not after today in Lagos, and at most\n366 days from `from`, both days counted (STATEMENT_MAX_DAYS).",
-            "schema": {
-              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$",
-              "example": "2026-09-30",
-              "type": "string"
-            }
-          },
-          {
-            "name": "format",
-            "required": true,
-            "in": "query",
-            "description": "The file. Only `csv` today: Fintava issues no stamped statement\n(WALLET-27, BACKEND_GAPS G-68), so there is no `pdf`.",
-            "schema": {
-              "type": "string",
-              "enum": [
-                "csv"
-              ]
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StatementView"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "reason.code: statement_too_large",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "reason.code: statement_rate_limited",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "reason.code: statement_busy",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "One statement. `from` and `to` are calendar days in Africa/Lagos time\nand BOTH are included: from 00:00 on `from` to 23:59:59.999 on `to`,\nLagos time. A day that does not exist, `from` after `to`, `to` after\ntoday in Lagos, or more than 366 days is a 400; a period with more than\n50,000 movements is `400 statement_too_large`. The app's global\nper-address limits apply as on every route; on top, one person may ask\nfor 5 a minute and 30 an hour (`429 statement_rate_limited`, counted\nhere, after the token is verified), and two statements are built at\nonce in the process (`503 statement_busy` after 5 s of waiting).\nThe route's own 400s never count: the period is checked before the\nperson is counted, and `statement_too_large` gives the place back.",
-        "tags": [
-          "MoneyStatement"
-        ],
-        "x-wawu-built-by": "WALLET-27"
-      }
-    },
-    "/api/hub/money/fees/quote": {
-      "get": {
-        "operationId": "MoneyFeesController_feeQuote",
-        "parameters": [
-          {
-            "name": "kind",
-            "required": true,
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "enum": [
-                "wawu_transfer",
-                "bank_transfer",
-                "purchase",
-                "bill"
-              ]
-            }
-          },
-          {
-            "name": "amountKobo",
-            "required": true,
-            "in": "query",
-            "description": "In kobo: what the recipient gets on a send, the price on a purchase,\nthe bill's own amount on a bill. Fees are added on top, never taken\nout of it. Digits only: `100.00` (a naira decimal), `1e4` or `10,000`\nis a 400, never read as some other number of kobo.",
-            "schema": {
-              "minimum": 1,
-              "maximum": 9007199254740991,
-              "type": "integer"
-            }
-          },
-          {
-            "name": "billCategory",
-            "required": false,
-            "in": "query",
-            "description": "Required when kind is `bill`; any other kind with it is a 400.",
-            "schema": {
-              "type": "string",
-              "enum": [
-                "electricity",
-                "cable",
-                "airtime",
-                "data"
-              ]
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FeeQuoteView"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "reason.code: amount_out_of_range",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "reason.code: fees_not_set",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "What a send, a withdrawal, a purchase or a bill will cost, before the\nPIN (W10, W17, H14): Fintava's charge plus WAWU's fee from config\n(R-10, R-31), each charge as its own part, the total, and a signed\nquote the paying request can send back. Nothing is reserved and\nFintava is not asked. A purchase or bill whose total is above\nMERCHANT_MAX_PER_TXN_KOBO is amount_out_of_range with maximumKobo.\n\nNUV-07: the provider's charge comes from the running provider's\nsettings. While any of them is unset (Nuvion's, until the owner fills\nthem in) every quote is fees_not_set, before the wallet gate; under\nNuvion, which has no bill payments, a bill is target_not_payable.",
-        "tags": [
-          "MoneyFees"
-        ],
-        "x-wawu-built-by": "WALLET-15"
-      }
-    },
-    "/api/hub/money/transactions/{id}/receipt": {
-      "post": {
-        "operationId": "MoneyReceiptController_issue",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ReceiptView"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "reason.code: not_found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "W41: the receipt and its code. The same code every time.",
-        "tags": [
-          "MoneyReceipt"
-        ],
-        "x-wawu-built-by": "WALLET-18"
-      }
-    },
-    "/api/hub/money/transactions/{id}/receipt/image": {
-      "get": {
-        "operationId": "MoneyReceiptController_image",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "The receipt as a PNG image.",
-            "content": {
-              "image/png": {
-                "schema": {
-                  "type": "string",
-                  "format": "binary"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "reason.code: not_found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Receipts are busy right now. Try again in a few seconds."
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "W42: the receipt as a PNG, always a white document.",
-        "tags": [
-          "MoneyReceipt"
-        ],
-        "x-wawu-built-by": "WALLET-18"
-      }
-    },
-    "/api/hub/money/transactions/{id}/receipt/pdf": {
-      "get": {
-        "operationId": "MoneyReceiptController_pdf",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "The receipt as a one-page A4 PDF.",
-            "content": {
-              "application/pdf": {
-                "schema": {
-                  "type": "string",
-                  "format": "binary"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "reason.code: not_found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Receipts are busy right now. Try again in a few seconds."
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "W43: the receipt as a one-page A4 PDF.",
-        "tags": [
-          "MoneyReceipt"
-        ],
-        "x-wawu-built-by": "WALLET-18"
-      }
-    },
-    "/api/hub/r/{code}": {
-      "get": {
-        "operationId": "PublicReceiptController_page",
-        "parameters": [
-          {
-            "name": "code",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "The receipt check page: amount, date, status, both sides masked, reference.",
-            "content": {
-              "text/html": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "No receipt has this code. The same page for every miss.",
-            "content": {
-              "text/html": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "PublicReceipt"
-        ]
-      }
-    },
-    "/api/hub/money/recipients": {
-      "get": {
-        "operationId": "MoneyRecipientController_search",
-        "parameters": [
-          {
-            "name": "q",
-            "required": true,
-            "in": "query",
-            "schema": {
-              "minLength": 2,
-              "maxLength": 60,
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/RecipientView"
-                  },
-                  "maxItems": 20
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "q is missing, repeated, shorter than 2 characters (not counting a leading @) or longer than 60, or another field was sent. No `reason`: a malformed field.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyPlainErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "reason.code: recipient_search_rate_limited",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "WAWU users with an open wallet, by name, @handle or phone (W7). Blocked people never appear. At most 20.",
-        "tags": [
-          "MoneyRecipient"
-        ],
-        "x-wawu-built-by": "WALLET-08",
-        "x-wawu-max-items": 20
-      }
-    },
-    "/api/hub/money/recipients/recent": {
-      "get": {
-        "operationId": "MoneyRecipientController_recentRecipients",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/RecipientView"
-                  },
-                  "maxItems": 10
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "The people this user sent money to most recently, newest first (W7). At most 10.",
-        "tags": [
-          "MoneyRecipient"
-        ],
-        "x-wawu-built-by": "WALLET-08",
-        "x-wawu-max-items": 10
-      }
-    },
     "/api/hub/about": {
       "get": {
         "operationId": "AboutController_about",
@@ -29749,6 +29780,499 @@
           }
         }
       },
+      "MoneyErrorReason": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "enum": [
+              "wallet_not_open",
+              "wallet_opening",
+              "wallet_frozen",
+              "provider_unreachable",
+              "idempotency_key_required",
+              "idempotency_key_reused",
+              "idempotency_in_progress",
+              "pin_required",
+              "pin_not_set",
+              "pin_already_set",
+              "pin_incorrect",
+              "pin_locked",
+              "pin_mismatch",
+              "reset_code_invalid",
+              "insufficient_funds",
+              "daily_limit_exceeded",
+              "amount_out_of_range",
+              "quote_changed",
+              "name_check_failed",
+              "recipient_not_found",
+              "recipient_has_no_wallet",
+              "recipient_blocked",
+              "self_transfer",
+              "beneficiary_limit_reached",
+              "bank_transfers_blocked",
+              "target_not_found",
+              "target_not_payable",
+              "not_found",
+              "bvn_not_confirmed",
+              "bvn_phone_mismatch",
+              "phone_not_nigerian",
+              "identity_checks_exhausted",
+              "bvn_not_checked",
+              "wallet_already_open",
+              "selfie_not_matched",
+              "selfie_checks_exhausted",
+              "selfie_already_matched",
+              "selfie_required",
+              "identity_has_wallet",
+              "account_not_opened",
+              "phone_held_by_other_identity",
+              "reset_codes_exhausted",
+              "device_approval_refused",
+              "statement_too_large",
+              "statement_rate_limited",
+              "statement_busy",
+              "recipient_search_rate_limited",
+              "fees_not_set",
+              "limit_reached",
+              "identity_under_review",
+              "step_not_used",
+              "open_address_limited"
+            ],
+            "type": "string"
+          },
+          "balanceKobo": {
+            "type": "integer",
+            "description": "insufficient_funds: Fintava's available balance when the payment was refused."
+          },
+          "totalKobo": {
+            "type": "integer",
+            "description": "insufficient_funds, daily_limit_exceeded: the total the request needed (amount plus fees)."
+          },
+          "shortfallKobo": {
+            "type": "integer",
+            "description": "insufficient_funds: totalKobo minus balanceKobo, what to add before trying again."
+          },
+          "remainingTodayKobo": {
+            "type": "integer",
+            "description": "daily_limit_exceeded: what is left of today's limit."
+          },
+          "minimumKobo": {
+            "type": "integer",
+            "description": "amount_out_of_range: the smallest amount accepted."
+          },
+          "maximumKobo": {
+            "type": "integer",
+            "description": "amount_out_of_range: the largest amount accepted."
+          },
+          "feeQuote": {
+            "description": "quote_changed on a transfer: the quote as it stands now.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FeeQuoteView"
+              }
+            ]
+          },
+          "paymentQuote": {
+            "description": "quote_changed on a payment: the quote as it stands now.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PaymentQuoteView"
+              }
+            ]
+          },
+          "blockedBy": {
+            "description": "bank_transfers_blocked: why (W18).",
+            "enum": [
+              "kyc_pending",
+              "kyc_rejected",
+              "kyc_not_submitted"
+            ],
+            "type": "string"
+          },
+          "limit": {
+            "description": "limit_reached: which limit the movement passes (NUV-07), WAWU's own or the provider's.",
+            "enum": [
+              "per_transaction",
+              "daily",
+              "monthly"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "type": "string",
+            "description": "A sentence the app may show as it is. Never an em-dash, never a provider's raw text."
+          },
+          "triesLeft": {
+            "type": "number",
+            "description": "pin_incorrect: wrong tries left before the PIN locks. reset_code_invalid: tries left on this code."
+          },
+          "lockedUntil": {
+            "type": "string",
+            "description": "pin_locked: when the lock ends, ISO 8601 UTC."
+          },
+          "retryAfterSeconds": {
+            "type": "number",
+            "description": "provider_unreachable, idempotency_in_progress, identity_checks_exhausted, open_address_limited, selfie_checks_exhausted, reset_codes_exhausted, recipient_search_rate_limited: seconds to wait before trying again."
+          },
+          "checksLeft": {
+            "type": "number",
+            "description": "bvn_not_confirmed, bvn_phone_mismatch: BVN checks left in the current 24 hours. selfie_not_matched: selfie matches left in the current 24 hours."
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
+      "MoneyErrorEnvelope": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "description": "Always null on an error.",
+            "type": "object",
+            "nullable": true,
+            "example": null
+          },
+          "statusCode": {
+            "type": "number",
+            "description": "The HTTP status again."
+          },
+          "message": {
+            "type": "string",
+            "description": "Same as reason.message."
+          },
+          "reason": {
+            "$ref": "#/components/schemas/MoneyErrorReason"
+          }
+        },
+        "required": [
+          "data",
+          "statusCode",
+          "message",
+          "reason"
+        ]
+      },
+      "SetPinDto": {
+        "type": "object",
+        "properties": {
+          "pin": {
+            "type": "string",
+            "pattern": "^[0-9]{4}$"
+          },
+          "pinConfirmation": {
+            "type": "string",
+            "description": "The second entry (A10 \"Enter it again\"). A difference is `pin_mismatch`.",
+            "pattern": "^[0-9]{4}$"
+          }
+        },
+        "required": [
+          "pin",
+          "pinConfirmation"
+        ]
+      },
+      "ChangePinDto": {
+        "type": "object",
+        "properties": {
+          "newPin": {
+            "type": "string",
+            "pattern": "^[0-9]{4}$"
+          },
+          "newPinConfirmation": {
+            "type": "string",
+            "pattern": "^[0-9]{4}$"
+          }
+        },
+        "required": [
+          "newPin",
+          "newPinConfirmation"
+        ]
+      },
+      "ConfirmPinResetDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The code from the text message. Its length is set by whoever sends it (MONEY-14).",
+            "pattern": "^[0-9]{4,8}$"
+          },
+          "newPin": {
+            "type": "string",
+            "pattern": "^[0-9]{4}$"
+          },
+          "newPinConfirmation": {
+            "type": "string",
+            "pattern": "^[0-9]{4}$"
+          },
+          "resetId": {
+            "type": "string",
+            "description": "From POST /money/pin/reset.",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "code",
+          "newPin",
+          "newPinConfirmation",
+          "resetId"
+        ]
+      },
+      "RegisterApprovalDeviceDto": {
+        "type": "object",
+        "properties": {
+          "publicKey": {
+            "type": "string",
+            "description": "The public half of a P-256 key the phone made, as SubjectPublicKeyInfo\n(DER), base64url without padding. Its private half stays on the phone,\nunlocked only by the phone's biometric.",
+            "pattern": "^[A-Za-z0-9_-]{80,200}$"
+          },
+          "biometric": {
+            "description": "What the phone approves with, for W35's label.",
+            "enum": [
+              "fingerprint",
+              "face"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "publicKey",
+          "biometric"
+        ]
+      },
+      "BvnCheckDto": {
+        "type": "object",
+        "properties": {
+          "bvn": {
+            "type": "string",
+            "description": "The Bank Verification Number: 11 digits, no spaces.",
+            "pattern": "^[0-9]{11}$"
+          },
+          "nin": {
+            "type": "string",
+            "description": "The National Identification Number: 11 digits, no spaces. Fintava needs it to open the account.",
+            "pattern": "^[0-9]{11}$"
+          }
+        },
+        "required": [
+          "bvn",
+          "nin"
+        ]
+      },
+      "SelfieMatchDto": {
+        "type": "object",
+        "properties": {
+          "bvn": {
+            "type": "string",
+            "description": "The BVN whose check passed: 11 digits, no spaces. Leave it out and send\n`checkHandle` instead (KYC-03); one of the two, never both.",
+            "pattern": "^[0-9]{11}$"
+          },
+          "checkHandle": {
+            "type": "string",
+            "description": "The `checkHandle` the passed BVN check answered, in place of `bvn`\n(KYC-03): the server takes the BVN from it. One of the two, never both.",
+            "maxLength": 1024
+          },
+          "image": {
+            "type": "string",
+            "description": "The selfie: plain base64 (no `data:` prefix) of a JPEG or PNG, 1 KB to\nabout 75 KB (at most 100,000 base64 characters), at most 2,048 pixels\non each side. A face match against the BVN photo, not a liveness check.",
+            "format": "byte",
+            "maxLength": 100000
+          }
+        },
+        "required": [
+          "image"
+        ]
+      },
+      "IdentityOccupationDto": {
+        "type": "object",
+        "properties": {
+          "occupation": {
+            "type": "string",
+            "description": "2 to 80 characters with at least one letter; spaces at either end are dropped.",
+            "maxLength": 80,
+            "pattern": "^(?=.*\\p{L})[^\\p{Cc}<>]{2,80}$"
+          }
+        },
+        "required": [
+          "occupation"
+        ]
+      },
+      "OpenNairaWalletDto": {
+        "type": "object",
+        "properties": {
+          "bvn": {
+            "type": "string",
+            "description": "The BVN whose check passed: 11 digits, no spaces. Leave it and `nin` out\nand send `checkHandle` instead (KYC-03); never both.",
+            "pattern": "^[0-9]{11}$"
+          },
+          "nin": {
+            "type": "string",
+            "description": "The NIN given with that check: 11 digits, no spaces. Left out with `checkHandle`.",
+            "pattern": "^[0-9]{11}$"
+          },
+          "checkHandle": {
+            "type": "string",
+            "description": "The `checkHandle` the passed BVN check answered, in place of `bvn` and\n`nin` (KYC-03): the server takes both from it. Never with them.",
+            "maxLength": 1024
+          },
+          "middleName": {
+            "type": "string"
+          },
+          "gender": {
+            "enum": [
+              "male",
+              "female"
+            ],
+            "type": "string"
+          },
+          "addressLine2": {
+            "type": "string",
+            "description": "A second address line (flat, estate), when there is one.",
+            "maxLength": 100
+          },
+          "city": {
+            "type": "string",
+            "description": "The town or city.",
+            "maxLength": 100
+          },
+          "state": {
+            "type": "string",
+            "description": "The state (Lagos, FCT ...).",
+            "maxLength": 100
+          },
+          "postalCode": {
+            "type": "string",
+            "description": "The postal code, 1 to 20 letters, digits, spaces or dashes.",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9 -]{0,19}$",
+            "maxLength": 20
+          },
+          "idType": {
+            "description": "The ID document the person will upload (NUV-03).",
+            "enum": [
+              "international_passport",
+              "drivers_license",
+              "national_id"
+            ],
+            "type": "string"
+          },
+          "idNumber": {
+            "type": "string",
+            "description": "Its number, as printed: 5 to 30 letters, digits or dashes. Never stored.",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{4,29}$",
+            "minLength": 5,
+            "maxLength": 30
+          },
+          "idIssueDate": {
+            "type": "string",
+            "description": "When it was issued, `YYYY-MM-DD`, when it says."
+          },
+          "idExpiryDate": {
+            "type": "string",
+            "description": "When it expires, `YYYY-MM-DD`, when it says; not already passed."
+          },
+          "proofOfAddressType": {
+            "description": "The proof of address the person will upload (NUV-03).",
+            "enum": [
+              "utility_bill",
+              "bank_statement"
+            ],
+            "type": "string"
+          },
+          "firstName": {
+            "type": "string",
+            "description": "A5's first name, as the BVN check prefilled it."
+          },
+          "lastName": {
+            "type": "string",
+            "description": "A5's last name, as the BVN check prefilled it."
+          },
+          "dateOfBirth": {
+            "type": "string",
+            "description": "A5's date of birth, `YYYY-MM-DD`."
+          },
+          "address": {
+            "type": "string",
+            "description": "The full home address in one line (street, town, state), 5 to 200\ncharacters with a letter in it. Fintava takes it as one field.",
+            "maxLength": 200,
+            "pattern": "^(?=.*\\p{L})[^\\p{Cc}<>]{5,200}$"
+          }
+        },
+        "required": [
+          "firstName",
+          "lastName",
+          "dateOfBirth",
+          "address"
+        ]
+      },
+      "CreateBeneficiaryDto": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "wawu_user",
+              "bank_account"
+            ],
+            "type": "string"
+          },
+          "bankCode": {
+            "type": "string",
+            "description": "Required when kind is bank_account.",
+            "pattern": "^[0-9]{3,6}$"
+          },
+          "accountNumber": {
+            "type": "string",
+            "description": "Required when kind is bank_account.",
+            "pattern": "^[0-9]{10}$"
+          },
+          "wawuUserId": {
+            "type": "string",
+            "description": "Required when kind is wawu_user.",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "PayoutAccountDto": {
+        "type": "object",
+        "properties": {
+          "bankCode": {
+            "type": "string",
+            "pattern": "^[0-9]{3,6}$"
+          },
+          "accountNumber": {
+            "type": "string",
+            "pattern": "^[0-9]{10}$"
+          }
+        },
+        "required": [
+          "bankCode",
+          "accountNumber"
+        ]
+      },
+      "MoneyPlainErrorEnvelope": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "description": "Always null on an error.",
+            "type": "object",
+            "nullable": true,
+            "example": null
+          },
+          "statusCode": {
+            "type": "number",
+            "description": "400."
+          },
+          "message": {
+            "type": "string",
+            "description": "A sentence about the first field that is wrong."
+          }
+        },
+        "required": [
+          "data",
+          "statusCode",
+          "message"
+        ]
+      },
       "EventDecisionReasonDto": {
         "type": "object",
         "properties": {
@@ -31170,498 +31694,6 @@
           }
         }
       },
-      "MoneyErrorReason": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "enum": [
-              "wallet_not_open",
-              "wallet_opening",
-              "wallet_frozen",
-              "provider_unreachable",
-              "idempotency_key_required",
-              "idempotency_key_reused",
-              "idempotency_in_progress",
-              "pin_required",
-              "pin_not_set",
-              "pin_already_set",
-              "pin_incorrect",
-              "pin_locked",
-              "pin_mismatch",
-              "reset_code_invalid",
-              "insufficient_funds",
-              "daily_limit_exceeded",
-              "amount_out_of_range",
-              "quote_changed",
-              "name_check_failed",
-              "recipient_not_found",
-              "recipient_has_no_wallet",
-              "recipient_blocked",
-              "self_transfer",
-              "beneficiary_limit_reached",
-              "bank_transfers_blocked",
-              "target_not_found",
-              "target_not_payable",
-              "not_found",
-              "bvn_not_confirmed",
-              "bvn_phone_mismatch",
-              "phone_not_nigerian",
-              "identity_checks_exhausted",
-              "bvn_not_checked",
-              "wallet_already_open",
-              "selfie_not_matched",
-              "selfie_checks_exhausted",
-              "selfie_already_matched",
-              "selfie_required",
-              "identity_has_wallet",
-              "account_not_opened",
-              "phone_held_by_other_identity",
-              "reset_codes_exhausted",
-              "device_approval_refused",
-              "statement_too_large",
-              "statement_rate_limited",
-              "statement_busy",
-              "recipient_search_rate_limited",
-              "fees_not_set",
-              "limit_reached",
-              "identity_under_review",
-              "step_not_used"
-            ],
-            "type": "string"
-          },
-          "balanceKobo": {
-            "type": "integer",
-            "description": "insufficient_funds: Fintava's available balance when the payment was refused."
-          },
-          "totalKobo": {
-            "type": "integer",
-            "description": "insufficient_funds, daily_limit_exceeded: the total the request needed (amount plus fees)."
-          },
-          "shortfallKobo": {
-            "type": "integer",
-            "description": "insufficient_funds: totalKobo minus balanceKobo, what to add before trying again."
-          },
-          "remainingTodayKobo": {
-            "type": "integer",
-            "description": "daily_limit_exceeded: what is left of today's limit."
-          },
-          "minimumKobo": {
-            "type": "integer",
-            "description": "amount_out_of_range: the smallest amount accepted."
-          },
-          "maximumKobo": {
-            "type": "integer",
-            "description": "amount_out_of_range: the largest amount accepted."
-          },
-          "feeQuote": {
-            "description": "quote_changed on a transfer: the quote as it stands now.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/FeeQuoteView"
-              }
-            ]
-          },
-          "paymentQuote": {
-            "description": "quote_changed on a payment: the quote as it stands now.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/PaymentQuoteView"
-              }
-            ]
-          },
-          "blockedBy": {
-            "description": "bank_transfers_blocked: why (W18).",
-            "enum": [
-              "kyc_pending",
-              "kyc_rejected",
-              "kyc_not_submitted"
-            ],
-            "type": "string"
-          },
-          "limit": {
-            "description": "limit_reached: which limit the movement passes (NUV-07), WAWU's own or the provider's.",
-            "enum": [
-              "per_transaction",
-              "daily",
-              "monthly"
-            ],
-            "type": "string"
-          },
-          "message": {
-            "type": "string",
-            "description": "A sentence the app may show as it is. Never an em-dash, never a provider's raw text."
-          },
-          "triesLeft": {
-            "type": "number",
-            "description": "pin_incorrect: wrong tries left before the PIN locks. reset_code_invalid: tries left on this code."
-          },
-          "lockedUntil": {
-            "type": "string",
-            "description": "pin_locked: when the lock ends, ISO 8601 UTC."
-          },
-          "retryAfterSeconds": {
-            "type": "number",
-            "description": "provider_unreachable, idempotency_in_progress, identity_checks_exhausted, selfie_checks_exhausted, reset_codes_exhausted, recipient_search_rate_limited: seconds to wait before trying again."
-          },
-          "checksLeft": {
-            "type": "number",
-            "description": "bvn_not_confirmed, bvn_phone_mismatch: BVN checks left in the current 24 hours. selfie_not_matched: selfie matches left in the current 24 hours."
-          }
-        },
-        "required": [
-          "code",
-          "message"
-        ]
-      },
-      "MoneyErrorEnvelope": {
-        "type": "object",
-        "properties": {
-          "data": {
-            "description": "Always null on an error.",
-            "type": "object",
-            "nullable": true,
-            "example": null
-          },
-          "statusCode": {
-            "type": "number",
-            "description": "The HTTP status again."
-          },
-          "message": {
-            "type": "string",
-            "description": "Same as reason.message."
-          },
-          "reason": {
-            "$ref": "#/components/schemas/MoneyErrorReason"
-          }
-        },
-        "required": [
-          "data",
-          "statusCode",
-          "message",
-          "reason"
-        ]
-      },
-      "SetPinDto": {
-        "type": "object",
-        "properties": {
-          "pin": {
-            "type": "string",
-            "pattern": "^[0-9]{4}$"
-          },
-          "pinConfirmation": {
-            "type": "string",
-            "description": "The second entry (A10 \"Enter it again\"). A difference is `pin_mismatch`.",
-            "pattern": "^[0-9]{4}$"
-          }
-        },
-        "required": [
-          "pin",
-          "pinConfirmation"
-        ]
-      },
-      "ChangePinDto": {
-        "type": "object",
-        "properties": {
-          "newPin": {
-            "type": "string",
-            "pattern": "^[0-9]{4}$"
-          },
-          "newPinConfirmation": {
-            "type": "string",
-            "pattern": "^[0-9]{4}$"
-          }
-        },
-        "required": [
-          "newPin",
-          "newPinConfirmation"
-        ]
-      },
-      "ConfirmPinResetDto": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string",
-            "description": "The code from the text message. Its length is set by whoever sends it (MONEY-14).",
-            "pattern": "^[0-9]{4,8}$"
-          },
-          "newPin": {
-            "type": "string",
-            "pattern": "^[0-9]{4}$"
-          },
-          "newPinConfirmation": {
-            "type": "string",
-            "pattern": "^[0-9]{4}$"
-          },
-          "resetId": {
-            "type": "string",
-            "description": "From POST /money/pin/reset.",
-            "format": "uuid"
-          }
-        },
-        "required": [
-          "code",
-          "newPin",
-          "newPinConfirmation",
-          "resetId"
-        ]
-      },
-      "RegisterApprovalDeviceDto": {
-        "type": "object",
-        "properties": {
-          "publicKey": {
-            "type": "string",
-            "description": "The public half of a P-256 key the phone made, as SubjectPublicKeyInfo\n(DER), base64url without padding. Its private half stays on the phone,\nunlocked only by the phone's biometric.",
-            "pattern": "^[A-Za-z0-9_-]{80,200}$"
-          },
-          "biometric": {
-            "description": "What the phone approves with, for W35's label.",
-            "enum": [
-              "fingerprint",
-              "face"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "publicKey",
-          "biometric"
-        ]
-      },
-      "BvnCheckDto": {
-        "type": "object",
-        "properties": {
-          "bvn": {
-            "type": "string",
-            "description": "The Bank Verification Number: 11 digits, no spaces.",
-            "pattern": "^[0-9]{11}$"
-          },
-          "nin": {
-            "type": "string",
-            "description": "The National Identification Number: 11 digits, no spaces. Fintava needs it to open the account.",
-            "pattern": "^[0-9]{11}$"
-          }
-        },
-        "required": [
-          "bvn",
-          "nin"
-        ]
-      },
-      "SelfieMatchDto": {
-        "type": "object",
-        "properties": {
-          "bvn": {
-            "type": "string",
-            "description": "The BVN whose check passed: 11 digits, no spaces. Leave it out and send\n`checkHandle` instead (KYC-03); one of the two, never both.",
-            "pattern": "^[0-9]{11}$"
-          },
-          "checkHandle": {
-            "type": "string",
-            "description": "The `checkHandle` the passed BVN check answered, in place of `bvn`\n(KYC-03): the server takes the BVN from it. One of the two, never both.",
-            "maxLength": 1024
-          },
-          "image": {
-            "type": "string",
-            "description": "The selfie: plain base64 (no `data:` prefix) of a JPEG or PNG, 1 KB to\nabout 75 KB (at most 100,000 base64 characters), at most 2,048 pixels\non each side. A face match against the BVN photo, not a liveness check.",
-            "format": "byte",
-            "maxLength": 100000
-          }
-        },
-        "required": [
-          "image"
-        ]
-      },
-      "IdentityOccupationDto": {
-        "type": "object",
-        "properties": {
-          "occupation": {
-            "type": "string",
-            "description": "2 to 80 characters with at least one letter; spaces at either end are dropped.",
-            "maxLength": 80,
-            "pattern": "^(?=.*\\p{L})[^\\p{Cc}<>]{2,80}$"
-          }
-        },
-        "required": [
-          "occupation"
-        ]
-      },
-      "OpenNairaWalletDto": {
-        "type": "object",
-        "properties": {
-          "bvn": {
-            "type": "string",
-            "description": "The BVN whose check passed: 11 digits, no spaces. Leave it and `nin` out\nand send `checkHandle` instead (KYC-03); never both.",
-            "pattern": "^[0-9]{11}$"
-          },
-          "nin": {
-            "type": "string",
-            "description": "The NIN given with that check: 11 digits, no spaces. Left out with `checkHandle`.",
-            "pattern": "^[0-9]{11}$"
-          },
-          "checkHandle": {
-            "type": "string",
-            "description": "The `checkHandle` the passed BVN check answered, in place of `bvn` and\n`nin` (KYC-03): the server takes both from it. Never with them.",
-            "maxLength": 1024
-          },
-          "middleName": {
-            "type": "string"
-          },
-          "gender": {
-            "enum": [
-              "male",
-              "female"
-            ],
-            "type": "string"
-          },
-          "addressLine2": {
-            "type": "string",
-            "description": "A second address line (flat, estate), when there is one.",
-            "maxLength": 100
-          },
-          "city": {
-            "type": "string",
-            "description": "The town or city.",
-            "maxLength": 100
-          },
-          "state": {
-            "type": "string",
-            "description": "The state (Lagos, FCT ...).",
-            "maxLength": 100
-          },
-          "postalCode": {
-            "type": "string",
-            "description": "The postal code, 1 to 20 letters, digits, spaces or dashes.",
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9 -]{0,19}$",
-            "maxLength": 20
-          },
-          "idType": {
-            "description": "The ID document the person will upload (NUV-03).",
-            "enum": [
-              "international_passport",
-              "drivers_license",
-              "national_id"
-            ],
-            "type": "string"
-          },
-          "idNumber": {
-            "type": "string",
-            "description": "Its number, as printed: 5 to 30 letters, digits or dashes. Never stored.",
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{4,29}$",
-            "minLength": 5,
-            "maxLength": 30
-          },
-          "idIssueDate": {
-            "type": "string",
-            "description": "When it was issued, `YYYY-MM-DD`, when it says."
-          },
-          "idExpiryDate": {
-            "type": "string",
-            "description": "When it expires, `YYYY-MM-DD`, when it says; not already passed."
-          },
-          "proofOfAddressType": {
-            "description": "The proof of address the person will upload (NUV-03).",
-            "enum": [
-              "utility_bill",
-              "bank_statement"
-            ],
-            "type": "string"
-          },
-          "firstName": {
-            "type": "string",
-            "description": "A5's first name, as the BVN check prefilled it."
-          },
-          "lastName": {
-            "type": "string",
-            "description": "A5's last name, as the BVN check prefilled it."
-          },
-          "dateOfBirth": {
-            "type": "string",
-            "description": "A5's date of birth, `YYYY-MM-DD`."
-          },
-          "address": {
-            "type": "string",
-            "description": "The full home address in one line (street, town, state), 5 to 200\ncharacters with a letter in it. Fintava takes it as one field.",
-            "maxLength": 200,
-            "pattern": "^(?=.*\\p{L})[^\\p{Cc}<>]{5,200}$"
-          }
-        },
-        "required": [
-          "firstName",
-          "lastName",
-          "dateOfBirth",
-          "address"
-        ]
-      },
-      "CreateBeneficiaryDto": {
-        "type": "object",
-        "properties": {
-          "kind": {
-            "enum": [
-              "wawu_user",
-              "bank_account"
-            ],
-            "type": "string"
-          },
-          "bankCode": {
-            "type": "string",
-            "description": "Required when kind is bank_account.",
-            "pattern": "^[0-9]{3,6}$"
-          },
-          "accountNumber": {
-            "type": "string",
-            "description": "Required when kind is bank_account.",
-            "pattern": "^[0-9]{10}$"
-          },
-          "wawuUserId": {
-            "type": "string",
-            "description": "Required when kind is wawu_user.",
-            "format": "uuid"
-          }
-        },
-        "required": [
-          "kind"
-        ]
-      },
-      "PayoutAccountDto": {
-        "type": "object",
-        "properties": {
-          "bankCode": {
-            "type": "string",
-            "pattern": "^[0-9]{3,6}$"
-          },
-          "accountNumber": {
-            "type": "string",
-            "pattern": "^[0-9]{10}$"
-          }
-        },
-        "required": [
-          "bankCode",
-          "accountNumber"
-        ]
-      },
-      "MoneyPlainErrorEnvelope": {
-        "type": "object",
-        "properties": {
-          "data": {
-            "description": "Always null on an error.",
-            "type": "object",
-            "nullable": true,
-            "example": null
-          },
-          "statusCode": {
-            "type": "number",
-            "description": "400."
-          },
-          "message": {
-            "type": "string",
-            "description": "A sentence about the first field that is wrong."
-          }
-        },
-        "required": [
-          "data",
-          "statusCode",
-          "message"
-        ]
-      },
       "PolicySectionDto": {
         "type": "object",
         "properties": {
@@ -33035,7 +33067,8 @@
               "proof_of_address_not_verified",
               "bvn_phone_mismatch",
               "details_not_verified",
-              "review_stopped"
+              "review_stopped",
+              "review_expired"
             ]
           },
           "message": {
@@ -33061,7 +33094,8 @@
               "checking",
               "approved",
               "rejected",
-              "stopped"
+              "stopped",
+              "expired"
             ]
           },
           "reasons": {
@@ -33073,6 +33107,10 @@
           "canResubmit": {
             "type": "boolean"
           },
+          "canResubmitAt": {
+            "type": "string",
+            "nullable": true
+          },
           "decidedAt": {
             "type": "string",
             "nullable": true
@@ -33082,6 +33120,7 @@
           "stage",
           "reasons",
           "canResubmit",
+          "canResubmitAt",
           "decidedAt"
         ]
       },
@@ -40858,6 +40897,33 @@
           "lifetime"
         ]
       },
+      "IdentityHoldReleaseView": {
+        "type": "object",
+        "properties": {
+          "wawuUserId": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "released",
+              "already_released"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "expired",
+              "unchanged"
+            ]
+          }
+        },
+        "required": [
+          "wawuUserId",
+          "outcome",
+          "state"
+        ]
+      },
       "EventSpeakerView": {
         "type": "object",
         "properties": {
@@ -47555,8 +47621,8 @@
             "type": "string",
             "enum": [
               "refunded",
-              "held",
-              "released"
+              "released",
+              "held"
             ]
           },
           "amountKobo": {

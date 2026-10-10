@@ -1,4 +1,5 @@
 import { createHmac } from 'node:crypto';
+import { isIPv6 } from 'node:net';
 import type { PrismaService } from '../../common/prisma/prisma.service';
 import {
   BVN_CHECK_WINDOW_MS,
@@ -62,8 +63,35 @@ export interface AddressKeyer {
 }
 
 /**
- * The keyed hash of a caller's address, or null when there is none to key
- * (nothing is stored as the address itself).
+ * The place an address stands for: an IPv4 address is itself, an IPv4-mapped
+ * IPv6 address is its IPv4 address, and any other IPv6 address is its /64
+ * (the block one connection is given, so rotating through its addresses is
+ * still one place).
+ */
+export function addressPlaceOf(address: string): string {
+  const a = address.trim().toLowerCase().split('%')[0] ?? '';
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(a);
+  if (mapped) return mapped[1];
+  if (!isIPv6(a) || a.includes('.')) return a;
+  const [head = '', tail = ''] = a.split('::');
+  const first = head === '' ? [] : head.split(':');
+  const last = tail === '' ? [] : tail.split(':');
+  const groups = a.includes('::')
+    ? [
+        ...first,
+        ...Array<string>(8 - first.length - last.length).fill('0'),
+        ...last,
+      ]
+    : first;
+  return `${groups
+    .slice(0, 4)
+    .map((g) => g.padStart(4, '0'))
+    .join(':')}/64`;
+}
+
+/**
+ * The keyed hash of a caller's address (its place, `addressPlaceOf`), or
+ * null when there is none to key (nothing is stored as the address itself).
  */
 export function addressKeyOf(
   hasher: AddressKeyer,
@@ -72,7 +100,7 @@ export function addressKeyOf(
   const a = (address ?? '').trim();
   if (a === '' || !hasher.configured) return null;
   return createHmac('sha256', hasher.deriveKey(OPEN_ADDRESS_KEY_LABEL))
-    .update(a)
+    .update(addressPlaceOf(a))
     .digest('hex')
     .slice(0, 32);
 }

@@ -455,7 +455,9 @@ export class ReviewedOpening {
     if (row.state === EXPIRED_STATE) {
       return { outcome: 'already_released', before: row.state };
     }
-    if (['opening', 'unknown', 'open'].includes(row.state)) {
+    // Being made, being checked, approved, or held for a hand look
+    // (`conflict`): not an idle hold, not support's to let go of here.
+    if (['opening', 'unknown', 'open', 'conflict'].includes(row.state)) {
       return { outcome: 'in_review', before: row.state };
     }
     if (isReleasedBvnHash(row.bvnHash)) {
@@ -463,11 +465,12 @@ export class ReviewedOpening {
     }
     const now = await this.host.dbNow();
     const done = await this.prisma.$transaction((tx) =>
+      // Only openings that have an entity at the provider and may hold a
+      // BVN: documents needed, refused, or stopped (a `failed` row holds
+      // nothing; nothing is made for it until the person starts again).
       expireOpening(tx, wawuUserId, EXPIRED_BY_SUPPORT, now, [
         'review',
         'stopped',
-        'failed',
-        'conflict',
       ]),
     );
     return done

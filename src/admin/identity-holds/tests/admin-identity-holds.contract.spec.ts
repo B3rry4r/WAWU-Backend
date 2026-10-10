@@ -8,6 +8,7 @@ import {
 import { ConfigModule } from '@nestjs/config';
 import { Test, type TestingModule } from '@nestjs/testing';
 import request from 'supertest';
+import type { App } from 'supertest/types';
 import { AdminRole } from '../../../../generated/prisma/enums';
 import { AdminOpsAuditModule } from '../../../common/audit/admin-ops-audit.module';
 import { AllExceptionsFilter } from '../../../common/filters/all-exceptions.filter';
@@ -70,7 +71,7 @@ class OpeningDoubleModule {}
 class UnderTestModule {}
 
 describe('Admin: support lets go of a BVN hold (NUV-02 round 3)', () => {
-  let app: INestApplication;
+  let app: INestApplication<App>;
   let prisma: PrismaService;
   let double: OpeningDouble;
   const previous: Record<string, string | undefined> = {};
