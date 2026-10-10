@@ -188,6 +188,25 @@ export function IdempotencyKeyHeader(): MethodDecorator {
   });
 }
 
+/**
+ * The key on the two routes that replace a PIN (`PUT /money/pin` and `POST
+ * /money/pin/reset/confirm`, WALLET-06 round 2; CONVENTIONS.md section 4,
+ * "On the PIN routes"). Optional: without it the route answers as it always
+ * has. Not `IdempotencyKeyHeader()`: that one is for requests that move money
+ * and says the header is required. The refusals it brings are written here,
+ * not in the route's `@MoneyErrors` list, because that list is how a route is
+ * told to move money (money-moving-coverage.spec.ts), and these two do not.
+ */
+export function OptionalIdempotencyKeyHeader(): MethodDecorator {
+  return ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description:
+      'Optional. One value per attempt to change the PIN, made by the app when the person first confirms (a UUID) and sent again unchanged when the answer was lost. If the first request landed, its answer comes back with the header Idempotent-Replayed: true and the PIN is not checked again. The same key with another body is 409 idempotency_key_reused; while the first is still running, 409 idempotency_in_progress with retryAfterSeconds; a value that is not 8 to 128 of [A-Za-z0-9_-] is 400 idempotency_key_required. A refused request gives the key back.',
+    schema: { type: 'string', pattern: '^[A-Za-z0-9_-]{8,128}$' },
+  });
+}
+
 /** The transaction PIN, only in this header (CONVENTIONS.md, "The transaction PIN"). */
 export function TransactionPinHeader(): MethodDecorator {
   return ApiHeader({

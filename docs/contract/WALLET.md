@@ -26,10 +26,10 @@ caller from the token.
 | `GET /money/wallet/balance` | `WalletBalanceView` | | MONEY-11 (served) |
 | `GET /money/pin` | `PinStateView` | | MONEY-09 |
 | `POST /money/pin` | `PinStateView` | `SetPinDto` | MONEY-09 |
-| `PUT /money/pin` | `PinStateView` | `ChangePinDto`, `X-Transaction-Pin` (current) | MONEY-09 |
+| `PUT /money/pin` | `PinStateView` | `ChangePinDto`, `X-Transaction-Pin` (current), optional `Idempotency-Key` | MONEY-09 (the key: WALLET-06 round 2, CONVENTIONS.md section 4) |
 | `POST /money/pin/verify` | `PinStateView` | `X-Transaction-Pin` | MONEY-09 |
 | `POST /money/pin/reset` | `PinResetView` | | MONEY-14 (served; CONVENTIONS.md section 5) |
-| `POST /money/pin/reset/confirm` | `PinStateView` | `ConfirmPinResetDto` | MONEY-14 (served) |
+| `POST /money/pin/reset/confirm` | `PinStateView` | `ConfirmPinResetDto`, optional `Idempotency-Key` | MONEY-14 (served; the key: WALLET-06 round 2, CONVENTIONS.md section 4) |
 | `GET /money/device` | `ApprovalDeviceView` | | MONEY-14 (served) |
 | `PUT /money/device` | `ApprovalDeviceView` | `RegisterApprovalDeviceDto`, `X-Transaction-Pin` | MONEY-14 (served) |
 | `DELETE /money/device` | `ApprovalDeviceView` | | MONEY-14 (served) |
