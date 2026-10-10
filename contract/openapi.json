@@ -28542,6 +28542,7 @@
               "community/image",
               "community/message",
               "event/speaker",
+              "event/banner",
               "profile/work"
             ]
           },
@@ -44934,6 +44935,68 @@
           "lastDecisionReason"
         ]
       },
+      "EventTicketRulesView": {
+        "type": "object",
+        "properties": {
+          "hostSharePercent": {
+            "type": "number"
+          },
+          "minPriceNaira": {
+            "type": "number"
+          },
+          "maxPriceNaira": {
+            "type": "number"
+          },
+          "minQuantity": {
+            "type": "number"
+          },
+          "maxQuantity": {
+            "type": "number"
+          },
+          "nameMinLength": {
+            "type": "number"
+          },
+          "nameMaxLength": {
+            "type": "number"
+          },
+          "maxTypes": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "hostSharePercent",
+          "minPriceNaira",
+          "maxPriceNaira",
+          "minQuantity",
+          "maxQuantity",
+          "nameMinLength",
+          "nameMaxLength",
+          "maxTypes"
+        ]
+      },
+      "EventFieldLimitsView": {
+        "type": "object",
+        "properties": {
+          "nameMax": {
+            "type": "number"
+          },
+          "descriptionMax": {
+            "type": "number"
+          },
+          "hostOrgMax": {
+            "type": "number"
+          },
+          "addressMax": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "nameMax",
+          "descriptionMax",
+          "hostOrgMax",
+          "addressMax"
+        ]
+      },
       "EventOptionsView": {
         "type": "object",
         "properties": {
@@ -45016,12 +45079,20 @@
                 "label"
               ]
             }
+          },
+          "tickets": {
+            "$ref": "#/components/schemas/EventTicketRulesView"
+          },
+          "fields": {
+            "$ref": "#/components/schemas/EventFieldLimitsView"
           }
         },
         "required": [
           "categories",
           "formats",
-          "types"
+          "types",
+          "tickets",
+          "fields"
         ]
       },
       "EventFromPricesView": {
