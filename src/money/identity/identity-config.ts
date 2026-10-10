@@ -19,6 +19,9 @@ export const IDENTITY_CONFIG_KEYS = {
   // NUV-02 round 3: a Nuvion opening left unfinished lets go of its BVN
   // after this many days, and tries are limited per address.
   holdDays: 'IDENTITY_HOLD_DAYS',
+  // NUV-03 round 4 (R4-2): one account holds one BVN for at most this many
+  // days from the first claim, whatever progress is recorded.
+  holdLifetimeDays: 'IDENTITY_HOLD_LIFETIME_DAYS',
   opensPerAddressPerHour: 'OPEN_ATTEMPTS_PER_ADDRESS_PER_HOUR',
 } as const;
 
@@ -57,6 +60,21 @@ export const BVN_CHECK_WINDOW_MS = 24 * 60 * 60_000;
  * (NUV-02 round 3, N3). Overridable with IDENTITY_HOLD_DAYS.
  */
 export const DEFAULT_IDENTITY_HOLD_DAYS = 14;
+
+/**
+ * PROVISIONAL(IDENTITY-HOLD-LIFETIME-DAYS, owner=YOU, why=the lead set 30 days on 10 Oct 2026 as a default after the NUV-02 round 4 verifier showed that a 4 byte upload every 13 days kept a stranger's BVN held for ever; the owner has not named how long one account may hold a BVN while its opening is unfinished)
+ *
+ * Under a provider that reviews the person (Nuvion): the longest one account
+ * may hold one BVN while its opening is still at "documents needed" (or
+ * refused only about its documents or details), counted from the day the
+ * account took the claim on that number, whatever the person has done since
+ * (NUV-03 round 4, R4-2). When it ends the opening is marked expired by the
+ * sweep, exactly as an idle one is: the BVN is let go, the person is told
+ * once and starts again (which takes a new claim, and so a new lifetime).
+ * Overridable with IDENTITY_HOLD_LIFETIME_DAYS; never shorter than
+ * IDENTITY_HOLD_DAYS.
+ */
+export const DEFAULT_IDENTITY_HOLD_LIFETIME_DAYS = 30;
 
 /**
  * PROVISIONAL(OPEN-ATTEMPTS-PER-ADDRESS, owner=YOU, why=the lead set 10 an hour on 9 Oct 2026 as a default; no ruling names a per-address limit for opening a wallet)
@@ -196,6 +214,20 @@ export function identityHoldDays(raw: string | undefined): number {
   return n;
 }
 
+/** Reads IDENTITY_HOLD_LIFETIME_DAYS (1 to 365); unset means the provisional default. */
+export function identityHoldLifetimeDays(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') {
+    return DEFAULT_IDENTITY_HOLD_LIFETIME_DAYS;
+  }
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 365) {
+    throw new IdentityConfigError(
+      `${IDENTITY_CONFIG_KEYS.holdLifetimeDays} must be a whole number from 1 to 365.`,
+    );
+  }
+  return n;
+}
+
 /** Reads OPEN_ATTEMPTS_PER_ADDRESS_PER_HOUR (1 to 100000); unset means the default. */
 export function openAttemptsPerAddressPerHour(raw: string | undefined): number {
   if (raw === undefined || raw.trim() === '') {
@@ -287,6 +319,11 @@ export class IdentityHasher {
   readonly selfieChecksPerDay: number;
   /** Days an unfinished Nuvion opening holds its BVN (NUV-02 round 3). */
   readonly holdDays: number;
+  /**
+   * The most days one account holds one BVN while its opening is unfinished,
+   * from the first claim, whatever the person does meanwhile (NUV-03 round 4).
+   */
+  readonly holdLifetimeDays: number;
   /** Opening tries one address may make an hour (NUV-02 round 3). */
   readonly opensPerAddressPerHour: number;
 
@@ -307,6 +344,14 @@ export class IdentityHasher {
     this.holdDays = identityHoldDays(
       config.get<string>(IDENTITY_CONFIG_KEYS.holdDays),
     );
+    this.holdLifetimeDays = identityHoldLifetimeDays(
+      config.get<string>(IDENTITY_CONFIG_KEYS.holdLifetimeDays),
+    );
+    if (this.holdLifetimeDays < this.holdDays) {
+      throw new IdentityConfigError(
+        `${IDENTITY_CONFIG_KEYS.holdLifetimeDays} (${this.holdLifetimeDays}) must not be shorter than ${IDENTITY_CONFIG_KEYS.holdDays} (${this.holdDays}).`,
+      );
+    }
     this.opensPerAddressPerHour = openAttemptsPerAddressPerHour(
       config.get<string>(IDENTITY_CONFIG_KEYS.opensPerAddressPerHour),
     );
