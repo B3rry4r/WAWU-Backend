@@ -1763,12 +1763,53 @@ describe('Event registration link (JOIN-01) over HTTP', () => {
         const before = await rows();
         drawn = 0;
         const res = await post().expect(503);
+        // The bound is five draws. The literal sits beside the constant so that
+        // changing the constant cannot move this test along with it.
+        expect(drawn).toBe(5);
         expect(drawn).toBe(REFERENCE_ATTEMPTS);
         expect(res.body.data).toBeNull();
         expect(JSON.stringify(res.body)).not.toMatch(
           /[\u2014]|prisma|unique|constraint/i,
         );
         expect(await rows()).toBe(before);
+      } finally {
+        await other.close();
+      }
+    });
+
+    it('an error that is not a unique violation is not retried: one draw, one attempt, a 500 and not the 503, nothing written', async () => {
+      const random = scripted([draw('a1a2a3a4', 1), draw('a5a6a7a8', 2)]);
+      const other = await bootWaitlist(config, fake, [], [], random);
+      try {
+        const db = other.get(PrismaService);
+        // The first (and only) write is refused for a reason that is not a
+        // taken code, as a lost database connection would be.
+        const create = jest
+          .spyOn(db.waitlistRegistration, 'create')
+          .mockRejectedValueOnce(new Error('connection lost'));
+        const body = person();
+        const res = await request(other.getHttpServer())
+          .post('/api/hub/waitlist/registrations')
+          .send(body);
+        expect(res.status).toBe(500);
+        expect(res.status).not.toBe(503);
+        expect(JSON.stringify(res.body)).not.toMatch(/connection lost/);
+        // Exactly one draw and one write: the error was not swallowed and not retried.
+        expect(random.drawn).toBe(1);
+        expect(create).toHaveBeenCalledTimes(1);
+        expect(
+          await prisma.waitlistRegistration.count({
+            where: { email: body.email },
+          }),
+        ).toBe(0);
+        // Nothing is left broken: the same person can start right after.
+        const again = await request(other.getHttpServer())
+          .post('/api/hub/waitlist/registrations')
+          .send(body)
+          .expect(200);
+        expect(data(again).reference).toMatch(/^wawu-join-[0-9a-f]{36}$/);
+        expect(random.drawn).toBe(2);
+        create.mockRestore();
       } finally {
         await other.close();
       }
