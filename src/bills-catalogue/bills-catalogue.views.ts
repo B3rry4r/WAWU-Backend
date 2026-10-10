@@ -1,5 +1,14 @@
 export type MeterPlan = 'prepaid' | 'postpaid';
 
+/**
+ * One quick amount to offer. An object, not a bare number, so the field that holds the figure is named `amountKobo` like
+ * every other kobo figure on the wire (a list named `...Kobo` cannot be typed as an integer in the contract).
+ */
+export interface ElectricityPresetView {
+  /** The amount in kobo (₦5,000 is 500000). */
+  amountKobo: number;
+}
+
 /** One electricity company on S3, in one plan: the code Fintava lists for it, its limits and the amounts to offer. */
 export interface ElectricityBillerView {
   /** Fintava's disco code for this company and plan. The app sends it back on the meter preview and, later, on the payment. */
@@ -11,8 +20,8 @@ export interface ElectricityBillerView {
   /** This company's own smallest and largest amount, in kobo, as Fintava lists them (never a fixed figure). Zero is a listed minimum. */
   minimumKobo: number;
   maximumKobo: number;
-  /** The quick amounts to offer, in kobo: the configured ones that fit between the two limits. */
-  presetsKobo: number[];
+  /** The quick amounts to offer: the configured ones that fit between the two limits, smallest first. */
+  presets: ElectricityPresetView[];
 }
 
 export interface ElectricityBillersView {
