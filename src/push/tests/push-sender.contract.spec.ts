@@ -751,16 +751,16 @@ describe('Phone push sender (INBOX-03)', () => {
       );
 
       it.each([
-        ['1e20', 'scientific notation'],
-        ['-5', 'negative'],
-        ['0', 'zero'],
-        ['abc', 'text'],
-        ['', 'empty'],
-        ['Wed, 21 Oct 2099 07:28:00 GMT', 'an HTTP date'],
-        ['1'.repeat(400), 'too many digits for a number'],
+        { header: '1e20', why: 'scientific notation' },
+        { header: '-5', why: 'negative' },
+        { header: '0', why: 'zero' },
+        { header: 'abc', why: 'text' },
+        { header: '', why: 'empty' },
+        { header: 'Wed, 21 Oct 2099 07:28:00 GMT', why: 'an HTTP date' },
+        { header: '1'.repeat(400), why: 'too many digits for a number' },
       ])(
-        'a value that is not a plain number of seconds (%s, %s) falls back to the normal backoff, and the pass does not fail',
-        async (header) => {
+        'a value that is not a plain number of seconds ($why) falls back to the normal backoff, and the pass does not fail',
+        async ({ header }) => {
           const r = await answer429(header);
           expect(r).toMatchObject({ status: 'pending', reason: 'http_429' });
           expect(r.wait).toBeGreaterThan(0);

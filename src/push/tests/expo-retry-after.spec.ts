@@ -15,23 +15,25 @@ describe('parseRetryAfter', () => {
     expect(parseRetryAfter(header)).toBe(seconds);
   });
 
-  it.each([
-    [null, 'no header'],
-    ['', 'empty'],
-    ['   ', 'blank'],
-    ['0', 'zero'],
-    ['-5', 'negative'],
-    ['+5', 'signed'],
-    ['2.5', 'a fraction'],
-    ['1e20', 'scientific notation'],
-    ['0x10', 'hex'],
-    ['abc', 'text'],
-    ['30 seconds', 'text after the number'],
-    ['Infinity', 'Infinity'],
-    ['NaN', 'NaN'],
-    ['1'.repeat(400), 'a number that overflows to Infinity'],
-    ['Wed, 21 Oct 2099 07:28:00 GMT', 'an HTTP date'],
-  ])('ignores %p (%s)', (header) => {
+  const IGNORED: Array<{ header: string | null; why: string }> = [
+    { header: null, why: 'no header' },
+    { header: '', why: 'empty' },
+    { header: '   ', why: 'blank' },
+    { header: '0', why: 'zero' },
+    { header: '-5', why: 'negative' },
+    { header: '+5', why: 'signed' },
+    { header: '2.5', why: 'a fraction' },
+    { header: '1e20', why: 'scientific notation' },
+    { header: '0x10', why: 'hex' },
+    { header: 'abc', why: 'text' },
+    { header: '30 seconds', why: 'text after the number' },
+    { header: 'Infinity', why: 'Infinity' },
+    { header: 'NaN', why: 'NaN' },
+    { header: '1'.repeat(400), why: 'a number that overflows to Infinity' },
+    { header: 'Wed, 21 Oct 2099 07:28:00 GMT', why: 'an HTTP date' },
+  ];
+
+  it.each(IGNORED)('ignores $why', ({ header }) => {
     expect(parseRetryAfter(header)).toBeNull();
   });
 });
