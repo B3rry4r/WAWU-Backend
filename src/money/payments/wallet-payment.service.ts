@@ -279,6 +279,12 @@ export class WalletPaymentService implements OnModuleInit {
     // too (R7-1): the ledger holds the row's figures, the payment completes
     // at the provider's.
     this.ledger.onPaymentDebitSighted((e) => this.completeFromSighting(e));
+    // ... and a report whose charge is not believed (N2) stops the payment
+    // IN THE LEDGER'S OWN TRANSACTION, so no completion can come between the
+    // report being known to the ledger and the payment (MONEY-18 round 2, F1).
+    this.ledger.onPaymentDebitSightedInTransaction((tx, e) =>
+      this.holdUntrustedReport(tx, e),
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -922,19 +928,61 @@ export class WalletPaymentService implements OnModuleInit {
    * completed nor delivered at it, and no figure of the provider's is
    * written to it or to the ledger. A `pending` payment leaves the sweep for
    * a person (`reviewSince`, the item stays claimed, as every review does);
-   * a payment already completed and delivered at the quote is only marked.
-   * The buyer's ledger row gets the same words, so the ledger's own checks
-   * leave it for the person too.
+   * a payment completed and not yet delivered is stopped before its delivery
+   * (O3); a payment already delivered at the quote is only marked. The
+   * buyer's ledger row gets the same words, so the ledger's own checks leave
+   * it for the person too.
    */
   private async toChargeReview(
     p: PaymentRow,
     note: string,
   ): Promise<PaymentRow> {
+    await this.markChargeReview(this.prisma, p, note);
+    return this.prisma.walletPayment.findUniqueOrThrow({ where: { id: p.id } });
+  }
+
+  /**
+   * The signed report of a charge that is not believed, heard INSIDE the
+   * ledger's transaction that stores it (MONEY-18 round 2, F1): the same
+   * judgment as every other path (`completedFigures`), made with the report
+   * and written with it. A payment that has not completed can no longer
+   * complete (its completion is conditional on this mark); one completed and
+   * not yet delivered is not delivered (O3). Trusted figures, another amount
+   * and another provider's payment are left to `completeFromSighting`.
+   */
+  private async holdUntrustedReport(
+    tx: Prisma.TransactionClient,
+    e: LedgerDebitSighting,
+  ): Promise<void> {
+    const p = await tx.walletPayment.findUnique({ where: { id: e.paymentId } });
+    if (!p || p.provider !== this.provider.name) return;
+    if (p.status !== 'pending' && p.status !== 'completed') return;
+    if (p.chargeReviewSince || e.amountKobo !== p.priceKobo) return;
+    const figures = completedFigures(
+      { providerFeeKobo: p.providerFeeKobo, totalKobo: p.totalKobo },
+      { amountKobo: e.amountKobo, feeKobo: e.feeKobo, totalKobo: e.totalKobo },
+      this.provider.label,
+      BigInt(this.settings.chargeReviewAboveKobo),
+    );
+    if (figures.verdict !== 'untrusted') return;
+    await this.markChargeReview(tx, p, figures.note ?? 'charge not trusted');
+  }
+
+  /**
+   * The one write of a charge review, on `this.prisma` or on a transaction.
+   * Sticky and conditional: it only ever moves a `pending` or `completed`
+   * payment that is not already marked, so every path may call it again.
+   */
+  private async markChargeReview(
+    db: Prisma.TransactionClient | PrismaService,
+    p: PaymentRow,
+    note: string,
+  ): Promise<void> {
     // The ledger row first: if this stops between the two, the next path
     // finds the charge untrusted again and finishes (the note is joined once).
     if (!p.chargeReviewSince) {
       try {
-        const out = await this.prisma.fintavaLedgerEntry.findFirst({
+        const out = await db.fintavaLedgerEntry.findFirst({
           where: {
             customerReference: p.customerReference,
             direction: 'out',
@@ -942,8 +990,15 @@ export class WalletPaymentService implements OnModuleInit {
           },
           select: { id: true },
         });
-        if (out) await this.ledger.noteDiscrepancy(out.id, note);
+        if (out) {
+          await this.ledger.noteDiscrepancy(
+            out.id,
+            note,
+            db === this.prisma ? undefined : db,
+          );
+        }
       } catch (e) {
+        if (db !== this.prisma) throw e;
         this.logger.error(
           `payment ${p.id}: the ledger row could not be marked (${e instanceof Error ? e.name : 'error'})`,
         );
@@ -951,26 +1006,37 @@ export class WalletPaymentService implements OnModuleInit {
     }
     const now = new Date();
     const discrepancy = joinNotes(p.discrepancy, note);
-    const { count } = await this.prisma.walletPayment.updateMany({
+    const { count } = await db.walletPayment.updateMany({
       where: {
         id: p.id,
         status: { in: ['pending', 'completed'] },
         chargeReviewSince: null,
       },
-      data: {
-        chargeReviewSince: now,
-        ...(p.status === 'pending'
-          ? { reviewSince: p.reviewSince ?? now, nextCheckAt: null }
-          : {}),
-        discrepancy,
+      data: { chargeReviewSince: now, discrepancy },
+    });
+    // Out of the sweeps that would complete or deliver it: a pending payment
+    // is not checked again, a completed one not yet delivered is not
+    // delivered. Conditional on the state it is in NOW, whichever it was when
+    // `p` was read.
+    await db.walletPayment.updateMany({
+      where: { id: p.id, status: 'pending', chargeReviewSince: { not: null } },
+      data: { reviewSince: p.reviewSince ?? now, nextCheckAt: null },
+    });
+    await db.walletPayment.updateMany({
+      where: {
+        id: p.id,
+        status: 'completed',
+        fulfilledAt: null,
+        reviewSince: null,
+        chargeReviewSince: { not: null },
       },
+      data: { reviewSince: now, nextDeliveryAt: null },
     });
     if (count > 0) {
       this.logger.error(
-        `payment ${p.id}: ${note}; sent to review, nothing is delivered at it`,
+        `payment ${p.id}: ${note}; sent to review, nothing more is delivered at it`,
       );
     }
-    return this.prisma.walletPayment.findUniqueOrThrow({ where: { id: p.id } });
   }
 
   /**
@@ -1035,6 +1101,8 @@ export class WalletPaymentService implements OnModuleInit {
         const where: Prisma.WalletPaymentWhereInput = {
           status: 'pending',
           reviewSince: null,
+          // A payment in charge review (N2) is a person's, not the sweep's.
+          chargeReviewSince: null,
           nextCheckAt: { lte: now },
         };
         if (after) {
@@ -1076,6 +1144,8 @@ export class WalletPaymentService implements OnModuleInit {
             status: 'completed',
             fulfilledAt: null,
             reviewSince: null,
+            // Never delivered while its charge is in question (N2, O3).
+            chargeReviewSince: null,
             payerWawuUserId: { not: null },
             kind: { in: delivering },
             // The delivery the completion itself started has had a minute,
@@ -1676,8 +1746,11 @@ export class WalletPaymentService implements OnModuleInit {
     // without the other (MONEY-18).
     const condition = releaseConditionOf(p.kind);
     const count = await this.prisma.$transaction(async (tx) => {
+      // `chargeReviewSince: null`: a payment whose charge is in question
+      // (N2) is never completed by ANY caller, whatever it read a moment ago
+      // (MONEY-18 round 2, F1). The mark and this update meet on one row.
       const { count: won } = await tx.walletPayment.updateMany({
-        where: { id: p.id, status: 'pending' },
+        where: { id: p.id, status: 'pending', chargeReviewSince: null },
         data: {
           status: 'completed',
           completedAt: now,
@@ -1853,6 +1926,28 @@ export class WalletPaymentService implements OnModuleInit {
     now = new Date(),
   ): Promise<boolean> {
     if (!handler.onCompleted || p.fulfilledAt || !p.payerWawuUserId) {
+      return false;
+    }
+    // The payment as it stands at the moment of delivery, not as the caller
+    // read it (MONEY-18 round 2, O3): a charge that is not believed (N2), or
+    // any review, stops a delivery not yet made. A delivery already made is
+    // not taken back; the mark is all that is left to do for it.
+    const fresh = await this.prisma.walletPayment.findUnique({
+      where: { id: p.id },
+      select: {
+        status: true,
+        fulfilledAt: true,
+        reviewSince: true,
+        chargeReviewSince: true,
+      },
+    });
+    if (
+      !fresh ||
+      fresh.status !== 'completed' ||
+      fresh.fulfilledAt ||
+      fresh.reviewSince ||
+      fresh.chargeReviewSince
+    ) {
       return false;
     }
     try {

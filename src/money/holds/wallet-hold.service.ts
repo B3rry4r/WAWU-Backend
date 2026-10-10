@@ -21,23 +21,25 @@ import { joinNotes } from '../payments/payment-figures';
 import {
   type HoldAction,
   type HoldRef,
+  HOLD_SWEEP_BUDGET_MS,
   HoldRequestError,
   type HoldSettlement,
   type HoldSettlementState,
+  type HoldSweepCursor,
   type HoldWaiting,
   holdReference,
   REFUND_NARRATION,
   RELEASE_NARRATION,
   transferFor,
   WALLET_WAITS,
+  walletWaitRestMs,
 } from './hold-rules';
 
 type HoldRow = Prisma.WalletHoldGetPayload<object>;
 
 const MINUTE = 60_000;
-/** Holds per page of the sweep, and pages per pass. */
+/** Holds the sweep reads at a time. */
 const SWEEP_PAGE = 50;
-const SWEEP_PAGES = 20;
 
 /** The rest before the next try or question: 1, 2, 4 ... minutes, at most an hour. */
 function restMs(count: number): number {
@@ -87,10 +89,11 @@ function restMs(count: number): number {
  * **Waiting is not failing.** A person with no wallet yet (R-11: the money
  * waits and lands within a minute of the wallet opening), a frozen wallet
  * (BACKEND_GAPS G-10: paid on unfreeze), WAWU's own account short of money
- * (an error in the log every try), the provider out of reach: the hold
- * stays `held`, the money stays in WAWU's account, and the sweep tries
- * again. Nothing is ever refunded because a release is stuck, or the other
- * way round.
+ * (an error in the log every try), the provider out of reach (including a
+ * request that provably never reached it: the same reference is sent again):
+ * the hold stays `held`, the money stays in WAWU's account, and the sweep
+ * tries again. Nothing is ever refunded because a release is stuck, or the
+ * other way round.
  *
  * Through the provider seam only (MONEY-20): a server acts only on holds of
  * the provider it runs.
@@ -99,6 +102,8 @@ function restMs(count: number): number {
 export class WalletHoldService {
   private readonly logger = new Logger(WalletHoldService.name);
   private sweeping = false;
+  /** Where the last pass stopped when its time ran out; null once it has read to the end. */
+  private sweepAfter: HoldSweepCursor | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -223,17 +228,31 @@ export class WalletHoldService {
 
   /**
    * Every minute: every hold whose action was chosen and whose move is not
-   * confirmed, not under review and due (a hold waiting for a wallet is due
-   * every pass), of the provider this server runs.
+   * confirmed, not under review and due, of the provider this server runs.
+   *
+   * MONEY-18 round 2 (F4): the pass walks EVERY due hold by a keyset cursor
+   * (action time, then id), with no cap on the rows it looks at, the way
+   * NUV-02's expiry sweep does. It stops only at the end of the due holds or
+   * when its time is used (`budgetMs`), and then the next pass starts where
+   * this one stopped, so no number of holds in front can keep it from the
+   * ones behind. A hold waiting for a person's wallet rests (a minute to an
+   * hour, by its age) instead of being due on every pass, and is woken the
+   * moment its person has a wallet (R-11).
    */
   @Cron(CronExpression.EVERY_MINUTE, { name: 'money-hold-settle' })
-  async sweep(now = new Date()): Promise<{ checked: number; settled: number }> {
+  async sweep(
+    now = new Date(),
+    opts: { budgetMs?: number } = {},
+  ): Promise<{ checked: number; settled: number }> {
     const counts = { checked: 0, settled: 0 };
     if (this.sweeping) return counts;
     this.sweeping = true;
+    const budgetMs = opts.budgetMs ?? HOLD_SWEEP_BUDGET_MS;
+    const started = Date.now();
     try {
-      let after: { at: Date; id: string } | null = null;
-      for (let page = 0; page < SWEEP_PAGES; page += 1) {
+      await this.wakeWalletWaiters(now);
+      let after: HoldSweepCursor | null = this.sweepAfter;
+      for (;;) {
         const where: Prisma.WalletHoldWhereInput = {
           status: 'held',
           action: { not: null },
@@ -259,7 +278,7 @@ export class WalletHoldService {
           take: SWEEP_PAGE,
           select: { id: true, actionAt: true },
         });
-        for (const { id } of due) {
+        for (const { id, actionAt } of due) {
           counts.checked += 1;
           try {
             const s = await this.drive(id, now);
@@ -269,8 +288,18 @@ export class WalletHoldService {
               `hold ${id}: the sweep could not drive it (${e instanceof Error ? e.name : 'error'})`,
             );
           }
+          // Out of time (a slow provider spends it a hold at a time): the
+          // next pass starts after this hold.
+          if (Date.now() - started >= budgetMs) {
+            this.sweepAfter = { at: actionAt!, id };
+            return counts;
+          }
         }
-        if (due.length < SWEEP_PAGE) break;
+        if (due.length < SWEEP_PAGE) {
+          // Read to the end: the next pass starts from the front again.
+          this.sweepAfter = null;
+          break;
+        }
         const last = due[due.length - 1];
         after = { at: last.actionAt!, id: last.id };
       }
@@ -282,6 +311,37 @@ export class WalletHoldService {
       this.sweeping = false;
     }
     return counts;
+  }
+
+  /**
+   * A hold that waits for a person's wallet rests until its next look; one
+   * whose person has a wallet NOW is made due at once, so the money lands in
+   * the first sweep after the wallet opens (R-11) however long it had rested.
+   * Only the running provider's wallets count (a wallet of the other
+   * provider is not a place this server can send to).
+   */
+  private async wakeWalletWaiters(now: Date): Promise<void> {
+    try {
+      await this.prisma.$executeRaw`
+        UPDATE "WalletHold" h
+           SET "nextAttemptAt" = NULL
+         WHERE h."status" = 'held' AND h."action" IS NOT NULL
+           AND h."reviewSince" IS NULL AND h."sentAt" IS NULL
+           AND h."provider" = ${this.provider.name}
+           AND h."waiting" IN ('payee_wallet', 'payer_wallet')
+           AND h."nextAttemptAt" > ${now}
+           AND EXISTS (
+             SELECT 1 FROM "FintavaWallet" w
+              WHERE w."wawuUserId" = CASE WHEN h."action" = 'release'
+                                          THEN h."payeeWawuUserId"
+                                          ELSE h."payerWawuUserId" END
+                AND LOWER(BTRIM(COALESCE(w."provider", 'fintava'))) = ${this.provider.name})`;
+    } catch (e) {
+      // The waiters keep their rest and are looked at when it ends.
+      this.logger.error(
+        `hold sweep: could not wake the holds waiting for a wallet (${e instanceof Error ? e.name : 'error'})`,
+      );
+    }
   }
 
   /**
@@ -442,9 +502,12 @@ export class WalletHoldService {
     now: Date,
   ): Promise<HoldSettlement> {
     const refusal = e instanceof WalletProviderError ? e : null;
-    if (!refusal || refusal.recordMayExist) {
+    if (!refusal || (refusal.recordMayExist && !refusal.requestNotSent)) {
       // Money may have moved (a lost answer, a transfer accepted and not
       // finished, a repeated reference): asked about, never sent again.
+      // A request that PROVABLY never reached the provider (a refused
+      // connection, a host name that did not resolve: `requestNotSent`)
+      // is not here: nothing was sent, so it is the refusal below.
       this.logger.warn(
         `hold ${hold.id}: the ${hold.action} outcome is unknown (${refusal?.kind ?? 'error'}); asking ${this.provider.label} about it`,
       );
@@ -454,8 +517,14 @@ export class WalletHoldService {
     // A refusal that moved nothing: the lease is given back, the same
     // reference is used again (a refused send does not use it up).
     let waiting: HoldWaiting;
-    if (refusal instanceof WalletProviderLimitError) waiting = 'provider';
-    else if (refusal.kind === 'insufficient_funds') waiting = 'funds';
+    if (refusal.requestNotSent) {
+      this.logger.warn(
+        `hold ${hold.id}: ${this.provider.label} could not be reached (the request was not sent); the ${hold.action} is tried again under the same reference`,
+      );
+      waiting = 'provider';
+    } else if (refusal instanceof WalletProviderLimitError) {
+      waiting = 'provider';
+    } else if (refusal.kind === 'insufficient_funds') waiting = 'funds';
     else if (refusal.kind === 'wallet_inactive') waiting = 'recipient_frozen';
     else if (
       [
@@ -806,8 +875,10 @@ export class WalletHoldService {
 
   /**
    * Nothing has moved and the reason is a person's wallet, a frozen wallet,
-   * a provider out of reach or a refusal. A hold waiting for a wallet is
-   * tried every minute; the rest back off to hourly.
+   * a provider out of reach or a refusal. Every wait rests before the next
+   * look and backs off to hourly: a hold waiting for a wallet by its age
+   * (`walletWaitRestMs`) and woken as soon as the wallet exists, the rest by
+   * the number of tries.
    */
   private async waitFor(
     hold: HoldRow,
@@ -838,12 +909,16 @@ export class WalletHoldService {
       where: { id: hold.id, status: 'held', sentAt: null },
       data: {
         waiting,
-        nextAttemptAt: walletWait
-          ? null
-          : new Date(
-              now.getTime() +
-                (slow ? 60 * MINUTE : restMs(Math.max(hold.attempts, 1))),
-            ),
+        nextAttemptAt: new Date(
+          now.getTime() +
+            (walletWait
+              ? walletWaitRestMs(
+                  now.getTime() - (hold.actionAt ?? hold.createdAt).getTime(),
+                )
+              : slow
+                ? 60 * MINUTE
+                : restMs(Math.max(hold.attempts, 1))),
+        ),
       },
     });
     return this.settlementOf(await this.load(hold.id));

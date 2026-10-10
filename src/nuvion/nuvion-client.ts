@@ -14,6 +14,7 @@ import type {
   NuvionListQuery,
   NuvionPagination,
 } from './nuvion.interface';
+import { connectionNeverOpened } from '../wallet-provider/connection-never-opened';
 import type {
   WalletProviderError,
   WalletProviderErrorKind,
@@ -113,7 +114,9 @@ class NuvionDeadline {
         },
         (e: unknown) => {
           this.#onTimeout = null;
-          reject(e instanceof Error ? e : new Error('fetch failed'));
+          reject(
+            e instanceof Error ? e : new Error('fetch failed', { cause: e }),
+          );
         },
       );
     });
@@ -362,6 +365,7 @@ export class NuvionClient {
       requestId?: string | null;
       nuvionType?: string | null;
       recordMayExist?: boolean;
+      requestNotSent?: boolean;
       retryAfterSeconds?: number;
     },
   ): WalletProviderError {
@@ -386,6 +390,7 @@ export class NuvionClient {
         requestId: args.requestId ?? null,
         nuvionType: args.nuvionType ?? null,
         recordMayExist: args.recordMayExist,
+        requestNotSent: args.requestNotSent,
         retryAfterSeconds:
           args.retryAfterSeconds ?? this.settings.retryAfterSeconds,
       });
@@ -441,11 +446,14 @@ export class NuvionClient {
     const started = Date.now();
     const deadline = new NuvionDeadline(this.timeoutFor(op.call));
     // No answer, or one cut short, is not evidence about the money.
-    const lost = (why: string) =>
+    // A connection that never opened proves the request was not sent
+    // (`requestNotSent`); every other loss stays an unknown outcome.
+    const lost = (why: string, requestNotSent = false) =>
       this.fail(op, {
         kind: op.call === 'write' ? 'outcome_unknown' : 'unavailable',
         messages: [why],
         reference: opts.reference,
+        requestNotSent,
       });
     let res: Response;
     let read: BodyRead;
@@ -461,8 +469,10 @@ export class NuvionClient {
             redirect: 'error',
           }),
         );
-      } catch {
-        throw lost(deadline.timedOut ? 'timed out' : 'no connection');
+      } catch (e) {
+        throw deadline.timedOut
+          ? lost('timed out')
+          : lost('no connection', connectionNeverOpened(e));
       }
       read = await readBody(res, cap, deadline);
     } finally {

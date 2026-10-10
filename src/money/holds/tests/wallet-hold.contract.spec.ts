@@ -1444,4 +1444,454 @@ describe('Hold, release and refund (MONEY-18) on Fintava', () => {
     expect(after.count).toBe(before.count);
     expect(after.amountKobo).toBe(before.amountKobo);
   });
+  // -------------------------------------------------------------------------
+  // MONEY-18 round 2
+  // -------------------------------------------------------------------------
+
+  it("F2 a refund is recorded as a refund: both ledger rows, linked to the item, WAWU as the other side of the payer's, and the payer's history says Refund", async () => {
+    const creator = await person(0, false);
+    const buyer = await person(300_000);
+    const target = listing(creator, 100_000, 'refund-ledger');
+    const payment = await paid(buyer, 'paid_dm', target);
+    const hold = await holdOfPayment(payment.id);
+    await holds.refund({ paymentId: payment.id }, 'no answer');
+
+    const rows = await ledgerRows(`wawu-ref-${hold.id}`);
+    expect(rows).toHaveLength(2);
+    const back = rows.find((r) => r.direction === 'in')!;
+    const out = rows.find((r) => r.direction === 'out')!;
+    for (const r of rows) {
+      expect(r.category).toBe('refund');
+      expect(r.status).toBe('completed');
+      expect(r.amountKobo).toBe(100_000n);
+      expect(r.linkKind).toBe('paid_dm');
+      expect(r.linkTargetId).toBe(target);
+      expect(r.customerReference).toBe(`wawu-ref-${hold.id}`);
+    }
+    // The payer's wallet gets the whole price, no fee on it.
+    expect(back).toMatchObject({
+      walletKind: 'user',
+      wawuUserId: buyer.id,
+      accountNumber: buyer.accountNumber,
+      feeKobo: 0n,
+      totalKobo: 100_000n,
+      counterpartyKind: 'wawu',
+      counterpartyWawuUserId: null,
+      counterpartyAccountNumber: null,
+    });
+    // WAWU's account pays the price and the provider's charge (R-31).
+    expect(out).toMatchObject({
+      walletKind: 'merchant',
+      feeKobo: 2_325n,
+      totalKobo: 102_325n,
+    });
+    // It is not an earning for anyone: the creator has no ledger row at all.
+    expect(
+      await prisma.fintavaLedgerEntry.count({
+        where: { wawuUserId: creator.id, category: 'earning' },
+      }),
+    ).toBe(0);
+
+    const res = await request(app.getHttpServer())
+      .get(`${BASE}/transactions?limit=50`)
+      .set('Authorization', buyer.auth);
+    expect(res.status).toBe(200);
+    const items = body<{
+      items: Array<{
+        category: string;
+        description: string;
+        reference: string;
+        direction: string;
+      }>;
+    }>(res).data!.items;
+    const refund = items.find((i) => i.reference === `wawu-ref-${hold.id}`)!;
+    expect(refund).toMatchObject({ category: 'refund', direction: 'in' });
+    expect(refund.description).toMatch(/^Refund/);
+  });
+
+  it('F3 the database refuses a settled hold that names no action, and a refund that names no amount', async () => {
+    const creator = await person(0, false);
+    const buyer = await person(300_000);
+    const open = await holdOfPayment(
+      (await paid(buyer, 'paid_dm', listing(creator))).id,
+    );
+    // No action chosen yet: the old CHECK passed these on NULL.
+    expect(open.action).toBeNull();
+    await expect(
+      prisma.$executeRaw`UPDATE "WalletHold" SET "status" = 'released', "settledAt" = now() WHERE "id" = ${open.id}`,
+    ).rejects.toThrow(/WalletHold_outcome_check/);
+    await expect(
+      prisma.$executeRaw`UPDATE "WalletHold" SET "status" = 'refunded', "settledAt" = now(), "refundedKobo" = "amountKobo" WHERE "id" = ${open.id}`,
+    ).rejects.toThrow(/WalletHold_outcome_check/);
+    // A refund that names its action and no amount passed on NULL too.
+    await expect(
+      prisma.$executeRaw`UPDATE "WalletHold" SET "action" = 'refund', "status" = 'refunded', "settledAt" = now(), "refundedKobo" = NULL WHERE "id" = ${open.id}`,
+    ).rejects.toThrow(/WalletHold_outcome_check/);
+    // A release carrying a refund amount, and a refund of another amount.
+    await expect(
+      prisma.$executeRaw`UPDATE "WalletHold" SET "action" = 'release', "status" = 'released', "settledAt" = now(), "refundedKobo" = "amountKobo" WHERE "id" = ${open.id}`,
+    ).rejects.toThrow(/WalletHold_outcome_check/);
+    await expect(
+      prisma.$executeRaw`UPDATE "WalletHold" SET "action" = 'refund', "status" = 'refunded', "settledAt" = now(), "refundedKobo" = "amountKobo" - 1 WHERE "id" = ${open.id}`,
+    ).rejects.toThrow(/WalletHold_outcome_check/);
+    // Nothing changed, and the legitimate ways to settle it still work.
+    expect(await holdOfPayment(open.paymentId)).toMatchObject({
+      status: 'held',
+      action: null,
+      settledAt: null,
+    });
+    await holds.refund({ holdId: open.id });
+    expect(await holdOfPayment(open.paymentId)).toMatchObject({
+      status: 'refunded',
+      action: 'refund',
+      refundedKobo: open.amountKobo,
+    });
+    // A hold with nothing to move (a bill) settles with its action in one update.
+    const bill = await holdOfPayment(
+      (await paid(buyer, 'bill', listing(null))).id,
+    );
+    const s = await holds.release({ holdId: bill.id });
+    expect(s).toMatchObject({ state: 'settled', status: 'released' });
+    expect(await holdOfPayment(bill.paymentId)).toMatchObject({
+      action: 'release',
+      status: 'released',
+    });
+  });
+
+  /**
+   * `count` holds that wait for a payee's wallet, cloned from a real one with
+   * action times before `before`: as the first round's code left them (no
+   * rest, due on every pass) when `legacy`, else as it leaves them now.
+   */
+  async function cloneWaiters(
+    template: string,
+    count: number,
+    before: Date,
+    legacy: boolean,
+  ): Promise<void> {
+    await prisma.$executeRawUnsafe(`
+      DO $$
+      DECLARE i int; pid text; hid text;
+      BEGIN
+        CREATE TEMP TABLE tp AS SELECT * FROM "WalletPayment" WHERE id = '${template}';
+        CREATE TEMP TABLE th AS SELECT * FROM "WalletHold" WHERE "paymentId" = '${template}';
+        FOR i IN 1..${count} LOOP
+          pid := gen_random_uuid()::text; hid := gen_random_uuid()::text;
+          UPDATE tp SET id = pid, "customerReference" = 'wawu-pay-' || pid, "openKey" = NULL;
+          UPDATE th SET id = hid, "paymentId" = pid, "customerReference" = NULL,
+                 "actionAt" = '${before.toISOString()}'::timestamp - (${count} - i || ' seconds')::interval
+                 ${legacy ? `, "nextAttemptAt" = NULL` : ''};
+          INSERT INTO "WalletPayment" SELECT * FROM tp;
+          INSERT INTO "WalletHold" SELECT * FROM th;
+        END LOOP;
+        DROP TABLE tp; DROP TABLE th;
+      END $$;
+    `);
+  }
+
+  /** The cloned waiters are removed so they never sit in front of another test's holds. */
+  const clonedFor: string[] = [];
+  const dropWaiters = (payer: string) =>
+    prisma.walletHold.deleteMany({
+      where: { payerWawuUserId: payer, waiting: 'payee_wallet' },
+    });
+  afterEach(async () => {
+    for (const payer of clonedFor.splice(0)) await dropWaiters(payer);
+  });
+
+  it('F4 a hold behind more than a thousand that wait for a wallet is reached by the first pass, and the waiters rest instead of being due on every pass', async () => {
+    const buyer = await person(10_000_000);
+    clonedFor.push(buyer.id);
+    const creator = await person(0, false);
+    // The hold that needs the sweep: WAWU's own account was short when the
+    // release was asked, and has been topped up since.
+    const ready = await paid(buyer, 'paid_dm', listing(creator, 200_000));
+    const readyHold = await holdOfPayment(ready.id);
+    const kept = merchantBalance();
+    wallets.kobo.set(MERCHANT_ACCOUNT, 100);
+    expect((await holds.release({ paymentId: ready.id })).waiting).toBe(
+      'funds',
+    );
+    wallets.kobo.set(MERCHANT_ACCOUNT, kept);
+    // 1,002 holds waiting for the wallet of someone who never opens one, all
+    // asked before the ready one and due on every pass (no rest written).
+    const lonely = noWallet();
+    const t = await paid(buyer, 'paid_dm', listing(lonely, 111_111));
+    expect(await holds.release({ paymentId: t.id })).toMatchObject({
+      state: 'waiting',
+      waiting: 'payee_wallet',
+    });
+    const template = await holdOfPayment(t.id);
+    // A wait now has a rest (F4): the first look comes a minute after.
+    expect(template.nextAttemptAt).not.toBeNull();
+    const rest = template.nextAttemptAt!.getTime() - Date.now();
+    expect(rest).toBeGreaterThan(50_000);
+    expect(rest).toBeLessThanOrEqual(61_000);
+    await cloneWaiters(
+      t.id,
+      1_002,
+      new Date((readyHold.actionAt ?? new Date()).getTime() - 60_000),
+      true,
+    );
+    const waiting = await prisma.walletHold.count({
+      where: { waiting: 'payee_wallet', nextAttemptAt: null },
+    });
+    expect(waiting).toBeGreaterThanOrEqual(1_002);
+
+    // Within two passes (the first reads every due hold unless the machine
+    // is so slow that its time runs out, and then the second starts where it
+    // stopped).
+    const passes: number[] = [];
+    let row = readyHold;
+    for (let pass = 0; pass < 2 && row.status === 'held'; pass += 1) {
+      passes.push((await holds.sweep(later(10 * 60_000))).checked);
+      row = await holdOfPayment(ready.id);
+    }
+    expect(row.status).toBe('released');
+    expect(sendsOf(`wawu-rel-${readyHold.id}`)).toHaveLength(1);
+    // Not stopped at a thousand: every due hold was looked at.
+    expect(passes.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(1_004);
+
+    // The waiters now rest: none is due on every pass, and a pass at once
+    // finds nothing of theirs to look at.
+    expect(
+      await prisma.walletHold.count({
+        where: { waiting: 'payee_wallet', nextAttemptAt: null },
+      }),
+    ).toBe(0);
+    const again = await holds.sweep(later(1_000));
+    expect(again.checked).toBeLessThan(10);
+    // Nothing was sent for any of them.
+    expect(wallets.sends.filter((x) => x.amountKobo === 94_444).length).toBe(0);
+  });
+
+  it('F4 a pass that runs out of time hands its place to the next, which reaches the holds behind even when the ones in front stay due; the pass after a full read starts from the front again', async () => {
+    const buyer = await person(10_000_000);
+    clonedFor.push(buyer.id);
+    const creator = await person(0, false);
+    const ready = await paid(buyer, 'paid_dm', listing(creator, 200_000));
+    const readyHold = await holdOfPayment(ready.id);
+    const kept = merchantBalance();
+    wallets.kobo.set(MERCHANT_ACCOUNT, 100);
+    await holds.release({ paymentId: ready.id });
+    wallets.kobo.set(MERCHANT_ACCOUNT, kept);
+    const lonely = noWallet();
+    const t = await paid(buyer, 'paid_dm', listing(lonely, 111_111));
+    await holds.release({ paymentId: t.id });
+    await cloneWaiters(
+      t.id,
+      120,
+      new Date((readyHold.actionAt ?? new Date()).getTime() - 60_000),
+      true,
+    );
+    // Holds in front that cannot be driven (their row keeps failing) stay due
+    // on every pass: only the cursor carries a pass past them.
+    const troubled = new Set(
+      (
+        await prisma.walletHold.findMany({
+          where: { payerWawuUserId: buyer.id, waiting: 'payee_wallet' },
+          select: { id: true },
+        })
+      ).map((h) => h.id),
+    );
+    troubled.delete((await holdOfPayment(t.id)).id);
+    const real = holds.drive.bind(holds);
+    const drive = jest
+      .spyOn(holds, 'drive')
+      .mockImplementation((id: string, now?: Date) => {
+        if (troubled.has(id)) return Promise.reject(new Error('trouble'));
+        return real(id, now);
+      });
+    const calls = () => drive.mock.calls.map((c) => c[0]);
+    try {
+      // A budget of nothing: each pass drives one hold and stops, and the
+      // next pass starts after it.
+      for (let pass = 1; pass <= 3; pass += 1) {
+        expect(
+          (await holds.sweep(later(10 * 60_000), { budgetMs: 0 })).checked,
+        ).toBe(1);
+      }
+      expect(new Set(calls()).size).toBe(3);
+      // Pass after pass it walks on to the hold behind all of them: there
+      // are 120 in front, so it is the 121st.
+      let passes = 3;
+      while (
+        (await holdOfPayment(ready.id)).status === 'held' &&
+        passes < 200
+      ) {
+        await holds.sweep(later(10 * 60_000), { budgetMs: 0 });
+        passes += 1;
+      }
+      expect((await holdOfPayment(ready.id)).status).toBe('released');
+      expect(passes).toBeGreaterThanOrEqual(121);
+      expect(passes).toBeLessThanOrEqual(130);
+      // Read to the end (nothing left behind it): the pass after starts from
+      // the front again.
+      let empty = false;
+      for (let i = 0; i < 10 && !empty; i += 1) {
+        empty =
+          (await holds.sweep(later(10 * 60_000), { budgetMs: 0 })).checked ===
+          0;
+      }
+      expect(empty).toBe(true);
+      const mark = calls().length;
+      await holds.sweep(later(10 * 60_000), { budgetMs: 0 });
+      expect(calls()[mark]).toBe(calls()[0]);
+    } finally {
+      drive.mockRestore();
+    }
+  });
+
+  it('F4 more than a thousand holds in front that stay due (their rows keep failing) do not keep one pass from the hold behind them', async () => {
+    const buyer = await person(10_000_000);
+    clonedFor.push(buyer.id);
+    const creator = await person(0, false);
+    const ready = await paid(buyer, 'paid_dm', listing(creator, 200_000));
+    const readyHold = await holdOfPayment(ready.id);
+    const kept = merchantBalance();
+    wallets.kobo.set(MERCHANT_ACCOUNT, 100);
+    await holds.release({ paymentId: ready.id });
+    wallets.kobo.set(MERCHANT_ACCOUNT, kept);
+    const lonely = noWallet();
+    const t = await paid(buyer, 'paid_dm', listing(lonely, 111_111));
+    await holds.release({ paymentId: t.id });
+    await cloneWaiters(
+      t.id,
+      1_002,
+      new Date((readyHold.actionAt ?? new Date()).getTime() - 60_000),
+      true,
+    );
+    const templateId = (await holdOfPayment(t.id)).id;
+    const troubled = new Set(
+      (
+        await prisma.walletHold.findMany({
+          where: { payerWawuUserId: buyer.id, waiting: 'payee_wallet' },
+          select: { id: true },
+        })
+      ).map((h) => h.id),
+    );
+    troubled.delete(templateId);
+    expect(troubled.size).toBe(1_002);
+    const real = holds.drive.bind(holds);
+    const drive = jest
+      .spyOn(holds, 'drive')
+      .mockImplementation((id: string, now?: Date) =>
+        troubled.has(id) ? Promise.reject(new Error('trouble')) : real(id, now),
+      );
+    try {
+      // One pass, at the default budget: it reads past a thousand of them.
+      const pass = await holds.sweep(later(10 * 60_000));
+      expect(pass.checked).toBeGreaterThanOrEqual(1_004);
+    } finally {
+      drive.mockRestore();
+    }
+    expect((await holdOfPayment(ready.id)).status).toBe('released');
+    expect(sendsOf(`wawu-rel-${readyHold.id}`)).toHaveLength(1);
+  });
+
+  it('F4 a hold waiting for a wallet is woken by the first sweep after the wallet exists, however long it had rested', async () => {
+    const creator = noWallet();
+    const buyer = await person(300_000);
+    const payment = await paid(buyer, 'paid_dm', listing(creator));
+    const hold = await holdOfPayment(payment.id);
+    await holds.release({ paymentId: payment.id });
+    // Looked at every few hours for days: the rest is an hour by then.
+    const days = new Date(Date.now() + 3 * 24 * 3_600_000);
+    await holds.sweep(days);
+    const rested = await holdOfPayment(payment.id);
+    expect(rested.waiting).toBe('payee_wallet');
+    expect(rested.nextAttemptAt!.getTime() - days.getTime()).toBe(3_600_000);
+    // Not looked at again before its rest ends.
+    const before = asked(hold.id);
+    await holds.sweep(new Date(days.getTime() + 60_000));
+    expect(asked(hold.id)).toBe(before);
+
+    // The wallet opens. The next sweep, a minute later, lands the money.
+    accountSeq += 1;
+    const accountNumber = `17${String(Date.now()).slice(-6)}${String(accountSeq).padStart(2, '0')}`;
+    await prisma.fintavaWallet.create({
+      data: {
+        wawuUserId: creator.id,
+        customerId: randomUUID(),
+        walletId: randomUUID(),
+        accountNumber,
+      },
+    });
+    wallets.kobo.set(accountNumber, 0);
+    const swept = await holds.sweep(new Date(days.getTime() + 120_000));
+    expect(swept.settled).toBeGreaterThanOrEqual(1);
+    expect(wallets.kobo.get(accountNumber)).toBe(85_000);
+    expect((await holdOfPayment(payment.id)).status).toBe('released');
+    expect(sendsOf(`wawu-rel-${hold.id}`)).toHaveLength(1);
+    await prisma.fintavaWallet.delete({ where: { wawuUserId: creator.id } });
+  });
+
+  it('O1 a release whose request never reached Fintava (the connection is refused) is tried again by the sweep under the same reference, and moves once', async () => {
+    const creator = await person(0, false);
+    const buyer = await person(300_000);
+    const payment = await paid(buyer, 'paid_dm', listing(creator));
+    const hold = await holdOfPayment(payment.id);
+    await double.pause();
+    const s = await holds
+      .release({ paymentId: payment.id })
+      .finally(() => double.resume());
+    // Not "pending": Fintava was never asked to move anything, and the hold
+    // says so (it waits for the provider and is not under a question).
+    expect(s).toMatchObject({
+      state: 'waiting',
+      waiting: 'provider',
+      status: 'held',
+    });
+    const waiting = await holdOfPayment(payment.id);
+    expect(waiting.sentAt).toBeNull();
+    expect(waiting.reviewSince).toBeNull();
+    expect(sendsOf(`wawu-rel-${hold.id}`)).toEqual([]);
+    const requests = double.seen.filter((r) => r.path.includes(hold.id));
+    expect(requests).toEqual([]);
+
+    // Fintava is back: the minute sweep sends it, under the same reference.
+    await holds.sweep(later(5 * 60_000));
+    expect(sendsOf(`wawu-rel-${hold.id}`)).toHaveLength(1);
+    expect((await holdOfPayment(payment.id)).customerReference).toBe(
+      `wawu-rel-${hold.id}`,
+    );
+    expect((await holdOfPayment(payment.id)).attempt).toBe(1);
+    expect(balanceOf(creator)).toBe(85_000);
+    expect((await holdOfPayment(payment.id)).status).toBe('released');
+    // And once: nothing more moves.
+    await holds.sweep(later(5 * 60_000));
+    await holds.release({ paymentId: payment.id });
+    expect(sendsOf(`wawu-rel-${hold.id}`)).toHaveLength(1);
+  });
+
+  it('O1 a refund whose request never reached Fintava is tried again the same way', async () => {
+    const creator = await person(0, false);
+    const buyer = await person(300_000);
+    const payment = await paid(buyer, 'paid_dm', listing(creator));
+    const hold = await holdOfPayment(payment.id);
+    await double.pause();
+    const s = await holds
+      .refund({ paymentId: payment.id })
+      .finally(() => double.resume());
+    expect(s).toMatchObject({ state: 'waiting', waiting: 'provider' });
+    await holds.sweep(later(5 * 60_000));
+    expect(sendsOf(`wawu-ref-${hold.id}`)).toHaveLength(1);
+    expect((await holdOfPayment(payment.id)).status).toBe('refunded');
+  });
+
+  it('O1 a request that MAY have reached Fintava is still asked about and never sent again: an answer lost after the send, and a reset after it was read', async () => {
+    const creator = await person(0, false);
+    const buyer = await person(300_000);
+    const payment = await paid(buyer, 'paid_dm', listing(creator));
+    const hold = await holdOfPayment(payment.id);
+    // The send reaches Fintava, which moves the money and drops the line.
+    wallets.mode = 'timeout';
+    const s = await holds.release({ paymentId: payment.id });
+    wallets.mode = 'live';
+    expect(s).toMatchObject({ state: 'pending', status: 'held' });
+    expect((await holdOfPayment(payment.id)).sentAt).not.toBeNull();
+    await holds.sweep(later(5 * 60_000));
+    expect(sendsOf(`wawu-rel-${hold.id}`)).toHaveLength(1);
+    expect((await holdOfPayment(payment.id)).status).toBe('released');
+  });
 });

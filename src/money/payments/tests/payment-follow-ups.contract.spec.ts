@@ -179,6 +179,8 @@ describe('MONEY-17 follow-ups (D8-1, N2) on Fintava', () => {
   const wallets = new Wallets();
   const users: string[] = [];
   const delivered: CompletedPayment[] = [];
+  /** The next `n` deliveries fail (the feature is down). */
+  const failDeliveries = { n: 0 };
   const previous: Record<string, string | undefined> = {};
   let accountSeq = 0;
   let clock = Date.now();
@@ -223,9 +225,10 @@ describe('MONEY-17 follow-ups (D8-1, N2) on Fintava', () => {
   async function quoted(
     p: Person,
     targetId: string,
+    kind = 'content_unlock',
   ): Promise<PaymentQuoteView> {
     const res = await request(app.getHttpServer())
-      .get(`${BASE}/quote?kind=content_unlock&targetId=${targetId}`)
+      .get(`${BASE}/quote?kind=${kind}&targetId=${targetId}`)
       .set('Authorization', p.auth);
     expect(res.status).toBe(200);
     return body<PaymentQuoteView>(res).data!;
@@ -256,9 +259,9 @@ describe('MONEY-17 follow-ups (D8-1, N2) on Fintava', () => {
     delivered.filter((d) => d.paymentId === id).length;
 
   /** The quote's ₦23.25 and a payment whose answer was lost while Fintava took `fee`. */
-  async function lostAnswerTaking(fee: number) {
+  async function lostAnswerTaking(fee: number, kind = 'content_unlock') {
     const p = await buyer(1_000_000);
-    const q = await quoted(p, `once-fu-${randomUUID()}`);
+    const q = await quoted(p, `once-fu-${randomUUID()}`, kind);
     expect(q.totalKobo).toBe(102_325);
     wallets.mode = 'timeout';
     wallets.feeOverride = fee;
@@ -478,24 +481,32 @@ describe('MONEY-17 follow-ups (D8-1, N2) on Fintava', () => {
     consumer = moduleRef.get(LedgerConsumerService);
 
     const registry = moduleRef.get(PayableRegistry);
-    registry.register({
-      kind: 'content_unlock',
-      resolve: async ({ targetId }) => {
-        await Promise.resolve();
-        if (!targetId.startsWith('once-')) {
-          throw new MoneyError('target_not_found', 'That piece is gone.');
-        }
-        return {
-          title: `Piece ${targetId}`,
-          priceKobo: 100_000,
-          payee: creator,
-        };
-      },
-      onCompleted: async (p) => {
-        await Promise.resolve();
-        delivered.push(p);
-      },
-    });
+    // A kind that is not held and one that is (a paid DM completes into a
+    // hold), both resolved and delivered the same way.
+    for (const kind of ['content_unlock', 'paid_dm'] as const) {
+      registry.register({
+        kind,
+        resolve: async ({ targetId }) => {
+          await Promise.resolve();
+          if (!targetId.startsWith('once-')) {
+            throw new MoneyError('target_not_found', 'That piece is gone.');
+          }
+          return {
+            title: `Piece ${targetId}`,
+            priceKobo: 100_000,
+            payee: creator,
+          };
+        },
+        onCompleted: async (p) => {
+          await Promise.resolve();
+          if (failDeliveries.n > 0) {
+            failDeliveries.n -= 1;
+            throw new Error('the feature is down');
+          }
+          delivered.push(p);
+        },
+      });
+    }
   });
 
   afterAll(async () => {
@@ -508,6 +519,9 @@ describe('MONEY-17 follow-ups (D8-1, N2) on Fintava', () => {
         where: {
           customerReference: { in: rows.map((r) => r.customerReference) },
         },
+      });
+      await prisma.walletHold.deleteMany({
+        where: { payment: { payerWawuUserId: { in: users } } },
       });
       await prisma.walletPayment.deleteMany({
         where: { payerWawuUserId: { in: users } },
@@ -533,6 +547,7 @@ describe('MONEY-17 follow-ups (D8-1, N2) on Fintava', () => {
   beforeEach(() => {
     wallets.mode = 'live';
     wallets.feeOverride = null;
+    failDeliveries.n = 0;
   });
 
   // -------------------------------------------------------------------------
@@ -818,6 +833,167 @@ describe('MONEY-17 follow-ups (D8-1, N2) on Fintava', () => {
     expect(row.reviewSince).toBeNull();
     expect(row.discrepancy).toContain('charge not trusted');
     expect(deliveries(paid.id)).toBe(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // MONEY-18 round 2: N2 holds against a concurrent sweep (F1) and a late
+  // report stops a delivery not yet made (O3)
+  // -------------------------------------------------------------------------
+
+  const holdOf = (id: string) =>
+    prisma.walletHold.findUnique({ where: { paymentId: id } });
+
+  it('F1 the ledger has the report but its listener has not run: the sweep, the status check and a direct settle still cannot complete the payment, make a hold or deliver', async () => {
+    const fee = QUOTE_FEE + CAP + 1;
+    const { p, paid } = await lostAnswerTaking(fee, 'paid_dm');
+    // The listener the ledger calls after its commit is held back for good:
+    // everything below is what the payment knows from the commit alone.
+    const listener = jest
+      .spyOn(payments, 'completeFromSighting')
+      .mockImplementation(() => new Promise(() => undefined));
+    try {
+      expect(await consumer.consume(await deliverWebhook(p, paid.id))).toBe(
+        'processed',
+      );
+      // No waiting for anything: the mark is part of the report's commit.
+      expect((await rowOf(paid.id)).chargeReviewSince).not.toBeNull();
+      expect(listener).toHaveBeenCalled();
+      await payments.sweep(later());
+      await payments.settle(paid.id, later(), true);
+      await statusChecks.sweep(later(10 * 60_000));
+      await payments.sweep(later(60 * 60_000));
+    } finally {
+      listener.mockRestore();
+    }
+    await expectChargeReview(paid.id, paid.reference, fee);
+    expect(await holdOf(paid.id)).toBeNull();
+  });
+
+  it('F1 the sweep is at the door of the completion when the report is applied: the completion is refused, nothing is delivered and no hold is made, whoever calls it', async () => {
+    const fee = QUOTE_FEE + CAP + 1;
+    const { p, paid } = await lostAnswerTaking(fee, 'paid_dm');
+    const held = holdFirstComplete();
+    let sweeping: Promise<unknown> = Promise.resolve();
+    try {
+      // The sweep's lookup carries no charge: it has judged the payment
+      // "as quoted" and is about to complete it.
+      sweeping = payments.settle(paid.id, later(), true);
+      await until(() => held.reached());
+      expect((await rowOf(paid.id)).status).toBe('pending');
+      // The report is applied in that gap.
+      expect(await consumer.consume(await deliverWebhook(p, paid.id))).toBe(
+        'processed',
+      );
+      expect((await rowOf(paid.id)).chargeReviewSince).not.toBeNull();
+      held.release();
+      await sweeping;
+      await held.finished();
+    } finally {
+      held.release();
+      held.restore();
+      await sweeping;
+    }
+    await expectChargeReview(paid.id, paid.reference, fee);
+    expect(await holdOf(paid.id)).toBeNull();
+  });
+
+  it('F1 the report is applied and the payment sweep runs right after it, round after round: never completed, never held, never delivered', async () => {
+    const fee = QUOTE_FEE + CAP + 1;
+    for (let round = 0; round < 8; round += 1) {
+      const { p, paid } = await lostAnswerTaking(fee, 'paid_dm');
+      expect(await consumer.consume(await deliverWebhook(p, paid.id))).toBe(
+        'processed',
+      );
+      // At once, with nothing waited for (the verifier's "immediate").
+      await payments.sweep(later());
+      const row = await rowOf(paid.id);
+      expect(row.status).toBe('pending');
+      expect(row.chargeReviewSince).not.toBeNull();
+      expect(await holdOf(paid.id)).toBeNull();
+      expect(deliveries(paid.id)).toBe(0);
+    }
+  });
+
+  it('F1 a charge the report puts within the cap is not held: the payment completes at the reported figures through the listener, as before', async () => {
+    const fee = QUOTE_FEE + 500;
+    const { p, paid } = await lostAnswerTaking(fee, 'paid_dm');
+    expect(await consumer.consume(await deliverWebhook(p, paid.id))).toBe(
+      'processed',
+    );
+    await until(async () => (await rowOf(paid.id)).status === 'completed');
+    const row = await rowOf(paid.id);
+    expect(row.chargeReviewSince).toBeNull();
+    expect(row.totalKobo).toBe(BigInt(100_000 + fee));
+    expect(await holdOf(paid.id)).not.toBeNull();
+    await until(() => deliveries(paid.id) === 1);
+  });
+
+  it('O3 completed at the quote and not yet delivered (the feature is down), then a report of an untrusted charge: the delivery is not made, however often the sweep tries, and the item stays claimed', async () => {
+    const fee = QUOTE_FEE + CAP + 500;
+    const { p, paid } = await lostAnswerTaking(fee, 'paid_dm');
+    failDeliveries.n = 1;
+    await payments.settle(paid.id, new Date(), true);
+    let row = await rowOf(paid.id);
+    expect(row.status).toBe('completed');
+    expect(row.fulfilledAt).toBeNull();
+    expect(deliveries(paid.id)).toBe(0);
+    expect(await holdOf(paid.id)).not.toBeNull();
+
+    expect(await consumer.consume(await deliverWebhook(p, paid.id))).toBe(
+      'processed',
+    );
+    row = await rowOf(paid.id);
+    expect(row.chargeReviewSince).not.toBeNull();
+    expect(row.reviewSince).not.toBeNull();
+    expect(row.status).toBe('completed');
+    // Still the quote's figures: nothing the provider reported is believed.
+    expect(row.totalKobo).toBe(BigInt(100_000 + QUOTE_FEE));
+    expect(row.discrepancy).toContain('charge not trusted');
+
+    for (let i = 1; i <= 4; i += 1)
+      await payments.sweep(later(i * 31 * 60_000));
+    row = await rowOf(paid.id);
+    expect(deliveries(paid.id)).toBe(0);
+    expect(row.fulfilledAt).toBeNull();
+    expect(row.openKey).not.toBeNull();
+
+    // A person clears the review: the delivery is made, once.
+    await prisma.walletPayment.update({
+      where: { id: paid.id },
+      data: { chargeReviewSince: null, reviewSince: null },
+    });
+    await payments.sweep(later(6 * 60 * 60_000));
+    expect(deliveries(paid.id)).toBe(1);
+    row = await rowOf(paid.id);
+    expect(row.fulfilledAt).not.toBeNull();
+    expect(row.openKey).toBeNull();
+    await payments.sweep(later(7 * 60 * 60_000));
+    expect(deliveries(paid.id)).toBe(1);
+  });
+
+  it('O3 the delivery reads the payment as it is at that moment: a row read before the mark, delivered after it, is not delivered', async () => {
+    const fee = QUOTE_FEE + CAP + 500;
+    const { paid } = await lostAnswerTaking(fee);
+    failDeliveries.n = 1;
+    await payments.settle(paid.id, new Date(), true);
+    const stale = await rowOf(paid.id);
+    expect(stale.status).toBe('completed');
+    expect(stale.chargeReviewSince).toBeNull();
+    // The mark lands after the caller read the row (the sweep's page, or the
+    // request that has just completed it) and before the feature is told.
+    await prisma.walletPayment.update({
+      where: { id: paid.id },
+      data: { chargeReviewSince: new Date() },
+    });
+    const registry = app.get(PayableRegistry);
+    const fulfil = (
+      payments as unknown as {
+        fulfil: (...a: unknown[]) => Promise<boolean>;
+      }
+    ).fulfil.bind(payments);
+    expect(await fulfil(stale, registry.get('content_unlock'))).toBe(false);
+    expect(deliveries(paid.id)).toBe(0);
+    expect((await rowOf(paid.id)).fulfilledAt).toBeNull();
   });
 
   it('a payment of a kind that is not held has no hold', async () => {

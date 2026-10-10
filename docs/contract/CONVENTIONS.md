@@ -1857,15 +1857,28 @@ added up into one.
 - **Waiting is not failing** (`waiting` on the hold): the hold stays `held`
   and the money stays in WAWU's account.
   - `payee_wallet`, `payer_wallet`: the person has no wallet yet (R-11: the
-    creator keeps earning). Tried every minute with no back-off; lands within
-    a minute of the wallet opening. No review bound.
+    creator keeps earning). Looked at again after a rest that doubles with the
+    hold's age, a minute to an hour (`walletWaitRestMs`: looks at 1, 2, 4, 8
+    ... minutes of age, then hourly), so a creator who never opens a wallet
+    costs one look an hour; the first sweep after the person HAS a wallet
+    wakes the hold whatever its rest, so the money still lands within a
+    minute of the wallet opening. No review bound. (MONEY-18 round 2, F4.)
   - `recipient_frozen`: the provider refuses a move into a frozen wallet
     (G-10). Paid on unfreeze, tried hourly. No review bound.
   - `funds`: the provider says WAWU's own account cannot cover the move
     (amount plus its charge): an error in the log on every try, retried.
   - `provider`: the provider is out of reach or not set up, or it is another
     provider's hold (written before a switch of `WALLET_PROVIDER`; this
-    server sends nothing for it).
+    server sends nothing for it). **A request that provably never reached the
+    provider** (the connection was refused, the host name did not resolve, no
+    route: `WalletProviderError.requestNotSent`, set by the Fintava and
+    Nuvion clients from the socket's own error code) is this, not an unknown
+    outcome: the lease is given back and the minute sweep sends it again under
+    the SAME reference (MONEY-18 round 2, O1). Every other loss (a timeout,
+    a dropped line, a reset, a 5xx, a TLS failure) may have reached the
+    provider and stays `pending`: asked about, never sent again. Payments
+    (section 14) read the flag nowhere: they keep treating a lost write as an
+    unknown outcome.
   - `refused`: the provider refused and nothing moved; retried under the same
     reference, and a person looks past the review bound.
   Nothing is refunded because a release is stuck, or the other way round.
@@ -1886,6 +1899,19 @@ added up into one.
   the account a refund went to are cleared, `ANONYMISED`); a payee's goes
   `COUNTERPARTY`. A refund with nobody to return to is review.
 
+- **The sweep** (`WalletHoldService.sweep`, every minute) walks every due
+  hold by a keyset cursor (action time, then id) with no cap on the rows it
+  looks at, stopping only at the end or when its time (`HOLD_SWEEP_BUDGET_MS`,
+  45 s) is used; the next pass then starts where this one stopped, and a pass
+  that reads to the end starts from the front again. A hold in front, however
+  many and however long they stay due, cannot keep it from the ones behind
+  (MONEY-18 round 2, F4; the shape of NUV-02 round 4's N15).
+- **A settled hold names its action** (MONEY-18 round 2, F3): the database's
+  `WalletHold_outcome_check` states that a `released` hold has the action
+  `release` and no refund amount, and a `refunded` hold the action `refund`
+  and a refunded amount equal to the price, so a NULL is a refusal and not a
+  pass (migration `20261020190000_wallet_hold_outcome_check`).
+
 ### The provider's charge on a purchase must be believable (N2)
 
 (MONEY-17's finding N2, carried into MONEY-18.) A payment's charge **below 0**,
@@ -1903,6 +1929,30 @@ it is. No figure the provider reported is written to the payment or the ledger.
 payment already completed and delivered at the quote is only marked
 (`chargeReviewSince`, the words on `discrepancy`). A charge exactly at the cap
 above the quote is believed (completed, flagged `debitReviewSince`, as before).
+
+**Airtight against a concurrent path** (MONEY-18 round 2, F1 and O3):
+- A signed report of a charge that is not believed is judged (by the same
+  `completedFigures`) and the payment marked **inside the ledger's own
+  transaction** that stores the report
+  (`LedgerService.onPaymentDebitSightedInTransaction`), so there is no instant
+  at which the ledger has the report and the payment does not. The listener
+  that runs after the commit (`onPaymentDebitSighted`, not awaited) only
+  completes a payment at figures that ARE believed.
+- Completing a payment (`complete()`) is conditional on `chargeReviewSince`
+  being null, in the same update that checks it is `pending`, so a path that
+  read the payment a moment ago and judged it "as quoted" (the sweep's lookup
+  carries no charge) cannot complete it once the mark is there. The mark and
+  the completion meet on one row; whichever is second sees the other.
+- Delivery reads the payment at the moment of delivery (`fulfil`): a payment
+  in charge review (or any review) is not delivered, and the sweeps do not
+  offer it. A report that arrives after a payment completed but before its
+  delivery stops that delivery (the item stays claimed, the payment is out of
+  the delivery sweep, the hold, if any, stays); a delivery already made is not
+  taken back, the payment is only marked. A person clears the review by
+  clearing `chargeReviewSince` and `reviewSince`; the next sweep delivers.
+- What the system has not yet been told is not a report: a delivery stored by
+  the webhook route and not yet applied to the ledger (up to 30 seconds) is
+  the late report above.
 
 ### D8-1 (MONEY-17 round 8)
 
