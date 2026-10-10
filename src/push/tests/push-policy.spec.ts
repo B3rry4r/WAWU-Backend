@@ -46,6 +46,7 @@ describe('which notifications reach a phone', () => {
     expect(held).toEqual([
       'campaign',
       'credits_low',
+      'identity_review',
       'kyc_verified',
       'legal_delivered',
       'paid_dm_paused',
