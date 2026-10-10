@@ -1,5 +1,10 @@
 import { randomBytes } from 'node:crypto';
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
 import type { WaitlistRegistration } from '../../generated/prisma/client';
 import { WaitlistStatus } from '../../generated/prisma/enums';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -76,6 +81,23 @@ function tidy(v: string | undefined): string | null {
   const t = v.replace(/\s+/g, ' ').trim();
   return t === '' ? null : t;
 }
+
+/**
+ * Whether `v` holds a control character: anything below U+0020, a NUL byte
+ * included, with no exception (a tab or a line break is one too). Postgres
+ * refuses a NUL in text outright, and no field of the form has a use for the
+ * rest.
+ */
+function hasControlChar(v: string | undefined): boolean {
+  if (v === undefined) return false;
+  for (let i = 0; i < v.length; i += 1) if (v.charCodeAt(i) < 0x20) return true;
+  return false;
+}
+
+/** The shape of every reference this server issues (REFERENCE_PREFIX plus 2 * REFERENCE_BYTES lower-case hex digits). */
+const REFERENCE_SHAPE = new RegExp(
+  `^${REFERENCE_PREFIX}[0-9a-f]{${REFERENCE_BYTES * 2}}$`,
+);
 
 /** A reference: random, at least 128 bits, safe to put in a URL. */
 export function newReference(): string {
@@ -190,6 +212,11 @@ export class WaitlistService {
         'consent_required',
         'Please accept the privacy notice to register.',
       );
+    if (hasControlChar(dto.fullName))
+      throw new WaitlistError(
+        'name_invalid',
+        'Your name has a character we cannot accept. Please type it again using letters and normal punctuation.',
+      );
     const fullName = tidy(dto.fullName);
     if (
       fullName === null ||
@@ -203,9 +230,19 @@ export class WaitlistService {
         'phone_invalid',
         'Enter a valid phone number. A Nigerian number can start with 0 or +234; any other number needs its country code.',
       );
-    const email = normaliseEmail(dto.email);
+    const email = hasControlChar(dto.email) ? null : normaliseEmail(dto.email);
     if (email === null)
       throw new WaitlistError('email_invalid', 'Enter a valid email address.');
+    // No `reason.code` for these two: they are optional free text, and a
+    // control character there is a malformed body (the 400 with no `reason`).
+    if (hasControlChar(dto.state))
+      throw new BadRequestException(
+        'Your state has a character we cannot accept. Please type it again using letters and normal punctuation.',
+      );
+    if (hasControlChar(dto.makes))
+      throw new BadRequestException(
+        'What you make has a character we cannot accept. Please type it again using letters and normal punctuation.',
+      );
     const state = tidy(dto.state)?.slice(0, SHORT_TEXT_MAX) ?? null;
     const makes = tidy(dto.makes)?.slice(0, SHORT_TEXT_MAX) ?? null;
 
@@ -315,9 +352,10 @@ export class WaitlistService {
   }
 
   private byReference(reference: string): Promise<WaitlistRegistration | null> {
-    // A reference this server never issues is a miss without a query.
-    if (!reference.startsWith(REFERENCE_PREFIX) || reference.length > 100)
-      return Promise.resolve(null);
+    // A reference this server never issues (wrong shape, or any character
+    // outside it, a NUL byte included) is a miss without a query, so it is
+    // answered exactly as an unknown reference is.
+    if (!REFERENCE_SHAPE.test(reference)) return Promise.resolve(null);
     return this.prisma.waitlistRegistration.findUnique({
       where: { reference },
     });
@@ -376,10 +414,16 @@ export class WaitlistService {
     return this.verify({ reference, transactionId });
   }
 
+  /**
+   * The verify-time refusal: this payment is a second one for a person who
+   * is already registered, kept for a refund. They WERE charged, so the
+   * sentence must not say otherwise (register's own refusal, before any
+   * charge, does say so).
+   */
   private alreadyRegistered(): WaitlistError {
     return new WaitlistError(
       'already_registered',
-      'You are already registered for this event. You have not been charged again.',
+      "You're already registered. This extra payment will be refunded. Email support@wawuafrica.com with your reference.",
     );
   }
 

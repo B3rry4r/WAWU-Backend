@@ -6,6 +6,11 @@ import type { App } from 'supertest/types';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { PlansConfig } from '../../plans/plans-config';
 import { WaitlistService } from '../waitlist.service';
+import {
+  RECHECK_AFTER_MS,
+  RECHECK_PAGE,
+  RECHECK_UNTIL_MS,
+} from '../waitlist-config';
 import { WaitlistSweepService } from '../waitlist-sweep.service';
 import {
   bootWaitlist,
@@ -34,6 +39,12 @@ const PHONE_FORMS = [
   '+234 (803) 123-4567',
 ];
 const E164 = '+2348031234567';
+
+/** The two refusals a person reads when this phone or email already paid (R-48). */
+const BEFORE_CHARGE_WORDS =
+  'You are already registered for this event. You have not been charged again.';
+const AFTER_CHARGE_WORDS =
+  "You're already registered. This extra payment will be refunded. Email support@wawuafrica.com with your reference.";
 
 type Envelope<T> = { statusCode: number; message: string; data: T };
 const data = <T = any>(res: Response): T => (res.body as Envelope<T>).data;
@@ -450,6 +461,78 @@ describe('Event registration link (JOIN-01) over HTTP', () => {
       expect(reason(res).code).toBe('name_invalid');
     });
 
+    it.each([
+      ['a NUL byte', '\u0000'],
+      ['a bell', '\u0007'],
+      ['a tab', '\t'],
+      ['a line feed', '\n'],
+      ['a carriage return', '\r'],
+      ['the last control character, U+001F', '\u001f'],
+    ])(
+      'refuses %s in the name, email, state or what they make as a 400 field error in plain words, never a 500, and writes nothing',
+      async (_label, ch) => {
+        const rowsBefore = await prisma.waitlistRegistration.count({
+          where: { fullName: { contains: MARK } },
+        });
+        const wordsOf = (res: Response) => String(res.body.message);
+        const name = person({ fullName: `Ada${ch} Okafor ${MARK}` });
+        const nameRes = await register(name).expect(400);
+        expect(reason(nameRes).code).toBe('name_invalid');
+        expect(wordsOf(nameRes)).toMatch(/name/i);
+
+        const mail = person();
+        mail.email = `a${ch}b-${n}@test.wawu.dev`;
+        const mailRes = await register(mail).expect(400);
+        expect(reason(mailRes).code).toBe('email_invalid');
+        // An email that ENDS with the character is refused too (it is not trimmed away).
+        const mailEnd = person();
+        mailEnd.email = `${MARK}-end-${n}@test.wawu.dev${ch}`;
+        expect(reason(await register(mailEnd).expect(400)).code).toBe(
+          'email_invalid',
+        );
+
+        const stateRes = await register(person({ state: `Lag${ch}os` })).expect(
+          400,
+        );
+        expect(stateRes.body.reason).toBeUndefined();
+        expect(wordsOf(stateRes)).toMatch(/state/i);
+        const makesRes = await register(person({ makes: `sho${ch}es` })).expect(
+          400,
+        );
+        expect(makesRes.body.reason).toBeUndefined();
+        expect(wordsOf(makesRes)).toMatch(/make/i);
+
+        for (const res of [nameRes, mailRes, stateRes, makesRes]) {
+          expect(res.body.data).toBeNull();
+          // Plain words: no control character is echoed back, and no stack or database word.
+          expect(wordsOf(res)).not.toMatch(
+            // eslint-disable-next-line no-control-regex
+            /[\u0000-\u001f]|prisma|postgres|invalid byte/i,
+          );
+        }
+        // Not one of the attempts wrote a row (every attempt carries the mark in its name).
+        expect(
+          await prisma.waitlistRegistration.count({
+            where: { fullName: { contains: MARK } },
+          }),
+        ).toBe(rowsBefore);
+        expect(fake.initCalls).toHaveLength(0);
+      },
+    );
+
+    it('still takes ordinary spaces, accents, apostrophes and emoji in the name (nothing at or above U+0020 is refused)', async () => {
+      const s = await started({
+        fullName: `Chidi O'Neil-Adé 😀 ${MARK}`,
+        state: 'Akwa Ibom',
+        makes: 'Ankara & lace',
+      });
+      expect(await rowOf(s.reference)).toMatchObject({
+        fullName: `Chidi O'Neil-Adé 😀 ${MARK}`,
+        state: 'Akwa Ibom',
+        makes: 'Ankara & lace',
+      });
+    });
+
     it('refuses a body with a field it does not know and one with the wrong kind of value', async () => {
       await register({ ...person(), claimedByWawuId: 'x' }).expect(400);
       await register({ ...person(), phone: 8031234567 }).expect(400);
@@ -479,6 +562,35 @@ describe('Event registration link (JOIN-01) over HTTP', () => {
         email: `${MARK}-other-${n}@test.wawu.dev`,
       }).expect(200);
       expect(data(other).reference).not.toBe(first.reference);
+    });
+
+    it("a person's own unpaid row is charged today's fee when they register again after the price was changed", async () => {
+      const first = await started();
+      expect(first.amountKobo).toBe(config.eventOffers[0].priceKobo);
+      const dearer = configWith((raw) => {
+        raw.event_offers = [openOffer({ price_kobo: 350_000 })];
+      });
+      const other = await bootWaitlist(dearer, fake);
+      try {
+        const again = await request(other.getHttpServer())
+          .post('/api/hub/waitlist/registrations')
+          .send(first.body)
+          .expect(200);
+        // The same row (no duplicate), now asking the new figure everywhere.
+        expect(data(again).reference).toBe(first.reference);
+        expect(data(again).amountKobo).toBe(350_000);
+        expect(data(again).flutterwaveConfig.amount).toBe(3500);
+        expect((await rowOf(first.reference)).amountKobo).toBe(350_000);
+        // And that figure is what a payment must now meet.
+        const short = pay(first.reference, { amount: 2000 });
+        const res = await request(other.getHttpServer())
+          .post('/api/hub/waitlist/registrations/verify')
+          .send({ reference: first.reference, transactionId: short })
+          .expect(422);
+        expect(reason(res).code).toBe('payment_mismatch');
+      } finally {
+        await other.close();
+      }
     });
 
     it('refuses with 409 offer_closed when the offer has closed or has not opened, and writes nothing', async () => {
@@ -726,6 +838,81 @@ describe('Event registration link (JOIN-01) over HTTP', () => {
       expect(fake.verifyCalls).toHaveLength(0);
     });
 
+    it('a reference that is not exactly what this server issues is the same 404 as an unknown one, whatever the odd character (a NUL byte was a 500)', async () => {
+      const unknown = await verify(
+        'wawu-join-' + '0'.repeat(36),
+        '12345',
+      ).expect(404);
+      for (const reference of [
+        'wawu-join-' + 'a'.repeat(36) + '\u0000',
+        'wawu-join-' + 'a'.repeat(30) + '\u0000',
+        '\u0000',
+        'wawu-join-' + 'A'.repeat(36),
+        'wawu-join-' + 'a'.repeat(35),
+        'wawu-join-' + 'a'.repeat(37),
+        'wawu-join-' + 'g'.repeat(36),
+        'wawu-join-' + 'a'.repeat(36) + '\n',
+        ' wawu-join-' + 'a'.repeat(36),
+        'wawu-join-' + 'a'.repeat(34) + '\u001fa',
+      ]) {
+        const res = await verify(reference, '12345').expect(404);
+        expect(JSON.stringify(res.body)).toBe(JSON.stringify(unknown.body));
+      }
+      expect(fake.verifyCalls).toHaveLength(0);
+    });
+
+    it('the paid row keeps the transaction id Flutterwave reports, not the one the browser sent', async () => {
+      const s = await started();
+      const sent = pay(s.reference);
+      const reported = String(++txSeq);
+      fake.payments.get(sent)!.id = reported;
+      await verify(s.reference, sent).expect(200);
+      const row = await rowOf(s.reference);
+      expect(row.flutterwaveTxId).toBe(reported);
+      expect(row.flutterwaveTxId).not.toBe(sent);
+    });
+
+    it('a verify that read the row while it was pending cannot overwrite the payment another verify settled first: the first transaction id and paid time stay', async () => {
+      const s = await started();
+      const first = pay(s.reference);
+      const behind = pay(s.reference);
+      let release!: () => void;
+      fake.holds.set(
+        behind,
+        new Promise<void>((resolve) => (release = resolve)),
+      );
+      // This call reads the row (pending) and then waits inside Flutterwave's answer.
+      const slow = verify(s.reference, behind).then((res) => res);
+      for (let i = 0; i < 200; i++) {
+        if (fake.verifyCalls.some((c) => c.transactionId === behind)) break;
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      expect(fake.verifyCalls.some((c) => c.transactionId === behind)).toBe(
+        true,
+      );
+      // The other one settles the registration meanwhile.
+      await verify(s.reference, first).expect(200);
+      const settled = await rowOf(s.reference);
+      expect(settled).toMatchObject({
+        status: 'paid',
+        flutterwaveTxId: first,
+      });
+      release();
+      const late = await slow;
+      expect(late.status).toBe(200);
+      expect(data(late).status).toBe('paid');
+      const after = await rowOf(s.reference);
+      expect(after.flutterwaveTxId).toBe(first);
+      expect(after.paidAt).toEqual(settled.paidAt);
+      expect(after.paidKobo).toBe(settled.paidKobo);
+      // The second id was not recorded anywhere.
+      expect(
+        await prisma.waitlistRegistration.count({
+          where: { flutterwaveTxId: behind },
+        }),
+      ).toBe(0);
+    });
+
     it('refuses a transaction id that is not digits, and a missing field', async () => {
       const s = await started();
       for (const transactionId of [
@@ -877,6 +1064,36 @@ describe('Event registration link (JOIN-01) over HTTP', () => {
       ).toBe(1);
     });
 
+    it('says the right thing in each place: nothing was charged when it is refused at register, the extra payment will be refunded when it is refused at verify', async () => {
+      const phone = '+2348039990002';
+      const a = await started({
+        phone,
+        email: `${MARK}-words-a@test.wawu.dev`,
+      });
+      const b = await started({
+        phone,
+        email: `${MARK}-words-b@test.wawu.dev`,
+      });
+      await verify(a.reference, pay(a.reference)).expect(200);
+      // The second person's payment goes through at Flutterwave and is refused here.
+      const txB = pay(b.reference);
+      const failed = await verify(b.reference, txB).expect(409);
+      expect(reason(failed).code).toBe('already_registered');
+      expect(reason(failed).message).toBe(AFTER_CHARGE_WORDS);
+      expect(failed.body.message).toBe(AFTER_CHARGE_WORDS);
+      // Asking again about that failed row says the same, and never "not been charged".
+      const again = await verify(b.reference, txB).expect(409);
+      expect(reason(again).message).toBe(AFTER_CHARGE_WORDS);
+      expect(AFTER_CHARGE_WORDS).not.toMatch(/not been charged/);
+      // Before any charge, at register, the sentence is the other one and stays.
+      const early = await register(
+        person({ phone, email: `${MARK}-words-c@test.wawu.dev` }),
+      ).expect(409);
+      expect(reason(early).code).toBe('already_registered');
+      expect(reason(early).message).toBe(BEFORE_CHARGE_WORDS);
+      expect(early.body.message).toBe(BEFORE_CHARGE_WORDS);
+    });
+
     it('two simultaneous paid verifies for the same email leave one paid row', async () => {
       const email = `${MARK}-race-email@test.wawu.dev`;
       const a = await started({ email });
@@ -961,6 +1178,62 @@ describe('Event registration link (JOIN-01) over HTTP', () => {
       expect(reason(a).code).toBe('not_found');
       expect(JSON.stringify(a.body)).toBe(JSON.stringify(b.body));
       expect(JSON.stringify(a.body)).toBe(JSON.stringify(c.body));
+    });
+
+    const NEVER_ISSUED = [
+      'wawu-join-' + 'a'.repeat(36) + '\u0000',
+      'wawu-join-' + 'a'.repeat(30) + '\u0000',
+      'wawu-join-' + 'A'.repeat(36),
+      'wawu-join-' + 'a'.repeat(35),
+      'wawu-join-' + 'a'.repeat(37),
+      'wawu-join-' + 'g'.repeat(36),
+      'wawu-join-' + 'a'.repeat(36) + '\n',
+      ' wawu-join-' + 'a'.repeat(36),
+      'wawu-join-' + 'a'.repeat(34) + '\u001fa',
+      'wawu-join-',
+      'nonsense',
+    ];
+
+    it('a reference this server never issues, a NUL byte included, is byte for byte the 404 an unknown reference gets (a NUL byte was a 500)', async () => {
+      const unknown = await http()
+        .get(`/api/hub/waitlist/registrations/wawu-join-${'0'.repeat(36)}`)
+        .expect(404);
+      for (const reference of NEVER_ISSUED) {
+        const res = await http()
+          .get(
+            `/api/hub/waitlist/registrations/${encodeURIComponent(reference)}`,
+          )
+          .expect(404);
+        expect(res.text).toBe(unknown.text);
+        expect(res.headers['cache-control']).toBe(
+          unknown.headers['cache-control'],
+        );
+      }
+    });
+
+    it('answers a reference this server never issues without touching the database (the same service, with a database that fails on any use)', async () => {
+      const untouchable = new Proxy(
+        {},
+        {
+          get: () => {
+            throw new Error('the database was touched');
+          },
+        },
+      ) as PrismaService;
+      const service = new WaitlistService(untouchable, config, fake, fake);
+      for (const reference of NEVER_ISSUED) {
+        await expect(service.status(reference)).rejects.toMatchObject({
+          code: 'not_found',
+        });
+        await expect(
+          service.verify({ reference, transactionId: '12345' }),
+        ).rejects.toMatchObject({ code: 'not_found' });
+      }
+      // The control: a well-formed reference that is merely unknown DOES go to the database.
+      await expect(
+        service.status('wawu-join-' + '0'.repeat(36)),
+      ).rejects.toThrow('the database was touched');
+      expect(fake.verifyCalls).toHaveLength(0);
     });
   });
 
@@ -1056,6 +1329,122 @@ describe('Event registration link (JOIN-01) over HTTP', () => {
       expect((await rowOf(bad.reference)).status).toBe('pending');
       expect((await rowOf(good.reference)).status).toBe('paid');
     });
+
+    /**
+     * `count` pending rows, 30 minutes old (inside the window), written
+     * straight into the table: the shape of a registration burst. `layout`
+     * decides the order the re-check's cursor has to walk them in.
+     */
+    let burstSeq = 0;
+    const burst = async (
+      tag: string,
+      count: number,
+      layout: 'spread' | 'shared' | 'inverse',
+    ) => {
+      const base = Date.now() - 30 * 60_000;
+      const seq = (burstSeq++ % 16).toString(16);
+      const pad = (v: number, w: number) => String(v).padStart(w, '0');
+      const rows = Array.from({ length: count }, (_, i) => ({
+        // ids sort the same way as i, except in the layout that reverses them
+        id: `${tag}-${pad(layout === 'inverse' ? count - i : i, 5)}`,
+        offerId: OFFER_ID,
+        fullName: `Burst ${tag} ${i} ${MARK}`,
+        phone: `+23481${pad(i, 8)}`,
+        email: `${MARK}-burst-${tag}-${i}@test.wawu.dev`,
+        consentAt: new Date(base),
+        reference: `wawu-join-${seq}${i.toString(16).padStart(35, '0')}`,
+        amountKobo: config.eventOffers[0].priceKobo,
+        createdAt: new Date(layout === 'shared' ? base : base + i * 1000),
+      }));
+      await prisma.waitlistRegistration.createMany({ data: rows });
+      return rows;
+    };
+    const dueCount = (now: Date) =>
+      prisma.waitlistRegistration.count({
+        where: {
+          status: 'pending',
+          createdAt: {
+            lte: new Date(now.getTime() - RECHECK_AFTER_MS),
+            gt: new Date(now.getTime() - RECHECK_UNTIL_MS),
+          },
+        },
+      });
+
+    it('finds a payer who is behind more than a page of older abandoned registrations, in the first run (it used to look only at the oldest 200)', async () => {
+      const abandoned = await burst('abandoned', RECHECK_PAGE + 5, 'spread');
+      // One payer inside the first page, one after every abandoned row.
+      const early = await started();
+      await prisma.waitlistRegistration.update({
+        where: { reference: early.reference },
+        data: {
+          createdAt: new Date(
+            Date.now() - 30 * 60_000 + (RECHECK_PAGE / 2) * 1000 + 500,
+          ),
+        },
+      });
+      const late = await started();
+      await aged(late.reference, 10);
+      lookup(early.reference);
+      lookup(late.reference);
+      const now = new Date();
+      const expected = await dueCount(now);
+      expect(expected).toBeGreaterThan(RECHECK_PAGE);
+      const result = await sweep.recheckPending(now);
+      expect(await rowOf(early.reference)).toMatchObject({ status: 'paid' });
+      expect(await rowOf(late.reference)).toMatchObject({ status: 'paid' });
+      expect(result.paid).toBe(2);
+      // Every due row was looked at, once: the abandoned ones and the two payers.
+      expect(result.checked).toBe(expected);
+      const asked = new Set(fake.lookupCalls);
+      expect(fake.lookupCalls).toHaveLength(asked.size);
+      for (const r of abandoned) expect(asked.has(r.reference)).toBe(true);
+      await cleanUp();
+    }, 60_000);
+
+    it.each([
+      ['created times rising, ids rising', 'spread'],
+      [
+        'one shared created time (the cursor must tell them apart by id)',
+        'shared',
+      ],
+      [
+        'created times rising while ids fall (the cursor must follow created time first)',
+        'inverse',
+      ],
+    ] as const)(
+      'pages through every due row exactly once, none skipped and none read twice, with %s',
+      async (_label, layout) => {
+        const total = 2 * RECHECK_PAGE + 5;
+        const rows = await burst(layout, total, layout);
+        // Everyone in the burst paid and never came back, except one whose lookup fails at the end of the first page.
+        const failing = rows[RECHECK_PAGE - 1].reference;
+        for (const r of rows) lookup(r.reference);
+        fake.lookupFails.add(failing);
+        const now = new Date();
+        const expected = await dueCount(now);
+        const result = await sweep.recheckPending(now);
+        const mine = rows.map((r) => r.reference);
+        const lookedUp = fake.lookupCalls.filter((r) => mine.includes(r));
+        expect(lookedUp).toHaveLength(total);
+        expect(new Set(lookedUp).size).toBe(total);
+        expect(result.checked).toBe(expected);
+        const paid = await prisma.waitlistRegistration.count({
+          where: { reference: { in: mine }, status: 'paid' },
+        });
+        expect(paid).toBe(total - 1);
+        expect((await rowOf(failing)).status).toBe('pending');
+        // The next run looks at the one left and nothing else of the burst.
+        fake.lookupCalls = [];
+        fake.lookupFails.clear();
+        await sweep.recheckPending(now);
+        expect(fake.lookupCalls.filter((r) => mine.includes(r))).toEqual([
+          failing,
+        ]);
+        expect((await rowOf(failing)).status).toBe('paid');
+        await cleanUp();
+      },
+      60_000,
+    );
 
     it('a reference whose transaction id already paid another registration is refused and stays pending', async () => {
       const a = await started();
