@@ -435,6 +435,19 @@ export interface FintavaMeterPreviewInput {
  */
 export interface FintavaMeterPreview {
   details: Record<string, string | number | boolean | null>;
+  /**
+   * The name the meter is registered to: always text, because a preview is
+   * returned only for a body that names an owner under a key a person's name is
+   * kept under (`fintava-meter-answer.ts`; the real keys are a guess until a
+   * sandbox meter shows them: question 11). A body that names no one is `null`
+   * from `previewMeter`, and a body it cannot read is `bad_response`.
+   */
+  ownerName: string;
+  /**
+   * Where it is registered, null when the body carries none. Read here on
+   * purpose and kept out of `details`, which drops address fields.
+   */
+  ownerAddress: string | null;
 }
 
 export interface FintavaElectricityInput extends FintavaMeterPreviewInput {
