@@ -403,6 +403,16 @@ export interface ProviderTransaction {
   providerReference: string | null;
   secondaryReference: string | null;
   sessionId: string | null;
+  /**
+   * What the provider charged the sender on top of the amount, when its
+   * record says (kobo). Nuvion's transfer object carries `applicable_fee`;
+   * Fintava's lookups and history carry no charge for a wallet-to-wallet
+   * send. Absent or null: the record does not say, and the fee the payment
+   * was quoted stands. An adapter fills it whenever its record has the
+   * figure, because a payment is completed at what the provider took, not at
+   * the quote (MONEY-17 round 7, lead ruling R6-1; SHARED-CHANGES MONEY-17 #6).
+   */
+  feeKobo?: bigint | null;
 }
 
 export interface ProviderPage<T> {
@@ -715,6 +725,20 @@ export interface WalletProvider {
    * provider could not say.
    */
   secondaryReferenceOf(t: ProviderTransaction): Promise<string | null>;
+
+  // Identity (MONEY-17, lead ruling R5-1, 8 Oct 2026)
+  /**
+   * Whether two references name one account at this provider. Each is any
+   * number or id the provider knows an account by: Nuvion's NGN account
+   * number, its account id and its `nuvion_ban` all name one account. Pay
+   * from wallet asks it before money moves, so a payment from WAWU's own
+   * account to WAWU's own account is refused however the provider names
+   * the two. Optional: a provider without it names each account by one
+   * number (Fintava's NUBAN), so two references are one account exactly
+   * when they are the same text. Never moves money; fails with a
+   * `WalletProviderError` when the provider cannot say.
+   */
+  isSameAccount?(a: string, b: string): Promise<boolean>;
 }
 
 /** One PIN reset code for one person, as an `OtpSender` sends it (NUV-01). */
