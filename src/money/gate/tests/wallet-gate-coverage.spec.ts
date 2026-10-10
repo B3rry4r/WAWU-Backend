@@ -182,7 +182,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       ]),
     );
     expect(declared.map((r) => r.key)).toEqual(
-      expect.arrayContaining(['POST money/payments', 'GET money/holds']),
+      expect.arrayContaining(['GET money/payments/:id', 'GET money/holds']),
     );
   });
 
@@ -202,7 +202,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
     expect(half).toEqual([]);
   });
 
-  it('the gated routes today: the PIN, the balance, the PIN reset and biometric approval (MONEY-14), the history (MONEY-15), beneficiaries and the payout account (WALLET-14), the fee quote (WALLET-15), receipts (WALLET-18), statements (WALLET-27), recipient search and recent recipients (WALLET-08)', () => {
+  it('the gated routes today: the PIN, the balance, the PIN reset and biometric approval (MONEY-14), the history (MONEY-15), beneficiaries and the payout account (WALLET-14), the fee quote (WALLET-15), receipts (WALLET-18), statements (WALLET-27), recipient search and recent recipients (WALLET-08), the payment quote and the payment (MONEY-17)', () => {
     expect(
       mounted
         .filter((r) => r.guards.includes(WalletGateGuard))
@@ -214,6 +214,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'GET money/beneficiaries',
       'GET money/device',
       'GET money/fees/quote',
+      'GET money/payments/quote',
       'GET money/payout-account',
       'GET money/pin',
       'GET money/recipients',
@@ -228,6 +229,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'POST money/approval/verify',
       'POST money/beneficiaries',
       'POST money/device/challenge',
+      'POST money/payments',
       'POST money/pin',
       'POST money/pin/reset',
       'POST money/pin/reset/confirm',
@@ -245,6 +247,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
     );
     expect(pinRoutes.map((r) => r.key).sort()).toEqual([
       'POST money/approval/verify',
+      'POST money/payments',
       'POST money/pin/verify',
       'PUT money/device',
       'PUT money/pin',

@@ -13,6 +13,7 @@ import {
 } from '../../wallet-provider/wallet-provider.interface';
 import type { TransferStatus } from '../money-view.type';
 import type {
+  LedgerDebitSighting,
   LedgerDirection,
   LedgerMovementInput,
   LedgerRecordResult,
@@ -323,9 +324,27 @@ function sightingOfRow(row: EntryRow): Sighting {
  * transaction. Two writers racing on the same movement queue on that key;
  * the second sees the first's row once it commits and folds into it.
  */
+/**
+ * A ledger row that carries a feature's payment (`paymentId`) left `pending`
+ * (MONEY-17 round 2): the paying feature hears of it at once, from whatever
+ * settled it (a webhook, the status check, a reversal), so a paid payment
+ * never waits on its own sweep.
+ */
+export interface LedgerPaymentSettled {
+  entryId: string;
+  paymentId: string;
+  status: TransferStatus;
+}
+
 @Injectable()
 export class LedgerService {
   private readonly logger = new Logger(LedgerService.name);
+  private readonly settledListeners: Array<
+    (e: LedgerPaymentSettled) => Promise<unknown>
+  > = [];
+  private readonly debitListeners: Array<
+    (e: LedgerDebitSighting) => Promise<unknown>
+  > = [];
 
   /**
    * NUV-01 (SHARED-CHANGES NUV-01 #2, lead ruling 8): every row this
@@ -340,15 +359,105 @@ export class LedgerService {
     @Inject(WALLET_PROVIDER) private readonly provider: WalletProvider,
   ) {}
 
-  /** Records one side of one movement, or merges it into the row that has it. */
+  /**
+   * Called (not awaited) after a write committed that left a row with a
+   * `paymentId` completed, failed or reversed. Errors are logged, never
+   * thrown into the ledger's own work.
+   */
+  onPaymentSettled(
+    listener: (e: LedgerPaymentSettled) => Promise<unknown>,
+  ): void {
+    this.settledListeners.push(listener);
+  }
+
+  /**
+   * Called (not awaited) after a write committed in which a signed provider
+   * report (a webhook) said a payment's debit was COMPLETED at another charge
+   * than the buyer's row holds (MONEY-17 round 8, R7-1). The row keeps its
+   * figures, so without this the payment would never hear what the provider
+   * reported. Errors are logged, never thrown into the ledger's own work.
+   */
+  onPaymentDebitSighted(
+    listener: (e: LedgerDebitSighting) => Promise<unknown>,
+  ): void {
+    this.debitListeners.push(listener);
+  }
+
+  /**
+   * For a caller that wrote rows inside ITS OWN transaction (the webhook
+   * consumer): call it once that transaction has committed, with the ids of
+   * the rows it wrote and the debit reports (`LedgerRecordResult.debitSighting`)
+   * its writes carried. Rows with a payment that left `pending` are told to
+   * the payment listeners, as for a write the ledger commits itself; a debit
+   * report is told to the debit listeners after them.
+   */
+  async notifyCommitted(
+    entryIds: readonly string[],
+    sightings: readonly LedgerDebitSighting[] = [],
+  ): Promise<void> {
+    for (const id of new Set(entryIds)) await this.notifySettled(id);
+    for (const sighting of sightings) this.notifyDebitSighted(sighting);
+  }
+
+  private notifyDebitSighted(sighting: LedgerDebitSighting): void {
+    for (const listener of this.debitListeners) {
+      void listener(sighting).catch((e: unknown) =>
+        this.logger.error(
+          `ledger: a payment debit listener failed (${e instanceof Error ? e.name : 'error'})`,
+        ),
+      );
+    }
+  }
+
+  private async notifySettled(entryId: string): Promise<void> {
+    if (this.settledListeners.length === 0) return;
+    let row: { paymentId: string | null; status: TransferStatus } | null;
+    try {
+      row = await this.prisma.fintavaLedgerEntry.findUnique({
+        where: { id: entryId },
+        select: { paymentId: true, status: true },
+      });
+    } catch {
+      // The payment sweep settles it later; the ledger write stands.
+      return;
+    }
+    if (!row?.paymentId || row.status === 'pending') return;
+    const event = {
+      entryId,
+      paymentId: row.paymentId,
+      status: row.status,
+    };
+    for (const listener of this.settledListeners) {
+      void listener(event).catch((e: unknown) =>
+        this.logger.error(
+          `ledger: a payment settle listener failed (${e instanceof Error ? e.name : 'error'})`,
+        ),
+      );
+    }
+  }
+
+  /**
+   * Records one side of one movement, or merges it into the row that has it.
+   * `quiet`: the caller settles the payment itself (MONEY-17's own writes),
+   * so the payment listeners are not told.
+   */
   async record(
     input: LedgerMovementInput,
     db?: Prisma.TransactionClient,
+    options: { quiet?: boolean } = {},
   ): Promise<LedgerRecordResult> {
     if (db) return this.recordIn(db, input);
     for (let attempt = 1; ; attempt += 1) {
       try {
-        return await this.prisma.$transaction((tx) => this.recordIn(tx, input));
+        const result = await this.prisma.$transaction((tx) =>
+          this.recordIn(tx, input),
+        );
+        if (!options.quiet) {
+          await this.notifySettled(result.entryId);
+          if (result.debitSighting)
+            this.notifyDebitSighted(result.debitSighting);
+        }
+        return result;
       } catch (e) {
         // Writers racing on one movement can deadlock on its keys or see a
         // row folded away under them; Postgres rolls one back, and running
@@ -504,6 +613,75 @@ export class LedgerService {
     return this.prisma.$transaction(run);
   }
 
+  /**
+   * MONEY-17 (round 7, lead ruling R6-1): a payment writes the buyer's `out`
+   * row with the charge the buyer was QUOTED, before the provider answers.
+   * When the provider's own record of the debit differs, LOWER or (lead
+   * ruling, 10 Oct 2026) HIGHER, the row must say what really left the
+   * wallet: this takes the provider's figures and completes the row, so a
+   * delivered purchase is never left `pending`. Only the payment's own `out`
+   * row on the buyer's
+   * wallet, only the running provider's, only while it is still at the
+   * quoted figures and `pending` (or failed only because the provider had no
+   * record yet, which the record now overturns: a revival), and never a row
+   * that holds a disagreement about the AMOUNT (that is a stop). A note the
+   * row already holds about the charge (a status check or a webhook saw the
+   * other charge first) stays as the trail. A debit above the quote is
+   * flagged on the payment for NUV-08, not held on the row. Returns whether
+   * the row changed.
+   */
+  async completeDebitAt(
+    paymentId: string,
+    quoted: { feeKobo: bigint; totalKobo: bigint },
+    taken: { feeKobo: bigint; totalKobo: bigint },
+    source: 'send' | 'lookup' | 'history' | 'webhook',
+  ): Promise<boolean> {
+    const now = new Date();
+    const where = {
+      paymentId,
+      walletKind: 'user' as const,
+      direction: 'out' as const,
+      feeKobo: quoted.feeKobo,
+      totalKobo: quoted.totalKobo,
+      AND: [
+        rowsOf(this.provider.name),
+        {
+          OR: [
+            { discrepancy: null },
+            { NOT: { discrepancy: { contains: 'amountKobo' } } },
+          ],
+        },
+      ],
+    };
+    const figures = {
+      feeKobo: taken.feeKobo,
+      providerFeeKobo: taken.feeKobo,
+      totalKobo: taken.totalKobo,
+      status: 'completed' as const,
+      completedAt: now,
+    };
+    const pending = await this.prisma.fintavaLedgerEntry.updateMany({
+      where: { ...where, status: 'pending' },
+      data: figures,
+    });
+    const revived = await this.prisma.fintavaLedgerEntry.updateMany({
+      where: {
+        ...where,
+        status: 'failed',
+        failureReason: LEDGER_ABSENT_FAILURE,
+      },
+      data: {
+        ...figures,
+        failureReason: null,
+        revivedAt: now,
+        revivedBy: source,
+        nextCheckAt: null,
+        statusChecks: 0,
+      },
+    });
+    return pending.count + revived.count > 0;
+  }
+
   private async recordIn(
     tx: Prisma.TransactionClient,
     input: LedgerMovementInput,
@@ -602,8 +780,11 @@ export class LedgerService {
     const heldNotes = () =>
       notes.length + carried.length === 0
         ? keeper.discrepancy
-        : [keeper.discrepancy, ...carried, ...notes]
-            .filter(Boolean)
+        : [
+            ...new Set(
+              [keeper.discrepancy, ...carried, ...notes].filter(Boolean),
+            ),
+          ]
             .join('; ')
             .slice(0, 1000);
     for (const other of extra) {
@@ -618,7 +799,16 @@ export class LedgerService {
       if (merged.discrepancy) notes.push(merged.discrepancy);
       row = { ...row, ...merged.data, discrepancy: heldNotes() };
     }
-    const merged = this.merge(row, s, now);
+    // A sighting that carries no charge of its own (`figuresStand`) says
+    // nothing about the row's fee and total: whatever the row holds NOW, read
+    // under its lock above, stands.
+    const merged = this.merge(
+      row,
+      input.figuresStand
+        ? { ...s, feeKobo: row.feeKobo, totalKobo: row.totalKobo }
+        : s,
+      now,
+    );
     if (merged.discrepancy) notes.push(merged.discrepancy);
     row = { ...row, ...merged.data };
 
@@ -678,10 +868,31 @@ export class LedgerService {
         `ledger: a sighting disagreed with row ${keeper.id}; the stored figures are kept (${notes.join('; ')})`,
       );
     }
+    // A signed report that the payment's debit COMPLETED at another charge
+    // than the row holds (the row keeps its figures, above): the paying
+    // feature is told what the provider reported, so it can complete the
+    // payment at it (MONEY-17 round 8, R7-1). Only a webhook: a lookup is the
+    // payment's own sweep to read, and the sender's own answer is its own.
+    const debitSighting: LedgerDebitSighting | null =
+      s.source === 'webhook' &&
+      s.status === 'completed' &&
+      direction === 'out' &&
+      row.walletKind === 'user' &&
+      row.paymentId !== null &&
+      merged.chargeDiffers
+        ? {
+            entryId: keeper.id,
+            paymentId: row.paymentId,
+            amountKobo: s.amountKobo,
+            feeKobo: s.feeKobo,
+            totalKobo: s.totalKobo,
+          }
+        : null;
     return {
       entryId: keeper.id,
       created: false,
       discrepancy: notes.length ? notes.join('; ') : null,
+      ...(debitSighting ? { debitSighting } : {}),
     };
   }
 
@@ -699,7 +910,12 @@ export class LedgerService {
     row: EntryRow,
     s: Sighting,
     now: Date,
-  ): { data: Partial<EntryRow>; discrepancy: string | null } {
+  ): {
+    data: Partial<EntryRow>;
+    discrepancy: string | null;
+    /** The same amount moved, at another fee or total than the row holds. */
+    chargeDiffers: boolean;
+  } {
     const data: Partial<EntryRow> = {};
     const fill = <K extends keyof Sighting & keyof EntryRow>(k: K) => {
       if ((row[k] === null || row[k] === undefined) && s[k] !== null) {
@@ -851,6 +1067,9 @@ export class LedgerService {
       discrepancy: differs.length
         ? `${s.source} sighting: ${differs.join(', ')}`
         : null,
+      chargeDiffers:
+        s.amountKobo === row.amountKobo &&
+        (s.feeKobo !== row.feeKobo || s.totalKobo !== row.totalKobo),
     };
   }
 
@@ -921,6 +1140,10 @@ export class LedgerService {
       return { state: 'applied', entryId, changed: true } as const;
     };
     if (db) return run(db);
-    return this.prisma.$transaction(run);
+    const result = await this.prisma.$transaction(run);
+    if (result.state === 'applied' && result.changed) {
+      await this.notifySettled(result.entryId);
+    }
+    return result;
   }
 }

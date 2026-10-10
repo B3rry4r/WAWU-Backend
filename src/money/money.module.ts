@@ -34,6 +34,12 @@ import { MoneySavedAccountsController } from './saved-accounts/money-saved-accou
 import { PayoutAccountService } from './saved-accounts/payout-account.service';
 import { PinRequestKeyFilter, PinRequestKeyGuard } from './pin/pin-request-key';
 import { PinRequestKeys } from './pin/pin-request-keys.service';
+import { IdempotencyGuard, IdempotencyService } from './payments/idempotency';
+import { MerchantWallet } from './payments/merchant-wallet';
+import { MoneyPaymentsController } from './payments/money-payments.controller';
+import { PayableRegistry } from './payments/payable-registry';
+import { PaymentSettings } from './payments/payment-config';
+import { WalletPaymentService } from './payments/wallet-payment.service';
 import { PinResetSettings } from './pin/pin-reset-config';
 import { PinResetService } from './pin/pin-reset.service';
 import { TransactionPinGuard } from './pin/transaction-pin.guard';
@@ -111,6 +117,15 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
  * quoted (WALLET-07, WALLET-09, MONEY-17): they fill their fees from it and
  * check the quote the person saw with `check()`.
  *
+ * MONEY-17: pay from wallet (`GET /money/payments/quote`, `POST
+ * /money/payments`): the price from the buyer's wallet to WAWU's merchant
+ * wallet, with the 85/15 split recorded and the Idempotency-Key enforced,
+ * plus a sweep that settles a payment whose answer was lost from the
+ * ledger's status check (it runs where ScheduleModule.forRoot() is loaded).
+ * Exported: PayableRegistry, where each selling feature registers its kind
+ * (HOME-14, HOME-15, INBOX-16, ME-18, LEGAL-05, SCHOOLS-07); the
+ * Idempotency-Key service and guard, for the sends (WALLET-07, WALLET-09),
+ * through `@RequireIdempotentApproval()`.
  * WALLET-18: receipts. The owner's routes (`/money/transactions/{id}/receipt`,
  * its image and its PDF) sit behind the wallet gate and read the row through
  * the history's detail; the public check (`/r/{code}`, no sign-in,
@@ -151,6 +166,7 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     MoneyHistoryController,
     MoneyStatementController,
     MoneyFeesController,
+    MoneyPaymentsController,
     MoneyReceiptController,
     PublicReceiptController,
     MoneyRecipientController,
@@ -181,6 +197,12 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     StatementSlots,
     FeeSettings,
     FeeQuoteService,
+    PaymentSettings,
+    IdempotencyService,
+    IdempotencyGuard,
+    MerchantWallet,
+    PayableRegistry,
+    WalletPaymentService,
     ReceiptSettings,
     ReceiptService,
     RecipientService,
@@ -197,6 +219,10 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     WalletOpeningService,
     FeeSettings,
     FeeQuoteService,
+    PaymentSettings,
+    IdempotencyService,
+    IdempotencyGuard,
+    PayableRegistry,
   ],
 })
 export class MoneyModule {}

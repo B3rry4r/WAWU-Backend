@@ -69,6 +69,9 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   // Never 401 (that signs the person out) and never a PIN code: a refused
   // biometric approval uses up no PIN try (R-26).
   device_approval_refused: 403,
+  // Default (lead), owner may override: a payment for this item is still
+  // being confirmed, so a second one is not taken (MONEY-17).
+  payment_in_progress: 409,
   // Default (agent/lead), owner may override: a period with too many rows
   // for one file is the caller's to shorten, so a 400 (WALLET-27).
   statement_too_large: 400,
