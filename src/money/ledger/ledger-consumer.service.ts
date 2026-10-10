@@ -22,6 +22,7 @@ import {
 } from './ledger-config';
 import type {
   LedgerCounterparty,
+  LedgerDebitSighting,
   LedgerDirection,
   LedgerWallet,
 } from './ledger.interface';
@@ -396,7 +397,7 @@ export class LedgerConsumerService {
           },
           tx,
         );
-        touch(r.entryId);
+        touch(r.entryId, r.debitSighting);
         if (disagreement) {
           await this.ledger.noteDiscrepancy(
             r.entryId,
@@ -556,7 +557,7 @@ export class LedgerConsumerService {
     eventId: string,
     write: (
       tx: Prisma.TransactionClient,
-      touch: (entryId: string) => void,
+      touch: (entryId: string, sighting?: LedgerDebitSighting | null) => void,
     ) =>
       | Promise<{ status: 'processed' | 'failed'; note: string } | null>
       | { status: 'processed' | 'failed'; note: string }
@@ -564,14 +565,19 @@ export class LedgerConsumerService {
     waitNote = 'ledger: tried again on the next sweep',
   ): Promise<LedgerConsumeOutcome> {
     const touched: string[] = [];
+    const sighted: LedgerDebitSighting[] = [];
     const outcome = await this.prisma.$transaction(async (tx) => {
       touched.length = 0;
+      sighted.length = 0;
       const held = await tx.$queryRaw<Array<{ id: string }>>`
         SELECT "id" FROM "FintavaWebhookEvent"
          WHERE "id" = ${eventId} AND "processingStatus" = 'pending'
          FOR UPDATE SKIP LOCKED`;
       if (held.length === 0) return 'skipped' as const;
-      const result = await write(tx, (id) => touched.push(id));
+      const result = await write(tx, (id, sighting) => {
+        touched.push(id);
+        if (sighting) sighted.push(sighting);
+      });
       if (result === null) return 'waiting' as const;
       await tx.fintavaWebhookEvent.update({
         where: { id: eventId },
@@ -584,7 +590,9 @@ export class LedgerConsumerService {
       return result.status;
     });
     if (outcome === 'waiting') return this.wait(eventId, waitNote);
-    if (outcome === 'processed') await this.ledger.notifyCommitted(touched);
+    if (outcome === 'processed') {
+      await this.ledger.notifyCommitted(touched, sighted);
+    }
     return outcome;
   }
 

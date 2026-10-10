@@ -36,7 +36,10 @@ import {
   FeeQuoteService,
 } from '../fees/fee-quote.service';
 import type { OpenWallet } from '../gate/wallet-gate';
-import type { LedgerMovementInput } from '../ledger/ledger.interface';
+import type {
+  LedgerDebitSighting,
+  LedgerMovementInput,
+} from '../ledger/ledger.interface';
 import {
   koboNumber,
   LEDGER_FINTAVA_FAILURE,
@@ -211,7 +214,15 @@ export const isOpenKeyClash = (e: unknown) => isUniqueViolationOn(e, 'openKey');
  * - **Settled at once.** A ledger row of the payment settled by anything
  *   (a webhook, MONEY-08's status check, a reversal) settles the payment in
  *   the same breath (`LedgerService.onPaymentSettled`); the sweep is the
- *   fallback.
+ *   fallback. A signed webhook that reports a COMPLETED debit at another
+ *   charge than the quote leaves the buyer's row at its figures (a stop), so
+ *   the ledger tells the payment what was reported
+ *   (`LedgerService.onPaymentDebitSighted`) and the payment completes at it.
+ * - **One completion.** Every way a payment completes goes through
+ *   `completeFromRecord`: the provider's answer to the send, the sweep's
+ *   lookup, a ledger row some other job settled, and a signed report of the
+ *   debit. The figures come from the provider's own record in each, never
+ *   from the quote when the provider said otherwise (R6-1, R7-1).
  * - **The provider's figures are the record.** The ledger rows are written
  *   with the quoted figures before the send and the provider's after; any
  *   difference is kept on the row's `discrepancy` and on the payment, for
@@ -254,6 +265,10 @@ export class WalletPaymentService implements OnModuleInit {
     );
     // A payment's ledger row settled by anything settles the payment now.
     this.ledger.onPaymentSettled((e) => this.settle(e.paymentId));
+    // A signed report of a charge other than the quote reaches the payment
+    // too (R7-1): the ledger holds the row's figures, the payment completes
+    // at the provider's.
+    this.ledger.onPaymentDebitSighted((e) => this.completeFromSighting(e));
   }
 
   // -------------------------------------------------------------------------
@@ -693,11 +708,12 @@ export class WalletPaymentService implements OnModuleInit {
   }
 
   /**
-   * THE one place a payment is completed (lead ruling R6-1, 10 Oct 2026):
-   * from the provider's answer to the send, from the payment sweep's lookup,
-   * and from a ledger row some other job settled (the status check, a
-   * webhook). The provider's own record decides the figures
-   * (`completedFigures`), never the quote:
+   * THE one place a payment is completed (lead ruling R6-1, 10 Oct 2026; R7-1,
+   * 10 Oct 2026): from the provider's answer to the send, from the payment
+   * sweep's lookup, from a ledger row some other job settled (the status
+   * check, a webhook that agrees with the quote), and from a signed report
+   * of the debit that does not (`completeFromSighting`). The provider's own
+   * record decides the figures (`completedFigures`), never the quote:
    * - **as quoted**: both ledger rows complete, the payment completes.
    * - **below the quote**: the buyer's row takes the real charge and
    *   completes (nobody is owed anything, and a delivered purchase is never
@@ -707,12 +723,18 @@ export class WalletPaymentService implements OnModuleInit {
    *   is flagged for review (`debitReviewSince`, both figures on
    *   `discrepancy`); the price moved as asked, so it is delivered. The
    *   buyer's row keeps the ledger's rule (a disagreement is held `pending`
-   *   with its note, NUV-08 reconciles); the merchant's completes.
+   *   with its note, NUV-08 reconciles) and says the real charge in
+   *   `providerFeeKobo`; the merchant's completes.
    * The merchant-side (`in`) row is completed on every path, so a completed
    * payment never leaves WAWU's side of the ledger `pending` (R6-2).
+   *
+   * A payment already `completed` (say the sweep read the quote from a
+   * lookup, which carries no charge, before the provider's signed report
+   * came) is corrected by a report of another charge: the figures, the flag
+   * and the buyer's row follow the report, and nothing is delivered twice.
    */
   private async completeFromRecord(
-    p: PaymentRow,
+    seen: PaymentRow,
     rec: {
       amountKobo: bigint;
       feeKobo: bigint | null;
@@ -722,13 +744,18 @@ export class WalletPaymentService implements OnModuleInit {
         tagapayTransRef?: string | null;
         fintavaTransactionId?: string | null;
       };
-      source: 'send' | 'lookup' | 'history';
+      source: 'send' | 'lookup' | 'history' | 'webhook';
       occurredAt: Date | null;
       /** The buyer's row is already the record (it is what settled the payment). */
       debitRecorded: boolean;
     },
     handler?: PayableKindHandler,
   ): Promise<PaymentRow> {
+    // The figures the payment stands at now: another job may have completed
+    // it at the provider's since `seen` was read.
+    const p = await this.prisma.walletPayment.findUniqueOrThrow({
+      where: { id: seen.id },
+    });
     const figures = completedFigures(
       { providerFeeKobo: p.providerFeeKobo, totalKobo: p.totalKobo },
       rec,
@@ -754,19 +781,25 @@ export class WalletPaymentService implements OnModuleInit {
           );
         }
         const out = await this.ledger.record(
-          sighted(
-            this.movement(
-              p,
-              'out',
-              'completed',
-              {
-                amountKobo: price,
-                feeKobo: koboNumber(figures.feeKobo),
-                totalKobo: koboNumber(figures.totalKobo),
-              },
-              rec.refs,
+          {
+            ...sighted(
+              this.movement(
+                p,
+                'out',
+                'completed',
+                {
+                  amountKobo: price,
+                  feeKobo: koboNumber(figures.feeKobo),
+                  totalKobo: koboNumber(figures.totalKobo),
+                },
+                rec.refs,
+              ),
             ),
-          ),
+            // A record that gives no charge (Fintava's lookups and history)
+            // says nothing against the figures the row holds now, whoever
+            // wrote them (a signed report of the real charge, say).
+            figuresStand: rec.feeKobo === null && rec.totalKobo === null,
+          },
           undefined,
           { quiet: true },
         );
@@ -776,6 +809,17 @@ export class WalletPaymentService implements OnModuleInit {
         // ledger. The payment's own status is the provider's record.
         this.logger.error(
           `payment ${p.id}: the ledger could not record the debit (${e instanceof Error ? e.name : 'error'})`,
+        );
+      }
+    }
+    if (figures.verdict !== 'as_quoted') {
+      try {
+        // Whatever path learned it, the buyer's row names the provider's
+        // charge (F1): a row held at the quoted figures says it here.
+        await this.ledger.recordProviderCharge(p.id, figures.feeKobo);
+      } catch (e) {
+        this.logger.error(
+          `payment ${p.id}: the ledger could not record the provider's charge (${e instanceof Error ? e.name : 'error'})`,
         );
       }
     }
@@ -812,7 +856,7 @@ export class WalletPaymentService implements OnModuleInit {
         );
       }
       await this.prisma.walletPayment.updateMany({
-        where: { id: p.id, status: 'pending' },
+        where: { id: p.id, status: { in: ['pending', 'completed'] } },
         data: {
           providerFeeKobo: figures.feeKobo,
           totalKobo: figures.totalKobo,
@@ -825,11 +869,59 @@ export class WalletPaymentService implements OnModuleInit {
         where: { id: p.id },
       });
     }
-    return this.complete(
-      payment,
-      joinNotes(payment.discrepancy, figures.note, ...notes),
-      handler,
-    );
+    const note = joinNotes(payment.discrepancy, figures.note, ...notes);
+    if (payment.status === 'completed') {
+      // Completed before this record came (and delivered, or being
+      // delivered, by whoever completed it): only the figures and the note
+      // follow the record. `complete()` would do nothing for it.
+      if (note !== payment.discrepancy) {
+        await this.prisma.walletPayment.updateMany({
+          where: { id: p.id, status: 'completed' },
+          data: { discrepancy: note },
+        });
+        payment = await this.prisma.walletPayment.findUniqueOrThrow({
+          where: { id: p.id },
+        });
+      }
+      return payment;
+    }
+    return this.complete(payment, note, handler);
+  }
+
+  /**
+   * A signed provider report (a webhook) said the payment's debit COMPLETED
+   * at another charge than the buyer's row holds (R7-1). The ledger keeps
+   * the row's figures (a disagreement is a stop), so this is where the
+   * payment hears what the provider reported: it completes at those figures
+   * through the same function as every other path, whether it is still
+   * `pending` (the report came first) or was already completed at the quote
+   * by the sweep (a lookup carries no charge) and is corrected. A report of
+   * another amount than the price is the amount stop the ledger already
+   * holds; it is not completed here. Another provider's payment is left
+   * alone.
+   */
+  async completeFromSighting(
+    e: LedgerDebitSighting,
+  ): Promise<PaymentStatus | null> {
+    const p = await this.prisma.walletPayment.findUnique({
+      where: { id: e.paymentId },
+    });
+    if (!p || p.provider !== this.provider.name) return null;
+    if (p.status !== 'pending' && p.status !== 'completed') {
+      return p.status as PaymentStatus;
+    }
+    if (e.amountKobo !== p.priceKobo) return p.status;
+    return (
+      await this.completeFromRecord(p, {
+        amountKobo: e.amountKobo,
+        feeKobo: e.feeKobo,
+        totalKobo: e.totalKobo,
+        refs: {},
+        source: 'webhook',
+        occurredAt: null,
+        debitRecorded: false,
+      })
+    ).status as PaymentStatus;
   }
 
   // -------------------------------------------------------------------------
@@ -1435,7 +1527,9 @@ export class WalletPaymentService implements OnModuleInit {
         // which is what its record should say (G-39). After: its own.
         feeKobo: figures?.feeKobo ?? providerFee,
         totalKobo: figures?.totalKobo ?? price + providerFee,
-        providerFeeKobo: providerFee,
+        // The charge the person was quoted, until the provider's own is
+        // known: then its charge (F1).
+        providerFeeKobo: figures?.feeKobo ?? providerFee,
         wawuFeeKobo: koboNumber(p.wawuFeeKobo),
         counterparty: {
           kind: 'wawu',

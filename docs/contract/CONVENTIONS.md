@@ -1302,11 +1302,22 @@ Fintava or on Nuvion, whichever the server runs.
   (`completedFigures`, `payment-figures.ts`) decides them from the
   provider's own record, and one method completes the payment from it
   (`completeFromRecord`) whichever job gets there first: the provider's
-  answer to the send, the payment sweep's lookup, or a ledger row the status
-  check or a webhook settled. A seam record that carries the provider's
-  charge (`ProviderTransaction.feeKobo`: Nuvion's `applicable_fee`) is
-  compared; one that does not (Fintava's lookups and history) leaves the
-  quote standing.
+  answer to the send, the payment sweep's lookup, a ledger row the status
+  check or a webhook settled, or a signed webhook that reports a charge
+  other than the quote (round 8, R7-1). That last one is the only source of
+  a Fintava charge on a lost answer (its lookups carry none): the ledger
+  keeps the buyer's row at its figures (a stop), tells the payment what the
+  provider reported (`LedgerService.onPaymentDebitSighted`, from
+  `LedgerRecordResult.debitSighting`), and the payment completes at those
+  figures through the same method, whether it is still `pending` or the
+  sweep completed it at the quote first (a late report corrects the
+  figures, the flag and the buyer's row, and nothing is delivered twice).
+  A seam record that carries the provider's charge
+  (`ProviderTransaction.feeKobo`: Nuvion's `applicable_fee`) is compared;
+  one that does not (Fintava's lookups and history) leaves the quote
+  standing. Once the provider's charge is known, the buyer's ledger row says
+  it in `providerFeeKobo` on every path, never the quoted one (round 8, F1);
+  history, statements and the receipt still read it through `feeOf`.
   - **Above the quote**: `debitReviewSince` is set and both figures are named
     on `discrepancy` (NUV-08 reconciles it with the provider); the price
     moved as asked, so what was paid for is delivered. The ledger's `out` row
@@ -1352,7 +1363,8 @@ Fintava or on Nuvion, whichever the server runs.
   itself refuses for funds, the balance is read again: a real shortfall is
   shown as above; otherwise "Your balance changed. Check it and try again."
   with no `shortfallKobo` (D3). A shortfall shown is never ₦0.00 or less.
-  The daily limit is not held by any task (G-7).
+  WAWU's own purchase limits are checked inside the claim, after these (see
+  "Fees and limits first").
 - **The split** is recorded on the payment (`WalletPayment`), of the price
   only: the payee's 85% rounded down to the kobo, WAWU's 15% the rest (R-5;
   ₦1,000 is ₦850 and ₦150, ₦999.99 is ₦849.99 and ₦150.00). No payee: all

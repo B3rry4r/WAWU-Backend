@@ -2014,12 +2014,17 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
   });
 
   /** Fintava's signed wallet-to-wallet delivery for a payment's send, stored by the real route. */
-  async function deliverWebhook(p: Person, paymentId: string): Promise<string> {
+  async function deliverWebhook(
+    p: Person,
+    paymentId: string,
+    extra: Record<string, unknown> = {},
+  ): Promise<string> {
     const ref = `wawu-pay-${paymentId}`;
     const send = wallets.sends.find((x) => x.reference === ref)!;
     const text = JSON.stringify({
       event: 'wallet_to_wallet_transfer_v2',
       data: {
+        ...extra,
         amount: send.amountKobo / 100,
         reference: `tagapay${randomUUID().replace(/-/g, '')}`,
         customerReference: ref,
@@ -2104,6 +2109,393 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
       expect(sendsFrom(p)).toHaveLength(1);
     },
   );
+
+  // -------------------------------------------------------------------------
+  // Round 8: a signed webhook that reports the real charge is a completion
+  // path like the receipt and the sweep (R7-1), and the completion is once
+  // (O13)
+  // -------------------------------------------------------------------------
+
+  /** The buyer's history row for a payment, as the app reads it. */
+  async function historyOf(p: Person, paymentId: string) {
+    const res = await request(app.getHttpServer())
+      .get('/api/hub/money/transactions')
+      .set('Authorization', p.auth);
+    expect(res.status).toBe(200);
+    const items = body<{
+      items: Array<{
+        paymentId: string | null;
+        status: string;
+        totalKobo: number;
+        fee: { providerFeeKobo: number; totalFeeKobo: number };
+      }>;
+    }>(res).data!.items;
+    return items.find((i) => i.paymentId === paymentId);
+  }
+
+  /** The quote's ₦23.25 and a payment whose answer was lost while Fintava took `fee`. */
+  async function lostAnswerTaking(fee: number, targetId: string) {
+    const p = await buyer(1_000_000);
+    const q = await quoted(p, 'content_unlock', targetId);
+    expect(q.totalKobo).toBe(102_325);
+    wallets.mode = 'timeout';
+    wallets.feeOverride = fee;
+    const paid = body<PaymentView>(await pay(p, payBody(q))).data!;
+    wallets.mode = 'live';
+    wallets.feeOverride = null;
+    expect(paid.status).toBe('pending');
+    expect(sendsFrom(p)[0].feeKobo).toBe(fee);
+    return { p, q, paid };
+  }
+
+  it.each([
+    ['above the quote', 3000, 'above'],
+    ['below the quote', 1500, 'below'],
+    ['the sandbox charge, nothing', 0, 'below'],
+    ['as quoted', 2325, 'equal'],
+  ] as const)(
+    'R7-1: the signed webhook of a lost-answer payment says Fintava took another charge (%s, %i kobo): the payment completes through the same function at the reported figures, the buyer never waits on the sweep',
+    async (_label, fee, kind) => {
+      const { p, paid } = await lostAnswerTaking(fee, `once-r8-w-${fee}`);
+      const real = 100_000 + fee;
+      const event = await deliverWebhook(p, paid.id);
+      expect(await consumer.consume(event)).toBe('processed');
+      // No sweep and no status check: the payment hears of it at once.
+      await until(async () => (await rowOf(paid.id)).status === 'completed');
+      await until(async () => (await rowOf(paid.id)).fulfilledAt !== null);
+      const row = await rowOf(paid.id);
+      expect([row.status, row.totalKobo, row.providerFeeKobo]).toEqual([
+        'completed',
+        BigInt(real),
+        BigInt(fee),
+      ]);
+      expect(row.openKey).toBeNull();
+      expect(delivered.filter((d) => d.paymentId === paid.id)).toHaveLength(1);
+      expect(deliveryCalls.get(paid.id)).toBe(1);
+      expect(sendsFrom(p)).toHaveLength(1);
+
+      const [inn, out] = await ledgerRows(paid.reference);
+      expect([inn.direction, inn.status, inn.totalKobo]).toEqual([
+        'in',
+        'completed',
+        100_000n,
+      ]);
+      // F1: the buyer's row names the charge Fintava took, not the quoted one.
+      expect(out.providerFeeKobo).toBe(BigInt(fee));
+      if (kind === 'above') {
+        expect(row.debitReviewSince).not.toBeNull();
+        expect(row.discrepancy).toContain(`took ${real} kobo`);
+        expect(row.discrepancy).toContain('quoted 102325 kobo');
+        expect(row.discrepancy).toContain('feeKobo 2325 vs 3000');
+        // Ruling 5 (round 7 decision (c)): a debit above the quote is a stop
+        // the ledger keeps on the buyer's row; NUV-08 reconciles it.
+        expect([out.status, out.feeKobo, out.totalKobo]).toEqual([
+          'pending',
+          2325n,
+          102_325n,
+        ]);
+      } else if (kind === 'below') {
+        expect(row.debitReviewSince).toBeNull();
+        expect(row.discrepancy).toContain('debit differs from the quote');
+        expect(row.discrepancy).toContain(`took ${real} kobo`);
+        expect([out.status, out.feeKobo, out.totalKobo]).toEqual([
+          'completed',
+          BigInt(fee),
+          BigInt(real),
+        ]);
+        expect(out.completedAt).not.toBeNull();
+        // The buyer's history shows what Fintava took, completed.
+        const h = await historyOf(p, paid.id);
+        expect([h?.status, h?.totalKobo, h?.fee.providerFeeKobo]).toEqual([
+          'completed',
+          real,
+          fee,
+        ]);
+      } else {
+        expect(row.debitReviewSince).toBeNull();
+        expect(row.discrepancy).toBeNull();
+        expect([out.status, out.feeKobo, out.totalKobo]).toEqual([
+          'completed',
+          2325n,
+          102_325n,
+        ]);
+        const h = await historyOf(p, paid.id);
+        expect([h?.status, h?.totalKobo]).toEqual(['completed', 102_325]);
+      }
+      // Nothing is left for the sweep to change: it neither re-delivers nor
+      // moves the figures back to the quote.
+      await payments.sweep(new Date(Date.now() + 5 * 60_000));
+      const after = await rowOf(paid.id);
+      expect([after.totalKobo, after.providerFeeKobo]).toEqual([
+        BigInt(real),
+        BigInt(fee),
+      ]);
+      expect(delivered.filter((d) => d.paymentId === paid.id)).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    ['above the quote', 3000, 'above'],
+    ['below the quote', 1500, 'below'],
+  ] as const)(
+    'R7-1: the sweep read the quote from a lookup (which carries no charge) before the signed webhook came, %s: the late report corrects the completed payment, delivered once',
+    async (_label, fee, kind) => {
+      const { p, paid } = await lostAnswerTaking(fee, `once-r8-late-${fee}`);
+      await payments.sweep(new Date(Date.now() + 2 * 60_000));
+      await until(async () => (await rowOf(paid.id)).fulfilledAt !== null);
+      const early = await rowOf(paid.id);
+      // Fintava's lookup carries no charge: the quote stands, for now.
+      expect([early.status, early.totalKobo]).toEqual(['completed', 102_325n]);
+      expect(early.debitReviewSince).toBeNull();
+      expect(deliveryCalls.get(paid.id)).toBe(1);
+
+      const event = await deliverWebhook(p, paid.id);
+      expect(await consumer.consume(event)).toBe('processed');
+      const real = 100_000 + fee;
+      // The figures, the flag and the note are written in steps: wait for the last.
+      await until(async () => {
+        const r = await rowOf(paid.id);
+        return (
+          r.totalKobo === BigInt(real) && !!r.discrepancy?.includes('took')
+        );
+      });
+      const row = await rowOf(paid.id);
+      expect([row.status, row.providerFeeKobo]).toEqual([
+        'completed',
+        BigInt(fee),
+      ]);
+      expect(row.discrepancy).toContain(`took ${real} kobo`);
+      expect(row.discrepancy).toContain('quoted 102325 kobo');
+      expect(row.debitReviewSince !== null).toBe(kind === 'above');
+      expect(deliveryCalls.get(paid.id)).toBe(1);
+      expect(delivered.filter((d) => d.paymentId === paid.id)).toHaveLength(1);
+      const [inn, out] = await ledgerRows(paid.reference);
+      expect(inn.status).toBe('completed');
+      expect(out.providerFeeKobo).toBe(BigInt(fee));
+      expect(out.status).toBe(kind === 'above' ? 'pending' : 'completed');
+      if (kind === 'below') {
+        expect([out.feeKobo, out.totalKobo]).toEqual([
+          BigInt(fee),
+          BigInt(real),
+        ]);
+        expect((await historyOf(p, paid.id))?.totalKobo).toBe(real);
+      }
+    },
+  );
+
+  it.each([3000, 1500, 0, 2325])(
+    "F1: the answer to the send says Fintava took %i kobo: the buyer's ledger row names that charge in providerFeeKobo, not the quoted ₦23.25",
+    async (fee) => {
+      const p = await buyer(1_000_000);
+      const q = await quoted(p, 'content_unlock', `once-r8-f1-${fee}`);
+      wallets.feeOverride = fee;
+      const paid = body<PaymentView>(await pay(p, payBody(q))).data!;
+      wallets.feeOverride = null;
+      expect(paid).toMatchObject({
+        status: 'completed',
+        totalKobo: 100_000 + fee,
+        fee: { providerFeeKobo: fee },
+      });
+      const out = (await ledgerRows(paid.reference)).find(
+        (r) => r.direction === 'out',
+      )!;
+      expect(out.providerFeeKobo).toBe(BigInt(fee));
+      expect(out.status).toBe(fee > 2325 ? 'pending' : 'completed');
+      if (fee <= 2325) expect(out.feeKobo).toBe(BigInt(fee));
+    },
+  );
+
+  it("F1: Fintava moving another amount than the price (review) and a charge other than the quote: the buyer's row still names the charge Fintava took, not the quoted one", async () => {
+    const p = await buyer(1_000_000);
+    const q = await quoted(p, 'content_unlock', 'once-r8-f1-amount');
+    wallets.mode = 'wrongamount';
+    wallets.feeOverride = 3000;
+    const paid = body<PaymentView>(await pay(p, payBody(q))).data!;
+    wallets.mode = 'live';
+    wallets.feeOverride = null;
+    expect(paid.status).toBe('pending');
+    const row = await rowOf(paid.id);
+    expect(row.reviewSince).not.toBeNull();
+    const out = (await ledgerRows(paid.reference)).find(
+      (r) => r.direction === 'out',
+    )!;
+    expect([out.amountKobo, out.feeKobo, out.providerFeeKobo]).toEqual([
+      100_000n,
+      2325n,
+      3000n,
+    ]);
+  });
+
+  it('R7-1: a signed webhook that still says PENDING, at another charge, completes nothing: the payment waits for Fintava to say it is done', async () => {
+    const { p, paid } = await lostAnswerTaking(3000, 'once-r8-pending');
+    const event = await deliverWebhook(p, paid.id, { status: 'PENDING' });
+    expect(await consumer.consume(event)).toBe('processed');
+    await new Promise((r) => setTimeout(r, 300));
+    const row = await rowOf(paid.id);
+    expect([row.status, row.totalKobo, row.debitReviewSince]).toEqual([
+      'pending',
+      102_325n,
+      null,
+    ]);
+    expect(delivered.filter((d) => d.paymentId === paid.id)).toHaveLength(0);
+  });
+
+  it("R7-1: a signed webhook for another amount than the price is the ledger's amount stop; the payment is not completed at it", async () => {
+    const { p, paid } = await lostAnswerTaking(3000, 'once-r8-amount');
+    const ref = paid.reference;
+    const send = wallets.sends.find((x) => x.reference === ref)!;
+    send.amountKobo += 100;
+    const event = await deliverWebhook(p, paid.id);
+    send.amountKobo -= 100;
+    await consumer.consume(event);
+    await new Promise((r) => setTimeout(r, 300));
+    const row = await rowOf(paid.id);
+    expect(row.status).toBe('pending');
+    expect(row.debitReviewSince).toBeNull();
+    expect(delivered.filter((d) => d.paymentId === paid.id)).toHaveLength(0);
+  });
+
+  it("R7-1: every way a payment completes goes through completeFromRecord (the answer to the send, the sweep's lookup, a ledger row some job settled, a signed report of the debit), and no path completes it outside that function", async () => {
+    const inner = payments as unknown as {
+      completeFromRecord: (
+        seen: unknown,
+        rec: { source: string; debitRecorded: boolean },
+        handler?: unknown,
+      ) => Promise<unknown>;
+      complete: (...a: unknown[]) => Promise<unknown>;
+    };
+    const calls: Array<{
+      paymentId: string;
+      source: string;
+      debitRecorded: boolean;
+    }> = [];
+    /** What the function was called with for these payments only (a sweep reads others too). */
+    const callsFor = (...ids: string[]) =>
+      calls
+        .filter((c) => ids.includes(c.paymentId))
+        .map(({ source, debitRecorded }) => ({ source, debitRecorded }));
+    let inside = 0;
+    let outside = 0;
+    const record = inner.completeFromRecord.bind(payments);
+    const complete = inner.complete.bind(payments);
+    const recordSpy = jest
+      .spyOn(inner, 'completeFromRecord')
+      .mockImplementation(async (seen, rec, handler) => {
+        calls.push({
+          paymentId: (seen as { id: string }).id,
+          source: rec.source,
+          debitRecorded: rec.debitRecorded,
+        });
+        inside += 1;
+        try {
+          return await record(seen, rec, handler);
+        } finally {
+          inside -= 1;
+        }
+      });
+    const completeSpy = jest
+      .spyOn(inner, 'complete')
+      .mockImplementation((...a: unknown[]) => {
+        if (inside === 0) outside += 1;
+        return complete(...a);
+      });
+    try {
+      // 1. The provider's own answer to the send.
+      const a = await buyer(500_000);
+      const qa = await quoted(a, 'content_unlock', 'once-r8-path-a');
+      const paidA = body<PaymentView>(await pay(a, payBody(qa))).data!;
+      expect(paidA.status).toBe('completed');
+      expect(callsFor(paidA.id)).toEqual([
+        { source: 'send', debitRecorded: false },
+      ]);
+
+      // 2. The sweep's lookup after a lost answer.
+      const b = await lostAnswerTaking(2325, 'once-r8-path-b');
+      await payments.sweep(new Date(Date.now() + 2 * 60_000));
+      await until(async () => (await rowOf(b.paid.id)).status === 'completed');
+      expect(callsFor(b.paid.id)).toEqual([
+        { source: 'lookup', debitRecorded: false },
+      ]);
+
+      // 3. A ledger row some other job settled (MONEY-08's status check).
+      const c = await lostAnswerTaking(2325, 'once-r8-path-c');
+      const [outC] = (await ledgerRows(c.paid.reference)).filter(
+        (r) => r.direction === 'out',
+      );
+      expect(
+        (await statusChecks.check(outC.id, new Date(Date.now() + 5 * 60_000)))
+          .status,
+      ).toBe('completed');
+      await until(async () => (await rowOf(c.paid.id)).status === 'completed');
+      expect(callsFor(c.paid.id)).toEqual([
+        { source: 'lookup', debitRecorded: true },
+      ]);
+
+      // 4. A signed report of a charge other than the quote.
+      const d = await lostAnswerTaking(3000, 'once-r8-path-d');
+      expect(await consumer.consume(await deliverWebhook(d.p, d.paid.id))).toBe(
+        'processed',
+      );
+      await until(async () => (await rowOf(d.paid.id)).status === 'completed');
+      expect(callsFor(d.paid.id)).toEqual([
+        { source: 'webhook', debitRecorded: false },
+      ]);
+
+      // And no completion happened anywhere else.
+      expect(outside).toBe(0);
+      expect(completeSpy).toHaveBeenCalled();
+    } finally {
+      recordSpy.mockRestore();
+      completeSpy.mockRestore();
+    }
+  });
+
+  it('O13: completing a payment is once: three paths reach complete() at the same moment, and only the one that finds it pending delivers (a status guard dropped from complete() delivers three times)', async () => {
+    const inner = payments as unknown as {
+      complete: (...a: unknown[]) => Promise<unknown>;
+    };
+    const complete = inner.complete.bind(payments);
+    const rounds = 4;
+    const ids: string[] = [];
+    for (let round = 0; round < rounds; round += 1) {
+      const { paid } = await lostAnswerTaking(2325, `once-r8-race-${round}`);
+      ids.push(paid.id);
+    }
+    for (const id of ids) {
+      // Three paths to one payment, all holding the payment as `pending`
+      // when they arrive: held at complete() until every one has arrived,
+      // then let go together. They wait on that and never on a time.
+      let arrived = 0;
+      let open!: () => void;
+      const together = new Promise<void>((r) => (open = r));
+      const spy = jest
+        .spyOn(inner, 'complete')
+        .mockImplementation(async (...a: unknown[]) => {
+          arrived += 1;
+          if (arrived >= 3) open();
+          await Promise.race([
+            together,
+            new Promise((r) => setTimeout(r, 15_000)),
+          ]);
+          return complete(...a);
+        });
+      try {
+        await Promise.all([
+          payments.settle(id, new Date(), true),
+          payments.settle(id, new Date(), true),
+          payments.settle(id, new Date(), true),
+        ]);
+        expect(arrived).toBe(3);
+      } finally {
+        spy.mockRestore();
+      }
+      const row = await rowOf(id);
+      expect(row.status).toBe('completed');
+      await until(async () => (await rowOf(id)).fulfilledAt !== null);
+      expect(deliveryCalls.get(id)).toBe(1);
+      expect(delivered.filter((d) => d.paymentId === id)).toHaveLength(1);
+    }
+  });
 
   it('V4: the quote is checked a second time inside the claim: one that no longer holds then gives the claim back, nothing is sent', async () => {
     const p = await buyer(1_000_000);

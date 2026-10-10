@@ -1372,6 +1372,69 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     expect(deliveriesOf(pb.id)).toBe(1);
   });
 
+  it.each([700, -500, 0])(
+    "F1: the buyer's ledger row names the charge Nuvion really took in providerFeeKobo (%i kobo from the quote: above, below, as quoted), not the quoted one, whichever path learned it: the answer to the send, the sweep's lookup, the status check first",
+    async (delta) => {
+      // One buyer per path: WAWU's daily purchase limit in this file is two
+      // items a person.
+      const cases: Array<{ reference: string; quotedFee: number }> = [];
+
+      const byAnswerBuyer = await buyer(500_000);
+      nuvion.mode = 'successful';
+      const qr = await quoted(
+        byAnswerBuyer,
+        'content_unlock',
+        `n-f1-r${delta}`,
+      );
+      nuvion.feeKobo = () => BigInt(qr.fee.providerFeeKobo + delta);
+      const byAnswer = body<PaymentView>(await pay(byAnswerBuyer, qr)).data!;
+      expect(byAnswer.status).toBe('completed');
+      cases.push({
+        reference: byAnswer.reference,
+        quotedFee: qr.fee.providerFeeKobo,
+      });
+      nuvion.mode = 'pending';
+
+      const bySweep = await pendingAt(
+        await buyer(500_000),
+        `n-f1-s${delta}`,
+        delta,
+      );
+      nuvion.settle(bySweep.paid.reference, 'successful');
+      await sweepLater();
+      cases.push({
+        reference: bySweep.paid.reference,
+        quotedFee: bySweep.q.fee.providerFeeKobo,
+      });
+
+      const byCheck = await pendingAt(
+        await buyer(500_000),
+        `n-f1-c${delta}`,
+        delta,
+      );
+      nuvion.settle(byCheck.paid.reference, 'successful');
+      const { out: checked } = await bothRows(byCheck.paid.reference);
+      await statusChecks.check(checked.id, new Date(Date.now() + 10 * 60_000));
+      await sweepLater();
+      cases.push({
+        reference: byCheck.paid.reference,
+        quotedFee: byCheck.q.fee.providerFeeKobo,
+      });
+
+      for (const c of cases) {
+        const { out } = await bothRows(c.reference);
+        expect(out.providerFeeKobo).toBe(BigInt(c.quotedFee + delta));
+        if (delta <= 0) {
+          // Completed at what was taken: the whole row agrees with the charge.
+          expect([out.status, out.feeKobo]).toEqual([
+            'completed',
+            BigInt(c.quotedFee + delta),
+          ]);
+        }
+      }
+    },
+  );
+
   it("R6-1, a buyer's row MONEY-08 failed as absent, and Nuvion then shows the transfer below the quote: the row is revived and completed at the real figures", async () => {
     const p = await buyer(500_000);
     const q = await quoted(p, 'content_unlock', 'n-absent-below');

@@ -79,11 +79,26 @@ export interface LedgerMovementInput {
   amountKobo: number;
   /** What Fintava took on top (out rows). Default 0. */
   feeKobo?: number;
-  /** Fintava's charge and WAWU's fee as quoted (R-10), when the sender knows them. */
+  /**
+   * Fintava's charge and WAWU's fee as quoted (R-10), when the sender knows
+   * them. Once the provider's own charge is known (its answer, its record, a
+   * signed report), the provider's charge is what a payment's row says here,
+   * not the quoted one (MONEY-17 round 8, F1).
+   */
   providerFeeKobo?: number | null;
   wawuFeeKobo?: number | null;
   /** Default: amount + fee on an out row, amount on an in row. */
   totalKobo?: number;
+  /**
+   * The sighting carries no fee or total of its own (a lookup, a history
+   * row: Fintava's carry no charge for a wallet-to-wallet send), so when the
+   * row exists, the figures it holds stand: the `feeKobo` and `totalKobo`
+   * given are used only to create it. Read under the row's lock, so a figure
+   * another job wrote since the caller read the row (a signed report of the
+   * real charge, MONEY-17 round 8) is never "disagreed with" by a stale one.
+   * The amount is still compared.
+   */
+  figuresStand?: boolean;
   counterparty?: LedgerCounterparty | null;
   link?: LedgerLink | null;
   note?: string | null;
@@ -104,6 +119,29 @@ export interface LedgerRecordResult {
   created: boolean;
   /** Set when the sighting disagreed with the stored amounts (kept, reported). */
   discrepancy: string | null;
+  /**
+   * Set when a webhook reported a COMPLETED debit of a payment (a row with a
+   * `paymentId`) at the same amount but another charge than the row holds
+   * (MONEY-17 round 8, R7-1). The row keeps its figures (a disagreement is a
+   * stop), so the paying feature is told what the provider reported and
+   * completes the payment at it (`LedgerService.onPaymentDebitSighted`).
+   */
+  debitSighting?: LedgerDebitSighting | null;
+}
+
+/**
+ * What a signed provider report (a webhook) says a payment's debit really
+ * was, in kobo, when its charge is not the one the buyer's row holds. The
+ * report is the provider's own record of what it took, so the payment treats
+ * it like the provider's answer to the send or its lookup: one completion,
+ * whichever of them tells it first.
+ */
+export interface LedgerDebitSighting {
+  entryId: string;
+  paymentId: string;
+  amountKobo: bigint;
+  feeKobo: bigint;
+  totalKobo: bigint;
 }
 
 /** What a debit_transfer_reversal reported, in kobo. */

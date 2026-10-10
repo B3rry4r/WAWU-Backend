@@ -470,6 +470,11 @@ export class LedgerStatusService {
         debitFee === null
           ? koboNumber(e.totalKobo)
           : safeKoboNumber(t.amountKobo) + debitFee,
+      // No charge in the record: whatever the row holds when this lands
+      // stands (read under its lock), not the figures read before the
+      // lookup. A signed report of the real charge, or the payment's own
+      // completion at it, may have changed them meanwhile (MONEY-17 round 8).
+      figuresStand: debitFee === null,
       references: {
         customerReference: out ? t.ourReference : null,
         fintavaReference: t.providerReference,
