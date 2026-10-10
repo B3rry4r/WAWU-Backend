@@ -20,8 +20,7 @@ import type { ProductDraftView } from './dto/product-draft.view';
 /**
  * How many drafts one person may keep at once. A draft holds no file and no
  * place, so this only keeps a free account from filling the table.
- * PROVISIONAL(PRODUCT-DRAFTS-MAX, owner=YOU, why=no ruling sizes a person's
- * drafts and they cost nothing to keep; the owner may set another number).
+ * PROVISIONAL(PRODUCT-DRAFTS-MAX, owner=YOU, why=no ruling sizes a person's drafts and they cost nothing to keep)
  */
 export const PRODUCT_DRAFTS_MAX = 20;
 
