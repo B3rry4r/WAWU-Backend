@@ -105,6 +105,7 @@ null), and every number in both answers is `integer`
 With `tier` (`id`, and `name` and `badge` from the config; both null if the
 config no longer names that tier), `activeFrom`, `activeUntil`,
 `productsAllowed` (the tier's products when bought plus `extraProducts`),
+`productsUsed` (products published now, the count the publishing gate checks),
 `pointsIncluded`, `firstVoiceIntroIncluded` and `eventPass` (the highest pass
 the person holds, in the order of the config's `event_passes`).
 
@@ -122,3 +123,82 @@ takes away what a person paid for. `MakerTierService` is the one reader: GET
 /me/tier, the publishing gate (TIER-02, `hasActiveTier`) and the purchases ask
 it. All three tables are in the account purge (OWNED) and the data export
 (without payment references).
+
+## 6. Publishing needs a tier (TIER-02)
+
+Task TIER-02, R-43: "Anyone can sign up, build a profile and draft products
+free. Publishing, or uploading any file, needs an active tier, and published
+products never exceed the tier's products plus any extra products bought."
+
+**What a person may publish** (`PublishingAllowanceService.of`, the one place
+that answers it; the gate, `GET /me/tier` `productsUsed`, `GET /creator/state`
+`slotsTotal`, `GET /uploads/allowance` and the admin creator, KYC and content
+screens all read it):
+
+| they hold | products allowed | storage for content |
+|---|---|---|
+| a running tier (`active` or `ending`) | the tier's products plus `extraProducts` | 10 GB |
+| a verification tick that has not ended | 25 (the tick-era cap, kept for people who paid before tiers) | 10 GB |
+| both | the larger of the two, not the sum | 10 GB |
+| neither (never had a tier, the tier ended, the tick lapsed) | 0: `tier_required` | 1 GB (nothing can be uploaded) |
+
+An ended tier or a lapsed tick only stops the next publish or file. Nothing
+published is unpublished or hidden, and it still counts in `productsUsed`.
+Storage for a person on a tier is R-7's with-a-tick figure: tiers replace
+the tick and nothing in the plan sizes storage (Default (agent), owner may
+override).
+
+**What counts.** A product is a content piece waiting for review or live
+(`CreatorState.slotsUsed`, the counter every publish claims against with a
+conditional update, so two publishes at once cannot pass the limit). A draft
+does not count. A piece that is removed (`DELETE /content/:id`), turned down
+or taken down gives its place back; sending a turned-down piece again takes
+one. Removal is the unpublish: there is no route that turns a live piece back
+into a draft, because a draft holds no file.
+
+**The refusal.** `402`, the contract's one error shape (CONVENTIONS section
+3), `reason.code`:
+
+- `tier_required`: no running tier and no tick that has not ended.
+  `tierState` is `none` or `ended`.
+- `product_limit_reached`: every product they may have is published.
+
+`reason` is flat and always the same keys: `code`, `message`, `tierState`,
+`productsUsed`, `productsAllowed`, `currency`, `tiers`, `extraProducts`. The
+offers are the figures `GET /plans` answers, in the person's billing currency
+only: for `tier_required` every tier; for `product_limit_reached` the tiers
+that allow more products than the one they hold (none when they hold the top
+one, or only a tick), and `extraProducts` (`count`, `priceMinor`) while they
+hold a running tier, else `null`. The routes' interceptor
+(`PublishingOffersInterceptor`) adds them, because only the route knows whose
+token, and so whose currency, asked.
+
+**The routes** (`publishing-gate-coverage.spec.ts` holds this list to the
+code):
+
+| Route | Asks |
+|---|---|
+| `POST /content` | a way to publish, then a free place |
+| `POST /content/:id/resubmit` | the same (it takes a place) |
+| `PATCH /content/:id` | a way to publish, when the body carries `previewAsset` or `fullAsset` (the piece has its place already) |
+| `POST /uploads/presign` | the same as `POST /content`, when `folder` is `content/preview` or `content/full`. Every other folder (an avatar, a cover, an identity or professional document, a banner, a chat or community picture, a featured work) is not a product and is never asked |
+| `POST /product-drafts/:id/publish` | the same as `POST /content` |
+
+Not gated, and why: `PUT /content/:id/media` and `/preview` take links to
+files `POST /uploads/presign` already accepted; events (E21's tier is its own
+task); featured works and the professional listing are profile content, not
+products; the shop has no creator route (R-2); learn guides are written by
+admins.
+
+**Drafts** (`src/content-piece/product-draft.*`, creator accounts, free, no
+tier asked): `POST /product-drafts` (a title; everything else optional),
+`GET /product-drafts`, `GET`, `PATCH` and `DELETE /product-drafts/:id`, and
+`POST /product-drafts/:id/publish` (the two file links). A draft has no
+file, holds no place and is shown to nobody else. `missing` lists what
+publishing still needs (`contentType`, `description`, `category`,
+`accessType`, and `price` for a paid product). Publishing asks the gate first
+(so Publish opens the offers), then finishes the draft check
+(`400 draft_incomplete`), then creates the piece and deletes the draft in one
+transaction. A person keeps at most `PRODUCT_DRAFTS_MAX` drafts
+(`PROVISIONAL(PRODUCT-DRAFTS-MAX)`; `409 draft_limit_reached`).
+

@@ -113,6 +113,13 @@ export interface MyTierView {
   activeUntil: string | null;
   /** The tier's products plus extra products bought (0 with no tier). */
   productsAllowed: number;
+  /**
+   * Products published now, across content (a draft does not count, a piece
+   * that was removed or turned down gives its place back). It is the count
+   * the publishing gate checks, so `productsUsed` of `productsAllowed` is the
+   * meter VF12 and VF14 draw (TIER-02).
+   */
+  productsUsed: number;
   extraProducts: number;
   /** The bonus points the tier came with. */
   pointsIncluded: number;

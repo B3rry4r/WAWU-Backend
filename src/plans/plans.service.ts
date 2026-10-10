@@ -5,6 +5,7 @@ import {
   type BillingClaims,
 } from './billing-currency.service';
 import { MakerTierService } from './maker-tier.service';
+import { PublishingAllowanceService } from './publishing-allowance.service';
 import {
   countIn,
   PLANS_CONFIG,
@@ -29,6 +30,7 @@ export class PlansService {
     @Inject(PLANS_CONFIG) private readonly config: PlansConfig,
     private readonly currency: BillingCurrencyService,
     private readonly tiers: MakerTierService,
+    private readonly publishing: PublishingAllowanceService,
   ) {}
 
   /** The plan as the caller pays for it. */
@@ -48,7 +50,10 @@ export class PlansService {
     wawuUserId: string,
     now: Date = new Date(),
   ): Promise<MyTierView> {
-    const held = await this.tiers.tierOf(wawuUserId, now);
+    const [held, allowance] = await Promise.all([
+      this.tiers.tierOf(wawuUserId, now),
+      this.publishing.of(wawuUserId, now),
+    ]);
     return {
       state: held.state,
       tier:
@@ -62,6 +67,7 @@ export class PlansService {
       activeFrom: held.activeFrom?.toISOString() ?? null,
       activeUntil: held.activeUntil?.toISOString() ?? null,
       productsAllowed: held.productsAllowed,
+      productsUsed: allowance.productsUsed,
       extraProducts: held.extraProducts,
       pointsIncluded: held.pointsIncluded,
       firstVoiceIntroIncluded: held.voiceIntroIncluded,

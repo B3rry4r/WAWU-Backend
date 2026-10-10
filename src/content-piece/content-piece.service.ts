@@ -9,12 +9,7 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
-import {
-  TICK_COLUMNS,
-  TICK_UPLOADS,
-  holdsTick,
-  uploadAllowanceFor,
-} from '../common/creator-allowance';
+import { PublishingGate } from '../plans/publishing-gate.service';
 import { RANKING, type ContentSort } from './ranking';
 import { Prisma } from '../../generated/prisma/client';
 import type { ContentPieceModel as ContentPieceRow } from '../../generated/prisma/models';
@@ -102,6 +97,7 @@ export class ContentPieceService {
     private readonly notifications: NotificationService,
     private readonly storage: StorageService,
     private readonly blockedAccounts: BlockedAccountService,
+    private readonly gate: PublishingGate,
   ) {}
 
   /**
@@ -512,24 +508,24 @@ export class ContentPieceService {
     );
   }
 
+  /**
+   * `inTransaction`, when given, runs inside the publish transaction before
+   * the place is claimed: a draft being published deletes itself there, so a
+   * second tap finds it gone and publishes nothing twice.
+   */
   async create(
     creatorWawuId: string,
     dto: CreateContentDto,
+    inTransaction?: (tx: Prisma.TransactionClient) => Promise<void>,
   ): Promise<ContentPieceResponse> {
-    // No payment gate on uploading (build brief B1). CreatorAccountGuard on
-    // POST /content has already proved this caller is a creator account, which
-    // is the only thing that was ever checked here besides the subscription.
-    //
-    // The cap comes from whether the creator holds a tick now (R-7): 5 without
-    // one, 25 with one. A free piece is allowed as the first upload or any
-    // other, and claims a slot exactly like a paid one (R-8).
-    const tickHeld = holdsTick(
-      await this.prisma.userProfile.findUnique({
-        where: { wawuUserId: creatorWawuId },
-        select: TICK_COLUMNS,
-      }),
-    );
-    const allowance = uploadAllowanceFor(tickHeld);
+    // Publishing needs a tier (R-43, TIER-02), or a verification tick that has
+    // not ended, and a free place for one more product. CreatorAccountGuard on
+    // POST /content has already proved this caller is a creator account.
+    // The gate refuses with 402 `tier_required` or `product_limit_reached`;
+    // the route's interceptor adds the offers. A free piece is allowed as the
+    // first upload or any other, and takes a place exactly like a paid one
+    // (R-8).
+    const allowance = await this.gate.assertRoomForProduct(creatorWawuId);
 
     // `previewAsset` is public by design — it is returned to every caller,
     // including anonymous ones on /content/public/featured. If it points at
@@ -556,6 +552,7 @@ export class ContentPieceService {
     // would let two uploads sent at the same moment both read "2 used" and
     // both be written.
     const created = await this.prisma.$transaction(async (tx) => {
+      if (inTransaction) await inTransaction(tx);
       // A REJECTED or REMOVED piece occupies no slot.
       //
       // POST /admin/content/:id/reject and DELETE /content/:id both give the
@@ -596,23 +593,16 @@ export class ContentPieceService {
       const claimed = await tx.creatorState.updateMany({
         where: {
           wawuUserId: creatorWawuId,
-          slotsUsed: { lt: allowance.total },
+          slotsUsed: { lt: allowance.productsAllowed },
         },
         data: { slotsUsed: { increment: 1 } },
       });
       if (claimed.count === 0) {
         // Only this NEW upload is refused. Pieces already published stay as
-        // they are, even when the account is above the cap (a tick that
-        // lapsed with more than 5 pieces live).
-        throw new ForbiddenException({
-          message: `You have used all ${allowance.total} of your upload slots. Remove an item to free one up.`,
-          reason: {
-            code: 'upload_limit_reached',
-            uploadsAllowed: allowance.total,
-            tickHeld,
-            uploadsWithTick: TICK_UPLOADS,
-          },
-        });
+        // they are, even when the account is above its allowance (a tier or
+        // a tick that ended with more pieces live). Throwing rolls the
+        // transaction back, so a draft deleted above comes back with it.
+        throw await this.gate.limitReachedFor(creatorWawuId);
       }
 
       return tx.contentPiece.create({
@@ -786,6 +776,11 @@ export class ContentPieceService {
         'A live piece cannot be edited. Take it down to change it.',
       );
     }
+    // An edit that carries a file is accepting a file (TIER-02): it needs a
+    // way to publish. It does not ask for room: the piece has its place
+    // already, or gets one when it is sent again (`resubmit`).
+    if (dto.previewAsset !== undefined || dto.fullAsset !== undefined)
+      await this.gate.assertMayUpload(creatorWawuId);
 
     const changes: Prisma.ContentPieceUpdateManyMutationInput = {};
     if (dto.title !== undefined) changes.title = dto.title;
@@ -856,8 +851,9 @@ export class ContentPieceService {
    *
    * A rejection handed the slot back (admin reject), so sending it again
    * claims one, conditionally and in the same transaction as the status flip,
-   * against the same allowance as an upload. At the cap it is refused with
-   * the same `upload_limit_reached` reason as POST /content. Pressing it
+   * against the same allowance as an upload (TIER-02): without a running
+   * tier or a held tick it is refused `tier_required`, and at the limit
+   * `product_limit_reached`, the same two answers as POST /content. Pressing it
    * twice is safe: a piece already `pending` is returned unchanged and no
    * second slot is claimed.
    */
@@ -870,13 +866,7 @@ export class ContentPieceService {
       throw new ConflictException('Only a rejected piece can be sent again.');
     }
 
-    const tickHeld = holdsTick(
-      await this.prisma.userProfile.findUnique({
-        where: { wawuUserId: creatorWawuId },
-        select: TICK_COLUMNS,
-      }),
-    );
-    const allowance = uploadAllowanceFor(tickHeld);
+    const allowance = await this.gate.assertRoomForProduct(creatorWawuId);
 
     await this.prisma.$transaction(async (tx) => {
       const flipped = await tx.contentPiece.updateMany({
@@ -895,21 +885,13 @@ export class ContentPieceService {
       const claimed = await tx.creatorState.updateMany({
         where: {
           wawuUserId: creatorWawuId,
-          slotsUsed: { lt: allowance.total },
+          slotsUsed: { lt: allowance.productsAllowed },
         },
         data: { slotsUsed: { increment: 1 } },
       });
       if (claimed.count === 0) {
         // Throwing rolls the status flip back with it.
-        throw new ForbiddenException({
-          message: `You have used all ${allowance.total} of your upload slots. Remove an item to free one up.`,
-          reason: {
-            code: 'upload_limit_reached',
-            uploadsAllowed: allowance.total,
-            tickHeld,
-            uploadsWithTick: TICK_UPLOADS,
-          },
-        });
+        throw await this.gate.limitReachedFor(creatorWawuId);
       }
     });
     return this.getMyPiece(id, creatorWawuId);

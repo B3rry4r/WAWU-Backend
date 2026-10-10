@@ -5,16 +5,24 @@ import { MeTierController } from './me-tier.controller';
 import { loadPlansConfig, PLANS_CONFIG } from './plans-config';
 import { PlansController } from './plans.controller';
 import { PlansService } from './plans.service';
+import { PublishingAllowanceService } from './publishing-allowance.service';
+import { PublishingGate } from './publishing-gate.service';
+import { PublishingOffersInterceptor } from './publishing-offers.interceptor';
 
 /**
  * The maker plan (TIER-01, R-43): its figures from `plans.config.json`,
  * checked at boot (a bad file stops the server naming the field), a
  * person's billing currency, and the one reader of their tier.
  *
- * Exported for the tasks that build on it: the publishing gate (TIER-02)
- * asks MakerTierService; the purchases (TIER-03, TIER-04, POINTS-02) price
- * from PLANS_CONFIG with `priceIn` and fix the currency with
- * BillingCurrencyService.fixAtFirstPurchase.
+ * The publishing gate (TIER-02): `PublishingAllowanceService` says what a
+ * person may publish and has used, `PublishingGate` refuses with a 402 when
+ * they may not, and `PublishingOffersInterceptor` (on the routes that carry
+ * `@GatesPublishing()`) adds the offers to that refusal.
+ *
+ * Exported for the tasks that build on it: the gate and the places that show
+ * what a person may publish read the allowance; the purchases (TIER-03,
+ * TIER-04, POINTS-02) price from PLANS_CONFIG with `priceIn` and fix the
+ * currency with BillingCurrencyService.fixAtFirstPurchase.
  *
  * PrismaService comes from the global PrismaModule, as for every module.
  */
@@ -25,7 +33,18 @@ import { PlansService } from './plans.service';
     BillingCurrencyService,
     MakerTierService,
     PlansService,
+    PublishingAllowanceService,
+    PublishingGate,
+    PublishingOffersInterceptor,
   ],
-  exports: [PLANS_CONFIG, BillingCurrencyService, MakerTierService],
+  exports: [
+    PLANS_CONFIG,
+    BillingCurrencyService,
+    MakerTierService,
+    PlansService,
+    PublishingAllowanceService,
+    PublishingGate,
+    PublishingOffersInterceptor,
+  ],
 })
 export class PlansModule {}

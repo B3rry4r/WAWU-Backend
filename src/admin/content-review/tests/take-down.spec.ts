@@ -106,10 +106,15 @@ function buildService(seed: ContentRow) {
     ),
   };
 
+  // The creator context reads what the publishing gate allows (TIER-02); this
+  // spec is about the take-down, so nobody is allowed anything.
+  const publishing = { ofMany: () => Promise.resolve(new Map()) };
+
   const service = new AdminContentReviewService(
     prisma as never,
     notifications as never,
     storage as never,
+    publishing as never,
   );
   return { service, content, creatorStates, reviews };
 }

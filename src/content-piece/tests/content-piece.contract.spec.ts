@@ -130,6 +130,28 @@ describe('ContentPiece (contract)', () => {
 
     prisma = moduleRef.get(PrismaService);
 
+    // TIER-02 (R-43): publishing needs a running tier. The seeded creator
+    // holds one for this suite, so what it checks (create, edit rules, the
+    // unlock flow) is about the piece and not about the tier; the gate has
+    // its own suite (plans/tests/publishing-gate.contract.spec.ts). Removed
+    // in afterAll.
+    await prisma.makerTier.upsert({
+      where: { wawuUserId: USER_CREATOR_BASIC },
+      create: {
+        wawuUserId: USER_CREATOR_BASIC,
+        tierId: 'content-suite',
+        activeFrom: new Date(Date.now() - 86_400_000),
+        activeUntil: new Date(Date.now() + 30 * 86_400_000),
+        productsIncluded: 25,
+        pointsIncluded: 0,
+      },
+      update: {
+        activeUntil: new Date(Date.now() + 30 * 86_400_000),
+        productsIncluded: 25,
+        extraProducts: 0,
+      },
+    });
+
     const state = await prisma.creatorState.findUnique({
       where: { wawuUserId: USER_CREATOR_BASIC },
     });
@@ -144,6 +166,9 @@ describe('ContentPiece (contract)', () => {
   }, 30000);
 
   afterAll(async () => {
+    await prisma?.makerTier.deleteMany({
+      where: { wawuUserId: USER_CREATOR_BASIC },
+    });
     // POST /content and /unlock tests create real ContentPiece rows
     // (titled 'Contract Test Upload' / 'Unlock Flow Fixture') that are not
     // in seed.ts's known-id set -- delete them so other suites sharing

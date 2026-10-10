@@ -145,6 +145,9 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'PersonBilling', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'MakerTier', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'EventPass', column: 'wawuUserId', disposition: 'OWNED' },
+  // A product this person was still drafting (TIER-02): its details, no file.
+  // It exists only because this account does and is shown to nobody else.
+  { model: 'ProductDraft', column: 'wawuUserId', disposition: 'OWNED' },
   // An event registration this account claimed in the app (JOIN-01; claimed by
   // JOIN-03): its name, phone, email and the payment that bought the plan. It
   // names this account only after the claim, so it goes with the claimer. An

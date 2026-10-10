@@ -7,7 +7,7 @@ import {
 import { NotificationService } from '../../notification/notification.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { objectKeyFrom, StorageService } from '../../storage/storage.service';
-import { holdsTick, uploadAllowanceFor } from '../../common/creator-allowance';
+import { PublishingAllowanceService } from '../../plans/publishing-allowance.service';
 import type { Paginated } from '../../common/interceptors/response.interceptor';
 import type { ContentPieceModel } from '../../../generated/prisma/models';
 import type { AdminUserView } from '../auth/admin-user-view.type';
@@ -57,6 +57,7 @@ export class AdminContentReviewService {
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationService,
     private readonly storage: StorageService,
+    private readonly publishing: PublishingAllowanceService,
   ) {}
 
   /**
@@ -418,8 +419,8 @@ export class AdminContentReviewService {
    * per-row lookups.
    *
    * Every value is read from the row the app itself reads. `slotsTotal` is
-   * derived with the shared `uploadAllowanceFor()` helper, exactly as
-   * CreatorStateService does, and `kycStatus` reproduces that service's
+   * what the publishing gate allows (TIER-02), read from the same
+   * PublishingAllowanceService as CreatorStateService, and `kycStatus` reproduces that service's
    * `not_started` synthesis (protected-surface hazard H-5) — the reviewer must
    * see the same word the creator sees on their own screen, not a second
    * definition of it. Nothing here is written back.
@@ -430,7 +431,7 @@ export class AdminContentReviewService {
     const ids = [...new Set(wawuUserIds)];
     if (ids.length === 0) return new Map();
 
-    const [profiles, states, submitted] = await Promise.all([
+    const [profiles, states, submitted, allowances] = await Promise.all([
       this.prisma.userProfile.findMany({ where: { wawuUserId: { in: ids } } }),
       this.prisma.creatorState.findMany({ where: { wawuUserId: { in: ids } } }),
       this.prisma.kycSubmission.findMany({
@@ -438,6 +439,7 @@ export class AdminContentReviewService {
         select: { wawuUserId: true },
         distinct: ['wawuUserId'],
       }),
+      this.publishing.ofMany(ids),
     ]);
 
     const profileById = new Map(profiles.map((p) => [p.wawuUserId, p]));
@@ -461,7 +463,7 @@ export class AdminContentReviewService {
               : null,
             slotsUsed: state?.slotsUsed ?? null,
             slotsTotal: state
-              ? uploadAllowanceFor(holdsTick(profile)).total
+              ? (allowances.get(wawuUserId)?.productsAllowed ?? null)
               : null,
           },
         ];
