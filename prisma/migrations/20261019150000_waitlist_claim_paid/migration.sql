@@ -13,7 +13,7 @@
 --
 -- Rollback (also in rollback.sql):
 --   ALTER TABLE "WaitlistRegistration" DROP CONSTRAINT "WaitlistRegistration_claim_paid_check";
---   DELETE FROM "_prisma_migrations" WHERE migration_name = '20261019130000_waitlist_claim_paid';
+--   DELETE FROM "_prisma_migrations" WHERE migration_name = '20261019150000_waitlist_claim_paid';
 
 ALTER TABLE "WaitlistRegistration"
   ADD CONSTRAINT "WaitlistRegistration_claim_paid_check"
