@@ -35,6 +35,32 @@ const orMissing = ({ value }: { value: unknown }) =>
 const trimOrMissing = ({ value }: { value: unknown }) =>
   value === null ? undefined : typeof value === 'string' ? value.trim() : value;
 
+/**
+ * The words a client that wrote out a missing value (`String(null)`, a
+ * template with nothing in it) sends in place of the value: refused like an
+ * empty field in every required text field (NUV-02 round 3, N9), the same
+ * 400 and the same sentence. Any case, once trimmed.
+ */
+export function isStringifiedNull(value: unknown): boolean {
+  return (
+    typeof value === 'string' && /^(?:null|undefined)$/i.test(value.trim())
+  );
+}
+
+/** The pattern prefix that makes a text field refuse those two words. */
+const NOT_A_WORD_FOR_NOTHING = '(?!(?:null|undefined)$)';
+
+/**
+ * A stringified missing value in an OPTIONAL text field is the same as
+ * leaving it out (as a JSON `null` is), so nothing reaches the provider.
+ */
+const trimOrMissingText = ({ value }: { value: unknown }) =>
+  value === null || isStringifiedNull(value)
+    ? undefined
+    : typeof value === 'string'
+      ? value.trim()
+      : value;
+
 /** A real calendar date, `YYYY-MM-DD`, from 1900 up to today. */
 export function isBirthDate(value: unknown): boolean {
   if (typeof value !== 'string') return false;
@@ -52,10 +78,34 @@ export function isBirthDate(value: unknown): boolean {
   return y >= 1900 && date.getTime() <= Date.now();
 }
 
-const NAME = /^\p{L}[\p{L}\p{M}' .-]{0,49}$/u;
+const NAME = new RegExp(
+  `^${NOT_A_WORD_FOR_NOTHING}\\p{L}[\\p{L}\\p{M}' .-]{0,49}$`,
+  'iu',
+);
 
 /** A town, a state or an address line: 1 to 100 characters with a letter in it. */
-const PLACE = /^(?=.*\p{L})[^\p{Cc}<>]{1,100}$/u;
+const PLACE = new RegExp(
+  `^${NOT_A_WORD_FOR_NOTHING}(?=.*\\p{L})[^\\p{Cc}<>]{1,100}$`,
+  'iu',
+);
+
+/** An address line: 5 to 200 characters with a letter in it. */
+const ADDRESS_LINE = new RegExp(
+  `^${NOT_A_WORD_FOR_NOTHING}(?=.*\\p{L})[^\\p{Cc}<>]{5,200}$`,
+  'iu',
+);
+
+/** A postal code: 1 to 20 letters, digits, spaces or dashes. */
+const POSTAL_CODE = new RegExp(
+  `^${NOT_A_WORD_FOR_NOTHING}[A-Za-z0-9][A-Za-z0-9 -]{0,19}$`,
+  'i',
+);
+
+/** An ID number as printed: 5 to 30 letters, digits or dashes. */
+const ID_NUMBER = new RegExp(
+  `^${NOT_A_WORD_FOR_NOTHING}[A-Za-z0-9][A-Za-z0-9-]{4,29}$`,
+  'i',
+);
 
 /** NUV-02: what a reviewing provider takes (Nuvion's `gender` is m or f). */
 export const GENDERS = ['male', 'female'] as const;
@@ -168,7 +218,7 @@ export class OpenNairaWalletDto {
   @Transform(trim)
   @IsString()
   @MaxLength(200, { message: 'address must be 200 characters or fewer' })
-  @Matches(/^(?=.*\p{L})[^\p{Cc}<>]{5,200}$/u, {
+  @Matches(ADDRESS_LINE, {
     message: 'address must be 5 to 200 characters and include a letter',
   })
   address!: string;
@@ -184,7 +234,7 @@ export class OpenNairaWalletDto {
   /** A middle name, when the person has one. */
   @ApiPropertyOptional()
   @IsOptional()
-  @Transform(trimOrMissing)
+  @Transform(trimOrMissingText)
   @IsString()
   @Matches(NAME, {
     message:
@@ -201,7 +251,7 @@ export class OpenNairaWalletDto {
   /** A second address line (flat, estate), when there is one. */
   @ApiPropertyOptional({ maxLength: 100 })
   @IsOptional()
-  @Transform(trimOrMissing)
+  @Transform(trimOrMissingText)
   @IsString()
   @Matches(PLACE, {
     message: 'addressLine2 must be 1 to 100 characters and include a letter',
@@ -233,7 +283,7 @@ export class OpenNairaWalletDto {
   @IsOptional()
   @Transform(trimOrMissing)
   @IsString()
-  @Matches(/^[A-Za-z0-9][A-Za-z0-9 -]{0,19}$/, {
+  @Matches(POSTAL_CODE, {
     message: 'postalCode must be 1 to 20 letters, digits, spaces or dashes',
   })
   postalCode?: string;
@@ -253,7 +303,7 @@ export class OpenNairaWalletDto {
   @IsOptional()
   @Transform(orMissing)
   @IsString()
-  @Matches(/^[A-Za-z0-9][A-Za-z0-9-]{4,29}$/, {
+  @Matches(ID_NUMBER, {
     message: 'idNumber must be 5 to 30 letters, digits or dashes',
   })
   idNumber?: string;

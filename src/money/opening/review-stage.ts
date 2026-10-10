@@ -17,6 +17,13 @@ import type {
  * entity may be submitted again), `failed` and `suspended`.
  */
 
+/**
+ * The stage the provider's own word gives. `expired` is not one of them: it
+ * is our marking of an opening left idle (the opening's state), which
+ * shadows the provider's word in the view.
+ */
+export type EntityStage = Exclude<WalletReviewStage, 'expired'>;
+
 /** What the stage is read from: NuvionEntity's columns. */
 export interface ReviewRecord {
   /** Nuvion's own word for the review (`NuvionEntity.status`). */
@@ -38,7 +45,7 @@ export interface ReviewRecord {
  * documents (NUV-03). A word we do not know reads `checking`: the person
  * waits and nothing is sent, never "approved" or "rejected" on a guess.
  */
-export function reviewStageOf(r: ReviewRecord): WalletReviewStage {
+export function reviewStageOf(r: ReviewRecord): EntityStage {
   switch (r.status.trim().toLowerCase()) {
     case 'incomplete':
       return 'needs_documents';
@@ -71,7 +78,7 @@ export function reviewStageOf(r: ReviewRecord): WalletReviewStage {
  *   `409 wallet_not_open`, the existing no-wallet answer.
  */
 export function openingStateForStage(
-  stage: WalletReviewStage,
+  stage: EntityStage,
 ): 'review' | 'open' | 'stopped' {
   switch (stage) {
     case 'needs_documents':
@@ -152,6 +159,10 @@ export const REVIEW_REASONS: Record<
     message: 'We could not open your wallet.',
     fix: 'Contact support and we will help.',
   },
+  review_expired: {
+    message: 'We closed your wallet application because it was not finished.',
+    fix: 'Send your details again to start a new one.',
+  },
 };
 
 function reason(code: WalletReviewReasonView['code']): WalletReviewReasonView {
@@ -193,11 +204,39 @@ export function reviewViewOf(r: ReviewRecord): WalletReviewView {
     stage,
     reasons: reviewReasonsOf(r),
     canResubmit: stage === 'rejected',
+    canResubmitAt: null,
     decidedAt:
       stage === 'approved' || stage === 'rejected' || stage === 'stopped'
         ? (r.decidedAt?.toISOString() ?? null)
         : null,
   };
+}
+
+/**
+ * The review of an opening marked expired (idle too long, or released by
+ * support): its BVN was let go and the person starts again (round 3, N3).
+ */
+export function expiredViewOf(expiredAt: Date | null): WalletReviewView {
+  return {
+    stage: 'expired',
+    reasons: [reason('review_expired')],
+    canResubmit: true,
+    canResubmitAt: null,
+    decidedAt: expiredAt?.toISOString() ?? null,
+  };
+}
+
+/**
+ * A view whose tries are used up says so (round 3, N6): it never offers
+ * `canResubmit` while the server would answer 429; `opensAt` is when the
+ * tries open again.
+ */
+export function withTriesUsedUp(
+  view: WalletReviewView,
+  opensAt: Date | null,
+): WalletReviewView {
+  if (opensAt === null || !view.canResubmit) return view;
+  return { ...view, canResubmit: false, canResubmitAt: opensAt.toISOString() };
 }
 
 /** Nuvion's words that end a review (the time is kept as `decidedAt`). */
@@ -211,43 +250,91 @@ export function isDecision(status: string): boolean {
 export interface DecisionHeld {
   status: string;
   decidedAt: Date | null;
-  correctedAt: Date | null;
-  /** Nuvion's own `updated` time as last recorded (its clock). */
-  entityUpdatedAt: Date | null;
+  /** When the person last submitted for review (a correction, a resubmit). */
+  submittedAt: Date | null;
+  /** The check words as last recorded. */
+  bvnStatus: string | null;
+  ninStatus: string | null;
+  documentStatus: string | null;
+  addressProofStatus: string | null;
+  identificationStatus: string | null;
+}
+
+/** What a re-read entity shows: its review word and each check's word. */
+export interface DecisionRead {
+  status: string;
+  bvnStatus: string | null;
+  ninStatus: string | null;
+  documentStatus: string | null;
+  addressProofStatus: string | null;
+  identificationStatus: string | null;
+}
+
+/** A check word that is still waiting for a verdict. */
+function waiting(word: string | null): boolean {
+  const w = (word ?? '').trim().toLowerCase();
+  return w === '' || w === 'pending' || w === 'incomplete';
+}
+
+/**
+ * Whether any check came to a verdict that differs from the one recorded: a
+ * word that is not "waiting" and not what was held. A check going back to
+ * `pending` (a new document uploaded) is not a verdict.
+ */
+export function verdictMoved(held: DecisionHeld, read: DecisionRead): boolean {
+  const pairs: Array<[string | null, string | null]> = [
+    [held.bvnStatus, read.bvnStatus],
+    [held.ninStatus, read.ninStatus],
+    [held.documentStatus, read.documentStatus],
+    [held.addressProofStatus, read.addressProofStatus],
+    [held.identificationStatus, read.identificationStatus],
+  ];
+  return pairs.some(
+    ([was, now]) =>
+      !waiting(now) &&
+      (now ?? '').trim().toLowerCase() !== (was ?? '').trim().toLowerCase(),
+  );
 }
 
 /**
  * Whether a re-read entity shows a decision we have not recorded (NUV-02
- * round 2, D3): `read.status` must be a decision, and either none is held,
- * or the word changed, or the same word came after the person's corrected
- * details and Nuvion's own update time has moved past the one recorded with
- * the correction (a decision read with no later time is the echo of the
- * correction itself, which leaves the word as it was). When Nuvion gives no
- * update time, a decision after a correction is taken as new. The same
- * decision read again with no correction between is not new: nothing
- * changes and nobody is told twice.
+ * round 3, N4). `read.status` must be a decision, and then:
+ *
+ * - none is held, or the word changed (it went through `pending`, or from
+ *   one decision to another): new;
+ * - the same word again with no submission by the person since the last
+ *   decision (a replay, a delivery that only bumped Nuvion's `updated`):
+ *   the same decision, nothing changes and nobody is told twice;
+ * - the same word again after the person submitted (corrected details, a
+ *   resubmit): new when Nuvion's check words moved to a verdict since they
+ *   were recorded. With every word as it was, nothing says a review
+ *   happened: the entity is only echoing the submission itself (Nuvion's
+ *   `entities.updated` fires for our own PATCH), so it is not new.
+ *
+ * Nuvion's own `updated` time is not read: it moves for things that are not
+ * decisions and may not move for one that is.
  */
 export function isNewDecision(
   held: DecisionHeld | null,
-  read: { status: string; updated: number | null },
+  read: DecisionRead,
 ): boolean {
   if (!isDecision(read.status)) return false;
   if (held === null || held.decidedAt === null) return true;
   if (held.status.trim().toLowerCase() !== read.status.trim().toLowerCase()) {
     return true;
   }
-  if (held.correctedAt === null || held.correctedAt <= held.decidedAt) {
+  if (held.submittedAt === null || held.submittedAt <= held.decidedAt) {
     return false;
   }
-  if (read.updated === null || held.entityUpdatedAt === null) return true;
-  return read.updated > held.entityUpdatedAt.getTime();
+  return verdictMoved(held, read);
 }
 
 /** What a decision tells the person (the notification), from our own words only. */
 export type DecisionNotice =
   | { outcome: 'approved' }
   | { outcome: 'rejected'; fixes: string[] }
-  | { outcome: 'stopped' };
+  | { outcome: 'stopped' }
+  | { outcome: 'expired' };
 
 /** The notice for the stage a record is at; null while the review goes on. */
 export function noticeOf(r: ReviewRecord): DecisionNotice | null {

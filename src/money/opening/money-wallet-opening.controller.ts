@@ -5,12 +5,14 @@ import {
   Header,
   HttpCode,
   Post,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
 import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
+import { openingAddressOf } from '../identity/identity-config';
 import { BuiltBy, MoneyErrors } from '../money-contract';
 import type { WalletView } from '../money-view.type';
 import { OpenNairaWalletDto } from './dto/open-wallet.dto';
@@ -40,8 +42,11 @@ export class MoneyWalletController {
   @Get('wallet')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('MONEY-12')
-  wallet(@CurrentUser() user: WawuJwtClaims): Promise<WalletView> {
-    return this.opening.view(user.sub);
+  wallet(
+    @CurrentUser() user: WawuJwtClaims,
+    @Req() req: Record<string, unknown>,
+  ): Promise<WalletView> {
+    return this.opening.view(user.sub, openingAddressOf(req));
   }
 
   /**
@@ -73,11 +78,20 @@ export class MoneyWalletController {
     'phone_not_nigerian',
     'identity_under_review',
     'identity_checks_exhausted',
+    // NUV-02 round 3: the tries from one address in an hour.
+    'open_address_limited',
   )
   open(
     @CurrentUser() user: WawuJwtClaims,
     @Body() body: OpenNairaWalletDto,
+    @Req() req: Record<string, unknown>,
   ): Promise<WalletView> {
-    return this.opening.open(user.sub, user.email, body, user.phone);
+    return this.opening.open(
+      user.sub,
+      user.email,
+      body,
+      user.phone,
+      openingAddressOf(req),
+    );
   }
 }

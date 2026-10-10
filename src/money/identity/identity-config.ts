@@ -16,6 +16,10 @@ export const IDENTITY_CONFIG_KEYS = {
   hashKey: 'IDENTITY_HASH_KEY',
   checksPerDay: 'BVN_CHECKS_PER_DAY',
   selfieChecksPerDay: 'SELFIE_CHECKS_PER_DAY',
+  // NUV-02 round 3: a Nuvion opening left unfinished lets go of its BVN
+  // after this many days, and tries are limited per address.
+  holdDays: 'IDENTITY_HOLD_DAYS',
+  opensPerAddressPerHour: 'OPEN_ATTEMPTS_PER_ADDRESS_PER_HOUR',
 } as const;
 
 /** A key derived from IDENTITY_HASH_KEY (`deriveKey`): 32 bytes, AES-256. */
@@ -42,6 +46,31 @@ export const DEFAULT_BVN_CHECKS_PER_DAY = 3;
 
 /** The window the daily limit counts over: a rolling 24 hours. */
 export const BVN_CHECK_WINDOW_MS = 24 * 60 * 60_000;
+
+/**
+ * PROVISIONAL(IDENTITY-HOLD-DAYS, owner=YOU, why=the lead set 14 days on 9 Oct 2026 as a default; the owner has not named how long an unfinished opening may hold a BVN)
+ *
+ * Under a provider that reviews the person (Nuvion): an opening that sits at
+ * "documents needed", or was refused only for its documents, with nothing
+ * from the person for this many days is marked expired. Its BVN is let go,
+ * the person is told once and starts again; nothing is deleted at Nuvion
+ * (NUV-02 round 3, N3). Overridable with IDENTITY_HOLD_DAYS.
+ */
+export const DEFAULT_IDENTITY_HOLD_DAYS = 14;
+
+/**
+ * PROVISIONAL(OPEN-ATTEMPTS-PER-ADDRESS, owner=YOU, why=the lead set 10 an hour on 9 Oct 2026 as a default; no ruling names a per-address limit for opening a wallet)
+ *
+ * Opening tries (the ones that name a BVN or NIN and count against the
+ * day's tries) one address may make in an hour, across every account, so a
+ * squatter cannot sweep BVNs from one place (NUV-02 round 3). A plain 429
+ * with its own reason code. Overridable with
+ * OPEN_ATTEMPTS_PER_ADDRESS_PER_HOUR.
+ */
+export const DEFAULT_OPEN_ATTEMPTS_PER_ADDRESS_PER_HOUR = 10;
+
+/** The window the per-address limit counts over: a rolling hour. */
+export const OPEN_ADDRESS_WINDOW_MS = 60 * 60_000;
 
 /**
  * PROVISIONAL(SELFIE-CHECKS-PER-DAY, owner=YOU, why=Fintava charges for every selfie match, even a failed one; the ticket and fees.md name 3 a day, no ruling confirms it)
@@ -109,6 +138,19 @@ export function bvnCheckTracker(request: Record<string, unknown>): string {
   return last === '' ? peer : last;
 }
 
+/**
+ * The client address an opening try is counted under (NUV-02 round 3), or
+ * null when there is none to count: a call made on the server itself with no
+ * proxy header (a loopback peer that names no client). Behind nginx the
+ * address is the real caller's (`bvnCheckTracker`).
+ */
+export function openingAddressOf(
+  request: Record<string, unknown>,
+): string | null {
+  const address = bvnCheckTracker(request);
+  return address === '' || LOOPBACK.has(address) ? null : address;
+}
+
 /** A set but unusable identity setting. Stops the app at boot. */
 export class IdentityConfigError extends Error {
   constructor(message: string) {
@@ -140,6 +182,32 @@ export function bvnChecksPerDay(raw: string | undefined): number {
     IDENTITY_CONFIG_KEYS.checksPerDay,
     DEFAULT_BVN_CHECKS_PER_DAY,
   );
+}
+
+/** Reads IDENTITY_HOLD_DAYS (1 to 365); unset means the provisional default. */
+export function identityHoldDays(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return DEFAULT_IDENTITY_HOLD_DAYS;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 365) {
+    throw new IdentityConfigError(
+      `${IDENTITY_CONFIG_KEYS.holdDays} must be a whole number from 1 to 365.`,
+    );
+  }
+  return n;
+}
+
+/** Reads OPEN_ATTEMPTS_PER_ADDRESS_PER_HOUR (1 to 100000); unset means the default. */
+export function openAttemptsPerAddressPerHour(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') {
+    return DEFAULT_OPEN_ATTEMPTS_PER_ADDRESS_PER_HOUR;
+  }
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 100_000) {
+    throw new IdentityConfigError(
+      `${IDENTITY_CONFIG_KEYS.opensPerAddressPerHour} must be a whole number from 1 to 100000.`,
+    );
+  }
+  return n;
 }
 
 /** Reads SELFIE_CHECKS_PER_DAY; unset means the provisional default. */
@@ -187,8 +255,20 @@ export async function reserveDailyAttempt(
 
   await ledger.remove(id);
   const oldest = await ledger.oldestSince(wawuUserId, since);
-  const freesAt = (oldest?.getTime() ?? Date.now()) + BVN_CHECK_WINDOW_MS;
-  throw exhausted(Math.max(1, Math.ceil((freesAt - Date.now()) / 1000)));
+  throw exhausted(secondsUntilFree(oldest));
+}
+
+/**
+ * Seconds until the daily window frees a place, from the oldest row still
+ * inside it (at least 1). The one formula, so the 429 a reservation throws
+ * and the time a view shows (NUV-02 round 3, N6) are the same number.
+ */
+export function secondsUntilFree(
+  oldest: Date | null,
+  windowMs: number = BVN_CHECK_WINDOW_MS,
+): number {
+  const freesAt = (oldest?.getTime() ?? Date.now()) + windowMs;
+  return Math.max(1, Math.ceil((freesAt - Date.now()) / 1000));
 }
 
 /**
@@ -205,6 +285,10 @@ export class IdentityHasher {
   readonly checksPerDay: number;
   /** Selfie matches per person per 24 hours (KYC-02). */
   readonly selfieChecksPerDay: number;
+  /** Days an unfinished Nuvion opening holds its BVN (NUV-02 round 3). */
+  readonly holdDays: number;
+  /** Opening tries one address may make an hour (NUV-02 round 3). */
+  readonly opensPerAddressPerHour: number;
 
   constructor(config: ConfigService) {
     const raw = (config.get<string>(IDENTITY_CONFIG_KEYS.hashKey) ?? '').trim();
@@ -219,6 +303,12 @@ export class IdentityHasher {
     );
     this.selfieChecksPerDay = selfieChecksPerDay(
       config.get<string>(IDENTITY_CONFIG_KEYS.selfieChecksPerDay),
+    );
+    this.holdDays = identityHoldDays(
+      config.get<string>(IDENTITY_CONFIG_KEYS.holdDays),
+    );
+    this.opensPerAddressPerHour = openAttemptsPerAddressPerHour(
+      config.get<string>(IDENTITY_CONFIG_KEYS.opensPerAddressPerHour),
     );
     if (raw === '') {
       this.logger.warn(

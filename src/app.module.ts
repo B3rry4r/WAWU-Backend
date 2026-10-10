@@ -10,6 +10,7 @@ import { AdminProfessionalReviewModule } from './admin/professional-review/admin
 import { AdminPaymentsModule } from './admin/payments/admin-payments.module';
 import { AdminCreatorsModule } from './admin/creators/admin-creators.module';
 import { AdminFinanceModule } from './admin/finance/admin-finance.module';
+import { AdminIdentityHoldsModule } from './admin/identity-holds/admin-identity-holds.module';
 import { AdminEventsModule } from './admin/events/admin-events.module';
 import { AdminNotificationsModule } from './admin/notifications/admin-notifications.module';
 import { AdminFeaturedCreatorsModule } from './admin/featured-creators/admin-featured-creators.module';
@@ -246,6 +247,10 @@ import { AdsEventsModule } from './ads/ads-events.module';
     // dedupes, so the load-bearing controller order below is untouched --
     // exactly as it already is for AdminPaymentsModule's own imports.
     AdminFinanceModule,
+    // Support letting go of one person's BVN hold (NUV-02 round 3):
+    // `admin/identity-holds`, a first segment after `admin` that nothing else
+    // declares, so it can neither shadow nor be shadowed (SHARED-CHANGES row).
+    AdminIdentityHoldsModule,
     // Admin event moderation, for the Events feature reinstated 22 Aug 2026 by
     // product-owner decision (see src/event/ for the app-facing half and
     // prisma/schema.prisma for the three new tables). Registered alongside the

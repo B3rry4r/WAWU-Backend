@@ -18,17 +18,34 @@ import {
 import type { IdentityHasher } from '../identity/identity-config';
 import { MoneyError } from '../money-error';
 import type { WalletReviewView } from '../money-view.type';
-import { alignClaim, CLAIM_LOST, heldBvnHash } from './bvn-claim';
-import type { OpenNairaWalletDto } from './dto/open-wallet.dto';
-import { REVIEW_REQUIRED_FIELDS } from './dto/open-wallet.dto';
-import { OpeningAttempts } from './opening-attempts';
 import {
+  alignClaim,
+  CLAIM_LOST,
+  EXPIRED_BY_SUPPORT,
+  EXPIRED_STATE,
+  heldBvnHash,
+  isReleasedBvnHash,
+} from './bvn-claim';
+import type { OpenNairaWalletDto } from './dto/open-wallet.dto';
+import {
+  isStringifiedNull,
+  REVIEW_REQUIRED_FIELDS,
+} from './dto/open-wallet.dto';
+import {
+  expireIdleOpenings,
+  expireOpening,
+  HOLD_SWEEP_LOCK,
+} from './identity-hold';
+import { addressKeyOf, OpeningAttempts } from './opening-attempts';
+import {
+  expiredViewOf,
   isNewDecision,
   numbersFailed,
   openingStateForStage,
   type ReviewRecord,
   reviewStageOf,
   reviewViewOf,
+  withTriesUsedUp,
 } from './review-stage';
 
 /** An opening row as the reviewed path reads it. */
@@ -88,10 +105,13 @@ const ENTITY_SELECT = {
   decidedAt: true,
   correctedAt: true,
   entityUpdatedAt: true,
+  submittedAt: true,
+  holdExpiredAt: true,
   bvnStatus: true,
   ninStatus: true,
   documentStatus: true,
   addressProofStatus: true,
+  identificationStatus: true,
   rejectionReasons: true,
 } as const;
 
@@ -99,7 +119,25 @@ type EntityRow = ReviewRecord & {
   wawuUserId: string;
   entityId: string | null;
   entityUpdatedAt: Date | null;
+  submittedAt: Date | null;
+  holdExpiredAt: Date | null;
+  identificationStatus: string | null;
 };
+
+/** What one request sends: the numbers, the account's contact, the details. */
+interface Send {
+  bvn: string;
+  nin: string;
+  email: string;
+  phone: string;
+  details: Omit<
+    ProviderReviewDetails,
+    'customerId' | 'numbersAgain' | 'lostAttemptAt' | 'beforeCreate'
+  >;
+  input: OpenNairaWalletDto;
+  /** The keyed hash of the caller's address, or null when there is none. */
+  addressKey: string | null;
+}
 
 /** The moment before a create goes out found the claim no longer ours. */
 class ClaimMoved extends Error {}
@@ -168,7 +206,11 @@ export class ReviewedOpening {
   private readonly attempts: OpeningAttempts;
 
   constructor(private readonly host: ReviewedOpeningHost) {
-    this.attempts = new OpeningAttempts(host.prisma, host.hasher.checksPerDay);
+    this.attempts = new OpeningAttempts(
+      host.prisma,
+      host.hasher.checksPerDay,
+      host.hasher.opensPerAddressPerHour,
+    );
   }
 
   private get prisma(): PrismaService {
@@ -178,26 +220,45 @@ export class ReviewedOpening {
   /**
    * The review GET /money/wallet tells: null when nothing was sent yet. The
    * person's opening row (state and failure) is the caller's, already read.
+   * While the day's tries are used up it never offers `canResubmit` (N6).
    */
   async reviewOf(
     wawuUserId: string,
     opening: { state: string; failure: string | null } | null,
+    address: string | null = null,
   ): Promise<WalletReviewView | null> {
     const entity = await this.entity(wawuUserId);
     if (!entity?.entityId) return null;
-    // Stopped because the BVN is now another account's: told as the stop
-    // it is (contact support), whatever Nuvion's word says.
-    if (opening?.state === 'stopped' && opening.failure === CLAIM_LOST) {
-      return reviewViewOf({ ...entity, status: 'suspended' });
+    let view: WalletReviewView;
+    if (opening?.state === EXPIRED_STATE) {
+      // Left idle too long, or released by support: start again.
+      view = expiredViewOf(entity.holdExpiredAt);
+    } else if (opening?.state === 'stopped' && opening.failure === CLAIM_LOST) {
+      // Stopped because the BVN is now another account's: told as the stop
+      // it is (contact support), whatever Nuvion's word says.
+      view = reviewViewOf({ ...entity, status: 'suspended' });
+    } else {
+      view = reviewViewOf(entity);
     }
-    return reviewViewOf(entity);
+    if (!view.canResubmit) return view;
+    return withTriesUsedUp(
+      view,
+      await this.attempts.opensAgainAt(
+        wawuUserId,
+        addressKeyOf(this.host.hasher, address),
+      ),
+    );
   }
 
   // -------------------------------------------------------------------------
   // POST /money/wallet/open
   // -------------------------------------------------------------------------
 
-  /** Answers nothing: the caller answers the wallet view afterwards. */
+  /**
+   * Answers nothing: the caller answers the wallet view afterwards.
+   * `address` is the caller's (the proxy's client address), counted against
+   * the per-address limit; null when there is none.
+   */
   async open(
     wawuUserId: string,
     claims: {
@@ -205,6 +266,7 @@ export class ReviewedOpening {
       phone: string | null | undefined;
     },
     input: OpenNairaWalletDto,
+    address: string | null = null,
   ): Promise<void> {
     const host = this.host;
     if (!host.hasher.configured || !host.provider.configured) {
@@ -221,13 +283,14 @@ export class ReviewedOpening {
       throw new MoneyError('phone_not_nigerian', PHONE_NOT_NIGERIAN_FOR_REVIEW);
     }
     const phone = `+234${local.slice(1)}`;
-    const send = {
+    const send: Send = {
       bvn: input.bvn!,
       nin: input.nin!,
       email: mail,
       phone,
       details,
       input,
+      addressKey: addressKeyOf(host.hasher, address),
     };
 
     let row = await host.opening(wawuUserId);
@@ -244,7 +307,17 @@ export class ReviewedOpening {
         case 'review': {
           const entity = await this.entity(wawuUserId);
           if (entity?.entityId && reviewStageOf(entity) === 'rejected') {
-            await this.correct(row, entity, send);
+            await this.correct(row, entity, send, 'review');
+          }
+          return;
+        }
+        case EXPIRED_STATE: {
+          // Left idle too long, or released by support: the person starts
+          // again. The same entity at the provider is corrected with the
+          // details sent now, BVN and NIN included (nothing was deleted).
+          const entity = await this.entity(wawuUserId);
+          if (entity?.entityId) {
+            await this.correct(row, entity, send, EXPIRED_STATE);
           }
           return;
         }
@@ -257,19 +330,19 @@ export class ReviewedOpening {
           ) {
             return;
           }
-          await this.attempts.assertLeft(wawuUserId);
+          await this.attempts.assertLeft(wawuUserId, send.addressKey);
           const attempt = await this.claim(wawuUserId, row, 'unknown', send);
           if (attempt === null) return;
-          await this.attempts.spend(wawuUserId, false);
+          await this.attempts.spend(wawuUserId, false, send.addressKey);
           await this.create(wawuUserId, attempt, send, row.attemptStartedAt);
           return;
         }
         case 'failed': {
           if (await this.settleFromRecord(row)) return;
-          await this.attempts.assertLeft(wawuUserId);
+          await this.attempts.assertLeft(wawuUserId, send.addressKey);
           const attempt = await this.claim(wawuUserId, row, 'failed', send);
           if (attempt === null) return;
-          await this.attempts.spend(wawuUserId, false);
+          await this.attempts.spend(wawuUserId, false, send.addressKey);
           await this.create(wawuUserId, attempt, send, null);
           return;
         }
@@ -278,10 +351,10 @@ export class ReviewedOpening {
           return;
       }
     }
-    await this.attempts.assertLeft(wawuUserId);
+    await this.attempts.assertLeft(wawuUserId, send.addressKey);
     const attempt = await this.claim(wawuUserId, null, 'new', send);
     if (attempt === null) return;
-    await this.attempts.spend(wawuUserId, false);
+    await this.attempts.spend(wawuUserId, false, send.addressKey);
     await this.create(wawuUserId, attempt, send, null);
   }
 
@@ -330,6 +403,79 @@ export class ReviewedOpening {
   }
 
   // -------------------------------------------------------------------------
+  // Holds that run out (round 3, N3)
+  // -------------------------------------------------------------------------
+
+  /**
+   * The sweep: every opening at "documents needed" (or refused only about
+   * documents or details) with no progress from the person for
+   * IDENTITY_HOLD_DAYS is marked expired and lets go of its BVN. One pass at
+   * a time across servers (a transaction-scoped advisory lock), and each
+   * opening by a conditional update, so exactly one pass marks it. Returns
+   * the people to tell, once each; nothing is sent to the provider.
+   */
+  async expireIdle(): Promise<string[]> {
+    const now = await this.host.dbNow();
+    return this.prisma.$transaction(
+      async (tx) => {
+        const [lock] = await tx.$queryRaw<Array<{ locked: boolean }>>`
+          SELECT pg_try_advisory_xact_lock(hashtextextended(${HOLD_SWEEP_LOCK}, 0)) AS "locked"
+        `;
+        if (!lock?.locked) return [];
+        return expireIdleOpenings(tx, this.host.hasher.holdDays, now);
+      },
+      { timeout: 60_000, maxWait: 5_000 },
+    );
+  }
+
+  /**
+   * Support lets go of one person's hold at once (the admin route). The
+   * opening is marked expired, as an idle one is, and the person starts
+   * again. Nothing is sent to the provider. Refused while the provider is
+   * still reviewing the person (the decision is not ours to pre-empt) or
+   * when the person has a wallet. Support deals in accounts: no BVN comes in or goes out.
+   */
+  async releaseHold(wawuUserId: string): Promise<{
+    outcome:
+      | 'released'
+      | 'no_opening'
+      | 'already_released'
+      | 'not_held'
+      | 'in_review'
+      | 'has_wallet';
+    before: string | null;
+  }> {
+    const row = await this.host.opening(wawuUserId);
+    if (!row || !isRowOf(this.host.provider.name, row.provider)) {
+      return { outcome: 'no_opening', before: null };
+    }
+    if (await this.host.hasWallet(wawuUserId)) {
+      return { outcome: 'has_wallet', before: row.state };
+    }
+    if (row.state === EXPIRED_STATE) {
+      return { outcome: 'already_released', before: row.state };
+    }
+    if (['opening', 'unknown', 'open'].includes(row.state)) {
+      return { outcome: 'in_review', before: row.state };
+    }
+    if (isReleasedBvnHash(row.bvnHash)) {
+      return { outcome: 'not_held', before: row.state };
+    }
+    const now = await this.host.dbNow();
+    const done = await this.prisma.$transaction((tx) =>
+      expireOpening(tx, wawuUserId, EXPIRED_BY_SUPPORT, now, [
+        'review',
+        'stopped',
+        'failed',
+        'conflict',
+      ]),
+    );
+    return done
+      ? { outcome: 'released', before: row.state }
+      : { outcome: 'not_held', before: row.state };
+  }
+
+  // -------------------------------------------------------------------------
 
   private entity(wawuUserId: string): Promise<EntityRow | null> {
     return this.prisma.nuvionEntity.findUnique({
@@ -358,7 +504,7 @@ export class ReviewedOpening {
       },
     });
     if (moved.count === 1) {
-      await alignClaim(this.prisma, row.wawuUserId, stage);
+      await alignClaim(this.prisma, row.wawuUserId);
       this.logger.log(
         'wallet opening (review): a lost answer was found at the provider',
       );
@@ -381,8 +527,13 @@ export class ReviewedOpening {
     }
     for (const field of REVIEW_REQUIRED_FIELDS) {
       // A null is a missing field (the DTO turns it into one; a caller that
-      // skips the pipe is held to the same rule).
-      if (input[field] === undefined || input[field] === null) {
+      // skips the pipe is held to the same rule), and so is the word "null"
+      // or "undefined" a client wrote out in its place (N9).
+      if (
+        input[field] === undefined ||
+        input[field] === null ||
+        isStringifiedNull(input[field])
+      ) {
         throw new BadRequestException(
           `${field} is required to open this wallet`,
         );
@@ -430,7 +581,7 @@ export class ReviewedOpening {
     wawuUserId: string,
     row: ReviewedOpeningRow | null,
     from: 'new' | 'failed' | 'unknown',
-    send: { bvn: string; phone: string },
+    send: Send,
   ): Promise<number | null> {
     const startedAt = await this.host.dbNow();
     const bvnHash = this.host.hasher.hash('bvn', send.bvn);
@@ -489,7 +640,7 @@ export class ReviewedOpening {
       if (row === null && (await this.host.opening(wawuUserId)) !== null) {
         return null;
       }
-      return this.heldByAnother(wawuUserId);
+      return this.heldByAnother(wawuUserId, send.addressKey);
     }
   }
 
@@ -500,8 +651,11 @@ export class ReviewedOpening {
    * at once learns the answer at most `BVN_CHECKS_PER_DAY` times; past it
    * the answer is the 429).
    */
-  private async heldByAnother(wawuUserId: string): Promise<never> {
-    await this.attempts.spend(wawuUserId, true);
+  private async heldByAnother(
+    wawuUserId: string,
+    addressKey: string | null,
+  ): Promise<never> {
+    await this.attempts.spend(wawuUserId, true, addressKey);
     throw new MoneyError('identity_has_wallet', OPENING_HELD_MESSAGE);
   }
 
@@ -535,17 +689,7 @@ export class ReviewedOpening {
   private async create(
     wawuUserId: string,
     attempt: number,
-    send: {
-      bvn: string;
-      nin: string;
-      email: string;
-      phone: string;
-      details: Omit<
-        ProviderReviewDetails,
-        'customerId' | 'numbersAgain' | 'lostAttemptAt' | 'beforeCreate'
-      >;
-      input: OpenNairaWalletDto;
-    },
+    send: Send,
     lostAttemptAt: Date | null,
   ): Promise<void> {
     const prisma = this.prisma;
@@ -599,7 +743,7 @@ export class ReviewedOpening {
         data: { state: 'failed', failure: `refused_${e.kind}` },
       });
       // Nuvion made nothing: the BVN is let go at once.
-      if (refused.count === 1) await alignClaim(prisma, wawuUserId, 'stopped');
+      if (refused.count === 1) await alignClaim(prisma, wawuUserId);
       throw this.host.refusal(e);
     }
     if (opened.state !== 'provisioning' || !opened.review) {
@@ -636,21 +780,26 @@ export class ReviewedOpening {
       identificationStatus: review.identificationStatus,
       rejectionReasons: review.reasons,
       reviewReadAt: now,
+      // The person sent their details just now: that is progress.
+      progressAt: now,
       ...(review.updated !== null
         ? { entityUpdatedAt: new Date(review.updated) }
         : {}),
     };
-    let stage;
     try {
-      stage = await this.prisma.$transaction(async (tx) => {
+      await this.prisma.$transaction(async (tx) => {
         const mine = await tx.nuvionEntity.findUnique({
           where: { wawuUserId },
           select: {
             entityId: true,
             decidedAt: true,
             status: true,
-            correctedAt: true,
-            entityUpdatedAt: true,
+            submittedAt: true,
+            bvnStatus: true,
+            ninStatus: true,
+            documentStatus: true,
+            addressProofStatus: true,
+            identificationStatus: true,
           },
         });
         if (mine?.entityId && mine.entityId !== entityId) {
@@ -687,7 +836,7 @@ export class ReviewedOpening {
         });
         return stage;
       });
-      await alignClaim(this.prisma, wawuUserId, stage);
+      await alignClaim(this.prisma, wawuUserId);
       this.logger.log(
         review.found
           ? 'wallet opening (review): the entity a lost answer made was found and recorded'
@@ -726,27 +875,25 @@ export class ReviewedOpening {
    * claim takes back the BVN Nuvion already has (the number typed is not
    * used). Either way another account holding the number is the plain answer
    * and nothing is sent.
+   *
+   * `from` is where the opening was: `review` (refused, the details are
+   * corrected) or `expired` (left idle too long or released by support,
+   * round 3, N3). A person starting again sends the details afresh, BVN and
+   * NIN included, to the same entity: the claim moves to the BVN typed in
+   * the step that sends it, and is refused as the plain answer when another
+   * account has taken that number meanwhile.
    */
   private async correct(
     row: ReviewedOpeningRow,
     entity: EntityRow,
-    send: {
-      bvn: string;
-      nin: string;
-      email: string;
-      phone: string;
-      details: Omit<
-        ProviderReviewDetails,
-        'customerId' | 'numbersAgain' | 'lostAttemptAt' | 'beforeCreate'
-      >;
-      input: OpenNairaWalletDto;
-    },
+    send: Send,
+    from: 'review' | typeof EXPIRED_STATE,
   ): Promise<void> {
     const prisma = this.prisma;
-    await this.attempts.assertLeft(row.wawuUserId);
+    await this.attempts.assertLeft(row.wawuUserId, send.addressKey);
     const next = row.attempts + 1;
     const startedAt = await this.host.dbNow();
-    const numbersAgain = numbersFailed(entity);
+    const numbersAgain = from === EXPIRED_STATE || numbersFailed(entity);
     const claimHash = numbersAgain
       ? this.host.hasher.hash('bvn', send.bvn)
       : heldBvnHash(row.wawuUserId, row.bvnHash);
@@ -756,7 +903,7 @@ export class ReviewedOpening {
         where: {
           wawuUserId: row.wawuUserId,
           attempts: row.attempts,
-          state: 'review',
+          state: from,
         },
         data: {
           state: 'opening',
@@ -768,18 +915,25 @@ export class ReviewedOpening {
         },
       });
     } catch (e) {
-      if (isUniqueViolation(e)) return this.heldByAnother(row.wawuUserId);
+      if (isUniqueViolation(e)) {
+        return this.heldByAnother(row.wawuUserId, send.addressKey);
+      }
       throw e;
     }
     if (claimed.count !== 1) return;
-    await this.attempts.spend(row.wawuUserId, false);
+    await this.attempts.spend(row.wawuUserId, false, send.addressKey);
     const back = (
-      state: 'review' | 'open' | 'stopped',
+      state: 'review' | 'open' | 'stopped' | typeof EXPIRED_STATE,
       extra: { bvnHash?: string; phone?: string } = {},
     ) =>
       prisma.fintavaWalletOpening.updateMany({
         where: { wawuUserId: row.wawuUserId, attempts: next, state: 'opening' },
-        data: { state, failure: null, ...extra },
+        data: {
+          state,
+          // An opening that could not be started again stays as it was.
+          failure: state === EXPIRED_STATE ? row.failure : null,
+          ...extra,
+        },
       });
 
     let opened;
@@ -802,7 +956,7 @@ export class ReviewedOpening {
       });
     } catch (e) {
       // Nothing is known to have changed: the claim's BVN and phone go back.
-      await back('review', { bvnHash: row.bvnHash, phone: row.phone });
+      await back(from, { bvnHash: row.bvnHash, phone: row.phone });
       if (e instanceof WalletProviderError && e.kind === 'under_review') {
         throw new MoneyError('identity_under_review', UNDER_REVIEW_MESSAGE);
       }
@@ -819,9 +973,14 @@ export class ReviewedOpening {
       where: { wawuUserId: row.wawuUserId, entityId: entity.entityId },
       data: {
         correctedAt: now,
+        // The person submitted: a refusal read after this, with a check that
+        // came to a verdict, is a new decision (N4); and it is progress.
+        submittedAt: now,
+        progressAt: now,
+        holdExpiredAt: null,
         reviewReadAt: now,
-        // Nuvion's own time of this correction: a decision read later with a
-        // time past it is a new decision, one without is the echo (D3).
+        // Nuvion's own time of this correction, kept as Nuvion's clock
+        // (no rule reads it: it moves for things that are not decisions).
         entityUpdatedAt:
           review?.updated != null ? new Date(review.updated) : null,
         ...(review
@@ -839,7 +998,7 @@ export class ReviewedOpening {
     const after = await this.entity(row.wawuUserId);
     const stage = after ? reviewStageOf(after) : 'needs_documents';
     await back(openingStateForStage(stage));
-    await alignClaim(prisma, row.wawuUserId, stage);
+    await alignClaim(prisma, row.wawuUserId);
     this.logger.log('wallet opening (review): corrected details sent');
   }
 

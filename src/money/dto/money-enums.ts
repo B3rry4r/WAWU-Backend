@@ -178,5 +178,8 @@ export const MONEY_ERROR_CODES = [
   // the person itself does not have (NUV-02 round 2, U3): permanent, not
   // "try again".
   'step_not_used',
+  // Opening tries from one address in an hour (NUV-02 round 3): a plain 429
+  // with its own code, beside the person's `identity_checks_exhausted`.
+  'open_address_limited',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];

@@ -11,11 +11,11 @@ import {
   isDecision,
   isNewDecision,
   noticeOf,
+  type EntityStage,
   openingStateForStage,
   REVIEW_OPENING_STATES,
   reviewStageOf,
 } from '../../money/opening/review-stage';
-import type { WalletReviewStage } from '../../money/money-view.type';
 import { NotificationService } from '../../notification/notification.service';
 import {
   WALLET_PROVIDER,
@@ -42,7 +42,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 
 /** What recording a delivery left: the stage, the claim, who is to be told. */
 interface Recorded {
-  stage: WalletReviewStage;
+  stage: EntityStage;
   claim: ClaimAlignment;
   notice: DecisionNotice | null;
 }
@@ -206,10 +206,18 @@ export class NuvionOpeningHandler implements NuvionEventHandler {
         select: {
           status: true,
           decidedAt: true,
-          correctedAt: true,
-          entityUpdatedAt: true,
+          submittedAt: true,
+          bvnStatus: true,
+          ninStatus: true,
+          documentStatus: true,
+          addressProofStatus: true,
+          identificationStatus: true,
         },
       });
+      // Whether the person was already stopped (told once) before this read.
+      const wasStopped = ['failed', 'suspended'].includes(
+        before.status.trim().toLowerCase(),
+      );
       const fresh = isNewDecision(before, read);
       const won = await tx.nuvionEntity.updateMany({
         where: {
@@ -244,6 +252,7 @@ export class NuvionOpeningHandler implements NuvionEventHandler {
       });
       return {
         stage,
+        wasStopped,
         notice: won.count === 1 && fresh ? noticeOf(after) : null,
       };
     });
@@ -252,23 +261,32 @@ export class NuvionOpeningHandler implements NuvionEventHandler {
 
   /**
    * After the opening follows the stage, the claim on the BVN follows it too
-   * (let go on rejected and stopped, taken back otherwise). A BVN that is
-   * another account's now stops the opening, and the person is told that
-   * instead of anything else.
+   * (`alignClaim`: held while the provider's entity still carries the BVN,
+   * let go when it does not). A BVN that is another account's now stops the
+   * opening, and the person is told that instead of anything else, unless
+   * they were already stopped and told (one "stopped" notice, N10).
    */
   private async settleClaim(
     wawuUserId: string,
-    recorded: { stage: WalletReviewStage; notice: DecisionNotice | null },
+    recorded: {
+      stage: EntityStage;
+      notice: DecisionNotice | null;
+      wasStopped?: boolean;
+    },
   ): Promise<Recorded> {
-    const claim = await alignClaim(this.prisma, wawuUserId, recorded.stage);
+    const claim = await alignClaim(this.prisma, wawuUserId);
     if (claim === 'stopped_now') {
       this.logger.error(
         'nuvion opening: the BVN reviewed is held by another account now; the opening is stopped for review',
       );
-      return { ...recorded, claim, notice: { outcome: 'stopped' } };
+      return {
+        stage: recorded.stage,
+        claim,
+        notice: recorded.wasStopped ? null : { outcome: 'stopped' },
+      };
     }
     return {
-      ...recorded,
+      stage: recorded.stage,
       claim,
       notice: claim === 'stopped' ? null : recorded.notice,
     };
@@ -334,7 +352,7 @@ export class NuvionOpeningHandler implements NuvionEventHandler {
     if (fits.length !== 1) return null;
     const [c] = fits;
     const now = await this.dbNow();
-    let adopted: { stage: WalletReviewStage; notice: DecisionNotice | null };
+    let adopted: { stage: EntityStage; notice: DecisionNotice | null };
     try {
       adopted = await this.prisma.$transaction(async (tx) => {
         const held = await tx.nuvionEntity.findUnique({

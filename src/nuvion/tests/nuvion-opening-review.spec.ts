@@ -1,11 +1,17 @@
 import {
+  type HoldFacts,
   heldBvnHash,
+  holdsBvn,
   isReleasedBvnHash,
   releasedBvnHash,
-  stageHoldsBvn,
 } from '../../money/opening/bvn-claim';
+import { isStringifiedNull } from '../../money/opening/dto/open-wallet.dto';
+import { idleSince } from '../../money/opening/identity-hold';
 import {
+  accountOnItsWay,
   type DecisionHeld,
+  type DecisionRead,
+  expiredViewOf,
   isNewDecision,
   noticeOf,
   numbersFailed,
@@ -14,6 +20,8 @@ import {
   reviewReasonsOf,
   reviewStageOf,
   reviewViewOf,
+  verdictMoved,
+  withTriesUsedUp,
 } from '../../money/opening/review-stage';
 import {
   maskReviewWords,
@@ -237,6 +245,79 @@ describe('NUV-02 round 2: Nuvion text with numbers in groups (D5)', () => {
   });
 });
 
+describe('NUV-02 round 3: numbers in any form are masked, in a log and in what is stored (N5)', () => {
+  const fw = (v: string) =>
+    v.replace(/\d/g, (d) => String.fromCharCode(0xff10 + Number(d)));
+  const ai = (v: string) =>
+    v.replace(/\d/g, (d) => String.fromCharCode(0x0660 + Number(d)));
+  const groups = (b: string, sep: string) =>
+    `${b.slice(0, 4)}${sep}${b.slice(4, 7)}${sep}${b.slice(7)}`;
+  const BVN = '22217390137';
+  // The verifier's 24 forms of an 11-digit number (p-mask.js).
+  const FORMS: Array<[string, (b: string) => string]> = [
+    ['plain', (b) => b],
+    ['space', (b) => groups(b, ' ')],
+    ['dash', (b) => groups(b, '-')],
+    ['dot', (b) => groups(b, '.')],
+    ['two-spaces', (b) => groups(b, '  ')],
+    ['en-dash', (b) => groups(b, '\u2013')],
+    ['nbsp', (b) => groups(b, '\u00a0')],
+    ['space-dash-space', (b) => groups(b, ' - ')],
+    ['slash', (b) => groups(b, '/')],
+    ['comma', (b) => groups(b, ',')],
+    ['comma-space', (b) => groups(b, ', ')],
+    ['underscore', (b) => groups(b, '_')],
+    ['colon', (b) => groups(b, ':')],
+    ['three-spaces', (b) => groups(b, '   ')],
+    ['tab', (b) => groups(b, '\t')],
+    ['newline', (b) => groups(b, '\n')],
+    ['singles', (b) => b.split('').join(' ')],
+    ['fullwidth', (b) => fw(b)],
+    ['arabic-indic', (b) => ai(b)],
+    ['zwsp', (b) => groups(b, '\u200b')],
+    ['letter-sep', (b) => groups(b, 'x')],
+    ['parens', (b) => `(${b.slice(0, 4)})(${b.slice(4, 7)})(${b.slice(7)})`],
+    ['hash-prefixed', (b) => `#${b}`],
+    ['ref-glued', (b) => `REF${b}Z`],
+  ];
+
+  it('there are 24 forms', () => expect(FORMS).toHaveLength(24));
+
+  it.each(FORMS)('%s: only the last 4 digits are left', (_name, form) => {
+    const text = `BVN ${form(BVN)} is not valid`;
+    for (const out of [maskNuvionText(text), maskReviewWords(text)]) {
+      // No run of the number is left but its last four digits.
+      const folded = out.replace(/[\uff10-\uff19\u0660-\u0669]/g, (c) =>
+        String(c.charCodeAt(0) & 0xf),
+      );
+      // What is left is the end of the number: its last 4 digits, or fewer
+      // where a letter glued to it is counted into the last 4 characters.
+      const left = folded.replace(/\D/g, '');
+      expect(left.length).toBeGreaterThanOrEqual(3);
+      expect(left.length).toBeLessThanOrEqual(4);
+      expect('0137'.endsWith(left)).toBe(true);
+    }
+  });
+
+  it('digits of other scripts are read as digits; separators of every kind join groups', () => {
+    expect(
+      maskNuvionText(
+        'NIN \u0663\u0663\u0663\u0661 \u0660\u0660\u0660\u0663 \u0661\u0662\u0663',
+      ),
+    ).toBe('NIN *******3123');
+    expect(maskNuvionText('phone (0803) 123-4567 refused')).toBe(
+      'phone (*******4567 refused',
+    );
+  });
+
+  it('a short number, a date part or a list of words is left alone', () => {
+    expect(maskNuvionText('step 2 of 3, 12 items, version 4.1')).toBe(
+      'step 2 of 3, 12 items, version 4.1',
+    );
+    expect(maskNuvionText('order 123456 shipped')).toBe('order 123456 shipped');
+  });
+});
+
 describe('NUV-02 round 2: who holds a BVN (the stored form)', () => {
   const user = '6f1f6f5e-0f6e-4f0c-9d4e-1a2b3c4d5e6f';
   const hash = 'a'.repeat(64);
@@ -259,95 +340,345 @@ describe('NUV-02 round 2: who holds a BVN (the stored form)', () => {
       hash,
     );
   });
-
-  it.each([
-    ['needs_documents', true],
-    ['checking', true],
-    ['approved', true],
-    ['rejected', false],
-    ['stopped', false],
-  ] as const)('%s holds it: %s', (stage, holds) => {
-    expect(stageHoldsBvn(stage)).toBe(holds);
-  });
 });
 
-describe('NUV-02 round 2: is a decision read back a new one (D3)', () => {
-  const t = (n: number) => new Date(1_700_000_000_000 + n * 1000);
-  const held = (o: Partial<DecisionHeld> = {}): DecisionHeld => ({
-    status: 'rejected',
-    decidedAt: t(1),
-    correctedAt: null,
-    entityUpdatedAt: t(1),
+describe('NUV-02 round 3: does the opening still hold its BVN (N1, N2)', () => {
+  const facts = (o: Partial<HoldFacts>): HoldFacts => ({
+    state: 'review',
+    hasEntity: true,
+    stage: 'needs_documents',
+    numbersRefused: false,
+    hasAccount: false,
     ...o,
   });
 
+  it.each([
+    ['documents needed', { stage: 'needs_documents' }, true],
+    ['being checked', { stage: 'checking', state: 'open' }, true],
+    ['approved', { stage: 'approved', state: 'open' }, true],
+    [
+      'refused on the documents only (the entity keeps the BVN)',
+      { stage: 'rejected' },
+      true,
+    ],
+    [
+      'refused with nothing named (the details)',
+      { stage: 'rejected', numbersRefused: false },
+      true,
+    ],
+    [
+      'refused on the BVN or the NIN (the identity itself)',
+      { stage: 'rejected', numbersRefused: true },
+      false,
+    ],
+    [
+      'refused on the BVN, but an account is recorded',
+      { stage: 'rejected', numbersRefused: true, hasAccount: true },
+      true,
+    ],
+    [
+      'failed or suspended with no account',
+      { stage: 'stopped', state: 'stopped' },
+      false,
+    ],
+    [
+      'failed or suspended with an account (support decides)',
+      { stage: 'stopped', state: 'stopped', hasAccount: true },
+      true,
+    ],
+    [
+      'expired, whatever the entity says',
+      { state: 'expired', stage: 'needs_documents' },
+      false,
+    ],
+    [
+      'a create in flight, nothing recorded yet',
+      { state: 'opening', hasEntity: false },
+      true,
+    ],
+    [
+      'a create whose answer was lost',
+      { state: 'unknown', hasEntity: false },
+      true,
+    ],
+    [
+      'the provider refused the create, nothing was made',
+      { state: 'failed', hasEntity: false },
+      false,
+    ],
+  ] as const)('%s: held %s', (_name, over, holds) => {
+    expect(holdsBvn(facts(over as Partial<HoldFacts>))).toBe(holds);
+  });
+});
+
+describe('NUV-02 round 3: is a decision read back a new one (N4)', () => {
+  const t = (n: number) => new Date(1_700_000_000_000 + n * 1000);
+  const words = {
+    bvnStatus: 'pending',
+    ninStatus: 'pending',
+    documentStatus: 'pending',
+    addressProofStatus: 'pending',
+    identificationStatus: 'pending',
+  };
+  const held = (o: Partial<DecisionHeld> = {}): DecisionHeld => ({
+    status: 'rejected',
+    decidedAt: t(1),
+    submittedAt: null,
+    ...words,
+    ...o,
+  });
+  const read = (o: Partial<DecisionRead> = {}): DecisionRead => ({
+    status: 'rejected',
+    ...words,
+    ...o,
+  });
+  const verdict = { bvnStatus: 'rejected', ninStatus: 'approved' };
+
   it('only a decision can be new', () => {
-    expect(isNewDecision(null, { status: 'pending', updated: 5 })).toBe(false);
-    expect(isNewDecision(null, { status: 'incomplete', updated: null })).toBe(
+    expect(isNewDecision(null, read({ status: 'pending' }))).toBe(false);
+    expect(isNewDecision(null, read({ status: 'incomplete' }))).toBe(false);
+  });
+
+  it('the first decision, or a different word, is new', () => {
+    expect(isNewDecision(null, read())).toBe(true);
+    expect(isNewDecision(held({ decidedAt: null }), read())).toBe(true);
+    expect(isNewDecision(held({ status: 'pending' }), read())).toBe(true);
+    expect(isNewDecision(held(), read({ status: 'approved' }))).toBe(true);
+  });
+
+  it('the same word again with no submission since the last decision is the same decision, whatever Nuvion bumped', () => {
+    // A replay, a delivery that only moved Nuvion's `updated`, checks that
+    // came to other verdicts: no submission, no new decision.
+    expect(isNewDecision(held(), read())).toBe(false);
+    expect(isNewDecision(held(), read(verdict))).toBe(false);
+    // A submission older than the decision does not count.
+    expect(isNewDecision(held({ submittedAt: t(0) }), read(verdict))).toBe(
+      false,
+    );
+    expect(isNewDecision(held({ submittedAt: t(1) }), read(verdict))).toBe(
       false,
     );
   });
 
-  it('the first decision, or a different word, is new', () => {
-    expect(isNewDecision(null, { status: 'rejected', updated: null })).toBe(
+  it('after a submission, the same word is new when a check came to a verdict, whether Nuvion moved its time, kept it, or gave none', () => {
+    // `updated` is not an input at all: the same read is new in all three.
+    expect(isNewDecision(held({ submittedAt: t(5) }), read(verdict))).toBe(
       true,
     );
     expect(
-      isNewDecision(held({ decidedAt: null }), {
-        status: 'rejected',
-        updated: null,
-      }),
-    ).toBe(true);
-    expect(
-      isNewDecision(held({ status: 'pending', decidedAt: t(1) }), {
-        status: 'rejected',
-        updated: t(1).getTime(),
-      }),
-    ).toBe(true);
-    expect(
-      isNewDecision(held(), { status: 'approved', updated: t(1).getTime() }),
+      isNewDecision(
+        held({ submittedAt: t(5) }),
+        read({ documentStatus: 'rejected' }),
+      ),
     ).toBe(true);
   });
 
-  it('the same word again, with no correction between, is the same decision', () => {
+  it('after a submission, the echo of the submission itself (every word as recorded, or a check back at pending) is not new', () => {
+    expect(isNewDecision(held({ submittedAt: t(5) }), read())).toBe(false);
     expect(
-      isNewDecision(held(), { status: 'rejected', updated: t(9).getTime() }),
-    ).toBe(false);
-    expect(
-      isNewDecision(held({ correctedAt: t(0) }), {
-        status: 'rejected',
-        updated: t(9).getTime(),
-      }),
+      isNewDecision(
+        held({ submittedAt: t(5), documentStatus: 'rejected' }),
+        read({ documentStatus: 'pending' }),
+      ),
     ).toBe(false);
   });
 
-  it('the same word after a correction is new only when Nuvion moved its own time on', () => {
-    const afterCorrection = held({ correctedAt: t(5), entityUpdatedAt: t(5) });
-    // The echo of the correction: Nuvion's time is the one the correction got.
-    expect(
-      isNewDecision(afterCorrection, {
-        status: 'rejected',
-        updated: t(5).getTime(),
-      }),
-    ).toBe(false);
-    // Reviewed again later.
-    expect(
-      isNewDecision(afterCorrection, {
-        status: 'rejected',
-        updated: t(6).getTime(),
-      }),
-    ).toBe(true);
-    // Nuvion gives no time (before or now): a decision after a correction is new.
-    expect(
-      isNewDecision(afterCorrection, { status: 'rejected', updated: null }),
-    ).toBe(true);
-    expect(
-      isNewDecision(held({ correctedAt: t(5), entityUpdatedAt: null }), {
-        status: 'rejected',
-        updated: t(5).getTime(),
-      }),
-    ).toBe(true);
+  it('a new verdict word is one that is not waiting and not what was held', () => {
+    const h = held({ bvnStatus: 'rejected' });
+    expect(verdictMoved(h, read({ bvnStatus: 'rejected' }))).toBe(false);
+    expect(verdictMoved(h, read({ bvnStatus: 'pending' }))).toBe(false);
+    expect(verdictMoved(h, read({ bvnStatus: null }))).toBe(false);
+    expect(verdictMoved(h, read({ bvnStatus: 'approved' }))).toBe(true);
+    expect(verdictMoved(h, read({ ninStatus: 'Rejected ' }))).toBe(true);
+    expect(verdictMoved(h, read({ identificationStatus: 'failed' }))).toBe(
+      true,
+    );
   });
+});
+
+describe('NUV-02 round 3: an opening left idle (N3)', () => {
+  const day = 24 * 60 * 60_000;
+  const t = (days: number) => new Date(1_700_000_000_000 + days * day);
+  const entity = (o: Record<string, unknown> = {}) => ({
+    ...base,
+    entityId: '01HXYZ0001ABCDEFGHJKMNPQRS',
+    accountId: null,
+    accountRequestedAt: null,
+    submittedAt: null,
+    progressAt: null,
+    holdExpiredAt: null,
+    ...o,
+  });
+  const opening = (o: Record<string, unknown> = {}) => ({
+    state: 'review',
+    attemptStartedAt: t(0),
+    ...o,
+  });
+
+  it('documents needed: idle since the latest thing the person did', () => {
+    expect(idleSince(opening(), entity(), false)).toEqual(t(0));
+    expect(idleSince(opening(), entity({ progressAt: t(3) }), false)).toEqual(
+      t(3),
+    );
+    expect(idleSince(opening(), entity({ submittedAt: t(4) }), false)).toEqual(
+      t(4),
+    );
+    expect(idleSince(opening(), entity({ correctedAt: t(5) }), false)).toEqual(
+      t(5),
+    );
+  });
+
+  it('refused on the documents or the details: idle since the person was told', () => {
+    const rejected = entity({
+      status: 'rejected',
+      decidedAt: t(2),
+      documentStatus: 'rejected',
+    });
+    expect(idleSince(opening(), rejected, false)).toEqual(t(2));
+    expect(
+      idleSince(opening(), { ...rejected, progressAt: t(6) }, false),
+    ).toEqual(t(6));
+  });
+
+  it('never idle: refused on the identity (nothing is held), being checked, approved, stopped, an account, a wallet, no entity, not in review', () => {
+    expect(
+      idleSince(
+        opening(),
+        entity({ status: 'rejected', decidedAt: t(2), bvnStatus: 'rejected' }),
+        false,
+      ),
+    ).toBeNull();
+    for (const status of ['pending', 'approved', 'failed', 'suspended']) {
+      expect(idleSince(opening(), entity({ status }), false)).toBeNull();
+    }
+    expect(
+      idleSince(opening(), entity({ accountId: 'acc_1' }), false),
+    ).toBeNull();
+    expect(
+      idleSince(opening(), entity({ accountRequestedAt: t(1) }), false),
+    ).toBeNull();
+    expect(idleSince(opening(), entity(), true)).toBeNull();
+    expect(idleSince(opening(), entity({ entityId: null }), false)).toBeNull();
+    expect(idleSince(opening(), null, false)).toBeNull();
+    for (const state of ['open', 'opening', 'unknown', 'stopped', 'expired']) {
+      expect(idleSince(opening({ state }), entity(), false)).toBeNull();
+    }
+  });
+
+  it("the view of an expired opening: start again, never a reason that is Nuvion's", () => {
+    const v = expiredViewOf(t(9));
+    expect(v).toMatchObject({
+      stage: 'expired',
+      canResubmit: true,
+      canResubmitAt: null,
+      decidedAt: t(9).toISOString(),
+    });
+    expect(v.reasons.map((r) => r.code)).toEqual(['review_expired']);
+    expect(`${v.reasons[0].message} ${v.reasons[0].fix}`).not.toMatch(
+      /—|Nuvion/,
+    );
+  });
+});
+
+describe('NUV-02 round 3: the view never offers a try the server would refuse (N6)', () => {
+  const rejected = reviewViewOf({
+    ...base,
+    status: 'rejected',
+    decidedAt: new Date('2026-10-08T10:00:00Z'),
+    bvnStatus: 'rejected',
+  });
+
+  it('tries left: the view is as it was', () => {
+    expect(withTriesUsedUp(rejected, null)).toEqual(rejected);
+    expect(rejected.canResubmit).toBe(true);
+    expect(rejected.canResubmitAt).toBeNull();
+  });
+
+  it('tries used up: canResubmit is false and the time they open again is given', () => {
+    const at = new Date('2026-10-09T10:00:00Z');
+    expect(withTriesUsedUp(rejected, at)).toMatchObject({
+      stage: 'rejected',
+      canResubmit: false,
+      canResubmitAt: at.toISOString(),
+    });
+    expect(withTriesUsedUp(expiredViewOf(null), at)).toMatchObject({
+      stage: 'expired',
+      canResubmit: false,
+      canResubmitAt: at.toISOString(),
+    });
+  });
+
+  it('a stage that offers no resubmission has no time either', () => {
+    const waiting = reviewViewOf({ ...base, status: 'incomplete' });
+    expect(withTriesUsedUp(waiting, new Date('2026-10-09T10:00:00Z'))).toEqual(
+      waiting,
+    );
+  });
+});
+
+describe('NUV-02 round 3: the account number is on its way only after an approval asked for one (merge with NUV-04)', () => {
+  const entity = (o = {}) => ({
+    accountId: null,
+    accountRequestedAt: null,
+    ...o,
+  });
+
+  it.each([
+    [
+      'being checked',
+      'checking',
+      entity({ accountRequestedAt: new Date() }),
+      false,
+    ],
+    ['documents needed', 'needs_documents', entity(), false],
+    ['refused', 'rejected', entity(), false],
+    [
+      'stopped (also for a BVN another account took)',
+      'stopped',
+      entity({ accountId: 'a' }),
+      false,
+    ],
+    ['expired', 'expired', entity(), false],
+    ['approved, no account requested yet', 'approved', entity(), false],
+    [
+      'approved, the account requested',
+      'approved',
+      entity({ accountRequestedAt: new Date() }),
+      true,
+    ],
+    [
+      'approved, the account made',
+      'approved',
+      entity({ accountId: 'a' }),
+      true,
+    ],
+    ['nothing recorded', null, null, false],
+  ] as const)('%s: %s', (_name, stage, e, onItsWay) => {
+    expect(accountOnItsWay(stage, e)).toBe(onItsWay);
+  });
+});
+
+describe('NUV-02 round 3: a word written out in place of nothing (N9)', () => {
+  it.each([
+    'null',
+    'NULL',
+    ' Null ',
+    'undefined',
+    'Undefined',
+    '\tundefined\n',
+  ])('%j is a stringified null', (v) =>
+    expect(isStringifiedNull(v)).toBe(true),
+  );
+  it.each([
+    '',
+    'nullable',
+    'undefined street',
+    'Nulla',
+    'nul',
+    0,
+    null,
+    undefined,
+  ])('%j is not', (v) => expect(isStringifiedNull(v)).toBe(false));
 });
 
 describe('NUV-02 round 2: what a decision tells the person (D6)', () => {

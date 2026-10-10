@@ -1,16 +1,36 @@
 import type { PrismaService } from '../../common/prisma/prisma.service';
-import type { WalletReviewStage } from '../money-view.type';
+import {
+  type EntityStage,
+  numbersFailed,
+  type ReviewRecord,
+  reviewStageOf,
+} from './review-stage';
 
 /**
  * Who holds a BVN, when a provider reviews the person (NUV-02 round 2, D1
- * and D4; lead ruling "who holds a BVN").
+ * and D4; round 3, N1 to N3; lead rulings "who holds a BVN" and "an
+ * unfinished opening's hold expires").
  *
- * A BVN is held by one WAWU account while that account's opening with it is
- * with the provider (being made, documents still needed, being checked) or
- * once the provider approved it. A rejected, failed or stopped opening
- * releases it at once, so a person who typed someone else's BVN cannot keep
- * its owner out. The claim follows exactly what the provider was told: it
- * moves to a new number only in the step that sends that number.
+ * A BVN is held by one WAWU account for as long as the provider's entity for
+ * that account still carries it in a live state, and it is let go only when
+ * that is no longer so:
+ *
+ * - **held**: the opening is with the provider (being made, documents still
+ *   needed, being checked), was approved, or was refused only for its
+ *   documents or details (the entity keeps the BVN and the person corrects
+ *   the documents); and always once an account is recorded, whatever the
+ *   provider later says (a failed or suspended entity with an account keeps
+ *   its hold: support decides);
+ * - **let go at once**: a refusal that names the identity itself (the BVN or
+ *   the NIN refused), and a failed or suspended entity that has no account
+ *   (and a create the provider refused, where nothing was made);
+ * - **let go by time**: an opening that sits at "documents needed", or was
+ *   refused only for its documents, with nothing from the person for
+ *   IDENTITY_HOLD_DAYS is marked `expired` (src/money/opening/
+ *   identity-hold.ts); support can release one person's hold at once.
+ *
+ * The claim follows exactly what the provider was told: it moves to a new
+ * number only in the step that sends that number.
  *
  * The claim is `FintavaWalletOpening.bvnHash` (the keyed hash, unique). A
  * released opening keeps the hash of the BVN the provider has, in a form no
@@ -39,9 +59,48 @@ export function heldBvnHash(wawuUserId: string, stored: string): string {
   return stored.startsWith(prefix) ? stored.slice(prefix.length) : stored;
 }
 
-/** The stages in which an opening holds its BVN. */
-export function stageHoldsBvn(stage: WalletReviewStage): boolean {
-  return stage !== 'rejected' && stage !== 'stopped';
+/** The opening state of an opening marked expired (idle too long, or released by support). */
+export const EXPIRED_STATE = 'expired';
+
+/** `FintavaWalletOpening.failure` of an expired opening, by cause. */
+export const EXPIRED_IDLE = 'hold_expired';
+export const EXPIRED_BY_SUPPORT = 'hold_released_by_support';
+
+/** What decides whether an opening still holds its BVN. */
+export interface HoldFacts {
+  /** The opening's state (`FintavaWalletOpening.state`). */
+  state: string;
+  /** The entity at the provider is recorded for this person. */
+  hasEntity: boolean;
+  /** The stage of the provider's review, from what is stored of it. */
+  stage: EntityStage;
+  /** The review named the BVN or the NIN as what failed. */
+  numbersRefused: boolean;
+  /** An account is recorded or was requested (or a wallet exists). */
+  hasAccount: boolean;
+}
+
+/**
+ * Whether the opening holds its BVN. Pure: the handler, the opening, the
+ * sweep and the specs share it.
+ */
+export function holdsBvn(f: HoldFacts): boolean {
+  if (f.state === EXPIRED_STATE) return false;
+  // Nothing was recorded at the provider: only a create in flight (or one
+  // whose answer was lost) can still turn into an entity carrying the BVN.
+  if (!f.hasEntity) return f.state === 'opening' || f.state === 'unknown';
+  switch (f.stage) {
+    case 'needs_documents':
+    case 'checking':
+    case 'approved':
+      return true;
+    case 'rejected':
+      // Only the identity itself refused lets the BVN go; a refusal about
+      // the documents or the details leaves the BVN on the entity.
+      return f.hasAccount || !f.numbersRefused;
+    case 'stopped':
+      return f.hasAccount;
+  }
 }
 
 /**
@@ -71,17 +130,69 @@ function isUniqueViolation(e: unknown): boolean {
   );
 }
 
+/** The entity columns a hold is read from (NuvionEntity). */
+export const HOLD_ENTITY_SELECT = {
+  entityId: true,
+  status: true,
+  decidedAt: true,
+  correctedAt: true,
+  bvnStatus: true,
+  ninStatus: true,
+  documentStatus: true,
+  addressProofStatus: true,
+  rejectionReasons: true,
+  accountId: true,
+  accountRequestedAt: true,
+  submittedAt: true,
+  progressAt: true,
+  holdExpiredAt: true,
+} as const;
+
+/** One NuvionEntity row as `HOLD_ENTITY_SELECT` reads it. */
+export type HoldEntity = ReviewRecord & {
+  entityId: string | null;
+  accountId: string | null;
+  accountRequestedAt: Date | null;
+  submittedAt: Date | null;
+  progressAt: Date | null;
+  holdExpiredAt: Date | null;
+};
+
+/** The facts of one opening and its entity, for `holdsBvn`. */
+export function holdFactsOf(
+  state: string,
+  entity: HoldEntity | null,
+  hasWallet: boolean,
+): HoldFacts {
+  return {
+    state,
+    hasEntity: !!entity?.entityId,
+    stage: entity ? reviewStageOf(entity) : 'needs_documents',
+    numbersRefused: entity ? numbersFailed(entity) : false,
+    hasAccount:
+      hasWallet ||
+      (entity !== null &&
+        (entity.accountId !== null || entity.accountRequestedAt !== null)),
+  };
+}
+
+type ClaimPrisma = Pick<
+  PrismaService,
+  'fintavaWalletOpening' | 'nuvionEntity' | 'fintavaWallet'
+>;
+
 /**
- * Makes the opening's claim agree with where the review stands: held in
- * every stage but `rejected` and `stopped`. Taking a released claim back
- * can find the number held by another account meanwhile: the opening is then
- * stopped (`stopped`, `CLAIM_LOST`), never left claiming a number it does
- * not hold. Idempotent; safe to call after every state change.
+ * Makes the opening's claim agree with where the review stands (`holdsBvn`):
+ * read here from what is stored, so every caller (the handler, the opening,
+ * the sweep) reaches the same answer. Taking a released claim back can find
+ * the number held by another account meanwhile: the opening is then stopped
+ * (`stopped`, `CLAIM_LOST`), never left claiming a number it does not hold.
+ * An expired opening never takes its number back. Idempotent; safe to call
+ * after every state change.
  */
 export async function alignClaim(
-  prisma: Pick<PrismaService, 'fintavaWalletOpening'>,
+  prisma: ClaimPrisma,
   wawuUserId: string,
-  stage: WalletReviewStage,
 ): Promise<ClaimAlignment> {
   const row = await prisma.fintavaWalletOpening.findUnique({
     where: { wawuUserId },
@@ -89,7 +200,17 @@ export async function alignClaim(
   });
   if (!row || row.provider !== 'nuvion') return 'none';
   if (row.state === 'stopped' && row.failure === CLAIM_LOST) return 'stopped';
-  const hold = stageHoldsBvn(stage);
+  const [entity, wallet] = await Promise.all([
+    prisma.nuvionEntity.findUnique({
+      where: { wawuUserId },
+      select: HOLD_ENTITY_SELECT,
+    }),
+    prisma.fintavaWallet.findUnique({
+      where: { wawuUserId },
+      select: { wawuUserId: true },
+    }),
+  ]);
+  const hold = holdsBvn(holdFactsOf(row.state, entity, wallet !== null));
   if (hold === !isReleasedBvnHash(row.bvnHash)) {
     return hold ? 'held' : 'released';
   }
