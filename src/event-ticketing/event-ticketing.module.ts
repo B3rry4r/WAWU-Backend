@@ -5,6 +5,8 @@ import { EventTicketingController } from './event-ticketing.controller';
 import { EventTicketingService } from './event-ticketing.service';
 import { EventRunningController } from './event-running.controller';
 import { EventRunningService } from './event-running.service';
+import { EventHeldTicketsController } from './event-held-tickets.controller';
+import { EventHeldTicketsService } from './event-held-tickets.service';
 import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 
 /**
@@ -21,8 +23,16 @@ import { BlockedAccountModule } from '../blocked-account/blocked-account.module'
  */
 @Module({
   imports: [WawuAuthModule, DirectMessageModule, BlockedAccountModule],
-  controllers: [EventTicketingController, EventRunningController],
-  providers: [EventTicketingService, EventRunningService],
+  controllers: [
+    EventTicketingController,
+    EventRunningController,
+    EventHeldTicketsController,
+  ],
+  providers: [
+    EventTicketingService,
+    EventRunningService,
+    EventHeldTicketsService,
+  ],
   exports: [EventTicketingService],
 })
 export class EventTicketingModule {}

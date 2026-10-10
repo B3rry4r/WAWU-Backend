@@ -51,6 +51,16 @@
       "first_voice_intro": true
     }
   ],
+  "event_offers": [
+    {
+      "id": "event-oct-2026",
+      "name": "WAWU event registration",
+      "price_kobo": 200000,
+      "tier": "verify",
+      "tier_days": 30,
+      "open_from": "2026-10-10T00:00:00+01:00"
+    }
+  ],
   "preselected_tier": "founding",
   "tier_ending_days": 7,
   "extra_products": { "count": 5, "price": { "kobo": 150000, "cents": 300 } },
