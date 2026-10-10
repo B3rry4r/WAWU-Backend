@@ -159,7 +159,8 @@ export class TransactionPinService {
 
   /**
    * PUT /money/pin. The current PIN has already been checked by
-   * TransactionPinGuard on the same request; this only replaces it.
+   * TransactionPinGuard on the same request; this replaces it and ends any
+   * PIN reset that is still open.
    */
   async change(wawuUserId: string, dto: ChangePinDto): Promise<PinStateView> {
     if (dto.newPin !== dto.newPinConfirmation) {
@@ -167,9 +168,20 @@ export class TransactionPinService {
     }
     const pinHash = await hashPin(dto.newPin);
     try {
-      const row = await this.prisma.transactionPin.update({
-        where: { wawuUserId },
-        data: { pinHash, failedTries: 0, lockedUntil: null, setAt: new Date() },
+      // One transaction: the new PIN and the end of every reset still open
+      // (BACKEND_GAPS G-50). A code texted before this change must not work
+      // afterwards: confirming it would overwrite the PIN just chosen.
+      const row = await this.prisma.$transaction(async (tx) => {
+        const now = new Date();
+        const changed = await tx.transactionPin.update({
+          where: { wawuUserId },
+          data: { pinHash, failedTries: 0, lockedUntil: null, setAt: now },
+        });
+        await tx.transactionPinReset.updateMany({
+          where: { wawuUserId, usedAt: null, supersededAt: null },
+          data: { supersededAt: now },
+        });
+        return changed;
       });
       return pinStateView(row, new Date());
     } catch (err) {

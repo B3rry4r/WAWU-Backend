@@ -38,7 +38,7 @@ const t = new Money14App({});
  * masked phone (`+234 *** *** 1590`) whose random last four digits equalled
  * a fixed test PIN failed the scan about once in 30 runs.
  */
-const pins = t.reservePins(40);
+const pins = t.reservePins(60);
 function pin(): string {
   const next = pins.shift();
   if (!next) throw new Error('the PIN pool is used up: reserve more');
@@ -579,6 +579,91 @@ describe('a reset turns biometric approval off', () => {
       .post('/api/hub/money/device/challenge')
       .set('Authorization', who.auth)
       .expect(403);
+  });
+});
+
+describe('a PIN change ends an open reset (BACKEND_GAPS G-50)', () => {
+  it('a code texted before the person changed their PIN is refused afterwards, and the PIN they chose stays', async () => {
+    const first = pin();
+    const chosen = pin();
+    const attacker = pin();
+    const who = await holder(first);
+    const reset = await resetOf(who);
+    const code = t.lastCode(who.phone);
+    secrets.add(code);
+
+    await t
+      .http()
+      .put('/api/hub/money/pin')
+      .set('Authorization', who.auth)
+      .set('X-Transaction-Pin', first)
+      .send({ newPin: chosen, newPinConfirmation: chosen })
+      .expect(200);
+
+    const refused = await confirm(who, {
+      resetId: reset.resetId,
+      code,
+      newPin: attacker,
+    }).expect(400);
+    expect(t.body(refused).reason).toMatchObject({
+      code: 'reset_code_invalid',
+      triesLeft: 0,
+    });
+    // The change stands: the PIN chosen approves, the one the old code would have set does not.
+    await t.approveWithPin(who, chosen).expect(200);
+    await t.approveWithPin(who, attacker).expect(403);
+
+    const row = await t.prisma.transactionPinReset.findUniqueOrThrow({
+      where: { id: reset.resetId },
+    });
+    expect(row.supersededAt).not.toBeNull();
+    expect(row.usedAt).toBeNull();
+  });
+
+  it('a change made while no reset is open changes nothing about other people’s resets', async () => {
+    const mine = pin();
+    const theirs = pin();
+    const me = await holder(mine);
+    const other = await holder(theirs);
+    const reset = await resetOf(other);
+    const newPin = pin();
+    await t
+      .http()
+      .put('/api/hub/money/pin')
+      .set('Authorization', me.auth)
+      .set('X-Transaction-Pin', mine)
+      .send({ newPin, newPinConfirmation: newPin })
+      .expect(200);
+    const row = await t.prisma.transactionPinReset.findUniqueOrThrow({
+      where: { id: reset.resetId },
+    });
+    expect(row.supersededAt).toBeNull();
+    const code = t.lastCode(other.phone);
+    secrets.add(code);
+    await confirm(other, {
+      resetId: reset.resetId,
+      code,
+      newPin: pin(),
+    }).expect(200);
+  });
+
+  it('a reset stores the new PIN only as an argon2id hash (FIX-03 verifier)', async () => {
+    const first = pin();
+    const chosen = pin();
+    const who = await holder(first);
+    const reset = await resetOf(who);
+    const code = t.lastCode(who.phone);
+    secrets.add(code);
+    await confirm(who, {
+      resetId: reset.resetId,
+      code,
+      newPin: chosen,
+    }).expect(200);
+    const stored = await t.prisma.transactionPin.findUniqueOrThrow({
+      where: { wawuUserId: who.id },
+    });
+    expect(stored.pinHash).toMatch(/^\$argon2id\$/);
+    expect(stored.pinHash).not.toContain(chosen);
   });
 });
 
