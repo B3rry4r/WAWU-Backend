@@ -34,6 +34,9 @@ import { MoneySavedAccountsController } from './saved-accounts/money-saved-accou
 import { PayoutAccountService } from './saved-accounts/payout-account.service';
 import { IdempotencyGuard, IdempotencyService } from './payments/idempotency';
 import { MerchantWallet } from './payments/merchant-wallet';
+import { HoldViewService } from './holds/hold-view.service';
+import { MoneyHoldsController } from './holds/money-holds.controller';
+import { WalletHoldService } from './holds/wallet-hold.service';
 import { MoneyPaymentsController } from './payments/money-payments.controller';
 import { PayableRegistry } from './payments/payable-registry';
 import { PaymentSettings } from './payments/payment-config';
@@ -124,6 +127,15 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
  * (HOME-14, HOME-15, INBOX-16, ME-18, LEGAL-05, SCHOOLS-07); the
  * Idempotency-Key service and guard, for the sends (WALLET-07, WALLET-09),
  * through `@RequireIdempotentApproval()`.
+ *
+ * MONEY-18: hold, release and refund (`GET /money/holds`, `GET
+ * /money/holds/{id}`). A held kind (paid DM, ticket, bill) registers with
+ * PayableRegistry like any other; its payment completes into a `WalletHold`,
+ * and the owning feature later releases it to the payee or refunds it to the
+ * payer through the exported `WalletHoldService` (never a client request).
+ * A sweep every minute settles a move whose answer was lost and tries again
+ * what is waiting (a wallet not opened yet, a frozen one, the provider out of
+ * reach); it runs where ScheduleModule.forRoot() is loaded.
  * WALLET-18: receipts. The owner's routes (`/money/transactions/{id}/receipt`,
  * its image and its PDF) sit behind the wallet gate and read the row through
  * the history's detail; the public check (`/r/{code}`, no sign-in,
@@ -165,6 +177,7 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     MoneyStatementController,
     MoneyFeesController,
     MoneyPaymentsController,
+    MoneyHoldsController,
     MoneyReceiptController,
     PublicReceiptController,
     MoneyRecipientController,
@@ -198,6 +211,8 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     MerchantWallet,
     PayableRegistry,
     WalletPaymentService,
+    HoldViewService,
+    WalletHoldService,
     ReceiptSettings,
     ReceiptService,
     RecipientService,
@@ -218,6 +233,8 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     IdempotencyService,
     IdempotencyGuard,
     PayableRegistry,
+    WalletHoldService,
+    HoldViewService,
   ],
 })
 export class MoneyModule {}
