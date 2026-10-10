@@ -719,12 +719,14 @@ export class WalletPaymentService implements OnModuleInit {
    *   completes (nobody is owed anything, and a delivered purchase is never
    *   left `pending`), the merchant's completes, the payment records the real
    *   figures and the difference on `discrepancy`; no flag.
-   * - **above the quote**: the payment records and answers the real total and
-   *   is flagged for review (`debitReviewSince`, both figures on
-   *   `discrepancy`); the price moved as asked, so it is delivered. The
-   *   buyer's row keeps the ledger's rule (a disagreement is held `pending`
-   *   with its note, NUV-08 reconciles) and says the real charge in
-   *   `providerFeeKobo`; the merchant's completes.
+   * - **above the quote**: the money left the wallet at the provider's
+   *   figures, so the buyer's row takes them and completes exactly as for
+   *   below (lead ruling, 10 Oct 2026: a delivered purchase never sits
+   *   `pending` in the history); the payment records and answers the real
+   *   total and is flagged for review (`debitReviewSince`, both figures on
+   *   `discrepancy`; NUV-08 reconciles), and is delivered, since the price
+   *   moved as asked. A row that holds a disagreement about the AMOUNT is
+   *   still held (a stop).
    * The merchant-side (`in`) row is completed on every path, so a completed
    * payment never leaves WAWU's side of the ledger `pending` (R6-2).
    *
@@ -770,9 +772,12 @@ export class WalletPaymentService implements OnModuleInit {
     });
     if (!rec.debitRecorded) {
       try {
-        if (figures.verdict === 'below') {
-          // The buyer's row was written with the quoted charge; the real one
-          // is lower, so the row takes it and completes (never held).
+        if (figures.verdict !== 'as_quoted') {
+          // The buyer's row was written with the quoted charge; the money
+          // left the wallet at the provider's, above or below, so the row
+          // takes the provider's figures and completes (never held, never
+          // `pending` for a delivered purchase). A debit above the quote is
+          // flagged on the payment for NUV-08 instead.
           await this.ledger.completeDebitAt(
             p.id,
             { feeKobo: p.providerFeeKobo, totalKobo: p.totalKobo },
@@ -809,17 +814,6 @@ export class WalletPaymentService implements OnModuleInit {
         // ledger. The payment's own status is the provider's record.
         this.logger.error(
           `payment ${p.id}: the ledger could not record the debit (${e instanceof Error ? e.name : 'error'})`,
-        );
-      }
-    }
-    if (figures.verdict !== 'as_quoted') {
-      try {
-        // Whatever path learned it, the buyer's row names the provider's
-        // charge (F1): a row held at the quoted figures says it here.
-        await this.ledger.recordProviderCharge(p.id, figures.feeKobo);
-      } catch (e) {
-        this.logger.error(
-          `payment ${p.id}: the ledger could not record the provider's charge (${e instanceof Error ? e.name : 'error'})`,
         );
       }
     }

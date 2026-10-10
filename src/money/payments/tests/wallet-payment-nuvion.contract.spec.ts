@@ -1229,7 +1229,7 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     };
   };
 
-  it("R6-1 on the sweep (Nuvion's documented path): Nuvion took MORE than the quote after a pending first answer: the payment records the real total, is flagged with both figures, is delivered once; the buyer's row is held with its note, the merchant row completes", async () => {
+  it("R6-1 on the sweep (Nuvion's documented path): Nuvion took MORE than the quote after a pending first answer: the payment records the real total, is flagged with both figures, is delivered once; both ledger rows complete at what Nuvion took (the lead's ruling of 10 Oct: a delivered purchase never sits pending)", async () => {
     const p = await buyer(1_000_000);
     const { q, paid } = await pendingAt(p, 'n-sweep-above', 700);
     nuvion.settle(paid.reference, 'successful');
@@ -1244,16 +1244,24 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     expect(row.debitReviewSince).not.toBeNull();
     expect(row.discrepancy).toContain(`took ${real} kobo`);
     expect(row.discrepancy).toContain(`quoted ${q.totalKobo} kobo`);
-    // The ledger's own note about the two charges is on the payment too.
-    expect(row.discrepancy).toContain(
-      `feeKobo ${q.fee.providerFeeKobo} vs ${q.fee.providerFeeKobo + 700}`,
-    );
     expect(deliveriesOf(paid.id)).toBe(1);
     expect(p.account.availableKobo).toBe(BigInt(1_000_000 - real));
     const { out, inn } = await bothRows(paid.reference);
     expect(inn.status).toBe('completed');
-    expect(out.status).toBe('pending');
-    expect(out.discrepancy).toContain(`feeKobo ${q.fee.providerFeeKobo} vs`);
+    expect([
+      out.status,
+      out.feeKobo,
+      out.totalKobo,
+      out.providerFeeKobo,
+    ]).toEqual([
+      'completed',
+      BigInt(q.fee.providerFeeKobo + 700),
+      BigInt(real),
+      BigInt(q.fee.providerFeeKobo + 700),
+    ]);
+    expect(out.completedAt).not.toBeNull();
+    // The flag and both figures stay on the payment, for NUV-08.
+    expect(row.debitReviewSince).not.toBeNull();
     // The answer a repeat of the request gets is the real total too.
     const again = await payments.settle(paid.id);
     expect(again).toBe('completed');
@@ -1290,7 +1298,7 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     expect(out.completedAt).not.toBeNull();
   });
 
-  it("R6-1 on the receipt (Nuvion answers successful at once): LESS than the quote completes the buyer's row at the real figures too (round 6 left it pending); MORE keeps it held and flagged", async () => {
+  it("R6-1 on the receipt (Nuvion answers successful at once): LESS than the quote completes the buyer's row at the real figures too (round 6 left it pending); MORE completes it at the real figures as well and the payment is flagged", async () => {
     const p = await buyer(2_000_000);
     nuvion.mode = 'successful';
     const below = await quoted(p, 'content_unlock', 'n-receipt-below');
@@ -1316,16 +1324,25 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
       totalKobo: above.totalKobo + 700,
     });
     rows = await bothRows(high.reference);
-    expect(rows.out.status).toBe('pending');
+    expect([
+      rows.out.status,
+      rows.out.feeKobo,
+      rows.out.totalKobo,
+      rows.out.providerFeeKobo,
+    ]).toEqual([
+      'completed',
+      BigInt(above.fee.providerFeeKobo + 700),
+      BigInt(above.totalKobo + 700),
+      BigInt(above.fee.providerFeeKobo + 700),
+    ]);
     expect(rows.inn.status).toBe('completed');
     const highRow = await rowOf(high.id);
     expect(highRow.debitReviewSince).not.toBeNull();
-    expect(highRow.discrepancy).toContain(
-      `feeKobo ${above.fee.providerFeeKobo} vs ${above.fee.providerFeeKobo + 700}`,
-    );
+    expect(highRow.discrepancy).toContain(`took ${above.totalKobo + 700} kobo`);
+    expect(highRow.discrepancy).toContain(`quoted ${above.totalKobo} kobo`);
   });
 
-  it("R6-1 when the ledger status check looks first: a charge other than the quote is held on the buyer's row (never completed at the quote), and the payment sweep then completes the payment at the provider's figures, flagged when above, with the buyer's row completed when below", async () => {
+  it("R6-1 when the ledger status check looks first: a charge other than the quote is held on the buyer's row (never completed at the quote), and the payment sweep then completes the payment at the provider's figures, flagged when above, and the buyer's row at them, above or below", async () => {
     const p = await buyer(2_000_000);
     const { q: qa, paid: pa } = await pendingAt(p, 'n-check-above', 700);
     const { q: qb, paid: pb } = await pendingAt(p, 'n-check-below', -500);
@@ -1353,8 +1370,18 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
       `feeKobo ${qa.fee.providerFeeKobo} vs ${qa.fee.providerFeeKobo + 700}`,
     );
     const aboveRows = await bothRows(pa.reference);
-    expect(aboveRows.out.status).toBe('pending');
-    // The note the status check wrote and the payment's own are not doubled.
+    expect([
+      aboveRows.out.status,
+      aboveRows.out.feeKobo,
+      aboveRows.out.totalKobo,
+    ]).toEqual([
+      'completed',
+      BigInt(qa.fee.providerFeeKobo + 700),
+      BigInt(qa.totalKobo + 700),
+    ]);
+    expect(aboveRows.inn.status).toBe('completed');
+    // The status check's note stays on the row as the trail; the note the
+    // status check wrote and the payment's own are not doubled.
     const notes = (aboveRows.out.discrepancy ?? '').split('; ');
     expect(new Set(notes).size).toBe(notes.length);
 
@@ -1424,13 +1451,12 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
       for (const c of cases) {
         const { out } = await bothRows(c.reference);
         expect(out.providerFeeKobo).toBe(BigInt(c.quotedFee + delta));
-        if (delta <= 0) {
-          // Completed at what was taken: the whole row agrees with the charge.
-          expect([out.status, out.feeKobo]).toEqual([
-            'completed',
-            BigInt(c.quotedFee + delta),
-          ]);
-        }
+        // Completed at what was taken, above or below: the whole row agrees
+        // with the charge.
+        expect([out.status, out.feeKobo]).toEqual([
+          'completed',
+          BigInt(c.quotedFee + delta),
+        ]);
       }
     },
   );

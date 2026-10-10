@@ -616,18 +616,19 @@ export class LedgerService {
   /**
    * MONEY-17 (round 7, lead ruling R6-1): a payment writes the buyer's `out`
    * row with the charge the buyer was QUOTED, before the provider answers.
-   * When the provider's own record of the debit is LOWER, nobody is owed
-   * anything and the row must say what really left the wallet: this takes
-   * the provider's figures and completes the row, so a delivered purchase is
-   * never left `pending`. Only the payment's own `out` row on the buyer's
+   * When the provider's own record of the debit differs, LOWER or (lead
+   * ruling, 10 Oct 2026) HIGHER, the row must say what really left the
+   * wallet: this takes the provider's figures and completes the row, so a
+   * delivered purchase is never left `pending`. Only the payment's own `out`
+   * row on the buyer's
    * wallet, only the running provider's, only while it is still at the
    * quoted figures and `pending` (or failed only because the provider had no
    * record yet, which the record now overturns: a revival), and never a row
    * that holds a disagreement about the AMOUNT (that is a stop). A note the
-   * row already holds about the charge (a status check saw the lower charge
-   * first) stays as the trail. A debit ABOVE the quote never comes here: that
-   * is a disagreement the ledger keeps as a stop (NUV-08 reconciles it).
-   * Returns whether the row changed.
+   * row already holds about the charge (a status check or a webhook saw the
+   * other charge first) stays as the trail. A debit above the quote is
+   * flagged on the payment for NUV-08, not held on the row. Returns whether
+   * the row changed.
    */
   async completeDebitAt(
     paymentId: string,
@@ -679,39 +680,6 @@ export class LedgerService {
       },
     });
     return pending.count + revived.count > 0;
-  }
-
-  /**
-   * MONEY-17 (round 8, F1): once the provider's own charge on a payment's
-   * debit is known, the buyer's row says that charge in `providerFeeKobo`,
-   * whatever path learned it. A row `completeDebitAt` completed already says
-   * it; a row held at the quoted figures (a debit above the quote is a stop
-   * the ledger keeps) takes the charge here without moving its status or its
-   * held figures. Only the payment's own `out` row on the buyer's wallet, and
-   * only the running provider's. Returns whether the row changed.
-   */
-  async recordProviderCharge(
-    paymentId: string,
-    feeKobo: bigint,
-  ): Promise<boolean> {
-    const { count } = await this.prisma.fintavaLedgerEntry.updateMany({
-      where: {
-        paymentId,
-        walletKind: 'user',
-        direction: 'out',
-        AND: [
-          rowsOf(this.provider.name),
-          {
-            OR: [
-              { providerFeeKobo: null },
-              { providerFeeKobo: { not: feeKobo } },
-            ],
-          },
-        ],
-      },
-      data: { providerFeeKobo: feeKobo },
-    });
-    return count > 0;
   }
 
   private async recordIn(

@@ -2187,12 +2187,20 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
         expect(row.discrepancy).toContain(`took ${real} kobo`);
         expect(row.discrepancy).toContain('quoted 102325 kobo');
         expect(row.discrepancy).toContain('feeKobo 2325 vs 3000');
-        // Ruling 5 (round 7 decision (c)): a debit above the quote is a stop
-        // the ledger keeps on the buyer's row; NUV-08 reconciles it.
+        // The lead's ruling of 10 Oct 2026: a debit above the quote completes
+        // the buyer's row at what Fintava took, as below the quote does; the
+        // flag and both figures stay on the payment for NUV-08.
         expect([out.status, out.feeKobo, out.totalKobo]).toEqual([
-          'pending',
-          2325n,
-          102_325n,
+          'completed',
+          3000n,
+          103_000n,
+        ]);
+        expect(out.completedAt).not.toBeNull();
+        const h = await historyOf(p, paid.id);
+        expect([h?.status, h?.totalKobo, h?.fee.providerFeeKobo]).toEqual([
+          'completed',
+          real,
+          fee,
         ]);
       } else if (kind === 'below') {
         expect(row.debitReviewSince).toBeNull();
@@ -2272,14 +2280,13 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
       const [inn, out] = await ledgerRows(paid.reference);
       expect(inn.status).toBe('completed');
       expect(out.providerFeeKobo).toBe(BigInt(fee));
-      expect(out.status).toBe(kind === 'above' ? 'pending' : 'completed');
-      if (kind === 'below') {
-        expect([out.feeKobo, out.totalKobo]).toEqual([
-          BigInt(fee),
-          BigInt(real),
-        ]);
-        expect((await historyOf(p, paid.id))?.totalKobo).toBe(real);
-      }
+      // Above or below: the buyer's row says what Fintava took, completed.
+      expect([out.status, out.feeKobo, out.totalKobo]).toEqual([
+        'completed',
+        BigInt(fee),
+        BigInt(real),
+      ]);
+      expect((await historyOf(p, paid.id))?.totalKobo).toBe(real);
     },
   );
 
@@ -2300,8 +2307,7 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
         (r) => r.direction === 'out',
       )!;
       expect(out.providerFeeKobo).toBe(BigInt(fee));
-      expect(out.status).toBe(fee > 2325 ? 'pending' : 'completed');
-      if (fee <= 2325) expect(out.feeKobo).toBe(BigInt(fee));
+      expect([out.status, out.feeKobo]).toEqual(['completed', BigInt(fee)]);
     },
   );
 

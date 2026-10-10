@@ -1499,11 +1499,15 @@ Fintava or on Nuvion, whichever the server runs.
   standing. Once the provider's charge is known, the buyer's ledger row says
   it in `providerFeeKobo` on every path, never the quoted one (round 8, F1);
   history, statements and the receipt still read it through `feeOf`.
-  - **Above the quote**: `debitReviewSince` is set and both figures are named
-    on `discrepancy` (NUV-08 reconciles it with the provider); the price
-    moved as asked, so what was paid for is delivered. The ledger's `out` row
-    keeps its own rule (a disagreement is held `pending` with its note, not
-    applied: MONEY-10).
+  - **Above the quote** (lead ruling, 10 Oct 2026): the money left the
+    wallet at the provider's figures, so both ledger rows complete at them
+    (the buyer's row takes the provider's charge, exactly as below), and a
+    delivered purchase never sits `pending` in `GET /money/transactions`.
+    `debitReviewSince` is set on the payment and both figures are named on
+    `discrepancy` (NUV-08 reconciles it with the provider); the price moved
+    as asked, so what was paid for is delivered. A row that holds a
+    disagreement about the AMOUNT is still held (a stop); the row's note may
+    keep the quote.
   - **Below the quote**: nobody is owed anything. Both ledger rows complete
     at the real figures (the buyer's row takes the provider's charge), the
     payment records them and the difference on `discrepancy`, and nothing is
@@ -1559,8 +1563,8 @@ Fintava or on Nuvion, whichever the server runs.
   provider's figures from its answer. A difference is decided as the
   paragraph "The real debit is the record" says (a charge below the quote,
   as Fintava's sandbox's ₦0, completes the rows at what was taken and is kept
-  on the payment's `discrepancy`; one above is held and flagged for
-  MONEY-16 and NUV-08).
+  on the payment's `discrepancy`; one above completes them at what was taken
+  too and is flagged on the payment for MONEY-16 and NUV-08).
 - **Answers** (all `201` with `PaymentView`, stored for the key):
   - `completed`: the provider moved the price.
   - `pending`, with `statusMessage` "We're still confirming this payment.
