@@ -600,7 +600,7 @@ describe('Not enough money, and still confirming (MONEY-19), Nuvion stood in', (
     expect(await polled(p, paid.id)).toEqual(paid);
   });
 
-  it('only the payer reads a payment: another person, an unknown id and a payee get the same 404; a bad id is 400; no token is 401; no wallet is 409; the quote route is still the quote', async () => {
+  it('only the payer reads a payment: another person and an unknown id get the same 404; a bad id is 400; no token is 401; no wallet is 409; the quote route is still the quote', async () => {
     const p = await buyer(500_000);
     const other = await buyer(500_000);
     const q = await quoted(p, 'p-private');
