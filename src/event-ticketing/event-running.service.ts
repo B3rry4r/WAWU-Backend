@@ -15,6 +15,14 @@ import {
   ticketTotals,
 } from './ticket-counts';
 
+/** The longest ticket code the Hub can hold (the host-only scan's limit too). */
+const MAX_TICKET_CODE_LENGTH = 40;
+
+/** Whether scanned text could be a ticket code: printable ASCII, no longer than a code. */
+function canBeTicketCode(text: string): boolean {
+  return text.length <= MAX_TICKET_CODE_LENGTH && /^[\x20-\x7e]+$/.test(text);
+}
+
 /** GET /events/mine/sold: one row per event the caller hosts. */
 export interface HostSoldCount {
   eventId: string;
@@ -383,16 +391,22 @@ export class EventRunningService {
     }
 
     const normalised = code.trim().toUpperCase();
-    const ticket = await this.prisma.eventTicket.findUnique({
-      where: { code: normalised },
-      select: {
-        id: true,
-        eventId: true,
-        status: true,
-        ticketType: { select: { name: true } },
-        order: { select: { buyerWawuId: true } },
-      },
-    });
+    // Only text that can be a ticket code is looked up: the unique index and
+    // the column hold codes of at most 40 printable ASCII characters. Anything
+    // else a camera read (a long link, a code with control characters) is not
+    // a ticket here, so it is a verdict, never a query or an error.
+    const ticket = !canBeTicketCode(normalised)
+      ? null
+      : await this.prisma.eventTicket.findUnique({
+          where: { code: normalised },
+          select: {
+            id: true,
+            eventId: true,
+            status: true,
+            ticketType: { select: { name: true } },
+            order: { select: { buyerWawuId: true } },
+          },
+        });
 
     // A code for another event is not a ticket at this door (E24), and
     // saying so confirms nothing about the other event.

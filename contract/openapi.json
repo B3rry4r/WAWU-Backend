@@ -13129,7 +13129,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ScanTicketDto"
+                "$ref": "#/components/schemas/DoorScanDto"
               }
             }
           }
@@ -30365,6 +30365,19 @@
             "maxLength": 30
           }
         }
+      },
+      "DoorScanDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 4,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "code"
+        ]
       },
       "MoneyErrorReason": {
         "type": "object",

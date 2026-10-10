@@ -35,3 +35,22 @@ export class AddDoorStaffDto {
   @MaxLength(30)
   label?: string;
 }
+
+/**
+ * POST /events/:id/door/check-in: one scan at the door.
+ *
+ * The door answers EVERY scan with a verdict. A phone camera reads whatever
+ * QR is in front of it (a flyer's link, a poster, a wifi code), and "this is
+ * not a ticket" is the red result on E24, not a validation error. So the body
+ * accepts any text a scanner can hand over, up to `MAX_DOOR_SCAN_LENGTH`,
+ * where the host-only protected scan (`ScanTicketDto`, 40) keeps its own
+ * limit untouched. The service decides whether the text can be a ticket code.
+ */
+export const MAX_DOOR_SCAN_LENGTH = 500;
+
+export class DoorScanDto {
+  @IsString()
+  @MinLength(4)
+  @MaxLength(MAX_DOOR_SCAN_LENGTH)
+  code!: string;
+}

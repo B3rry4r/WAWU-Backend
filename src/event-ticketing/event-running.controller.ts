@@ -11,8 +11,7 @@ import {
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
-import { ScanTicketDto } from './dto/event-ticketing.dto';
-import { AddDoorStaffDto } from './dto/event-running.dto';
+import { AddDoorStaffDto, DoorScanDto } from './dto/event-running.dto';
 import {
   EventRunningService,
   type DoorCheckInResult,
@@ -98,7 +97,7 @@ export class EventRunningController {
   checkIn(
     @CurrentUser() user: WawuJwtClaims,
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: ScanTicketDto,
+    @Body() dto: DoorScanDto,
   ): Promise<DoorCheckInResult> {
     return this.service.checkIn(user.sub, id, dto.code);
   }
