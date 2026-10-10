@@ -1,8 +1,5 @@
 import type { PaymentKind } from '../dto/money-enums';
-import type {
-  HoldReleaseCondition,
-  HoldStatus,
-} from '../money-view.type';
+import type { HoldReleaseCondition, HoldStatus } from '../money-view.type';
 
 /**
  * The rules of a hold that need no database (task MONEY-18, R-19).
@@ -24,9 +21,7 @@ export const HOLD_RELEASE_CONDITIONS: Readonly<
 };
 
 /** The release condition of a held kind; null for a kind that is not held. */
-export function releaseConditionOf(
-  kind: PaymentKind | string,
-): HoldReleaseCondition | null {
+export function releaseConditionOf(kind: string): HoldReleaseCondition | null {
   return (
     (HOLD_RELEASE_CONDITIONS as Record<string, HoldReleaseCondition>)[kind] ??
     null

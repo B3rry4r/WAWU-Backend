@@ -262,7 +262,8 @@ describe('Hold, release and refund (MONEY-18) on Fintava', () => {
   const asked = (holdId: string) =>
     double.seen.filter(
       (r) =>
-        r.path.includes(holdId) || JSON.stringify(r.body ?? {}).includes(holdId),
+        r.path.includes(holdId) ||
+        JSON.stringify(r.body ?? {}).includes(holdId),
     ).length;
 
   async function quoted(
@@ -330,29 +331,25 @@ describe('Hold, release and refund (MONEY-18) on Fintava', () => {
       status: 200,
       body: MERCHANT_BALANCE,
     });
-    double.on(
-      'GET',
-      /^\/customer\/wallet\/balance\//,
-      (req: SeenRequest) => {
-        const id = req.path.split('/').pop()!;
-        const account = wallets.byId.get(id);
-        if (!account) {
-          return { status: 400, body: fintavaError(400, 'Wallet not found') };
-        }
-        const naira = (wallets.kobo.get(account) ?? 0) / 100;
-        return {
-          status: 200,
-          body: {
-            data: {
-              balance: { bookedBalance: naira, availableBalance: naira },
-              tier: 'TIER_2',
-            },
-            status: 200,
-            message: 'Wallet details fetched',
+    double.on('GET', /^\/customer\/wallet\/balance\//, (req: SeenRequest) => {
+      const id = req.path.split('/').pop()!;
+      const account = wallets.byId.get(id);
+      if (!account) {
+        return { status: 400, body: fintavaError(400, 'Wallet not found') };
+      }
+      const naira = (wallets.kobo.get(account) ?? 0) / 100;
+      return {
+        status: 200,
+        body: {
+          data: {
+            balance: { bookedBalance: naira, availableBalance: naira },
+            tier: 'TIER_2',
           },
-        };
-      },
-    );
+          status: 200,
+          message: 'Wallet details fetched',
+        },
+      };
+    });
     double.on('GET', /^\/transaction\/reference\//, (req: SeenRequest) => {
       const ref = decodeURIComponent(
         req.path.replace('/transaction/reference/', ''),
@@ -720,9 +717,9 @@ describe('Hold, release and refund (MONEY-18) on Fintava', () => {
     // Asked again, from anywhere, nothing more moves.
     await holds.refund({ holdId: row.id });
     await holds.sweep(later());
-    expect(wallets.sends.filter((s) => s.to === buyer.accountNumber)).toHaveLength(
-      1,
-    );
+    expect(
+      wallets.sends.filter((s) => s.to === buyer.accountNumber),
+    ).toHaveLength(1);
   });
 
   // -------------------------------------------------------------------------
@@ -849,9 +846,9 @@ describe('Hold, release and refund (MONEY-18) on Fintava', () => {
     const buyer = await person(300_000);
     const released = await paid(buyer, 'paid_dm', listing(creator));
     await holds.release({ paymentId: released.id });
-    await expect(holds.refund({ paymentId: released.id })).rejects.toMatchObject(
-      { code: 'other_action_chosen' },
-    );
+    await expect(
+      holds.refund({ paymentId: released.id }),
+    ).rejects.toMatchObject({ code: 'other_action_chosen' });
     expect(wallets.sends.filter((s) => s.to === buyer.accountNumber)).toEqual(
       [],
     );
@@ -905,7 +902,7 @@ describe('Hold, release and refund (MONEY-18) on Fintava', () => {
     expect(row.status).toBe('released');
   });
 
-  it('a bill has no payee: releasing it moves nothing and the whole price is WAWU\'s', async () => {
+  it("a bill has no payee: releasing it moves nothing and the whole price is WAWU's", async () => {
     const buyer = await person(300_000);
     const payment = await paid(buyer, 'bill', listing(null, 100_000, 'bill'));
     const hold = await holdOfPayment(payment.id);
@@ -922,9 +919,9 @@ describe('Hold, release and refund (MONEY-18) on Fintava', () => {
     // A refund of a bill (the biller failed) does move the price back.
     const failed = await paid(buyer, 'bill', listing(null, 100_000, 'bill'));
     await holds.refund({ paymentId: failed.id }, 'the biller failed');
-    expect(wallets.sends.filter((s2) => s2.to === buyer.accountNumber)).toHaveLength(
-      1,
-    );
+    expect(
+      wallets.sends.filter((s2) => s2.to === buyer.accountNumber),
+    ).toHaveLength(1);
   });
 
   // -------------------------------------------------------------------------
@@ -995,7 +992,7 @@ describe('Hold, release and refund (MONEY-18) on Fintava', () => {
     expect((await holdOfPayment(payment.id)).status).toBe('released');
   });
 
-  it('WAWU\'s own account short of money keeps the hold held, logs the error, and pays when it is topped up', async () => {
+  it("WAWU's own account short of money keeps the hold held, logs the error, and pays when it is topped up", async () => {
     const creator = await person(0, false);
     const buyer = await person(300_000);
     const payment = await paid(buyer, 'paid_dm', listing(creator));
@@ -1008,7 +1005,9 @@ describe('Hold, release and refund (MONEY-18) on Fintava', () => {
     expect(s).toMatchObject({ state: 'waiting', waiting: 'funds' });
     expect(sendsOf(`wawu-rel-${hold.id}`)).toEqual([]);
     expect(
-      logger.lines.some((l) => l.includes(hold.id) && l.includes('cannot cover')),
+      logger.lines.some(
+        (l) => l.includes(hold.id) && l.includes('cannot cover'),
+      ),
     ).toBe(true);
 
     wallets.kobo.set(MERCHANT_ACCOUNT, keep);
@@ -1073,7 +1072,7 @@ describe('Hold, release and refund (MONEY-18) on Fintava', () => {
     expect(String(out.feeKobo)).toBe('2325');
   });
 
-  it('a 5xx is an unknown outcome too: pending until Fintava\'s record says, one send', async () => {
+  it("a 5xx is an unknown outcome too: pending until Fintava's record says, one send", async () => {
     const creator = await person(0, false);
     const buyer = await person(300_000);
     const payment = await paid(buyer, 'paid_dm', listing(creator));
@@ -1118,7 +1117,7 @@ describe('Hold, release and refund (MONEY-18) on Fintava', () => {
     expect(sendsOf(`wawu-rel-${hold.id}`)).toHaveLength(1);
   });
 
-  it('Fintava\'s own record that the move failed starts a new try under a new reference, once', async () => {
+  it("Fintava's own record that the move failed starts a new try under a new reference, once", async () => {
     const creator = await person(0, false);
     const buyer = await person(300_000);
     const payment = await paid(buyer, 'paid_dm', listing(creator));
@@ -1131,7 +1130,10 @@ describe('Hold, release and refund (MONEY-18) on Fintava', () => {
     const first = `wawu-rel-${hold.id}`;
     wallets.failures.add(first);
     const undo = wallets.sends.find((x) => x.reference === first)!;
-    wallets.kobo.set(undo.to, (wallets.kobo.get(undo.to) ?? 0) - undo.amountKobo);
+    wallets.kobo.set(
+      undo.to,
+      (wallets.kobo.get(undo.to) ?? 0) - undo.amountKobo,
+    );
     wallets.kobo.set(
       undo.from,
       (wallets.kobo.get(undo.from) ?? 0) + undo.amountKobo + undo.feeKobo,
@@ -1162,7 +1164,7 @@ describe('Hold, release and refund (MONEY-18) on Fintava', () => {
     expect(row.discrepancy).toContain('85100');
   });
 
-  it('another provider\'s hold is never moved by this one', async () => {
+  it("another provider's hold is never moved by this one", async () => {
     const creator = await person(0, false);
     const buyer = await person(300_000);
     const payment = await paid(buyer, 'paid_dm', listing(creator));
@@ -1220,7 +1222,9 @@ describe('Hold, release and refund (MONEY-18) on Fintava', () => {
     expect(new Set(seen.map((h) => h.id)).size).toBe(5);
 
     // The creator is owed them; the buyer has paid, owes, and is owed none.
-    const owed = body<HoldPage>(await listHolds(creator, 'role=payee&limit=100'));
+    const owed = body<HoldPage>(
+      await listHolds(creator, 'role=payee&limit=100'),
+    );
     expect(owed.data!.items.map((h) => h.paymentId).sort()).toEqual(
       made.map((m) => m.id).sort(),
     );
@@ -1254,7 +1258,10 @@ describe('Hold, release and refund (MONEY-18) on Fintava', () => {
     const refunded = body<HoldView>(
       await getHold(buyer, made[1].hold!.id),
     ).data!;
-    expect(refunded).toMatchObject({ status: 'refunded', refundedKobo: 100_000 });
+    expect(refunded).toMatchObject({
+      status: 'refunded',
+      refundedKobo: 100_000,
+    });
   });
 
   it('the routes ask for a wallet and a good query, as the contract says', async () => {
@@ -1270,18 +1277,26 @@ describe('Hold, release and refund (MONEY-18) on Fintava', () => {
     expect((await listHolds(buyer, 'role=payer&limit=101')).status).toBe(400);
     const bad = await listHolds(buyer, 'role=payer&cursor=nonsense');
     expect(bad.status).toBe(400);
-    expect(JSON.stringify(bad.body)).toContain('cursor is not one this list gave');
+    expect(JSON.stringify(bad.body)).toContain(
+      'cursor is not one this list gave',
+    );
     // Unauthenticated: no.
-    const anon = await request(app.getHttpServer()).get(`${BASE}/holds?role=payer`);
+    const anon = await request(app.getHttpServer()).get(
+      `${BASE}/holds?role=payer`,
+    );
     expect(anon.status).toBe(401);
   });
 
-  it('a held kind\'s quote says it will be held, and a kind that is not held says it will not', async () => {
+  it("a held kind's quote says it will be held, and a kind that is not held says it will not", async () => {
     const creator = await person(0, false);
     const buyer = await person(300_000);
     const q = await quoted(buyer, 'bill', listing(null, 100_000, 'bill'));
     expect(q.willBeHeld).toBe(true);
-    const q2 = await quoted(buyer, 'event_ticket', listing(creator, 100_000, 'ticket'));
+    const q2 = await quoted(
+      buyer,
+      'event_ticket',
+      listing(creator, 100_000, 'ticket'),
+    );
     expect(q2.willBeHeld).toBe(true);
   });
 
@@ -1307,8 +1322,11 @@ describe('Hold, release and refund (MONEY-18) on Fintava', () => {
     await payments.sweep(later());
     await until(
       async () =>
-        (await prisma.walletPayment.findUniqueOrThrow({ where: { id: pending.id } }))
-          .fulfilledAt !== null,
+        (
+          await prisma.walletPayment.findUniqueOrThrow({
+            where: { id: pending.id },
+          })
+        ).fulfilledAt !== null,
     );
     await payments.sweep(later());
     expect(
@@ -1321,7 +1339,9 @@ describe('Hold, release and refund (MONEY-18) on Fintava', () => {
     ).toEqual([hold.id]);
     // The same payment, read again, now carries its hold.
     const view = await payments.holdOf(
-      await prisma.walletPayment.findUniqueOrThrow({ where: { id: pending.id } }),
+      await prisma.walletPayment.findUniqueOrThrow({
+        where: { id: pending.id },
+      }),
     );
     expect(view).toMatchObject({ id: hold.id, status: 'held' });
     await statusChecks.sweep(later());

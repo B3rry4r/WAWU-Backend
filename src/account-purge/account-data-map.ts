@@ -320,6 +320,18 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     disposition: 'ANONYMISED',
     clear: ['payerAccountNumber', 'note', 'openKey'],
   },
+  // The price of a held payment (a paid DM, a ticket, a bill) waits in WAWU's
+  // own account until it is released or refunded (MONEY-18). The hold keeps
+  // the money's record when the payer's account goes; their side is
+  // anonymised, and so is the account the money was returned to (a refund's
+  // destination is the payer's wallet; the ledger and the payment keep the
+  // rest for the nightly check).
+  {
+    model: 'WalletHold',
+    column: 'payerWawuUserId',
+    disposition: 'ANONYMISED',
+    clear: ['destinationAccountNumber'],
+  },
   // The codes this person made to share their receipts (WALLET-18). They go
   // with them, and each code then opens the plain "not found" page.
   { model: 'MoneyReceipt', column: 'wawuUserId', disposition: 'OWNED' },
@@ -467,6 +479,13 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'payeeWawuUserId',
     disposition: 'COUNTERPARTY',
   },
+  // Somebody else's held payment that pays this account (MONEY-18): the
+  // payer's hold, and the share it owes, survive.
+  {
+    model: 'WalletHold',
+    column: 'payeeWawuUserId',
+    disposition: 'COUNTERPARTY',
+  },
 
   // ── admin audit trail, kept on purpose ──────────────────────────────────
   { model: 'AdminKycAudit', column: 'subjectWawuUserId', disposition: 'AUDIT' },
@@ -505,6 +524,8 @@ export const NOT_A_USER_REFERENCE: ReadonlyArray<{
   // WAWU's fee and WAWU's 15% share in kobo on a payment (MONEY-17), not a person.
   { model: 'WalletPayment', column: 'wawuFeeKobo' },
   { model: 'WalletPayment', column: 'wawuShareKobo' },
+  // WAWU's 15% share in kobo on a hold (MONEY-18), not a person.
+  { model: 'WalletHold', column: 'wawuShareKobo' },
 ];
 
 /** The rows a purge keeps with the account's side set to null. */

@@ -39,12 +39,12 @@ import { LedgerStatusService } from '../../ledger/ledger-status.service';
 import { MoneyError } from '../../money-error';
 import { MoneyModule } from '../../money.module';
 import type { PaymentQuoteView, PaymentView } from '../../money-view.type';
-import {
-  type CompletedPayment,
-  PayableRegistry,
-} from '../payable-registry';
+import { type CompletedPayment, PayableRegistry } from '../payable-registry';
 import { DEFAULT_PAYMENT_CHARGE_REVIEW_ABOVE_KOBO } from '../payment-config';
-import { STILL_CONFIRMING_MESSAGE, WalletPaymentService } from '../wallet-payment.service';
+import {
+  STILL_CONFIRMING_MESSAGE,
+  WalletPaymentService,
+} from '../wallet-payment.service';
 
 /**
  * Two follow-ups of MONEY-17 round 8, carried into MONEY-18 (lead rulings,
@@ -220,7 +220,10 @@ describe('MONEY-17 follow-ups (D8-1, N2) on Fintava', () => {
     return { id, auth: `Bearer ${mintToken(id)}`, customerId, accountNumber };
   }
 
-  async function quoted(p: Person, targetId: string): Promise<PaymentQuoteView> {
+  async function quoted(
+    p: Person,
+    targetId: string,
+  ): Promise<PaymentQuoteView> {
     const res = await request(app.getHttpServer())
       .get(`${BASE}/quote?kind=content_unlock&targetId=${targetId}`)
       .set('Authorization', p.auth);
@@ -313,7 +316,10 @@ describe('MONEY-17 follow-ups (D8-1, N2) on Fintava', () => {
 
   function installFintava() {
     double.reset();
-    double.on('GET', '/merchant/balance', { status: 200, body: MERCHANT_BALANCE });
+    double.on('GET', '/merchant/balance', {
+      status: 200,
+      body: MERCHANT_BALANCE,
+    });
     double.on('GET', /^\/customer\/wallet\/balance\//, (req: SeenRequest) => {
       const account = wallets.byId.get(req.path.split('/').pop()!);
       if (!account) {
@@ -338,7 +344,10 @@ describe('MONEY-17 follow-ups (D8-1, N2) on Fintava', () => {
       );
       const send = wallets.sends.find((x) => x.reference === ref);
       if (!send) {
-        return { status: 404, body: fintavaError(404, 'Transaction not found!') };
+        return {
+          status: 404,
+          body: fintavaError(404, 'Transaction not found!'),
+        };
       }
       return {
         status: 200,
@@ -476,7 +485,11 @@ describe('MONEY-17 follow-ups (D8-1, N2) on Fintava', () => {
         if (!targetId.startsWith('once-')) {
           throw new MoneyError('target_not_found', 'That piece is gone.');
         }
-        return { title: `Piece ${targetId}`, priceKobo: 100_000, payee: creator };
+        return {
+          title: `Piece ${targetId}`,
+          priceKobo: 100_000,
+          payee: creator,
+        };
       },
       onCompleted: async (p) => {
         await Promise.resolve();
@@ -672,7 +685,9 @@ describe('MONEY-17 follow-ups (D8-1, N2) on Fintava', () => {
     expect(row.fulfilledAt).toBeNull();
     expect(row.openKey).not.toBeNull();
     // The buyer's ledger row is marked for the person too, and not completed.
-    const out = (await ledgerRows(reference)).find((r) => r.direction === 'out')!;
+    const out = (await ledgerRows(reference)).find(
+      (r) => r.direction === 'out',
+    )!;
     expect(out.status).toBe('pending');
     expect(out.discrepancy).toContain('charge not trusted');
   }
@@ -685,7 +700,9 @@ describe('MONEY-17 follow-ups (D8-1, N2) on Fintava', () => {
   ) {
     await payments.sweep(later());
     await payments.settle(id, later(), true);
-    const out = (await ledgerRows(reference)).find((r) => r.direction === 'out')!;
+    const out = (await ledgerRows(reference)).find(
+      (r) => r.direction === 'out',
+    )!;
     await statusChecks.check(out.id, later(5 * 60_000));
     await statusChecks.sweep(later(10 * 60_000));
     await payments.sweep(later(60 * 60_000));
@@ -694,11 +711,15 @@ describe('MONEY-17 follow-ups (D8-1, N2) on Fintava', () => {
     expect(deliveries(id)).toBe(0);
     expect(row.fulfilledAt).toBeNull();
     // A second report of the same charge changes nothing either.
-    expect(await consumer.consume(await deliverWebhook(p, id))).toBe('processed');
+    expect(await consumer.consume(await deliverWebhook(p, id))).toBe(
+      'processed',
+    );
     await new Promise((r) => setTimeout(r, 200));
     expect((await rowOf(id)).status).toBe('pending');
     expect(deliveries(id)).toBe(0);
-    expect(wallets.sends.filter((s) => s.reference === reference)).toHaveLength(1);
+    expect(wallets.sends.filter((s) => s.reference === reference)).toHaveLength(
+      1,
+    );
   }
 
   it('N2 receipt, above the cap: the answer to the send carries a charge ₦1,000.01 above the quote: reviewed with both figures, not delivered, no path completes it', async () => {
@@ -759,7 +780,7 @@ describe('MONEY-17 follow-ups (D8-1, N2) on Fintava', () => {
     expect(deliveries(viewOver.id)).toBe(0);
   });
 
-  it('N2 signed report after a lost answer: Fintava\'s webhook says it took far more than the quote: reviewed, not delivered, and neither the sweep nor the status check completes it', async () => {
+  it("N2 signed report after a lost answer: Fintava's webhook says it took far more than the quote: reviewed, not delivered, and neither the sweep nor the status check completes it", async () => {
     const fee = QUOTE_FEE + CAP + 500;
     const { p, paid } = await lostAnswerTaking(fee);
     expect(await consumer.consume(await deliverWebhook(p, paid.id))).toBe(
@@ -771,7 +792,7 @@ describe('MONEY-17 follow-ups (D8-1, N2) on Fintava', () => {
     await expectChargeReview(paid.id, paid.reference, fee);
   });
 
-  it('N2 sweep and status check alone: Fintava\'s lookups carry no charge, so the quote stands and nothing is untrusted (the boundary of the Fintava record)', async () => {
+  it("N2 sweep and status check alone: Fintava's lookups carry no charge, so the quote stands and nothing is untrusted (the boundary of the Fintava record)", async () => {
     const { paid } = await lostAnswerTaking(QUOTE_FEE + CAP + 500);
     await payments.settle(paid.id, new Date(), true);
     const row = await rowOf(paid.id);

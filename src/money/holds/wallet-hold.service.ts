@@ -227,9 +227,7 @@ export class WalletHoldService {
    * every pass), of the provider this server runs.
    */
   @Cron(CronExpression.EVERY_MINUTE, { name: 'money-hold-settle' })
-  async sweep(
-    now = new Date(),
-  ): Promise<{ checked: number; settled: number }> {
+  async sweep(now = new Date()): Promise<{ checked: number; settled: number }> {
     const counts = { checked: 0, settled: 0 };
     if (this.sweeping) return counts;
     this.sweeping = true;
@@ -330,7 +328,9 @@ export class WalletHoldService {
     if (destination.kind === 'review') {
       return this.toReview(hold, destination.note);
     }
-    if (await this.isWawuAccount(hold.merchantAccountNumber, destination.account)) {
+    if (
+      await this.isWawuAccount(hold.merchantAccountNumber, destination.account)
+    ) {
       return this.toReview(
         hold,
         `the ${action} would move money from WAWU's account to WAWU's account`,
@@ -715,10 +715,16 @@ export class WalletHoldService {
     const dest = hold.destinationAccountNumber;
     if (!dest || !hold.customerReference) return;
     const amount = koboNumber(hold.transferKobo!);
-    const person = action === 'release' ? hold.payeeWawuUserId : hold.payerWawuUserId;
+    const person =
+      action === 'release' ? hold.payeeWawuUserId : hold.payerWawuUserId;
     if (!person) return;
-    const category = action === 'release' ? ('earning' as const) : ('refund' as const);
-    const link = { kind: hold.kind as PaymentKind, targetId: hold.targetId, title: hold.title };
+    const category =
+      action === 'release' ? ('earning' as const) : ('refund' as const);
+    const link = {
+      kind: hold.kind as PaymentKind,
+      targetId: hold.targetId,
+      title: hold.title,
+    };
     const common = {
       status: 'completed' as const,
       category,
@@ -844,10 +850,7 @@ export class WalletHoldService {
   }
 
   /** Out of the sweep, for a person to look at. The money stays where it is. */
-  private async toReview(
-    hold: HoldRow,
-    note: string,
-  ): Promise<HoldSettlement> {
+  private async toReview(hold: HoldRow, note: string): Promise<HoldSettlement> {
     const { count } = await this.prisma.walletHold.updateMany({
       where: { id: hold.id, status: 'held', reviewSince: null },
       data: {
@@ -878,7 +881,9 @@ export class WalletHoldService {
       action: (hold.action ?? 'release') as HoldAction,
       state,
       waiting:
-        state === 'waiting' ? ((hold.waiting as HoldWaiting | null) ?? null) : null,
+        state === 'waiting'
+          ? ((hold.waiting as HoldWaiting | null) ?? null)
+          : null,
       status: hold.status as HoldSettlement['status'],
     };
   }

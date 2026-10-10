@@ -409,13 +409,15 @@ describe('Hold, release and refund (MONEY-18) on the provider seam, Nuvion stood
       where: { customerReference: reference },
       orderBy: { direction: 'asc' },
     });
-    expect(rows.map((r) => [r.walletKind, r.direction, r.status, String(r.feeKobo)])).toEqual([
+    expect(
+      rows.map((r) => [r.walletKind, r.direction, r.status, String(r.feeKobo)]),
+    ).toEqual([
       ['user', 'in', 'completed', '0'],
       ['merchant', 'out', 'completed', String(FEE)],
     ]);
   });
 
-  it('a refund returns the price, not Nuvion\'s fee on the payment, once, even asked twice and while pending', async () => {
+  it("a refund returns the price, not Nuvion's fee on the payment, once, even asked twice and while pending", async () => {
     const creator = await person(0, false);
     const buyer = await person(500_000);
     const payment = await paid(buyer, 'paid_dm', listing(creator));
@@ -469,7 +471,7 @@ describe('Hold, release and refund (MONEY-18) on the provider seam, Nuvion stood
     expect(available(creator)).toBe(85_000n);
   });
 
-  it('Nuvion\'s own word that the move failed starts a new try under a new reference, once', async () => {
+  it("Nuvion's own word that the move failed starts a new try under a new reference, once", async () => {
     const creator = await person(0, false);
     const buyer = await person(900_000);
     const payment = await paid(buyer, 'paid_dm', listing(creator));
@@ -509,7 +511,7 @@ describe('Hold, release and refund (MONEY-18) on the provider seam, Nuvion stood
     expect(transfersOf(`wawu-rel-${hold.id}-2`)).toEqual([]);
   });
 
-  it('Nuvion\'s refusals keep the hold held: funds, compliance, a limit; each goes through once it clears', async () => {
+  it("Nuvion's refusals keep the hold held: funds, compliance, a limit; each goes through once it clears", async () => {
     const creator = await person(0, false);
     const buyer = await person(900_000);
     const payment = await paid(buyer, 'paid_dm', listing(creator));
@@ -555,9 +557,7 @@ describe('Hold, release and refund (MONEY-18) on the provider seam, Nuvion stood
     expect(s.state).toBe('review');
     const hold = await holdOf(payment.id);
     expect(transfersOf(`wawu-rel-${hold.id}`)).toEqual([]);
-    expect(hold.discrepancy).toContain(
-      "WAWU's account to WAWU's account",
-    );
+    expect(hold.discrepancy).toContain("WAWU's account to WAWU's account");
     await prisma.fintavaWallet.update({
       where: { wawuUserId: creator.id },
       data: { accountNumber: row.accountNumber },
@@ -576,9 +576,9 @@ describe('Hold, release and refund (MONEY-18) on the provider seam, Nuvion stood
     expect(s).toMatchObject({ state: 'waiting', waiting: 'provider' });
     nuvion.mode = 'successful';
     await holds.sweep(later(2 * 60 * 60_000));
-    expect(
-      transfersOf(`wawu-ref-${(await holdOf(payment.id)).id}`),
-    ).toEqual([]);
+    expect(transfersOf(`wawu-ref-${(await holdOf(payment.id)).id}`)).toEqual(
+      [],
+    );
     expect(fintavaHits).toEqual([]);
     await prisma.walletHold.update({
       where: { paymentId: payment.id },
