@@ -39,8 +39,10 @@ import type { NuvionClient } from './nuvion-client';
  *   (the BVN and NIN are checked inside Nuvion's review of the entity);
  * - the KYC is its own submission (entity, documents, onboarding
  *   submission), and the account number is provisioned after opening;
- * - the hosted selfie is off: NUV-03 turns it on once a session can be
- *   started for a child entity with an API key (SANDBOX-FINDINGS item 4).
+ * - the hosted selfie is off unless `NUVION_HOSTED_LIVENESS=on` (NUV-03,
+ *   read from the documents area, which also turns it off for an hour when
+ *   Nuvion refuses to start a session for a child entity: SANDBOX-FINDINGS
+ *   item 4). `capabilities.hostedLiveness` below is that, live.
  */
 export const NUVION_CAPABILITIES: WalletProviderCapabilities = {
   selfieMatch: false,
@@ -53,7 +55,7 @@ export const NUVION_CAPABILITIES: WalletProviderCapabilities = {
 /** Every area the adapter delegates to, one per later task. */
 export interface NuvionAreas {
   opening: NuvionOpeningMethods;
-  documents: NuvionDocumentsMethods;
+  documents: NuvionDocumentsMethods & { readonly hostedLiveness?: boolean };
   accounts: NuvionAccountsMethods;
   book: NuvionBookMethods;
   payouts: NuvionPayoutsMethods;
@@ -96,7 +98,13 @@ export class NuvionWalletProvider implements WalletProvider {
   readonly label = 'Nuvion';
   /** Built only with every Nuvion setting present (nuvion-config.ts). */
   readonly configured = true;
-  readonly capabilities = NUVION_CAPABILITIES;
+  /** NUVION_CAPABILITIES, with the hosted selfie as the documents area says now (NUV-03). */
+  get capabilities(): WalletProviderCapabilities {
+    return {
+      ...NUVION_CAPABILITIES,
+      hostedLiveness: this.areas.documents.hostedLiveness === true,
+    };
+  }
   /**
    * Nuvion names the issuing bank per account (account details' `issuer`),
    * not one bank for every wallet; NUV-04 records it per person
@@ -123,6 +131,15 @@ export class NuvionWalletProvider implements WalletProvider {
 
   get deliveries() {
     return this.areas.reconcile.deliveries;
+  }
+
+  /** The documents area (NUV-03): the upload, the submission and the hosted selfie. */
+  get documents(): NuvionDocumentsArea {
+    const area = this.areas.documents;
+    if (!(area instanceof NuvionDocumentsArea)) {
+      throw new Error("The documents area of this adapter is not Nuvion's.");
+    }
+    return area;
   }
 
   // Identity (opening, documents)

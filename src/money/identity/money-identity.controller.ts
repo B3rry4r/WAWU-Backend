@@ -74,6 +74,8 @@ export class MoneyIdentityController {
     'identity_checks_exhausted',
     'wallet_already_open',
     'provider_unreachable',
+    // NUV-02 round 2: under a provider that reviews the person itself.
+    'step_not_used',
   )
   checkBvn(
     @CurrentUser() user: WawuJwtClaims,
