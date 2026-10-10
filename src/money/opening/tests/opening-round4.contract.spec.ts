@@ -151,6 +151,31 @@ describe('NUV-02 round 4: the address limit is one atomic step (N12), the sweep 
       ).toBe(0);
     });
 
+    it('the person’s day counts the tries made, not the places held: three places held on an address leave the day untouched, three tries use it up', async () => {
+      const a = new OpeningAttempts(one, 3, 10);
+      const id = newUser();
+      const key = newKey();
+      for (let i = 0; i < 3; i += 1) {
+        await one.bvnCheckAttempt.create({
+          data: {
+            wawuUserId: id,
+            addressKey: key,
+            outcome: OPENING_PLACE_OUTCOME,
+          },
+        });
+      }
+      await expect(a.assertLeft(id, null)).resolves.toBeUndefined();
+      expect(await a.opensAgainAt(id, null)).toBeNull();
+      await one.bvnCheckAttempt.updateMany({
+        where: { wawuUserId: id },
+        data: { outcome: OPENING_ATTEMPT_OUTCOME },
+      });
+      await expect(a.assertLeft(id, null)).rejects.toMatchObject({
+        code: 'identity_checks_exhausted',
+      });
+      expect(await a.opensAgainAt(id, null)).toBeInstanceOf(Date);
+    });
+
     it('ten requests of one account at once take one place; the other nine are concurrent', async () => {
       const a = new OpeningAttempts(one, 3, 10);
       const key = newKey();

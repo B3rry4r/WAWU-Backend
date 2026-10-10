@@ -470,7 +470,7 @@ export class ReviewedOpening {
    * opening by a conditional update, so exactly one pass marks it. Returns
    * the people to tell, once each; nothing is sent to the provider.
    */
-  async expireIdle(): Promise<string[]> {
+  async expireIdle(budgetMs?: number): Promise<string[]> {
     const now = await this.host.dbNow();
     const after = this.sweepAfter;
     const out = await this.prisma.$transaction(
@@ -481,6 +481,7 @@ export class ReviewedOpening {
         if (!lock?.locked) return { told: [], resumeAfter: after };
         return expireIdleOpenings(tx, this.host.hasher.holdDays, now, {
           after,
+          budgetMs,
         });
       },
       { timeout: 60_000, maxWait: 5_000 },

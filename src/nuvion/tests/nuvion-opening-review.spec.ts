@@ -1029,6 +1029,18 @@ describe('NUV-02 round 4: the mask covers any length of separators between digit
     }
   });
 
+  it('a blob or a credential written in full-width characters is masked like one in ASCII (the characters are folded before the blob and credential passes)', () => {
+    const wide = (v: string) =>
+      v.replace(/[A-Za-z0-9]/g, (c) =>
+        String.fromCodePoint(c.codePointAt(0)! + 0xfee0),
+      );
+    const out = maskNuvionText(`file ${wide('Ab1'.repeat(20))} end`);
+    expect(out).toBe('file [data] end');
+    expect(maskNuvionText(`${wide('Bearer')} ${wide('abc.def')}`)).toBe(
+      '[credential]',
+    );
+  });
+
   it('a credential or a blob between two digit groups is still one gap, and its own words stay', () => {
     const out = maskNuvionText(
       `ref 2739 ${'A'.repeat(60)} 1845062 and Bearer abc.def.ghi`,

@@ -3354,6 +3354,28 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       }
     });
 
+    it('a request of an account whose earlier request still holds a place on that address does nothing: no opening, nothing sent, the place left alone', async () => {
+      const a = place();
+      const y = person();
+      await openFrom(y, a).expect(200);
+      const addressKey = (
+        await prisma.bvnCheckAttempt.findFirstOrThrow({
+          where: { wawuUserId: y.id },
+        })
+      ).addressKey;
+      expect(addressKey).not.toBeNull();
+      const x = person();
+      await prisma.bvnCheckAttempt.create({
+        data: { wawuUserId: x.id, outcome: 'reserved', addressKey },
+      });
+      const sentBefore = creates().length;
+      await openFrom(x, a).expect(200);
+      expect(creates()).toHaveLength(sentBefore);
+      expect(await row(x)).toBeNull();
+      expect(await reserved([x])).toBe(1);
+      expect(await tries([x])).toHaveLength(1);
+    });
+
     it('ten taps by one person at one address take one place: the three other accounts the limit leaves all proceed, the next is limited', async () => {
       const a = place();
       const x = person();
@@ -3604,6 +3626,41 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
         ).toBe(600);
       } finally {
         await unplant(kept);
+      }
+    }, 120_000);
+
+    it('the service remembers where a pass stopped: passes out of time walk through 305 openings it cannot expire to the due one behind them', async () => {
+      let ambiguous: string[] = [];
+      try {
+        ambiguous = await plantMany(305, daysAgo(60), {
+          status: 'rejected',
+          documentStatus: 'rejected',
+          decidedAgoDays: 1,
+        });
+        const real = person();
+        await opened(real);
+        await ageOpening(real, 15);
+        const reviewed = (
+          openingSvc() as unknown as {
+            reviewed: { expireIdle: (budgetMs?: number) => Promise<string[]> };
+          }
+        ).reviewed;
+        const told: string[] = [];
+        let passes = 0;
+        while (!told.includes(real.id) && passes < 10) {
+          told.push(...(await reviewed.expireIdle(0)));
+          passes += 1;
+        }
+        expect(told).toEqual([real.id]);
+        expect(passes).toBeGreaterThanOrEqual(4);
+        expect((await row(real))!.state).toBe('expired');
+        expect(
+          await prisma.fintavaWalletOpening.count({
+            where: { wawuUserId: { in: ambiguous }, state: 'review' },
+          }),
+        ).toBe(305);
+      } finally {
+        await unplant(ambiguous);
       }
     }, 120_000);
 
