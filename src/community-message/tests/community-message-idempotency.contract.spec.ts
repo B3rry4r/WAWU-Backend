@@ -12,6 +12,7 @@ import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
 import { LivePublisher } from '../../live/live-publisher.service';
+import { AccountPurgeService } from '../../account-purge/account-purge.service';
 import { CommunityMessageModule } from '../community-message.module';
 
 /**
@@ -592,6 +593,35 @@ describe('CommunityMessage Idempotency-Key (contract)', () => {
       expect(
         await prisma.communityMessageKey.count({
           where: { senderWawuId: USER_PLAIN, key },
+        }),
+      ).toBe(0);
+    });
+
+    it("goes with the person: an account purge deletes the sender's key rows by their own entry in the map, then the messages (defect 29)", async () => {
+      // A throwaway sender, so the purge cannot touch a seeded account.
+      const ghost = randomUUID();
+      const key = newKey();
+      const message = await prisma.communityMessage.create({
+        data: { communityId: ROOM, senderWawuId: ghost, text: 'purge me' },
+      });
+      await prisma.communityMessageKey.create({
+        data: { senderWawuId: ghost, key, messageId: message.id },
+      });
+
+      const purge = await new AccountPurgeService(prisma).purge(ghost);
+
+      // The key row is counted on its own line: it is deleted before the
+      // message it points at, not by the foreign key's cascade after it.
+      expect(purge.deleted['CommunityMessageKey.senderWawuId']).toBe(1);
+      expect(purge.deleted['CommunityMessage.senderWawuId']).toBe(1);
+      expect(
+        await prisma.communityMessageKey.count({
+          where: { senderWawuId: ghost },
+        }),
+      ).toBe(0);
+      expect(
+        await prisma.communityMessage.count({
+          where: { senderWawuId: ghost },
         }),
       ).toBe(0);
     });
