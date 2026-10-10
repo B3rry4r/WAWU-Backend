@@ -7,7 +7,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
 import { PaymentWebhookModule } from '../../payment-webhook/payment-webhook.module';
 import { PlansConfig } from '../../plans/plans-config';
-import { WaitlistService } from '../waitlist.service';
+import { newReference, WaitlistService } from '../waitlist.service';
 import {
   bootWaitlist,
   configWith,
@@ -39,6 +39,7 @@ describe('Flutterwave webhook settles an event registration (JOIN-01)', () => {
   const saved = process.env.FLUTTERWAVE_SECRET_HASH;
   let n = 0;
   let tx = 7_000_000;
+  const unknownRefs: string[] = [];
 
   const deliver = (body: unknown) =>
     request(app.getHttpServer())
@@ -121,7 +122,13 @@ describe('Flutterwave webhook settles an event registration (JOIN-01)', () => {
       select: { reference: true },
     });
     await prisma.paymentWebhookReceipt.deleteMany({
-      where: { txRef: { in: rows.map((r) => r.reference) } },
+      where: {
+        OR: [
+          { txRef: { in: rows.map((r) => r.reference) } },
+          // The reference no registration has, delivered once by the spec.
+          { txRef: { in: unknownRefs } },
+        ],
+      },
     });
     await prisma.waitlistRegistration.deleteMany({
       where: { fullName: { contains: MARK } },
@@ -189,7 +196,8 @@ describe('Flutterwave webhook settles an event registration (JOIN-01)', () => {
     ).toBe('rejected');
     expect(await rowOf(a)).toMatchObject({ status: 'pending' });
     expect(await rowOf(b)).toMatchObject({ status: 'pending' });
-    const unknown = `wawu-join-${'e'.repeat(36)}`;
+    const unknown = newReference();
+    unknownRefs.push(unknown);
     const res = await deliver(charge(unknown, script(unknown))).expect(200);
     expect(res.body.data.outcome).toBe('unmatched');
   });

@@ -154,7 +154,8 @@ describe('event_offers in plans.config.json (JOIN-01)', () => {
     ],
     [
       'a name with an em-dash',
-      (r) => (r.event_offers[0].name = 'Event — Lagos'),
+      (r) =>
+        (r.event_offers[0].name = `Event ${String.fromCharCode(0x2014)} Lagos`),
       'event_offers[0].name must not contain an em-dash',
     ],
     [

@@ -26660,7 +26660,7 @@
             "description": "`reason.code` `no_open_offer`: no offer is open now."
           }
         },
-        "summary": "The offer people can register for now.",
+        "summary": "The offer open for registration.",
         "tags": [
           "WaitlistPublic"
         ]

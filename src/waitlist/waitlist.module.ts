@@ -1,19 +1,14 @@
 import { Module } from '@nestjs/common';
 import { AdminAuthModule } from '../admin/auth/admin-auth.module';
-import { ContentPieceModule } from '../content-piece/content-piece.module';
-import { PlansModule } from '../plans/plans.module';
 import { WaitlistAdminController } from './waitlist-admin.controller';
-import {
-  FlutterwaveReferenceLookup,
-  WAITLIST_PAYMENT_LOOKUP,
-} from './waitlist-payment-lookup';
+import { WaitlistCoreModule } from './waitlist-core.module';
 import { WaitlistPublicController } from './waitlist-public.controller';
 import { WaitlistSweepService } from './waitlist-sweep.service';
-import { WaitlistService } from './waitlist.service';
 
 /**
  * The event registration link (JOIN-01, R-48): register on the website, pay
- * the event fee by Flutterwave checkout, no account.
+ * the event fee by Flutterwave checkout, no account. This module declares the
+ * routes and the sweeps; the service itself is WaitlistCoreModule's.
  *
  * The offer comes from PLANS_CONFIG (`event_offers` in plans.config.json,
  * checked at boot by the plans schema check). The Flutterwave client is
@@ -22,20 +17,13 @@ import { WaitlistService } from './waitlist.service';
  * (`shouldUseMockFlutterwave`, which refuses a production boot without a
  * real key). AdminAuthModule gives the admin routes their guards.
  *
- * WaitlistService is exported for the Flutterwave webhook
- * (PaymentWebhookService) and for JOIN-03's claim in the app.
- *
- * Listed in AppModule after PlansModule and ContentPieceModule so that
- * importing them here moves no other controller in the route order.
+ * Listed in AppModule after PlansModule; it imports nothing that declares a
+ * controller other than AdminAuthModule (already early), so no other route
+ * moves in the order.
  */
 @Module({
-  imports: [AdminAuthModule, ContentPieceModule, PlansModule],
+  imports: [AdminAuthModule, WaitlistCoreModule],
   controllers: [WaitlistPublicController, WaitlistAdminController],
-  providers: [
-    WaitlistService,
-    WaitlistSweepService,
-    { provide: WAITLIST_PAYMENT_LOOKUP, useClass: FlutterwaveReferenceLookup },
-  ],
-  exports: [WaitlistService],
+  providers: [WaitlistSweepService],
 })
 export class WaitlistModule {}

@@ -389,8 +389,9 @@ import { AdsEventsModule } from './ads/ads-events.module';
     // The event registration link (task JOIN-01): `waitlist/offers/current`,
     // `waitlist/registrations` (register, verify, status) and the team's
     // `admin/waitlist/registrations` (list, export). `waitlist` and
-    // `admin/waitlist` are segments no other controller declares. Imports
-    // PlansModule and ContentPieceModule, both listed above.
+    // `admin/waitlist` are segments no other controller declares. Declares
+    // the routes only; its service is WaitlistCoreModule's, which the
+    // Flutterwave webhook imports without moving any route.
     WaitlistModule,
     // Fintava's webhooks (task MONEY-07): POST /webhooks/fintava, recorded
     // once, no money moved. `webhooks/fintava` is a fixed path no other
