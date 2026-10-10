@@ -15,13 +15,13 @@ import {
   MoneyErrors,
   WALLET_GATE_ERRORS,
 } from './money-contract';
-import type { HoldPage, HoldView, PaymentView } from './money-view.type';
+import type { HoldPage, HoldView } from './money-view.type';
 
 /**
- * One payment as it stands (MONEY-19) and money held between payer and
- * payee in WAWU's merchant wallet (MONEY-18, R-19). Task MONEY-04 contract;
- * see money-contract.ts for why these handlers are declarations. The quote
- * and the payment itself are served by MONEY-17
+ * Money held between payer and payee in WAWU's merchant wallet (MONEY-18,
+ * R-19). Task MONEY-04 contract; see money-contract.ts for why these handlers
+ * are declarations. The quote, the payment itself and the poll of one payment
+ * are served by MONEY-17 and MONEY-19
  * (payments/money-payments.controller.ts).
  *
  * A hold is never moved by a client request: the owning feature releases it
@@ -33,14 +33,6 @@ import type { HoldPage, HoldView, PaymentView } from './money-view.type';
 @UseGuards(WawuAuthGuard)
 @Controller('money')
 export class MoneyPaymentController {
-  /** One payment, as it stands now. Only the payer can read it. */
-  @Get('payments/:id')
-  @BuiltBy('MONEY-19')
-  @MoneyErrors(...WALLET_GATE_ERRORS, 'not_found')
-  payment(@Param('id', ParseUUIDPipe) id: string): Promise<PaymentView> {
-    return declaredOnly('MONEY-19', id);
-  }
-
   /** Holds the caller paid (role=payer) or is owed (role=payee), newest first. */
   @Get('holds')
   @BuiltBy('MONEY-18')

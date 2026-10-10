@@ -41,7 +41,7 @@ export class MoneyErrorReason {
   /** pin_locked: when the lock ends, ISO 8601 UTC. */
   lockedUntil?: string;
 
-  /** insufficient_funds: Fintava's available balance when the payment was refused. */
+  /** insufficient_funds: the wallet provider's available balance when the movement was refused. */
   @ApiPropertyOptional({ type: 'integer' })
   balanceKobo?: number;
 

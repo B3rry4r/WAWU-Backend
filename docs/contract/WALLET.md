@@ -50,7 +50,7 @@ caller from the token.
 | `GET /money/transfers/{id}` | `TransferView` | | WALLET-07 |
 | `GET /money/payments/quote?kind=&targetId=&amountKobo=` | `PaymentQuoteView` | | MONEY-17 (served; CONVENTIONS.md section 14) |
 | `POST /money/payments` | `PaymentView` | `PaymentDto`, `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | MONEY-17 (served; CONVENTIONS.md section 14) |
-| `GET /money/payments/{id}` | `PaymentView` | | MONEY-19 |
+| `GET /money/payments/{id}` | `PaymentView` | | MONEY-19 (served; CONVENTIONS.md section 14a) |
 | `GET /money/holds?role=&cursor=&limit=` | `HoldPage` | | MONEY-18 |
 | `GET /money/holds/{id}` | `HoldView` | | MONEY-18 |
 | `GET /money/transactions?filter=&q=&month=&group=&cursor=&limit=` | `TransactionPage` | | MONEY-15 (served; CONVENTIONS.md section 6) |
@@ -246,9 +246,9 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 | A9 Create PIN, A10 Confirm PIN | set; a mismatch | `POST /money/pin`; `400 pin_mismatch` (no state drawn; the app shows the message) |
 | H14 Unlock sheet (MONEY-03), W10 "Pay from wallet" | price, Fintava's charge, total, balance | `GET /money/payments/quote` → `priceKobo`, `fee`, `totalKobo`, `balanceKobo` |
 | | over today's limit, stopped before the PIN | `PaymentQuoteView.withinDailyLimit`, `remainingTodayKobo`; on pay `403 daily_limit_exceeded` (Lead ruling 2) |
-| H17 Not enough in wallet | the shortfall including the charge | `PaymentQuoteView.shortfallKobo`; on pay `402 insufficient_funds.shortfallKobo` |
+| H17, I6, S11, W13 Not enough in wallet | the shortfall including the charge, and the balance | `PaymentQuoteView.balanceKobo`, `shortfallKobo`; on pay `402 insufficient_funds` with `balanceKobo`, `totalKobo`, `shortfallKobo` (CONVENTIONS.md section 14a) |
 | H15 PIN (MONEY-02) | PIN on the payment; tries; lock | `X-Transaction-Pin` on `POST /money/payments`; `pin_incorrect`, `pin_locked` |
-| H18 Couldn't confirm, E10 | still confirming, then paid or reversed | `PaymentView.status: pending`; poll `GET /money/payments/{id}` |
+| H18 Couldn't confirm, E10 | still confirming, then paid or reversed; paid and still opening | `PaymentView.status: pending` and `statusMessage`; poll `GET /money/payments/{id}` until `status` is not `pending` and, when `completed`, `delivered` is true |
 | M13 PIN in Me settings (MONEY-02) | PIN set and check | `GET /money/pin`, `POST /money/pin`, `POST /money/pin/verify` |
 
 ### After launch (not in this contract)

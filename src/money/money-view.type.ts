@@ -545,7 +545,12 @@ export interface HoldPage {
 
 /**
  * pending:   the debit is not confirmed yet (H18, E10); poll GET /money/payments/{id}.
- * completed: paid; the owning feature has granted what was bought.
+ *            It ends as completed, failed or reversed once the wallet provider
+ *            (or a webhook) says which; a payment the provider never answers
+ *            for stays pending, under review, with the same message (MONEY-19).
+ * completed: the price moved. What was bought has reached the buyer when
+ *            `delivered` is true; until then the owning feature is still
+ *            granting it (H18 "Paid, still opening").
  * failed:    refused before any money left the wallet.
  * reversed:  the debit came back (for example a biller failure, S12).
  */
@@ -565,9 +570,20 @@ export interface PaymentView {
   hold: HoldView | null;
   failureReason: string | null;
   /**
-   * What the app shows beside a `pending` payment (MONEY-17): "We're still
-   * confirming this payment. Don't pay again; we'll let you know." Null on
-   * every other status.
+   * True once what was paid for has reached the buyer: the payment is
+   * `completed` and the owning feature recorded the delivery (or nothing
+   * needs delivering). False while `pending`, while a `completed` payment's
+   * delivery is unfinished (the sweep keeps delivering it), and on `failed`
+   * and `reversed`. The app stops polling when `status` is not `pending` and,
+   * for `completed`, `delivered` is true (MONEY-19).
+   */
+  delivered: boolean;
+  /**
+   * What the app shows beside a payment that is not finished (MONEY-17,
+   * MONEY-19): on `pending`, "We're still confirming this payment. Don't pay
+   * again; we'll let you know."; on `completed` with `delivered` false, "Your
+   * payment went through and we're finishing it. Don't pay again." Null on
+   * every other payment.
    */
   statusMessage: string | null;
   createdAt: string;

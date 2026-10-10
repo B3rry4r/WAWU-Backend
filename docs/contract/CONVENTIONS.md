@@ -209,7 +209,7 @@ Every refusal is the envelope this backend already answers with
 | `pin_locked` | 423 | too many wrong PINs | `lockedUntil` |
 | `pin_mismatch` | 400 | the two entries of a new PIN differ | |
 | `reset_code_invalid` | 400 | wrong or expired reset code | `triesLeft` |
-| `insufficient_funds` | 402 | balance below the total (MONEY-19, W13, H17) | `balanceKobo`, `totalKobo`, `shortfallKobo` |
+| `insufficient_funds` | 402 | balance below the total (H17, I6, S11, W13); one wording for every route, built by `insufficientFunds()` in `src/money/insufficient-funds.ts` (MONEY-19) | `balanceKobo`, `totalKobo`, `shortfallKobo` |
 | `daily_limit_exceeded` | 403 | the send or purchase passes today's limit; stopped before money moves | `totalKobo`, `remainingTodayKobo` |
 | `amount_out_of_range` | 400 | below the minimum, or above `MERCHANT_MAX_PER_TXN_KOBO` on money through WAWU's merchant wallet | `minimumKobo`, `maximumKobo` |
 | `quote_changed` | 409 | `expectedTotalKobo` differs from the server's total | `feeQuote` or `paymentQuote` |
@@ -1412,8 +1412,8 @@ Fintava or on Nuvion, whichever the server runs.
 - **Routes** (`src/money/payments/`): `GET /money/payments/quote?kind=&targetId=&amountKobo=`
   (`PaymentQuoteView`, behind the wallet gate, `no-store`) and `POST
   /money/payments` (`PaymentDto`; `Idempotency-Key`, and the PIN or a
-  biometric approval, `@RequireApproval()`). `GET /money/payments/{id}`
-  stays declared for MONEY-19, the holds for MONEY-18.
+  biometric approval, `@RequireApproval()`), and `GET /money/payments/{id}`
+  (`PaymentView`, MONEY-19, below). The holds stay declared for MONEY-18.
 - **Fees and limits first** (NUV-07, BACKEND_GAPS G-410; round 6). Both
   routes carry `@RequireFeesSet()` as their last decorator, so while the
   running provider's fees are not set they answer `503 fees_not_set` before
@@ -1608,11 +1608,66 @@ Fintava or on Nuvion, whichever the server runs.
   - `reversed`: the debit came back.
   A key answers what it stored: a payment answered `pending` stays `pending`
   on its key after it completes; the app reads the outcome from `GET
-  /money/payments/{id}` (MONEY-19).
+  /money/payments/{id}` (MONEY-19, below).
 - **Paid twice for one item** (D1.4): if a second payment for the same
   person and item completes while another was open, both carry a
   `discrepancy` for MONEY-16; the refund is MONEY-18's (BACKEND_GAPS G-70 in
   the mobile repo).
+
+### 14a. Not enough money, and still confirming (MONEY-19)
+
+- **How much short** (H17, I6, S11, W13). One answer on every route that
+  takes money from a wallet: `402 insufficient_funds` with `reason.balanceKobo`
+  (the wallet provider's available balance read for this request, never a sum
+  of our own records), `reason.totalKobo` (what the movement needs: the amount
+  plus every fee the person pays, R-10) and `reason.shortfallKobo` (the total
+  minus the balance), and the sentence "You need ₦523.25 more in your wallet."
+  It is built by `insufficientFunds(balanceKobo, totalKobo)` in
+  `src/money/insufficient-funds.ts`, which refuses to build a shortfall of
+  zero or less; a route that serves a send (WALLET-07, WALLET-09) throws it
+  from there. On a payment the same figures are on the quote before the PIN
+  (`PaymentQuoteView.balanceKobo`, `shortfallKobo`, which is 0 when the wallet
+  covers the total, and null with the balance when the provider did not
+  answer). A ₦1,000 item with ₦500 in the wallet is `balanceKobo` 50000,
+  `totalKobo` 102325 and `shortfallKobo` 52325 at a provider charge of
+  ₦23.25 (the dashboard's Fintava rate; Nuvion's charge is a setting). Nothing
+  is stored, claimed or sent, and the Idempotency-Key is free for the same
+  payment once the person has added the money.
+- **The poll** (H18, E10). `GET /money/payments/{id}` answers the payment's
+  `PaymentView` as it stands now, `Cache-Control: no-store`, behind the
+  wallet gate; it needs no Idempotency-Key and no PIN and moves nothing.
+  Only the payer reads it: another person's payment and an id nobody holds
+  are the same `404 not_found` ("We could not find that payment."); a
+  malformed id is a plain `400`. It reads our record only and never asks the
+  wallet provider, so the app can poll it freely; what moves a payment on is
+  the sweep (every minute), the provider's webhooks and the ledger's status
+  check, each settling the payment as in section 14. The app polls after a
+  `pending` answer, after a `409 payment_in_progress` (`reason.paymentId`),
+  and from "Refresh" on H18 and E10.
+- **What the app reads from it.** `status` is `pending`, `completed`,
+  `failed` or `reversed`. A `pending` payment ends as `completed`, `failed`
+  or `reversed` at the next sweep after the provider (or a webhook) says
+  which, and the poll shows it from then on. `delivered` is true once what
+  was paid for has reached the buyer (`completed` and the owning feature
+  recorded the delivery, or there is nothing to deliver), and false while
+  `pending`, `failed`, `reversed`, and while a `completed` payment's delivery
+  is unfinished: "paid, still opening" (H18), `statusMessage` "Your payment
+  went through and we're finishing it. Don't pay again." (the sentence
+  `payment_in_progress` already answers), the sweep delivering it again.
+  The app stops polling when `status` is not `pending` and, for `completed`,
+  `delivered` is true. The answer to `POST /money/payments` carries the same
+  fields, so a delivery that succeeded inside the request reads
+  `delivered: true` there.
+- **A provider that never answers.** The one case where a payment is still
+  `pending` after the sweep has asked is a provider that gives no answer: no
+  record of the transfer, or a transfer it keeps `pending`. That is never
+  read as "no money moved" (lead ruling D1), so past
+  `PAYMENT_REVIEW_AFTER_HOURS` (PROVISIONAL, 72) the payment goes to review,
+  still `pending`, out of the sweep, the item still blocked, and the poll
+  keeps saying "We're still confirming this payment. Don't pay again; we'll
+  let you know." A webhook or the ledger's status check still settles it.
+  Whether something should end such a payment on its own is a ruling
+  (BACKEND_GAPS G-480 in the mobile repo), not a default.
 
 ---
 
