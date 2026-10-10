@@ -21,7 +21,7 @@ export interface WaitlistPaymentLookup {
 /** DI token. Specs stand in a scripted lookup; nothing else reads it. */
 export const WAITLIST_PAYMENT_LOOKUP = Symbol('WAITLIST_PAYMENT_LOOKUP');
 
-interface ByReferenceResponse {
+interface ReferenceLookupBody {
   status?: string;
   data?: {
     id?: number | string;
@@ -33,10 +33,11 @@ interface ByReferenceResponse {
 }
 
 /**
- * Flutterwave's verify-by-reference. Like every payment module here it does
- * not call Flutterwave when the mock is in use (no key, or NODE_ENV=test),
- * and `shouldUseMockFlutterwave()` still refuses a production boot with no
- * real key.
+ * Flutterwave's verify-by-reference. It asks Flutterwave only on a server
+ * that has a real key: with none (and under NODE_ENV=test) it asks nothing
+ * and answers null, as every payment module here does.
+ * `shouldUseMockFlutterwave()` is what decides that, and it still refuses a
+ * production boot with no real key.
  */
 @Injectable()
 export class FlutterwaveReferenceLookup implements WaitlistPaymentLookup {
@@ -61,7 +62,7 @@ export class FlutterwaveReferenceLookup implements WaitlistPaymentLookup {
       this.logger.warn(`Reference lookup answered ${res.status}`);
       throw new Error(`Flutterwave answered ${res.status}`);
     }
-    const body = (await res.json().catch(() => ({}))) as ByReferenceResponse;
+    const body = (await res.json().catch(() => ({}))) as ReferenceLookupBody;
     const data = body.data;
     if (body.status !== 'success' || !data || data.id === undefined)
       return null;

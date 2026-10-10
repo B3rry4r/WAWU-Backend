@@ -4,7 +4,7 @@
  * Flutterwave's checkout takes.
  */
 
-/** GET /waitlist/offers/current: the offer people can register for now. */
+/** GET /waitlist/offers/current: the offer open for registration. */
 export interface WaitlistOfferView {
   id: string;
   name: string;

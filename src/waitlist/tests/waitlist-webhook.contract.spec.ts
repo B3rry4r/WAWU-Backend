@@ -11,7 +11,7 @@ import { WaitlistService } from '../waitlist.service';
 import {
   bootWaitlist,
   configWith,
-  FakeFlutterwave,
+  ScriptedFlutterwave,
   OFFER_ID,
   openOffer,
 } from './waitlist-harness';
@@ -34,7 +34,7 @@ describe('Flutterwave webhook settles an event registration (JOIN-01)', () => {
   let prisma: PrismaService;
   let waitlist: WaitlistService;
   let config: PlansConfig;
-  const fake = new FakeFlutterwave();
+  const fake = new ScriptedFlutterwave();
   let fetchSpy: jest.SpyInstance;
   const saved = process.env.FLUTTERWAVE_SECRET_HASH;
   let n = 0;

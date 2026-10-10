@@ -11,7 +11,7 @@ import { WAITLIST_THROTTLE } from '../waitlist-config';
 import {
   bootWaitlist,
   configWith,
-  FakeFlutterwave,
+  ScriptedFlutterwave,
   OFFER_ID,
   openOffer,
 } from './waitlist-harness';
@@ -32,7 +32,7 @@ const SHORT = HUB_THROTTLERS.find((t) => t.name === 'short')!;
 describe('Event registration routes are throttled per address (JOIN-01)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
-  const fake = new FakeFlutterwave();
+  const fake = new ScriptedFlutterwave();
   const http = () => request(app.getHttpServer());
 
   beforeAll(async () => {

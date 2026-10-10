@@ -39,7 +39,7 @@ import type {
 export class WaitlistPublicController {
   constructor(private readonly waitlist: WaitlistService) {}
 
-  /** The offer people can register for now. */
+  /** The offer open for registration. */
   @Get('offers/current')
   @Header('Cache-Control', 'no-store')
   @ApiResponse({

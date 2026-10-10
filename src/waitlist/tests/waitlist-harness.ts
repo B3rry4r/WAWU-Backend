@@ -40,7 +40,7 @@ import { WaitlistModule } from '../waitlist.module';
 export const DAY = 86_400_000;
 
 /** A payment as the stood-in Flutterwave reports it. */
-export interface FakePayment {
+export interface ScriptedPayment {
   status: 'successful' | 'failed';
   /** Naira, as Flutterwave quotes it. */
   amount: number;
@@ -54,12 +54,12 @@ export interface FakePayment {
  * nobody scripted throws, as the real client does for an id Flutterwave
  * does not know.
  */
-export class FakeFlutterwave
+export class ScriptedFlutterwave
   implements FlutterwaveClient, WaitlistPaymentLookup
 {
   publicKey = 'FLWPUBK_TEST-join01-spec-X';
-  readonly payments = new Map<string, FakePayment>();
-  readonly byReference = new Map<string, FakePayment & { id: string }>();
+  readonly payments = new Map<string, ScriptedPayment>();
+  readonly byReference = new Map<string, ScriptedPayment & { id: string }>();
   readonly lookupFails = new Set<string>();
   verifyCalls: VerifyChargeParams[] = [];
   initCalls: InitChargeParams[] = [];
@@ -145,7 +145,7 @@ export function openOffer(over: Record<string, unknown> = {}): any {
 
 export async function bootWaitlist(
   config: PlansConfig,
-  fake: FakeFlutterwave,
+  fake: ScriptedFlutterwave,
   extraImports: unknown[] = [],
   extraProviders: unknown[] = [],
 ): Promise<INestApplication<App>> {

@@ -11,7 +11,7 @@ import { WaitlistService } from '../waitlist.service';
 import {
   bootWaitlist,
   configWith,
-  FakeFlutterwave,
+  ScriptedFlutterwave,
   OFFER_ID,
   openOffer,
 } from './waitlist-harness';
@@ -38,7 +38,7 @@ describe('Event registrations, the team view (JOIN-01)', () => {
   let prisma: PrismaService;
   let waitlist: WaitlistService;
   let config: PlansConfig;
-  const fake = new FakeFlutterwave();
+  const fake = new ScriptedFlutterwave();
   const tokens: Record<string, string> = {};
   const snapshot: Record<string, string | undefined> = {};
   let userToken: string;

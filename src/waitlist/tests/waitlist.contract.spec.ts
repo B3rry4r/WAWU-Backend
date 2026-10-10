@@ -10,7 +10,7 @@ import {
   bootWaitlist,
   configWith,
   DAY,
-  FakeFlutterwave,
+  ScriptedFlutterwave,
   OFFER_ID,
   openOffer,
 } from './waitlist-harness';
@@ -18,7 +18,7 @@ import {
 /**
  * JOIN-01 over HTTP: the four public routes of the event registration link on
  * the real WaitlistModule and a real database. Flutterwave is stood in at its
- * two seams (FakeFlutterwave); a fetch spy fails the run if anything reaches a
+ * two seams (ScriptedFlutterwave); a fetch spy fails the run if anything reaches a
  * network host. Every figure compared with is read from the config, never
  * written here (the price can be changed by the owner).
  */
@@ -43,7 +43,7 @@ describe('Event registration link (JOIN-01) over HTTP', () => {
   let prisma: PrismaService;
   let config: PlansConfig;
   let sweep: WaitlistSweepService;
-  const fake = new FakeFlutterwave();
+  const fake = new ScriptedFlutterwave();
   let fetchSpy: jest.SpyInstance;
   let n = 0;
   const http = () => request(app.getHttpServer());
