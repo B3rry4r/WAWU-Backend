@@ -9,6 +9,7 @@ import {
 import { ConfigModule } from '@nestjs/config';
 import { PassportModule } from '@nestjs/passport';
 import { Test } from '@nestjs/testing';
+import * as argon2 from 'argon2';
 import * as jwt from 'jsonwebtoken';
 import request, { type Response } from 'supertest';
 import type { App } from 'supertest/types';
@@ -279,6 +280,7 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
   let payments: WalletPaymentService;
   let statusChecks: LedgerStatusService;
   let ledger: LedgerService;
+  let cheapPinHash: string;
   let pins: TransactionPinService;
   let consumer: LedgerConsumerService;
   let fees: FeeQuoteService;
@@ -338,11 +340,14 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
     wallets.kobo.set(accountNumber, kobo);
     wallets.byId.set(walletId, accountNumber);
     const auth = `Bearer ${mintToken(id)}`;
-    const set = await request(app.getHttpServer())
-      .post('/api/hub/money/pin')
-      .set('Authorization', auth)
-      .send({ pin: PIN, pinConfirmation: PIN });
-    expect(set.status).toBe(201);
+    // The PIN is stored as POST /money/pin stores it (argon2id), with the
+    // cheapest cost the library takes: twenty taps at once each compare it,
+    // five at a time, and at the default cost a starved machine makes that
+    // take longer than the 40 s a check waits for a free slot (R6-4). The PIN
+    // routes themselves are proved in money-pin.contract.spec.ts.
+    await prisma.transactionPin.create({
+      data: { wawuUserId: id, pinHash: cheapPinHash },
+    });
     return { id, auth, walletId, accountNumber, customerId };
   }
 
@@ -561,6 +566,12 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
   }
 
   beforeAll(async () => {
+    cheapPinHash = await argon2.hash(PIN, {
+      type: argon2.argon2id,
+      timeCost: 1,
+      memoryCost: 1024,
+      parallelism: 1,
+    });
     await double.start();
     const env: Record<string, string> = {
       FINTAVA_BASE_URL: double.baseUrl,
@@ -1797,7 +1808,11 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
         // Every answer is the payment or a coded refusal: never a bare
         // "That record already exists.", never a 5xx.
         for (const r of answers) {
-          expect(settled(r)).toBe(true);
+          if (!settled(r)) {
+            throw new Error(
+              `an answer that is neither the payment nor a coded refusal: ${r.status} ${r.text.slice(0, 300)}; the Hub logged: ${JSON.stringify(logger.lines.filter((l) => /error|timeout|expired|pool|P20|transaction/i.test(l)).slice(-6))}`,
+            );
+          }
           if (r.status === 409) {
             expect(['payment_in_progress', 'target_not_payable']).toContain(
               codeOf(r),
