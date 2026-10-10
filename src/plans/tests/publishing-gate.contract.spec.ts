@@ -546,6 +546,38 @@ describe('Publishing needs a tier (TIER-02) over HTTP', () => {
       ).toBe(1);
     });
 
+    it('two taps on Publish at the same moment publish the draft once', async () => {
+      const id = await creator();
+      await giveTier(id, 0);
+      const draft = body(
+        await post(id, '/product-drafts', {
+          title: 'Tapped twice',
+          contentType: 'video',
+          description: 'd',
+          category: 'business_entrepreneurship',
+          accessType: 'paid',
+          price: 1200,
+        }).expect(201),
+      ).data;
+      const files = {
+        previewAsset: 'https://cdn.example.com/t.jpg',
+        fullAsset: 'https://cdn.example.com/t.mp4',
+      };
+      const taps = await Promise.all(
+        [1, 2, 3].map(() =>
+          post(id, `/product-drafts/${draft.id}/publish`, files),
+        ),
+      );
+      expect(taps.filter((t) => t.status === 201)).toHaveLength(1);
+      // The others find the draft gone: a refusal, never a second piece.
+      for (const t of taps.filter((x) => x.status !== 201))
+        expect([404, 409]).toContain(t.status);
+      expect(
+        await prisma.contentPiece.count({ where: { creatorWawuId: id } }),
+      ).toBe(1);
+      expect((await myTier(id)).productsUsed).toBe(1);
+    });
+
     it('a draft that is published with no tier gets tier_required and stays a draft', async () => {
       const id = await creator();
       const draft = body(
