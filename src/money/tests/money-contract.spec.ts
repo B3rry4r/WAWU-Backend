@@ -35,6 +35,11 @@ const SERVED_MONEY_ROUTES: Record<string, string> = {
   'PUT /api/hub/money/identity/occupation': 'KYC-01',
   'GET /api/hub/money/identity/selfie': 'KYC-02',
   'POST /api/hub/money/identity/selfie': 'KYC-02',
+  // NUV-03: the ID document, the proof of address and the hosted selfie.
+  'GET /api/hub/money/identity/documents': 'NUV-03',
+  'POST /api/hub/money/identity/documents': 'NUV-03',
+  'GET /api/hub/money/identity/liveness': 'NUV-03',
+  'POST /api/hub/money/identity/liveness': 'NUV-03',
   'GET /api/hub/money/wallet': 'MONEY-12',
   'POST /api/hub/money/wallet/open': 'MONEY-12',
   'GET /api/hub/money/beneficiaries': 'WALLET-14',

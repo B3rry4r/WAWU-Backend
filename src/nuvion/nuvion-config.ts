@@ -41,6 +41,25 @@ export const NUVION_CONFIG_KEYS = {
   moneyTimeoutMs: 'NUVION_MONEY_TIMEOUT_MS',
   checkTimeoutMs: 'NUVION_CHECK_TIMEOUT_MS',
   resendSafetyMs: 'NUVION_RESEND_SAFETY_MS',
+  /**
+   * NUV-03: `on` makes Nuvion's hosted selfie a step of opening (it must
+   * pass before the opening is submitted); `off` (the default) leaves it out.
+   * Nuvion's docs do not list the selfie API, so whether it can start a
+   * session for a child entity is only known once the sandbox key works
+   * (R-39); until then it is off and opening goes on without a selfie.
+   */
+  hostedLiveness: 'NUVION_HOSTED_LIVENESS',
+  /**
+   * NUV-03: where the hosted selfie page may send the person back to (the
+   * app's link and the website), comma separated. Each entry is an https
+   * origin and, usually, a path prefix: `https://app.example/open` allows
+   * `https://app.example/open` and anything under `/open/`, nothing else on
+   * that host. An entry with no path allows the whole origin. Empty: no
+   * address is allowed at all (a person can still start the selfie without
+   * one). The name keeps "ORIGINS" from the first round; an entry may carry
+   * a path.
+   */
+  livenessRedirectOrigins: 'NUVION_LIVENESS_REDIRECT_ORIGINS',
 } as const;
 
 /** The settings without which the Nuvion adapter cannot start. */
@@ -105,6 +124,13 @@ export interface NuvionSettings {
   /** Added to `moneyTimeoutMs` before a lost send may be sent again. */
   resendSafetyMs: number;
   retryAfterSeconds: number;
+  /** NUV-03: the hosted selfie is a step of opening (`NUVION_HOSTED_LIVENESS=on`). */
+  hostedLiveness?: boolean;
+  /**
+   * NUV-03: where the selfie page may return to, each `origin` or
+   * `origin/path-prefix` (normalised: no trailing slash); empty allows no address.
+   */
+  livenessRedirectOrigins?: readonly string[];
 }
 
 /** A Nuvion setting that is missing or wrong under nuvion. Stops the app at boot. */
@@ -205,6 +231,57 @@ export function readNuvionSettings(get: (key: string) => string | undefined): {
       [60_000, 86_400_000],
     ),
     retryAfterSeconds: NUVION_DEFAULTS.retryAfterSeconds,
+    hostedLiveness: switchSetting(
+      get(NUVION_CONFIG_KEYS.hostedLiveness),
+      NUVION_CONFIG_KEYS.hostedLiveness,
+    ),
+    livenessRedirectOrigins: origins(
+      get(NUVION_CONFIG_KEYS.livenessRedirectOrigins),
+      NUVION_CONFIG_KEYS.livenessRedirectOrigins,
+    ),
   };
   return { settings, apiKey: value(NUVION_CONFIG_KEYS.apiKey) };
+}
+
+/** `on` or `off` (unset or empty: off), anything else stops the server at boot. */
+function switchSetting(raw: string | undefined, key: string): boolean {
+  const v = (raw ?? '').trim().toLowerCase();
+  if (v === '' || v === 'off') return false;
+  if (v === 'on') return true;
+  throw new NuvionConfigError(`${key} must be on or off.`);
+}
+
+/**
+ * A comma separated list of https return addresses, each an origin and an
+ * optional path prefix (no credentials, query or fragment); unset: none.
+ * Kept as `origin` or `origin/prefix`, no trailing slash.
+ */
+function origins(raw: string | undefined, key: string): string[] {
+  const list = (raw ?? '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter((x) => x !== '');
+  const out: string[] = [];
+  for (const item of list) {
+    let url: URL;
+    try {
+      url = new URL(item);
+    } catch {
+      throw new NuvionConfigError(`${key} must list https addresses.`);
+    }
+    if (
+      url.protocol !== 'https:' ||
+      url.username !== '' ||
+      url.password !== '' ||
+      url.search !== '' ||
+      url.hash !== '' ||
+      /%2e|%2f|%5c|\\/i.test(url.pathname)
+    ) {
+      throw new NuvionConfigError(
+        `${key} must list https addresses (an origin and, if wanted, a path), with no credentials, query or fragment.`,
+      );
+    }
+    out.push(`${url.origin}${url.pathname.replace(/\/+$/, '')}`);
+  }
+  return [...new Set(out)];
 }
