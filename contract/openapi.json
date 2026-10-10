@@ -44879,10 +44879,10 @@
           "role": {
             "type": "string",
             "enum": [
-              "pending",
               "host",
-              "none",
-              "member"
+              "member",
+              "pending",
+              "none"
             ]
           },
           "messageCostInCredits": {

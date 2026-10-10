@@ -60,8 +60,20 @@ export interface CommunityReadView {
  * INBOX-05. Where the caller stands in a room: `host` (they host it),
  * `member` (let in), `pending` (asked to join a private room, waiting for the
  * host) or `none`.
+ *
+ * A TypeScript enum, not a union of string literals, on purpose: the contract
+ * generator (scripts/enrich-contract.js) lists a literal union in the order the
+ * compiler happens to create the literal types, which moves with whatever else
+ * is in the program (a merge with main reordered it). An enum's members are
+ * created together, in the order written here, so `contract:build` writes the
+ * same order every time. The wire values are the strings.
  */
-export type CommunityViewerRole = 'host' | 'member' | 'pending' | 'none';
+export enum CommunityViewerRole {
+  Host = 'host',
+  Member = 'member',
+  Pending = 'pending',
+  None = 'none',
+}
 
 /** INBOX-05, GET /communities/:id/room: a room as the caller sees it (I25). */
 export type CommunityRoomView = CommunityRoom & {

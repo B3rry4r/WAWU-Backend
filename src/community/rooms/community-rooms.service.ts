@@ -13,16 +13,16 @@ import { CommunityService } from '../community.service';
 import type { CreateCommunityDto } from '../dto/create-community.dto';
 import { Prisma } from '../../../generated/prisma/client';
 import { normaliseSlug, shareLink, slugBase } from './community-slug';
-import type {
-  CommunityLastMessage,
-  CommunityLinkView,
-  CommunityMessageCost,
-  CommunityReadView,
-  CommunityRoom,
-  CommunityRoomView,
+import {
   CommunityViewerRole,
-  MyCommunity,
-  SuggestedCommunity,
+  type CommunityLastMessage,
+  type CommunityLinkView,
+  type CommunityMessageCost,
+  type CommunityReadView,
+  type CommunityRoom,
+  type CommunityRoomView,
+  type MyCommunity,
+  type SuggestedCommunity,
 } from './community-room.type';
 
 /** Prisma's unique-constraint refusal (P2002). */
@@ -353,12 +353,12 @@ export class CommunityRoomsService {
 
     const role: CommunityViewerRole =
       community.hostWawuId === viewerWawuId
-        ? 'host'
+        ? CommunityViewerRole.Host
         : membership?.status === 'joined'
-          ? 'member'
+          ? CommunityViewerRole.Member
           : membership?.status === 'pending'
-            ? 'pending'
-            : 'none';
+            ? CommunityViewerRole.Pending
+            : CommunityViewerRole.None;
 
     return {
       ...withCounts,
