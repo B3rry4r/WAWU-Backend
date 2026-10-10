@@ -1244,6 +1244,10 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     expect(row.debitReviewSince).not.toBeNull();
     expect(row.discrepancy).toContain(`took ${real} kobo`);
     expect(row.discrepancy).toContain(`quoted ${q.totalKobo} kobo`);
+    // The ledger's own note about the two charges is on the payment too.
+    expect(row.discrepancy).toContain(
+      `feeKobo ${q.fee.providerFeeKobo} vs ${q.fee.providerFeeKobo + 700}`,
+    );
     expect(deliveriesOf(paid.id)).toBe(1);
     expect(p.account.availableKobo).toBe(BigInt(1_000_000 - real));
     const { out, inn } = await bothRows(paid.reference);
@@ -1314,7 +1318,11 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     rows = await bothRows(high.reference);
     expect(rows.out.status).toBe('pending');
     expect(rows.inn.status).toBe('completed');
-    expect((await rowOf(high.id)).debitReviewSince).not.toBeNull();
+    const highRow = await rowOf(high.id);
+    expect(highRow.debitReviewSince).not.toBeNull();
+    expect(highRow.discrepancy).toContain(
+      `feeKobo ${above.fee.providerFeeKobo} vs ${above.fee.providerFeeKobo + 700}`,
+    );
   });
 
   it("R6-1 when the ledger status check looks first: a charge other than the quote is held on the buyer's row (never completed at the quote), and the payment sweep then completes the payment at the provider's figures, flagged when above, with the buyer's row completed when below", async () => {
@@ -1340,6 +1348,10 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     expect(above.status).toBe('completed');
     expect(above.totalKobo).toBe(BigInt(qa.totalKobo + 700));
     expect(above.debitReviewSince).not.toBeNull();
+    // The status check's note, already copied onto the payment, is kept once.
+    expect(above.discrepancy).toContain(
+      `feeKobo ${qa.fee.providerFeeKobo} vs ${qa.fee.providerFeeKobo + 700}`,
+    );
     const aboveRows = await bothRows(pa.reference);
     expect(aboveRows.out.status).toBe('pending');
     // The note the status check wrote and the payment's own are not doubled.
@@ -1386,6 +1398,28 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     expect(rows.out.revivedAt).not.toBeNull();
     expect(rows.inn.status).toBe('completed');
     expect(deliveriesOf(paid.id)).toBe(1);
+  });
+
+  it("R6-1, a buyer's row that no longer holds the figures the payment was quoted at is left alone: the payment completes at the real figures, the row is not overwritten", async () => {
+    const p = await buyer(500_000);
+    const { q, paid } = await pendingAt(p, 'n-row-moved', -500);
+    const { out } = await bothRows(paid.reference);
+    await prisma.fintavaLedgerEntry.update({
+      where: { id: out.id },
+      data: {
+        feeKobo: out.feeKobo + 7n,
+        totalKobo: out.totalKobo + 7n,
+      },
+    });
+    nuvion.settle(paid.reference, 'successful');
+    await sweepLater();
+    expect((await rowOf(paid.id)).totalKobo).toBe(BigInt(q.totalKobo - 500));
+    const rows = await bothRows(paid.reference);
+    expect([rows.out.status, rows.out.totalKobo]).toEqual([
+      'pending',
+      BigInt(q.totalKobo + 7),
+    ]);
+    expect(rows.inn.status).toBe('completed');
   });
 
   it("R6-1, a stop about the AMOUNT on the buyer's row is never overridden by a lower charge: the payment completes at the real figures, the row stays held for a person", async () => {
