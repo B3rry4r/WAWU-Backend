@@ -17,7 +17,7 @@ import type { WaitlistClaimView } from './waitlist-view.type';
 const WORDS = {
   invalid: 'Type the 8 letters and numbers of your access code.',
   notFound:
-    'We could not match that code to you. Check the code, and sign in with the phone number or email you registered with.',
+    'We could not match that code to you. Check the code, and sign in with the phone number or email you registered with. It must be one you have confirmed.',
   notVerified:
     'Confirm your phone number or email first, then try your code again.',
   refunded:
@@ -34,8 +34,9 @@ const WORDS = {
  *
  * ── WHO MAY CLAIM ────────────────────────────────────────────────────────
  * The code alone is never enough. The caller must hold a phone or an email
- * their WAWU ID account has PROVEN (waitlist-claim-proof.ts) that is the one
- * the registration was made with. A code that does not exist, is not paid, or
+ * their account has PROVEN (waitlist-claim-proof.ts: WAWU ID's `phoneVerified`
+ * and `emailVerified` flags, or the Hub's BVN-checked phone) that is the one
+ * the registration was made with. A phone that was only typed never counts. A code that does not exist, is not paid, or
  * belongs to a registration whose contacts the caller has not proven all
  * answer the same `code_not_found`, so the route cannot be used to learn which
  * codes exist, and no answer carries anyone's name, phone, email or reference.
@@ -76,8 +77,14 @@ export class WaitlistClaimService {
     const code = readAccessCode(rawCode);
     if (code === null) throw new WaitlistError('code_invalid', WORDS.invalid);
 
-    const proven = verifiedContactsOf(user);
-    if (proven.phone === null && proven.email === null)
+    // The Hub's own proof of a phone (the BVN check matched it to the account's):
+    // read for the caller only, by their own id.
+    const identity = await this.prisma.walletIdentity.findUnique({
+      where: { wawuUserId: user.sub },
+      select: { verifiedPhone: true, bvnVerifiedAt: true },
+    });
+    const proven = verifiedContactsOf(user, identity);
+    if (proven.phones.length === 0 && proven.email === null)
       throw new WaitlistError('contact_not_verified', WORDS.notVerified);
 
     const row = await this.prisma.waitlistRegistration.findUnique({

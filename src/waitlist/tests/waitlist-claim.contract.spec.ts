@@ -150,6 +150,7 @@ describe('Claiming a paid event registration in the app (JOIN-03) over HTTP', ()
       await purgePersonPoints(prisma, sub);
       await prisma.eventPass.deleteMany({ where: { wawuUserId: sub } });
       await prisma.makerTier.deleteMany({ where: { wawuUserId: sub } });
+      await prisma.walletIdentity.deleteMany({ where: { wawuUserId: sub } });
     }
     await prisma.pointLot.deleteMany({
       where: {
@@ -362,6 +363,115 @@ describe('Claiming a paid event registration in the app (JOIN-03) over HTTP', ()
       expect(
         await prisma.makerTier.count({ where: { wawuUserId: who.sub } }),
       ).toBe(0);
+    });
+
+    it("a phone that was only typed never counts, even when it is the registration's own: refused as any contact that is not the caller's", async () => {
+      const owner = person();
+      const row = await registration(owner);
+      const typed: Who = {
+        sub: `${WHO}typed-${next()}`,
+        phone: owner.phone,
+        email: `${MARK}-typed-${next()}@test.wawu.dev`,
+      };
+      subs.add(typed.sub);
+      // The account's email is proven (and is not the registration's); its phone is the registration's and only typed.
+      const proofOfEmailOnly = await claim(
+        mint(typed, { emailVerified: true, phoneVerified: false }),
+        row.accessCode,
+      ).expect(404);
+      expect(reason(proofOfEmailOnly).code).toBe('code_not_found');
+      const unknown = await claim(
+        mint(typed, { emailVerified: true, phoneVerified: false }),
+        '00000000',
+      ).expect(404);
+      expect(proofOfEmailOnly.body).toEqual(unknown.body);
+      // Nothing proven at all: asked to confirm a contact first.
+      const nothing = await claim(
+        mint(typed, { emailVerified: false, phoneVerified: false }),
+        row.accessCode,
+      ).expect(409);
+      expect(reason(nothing).code).toBe('contact_not_verified');
+      const still = await prisma.waitlistRegistration.findUniqueOrThrow({
+        where: { id: row.id },
+      });
+      expect(still.claimedByWawuId).toBeNull();
+      expect(
+        await prisma.makerTier.count({ where: { wawuUserId: typed.sub } }),
+      ).toBe(0);
+    });
+
+    describe("the Hub's own proof of a phone: a BVN check that matched the account's phone", () => {
+      const noFlags = { emailVerified: false, phoneVerified: false };
+      const identity = (
+        who: Who,
+        over: {
+          verifiedPhone?: string | null;
+          bvnVerifiedAt?: Date | null;
+        } = {},
+      ) =>
+        prisma.walletIdentity.create({
+          data: {
+            wawuUserId: who.sub,
+            verifiedPhone: who.phone,
+            bvnVerifiedAt: new Date(),
+            ...over,
+          },
+        });
+
+      it('counts: the registration is claimed with a phone WAWU ID has not flagged, once the BVN check proved it', async () => {
+        const who = person();
+        const row = await registration(who);
+        await identity(who);
+        const res = await claim(
+          mint({ ...who, email: `other-${who.sub}@test.wawu.dev` }, noFlags),
+          row.accessCode,
+        ).expect(200);
+        expect(data(res).tier.tier.id).toBe('verify');
+      });
+
+      it('does not count without a passed check, for a phone the account no longer has, or from another person', async () => {
+        const row0 = await registration(person());
+        // A phone stored but the BVN check never passed.
+        const a = {
+          sub: `${WHO}hub-a-${next()}`,
+          phone: row0.phone,
+          email: `a-${next()}@test.wawu.dev`,
+        };
+        subs.add(a.sub);
+        await identity(a, { bvnVerifiedAt: null });
+        const r1 = await claim(mint(a, noFlags), row0.accessCode).expect(409);
+        expect(reason(r1).code).toBe('contact_not_verified');
+        // Proved a number the account has since given up (its phone now is another).
+        const b = {
+          sub: `${WHO}hub-b-${next()}`,
+          phone: '+2348077770002',
+          email: `b-${next()}@test.wawu.dev`,
+        };
+        subs.add(b.sub);
+        await identity(b, { verifiedPhone: row0.phone });
+        const r2 = await claim(mint(b, noFlags), row0.accessCode).expect(409);
+        expect(reason(r2).code).toBe('contact_not_verified');
+        // Somebody else's proof of the same phone is not the caller's.
+        const owner: Who = {
+          sub: `${WHO}hub-o-${next()}`,
+          phone: row0.phone,
+          email: `o-${next()}@test.wawu.dev`,
+        };
+        subs.add(owner.sub);
+        await identity(owner);
+        const c = {
+          sub: `${WHO}hub-c-${next()}`,
+          phone: row0.phone,
+          email: `c-${next()}@test.wawu.dev`,
+        };
+        subs.add(c.sub);
+        const r3 = await claim(mint(c, noFlags), row0.accessCode).expect(409);
+        expect(reason(r3).code).toBe('contact_not_verified');
+        const still = await prisma.waitlistRegistration.findUniqueOrThrow({
+          where: { id: row0.id },
+        });
+        expect(still.claimedByWawuId).toBeNull();
+      });
     });
 
     it("refuses someone who holds the code but proves neither of the registration's contacts, with the same answer as an unknown code", async () => {
