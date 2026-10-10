@@ -834,6 +834,21 @@ describe('Publishing needs a tier (TIER-02) over HTTP', () => {
       await http().get('/api/hub/product-drafts').expect(401);
     });
 
+    it('need a real title: a blank one is turned away, not stored', async () => {
+      const id = await creator();
+      await post(id, '/product-drafts', { title: '   ' }).expect(400);
+      await post(id, '/product-drafts', {}).expect(400);
+      const d = body(
+        await post(id, '/product-drafts', { title: ' Padded ' }).expect(201),
+      ).data;
+      // Stored without the padding; and a blank title cannot be written later.
+      expect(d.title).toBe('Padded');
+      await patch(id, `/product-drafts/${d.id}`, { title: '  ' }).expect(400);
+      expect(
+        body(await get(id, '/product-drafts').expect(200)).data,
+      ).toHaveLength(1);
+    });
+
     it('can be filled in later, and removed', async () => {
       const id = await creator();
       const d = body(

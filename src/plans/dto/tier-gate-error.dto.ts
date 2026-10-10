@@ -33,27 +33,32 @@ export class TierGateReasonDto {
   @ApiProperty({ type: 'integer' })
   productsAllowed!: number;
 
-  /** The currency of every amount in `tiers` and `extraProducts`. */
-  @ApiProperty({ enum: ['NGN', 'USD'] })
-  currency!: 'NGN' | 'USD';
+  /**
+   * The currency of every amount in `tiers` and `extraProducts`. The offers
+   * (`currency`, `tiers`, `extraProducts`) are always there; they are absent
+   * only when the Hub could not read the plan at that moment, and the app
+   * then shows `message` alone.
+   */
+  @ApiPropertyOptional({ enum: ['NGN', 'USD'] })
+  currency?: 'NGN' | 'USD';
 
   /**
    * `tier_required`: every tier. `product_limit_reached`: the tiers that
    * allow more products than the one the person holds (none when there is
    * no way up).
    */
-  @ApiProperty({
+  @ApiPropertyOptional({
     type: 'array',
     items: { $ref: getSchemaPath('PlanTierView') },
   })
-  tiers!: unknown[];
+  tiers?: unknown[];
 
   /** The extra products they can buy now, or null when they cannot. */
   @ApiPropertyOptional({
     nullable: true,
     allOf: [{ $ref: getSchemaPath('PlanExtraProductsView') }],
   })
-  extraProducts!: unknown;
+  extraProducts?: unknown;
 }
 
 /** The body of a 402 from a route that publishes or accepts a file. */

@@ -163,8 +163,10 @@ into a draft, because a draft holds no file.
   `tierState` is `none` or `ended`.
 - `product_limit_reached`: every product they may have is published.
 
-`reason` is flat and always the same keys: `code`, `message`, `tierState`,
-`productsUsed`, `productsAllowed`, `currency`, `tiers`, `extraProducts`. The
+`reason` is flat: `code`, `message`, `tierState`, `productsUsed`,
+`productsAllowed`, and the offers `currency`, `tiers`, `extraProducts` (absent
+only when the Hub could not read the plan at that moment; the app then shows
+`message` alone). The
 offers are the figures `GET /plans` answers, in the person's billing currency
 only: for `tier_required` every tier; for `product_limit_reached` the tiers
 that allow more products than the one they hold (none when they hold the top

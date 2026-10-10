@@ -7,6 +7,7 @@ import {
   IsOptional,
   IsString,
   IsUrl,
+  Matches,
   Max,
   MaxLength,
   Min,
@@ -33,6 +34,7 @@ const ACCESS_TYPES = ['free', 'paid'] as const;
 export class CreateProductDraftDto {
   @IsString()
   @IsNotEmpty()
+  @Matches(/\S/, { message: 'title must not be blank' })
   @MaxLength(200)
   title: string;
 
@@ -85,6 +87,7 @@ export class UpdateProductDraftDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()
+  @Matches(/\S/, { message: 'title must not be blank' })
   @MaxLength(200)
   title?: string;
 
