@@ -27,6 +27,7 @@ import {
   WAITLIST_PAYMENT_LOOKUP,
   type WaitlistPaymentLookup,
 } from '../waitlist-payment-lookup';
+import { type RandomBytes, WAITLIST_RANDOM } from '../waitlist-random';
 import { WaitlistModule } from '../waitlist.module';
 
 /**
@@ -155,8 +156,9 @@ export async function bootWaitlist(
   fake: ScriptedFlutterwave,
   extraImports: unknown[] = [],
   extraProviders: unknown[] = [],
+  random?: RandomBytes,
 ): Promise<INestApplication<App>> {
-  const moduleRef = await Test.createTestingModule({
+  const builder = Test.createTestingModule({
     imports: [
       ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
       PrismaModule,
@@ -171,8 +173,13 @@ export async function bootWaitlist(
     .overrideProvider(FLUTTERWAVE_CLIENT)
     .useValue(fake)
     .overrideProvider(WAITLIST_PAYMENT_LOOKUP)
-    .useValue(fake)
-    .compile();
+    .useValue(fake);
+  // A spec that forces two references onto one access code scripts the draws.
+  const moduleRef = await (
+    random
+      ? builder.overrideProvider(WAITLIST_RANDOM).useValue(random)
+      : builder
+  ).compile();
   const app = moduleRef.createNestApplication<INestApplication<App>>({
     logger: false,
   });
