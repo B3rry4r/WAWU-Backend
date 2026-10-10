@@ -1,10 +1,14 @@
+import { createHash } from 'node:crypto';
 import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import type { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
@@ -22,6 +26,51 @@ const MAX_TICKET_CODE_LENGTH = 40;
 function canBeTicketCode(text: string): boolean {
   return text.length <= MAX_TICKET_CODE_LENGTH && /^[\x20-\x7e]+$/.test(text);
 }
+
+/**
+ * `Idempotency-Key` on the door route (EVENTS-09 round 2, D1;
+ * docs/contract/CONVENTIONS.md section 4 gives the format). Optional here: a
+ * scan without one behaves as it always did.
+ */
+export const DOOR_KEY_FORMAT = /^[A-Za-z0-9_-]{8,128}$/;
+export const DOOR_KEY_MESSAGE =
+  'Idempotency-Key must be 8 to 128 letters, digits, - or _.';
+export const DOOR_KEY_REUSED_MESSAGE =
+  'This key was already used for a different scan. Scan the ticket again.';
+
+/**
+ * How long the first answer to a scan is kept (PROVISIONAL(DOOR-KEY-HOURS,
+ * owner=EVENTS-09, why=no ruling sizes it; a phone asks again within
+ * seconds, so a day is already generous and the answer holds a holder's
+ * name)). Purged hourly.
+ */
+export const DOOR_SCAN_KEY_HOURS = 48;
+
+/** Prisma's unique-constraint refusal (P2002). */
+function isUniqueViolation(e: unknown): boolean {
+  return (
+    typeof e === 'object' &&
+    e !== null &&
+    (e as { code?: unknown }).code === 'P2002'
+  );
+}
+
+/** What a key stands for: this event and the text sent, so another scan cannot reuse it. */
+function scanFingerprint(eventId: string, code: string): string {
+  return createHash('sha256')
+    .update(`${eventId}\n${code}`, 'utf8')
+    .digest('hex');
+}
+
+/** Name, handle and avatar per person (see `EventRunningService.names`). */
+type PersonNames = Map<
+  string,
+  {
+    displayName: string | null;
+    handle: string | null;
+    avatarUrl: string | null;
+  }
+>;
 
 /** GET /events/mine/sold: one row per event the caller hosts. */
 export interface HostSoldCount {
@@ -85,9 +134,23 @@ export interface CheckedInByView {
 
 export type DoorCheckInOutcome = 'valid' | 'already_used' | 'invalid';
 
+/** A scan's answer, and whether it is the first answer sent again (a repeat of the same `Idempotency-Key`). */
+export interface DoorCheckInAnswer {
+  result: DoorCheckInResult;
+  replayed: boolean;
+}
+
 /** POST /events/:id/door/check-in: E20, E23 and E24 in one answer. */
 export interface DoorCheckInResult {
   outcome: DoorCheckInOutcome;
+  /**
+   * Why an `invalid` scan is invalid, when the Hub can say without telling a
+   * stranger anything: `cancelled` is a ticket of THIS event that was voided
+   * because the event was called off ("This ticket was cancelled"). Left out
+   * for text that is no ticket here, which stays the one answer for a made-up
+   * code and another event's ticket alike.
+   */
+  reason?: 'cancelled';
   /** Null when the code is not a ticket for this event (E24). */
   ticket: {
     code: string;
@@ -125,6 +188,8 @@ export interface DoorCheckInResult {
  */
 @Injectable()
 export class EventRunningService {
+  private readonly logger = new Logger(EventRunningService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly wawuId: WawuIdClient,
@@ -366,11 +431,22 @@ export class EventRunningService {
    * The door
    * ------------------------------------------------------------------ */
 
+  /**
+   * One scan. With an `Idempotency-Key` the first answer is kept under
+   * (scanner, key), in the same transaction as the check-in it answers, and
+   * a repeat of the key gets that answer again: a phone whose answer was lost
+   * asks again with the same key and is told "let them in" (with the holder's
+   * name), not "already used" by its own door. Without a key nothing is kept.
+   */
   async checkIn(
     scannerWawuId: string,
     eventId: string,
     code: string,
-  ): Promise<DoorCheckInResult> {
+    key?: string,
+  ): Promise<DoorCheckInAnswer> {
+    if (key !== undefined && !DOOR_KEY_FORMAT.test(key)) {
+      throw new BadRequestException(DOOR_KEY_MESSAGE);
+    }
     const event = await this.prisma.event.findUnique({
       where: { id: eventId },
       select: { id: true, hostWawuId: true },
@@ -390,6 +466,17 @@ export class EventRunningService {
       }
     }
 
+    const fingerprint = scanFingerprint(eventId, code);
+    const keyOf = (k: string) => ({
+      scannerWawuId_key: { scannerWawuId, key: k },
+    });
+    if (key) {
+      const earlier = await this.prisma.eventDoorScan.findUnique({
+        where: keyOf(key),
+      });
+      if (earlier) return this.replay(earlier, fingerprint);
+    }
+
     const normalised = code.trim().toUpperCase();
     // Only text that can be a ticket code is looked up: the unique index and
     // the column hold codes of at most 40 printable ASCII characters. Anything
@@ -407,18 +494,95 @@ export class EventRunningService {
             order: { select: { buyerWawuId: true } },
           },
         });
+    // WAWU ID is asked before anything is written, so a slow or failed lookup
+    // can never leave a ticket checked in with its answer unsent.
+    const holders =
+      ticket && ticket.eventId === eventId && ticket.status !== 'void'
+        ? await this.names([ticket.order.buyerWawuId])
+        : null;
 
+    const decide = (db: Prisma.TransactionClient | PrismaService) =>
+      this.decide(db, event, scannerWawuId, ticket, holders);
+
+    if (!key) return { result: await decide(this.prisma), replayed: false };
+
+    try {
+      const result = await this.prisma.$transaction(
+        async (tx) => {
+          // The primary key is the lock: a second request with this key waits
+          // here until the first commits, then fails and is answered below.
+          await tx.eventDoorScan.create({
+            data: { scannerWawuId, key, eventId, fingerprint, response: '' },
+          });
+          const answer = await decide(tx);
+          await tx.eventDoorScan.update({
+            where: keyOf(key),
+            data: { response: JSON.stringify(answer) },
+          });
+          return answer;
+        },
+        { maxWait: 5000, timeout: 10_000 },
+      );
+      return { result, replayed: false };
+    } catch (e) {
+      if (!isUniqueViolation(e)) throw e;
+      const row = await this.prisma.eventDoorScan.findUnique({
+        where: keyOf(key),
+      });
+      if (!row) throw e;
+      return this.replay(row, fingerprint);
+    }
+  }
+
+  /** The first answer again, unless the key was used for another scan. */
+  private replay(
+    row: { fingerprint: string; response: string },
+    fingerprint: string,
+  ): DoorCheckInAnswer {
+    if (row.fingerprint !== fingerprint) {
+      throw new ConflictException(DOOR_KEY_REUSED_MESSAGE);
+    }
+    return {
+      result: JSON.parse(row.response) as DoorCheckInResult,
+      replayed: true,
+    };
+  }
+
+  /** The verdict, and the check-in when it is one. Database only: it runs inside the key's transaction. */
+  private async decide(
+    db: Prisma.TransactionClient | PrismaService,
+    event: { id: string; hostWawuId: string },
+    scannerWawuId: string,
+    ticket: {
+      id: string;
+      eventId: string;
+      status: string;
+      ticketType: { name: string };
+      order: { buyerWawuId: string };
+    } | null,
+    holders: PersonNames | null,
+  ): Promise<DoorCheckInResult> {
     // A code for another event is not a ticket at this door (E24), and
     // saying so confirms nothing about the other event.
-    if (!ticket || ticket.eventId !== eventId || ticket.status === 'void') {
+    if (!ticket || ticket.eventId !== event.id) {
       return {
         outcome: 'invalid',
         ticket: null,
-        totals: await this.doorTotals(eventId),
+        totals: await this.doorTotals(db, event.id),
+      };
+    }
+    // A ticket of this event that was voided (the event was called off) is
+    // told apart for the person at this door, who is its organiser or staff.
+    if (ticket.status === 'void') {
+      return {
+        outcome: 'invalid',
+        reason: 'cancelled',
+        ticket: null,
+        totals: await this.doorTotals(db, event.id),
       };
     }
 
-    const claimed = await this.prisma.eventTicket.updateMany({
+    const claimed = await db.eventTicket.updateMany({
       where: { id: ticket.id, status: 'valid' },
       data: {
         status: 'checked_in',
@@ -427,23 +591,25 @@ export class EventRunningService {
       },
     });
 
-    const fresh = await this.prisma.eventTicket.findUniqueOrThrow({
+    const fresh = await db.eventTicket.findUniqueOrThrow({
       where: { id: ticket.id },
       select: { code: true, checkedInAt: true, checkedInBy: true },
     });
 
-    const [names, checkedInBy, totals] = await Promise.all([
-      this.names([ticket.order.buyerWawuId]),
-      this.checkedInBy(event.id, event.hostWawuId, fresh.checkedInBy),
-      this.doorTotals(eventId),
-    ]);
+    const checkedInBy = await this.checkedInBy(
+      db,
+      event.id,
+      event.hostWawuId,
+      fresh.checkedInBy,
+    );
+    const totals = await this.doorTotals(db, event.id);
 
     return {
       outcome: claimed.count === 1 ? 'valid' : 'already_used',
       ticket: {
         code: fresh.code,
         tierName: ticket.ticketType.name,
-        holderName: names.get(ticket.order.buyerWawuId)?.displayName ?? null,
+        holderName: holders?.get(ticket.order.buyerWawuId)?.displayName ?? null,
         checkedInAt: fresh.checkedInAt,
         checkedInBy,
       },
@@ -451,12 +617,32 @@ export class EventRunningService {
     };
   }
 
+  /** The first answers kept for repeats are dropped after `DOOR_SCAN_KEY_HOURS`. */
+  @Cron(CronExpression.EVERY_HOUR)
+  async purgeDoorScans(now: Date = new Date()): Promise<number> {
+    const cutoff = new Date(now.getTime() - DOOR_SCAN_KEY_HOURS * 3_600_000);
+    try {
+      const { count } = await this.prisma.eventDoorScan.deleteMany({
+        where: { createdAt: { lt: cutoff } },
+      });
+      return count;
+    } catch (e) {
+      this.logger.error(
+        `Could not purge old door scans: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      return 0;
+    }
+  }
+
   /* ------------------------------------------------------------------ *
    * Helpers
    * ------------------------------------------------------------------ */
 
-  private async doorTotals(eventId: string) {
-    const t = await ticketTotals(this.prisma, eventId);
+  private async doorTotals(
+    db: Prisma.TransactionClient | PrismaService,
+    eventId: string,
+  ) {
+    const t = await ticketTotals(db, eventId);
     return {
       sold: t.sold,
       checkedIn: t.checkedIn,
@@ -466,13 +652,14 @@ export class EventRunningService {
   }
 
   private async checkedInBy(
+    db: Prisma.TransactionClient | PrismaService,
     eventId: string,
     hostWawuId: string,
     scannerWawuId: string | null,
   ): Promise<CheckedInByView | null> {
     if (!scannerWawuId) return null;
     if (scannerWawuId === hostWawuId) return { role: 'host', label: null };
-    const staff = await this.prisma.eventDoorStaff.findUnique({
+    const staff = await db.eventDoorStaff.findUnique({
       where: { eventId_staffWawuId: { eventId, staffWawuId: scannerWawuId } },
       select: { label: true },
     });
@@ -522,16 +709,7 @@ export class EventRunningService {
    * the profile, the way chats and saved recipients read people. WAWU ID
    * being unreachable degrades the name to the handle.
    */
-  private async names(ids: string[]): Promise<
-    Map<
-      string,
-      {
-        displayName: string | null;
-        handle: string | null;
-        avatarUrl: string | null;
-      }
-    >
-  > {
+  private async names(ids: string[]): Promise<PersonNames> {
     const unique = [...new Set(ids)];
     const [identities, profiles] = await Promise.all([
       this.wawuId.lookupPublicIdentities(unique),
@@ -541,14 +719,7 @@ export class EventRunningService {
       }),
     ]);
     const profileBy = new Map(profiles.map((p) => [p.wawuUserId, p]));
-    const out = new Map<
-      string,
-      {
-        displayName: string | null;
-        handle: string | null;
-        avatarUrl: string | null;
-      }
-    >();
+    const out: PersonNames = new Map();
     for (const id of unique) {
       const identity = identities.get(id);
       const profile = profileBy.get(id);

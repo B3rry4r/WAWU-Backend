@@ -193,9 +193,14 @@ describe('The door answers every scan (EVENTS-09)', () => {
     }
   });
 
-  it('the body takes exactly what a scanner can hand over: 500 characters, not 501, and not fewer than 4', async () => {
-    await scan('x'.repeat(MAX_DOOR_SCAN_LENGTH)).expect(201);
-    await scan('x'.repeat(MAX_DOOR_SCAN_LENGTH + 1)).expect(400);
+  it('the body takes exactly what a scanner can hand over: 500 characters, not 501, and not fewer than 4 (the numbers by value, not through the constant)', async () => {
+    // The app answers text outside 4 to 500 itself and never sends it (EVENTS-09 round 2);
+    // these are the numbers it relies on, so a change to either fails here.
+    expect(MAX_DOOR_SCAN_LENGTH).toBe(500);
+    await scan('x'.repeat(500)).expect(201);
+    await scan('x'.repeat(501)).expect(400);
+    await scan('x'.repeat(5000)).expect(400);
+    await scan('abcd').expect(201);
     await scan('abc').expect(400);
     await http()
       .post(`/api/hub/events/${EV}/door/check-in`)
