@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -92,16 +92,21 @@ import {
  */
 
 const BASE = '/api/hub/money/payments';
-const MONEY_TIMEOUT_MS = 1_500;
+// The client's timeouts are only a hang guard here (R6-4): nothing in this
+// file waits for one to run out. A lost answer is a dropped connection, and
+// a request in flight is held by the test until the test's own condition
+// holds, so a loaded machine can be as slow as it likes.
+const MONEY_TIMEOUT_MS = 120_000;
 const PIN = '4826';
 const WEBHOOK_SECRET = 'whsec_local_m17_pay_Qv7Lp3Xc9Ty2Hb5Jn';
 const WRONG_PIN = '1397';
 
-// Several tests wait out the money timeout, poll for a settlement for up to
-// 10 s, or check a dozen PINs one after another (argon2 each); at the load
-// the deploy suite meets beside other jobs that passes 5 s (verifier
-// defect 4, round 2).
-jest.setTimeout(60_000);
+// Several tests poll for a settlement, run twenty payments at once five times
+// over, or check a dozen PINs one after another (argon2 each). Each waits on
+// a condition and never on a number of milliseconds, so this is only the
+// guard against a hang, set far above what a machine at load 25 needs
+// (verifier defect 4, round 2; R6-4, round 7).
+jest.setTimeout(300_000);
 
 function mintToken(sub: string): string {
   const privateKey = readFileSync(
@@ -151,6 +156,32 @@ type Envelope<T> = {
 };
 const body = <T>(res: Response) => res.body as Envelope<T>;
 
+/**
+ * Fintava's record by our reference (`recordByReference`), with the ids that
+ * belong to ONE transfer. The sandbox record the double copies carries one
+ * fixed id, reference and session for every transfer, which a real provider
+ * never does; payments in one database that all carried them would share
+ * ledger references and be folded into one another, so a test's result
+ * would depend on which tests ran before it.
+ */
+function recordFor(ourReference: string, status: string, amount: string) {
+  const record = recordByReference(ourReference, status, amount);
+  const h = createHash('sha256').update(ourReference).digest('hex');
+  const uuid = (o: number) =>
+    `${h.slice(o, o + 8)}-${h.slice(o + 8, o + 12)}-4${h.slice(o + 12, o + 15)}-8${h.slice(o + 15, o + 18)}-${h.slice(o + 18, o + 30)}`;
+  return {
+    ...record,
+    data: {
+      ...record.data,
+      id: uuid(0),
+      reference: uuid(2),
+      sessionId: `09062026${BigInt(`0x${h.slice(0, 15)}`)
+        .toString()
+        .slice(0, 22)}`,
+    },
+  };
+}
+
 /** The dashboard's balance-transfer charge (`fees.md`), in kobo. */
 const liveFee = (amountKobo: number) => (amountKobo < 500_000 ? 2325 : 1575);
 
@@ -189,6 +220,8 @@ class Wallets {
   sendGate: (() => Promise<void>) | null = null;
   /** Held before a balance is answered. */
   balanceGate: ((account: string) => Promise<void>) | null = null;
+  /** Every transfer taken is held before it is answered, until released. */
+  hold: ReturnType<typeof newHold> | null = null;
 }
 
 /** Resolves once `n` callers have arrived, for all of them. */
@@ -203,13 +236,41 @@ function barrier(n: number): () => Promise<void> {
   };
 }
 
-/** Polls until `ok` answers true, for at most 10 s. */
+/** Polls until `ok` answers true. The cap only ends a hang; it is not what the test waits for. */
 async function until(ok: () => Promise<boolean>): Promise<void> {
-  for (let i = 0; i < 200; i += 1) {
+  for (let i = 0; i < 2_400; i += 1) {
     if (await ok()) return;
     await new Promise((r) => setTimeout(r, 50));
   }
   throw new Error('until: the condition never held');
+}
+
+/**
+ * Fintava's answers held back, after the transfer is taken, until `release()`:
+ * a request in flight for exactly as long as the test needs, so a test can
+ * tap again while the first is in flight and then let it finish, whatever the
+ * speed of the machine. `arrived` counts the transfers being held.
+ */
+function newHold() {
+  let release!: () => void;
+  const open = new Promise<void>((r) => {
+    release = r;
+  });
+  return { arrived: 0, open, release };
+}
+
+/** Collects answers as they come, so a test can wait on how many are in. */
+function collect<T>(requests: PromiseLike<T>[]) {
+  const done: T[] = [];
+  const all = Promise.all(
+    requests.map((r) =>
+      Promise.resolve(r).then((v) => {
+        done.push(v);
+        return v;
+      }),
+    ),
+  );
+  return { done, all };
 }
 
 describe('Pay from wallet (MONEY-17) over HTTP', () => {
@@ -388,7 +449,7 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
       }
       return {
         status: 200,
-        body: recordByReference(
+        body: recordFor(
           ref,
           wallets.failures.has(ref) ? 'FAILURE' : 'SUCCESS',
           (send.amountKobo / 100).toFixed(2),
@@ -465,14 +526,17 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
           reference: b.CustomerReference,
         });
         const after = (have - amountKobo - feeKobo) / 100;
+        if (wallets.hold) {
+          wallets.hold.arrived += 1;
+          await wallets.hold.open;
+        }
         return {
           status: 200,
-          delayMs:
-            mode === 'timeout'
-              ? MONEY_TIMEOUT_MS + 1_000
-              : mode === 'slow'
-                ? 400
-                : 0,
+          // A lost answer: the transfer is taken and the connection is
+          // dropped, which the client reads as it reads a timeout (the
+          // outcome is unknown); no waiting for a timer.
+          hangUp: mode === 'timeout',
+          delayMs: mode === 'slow' ? 400 : 0,
           body: {
             data: {
               amount: amountKobo / 100,
@@ -672,6 +736,8 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
     beforeDelivery = null;
     staleRead = null;
     wallets.balanceGate = null;
+    wallets.hold?.release();
+    wallets.hold = null;
   });
 
   // -------------------------------------------------------------------------
@@ -812,17 +878,25 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
     const p = await buyer(500_000);
     const q = await quoted(p, 'content_unlock', 'piece-1000');
     const key = randomUUID();
-    wallets.mode = 'slow';
-    const answers = await Promise.all(
+    // The one that takes the key is held in flight at Fintava until the
+    // other seven have been answered; so they all meet a payment still going
+    // through, on any machine.
+    const hold = (wallets.hold = newHold());
+    const taps = collect(
       Array.from({ length: 8 }, () => pay(p, payBody(q), key)),
     );
-    wallets.mode = 'live';
+    await until(() =>
+      Promise.resolve(taps.done.length === 7 && hold.arrived === 1),
+    );
+    hold.release();
+    wallets.hold = null;
+    const answers = await taps.all;
     expect(sendsFrom(p)).toHaveLength(1);
     expect(wallets.kobo.get(p.accountNumber)).toBe(500_000 - 102_325);
     const ok = answers.filter((a) => a.status === 201);
     const busy = answers.filter((a) => a.status === 409);
-    expect(ok.length + busy.length).toBe(8);
-    expect(ok.length).toBeGreaterThanOrEqual(1);
+    expect(ok).toHaveLength(1);
+    expect(busy).toHaveLength(7);
     expect(new Set(ok.map((a) => body<PaymentView>(a).data!.id)).size).toBe(1);
     for (const b of busy) {
       expect(body(b).reason).toEqual({
@@ -1236,7 +1310,7 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
     // MONEY-08's status check asks Fintava by our reference.
     double.on('GET', `/transaction/reference/${paid.reference}`, {
       status: 200,
-      body: recordByReference(paid.reference, 'SUCCESS', '1000.00'),
+      body: recordFor(paid.reference, 'SUCCESS', '1000.00'),
     });
     const [out] = (await ledgerRows(paid.reference)).filter(
       (r) => r.direction === 'out',
@@ -1339,23 +1413,38 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
     expect(sendsFrom(p)).toHaveLength(1);
   });
 
-  it('the sandbox charging ₦0 instead of the quoted ₦23.25: paid, and the difference kept on the ledger row and the payment for review', async () => {
+  it('the sandbox charging ₦0 instead of the quoted ₦23.25 (R6-1, a debit below the quote): paid, both ledger rows complete at what Fintava really took, the payment records it with the difference, and nothing is flagged', async () => {
     const p = await buyer(500_000);
     const q = await quoted(p, 'content_unlock', 'piece-1000');
     wallets.mode = 'sandbox';
     const res = await pay(p, payBody(q));
     wallets.mode = 'live';
     const paid = body<PaymentView>(res).data!;
-    expect(paid.status).toBe('completed');
+    expect(paid).toMatchObject({
+      status: 'completed',
+      totalKobo: 100_000,
+      fee: { providerFeeKobo: 0 },
+    });
     expect(wallets.kobo.get(p.accountNumber)).toBe(500_000 - 100_000);
-    const [, out] = await ledgerRows(paid.reference);
+    const [inn, out] = await ledgerRows(paid.reference);
     expect(out.direction).toBe('out');
-    expect(out.feeKobo).toBe(2325n);
-    expect(out.discrepancy).toMatch(/feeKobo 2325 vs 0/);
+    expect([out.status, out.feeKobo, out.totalKobo]).toEqual([
+      'completed',
+      0n,
+      100_000n,
+    ]);
+    expect([inn.direction, inn.status, inn.totalKobo]).toEqual([
+      'in',
+      'completed',
+      100_000n,
+    ]);
     const row = await prisma.walletPayment.findUniqueOrThrow({
       where: { id: paid.id },
     });
-    expect(row.discrepancy).toMatch(/feeKobo 2325 vs 0/);
+    expect(row.debitReviewSince).toBeNull();
+    expect(row.discrepancy).toMatch(
+      /debit differs from the quote: Fintava took 100000 kobo \(fee 0\), quoted 102325 kobo \(fee 2325\)/,
+    );
   });
 
   // -------------------------------------------------------------------------
@@ -1428,9 +1517,14 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
   it('D1: two payments for one item at once under two keys: one goes on, the other is payment_in_progress; one debit', async () => {
     const p = await buyer(1_000_000);
     const q = await quoted(p, 'content_unlock', 'piece-1000');
-    wallets.mode = 'slow';
-    const answers = await Promise.all([pay(p, payBody(q)), pay(p, payBody(q))]);
-    wallets.mode = 'live';
+    // The first is in flight at Fintava (held) while the second taps.
+    const hold = (wallets.hold = newHold());
+    const first = collect([pay(p, payBody(q))]);
+    await until(() => Promise.resolve(hold.arrived === 1));
+    const second = await pay(p, payBody(q));
+    hold.release();
+    wallets.hold = null;
+    const answers = [...(await first.all), second];
     expect(answers.map((r) => r.status).sort()).toEqual([201, 409]);
     const ok = body<PaymentView>(answers.find((r) => r.status === 201)!).data!;
     expect(body(answers.find((r) => r.status === 409)!).reason).toMatchObject({
@@ -1734,12 +1828,17 @@ describe('Pay from wallet (MONEY-17) over HTTP', () => {
     const gate = barrier(6);
     wallets.balanceGate = (account) =>
       account === p.accountNumber ? gate() : Promise.resolve();
-    wallets.mode = 'slow';
-    const answers = await Promise.all(
-      Array.from({ length: 6 }, () => pay(p, payBody(q))),
+    // The one that wins the claim is held in flight at Fintava until the five
+    // that lost have been answered: they all meet it open, on any machine.
+    const hold = (wallets.hold = newHold());
+    const taps = collect(Array.from({ length: 6 }, () => pay(p, payBody(q))));
+    await until(() =>
+      Promise.resolve(taps.done.length === 5 && hold.arrived === 1),
     );
-    wallets.mode = 'live';
+    hold.release();
+    wallets.hold = null;
     wallets.balanceGate = null;
+    const answers = await taps.all;
     const winners = answers.filter((r) => r.status === 201);
     const losers = answers.filter((r) => r.status !== 201);
     expect(winners).toHaveLength(1);

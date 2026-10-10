@@ -438,6 +438,8 @@ export class NuvionSeamStandIn implements WalletProvider {
       providerReference: t.id,
       secondaryReference: null,
       sessionId: null,
+      // The docs' transfer object carries `applicable_fee`.
+      feeKobo: t.feeKobo,
     };
   }
 

@@ -307,6 +307,16 @@ export interface ProviderTransaction {
   providerReference: string | null;
   secondaryReference: string | null;
   sessionId: string | null;
+  /**
+   * What the provider charged the sender on top of the amount, when its
+   * record says (kobo). Nuvion's transfer object carries `applicable_fee`;
+   * Fintava's lookups and history carry no charge for a wallet-to-wallet
+   * send. Absent or null: the record does not say, and the fee the payment
+   * was quoted stands. An adapter fills it whenever its record has the
+   * figure, because a payment is completed at what the provider took, not at
+   * the quote (MONEY-17 round 7, lead ruling R6-1; SHARED-CHANGES MONEY-17 #6).
+   */
+  feeKobo?: bigint | null;
 }
 
 export interface ProviderPage<T> {

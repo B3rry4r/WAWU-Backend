@@ -8,6 +8,7 @@ import {
   PaymentSettings,
   splitPrice,
 } from '../payment-config';
+import { completedFigures, joinNotes } from '../payment-figures';
 import {
   nairaText,
   nextCheckDelayMs,
@@ -45,6 +46,18 @@ describe('MONEY-17 units', () => {
       expect(splitPrice(100_000, false)).toEqual({
         payeeShareKobo: 0,
         wawuShareKobo: 100_000,
+      });
+    });
+
+    it('matches a bigint reference for every price a payment can carry (the 85% needs no float)', () => {
+      for (let price = 1; price <= 300_000; price += 1) {
+        const share = Number((BigInt(price) * 8500n) / 10_000n);
+        expect(splitPrice(price, true).payeeShareKobo).toBe(share);
+      }
+      // 140 kobo: 85% is exactly 119.
+      expect(splitPrice(140, true)).toEqual({
+        payeeShareKobo: 119,
+        wawuShareKobo: 21,
       });
     });
 
@@ -164,6 +177,93 @@ describe('MONEY-17 units', () => {
       expect(
         () => new PaymentSettings(fintavaConfig({ IDEMPOTENCY_KEY_HOURS: v })),
       ).toThrow(FeeConfigError);
+    });
+  });
+  describe("completedFigures (R6-1: the provider's own record decides what a payment completes at)", () => {
+    const quoted = { providerFeeKobo: 1_500n, totalKobo: 101_500n };
+
+    it('a record that carries no charge leaves the quote standing', () => {
+      expect(
+        completedFigures(
+          quoted,
+          { amountKobo: 100_000n, feeKobo: null, totalKobo: null },
+          'Nuvion',
+        ),
+      ).toEqual({
+        verdict: 'as_quoted',
+        feeKobo: 1_500n,
+        totalKobo: 101_500n,
+        note: null,
+      });
+    });
+
+    it('the quoted charge is as_quoted whether the record gives the fee, the total or both', () => {
+      for (const record of [
+        { amountKobo: 100_000n, feeKobo: 1_500n, totalKobo: null },
+        { amountKobo: 100_000n, feeKobo: null, totalKobo: 101_500n },
+        { amountKobo: 100_000n, feeKobo: 1_500n, totalKobo: 101_500n },
+      ]) {
+        expect(completedFigures(quoted, record, 'Nuvion').verdict).toBe(
+          'as_quoted',
+        );
+      }
+    });
+
+    it('a higher charge is above, a lower one below, each with both figures in its note and the real ones returned', () => {
+      const above = completedFigures(
+        quoted,
+        { amountKobo: 100_000n, feeKobo: 2_200n, totalKobo: null },
+        'Nuvion',
+      );
+      expect(above).toEqual({
+        verdict: 'above',
+        feeKobo: 2_200n,
+        totalKobo: 102_200n,
+        note: 'debit above the quote: Nuvion took 102200 kobo (fee 2200), quoted 101500 kobo (fee 1500)',
+      });
+      const below = completedFigures(
+        quoted,
+        { amountKobo: 100_000n, feeKobo: null, totalKobo: 101_000n },
+        'Nuvion',
+      );
+      expect(below).toEqual({
+        verdict: 'below',
+        feeKobo: 1_000n,
+        totalKobo: 101_000n,
+        note: 'debit differs from the quote: Nuvion took 101000 kobo (fee 1000), quoted 101500 kobo (fee 1500)',
+      });
+    });
+
+    it('one kobo either side of the quote is still above or below, never as_quoted', () => {
+      const one = (feeKobo: bigint) =>
+        completedFigures(
+          quoted,
+          { amountKobo: 100_000n, feeKobo, totalKobo: null },
+          'Fintava',
+        ).verdict;
+      expect(one(1_501n)).toBe('above');
+      expect(one(1_499n)).toBe('below');
+      expect(one(0n)).toBe('below');
+    });
+  });
+
+  describe('joinNotes (a discrepancy never says the same thing twice)', () => {
+    it('joins what is there, in order, once each', () => {
+      expect(joinNotes(null, 'a', undefined, 'b', 'a', '', 'c')).toBe(
+        'a; b; c',
+      );
+      expect(joinNotes('a; b', 'b', 'c')).toBe('a; b; c');
+      expect(joinNotes(null, undefined, '')).toBeNull();
+    });
+
+    it('a note that only contains another as part of a longer one is still kept', () => {
+      expect(joinNotes('debit above the quote: x', 'above the quote')).toBe(
+        'debit above the quote: x; above the quote',
+      );
+    });
+
+    it('is at most 1000 characters', () => {
+      expect(joinNotes('x'.repeat(2_000))!.length).toBe(1_000);
     });
   });
 });

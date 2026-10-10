@@ -62,6 +62,7 @@ import {
 import { isUniqueViolationOn } from '../prisma-unique';
 import { MoneyLimits } from '../limits/money-limits.service';
 import { PaymentSettings, splitPrice } from './payment-config';
+import { completedFigures, joinNotes } from './payment-figures';
 
 /** The route a payment's Idempotency-Key is scoped to. */
 export const PAY_ROUTE = 'POST money/payments';
@@ -619,8 +620,9 @@ export class WalletPaymentService implements OnModuleInit {
 
   /**
    * The provider completed the transfer and said what it took. Its figures
-   * are compared as the integers they are (bigint kobo): the price moved, or
-   * the payment is stopped for review.
+   * are compared as the integers they are (bigint kobo): the price moved and
+   * the payment completes at what the provider took (`completeFromRecord`),
+   * or the payment is stopped for review.
    */
   private async afterReceipt(
     payment: PaymentRow,
@@ -628,101 +630,206 @@ export class WalletPaymentService implements OnModuleInit {
     receipt: ProviderTransferReceipt,
     handler: PayableKindHandler,
   ): Promise<PaymentView> {
-    const notes: string[] = [];
     const refs = {
       fintavaReference: receipt.providerReference,
       tagapayTransRef: receipt.secondaryReference,
       fintavaTransactionId: receipt.transactionId,
     };
-    try {
-      const out = await this.ledger.record(
-        this.movement(
-          payment,
-          'out',
-          'completed',
-          {
-            amountKobo: safeKoboNumber(receipt.amountKobo),
-            feeKobo: safeKoboNumber(receipt.feeKobo),
-            totalKobo: safeKoboNumber(receipt.totalKobo),
-          },
-          refs,
-        ),
-        undefined,
-        { quiet: true },
-      );
-      const inn = await this.ledger.record(
-        this.movement(
-          payment,
-          'in',
-          'completed',
-          {
-            amountKobo: safeKoboNumber(receipt.amountKobo),
-            feeKobo: 0,
-            totalKobo: safeKoboNumber(receipt.amountKobo),
-          },
-          refs,
-        ),
-        undefined,
-        { quiet: true },
-      );
-      if (out.discrepancy) notes.push(out.discrepancy);
-      if (inn.discrepancy) notes.push(inn.discrepancy);
-    } catch (e) {
-      // The money moved; the webhook and the status check will write the
-      // ledger. The payment's own status is the provider's receipt.
-      this.logger.error(
-        `payment ${payment.id}: the ledger could not record the receipt (${e instanceof Error ? e.name : 'error'})`,
-      );
-    }
-    let discrepancy = notes.length ? notes.join('; ').slice(0, 1000) : null;
-    // What the provider really took is the payment's record and its answer,
-    // never the quote (lead ruling 5): its charge and the total it debited.
-    // A debit above the quoted total is flagged for review with both figures
-    // (`debitReviewSince`; NUV-08 reconciles it with the provider); the
-    // price moved as asked, so what was paid for is still delivered.
-    const realFee = receipt.feeKobo;
-    const realTotal = receipt.totalKobo;
-    const above = realTotal > payment.totalKobo;
-    if (
-      realFee !== payment.providerFeeKobo ||
-      realTotal !== payment.totalKobo
-    ) {
-      const note = `${above ? 'debit above the quote' : 'debit differs from the quote'}: ${this.provider.label} took ${realTotal} kobo (fee ${realFee}), quoted ${payment.totalKobo} kobo (fee ${payment.providerFeeKobo})`;
-      if (above) {
-        this.logger.error(`payment ${payment.id}: ${note}; flagged for review`);
+    if (receipt.amountKobo !== payment.priceKobo) {
+      // The provider moved another amount than the price: a stop. The ledger
+      // keeps both figures (a disagreement), and the payment goes to review
+      // (still pending, nothing delivered).
+      const notes: string[] = [];
+      for (const side of ['out', 'in'] as const) {
+        try {
+          const r = await this.ledger.record(
+            this.movement(
+              payment,
+              side,
+              'completed',
+              {
+                amountKobo: safeKoboNumber(receipt.amountKobo),
+                feeKobo: side === 'out' ? safeKoboNumber(receipt.feeKobo) : 0,
+                totalKobo: safeKoboNumber(
+                  side === 'out' ? receipt.totalKobo : receipt.amountKobo,
+                ),
+              },
+              refs,
+            ),
+            undefined,
+            { quiet: true },
+          );
+          if (r.discrepancy) notes.push(r.discrepancy);
+        } catch (e) {
+          this.logger.error(
+            `payment ${payment.id}: the ledger could not record the receipt (${e instanceof Error ? e.name : 'error'})`,
+          );
+        }
       }
-      discrepancy = [note, discrepancy]
-        .filter(Boolean)
-        .join('; ')
-        .slice(0, 1000);
-      await this.prisma.walletPayment.updateMany({
-        where: { id: payment.id, status: 'pending' },
-        data: {
-          providerFeeKobo: realFee,
-          totalKobo: realTotal,
-          ...(above ? { debitReviewSince: new Date() } : {}),
-        },
-      });
-      payment = await this.prisma.walletPayment.findUniqueOrThrow({
-        where: { id: payment.id },
-      });
-    }
-    let row: PaymentRow;
-    if (receipt.amountKobo === payment.priceKobo) {
-      row = await this.complete(payment, discrepancy, handler);
-    } else {
-      // The provider moved another amount than the price: a stop. The
-      // payment goes to review (still pending, nothing delivered).
       this.logger.error(
         `payment ${payment.id}: ${this.provider.label} moved another amount than the price; sent to review`,
       );
-      row = await this.toReview(
+      const row = await this.toReview(
         payment,
-        discrepancy ??
+        joinNotes(...notes) ??
           `amountKobo ${payment.priceKobo} vs ${receipt.amountKobo}`,
       );
+      return this.answer(scope, row);
     }
+    const row = await this.completeFromRecord(
+      payment,
+      {
+        amountKobo: receipt.amountKobo,
+        feeKobo: receipt.feeKobo,
+        totalKobo: receipt.totalKobo,
+        refs,
+        source: 'send',
+        occurredAt: null,
+        debitRecorded: false,
+      },
+      handler,
+    );
     return this.answer(scope, row);
+  }
+
+  /**
+   * THE one place a payment is completed (lead ruling R6-1, 10 Oct 2026):
+   * from the provider's answer to the send, from the payment sweep's lookup,
+   * and from a ledger row some other job settled (the status check, a
+   * webhook). The provider's own record decides the figures
+   * (`completedFigures`), never the quote:
+   * - **as quoted**: both ledger rows complete, the payment completes.
+   * - **below the quote**: the buyer's row takes the real charge and
+   *   completes (nobody is owed anything, and a delivered purchase is never
+   *   left `pending`), the merchant's completes, the payment records the real
+   *   figures and the difference on `discrepancy`; no flag.
+   * - **above the quote**: the payment records and answers the real total and
+   *   is flagged for review (`debitReviewSince`, both figures on
+   *   `discrepancy`); the price moved as asked, so it is delivered. The
+   *   buyer's row keeps the ledger's rule (a disagreement is held `pending`
+   *   with its note, NUV-08 reconciles); the merchant's completes.
+   * The merchant-side (`in`) row is completed on every path, so a completed
+   * payment never leaves WAWU's side of the ledger `pending` (R6-2).
+   */
+  private async completeFromRecord(
+    p: PaymentRow,
+    rec: {
+      amountKobo: bigint;
+      feeKobo: bigint | null;
+      totalKobo: bigint | null;
+      refs: {
+        fintavaReference?: string | null;
+        tagapayTransRef?: string | null;
+        fintavaTransactionId?: string | null;
+      };
+      source: 'send' | 'lookup' | 'history';
+      occurredAt: Date | null;
+      /** The buyer's row is already the record (it is what settled the payment). */
+      debitRecorded: boolean;
+    },
+    handler?: PayableKindHandler,
+  ): Promise<PaymentRow> {
+    const figures = completedFigures(
+      { providerFeeKobo: p.providerFeeKobo, totalKobo: p.totalKobo },
+      rec,
+      this.provider.label,
+    );
+    const price = koboNumber(p.priceKobo);
+    const notes: string[] = [];
+    const sighted = <T extends LedgerMovementInput>(m: T): T => ({
+      ...m,
+      source: rec.source,
+      ...(rec.occurredAt ? { occurredAt: rec.occurredAt } : {}),
+    });
+    if (!rec.debitRecorded) {
+      try {
+        if (figures.verdict === 'below') {
+          // The buyer's row was written with the quoted charge; the real one
+          // is lower, so the row takes it and completes (never held).
+          await this.ledger.completeDebitAt(
+            p.id,
+            { feeKobo: p.providerFeeKobo, totalKobo: p.totalKobo },
+            { feeKobo: figures.feeKobo, totalKobo: figures.totalKobo },
+            rec.source,
+          );
+        }
+        const out = await this.ledger.record(
+          sighted(
+            this.movement(
+              p,
+              'out',
+              'completed',
+              {
+                amountKobo: price,
+                feeKobo: koboNumber(figures.feeKobo),
+                totalKobo: koboNumber(figures.totalKobo),
+              },
+              rec.refs,
+            ),
+          ),
+          undefined,
+          { quiet: true },
+        );
+        if (out.discrepancy) notes.push(out.discrepancy);
+      } catch (e) {
+        // The money moved; the webhook and the status check will write the
+        // ledger. The payment's own status is the provider's record.
+        this.logger.error(
+          `payment ${p.id}: the ledger could not record the debit (${e instanceof Error ? e.name : 'error'})`,
+        );
+      }
+    }
+    try {
+      const inn = await this.ledger.record(
+        sighted(
+          this.movement(
+            p,
+            'in',
+            'completed',
+            { amountKobo: price, feeKobo: 0, totalKobo: price },
+            rec.refs,
+          ),
+        ),
+        undefined,
+        { quiet: true },
+      );
+      if (inn.discrepancy) notes.push(inn.discrepancy);
+    } catch (e) {
+      this.logger.error(
+        `payment ${p.id}: the ledger could not record the credit (${e instanceof Error ? e.name : 'error'})`,
+      );
+    }
+    // As it stands now: the settle that got here may have copied the ledger
+    // row's note onto it since `p` was read.
+    let payment = await this.prisma.walletPayment.findUniqueOrThrow({
+      where: { id: p.id },
+    });
+    if (figures.verdict !== 'as_quoted') {
+      const above = figures.verdict === 'above';
+      if (above) {
+        this.logger.error(
+          `payment ${p.id}: ${figures.note}; flagged for review`,
+        );
+      }
+      await this.prisma.walletPayment.updateMany({
+        where: { id: p.id, status: 'pending' },
+        data: {
+          providerFeeKobo: figures.feeKobo,
+          totalKobo: figures.totalKobo,
+          ...(above
+            ? { debitReviewSince: payment.debitReviewSince ?? new Date() }
+            : {}),
+        },
+      });
+      payment = await this.prisma.walletPayment.findUniqueOrThrow({
+        where: { id: p.id },
+      });
+    }
+    return this.complete(
+      payment,
+      joinNotes(payment.discrepancy, figures.note, ...notes),
+      handler,
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -774,6 +881,8 @@ export class WalletPaymentService implements OnModuleInit {
         const last = due[due.length - 1];
         after = { at: last.nextCheckAt!, id: last.id };
       }
+
+      await this.completeMerchantRows();
 
       const delivering = this.registry
         .kinds()
@@ -835,6 +944,63 @@ export class WalletPaymentService implements OnModuleInit {
   }
 
   /**
+   * WAWU's side of a completed payment (the `in` row on the merchant wallet)
+   * is never left `pending` (R6-2). Every path that completes a payment
+   * completes it with the payment; this is the net under them for a ledger
+   * write that failed once (a lost connection, a deadlock the ledger gave up
+   * on): the payment is complete, so its merchant row is completed from it.
+   * At most one page per pass, oldest first, the running provider's only.
+   */
+  private async completeMerchantRows(): Promise<void> {
+    const stuck = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT p."id" AS "id"
+        FROM "FintavaLedgerEntry" e
+        JOIN "WalletPayment" p ON p."id" = e."paymentId"
+       WHERE e."status" = 'pending' AND e."direction" = 'in'
+         AND e."walletKind" = 'merchant'
+         AND p."status" = 'completed' AND p."provider" = ${this.provider.name}
+       ORDER BY e."occurredAt", p."id"
+       LIMIT ${SWEEP_PAGE}`;
+    for (const { id } of stuck) {
+      const p = await this.prisma.walletPayment.findUnique({ where: { id } });
+      if (!p) continue;
+      const out = await this.prisma.fintavaLedgerEntry.findFirst({
+        where: {
+          customerReference: p.customerReference,
+          direction: 'out',
+          walletKind: 'user',
+        },
+        select: {
+          fintavaReference: true,
+          tagapayTransRef: true,
+          fintavaTransactionId: true,
+        },
+      });
+      const price = koboNumber(p.priceKobo);
+      try {
+        await this.ledger.record(
+          {
+            ...this.movement(
+              p,
+              'in',
+              'completed',
+              { amountKobo: price, feeKobo: 0, totalKobo: price },
+              out ?? {},
+            ),
+            source: 'lookup',
+          },
+          undefined,
+          { quiet: true },
+        );
+      } catch (e) {
+        this.logger.error(
+          `payment ${p.id}: its merchant ledger row could not be completed (${e instanceof Error ? e.name : 'error'})`,
+        );
+      }
+    }
+  }
+
+  /**
    * Settles one pending payment from what is known: its buyer-side ledger
    * row when that is settled, else the provider itself (`reconcileSend`: by
    * our reference, then the buyer's history). `ask`: whether to ask the
@@ -868,7 +1034,24 @@ export class WalletPaymentService implements OnModuleInit {
       });
     }
     if (row?.status === 'completed') {
-      return (await this.complete(p, null)).status as PaymentStatus;
+      // Some other job settled the buyer's row (the status check, a webhook):
+      // that row is the provider's record, and the payment completes from it
+      // the same way every other path does, merchant side included (R6-2).
+      return (
+        await this.completeFromRecord(p, {
+          amountKobo: row.amountKobo,
+          feeKobo: row.feeKobo,
+          totalKobo: row.totalKobo,
+          refs: {
+            fintavaReference: row.fintavaReference,
+            tagapayTransRef: row.tagapayTransRef,
+            fintavaTransactionId: row.fintavaTransactionId,
+          },
+          source: 'lookup',
+          occurredAt: null,
+          debitRecorded: true,
+        })
+      ).status as PaymentStatus;
     }
     if (row?.status === 'reversed') {
       return (await this.transition(p, 'reversed', { openKey: null }))
@@ -890,8 +1073,25 @@ export class WalletPaymentService implements OnModuleInit {
       const t = answer.transaction;
       const status = t.outcome;
       if (status === 'completed' && t.amountKobo === p.priceKobo) {
-        await this.recordSighting(p, row, 'completed', t, answer.source);
-        return (await this.complete(p, null)).status as PaymentStatus;
+        // The provider's record decides the figures: its charge when the
+        // record carries one (Nuvion's `applicable_fee`), else the quote.
+        return (
+          await this.completeFromRecord(p, {
+            amountKobo: t.amountKobo,
+            feeKobo: t.feeKobo ?? null,
+            totalKobo: null,
+            refs: {
+              fintavaReference: t.providerReference,
+              tagapayTransRef: t.secondaryReference,
+              fintavaTransactionId: t.id,
+            },
+            source: answer.source,
+            occurredAt: Number.isNaN(Date.parse(t.createdAt))
+              ? null
+              : new Date(t.createdAt),
+            debitRecorded: false,
+          })
+        ).status as PaymentStatus;
       }
       if (status === 'completed') {
         return (
@@ -979,14 +1179,16 @@ export class WalletPaymentService implements OnModuleInit {
   }
 
   /**
-   * The provider's record of the transfer onto both ledger sides (a revival
-   * when the row was failed as absent), with the row's own fee: lookups and
-   * history carry none for a wallet-to-wallet send (MONEY-08's rule).
+   * The provider's record of a transfer that FAILED or was REVERSED onto both
+   * ledger sides (a revival when the row was failed as absent), with the
+   * row's own fee: no money is owed on either, so the charge is not compared.
+   * A completed transfer goes through `completeFromRecord`, which decides the
+   * figures from the record.
    */
   private async recordSighting(
     p: PaymentRow,
     out: { feeKobo: bigint; totalKobo: bigint } | null,
-    status: 'completed' | 'failed' | 'reversed',
+    status: 'failed' | 'reversed',
     t: ProviderTransaction,
     source: 'lookup' | 'history',
   ): Promise<void> {

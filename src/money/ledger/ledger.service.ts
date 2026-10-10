@@ -576,6 +576,74 @@ export class LedgerService {
     return this.prisma.$transaction(run);
   }
 
+  /**
+   * MONEY-17 (round 7, lead ruling R6-1): a payment writes the buyer's `out`
+   * row with the charge the buyer was QUOTED, before the provider answers.
+   * When the provider's own record of the debit is LOWER, nobody is owed
+   * anything and the row must say what really left the wallet: this takes
+   * the provider's figures and completes the row, so a delivered purchase is
+   * never left `pending`. Only the payment's own `out` row on the buyer's
+   * wallet, only the running provider's, only while it is still at the
+   * quoted figures and `pending` (or failed only because the provider had no
+   * record yet, which the record now overturns: a revival), and never a row
+   * that holds a disagreement about the AMOUNT (that is a stop). A note the
+   * row already holds about the charge (a status check saw the lower charge
+   * first) stays as the trail. A debit ABOVE the quote never comes here: that
+   * is a disagreement the ledger keeps as a stop (NUV-08 reconciles it).
+   * Returns whether the row changed.
+   */
+  async completeDebitAt(
+    paymentId: string,
+    quoted: { feeKobo: bigint; totalKobo: bigint },
+    taken: { feeKobo: bigint; totalKobo: bigint },
+    source: 'send' | 'lookup' | 'history',
+  ): Promise<boolean> {
+    const now = new Date();
+    const where = {
+      paymentId,
+      walletKind: 'user' as const,
+      direction: 'out' as const,
+      feeKobo: quoted.feeKobo,
+      totalKobo: quoted.totalKobo,
+      AND: [
+        rowsOf(this.provider.name),
+        {
+          OR: [
+            { discrepancy: null },
+            { NOT: { discrepancy: { contains: 'amountKobo' } } },
+          ],
+        },
+      ],
+    };
+    const figures = {
+      feeKobo: taken.feeKobo,
+      providerFeeKobo: taken.feeKobo,
+      totalKobo: taken.totalKobo,
+      status: 'completed' as const,
+      completedAt: now,
+    };
+    const pending = await this.prisma.fintavaLedgerEntry.updateMany({
+      where: { ...where, status: 'pending' },
+      data: figures,
+    });
+    const revived = await this.prisma.fintavaLedgerEntry.updateMany({
+      where: {
+        ...where,
+        status: 'failed',
+        failureReason: LEDGER_ABSENT_FAILURE,
+      },
+      data: {
+        ...figures,
+        failureReason: null,
+        revivedAt: now,
+        revivedBy: source,
+        nextCheckAt: null,
+        statusChecks: 0,
+      },
+    });
+    return pending.count + revived.count > 0;
+  }
+
   private async recordIn(
     tx: Prisma.TransactionClient,
     input: LedgerMovementInput,
@@ -674,8 +742,11 @@ export class LedgerService {
     const heldNotes = () =>
       notes.length + carried.length === 0
         ? keeper.discrepancy
-        : [keeper.discrepancy, ...carried, ...notes]
-            .filter(Boolean)
+        : [
+            ...new Set(
+              [keeper.discrepancy, ...carried, ...notes].filter(Boolean),
+            ),
+          ]
             .join('; ')
             .slice(0, 1000);
     for (const other of extra) {

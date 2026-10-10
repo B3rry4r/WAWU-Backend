@@ -1296,13 +1296,29 @@ Fintava or on Nuvion, whichever the server runs.
   knows one account by its NGN account number, its id and its
   `nuvion_ban`). The same account is `503 provider_unreachable`, logged,
   nothing sent.
-- **The real debit is the record** (round 6, lead ruling 5). The payment
-  records and answers the fee and total the provider really took, never
-  the quoted ones; a debit above the quoted total sets `debitReviewSince`
-  and names both figures on `discrepancy` (NUV-08 reconciles it with the
-  provider); the price moved as asked, so what was paid for is delivered.
-  The ledger's `out` row keeps its own rule (a disagreement is held, not
-  applied: MONEY-10).
+- **The real debit is the record, on every path** (round 6, lead ruling 5;
+  round 7, lead ruling R6-1). The payment records and answers the fee and
+  total the provider really took, never the quoted ones. One function
+  (`completedFigures`, `payment-figures.ts`) decides them from the
+  provider's own record, and one method completes the payment from it
+  (`completeFromRecord`) whichever job gets there first: the provider's
+  answer to the send, the payment sweep's lookup, or a ledger row the status
+  check or a webhook settled. A seam record that carries the provider's
+  charge (`ProviderTransaction.feeKobo`: Nuvion's `applicable_fee`) is
+  compared; one that does not (Fintava's lookups and history) leaves the
+  quote standing.
+  - **Above the quote**: `debitReviewSince` is set and both figures are named
+    on `discrepancy` (NUV-08 reconciles it with the provider); the price
+    moved as asked, so what was paid for is delivered. The ledger's `out` row
+    keeps its own rule (a disagreement is held `pending` with its note, not
+    applied: MONEY-10).
+  - **Below the quote**: nobody is owed anything. Both ledger rows complete
+    at the real figures (the buyer's row takes the provider's charge), the
+    payment records them and the difference on `discrepancy`, and nothing is
+    flagged. A delivered purchase is never left `pending`.
+  - **The merchant (`in`) row completes with the payment on every path**:
+    whichever of the payment sweep and the ledger status check gets there
+    first, both rows end `completed` and the item is delivered once (R6-2).
 - **A reversal** found by the sweep (round 6, lead ruling 7): the provider
   moved the payment and gave it back, so the payment is `reversed`, both
   ledger sides `reversed`, nothing delivered, the item free; nothing is
@@ -1347,9 +1363,11 @@ Fintava or on Nuvion, whichever the server runs.
 - **The ledger** gets both sides (buyer `out`, merchant `in`, category
   `purchase`, `paymentId`, the link) as `pending` in the same transaction as
   the payment, with the quoted charge as the expected fee, then the
-  provider's figures from its answer. A difference (Fintava's sandbox
-  charges ₦0) is kept on the row's `discrepancy` and on the payment for
-  MONEY-16.
+  provider's figures from its answer. A difference is decided as the
+  paragraph "The real debit is the record" says (a charge below the quote,
+  as Fintava's sandbox's ₦0, completes the rows at what was taken and is kept
+  on the payment's `discrepancy`; one above is held and flagged for
+  MONEY-16 and NUV-08).
 - **Answers** (all `201` with `PaymentView`, stored for the key):
   - `completed`: the provider moved the price.
   - `pending`, with `statusMessage` "We're still confirming this payment.

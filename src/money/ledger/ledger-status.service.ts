@@ -440,6 +440,15 @@ export class LedgerStatusService {
     }
     const status = t.outcome ?? 'pending';
     const out = e.direction === 'out';
+    const debitFee =
+      out &&
+      status === 'completed' &&
+      e.walletKind === 'user' &&
+      e.paymentId !== null &&
+      t.feeKobo !== undefined &&
+      t.feeKobo !== null
+        ? safeKoboNumber(t.feeKobo)
+        : null;
     const tagapay =
       t.secondaryReference ?? (await this.provider.secondaryReferenceOf(t));
     await this.ledger.record({
@@ -448,10 +457,19 @@ export class LedgerStatusService {
       status,
       category: e.category,
       amountKobo: safeKoboNumber(t.amountKobo),
-      // Lookups and history carry no fee for a wallet-to-wallet send: the
-      // row's own fee and total stand, and only the amount is compared.
-      feeKobo: koboNumber(e.feeKobo),
-      totalKobo: koboNumber(e.totalKobo),
+      // Lookups and history carry no fee for a Fintava wallet-to-wallet send:
+      // the row's own fee and total stand, and only the amount is compared.
+      // The exception is a payment's debit row, once the provider says it
+      // completed, when the record DOES carry the provider's charge
+      // (Nuvion's `applicable_fee`; MONEY-17 round 7,
+      // lead ruling R6-1): that figure is compared, so a charge other than
+      // the quote is a disagreement the ledger keeps as a stop (the payment
+      // settles it from the same record), never a row completed at the quote.
+      feeKobo: debitFee === null ? koboNumber(e.feeKobo) : debitFee,
+      totalKobo:
+        debitFee === null
+          ? koboNumber(e.totalKobo)
+          : safeKoboNumber(t.amountKobo) + debitFee,
       references: {
         customerReference: out ? t.ourReference : null,
         fintavaReference: t.providerReference,

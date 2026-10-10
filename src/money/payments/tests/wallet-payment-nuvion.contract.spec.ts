@@ -26,14 +26,19 @@ import { PrismaModule } from '../../../common/prisma/prisma.module';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { HUB_APP_OPTIONS } from '../../../hub-app-options';
 import { WALLET_PROVIDER } from '../../../wallet-provider/wallet-provider.interface';
+import { WalletProviderError } from '../../../wallet-provider/wallet-provider-error';
 import type { MoneyErrorReason } from '../../dto/money-error.dto';
 import { LIMIT_REACHED_MESSAGES } from '../../limits/limit-reached';
 import type { LedgerMovementInput } from '../../ledger/ledger.interface';
-import { LedgerService } from '../../ledger/ledger.service';
+import {
+  LEDGER_ABSENT_FAILURE,
+  LedgerService,
+} from '../../ledger/ledger.service';
+import { LedgerStatusService } from '../../ledger/ledger-status.service';
 import { MoneyError } from '../../money-error';
 import { MoneyModule } from '../../money.module';
 import type { PaymentQuoteView, PaymentView } from '../../money-view.type';
-import { IDEMPOTENT_REPLAYED_HEADER } from '../idempotency';
+import { IDEMPOTENT_REPLAYED_HEADER, IdempotencyService } from '../idempotency';
 import {
   MerchantWallet,
   PAYMENTS_UNAVAILABLE_MESSAGE,
@@ -127,11 +132,27 @@ type Envelope<T> = {
 };
 const body = <T>(res: Response) => res.body as Envelope<T>;
 
+/** Waits on a condition, never on time: polls until it holds (the cap only ends a hang). */
+async function until(
+  ok: () => Promise<boolean> | boolean,
+  what = 'the condition',
+  capMs = 30_000,
+): Promise<void> {
+  const end = Date.now() + capMs;
+  while (Date.now() < end) {
+    if (await ok()) return;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error(`until: ${what} never held`);
+}
+
 describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
   let payments: WalletPaymentService;
   let merchant: MerchantWallet;
+  let statusChecks: LedgerStatusService;
+  let keys: IdempotencyService;
   const nuvion = new NuvionSeamStandIn();
   const logger = new QuietLogger();
   const users: string[] = [];
@@ -140,6 +161,15 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
   const previous: Record<string, string | undefined> = {};
   /** Every movement this task handed the ledger. */
   const movements: LedgerMovementInput[] = [];
+  /**
+   * Holds every payment's claim (its pending ledger rows are being written,
+   * inside the claim's transaction) until the test lets it go: a way to put
+   * two payments of one person in the claim together, on a condition and not
+   * on time.
+   */
+  let claimHold: { reached: number; open: Promise<void> } | null = null;
+  /** Reads of an item by (payer:target) and the price the feature answers from the third read on. */
+  const priceShift = new Map<string, { reads: number; priceKobo: number }>();
   /** Every request that reached the Fintava client's base URL. */
   const fintavaHits: string[] = [];
   let fintavaCounter: Server;
@@ -325,13 +355,25 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     prisma = moduleRef.get(PrismaService);
     payments = moduleRef.get(WalletPaymentService);
     merchant = moduleRef.get(MerchantWallet);
+    statusChecks = moduleRef.get(LedgerStatusService);
+    keys = moduleRef.get(IdempotencyService);
 
     const ledger = moduleRef.get(LedgerService);
     const record = ledger.record.bind(ledger);
     jest
       .spyOn(ledger, 'record')
-      .mockImplementation((input: LedgerMovementInput, ...rest) => {
+      .mockImplementation(async (input: LedgerMovementInput, ...rest) => {
         if (input.paymentId) movements.push(input);
+        if (
+          claimHold &&
+          input.status === 'pending' &&
+          input.direction === 'out' &&
+          rest[0] !== undefined
+        ) {
+          // Inside the claim's transaction (the second argument is its client).
+          claimHold.reached += 1;
+          await claimHold.open;
+        }
         return record(input, ...rest);
       });
 
@@ -354,6 +396,19 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
         }
         if (!targetId.startsWith('n-')) {
           throw new MoneyError('target_not_found', 'That piece is gone.');
+        }
+        const shift = priceShift.get(`${payerWawuUserId}:${targetId}`);
+        if (shift) {
+          // Read 1 is the quote, 2 the payment's first read, 3 the read
+          // inside the claim: the price changes between 2 and 3.
+          shift.reads += 1;
+          if (shift.reads >= 3) {
+            return {
+              title: `Piece ${targetId}`,
+              priceKobo: shift.priceKobo,
+              payee: creator,
+            };
+          }
         }
         return {
           title: `Piece ${targetId}`,
@@ -413,6 +468,7 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
   });
 
   beforeEach(() => {
+    claimHold = null;
     nuvion.mode = 'pending';
     nuvion.extraKobo = 0n;
     nuvion.insufficientStatus = 422;
@@ -1143,6 +1199,559 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     expect(row.reviewSince).not.toBeNull();
     expect(row.discrepancy).toContain('taken by fintava');
     expect(askedAbout(reference)).toBe(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // Round 7 (10 Oct 2026): the provider's own record decides the figures on
+  // every path (R6-1), the merchant row never stays pending (R6-2), and the
+  // round 6 survivors (R6-3)
+  // -------------------------------------------------------------------------
+
+  /** A pending payment of `n-<item>` with Nuvion charging `fee` instead of the quote. */
+  async function pendingAt(
+    p: Person,
+    item: string,
+    feeDelta: number,
+  ): Promise<{ q: PaymentQuoteView; paid: PaymentView }> {
+    const q = await quoted(p, 'content_unlock', item);
+    const fee = BigInt(q.fee.providerFeeKobo + feeDelta);
+    nuvion.feeKobo = () => fee;
+    const paid = body<PaymentView>(await pay(p, q)).data!;
+    expect(paid.status).toBe('pending');
+    return { q, paid };
+  }
+
+  const bothRows = async (reference: string) => {
+    const rows = await ledgerRows(reference);
+    return {
+      out: rows.find((r) => r.direction === 'out')!,
+      inn: rows.find((r) => r.direction === 'in')!,
+    };
+  };
+
+  it("R6-1 on the sweep (Nuvion's documented path): Nuvion took MORE than the quote after a pending first answer: the payment records the real total, is flagged with both figures, is delivered once; the buyer's row is held with its note, the merchant row completes", async () => {
+    const p = await buyer(1_000_000);
+    const { q, paid } = await pendingAt(p, 'n-sweep-above', 700);
+    nuvion.settle(paid.reference, 'successful');
+    await sweepLater();
+    const real = q.totalKobo + 700;
+    const row = await rowOf(paid.id);
+    expect(row.status).toBe('completed');
+    expect([row.totalKobo, row.providerFeeKobo]).toEqual([
+      BigInt(real),
+      BigInt(q.fee.providerFeeKobo + 700),
+    ]);
+    expect(row.debitReviewSince).not.toBeNull();
+    expect(row.discrepancy).toContain(`took ${real} kobo`);
+    expect(row.discrepancy).toContain(`quoted ${q.totalKobo} kobo`);
+    expect(deliveriesOf(paid.id)).toBe(1);
+    expect(p.account.availableKobo).toBe(BigInt(1_000_000 - real));
+    const { out, inn } = await bothRows(paid.reference);
+    expect(inn.status).toBe('completed');
+    expect(out.status).toBe('pending');
+    expect(out.discrepancy).toContain(`feeKobo ${q.fee.providerFeeKobo} vs`);
+    // The answer a repeat of the request gets is the real total too.
+    const again = await payments.settle(paid.id);
+    expect(again).toBe('completed');
+  });
+
+  it('R6-1 on the sweep: Nuvion took LESS than the quote after a pending first answer: both ledger rows complete at the real figures, the payment records them and the difference, no flag, delivered once', async () => {
+    const p = await buyer(1_000_000);
+    const { q, paid } = await pendingAt(p, 'n-sweep-below', -500);
+    nuvion.settle(paid.reference, 'successful');
+    await sweepLater();
+    const real = q.totalKobo - 500;
+    const row = await rowOf(paid.id);
+    expect(row.status).toBe('completed');
+    expect(row.totalKobo).toBe(BigInt(real));
+    expect(row.providerFeeKobo).toBe(BigInt(q.fee.providerFeeKobo - 500));
+    expect(row.debitReviewSince).toBeNull();
+    expect(row.discrepancy).toContain('debit differs from the quote');
+    expect(row.discrepancy).toContain(`took ${real} kobo`);
+    expect(deliveriesOf(paid.id)).toBe(1);
+    expect(p.account.availableKobo).toBe(BigInt(1_000_000 - real));
+    const { out, inn } = await bothRows(paid.reference);
+    expect([
+      out.status,
+      out.totalKobo,
+      out.feeKobo,
+      out.providerFeeKobo,
+    ]).toEqual([
+      'completed',
+      BigInt(real),
+      BigInt(q.fee.providerFeeKobo - 500),
+      BigInt(q.fee.providerFeeKobo - 500),
+    ]);
+    expect([inn.status, inn.totalKobo]).toEqual(['completed', BigInt(PRICE)]);
+    expect(out.completedAt).not.toBeNull();
+  });
+
+  it("R6-1 on the receipt (Nuvion answers successful at once): LESS than the quote completes the buyer's row at the real figures too (round 6 left it pending); MORE keeps it held and flagged", async () => {
+    const p = await buyer(2_000_000);
+    nuvion.mode = 'successful';
+    const below = await quoted(p, 'content_unlock', 'n-receipt-below');
+    nuvion.feeKobo = () => BigInt(below.fee.providerFeeKobo - 500);
+    const low = body<PaymentView>(await pay(p, below)).data!;
+    expect(low).toMatchObject({
+      status: 'completed',
+      totalKobo: below.totalKobo - 500,
+    });
+    let rows = await bothRows(low.reference);
+    expect([rows.out.status, rows.out.totalKobo]).toEqual([
+      'completed',
+      BigInt(below.totalKobo - 500),
+    ]);
+    expect(rows.inn.status).toBe('completed');
+    expect((await rowOf(low.id)).debitReviewSince).toBeNull();
+
+    const above = await quoted(p, 'content_unlock', 'n-receipt-above');
+    nuvion.feeKobo = () => BigInt(above.fee.providerFeeKobo + 700);
+    const high = body<PaymentView>(await pay(p, above)).data!;
+    expect(high).toMatchObject({
+      status: 'completed',
+      totalKobo: above.totalKobo + 700,
+    });
+    rows = await bothRows(high.reference);
+    expect(rows.out.status).toBe('pending');
+    expect(rows.inn.status).toBe('completed');
+    expect((await rowOf(high.id)).debitReviewSince).not.toBeNull();
+  });
+
+  it("R6-1 when the ledger status check looks first: a charge other than the quote is held on the buyer's row (never completed at the quote), and the payment sweep then completes the payment at the provider's figures, flagged when above, with the buyer's row completed when below", async () => {
+    const p = await buyer(2_000_000);
+    const { q: qa, paid: pa } = await pendingAt(p, 'n-check-above', 700);
+    const { q: qb, paid: pb } = await pendingAt(p, 'n-check-below', -500);
+    nuvion.settle(pa.reference, 'successful');
+    nuvion.settle(pb.reference, 'successful');
+    for (const paid of [pa, pb]) {
+      const { out } = await bothRows(paid.reference);
+      const r = await statusChecks.check(
+        out.id,
+        new Date(Date.now() + 10 * 60_000),
+      );
+      // A disagreement about the charge: the row waits, the payment is not
+      // completed at the quote by the row.
+      expect(r.status).toBe('pending');
+      expect((await rowOf(paid.id)).status).toBe('pending');
+    }
+    await sweepLater();
+
+    const above = await rowOf(pa.id);
+    expect(above.status).toBe('completed');
+    expect(above.totalKobo).toBe(BigInt(qa.totalKobo + 700));
+    expect(above.debitReviewSince).not.toBeNull();
+    const aboveRows = await bothRows(pa.reference);
+    expect(aboveRows.out.status).toBe('pending');
+    // The note the status check wrote and the payment's own are not doubled.
+    const notes = (aboveRows.out.discrepancy ?? '').split('; ');
+    expect(new Set(notes).size).toBe(notes.length);
+
+    const below = await rowOf(pb.id);
+    expect(below.status).toBe('completed');
+    expect(below.totalKobo).toBe(BigInt(qb.totalKobo - 500));
+    expect(below.debitReviewSince).toBeNull();
+    const belowRows = await bothRows(pb.reference);
+    expect([belowRows.out.status, belowRows.out.totalKobo]).toEqual([
+      'completed',
+      BigInt(qb.totalKobo - 500),
+    ]);
+    expect(belowRows.inn.status).toBe('completed');
+    expect(deliveriesOf(pa.id)).toBe(1);
+    expect(deliveriesOf(pb.id)).toBe(1);
+  });
+
+  it("R6-1, a buyer's row MONEY-08 failed as absent, and Nuvion then shows the transfer below the quote: the row is revived and completed at the real figures", async () => {
+    const p = await buyer(500_000);
+    const q = await quoted(p, 'content_unlock', 'n-absent-below');
+    nuvion.feeKobo = () => BigInt(q.fee.providerFeeKobo - 500);
+    nuvion.mode = 'timeout';
+    const paid = body<PaymentView>(await pay(p, q)).data!;
+    expect(paid.status).toBe('pending');
+    const { out } = await bothRows(paid.reference);
+    await prisma.fintavaLedgerEntry.update({
+      where: { id: out.id },
+      data: { status: 'failed', failureReason: LEDGER_ABSENT_FAILURE },
+    });
+    nuvion.settle(paid.reference, 'successful');
+    await sweepLater();
+    const row = await rowOf(paid.id);
+    expect(row.status).toBe('completed');
+    expect(row.totalKobo).toBe(BigInt(q.totalKobo - 500));
+    const rows = await bothRows(paid.reference);
+    expect([
+      rows.out.status,
+      rows.out.totalKobo,
+      rows.out.failureReason,
+    ]).toEqual(['completed', BigInt(q.totalKobo - 500), null]);
+    expect(rows.out.revivedAt).not.toBeNull();
+    expect(rows.inn.status).toBe('completed');
+    expect(deliveriesOf(paid.id)).toBe(1);
+  });
+
+  it("R6-1, a stop about the AMOUNT on the buyer's row is never overridden by a lower charge: the payment completes at the real figures, the row stays held for a person", async () => {
+    const p = await buyer(500_000);
+    const { q, paid } = await pendingAt(p, 'n-amount-stop', -500);
+    const { out } = await bothRows(paid.reference);
+    await prisma.fintavaLedgerEntry.update({
+      where: { id: out.id },
+      data: { discrepancy: 'status check: amountKobo 100000 vs 100100' },
+    });
+    nuvion.settle(paid.reference, 'successful');
+    await sweepLater();
+    const row = await rowOf(paid.id);
+    expect(row.status).toBe('completed');
+    expect(row.totalKobo).toBe(BigInt(q.totalKobo - 500));
+    const rows = await bothRows(paid.reference);
+    expect(rows.out.status).toBe('pending');
+    expect(rows.out.totalKobo).toBe(BigInt(q.totalKobo));
+    expect(rows.inn.status).toBe('completed');
+  });
+
+  it("the ledger status check compares Nuvion's charge only once Nuvion says the transfer is completed: while it is still pending, a charge other than the quote is no disagreement yet", async () => {
+    const p = await buyer(500_000);
+    const { paid } = await pendingAt(p, 'n-check-pending', 700);
+    const { out } = await bothRows(paid.reference);
+    const checked = await statusChecks.check(
+      out.id,
+      new Date(Date.now() + 10 * 60_000),
+    );
+    expect(checked.status).toBe('pending');
+    const after = await bothRows(paid.reference);
+    expect([after.out.status, after.out.discrepancy]).toEqual([
+      'pending',
+      null,
+    ]);
+    expect((await rowOf(paid.id)).status).toBe('pending');
+  });
+
+  it('R6-2, the net under every path: a completed payment whose merchant row is somehow still pending (a ledger write that failed once) has it completed by the next sweep', async () => {
+    const p = await buyer(500_000);
+    nuvion.mode = 'successful';
+    const q = await quoted(p, 'content_unlock', 'n-merchant-net');
+    const paid = body<PaymentView>(await pay(p, q)).data!;
+    expect(paid.status).toBe('completed');
+    await prisma.fintavaLedgerEntry.updateMany({
+      where: { customerReference: paid.reference, direction: 'in' },
+      data: { status: 'pending', completedAt: null },
+    });
+    expect((await bothRows(paid.reference)).inn.status).toBe('pending');
+    await sweepLater();
+    const rows = await bothRows(paid.reference);
+    expect([rows.out.status, rows.inn.status]).toEqual([
+      'completed',
+      'completed',
+    ]);
+    expect(rows.inn.totalKobo).toBe(BigInt(PRICE));
+    expect(deliveriesOf(paid.id)).toBe(1);
+  });
+
+  it("R6-2, before the payment sweep's first check: the sweep wins and both ledger rows complete, delivered once", async () => {
+    const p = await buyer(500_000);
+    const { paid } = await pendingAt(p, 'n-race-before', 0);
+    nuvion.settle(paid.reference, 'successful');
+    await sweepLater();
+    const { out, inn } = await bothRows(paid.reference);
+    expect([(await rowOf(paid.id)).status, out.status, inn.status]).toEqual([
+      'completed',
+      'completed',
+      'completed',
+    ]);
+    expect(deliveriesOf(paid.id)).toBe(1);
+  });
+
+  it("R6-2, between: the ledger status check wins before the payment sweep has looked at all: the payment completes from the buyer's row and the merchant row completes with it, delivered once", async () => {
+    const p = await buyer(500_000);
+    const { paid } = await pendingAt(p, 'n-race-between', 0);
+    nuvion.settle(paid.reference, 'successful');
+    const { out } = await bothRows(paid.reference);
+    const checked = await statusChecks.check(
+      out.id,
+      new Date(Date.now() + 10 * 60_000),
+    );
+    expect(checked.status).toBe('completed');
+    await until(
+      async () => (await rowOf(paid.id)).fulfilledAt !== null,
+      'the delivery',
+    );
+    const rows = await bothRows(paid.reference);
+    expect([rows.out.status, rows.inn.status]).toEqual([
+      'completed',
+      'completed',
+    ]);
+    expect((await rowOf(paid.id)).checks).toBe(0);
+    await sweepLater();
+    expect(deliveriesOf(paid.id)).toBe(1);
+    expect(sendsFrom(p)).toHaveLength(1);
+  });
+
+  it("R6-2, after the payment sweep's first check (Nuvion still pending then): the ledger status check wins later, and both ledger rows complete, delivered once", async () => {
+    const p = await buyer(500_000);
+    const { paid } = await pendingAt(p, 'n-race-after', 0);
+    await sweepLater();
+    expect((await rowOf(paid.id)).checks).toBe(1);
+    nuvion.settle(paid.reference, 'successful');
+    const { out } = await bothRows(paid.reference);
+    const checked = await statusChecks.check(
+      out.id,
+      new Date(Date.now() + 10 * 60_000),
+    );
+    expect(checked.status).toBe('completed');
+    await until(
+      async () => (await rowOf(paid.id)).fulfilledAt !== null,
+      'the delivery',
+    );
+    const rows = await bothRows(paid.reference);
+    expect([rows.out.status, rows.inn.status]).toEqual([
+      'completed',
+      'completed',
+    ]);
+    await sweepLater();
+    expect(deliveriesOf(paid.id)).toBe(1);
+  });
+
+  it('V4: a transfer Nuvion moved at another amount and then reversed goes to review (still pending, the item claimed), never to reversed', async () => {
+    const p = await buyer(500_000);
+    const q = await quoted(p, 'content_unlock', 'n-rev-other');
+    nuvion.extraKobo = 100n;
+    const paid = body<PaymentView>(await pay(p, q)).data!;
+    nuvion.settle(paid.reference, 'successful');
+    nuvion.settle(paid.reference, 'reversed');
+    await sweepLater();
+    const row = await rowOf(paid.id);
+    expect(row.status).toBe('pending');
+    expect(row.reviewSince).not.toBeNull();
+    expect(row.openKey).not.toBeNull();
+    expect(row.discrepancy).toContain(`reversed ${PRICE + 100} kobo`);
+    expect(deliveriesOf(paid.id)).toBe(0);
+  });
+
+  it('V6: a reversal that reaches the payment through its ledger row frees the item at once: reversed, nothing delivered, payable again', async () => {
+    const p = await buyer(500_000);
+    const { paid } = await pendingAt(p, 'n-rev-ledger', 0);
+    nuvion.settle(paid.reference, 'successful');
+    nuvion.settle(paid.reference, 'reversed');
+    const { out } = await bothRows(paid.reference);
+    await statusChecks.check(out.id, new Date(Date.now() + 10 * 60_000));
+    await until(
+      async () => (await rowOf(paid.id)).status === 'reversed',
+      'the payment follows its reversed ledger row',
+    );
+    const row = await rowOf(paid.id);
+    expect(row.openKey).toBeNull();
+    expect(deliveriesOf(paid.id)).toBe(0);
+    expect(
+      body<PaymentView>(await quote(p, 'content_unlock', 'n-rev-ledger'))
+        .statusCode,
+    ).toBe(200);
+  });
+
+  it("V8: when Nuvion cannot say whether the payer is WAWU's own account, nothing is sent: 503, nothing stored, the key free, and the same key pays once Nuvion answers", async () => {
+    const p = await buyer(500_000);
+    const q = await quoted(p, 'content_unlock', 'n-cannot-say');
+    const key = randomUUID();
+    const original = nuvion.isSameAccount.bind(nuvion);
+    nuvion.isSameAccount = () =>
+      Promise.reject(
+        new WalletProviderError({
+          kind: 'unavailable',
+          provider: 'nuvion',
+          operation: 'is same account',
+          recordMayExist: false,
+          retryAfterSeconds: 30,
+        }),
+      );
+    try {
+      const res = await pay(p, q, key);
+      expect(res.status).toBe(503);
+      expect(sendsFrom(p)).toHaveLength(0);
+      expect(
+        await prisma.walletPayment.count({ where: { payerWawuUserId: p.id } }),
+      ).toBe(0);
+      expect(
+        await prisma.moneyIdempotencyKey.count({ where: { wawuUserId: p.id } }),
+      ).toBe(0);
+    } finally {
+      nuvion.isSameAccount = original;
+    }
+    nuvion.mode = 'successful';
+    expect(body<PaymentView>(await pay(p, q, key)).data!.status).toBe(
+      'completed',
+    );
+  });
+
+  it("V9: a provider with no way to compare accounts (Fintava names an account by one number) is still refused when WAWU's account is the payer's wallet id: the text guard alone", async () => {
+    const p = await buyer(500_000);
+    const q = await quoted(p, 'content_unlock', 'n-text-guard');
+    const original = Object.getOwnPropertyDescriptor(
+      NuvionSeamStandIn.prototype,
+      'isSameAccount',
+    );
+    forgetPlatformAccount();
+    nuvion.platformOverride = {
+      accountNumber: p.account.accountId,
+      accountName: 'WAWU Operational',
+      availableKobo: 0n,
+      bookedKobo: 0n,
+    };
+    Object.defineProperty(nuvion, 'isSameAccount', {
+      value: undefined,
+      configurable: true,
+    });
+    try {
+      const res = await pay(p, q);
+      expect(res.status).toBe(503);
+      expect(body(res).message).toBe(PAYMENTS_UNAVAILABLE_MESSAGE);
+      expect(sendsFrom(p)).toHaveLength(0);
+      expect(
+        await prisma.walletPayment.count({ where: { payerWawuUserId: p.id } }),
+      ).toBe(0);
+    } finally {
+      delete (nuvion as unknown as Record<string, unknown>).isSameAccount;
+      expect(original).toBeDefined();
+      forgetPlatformAccount();
+      nuvion.platformOverride = null;
+    }
+  });
+
+  it('V11: a blank quote token is a 400 naming the field, like any other text WAWU cannot store, before anything is claimed', async () => {
+    const p = await buyer(500_000);
+    const q = await quoted(p, 'content_unlock', 'n-blank-token');
+    const res = await pay(p, q, randomUUID(), { quoteToken: '   ' });
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(body(res).message)).toContain('quoteToken');
+    expect(
+      await prisma.walletPayment.count({ where: { payerWawuUserId: p.id } }),
+    ).toBe(0);
+    expect(sendsFrom(p)).toHaveLength(0);
+  });
+
+  it('V13: two payments by one person at the limit are checked one after the other: the second waits for the first in the claim, then sees it and is refused (deterministic: it waits on the lock, not on time)', async () => {
+    const p = await buyer(2_000_000);
+    nuvion.mode = 'successful';
+    const first = await quoted(p, 'content_unlock', 'n-lim-first');
+    expect(body<PaymentView>(await pay(p, first)).data!.status).toBe(
+      'completed',
+    );
+    // 100,000 of today's 250,000 is used: room for one more ₦1,000, not two.
+    const qa = await quoted(p, 'content_unlock', 'n-lim-a');
+    const qb = await quoted(p, 'content_unlock', 'n-lim-b');
+    let release!: () => void;
+    claimHold = {
+      reached: 0,
+      open: new Promise<void>((r) => {
+        release = r;
+      }),
+    };
+    const hold = claimHold;
+    const advisoryWaiters = async () =>
+      (
+        await prisma.$queryRaw<Array<{ n: number }>>`
+          SELECT count(*)::int AS n FROM pg_locks
+           WHERE locktype = 'advisory' AND NOT granted
+             AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`
+      )[0].n;
+    try {
+      const a = pay(p, qa).then((r) => r);
+      await until(() => hold.reached >= 1, 'the first claim to be held');
+      const b = pay(p, qb).then((r) => r);
+      // The second is either waiting on the person's lock (checked in order)
+      // or, if nothing makes it wait, in its own claim beside the first.
+      await until(
+        async () => hold.reached >= 2 || (await advisoryWaiters()) >= 1,
+        'the second payment to wait or to reach its claim',
+      );
+      release();
+      const [ra, rb] = await Promise.all([a, b]);
+      expect([ra.status, rb.status]).toEqual([201, 403]);
+      expect(body(rb).reason).toMatchObject({
+        code: 'limit_reached',
+        limit: 'daily',
+      });
+    } finally {
+      release();
+      claimHold = null;
+    }
+    expect(sendsFrom(p)).toHaveLength(2);
+    expect(
+      await prisma.walletPayment.count({ where: { payerWawuUserId: p.id } }),
+    ).toBe(2);
+  });
+
+  it("V14: the daily limit counts the price, not the price plus the provider's charge: a tip of exactly the limit passes and one kobo more is refused", async () => {
+    nuvion.mode = 'successful';
+    const exact = await buyer(2_000_000);
+    const qe = await quoted(
+      exact,
+      'tip',
+      'creator-x',
+      `&amountKobo=${DAILY_PURCHASE_LIMIT_KOBO}`,
+    );
+    expect(qe.fee.providerFeeKobo).toBeGreaterThan(0);
+    const ok = await pay(exact, qe, randomUUID(), {
+      amountKobo: DAILY_PURCHASE_LIMIT_KOBO,
+    });
+    expect(ok.status).toBe(201);
+    expect(body<PaymentView>(ok).data!.status).toBe('completed');
+    const over = await buyer(2_000_000);
+    const qo = await quoted(
+      over,
+      'tip',
+      'creator-x',
+      `&amountKobo=${DAILY_PURCHASE_LIMIT_KOBO + 1}`,
+    );
+    const no = await pay(over, qo, randomUUID(), {
+      amountKobo: DAILY_PURCHASE_LIMIT_KOBO + 1,
+    });
+    expect(no.status).toBe(403);
+    expect(body(no).reason).toMatchObject({
+      code: 'limit_reached',
+      limit: 'daily',
+    });
+    expect(sendsFrom(over)).toHaveLength(0);
+  });
+
+  it('V16: a request that fails AFTER its payment is attached (the money may have moved) keeps its key: a retry under it is still "in progress", never a second payment', async () => {
+    const p = await buyer(500_000);
+    nuvion.mode = 'successful';
+    const q = await quoted(p, 'content_unlock', 'n-key-kept');
+    const key = randomUUID();
+    const finish = jest
+      .spyOn(keys, 'finish')
+      .mockRejectedValueOnce(new Error('the answer could not be stored'));
+    try {
+      const res = await pay(p, q, key);
+      expect(res.status).toBe(500);
+    } finally {
+      finish.mockRestore();
+    }
+    const stored = await prisma.moneyIdempotencyKey.findMany({
+      where: { wawuUserId: p.id },
+    });
+    expect(stored).toHaveLength(1);
+    expect(stored[0].resourceId).not.toBeNull();
+    expect(sendsFrom(p)).toHaveLength(1);
+    const retry = await pay(p, q, key);
+    expect(retry.status).toBe(409);
+    expect(sendsFrom(p)).toHaveLength(1);
+  });
+
+  it("M11: the item's price changing between the payment's first read and its read inside the claim gives the claim back: 409 quote_changed, nothing sent, the key free", async () => {
+    const p = await buyer(500_000);
+    const q = await quoted(p, 'content_unlock', 'n-price-shift');
+    priceShift.set(`${p.id}:n-price-shift`, { reads: 1, priceKobo: 150_000 });
+    nuvion.mode = 'successful';
+    const key = randomUUID();
+    const res = await pay(p, q, key);
+    expect(res.status).toBe(409);
+    expect(body(res).reason?.code).toBe('quote_changed');
+    expect(sendsFrom(p)).toHaveLength(0);
+    const rows = await prisma.walletPayment.findMany({
+      where: { payerWawuUserId: p.id },
+    });
+    expect(rows.map((r) => [r.status, r.openKey])).toEqual([['failed', null]]);
+    expect(
+      await prisma.moneyIdempotencyKey.count({ where: { wawuUserId: p.id } }),
+    ).toBe(0);
   });
 
   it("lead ruling 6: every ledger row this task wrote names its payment's provider; nothing reached the Fintava client; every payment of this file names Nuvion", async () => {
