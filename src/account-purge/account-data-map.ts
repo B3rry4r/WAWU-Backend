@@ -292,6 +292,13 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // not the account at Nuvion, which stays there; deletion needs an empty
   // wallet first (R-17).
   { model: 'NuvionEntity', column: 'wawuUserId', disposition: 'OWNED' },
+  // The documents sent to Nuvion and the onboarding submission and hosted
+  // selfie (NUV-03): which kind and which sides went, the state, Nuvion's
+  // document id, a SHA-256 of the bytes and the time; the session id and the
+  // result in one word. Never a file, a number read off one, or a face. Like
+  // NuvionEntity they are WAWU's pointers; Nuvion holds the documents.
+  { model: 'NuvionDocument', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'NuvionOnboarding', column: 'wawuUserId', disposition: 'OWNED' },
   // This person's saved beneficiaries and payout account (WALLET-14): their
   // own list of where they send money, and the bank account their
   // withdrawals go to. Both go with them.

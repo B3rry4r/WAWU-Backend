@@ -40,6 +40,20 @@ const NOT_GATED: Record<string, string> = {
   'PUT money/identity/occupation': 'Open your wallet: A5 (KYC-01)',
   'GET money/identity/selfie': 'Open your wallet: the selfie state (KYC-02)',
   'POST money/identity/selfie': 'Open your wallet: the selfie (A6, KYC-02)',
+  // NUV-03: they run before a wallet exists, as opening itself does. A
+  // person sends the ID document and the proof of address (and takes the
+  // hosted selfie) so that Nuvion can review them and the wallet can be
+  // opened at all; behind the gate they would answer wallet_not_open to the
+  // one person who must reach them. Each answers a person with no opening
+  // started with the gate's own wallet_not_open sentence, from the route.
+  'GET money/identity/documents':
+    'Open your wallet: where the documents stand (NUV-03)',
+  'POST money/identity/documents':
+    'Open your wallet: the ID document and proof of address (NUV-03)',
+  'GET money/identity/liveness':
+    'Open your wallet: the hosted selfie state (NUV-03)',
+  'POST money/identity/liveness':
+    'Open your wallet: starts the hosted selfie (NUV-03)',
   'POST money/wallet/open':
     'Open your wallet: opening the account (A7, MONEY-12)',
   'GET money/wallet':

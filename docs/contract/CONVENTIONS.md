@@ -226,14 +226,14 @@ Every refusal is the envelope this backend already answers with
 | `bvn_not_confirmed` | 422 | Fintava did not confirm the BVN (unknown or invalid) (KYC-01) | `checksLeft` |
 | `bvn_phone_mismatch` | 422 | the BVN's phone is not the account's phone (A14); nothing from the BVN record is answered | `checksLeft` |
 | `phone_not_nigerian` | 422 | the account's phone is not a Nigerian mobile, so no BVN can match it; Fintava is not asked | |
-| `identity_checks_exhausted` | 429 | the person has used today's BVN checks | `retryAfterSeconds` |
+| `identity_checks_exhausted` | 429 | the person has used today's BVN checks; under a provider that reviews the person (Nuvion) also `POST /money/wallet/open` when today's opening tries are used (section 9a) | `retryAfterSeconds` |
 | `bvn_not_checked` | 409 | A5's occupation, or a selfie match, sent before a BVN check passed; or a selfie match with a BVN other than the one that passed, or one whose BVN check was replaced by another while it was being matched | |
 | `wallet_already_open` | 409 | a BVN check or selfie match from someone whose wallet is open | |
 | `selfie_not_matched` | 422 | Fintava did not match the selfie to the BVN photo (A16) (KYC-02) | `checksLeft` |
 | `selfie_checks_exhausted` | 429 | the person has used today's selfie matches (A16 and the retry rule); Fintava is not asked | `retryAfterSeconds` |
 | `selfie_already_matched` | 409 | a selfie match from someone whose selfie already matched against their current BVN check | |
 | `selfie_required` | 409 | account opening before a selfie matched against the BVN check whose BVN and NIN were sent (MONEY-12) | |
-| `identity_has_wallet` | 409 | account opening for a BVN or phone another WAWU account opened a wallet with, or whose Fintava account another WAWU account holds; nothing is sent | |
+| `identity_has_wallet` | 409 | account opening for a BVN or phone another WAWU account opened a wallet with, or whose Fintava account another WAWU account holds; nothing is sent. Under a provider that reviews the person (Nuvion) it is the one plain answer for a BVN or phone another account holds, whether that account has a wallet or its opening is still being checked, and it does not say which (section 9a) | |
 | `account_not_opened` | 422 | Fintava refused the details sent (a validation or identity refusal, such as a blacklisted NIN), or the account has no email; nothing was created and the person may try again | |
 | `reset_codes_exhausted` | 429 | the person or the phone has had today's PIN reset texts (MONEY-14); nothing is sent | `retryAfterSeconds` |
 | `device_approval_refused` | 403 | `X-Device-Approval` not accepted: not the registered phone, a wrong signature, a used, expired or another person's challenge, or no phone registered; never uses a PIN try (MONEY-14) | |
@@ -245,6 +245,9 @@ Every refusal is the envelope this backend already answers with
 | `phone_held_by_other_identity` | 409 | account opening where Fintava already has a customer for the person's phone whose record does not carry the checked BVN (or carries none): nothing is adopted or created, and the opening stops for review (MONEY-12, BACKEND_GAPS G-37) | |
 | `fees_not_set` | 503 | the running wallet provider's fees are settings not filled in yet (Nuvion's `NUVION_FEE_*`, R-42): every fee quote and every money-moving route answers it before anything is sent to the provider; the balance, the history and the account number are unaffected (NUV-07, section 11) | |
 | `limit_reached` | 403 | the movement passes a limit: WAWU's own setting for its kind (`WAWU_LIMIT_<KIND>_<LIMIT>_KOBO`), checked before anything is sent, or the provider's own (Nuvion's per-transaction, daily or monthly refusal); the same answer either way (NUV-07, section 11) | `limit`: `per_transaction`, `daily` or `monthly` |
+| `open_address_limited` | 429 | under a provider that reviews the person (Nuvion): one address has made `OPEN_ATTEMPTS_PER_ADDRESS_PER_HOUR` opening tries (default 10, PROVISIONAL) in the last hour, across every account; a plain 429 before anything is claimed, sent or counted for the account. A call with no client address (made on the server itself) is not limited by address (NUV-02 round 3, section 9a) | `retryAfterSeconds` |
+| `identity_under_review` | 409 | under a provider that reviews the person itself (Nuvion): the person's details are with the provider's compliance review; they wait and nothing is sent again. The sentence promises a notification, and one is written when the review ends (NUV-02, section 9a). Any money route can answer it when the provider says so (`walletProviderErrorToHttp`) | |
+| `step_not_used` | 409 | `POST /money/identity/bvn` under a provider with no BVN lookup (Nuvion): that step does not exist there, the BVN is checked inside the review when the details are sent to open the wallet. Permanent, never "try again"; nothing is hashed, counted or sent (NUV-02 round 2, section 9a) | |
 
 The same table is `MONEY_ERROR_STATUS` in `src/money/money-contract.ts`; each
 operation in the contract lists the codes it can answer with, grouped by
@@ -868,6 +871,184 @@ still reads. Every answer is `Cache-Control: no-store`.
   answers `503 provider_unreachable` and sends nothing; `GET /money/wallet`
   still answers; the sweep does nothing.
 
+### 9a. Opening on a provider that reviews the person (Nuvion, NUV-02)
+
+Under `WALLET_PROVIDER=nuvion` there is no BVN check and no selfie match
+before the open: `POST /money/wallet/open` carries the details, the BVN and
+the NIN together, and Nuvion's own review checks them. Under Fintava none of
+this applies and every answer is as in section 9.
+
+- **The two additive fields of `GET /money/wallet` and `POST /money/wallet/open`.**
+  `openingFlow` is `review` (an absent `openingFlow` means `check`, section
+  9) and is sent only under such a provider. `review` (`WalletReviewView`) is
+  `null` until something was sent, then `{ stage, reasons[], canResubmit,
+  canResubmitAt, decidedAt }`. `stage` is `needs_documents` (the details are
+  in; the ID document and proof of address are still needed, NUV-03; also
+  right after corrected details), `checking` (sent for review), `approved`
+  (the account number is on its way, NUV-04), `rejected` (`reasons[]` say
+  why and what to fix, each `{ code, message, fix }` in our own words, never
+  Nuvion's text; `canResubmit` is true), `stopped` (failed, suspended, or the
+  BVN reviewed is now another account's; `reasons` is `review_stopped`, money
+  routes answer `409 wallet_not_open`, support can help) or `expired` (the
+  opening sat unfinished for too long, or support closed it; `reasons` is
+  `review_expired`, `canResubmit` is true: send the details again to start a
+  new one; `decidedAt` is when). `state` keeps its meaning: `not_open` while
+  documents are needed, after a refusal, when stopped and when expired;
+  `opening` while checked and once approved. `decidedAt` is when the
+  decision was recorded (null before one). **`canResubmit` is never true
+  while the server would answer 429** (round 3): when the person's day, or
+  the address the request comes from, has no try left, `canResubmit` is
+  false and `canResubmitAt` says when a try opens (otherwise `null`).
+  `accountNumberStatus` (NUV-04) is `on_its_way` once Nuvion has approved
+  the person; a person only being checked, refused, stopped (also for a BVN
+  another account took) or expired reads `none`.
+- **The body.** `bvn` and `nin` (11 digits each; a `checkHandle` is a plain
+  `400`), the section 9 fields, and what Nuvion needs: `gender` (`male` or
+  `female`), `city`, `state`, `postalCode`, `idType` (`international_passport`,
+  `drivers_license` or `national_id`), `idNumber` and `proofOfAddressType`
+  (`utility_bill` or `bank_statement`), each required; optional `middleName`,
+  `addressLine2`, `idIssueDate`, `idExpiryDate`. `address` is then the street
+  line. Nationality and the issuing country are not fields: they are `NG`.
+  A required field that is left out **or sent as `null`** is the same plain
+  `400` naming the first one missing, in that order; a `null` in an optional
+  field is the same as leaving it out. **The words `null` and `undefined`
+  (any case, trimmed)** in a required text field (`firstName`, `lastName`,
+  `address`, `city`, `state`, `postalCode`, `idNumber`) are refused like an
+  empty value, with the same sentence; in `middleName` and `addressLine2`
+  they mean nothing was typed. Nothing in the body is stored or logged; the
+  ID number is never stored.
+- **Who holds a BVN.** A BVN is held by one account for as long as Nuvion's
+  entity for that account still carries it in a live state. It is held while
+  the opening is with Nuvion (being made, documents needed, being checked),
+  once Nuvion approved it, after a refusal about anything but the BVN itself
+  (the documents, the details or the NIN: the entity keeps the BVN and the
+  person corrects what was named), and always once an account is recorded or
+  was requested, whatever Nuvion says later: a failed or suspended entity
+  **with** an account keeps its hold, and support decides. It is let go at
+  once by a refusal of the BVN itself (the review's word for the BVN is a
+  not-passed word: `rejected`, `failed`, `declined`, `not-approved`,
+  `invalid` or `unverified`, in any case), by a failed or suspended entity
+  that has no account, and by a create Nuvion refused. A BVN Nuvion has
+  approved for the person stays held while the opening is alive, whatever
+  else the refusal names (round 4, N11): any other word for the BVN
+  (approved, pending, a word we do not know) is held, the safe side. A
+  correction after a refusal moves the claim only in the step that sends the
+  new number to Nuvion (the review named the BVN or the NIN: both go again
+  and the claim moves to the BVN typed; it named something else: no number
+  goes, the number typed is not used, and the claim keeps the BVN Nuvion
+  already has). A lost answer sent again keeps its claim until a
+  create really goes out. Another account asking for a held BVN or phone gets
+  `409 identity_has_wallet`, "We can't use this BVN or phone number for a new
+  wallet. If it's yours, contact support.", the same words whether the holder
+  has a wallet or a check in progress (no existence oracle). The code is
+  stable. Nuvion approving an entity whose BVN another account holds by then
+  opens no account: the opening is stopped for review.
+- **A hold runs out.** An opening that sits at `needs_documents`, or was
+  refused with its BVN still held (anything but the BVN itself refused: the
+  documents, the details or the NIN), with no progress from the person
+  for `IDENTITY_HOLD_DAYS` (default 14, PROVISIONAL, 1 to 365) is marked
+  `expired` by a sweep that runs every minute where the schedule runs (one
+  pass at a time across servers, each opening by a conditional update): its
+  BVN is let go, the person is told once (`identity_review`, "Identity check
+  closed"), and nothing is sent to or deleted at Nuvion. Progress is the
+  opening's last claim (the first send, a correction, a start again), the
+  last submission, `NuvionEntity.progressAt` (NUV-03 sets it for each
+  document uploaded and for the submit call, `recordOpeningProgress`), and,
+  for a refusal, the day the person was told. An opening being checked,
+  approved, stopped, with an account or a wallet, or refused on the BVN
+  itself (which holds nothing) never expires. The sweep reads every
+  candidate by a keyset cursor (attempt start, then account), with no cap on
+  the rows it looks at, and when its time is used it hands the place it
+  reached to the next pass (round 4, N15), so openings that are not yet due
+  never keep it from the ones behind them. To start again the person sends the
+  details to `POST /money/wallet/open` as for a correction: the same entity
+  at Nuvion is corrected, BVN and NIN included, the claim is taken on the BVN
+  typed (the plain `409` if another account holds it by then), and the review
+  reads `needs_documents`. If Nuvion nevertheless starts checking or approves
+  the entity of an opening that expired, the opening is live again: its BVN
+  is held again (or, if another account took the number meanwhile, the
+  opening is stopped and nothing is opened) and, once approved, the one
+  account is opened as for any approval. A refusal about documents leaves it
+  expired.
+- **Support lets go of a hold at once.** `POST /admin/identity-holds/{wawuUserId}/release`
+  (roles `superadmin` and `support`; `reviewer` and `finance` are refused):
+  the holder's opening is marked expired exactly as an idle one is, and the
+  person is told once. The route names the holder's account and takes no BVN
+  and returns none (`{ wawuUserId, outcome: released | already_released,
+  state }`); it is audited (`AdminOpsAudit`: admin, account, the state
+  before) and logged by account and admin id only. `404` for an account with
+  no opening; `409` while Nuvion is still reviewing the person (`open`,
+  `opening`, `unknown`), for an opening held for a hand look (`conflict`) and
+  for an account with a wallet. It releases an opening at documents needed,
+  refused or stopped; a repeat, or an opening that holds nothing, changes
+  nothing. Safe to repeat.
+- **Tries.** At most 3 opening tries a day per account (`BVN_CHECKS_PER_DAY`,
+  PROVISIONAL, 24 hours rolling, the ledger `BvnCheckAttempt` with outcome
+  `opening`, written by KYC-01's `reserveDailyAttempt`): a request that takes
+  the claim (a first try, a try after a refusal or a lost answer, a
+  correction) or tries to and finds the BVN held by another account. The
+  fourth is `429 identity_checks_exhausted` with `retryAfterSeconds`, before
+  anything is claimed or sent; a burst of probes at once learns the held
+  answer at most three times. Taps on an opening already in flight, being
+  checked or stopped, and requests refused before the claim (a malformed
+  body, no email), count for nothing. **From one address**, at most
+  `OPEN_ATTEMPTS_PER_ADDRESS_PER_HOUR` (default 10, PROVISIONAL) such tries in
+  a rolling hour across every account: the next is `429 open_address_limited`
+  with `retryAfterSeconds`, before anything is claimed. The limit holds under
+  any burst (round 4, N12): the address's place is taken in one atomic step
+  before the claim (a lock on the address in the database, inside one
+  transaction that counts the hour's tries and writes the place only when one
+  is free; `BvnCheckAttempt.outcome` `reserved`, which the person's day does
+  not count), the place becomes the try when the claim is taken and is given
+  back when it is not, so 25 accounts opening at once from one address on one
+  server or on several sharing the database let exactly the limit in and
+  answer the rest `open_address_limited`. A second request of an account
+  whose first still holds a place on that address (a double tap) takes none.
+  A place left by a server that died stays counted against the address until
+  its hour is out. The address is the
+  caller's as the proxy gives it (`X-Forwarded-For`, as the BVN check's
+  limit reads it); an IPv6 address stands for its /64, so rotating through
+  the addresses of one connection is still one place. It is stored only as a
+  keyed hash on the try (`BvnCheckAttempt.addressKey`); a call with no client
+  address is not counted by address.
+- **A decision.** Nuvion's entity is read back before anything is recorded
+  (`GET /entities/{id}`). A decision is new when it is the first, or the word
+  changed (the entity went through `pending`, or from one decision to
+  another). The same word again is new only after the person submitted
+  since the last decision (corrected details, or NUV-03's submit call:
+  `NuvionEntity.submittedAt`) **and** a check Nuvion reports came to a
+  failing verdict that differs from the one recorded (a not-passed word:
+  `rejected`, `failed`, `declined`, `not-approved`, `invalid`, `unverified`;
+  not back to `pending`, which a new document does, and not an approving
+  word, which is the review progressing and leaves the stage, the decision
+  time and the notices as they were: round 4, N13). With no submission since the last decision it is the
+  same decision whatever Nuvion bumped; with every word as it was recorded
+  it is the echo of the submission itself (Nuvion's `entities.updated` fires
+  for our own PATCH). Nuvion's own `updated` time is not read: it moves for
+  things that are not decisions. A new decision sets `decidedAt`. A person
+  whose details were corrected after the last rejection reads
+  `needs_documents` until a decision newer than the correction is read. A new
+  `approved`, `rejected` or stopped (`failed`, `suspended`) decision writes
+  one `identity_review` notification (title and body of our own words; a
+  rejection carries what to fix; never a BVN, NIN or ID number), by the one
+  delivery that recorded it. A person stopped by Nuvion and then again
+  because their BVN was taken is told one "Identity check stopped".
+- **`POST /money/identity/bvn`** answers `409 step_not_used` under such a
+  provider (its `capabilities.identityLookup` is false) once the body passes
+  validation; a malformed body gets the validation pipe's `400` first.
+- **Nuvion's words are masked** before they are stored or logged: any run of
+  7 or more digits is cut to its last 4 after every separator is removed
+  from between the digits, however many there are (any width of space, tab,
+  newline, punctuation, slash, underscore, bracket, dash, zero-width
+  character, or the letter x or X, in any number: a run of 40 or more
+  slashes or pluses between groups of full-width digits is masked like a
+  run of one) and every Unicode decimal digit is read as 0 to 9 (full-width
+  and Arabic-Indic digits too), before anything else is masked (round 4,
+  N14). A letter or digit glued to the number is cut with it where the stored
+  words are masked. **A letter between groups is not a separator**: "1234
+  and 5678 and 9012" is three short numbers and a sentence, and is kept as
+  written.
+
 ## 10. Saved beneficiaries and the payout account (WALLET-14)
 
 - **Routes** (`src/money/saved-accounts/`): `GET /money/beneficiaries`
@@ -1474,3 +1655,112 @@ written here because the tasks that sell, spend and cash them out
   transaction, and never wait on a provider while you hold a person's points
   lock: this service's own transactions use Prisma's 5 s default, so a
   points call for that person would fail meanwhile.
+
+---
+
+## 17. Documents and the hosted selfie (NUV-03)
+
+Opening a wallet on Nuvion takes an ID document and a proof of address dated
+within 3 months (R-42), and Nuvion's hosted selfie when it is in use (R-39).
+The routes are part of opening, so they are not behind the wallet gate
+(section 7); a person with no opening started gets the same `409
+wallet_not_open` as every wallet route. The token is the person: no route
+takes a user id or a Nuvion id. Every answer is `Cache-Control: no-store`.
+Under a provider that reviews no documents (Fintava) the routes exist and say
+nothing is needed.
+
+| Route | What it does |
+|---|---|
+| `GET /money/identity/documents` | Both documents' state, whether uploads are open, what the opening waits for. When the documents are in and the opening is due to be sent (or its sending was lost), it sends it, once. |
+| `POST /money/identity/documents` | Multipart: `kind` (`identity` or `proof_of_address`), `file` (a PDF, JPG or PNG, 10 MB at most) and, for an ID with a back side, `file_back` of the same type. Sends the document to Nuvion once and answers the documents view. |
+| `GET /money/identity/liveness` | The hosted selfie: `enabled`, `state`, `url` while pending, `canStart`. Reads the result from Nuvion. |
+| `POST /money/identity/liveness` | JSON `{ redirectUrl? }` (https only). Starts the selfie, or answers the one already running, and returns the secure page to open. |
+
+- **One request per document.** Nuvion's `POST /documents` takes the front and
+  the back in one call and WAWU keeps no copy to hold a front until a back
+  arrives, so the two sides of an ID go in one request. A `side` field is
+  accepted only as `front`.
+- **WAWU keeps no file.** It goes to Nuvion; WAWU keeps the kind, the sides,
+  the state, Nuvion's document id, the time, whether Nuvion's review refused
+  it, and an HMAC-SHA256 of the bytes under `IDENTITY_HASH_KEY` (as the BVN's
+  hash is; so the same file sent twice is forwarded once, and nobody who can
+  read the table can test whether a person sent a given file). The
+  fingerprint is cleared once the opening is submitted: after that nothing is
+  compared with it, and any upload is `documents_closed` until the review
+  refuses a document and details are corrected. The type is read from the
+  bytes, never from what the client names it.
+- **Each step is progress** (round 4, NUV-02 G-497): a document sent (when it
+  is accepted for sending, and again when Nuvion has it), the selfie started
+  and the selfie coming back passed, and the submit call each write
+  `NuvionEntity.progressAt` (the submit call also `submittedAt`, so a refusal
+  read after it can be a new decision, section 9a). An opening being worked
+  on is therefore never closed by the hold expiry for being idle; one with
+  nothing done for `IDENTITY_HOLD_DAYS` is, as section 9a says. Support sees
+  the same time. A failure to write the time never fails the step.
+- **The same file again** (a double tap, a retry after a lost answer) is the
+  answer it already got, until the opening is submitted. **A different file**
+  replaces the first while the opening still takes documents.
+- **A document is `uploaded` only on Nuvion's answer.** An answer that was
+  lost leaves it `confirming`; nothing is sent again until the call's own
+  time has passed. Past that time `GET /money/identity/documents` reads
+  Nuvion's list of the entity's documents: a document it took reads
+  `uploaded`; one it never got, or a list that cannot be read, reads
+  `send_again` (WAWU keeps no copy: ask the person for the file again; the
+  upload route looks at Nuvion's list once more before it sends, so a file
+  Nuvion has is never sent twice). `not_accepted` means Nuvion refused the
+  last file (send another).
+- **A refused document stays refused.** `needs_new` means Nuvion's review
+  said this upload did not pass. The refusal is kept on the document's own
+  row, written where the entity's word for it is written (the delivery and
+  the correction of the details), so it survives a correction that Nuvion
+  answers with the check back at `pending` (as its own `PATCH
+  /individual-entities` sample does). The person is asked for a new file,
+  and the opening is not sent again without one: only a new upload of that
+  kind clears the refusal.
+- **The opening is sent for review once**, when both documents are `uploaded`
+  (and the selfie has passed, when it is in use), behind a claim taken before
+  `POST /onboarding-submissions`; `GET /money/wallet` then reads `checking`.
+  A submission Nuvion refused is not sent again for a minute, or until a
+  document changes. Corrected details after a refusal start it again.
+- **The selfie** is off unless `NUVION_HOSTED_LIVENESS=on`, and it is the
+  server's one switch, never a row of one person. A refused session start is
+  read by whom it is about:
+  - Nuvion saying its API is not available to this key (`error_endpoint_not_found`,
+    404, "API endpoint does not exist"; `error_auth_permission_denied` or
+    `error_auth_elevated_permission_required`, 403) turns the selfie off for
+    everyone on that server for an hour, logged as an error without any
+    person in it; the opening goes on without it and `POST` answers `409
+    selfie_not_available`. These are the only such answers Nuvion's errors page
+    lists; if the sandbox shows another, it is one more line
+    (`LIVENESS_API_UNAVAILABLE_TYPES`).
+  - A return address Nuvion will not take (a refused body, with an address
+    sent) is that person's `400 document_request_invalid`.
+  - Anything else about the person's request or entity (an identity,
+    entity or account refusal, no such record, a rate limit, a refused
+    body with no address) is `503 provider_unreachable` with `retryAfterSeconds`
+    for that person to wait out or retry. The step stays required of them:
+    no one gets past the selfie by being refused.
+  - A lost answer or a 5xx turns nothing off and records nothing.
+  The return address must be https, with no credentials or encoded dots or
+  slashes, on an origin AND under a path prefix listed in
+  `NUVION_LIVENESS_REDIRECT_ORIGINS` (`https://app.example/open` allows `/open`
+  and `/open/...` there, not `/opening`); an empty list allows no address,
+  and no address at all is allowed (nothing is sent).
+
+| `reason.code` | HTTP | When | Extra fields |
+|---|---|---|---|
+| `wallet_not_open` | 409 | no opening started | |
+| `document_request_invalid` | 400 | no or unknown `kind`, no file, a field or part we do not read, `file_back` for a proof of address, a return address that is not https or not one the server lists (origin and path prefix, `NUVION_LIVENESS_REDIRECT_ORIGINS`), or one Nuvion refused for that person | |
+| `document_file_invalid` | 422 | a file that is empty, over 10 MB, not a PDF, JPG or PNG, or two sides of different types; nothing is sent | |
+| `document_not_accepted` | 422 | Nuvion read the file or the details and refused them; nothing was kept | |
+| `documents_closed` | 409 | the opening is not taking documents now (sent, decided, stopped, or a refusal not yet corrected), or this wallet needs none | |
+| `document_in_progress` | 409 | the last upload of this kind is still being confirmed, or a selfie is being started | `retryAfterSeconds` |
+| `document_rate_limited` | 429 | too many uploads (or selfie starts) for now (`PROVISIONAL(NUVION-DOCUMENT-UPLOAD-LIMITS)`) | `retryAfterSeconds` |
+| `document_busy` | 503 | the server is busy with other uploads | `retryAfterSeconds` |
+| `selfie_not_available` | 409 | the selfie is not part of this opening (not in use, or Nuvion said its API is not available to us) | |
+| `identity_under_review` | 409 | Nuvion has the details with its compliance review | |
+| `provider_unreachable` | 503 | Nuvion did not answer, the answer is not confirmed yet, or it would not start this person's selfie (the step stays required) | `retryAfterSeconds` |
+
+The codes of this section are the task's own (`src/nuvion/documents/document-errors.ts`),
+not in the money contract's shared list; each route's entry in the contract
+lists the ones it can answer.

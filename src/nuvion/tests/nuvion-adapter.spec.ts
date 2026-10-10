@@ -389,10 +389,28 @@ describe('NUV-01: the Nuvion adapter behind WALLET_PROVIDER', () => {
         new NuvionClient(standin.settings(), 'nv_test_sk_k'),
       );
       expect(provider.capabilities).toEqual(NUVION_CAPABILITIES);
+      // Filled by NUV-02 (its own spec, nuvion-opening.contract.spec.ts):
+      // without the review details openWallet is refused before anything
+      // is sent, and Nuvion keeps no phone lookup ("cannot tell").
+      // Filled by NUV-03 (nuvion-documents.spec.ts): the onboarding
+      // submission is a real call now, so it is not in this table of
+      // "sends nothing". The hosted selfie stays not_supported until
+      // NUVION_HOSTED_LIVENESS=on, and the selfie match for good.
+      const FILLED: ReadonlyArray<keyof WalletProvider> = [
+        'openWallet',
+        'findCustomerByPhone',
+        'submitKyc',
+      ];
+      await expect(
+        provider.openWallet({ firstName: 'A' } as never),
+      ).rejects.toMatchObject({ kind: 'validation', recordMayExist: false });
+      await expect(
+        provider.findCustomerByPhone('+2348031234567', () => 'd'),
+      ).resolves.toEqual({ state: 'unknown', why: 'empty_answer' });
       // The accounts area is NUV-04's and no longer a stub (its own specs
       // cover it): every other area still answers not_supported.
       for (const [method, owner, args] of CALLS) {
-        if (owner === 'accounts') continue;
+        if (owner === 'accounts' || FILLED.includes(method)) continue;
         const methods = provider as unknown as Record<
           string,
           (...a: unknown[]) => Promise<unknown>
