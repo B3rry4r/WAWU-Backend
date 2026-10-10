@@ -2976,6 +2976,243 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
   });
 
   // =========================================================================
+  describe('NUV-03 round 4, R4-1: an expired opening takes no document, no selfie and sends nothing to Nuvion', () => {
+    const sweep = () =>
+      moduleRef.get(WalletOpeningService, { strict: false }).expireIdleHolds();
+    /** Nothing from the person for 15 days, then the running sweep: the opening is expired. */
+    async function expire(who: Person): Promise<void> {
+      await prisma.$executeRaw`UPDATE "FintavaWalletOpening" SET "attemptStartedAt" = now() - interval '15 days' WHERE "wawuUserId" = ${who.id}`;
+      await prisma.$executeRaw`UPDATE "NuvionEntity" SET "progressAt" = now() - interval '15 days', "submittedAt" = NULL, "correctedAt" = NULL WHERE "wawuUserId" = ${who.id}`;
+      expect(await sweep()).toBeGreaterThanOrEqual(1);
+      expect((await openingRow(who)).state).toBe('expired');
+    }
+    const startAgain = (who: Person) =>
+      http()
+        .post('/api/hub/money/wallet/open')
+        .set('Authorization', who.auth)
+        .send({
+          bvn: digits(11),
+          nin: digits(11),
+          firstName: 'Ada',
+          lastName: 'Documents',
+          dateOfBirth: '1991-04-12',
+          address: '14 Opebi Road',
+          city: 'Ikeja',
+          state: 'Lagos',
+          postalCode: '100001',
+          gender: 'female',
+          idType: 'international_passport',
+          idNumber: `A${digits(8)}`,
+          proofOfAddressType: 'utility_bill',
+        });
+    /** The wallet view's own words for an expired opening (what the person is told to do). */
+    const startAgainWords = async (who: Person): Promise<string> => {
+      const review = (await wallet(who)).review!;
+      expect(review).toMatchObject({
+        stage: 'expired',
+        canResubmit: true,
+        reasons: [{ code: 'review_expired' }],
+      });
+      return `${review.reasons[0].message} ${review.reasons[0].fix}`;
+    };
+
+    it('the documents view is closed and an upload is refused in the wallet view’s own words: 409 documents_closed, nothing sent, nothing kept, no progress', async () => {
+      const who = await opened();
+      await expire(who);
+      const words = await startAgainWords(who);
+      expect(words).toBe(
+        'We closed your wallet application because it was not finished. Send your details again to start a new one.',
+      );
+      expect((await view(who)).open).toBe(false);
+      for (const [kind, file] of [
+        ['identity', png()],
+        ['proof_of_address', pdf()],
+      ] as const) {
+        const res = await send(who, kind, file).expect(409);
+        expect(body(res).reason).toEqual({
+          code: 'documents_closed',
+          message: words,
+        });
+        expect(body(res).reason?.message).not.toContain('—');
+        expect(await docRow(who, kind)).toBeNull();
+      }
+      expect(uploads()).toHaveLength(0);
+      expect(submissions()).toHaveLength(0);
+      // The refusal is not the person working on it: the hold stays released.
+      const entity = await entityRow(who);
+      expect(Date.now() - entity.progressAt!.getTime()).toBeGreaterThan(
+        14 * 24 * 3600_000,
+      );
+      expect((await openingRow(who)).state).toBe('expired');
+      expect((await wallet(who)).review?.stage).toBe('expired');
+    });
+
+    it('a file Nuvion already has, sent again after the expiry, is refused too, not answered as if the opening were open', async () => {
+      const who = await opened();
+      const file = png();
+      await send(who, 'identity', file).expect(200);
+      expect(uploads()).toHaveLength(1);
+      await expire(who);
+      const res = await send(who, 'identity', file).expect(409);
+      expect(body(res).reason?.code).toBe('documents_closed');
+      expect(body(res).reason?.message).toBe(await startAgainWords(who));
+      expect(uploads()).toHaveLength(1);
+    });
+
+    it('both documents in and only the selfie missing: the selfie passing after the expiry, a delivery and a read of the documents send nothing, and the selfie cannot be started', async () => {
+      settings().hostedLiveness = true;
+      settings().livenessRedirectOrigins = [
+        'https://wawuafrica.example/return',
+      ];
+      const who = await opened();
+      await startLiveness(who, {
+        redirectUrl: 'https://wawuafrica.example/return',
+      }).expect(200);
+      await send(who, 'identity', png()).expect(200);
+      await send(who, 'proof_of_address', pdf()).expect(200);
+      expect(submissions()).toHaveLength(0);
+      await expire(who);
+
+      const session = [...nuvion.sessions.values()][0];
+      session.captureStatus = 'completed';
+      session.verificationStatus = 'approved';
+      // The person comes back from the selfie page: the result is read, and
+      // the expired opening is not sent for review.
+      expect(await liveness(who)).toMatchObject({ canStart: false });
+      expect(submissions()).toHaveLength(0);
+      expect((await view(who)).submitted).toBe(false);
+      await handler.handle(delivery(who.held));
+      expect(submissions()).toHaveLength(0);
+      expect((await onboarding(who))?.submittedAt).toBeNull();
+      expect((await openingRow(who)).state).toBe('expired');
+      // Reading the result is not the person working on it either.
+      expect(
+        Date.now() - (await entityRow(who)).progressAt!.getTime(),
+      ).toBeGreaterThan(14 * 24 * 3600_000);
+
+      const starts = sessionStarts().length;
+      const res = await startLiveness(who, {
+        redirectUrl: 'https://wawuafrica.example/return',
+      }).expect(409);
+      expect(body(res).reason).toEqual({
+        code: 'documents_closed',
+        message: await startAgainWords(who),
+      });
+      expect(sessionStarts()).toHaveLength(starts);
+    });
+
+    it('the selfie of an expired opening that never started one reads not_started and cannot be started', async () => {
+      settings().hostedLiveness = true;
+      settings().livenessRedirectOrigins = [
+        'https://wawuafrica.example/return',
+      ];
+      const who = await opened();
+      expect(await liveness(who)).toMatchObject({
+        state: 'not_started',
+        canStart: true,
+      });
+      await expire(who);
+      expect(await liveness(who)).toMatchObject({
+        state: 'not_started',
+        canStart: false,
+      });
+      await startLiveness(who).expect(409);
+      expect(sessionStarts()).toHaveLength(0);
+    });
+
+    it('starting again brings the documents back: the view is open, an upload is taken and the opening is sent for review once', async () => {
+      const who = await opened();
+      await expire(who);
+      await send(who, 'identity', png()).expect(409);
+      await startAgain(who).expect(200);
+      expect((await openingRow(who)).state).toBe('review');
+      expect(await view(who)).toMatchObject({ open: true, submitted: false });
+      await send(who, 'identity', png()).expect(200);
+      await send(who, 'proof_of_address', pdf()).expect(200);
+      expect(uploads()).toHaveLength(2);
+      expect(submissions()).toHaveLength(1);
+    });
+  });
+
+  // =========================================================================
+  describe('NUV-03 round 4, R4-2: a tiny upload keeps a hold alive for 14 days and not for ever', () => {
+    const sweep = () =>
+      moduleRef.get(WalletOpeningService, { strict: false }).expireIdleHolds();
+    /** As if `days` had passed: every time kept of the person's hold is that much older. */
+    async function pass(who: Person, days: number): Promise<void> {
+      await prisma.$executeRaw`UPDATE "FintavaWalletOpening" SET
+        "attemptStartedAt" = "attemptStartedAt" - make_interval(days => ${days}),
+        "bvnVerifiedAt" = "bvnVerifiedAt" - make_interval(days => ${days})
+        WHERE "wawuUserId" = ${who.id}`;
+      await prisma.$executeRaw`UPDATE "NuvionEntity" SET
+        "progressAt" = "progressAt" - make_interval(days => ${days}),
+        "submittedAt" = "submittedAt" - make_interval(days => ${days}),
+        "correctedAt" = "correctedAt" - make_interval(days => ${days}),
+        "decidedAt" = "decidedAt" - make_interval(days => ${days})
+        WHERE "wawuUserId" = ${who.id}`;
+    }
+    /** Four bytes that pass for a JPEG: the framing check reads the first three. */
+    const tiny = (n: number) => Buffer.from([0xff, 0xd8, 0xff, n]);
+
+    it('a 4 byte file every 13 days is accepted and is progress, and the hold is still released after 30 days from the first claim', async () => {
+      const who = await opened();
+      const claim = (await openingRow(who)).bvnVerifiedAt;
+      for (const [n, day] of [
+        [1, 13],
+        [2, 26],
+      ] as const) {
+        await pass(who, 13);
+        const res = await send(who, 'identity', tiny(n)).expect(200);
+        expect(body<IdentityDocumentsView>(res).data?.open).toBe(true);
+        // The upload was progress: nothing is idle, and the claim is the first one.
+        expect(
+          Date.now() - (await entityRow(who)).progressAt!.getTime(),
+        ).toBeLessThan(60_000);
+        await sweep();
+        expect((await openingRow(who)).state).toBe('review');
+        expect(
+          (Date.now() - (await openingRow(who)).bvnVerifiedAt.getTime()) /
+            (24 * 3600_000),
+        ).toBeGreaterThan(day - 0.1);
+        expect((await openingRow(who)).bvnVerifiedAt.getTime()).toBeLessThan(
+          claim.getTime() + 1,
+        );
+      }
+      expect(uploads()).toHaveLength(2);
+      // Day 31: another tiny file went in a moment ago.
+      await pass(who, 5);
+      await send(who, 'identity', tiny(3)).expect(200);
+      expect(
+        Date.now() - (await entityRow(who)).progressAt!.getTime(),
+      ).toBeLessThan(60_000);
+      expect(await sweep()).toBeGreaterThanOrEqual(1);
+      expect(await openingRow(who)).toMatchObject({
+        state: 'expired',
+        failure: 'hold_lifetime_ended',
+      });
+      expect((await openingRow(who)).bvnHash).toMatch(/^released:/);
+      expect((await wallet(who)).review).toMatchObject({
+        stage: 'expired',
+        canResubmit: true,
+      });
+      // And a tiny file after the release revives nothing (R4-1).
+      await send(who, 'identity', tiny(4)).expect(409);
+      expect(uploads()).toHaveLength(3);
+      expect((await openingRow(who)).state).toBe('expired');
+    });
+
+    it('a ready opening sent for review is out of the sweep, whatever its age', async () => {
+      const who = await opened();
+      await send(who, 'identity', png()).expect(200);
+      await send(who, 'proof_of_address', pdf()).expect(200);
+      expect(submissions()).toHaveLength(1);
+      await pass(who, 90);
+      await sweep();
+      expect((await openingRow(who)).state).toBe('open');
+    });
+  });
+
+  // =========================================================================
   describe('WAWU keeps no document content', () => {
     it('after every upload in this file, no table, log, answer or file on disk holds a document or any part of one', async () => {
       // One more person, with both documents carrying known markers.

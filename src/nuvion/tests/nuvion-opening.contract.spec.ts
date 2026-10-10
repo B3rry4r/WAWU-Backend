@@ -40,13 +40,18 @@ import * as identityConfig from '../../money/identity/identity-config';
 import {
   IdentityHasher,
   identityHoldDays,
+  identityHoldLifetimeDays,
   openAttemptsPerAddressPerHour,
 } from '../../money/identity/identity-config';
 import {
   expireOpening,
   recordOpeningProgress,
 } from '../../money/opening/identity-hold';
-import { EXPIRED_IDLE } from '../../money/opening/bvn-claim';
+import { EXPIRED_IDLE, EXPIRED_LIFETIME } from '../../money/opening/bvn-claim';
+import {
+  addressKeyOf,
+  OPENING_PLACE_OUTCOME,
+} from '../../money/opening/opening-attempts';
 import { REVIEW_REASONS } from '../../money/opening/review-stage';
 import { WalletOpeningService } from '../../money/opening/wallet-opening.service';
 import {
@@ -2558,6 +2563,12 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
         documentStatus?: string;
         decidedAgoDays?: number;
       },
+      /**
+       * Days since the account took the claim (round 4, R4-2: a hold older
+       * than IDENTITY_HOLD_LIFETIME_DAYS is released whatever was done, so a
+       * planted hold meant to survive the sweep is claimed recently).
+       */
+      claimedDaysAgo: number = days,
     ): Promise<string> {
       const id = randomUUID();
       users.push(id);
@@ -2567,7 +2578,9 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
           wawuUserId: id,
           state: 'review',
           bvnHash: `planted-${id}`,
-          bvnVerifiedAt: then,
+          bvnVerifiedAt: new Date(
+            Date.now() - claimedDaysAgo * 24 * 60 * 60_000,
+          ),
           phone: `+23481${digits(8)}`,
           attemptStartedAt: then,
           provider: 'nuvion',
@@ -2606,11 +2619,15 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       const kept: string[] = [];
       for (let i = 0; i < 105; i += 1) {
         kept.push(
-          await plant(60, {
-            status: 'rejected',
-            documentStatus: 'rejected',
-            decidedAgoDays: 1,
-          }),
+          await plant(
+            60,
+            {
+              status: 'rejected',
+              documentStatus: 'rejected',
+              decidedAgoDays: 1,
+            },
+            1,
+          ),
         );
       }
       const real = person();
@@ -3496,6 +3513,353 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
   });
 
   // -------------------------------------------------------------------------
+  describe('NUV-03 round 4, R4-2: a hold has an absolute lifetime, counted from the first claim', () => {
+    /** Moves every time kept of a person's hold back by `days`, the claim's included. */
+    async function ageHold(who: Person, days: number): Promise<void> {
+      await ageOpening(who, days);
+      await prisma.$executeRaw`UPDATE "FintavaWalletOpening" SET "bvnVerifiedAt" = "bvnVerifiedAt" - make_interval(days => ${days}) WHERE "wawuUserId" = ${who.id}`;
+    }
+    const claimedAt = async (who: Person): Promise<Date> =>
+      (await row(who))!.bvnVerifiedAt;
+    const ageOfClaim = async (who: Person): Promise<number> =>
+      (Date.now() - (await claimedAt(who)).getTime()) / (24 * 3600_000);
+    const notesOf = (who: Person) =>
+      prisma.notification.count({
+        where: { userWawuId: who.id, kind: 'identity_review' },
+      });
+
+    it('the setting is IDENTITY_HOLD_LIFETIME_DAYS, 30 by default, from 1 to 365, and never shorter than IDENTITY_HOLD_DAYS', () => {
+      expect(moduleRef.get(IdentityHasher).holdLifetimeDays).toBe(30);
+      expect(identityHoldLifetimeDays(undefined)).toBe(30);
+      expect(identityHoldLifetimeDays('')).toBe(30);
+      expect(identityHoldLifetimeDays('45')).toBe(45);
+      expect(identityHoldLifetimeDays('1')).toBe(1);
+      expect(identityHoldLifetimeDays('365')).toBe(365);
+      for (const bad of ['0', '-1', '1.5', 'x', '366']) {
+        expect(() => identityHoldLifetimeDays(bad)).toThrow(
+          /IDENTITY_HOLD_LIFETIME_DAYS/,
+        );
+      }
+      const hasher = (env: Record<string, string>) =>
+        new IdentityHasher({
+          get: (k: string) => env[k],
+        } as unknown as ConstructorParameters<typeof IdentityHasher>[0]);
+      const key = {
+        IDENTITY_HASH_KEY: 'r4-2-test-hash-key-0123456789abcdefghij',
+      };
+      expect(hasher(key).holdLifetimeDays).toBe(30);
+      expect(
+        hasher({ ...key, IDENTITY_HOLD_LIFETIME_DAYS: '60' }).holdLifetimeDays,
+      ).toBe(60);
+      expect(() => hasher({ ...key, IDENTITY_HOLD_DAYS: '40' })).toThrow(
+        /IDENTITY_HOLD_LIFETIME_DAYS \(30\) must not be shorter than IDENTITY_HOLD_DAYS \(40\)/,
+      );
+      expect(
+        hasher({
+          ...key,
+          IDENTITY_HOLD_DAYS: '40',
+          IDENTITY_HOLD_LIFETIME_DAYS: '40',
+        }).holdLifetimeDays,
+      ).toBe(40);
+    });
+
+    it('a squatter who does something every 13 days still loses the BVN at day 30: held at 13 and 26, released at 31 with the last thing done a moment ago, and the real owner opens', async () => {
+      const x = person();
+      const y = person({ bvn: x.body.bvn });
+      await opened(x);
+      // Day 13, day 26: progress each time, inside the idle days.
+      for (const step of [13, 13]) {
+        await ageHold(x, step);
+        await recordOpeningProgress(prisma, x.id);
+        await openingSvc().expireIdleHolds();
+        expect((await row(x))!.state).toBe('review');
+        expect(await held(x)).toBe(true);
+        fresh();
+        await open(person({ bvn: x.body.bvn })).expect(409);
+      }
+      expect(await ageOfClaim(x)).toBeGreaterThan(25.9);
+      expect(await ageOfClaim(x)).toBeLessThan(26.1);
+      // Day 31: the last thing done is seconds old, the idle rule sees a
+      // person at work, and the lifetime has run out all the same.
+      await ageHold(x, 5);
+      await recordOpeningProgress(prisma, x.id, { submitted: true });
+      fresh();
+      expect(await openingSvc().expireIdleHolds()).toBeGreaterThanOrEqual(1);
+      expect(standin.seen).toEqual([]);
+      expect(await row(x)).toMatchObject({
+        state: 'expired',
+        failure: EXPIRED_LIFETIME,
+      });
+      expect(await held(x)).toBe(false);
+      expect((await entityRow(x))!.holdExpiredAt).not.toBeNull();
+      expect(
+        Date.now() - (await entityRow(x))!.progressAt!.getTime(),
+      ).toBeLessThan(60_000);
+      expect((await wallet(x)).review).toMatchObject({
+        stage: 'expired',
+        canResubmit: true,
+        reasons: [{ code: 'review_expired' }],
+      });
+      // Told once, as an idle one is, and a second pass tells nobody again.
+      expect(await notesOf(x)).toBe(1);
+      await openingSvc().expireIdleHolds();
+      expect(await notesOf(x)).toBe(1);
+      await open(y).expect(200);
+      expect(creates()).toHaveLength(1);
+    });
+
+    it('inside the lifetime nothing changes: 29 days of work is held, and an idle one still goes at 14 days as before', async () => {
+      const worker = person();
+      const idle = person();
+      await opened(worker);
+      await opened(idle);
+      await ageHold(worker, 29);
+      await ageHold(idle, 15);
+      await recordOpeningProgress(prisma, worker.id);
+      await openingSvc().expireIdleHolds();
+      expect((await row(worker))!.state).toBe('review');
+      expect(await row(idle)).toMatchObject({
+        state: 'expired',
+        failure: EXPIRED_IDLE,
+      });
+    });
+
+    it('a correction with the same BVN is progress for the idle rule and not a new claim: 25 days in, a refused person corrects, and at day 31 the hold is released', async () => {
+      const x = person();
+      await opened(x, 'documents');
+      await ageHold(x, 25);
+      const before = await claimedAt(x);
+      fresh();
+      await open(x).expect(200);
+      expect(await claimedAt(x)).toEqual(before);
+      expect((await row(x))!.state).toBe('review');
+      expect((await wallet(x)).review?.stage).toBe('needs_documents');
+      await openingSvc().expireIdleHolds();
+      expect((await row(x))!.state).toBe('review');
+      await ageHold(x, 6);
+      await openingSvc().expireIdleHolds();
+      expect(await row(x)).toMatchObject({
+        state: 'expired',
+        failure: EXPIRED_LIFETIME,
+      });
+    });
+
+    it('a refusal on the NIN corrected with the same BVN and a new NIN sends the numbers again and still does not start a lifetime', async () => {
+      const x = person();
+      const e = await opened(x);
+      decide(e, 'rejected', { ninStatus: 'rejected' });
+      await handler.handle(delivery(e));
+      expect((await wallet(x)).review?.stage).toBe('rejected');
+      await ageHold(x, 25);
+      const before = await claimedAt(x);
+      fresh();
+      await open(x, { ...x.body, nin: digits(11) }).expect(200);
+      const patch = sent('PATCH', `/individual-entities/${e.id}`);
+      expect(patch).toHaveLength(1);
+      expect(
+        (patch[0].body as { person: Record<string, unknown> }).person,
+      ).toMatchObject({ bvn: x.body.bvn });
+      expect(await claimedAt(x)).toEqual(before);
+    });
+
+    it('starting again after an expiry takes a new claim and a new lifetime, and only that one runs out at 30 days', async () => {
+      const x = person();
+      await opened(x);
+      await ageHold(x, 31);
+      await recordOpeningProgress(prisma, x.id);
+      await openingSvc().expireIdleHolds();
+      expect((await row(x))!.state).toBe('expired');
+      const oldClaim = await claimedAt(x);
+      fresh();
+      await open(x).expect(200);
+      expect((await row(x))!.state).toBe('review');
+      expect(await held(x)).toBe(true);
+      expect(await ageOfClaim(x)).toBeLessThan(0.01);
+      expect((await claimedAt(x)).getTime()).toBeGreaterThan(
+        oldClaim.getTime() + 29 * 24 * 3600_000,
+      );
+      // Not expired again at once, nor at day 29; expired at day 31.
+      await openingSvc().expireIdleHolds();
+      expect((await row(x))!.state).toBe('review');
+      await ageHold(x, 29);
+      await recordOpeningProgress(prisma, x.id);
+      await openingSvc().expireIdleHolds();
+      expect((await row(x))!.state).toBe('review');
+      await ageHold(x, 2);
+      await recordOpeningProgress(prisma, x.id);
+      await openingSvc().expireIdleHolds();
+      expect(await row(x)).toMatchObject({
+        state: 'expired',
+        failure: EXPIRED_LIFETIME,
+      });
+    });
+
+    it('a correction that sends another BVN takes that number as a new claim; one Nuvion refuses leaves the claim, and its age, as it was', async () => {
+      const x = person();
+      const e = await opened(x);
+      decide(e, 'rejected', { ninStatus: 'rejected' });
+      await handler.handle(delivery(e));
+      await ageHold(x, 25);
+      const before = await row(x);
+      const old = await claimedAt(x);
+      // Nuvion refuses the correction: nothing changed.
+      standin.on('PATCH', /^\/individual-entities\/[^/]+$/, () => ({
+        status: 422,
+        body: errorBody('error_validation_error', 'Refused.'),
+      }));
+      await open(x, { ...x.body, bvn: newBvn() }).expect(422);
+      expect(await row(x)).toMatchObject({
+        state: 'review',
+        bvnHash: before!.bvnHash,
+      });
+      expect(await claimedAt(x)).toEqual(old);
+      // Nuvion takes it: the new number is a new claim, and the old is free.
+      fresh();
+      const other = newBvn();
+      await open(x, { ...x.body, bvn: other }).expect(200);
+      expect((await row(x))!.bvnHash).not.toBe(before!.bvnHash);
+      expect(await ageOfClaim(x)).toBeLessThan(0.01);
+      await open(person({ bvn: x.body.bvn })).expect(200);
+    });
+
+    it('a number taken back after it was let go is a new claim too', async () => {
+      const x = person();
+      const e = await opened(x, 'bvn');
+      expect(await held(x)).toBe(false);
+      await ageHold(x, 40);
+      decide(e, 'pending', { bvnStatus: 'pending', ninStatus: 'pending' });
+      await handler.handle(delivery(e));
+      expect((await row(x))!.state).toBe('open');
+      expect(await held(x)).toBe(true);
+      expect(await ageOfClaim(x)).toBeLessThan(0.01);
+    });
+
+    it('being checked, approved, stopped, an account or a wallet are not expired by the lifetime either', async () => {
+      const checking = person();
+      const approved = person();
+      const stopped = person();
+      const eC = await opened(checking);
+      decide(eC, 'pending', { bvnStatus: 'pending', ninStatus: 'pending' });
+      await handler.handle(delivery(eC));
+      const eA = await opened(approved);
+      decide(eA, 'approved', approvedWords);
+      await handler.handle(delivery(eA));
+      const eS = await opened(stopped);
+      decide(eS, 'suspended');
+      await handler.handle(delivery(eS));
+      for (const who of [checking, approved, stopped]) await ageHold(who, 90);
+      await openingSvc().expireIdleHolds();
+      expect((await row(checking))!.state).toBe('open');
+      expect((await row(approved))!.state).toBe('open');
+      expect((await row(stopped))!.state).toBe('stopped');
+    });
+
+    it('a refusal on the BVN itself holds nothing, so there is nothing for the lifetime to release', async () => {
+      const x = person();
+      await opened(x, 'bvn');
+      await ageHold(x, 90);
+      await openingSvc().expireIdleHolds();
+      expect((await row(x))!.state).toBe('review');
+      expect((await wallet(x)).review?.stage).toBe('rejected');
+    });
+
+    it('a person who started again after the sweep read them is not expired: the opening is read again under its lock', async () => {
+      const x = person();
+      await opened(x);
+      await ageHold(x, 31);
+      await recordOpeningProgress(prisma, x.id);
+      const idleCutoff = new Date(Date.now() - 14 * 24 * 3600_000);
+      const lifetimeCutoff = new Date(Date.now() - 30 * 24 * 3600_000);
+      // Not yet started again: due.
+      expect(
+        await prisma.$transaction((tx) =>
+          expireOpening(
+            tx,
+            x.id,
+            EXPIRED_IDLE,
+            new Date(),
+            ['review'],
+            idleCutoff,
+            lifetimeCutoff,
+          ),
+        ),
+      ).toBe(true);
+      expect(await row(x)).toMatchObject({
+        state: 'expired',
+        failure: EXPIRED_LIFETIME,
+      });
+      // Starting again, then a stale sweep with the old cutoffs: left alone.
+      fresh();
+      await open(x).expect(200);
+      expect(
+        await prisma.$transaction((tx) =>
+          expireOpening(
+            tx,
+            x.id,
+            EXPIRED_LIFETIME,
+            new Date(),
+            ['review'],
+            idleCutoff,
+            lifetimeCutoff,
+          ),
+        ),
+      ).toBe(false);
+      expect((await row(x))!.state).toBe('review');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe('NUV-03 round 4, R4-3: a place the same account holds on another address is no sign of a double tap', () => {
+    const addr = () => `198.19.${randomInt(1, 250)}.${randomInt(1, 250)}`;
+    const keyOf = (address: string) =>
+      addressKeyOf(moduleRef.get(IdentityHasher), address);
+
+    it('X holds a place on address A; X opens from address B inside the minute: it is let through and makes one entity', async () => {
+      const x = person();
+      const a = addr();
+      const b = addr();
+      await prisma.bvnCheckAttempt.create({
+        data: {
+          wawuUserId: x.id,
+          addressKey: keyOf(a),
+          outcome: OPENING_PLACE_OUTCOME,
+        },
+      });
+      await openFrom(x, b).expect(200);
+      expect(creates()).toHaveLength(1);
+      expect(await row(x)).toMatchObject({ state: 'review' });
+      expect((await wallet(x)).review?.stage).toBe('needs_documents');
+      // The place on A is untouched, and the try made on B is on B.
+      const rows = await prisma.bvnCheckAttempt.findMany({
+        where: { wawuUserId: x.id },
+        orderBy: { createdAt: 'asc' },
+      });
+      expect(rows.map((r) => [r.addressKey, r.outcome])).toEqual([
+        [keyOf(a), OPENING_PLACE_OUTCOME],
+        [keyOf(b), 'opening'],
+      ]);
+    });
+
+    it('the same place on the same address is the double tap it always was: nothing is claimed and no second place is taken', async () => {
+      const x = person();
+      const a = addr();
+      await prisma.bvnCheckAttempt.create({
+        data: {
+          wawuUserId: x.id,
+          addressKey: keyOf(a),
+          outcome: OPENING_PLACE_OUTCOME,
+        },
+      });
+      await openFrom(x, a).expect(200);
+      expect(creates()).toHaveLength(0);
+      expect(await row(x)).toBeNull();
+      expect(
+        await prisma.bvnCheckAttempt.count({ where: { wawuUserId: x.id } }),
+      ).toBe(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   describe('round 4, N14: any length of separators between any digits is masked', () => {
     const digitsIn = (script: 'ascii' | 'fullwidth' | 'arabic', n: string) =>
       script === 'ascii'
@@ -3563,6 +3927,8 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
         documentStatus?: string;
         decidedAgoDays?: number;
       },
+      /** When the account took the claim (round 4, R4-2); default: when it started. */
+      claimedAt: Date = startedAt,
     ): Promise<string[]> {
       const ids = Array.from({ length: count }, () => {
         const id = randomUUID();
@@ -3574,7 +3940,7 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
           wawuUserId: id,
           state: 'review',
           bvnHash: `planted-${id}`,
-          bvnVerifiedAt: startedAt,
+          bvnVerifiedAt: claimedAt,
           phone: `+23481${digits(8)}${k}`,
           attemptStartedAt: startedAt,
           provider: 'nuvion',
@@ -3609,11 +3975,16 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
     it('600 openings the query cannot tell from expirable ones (told yesterday, started long ago) in front of one that is due: the due one expires in the next pass', async () => {
       let kept: string[] = [];
       try {
-        kept = await plantMany(600, daysAgo(60), {
-          status: 'rejected',
-          documentStatus: 'rejected',
-          decidedAgoDays: 1,
-        });
+        kept = await plantMany(
+          600,
+          daysAgo(60),
+          {
+            status: 'rejected',
+            documentStatus: 'rejected',
+            decidedAgoDays: 1,
+          },
+          daysAgo(1),
+        );
         const real = person();
         await opened(real);
         await ageOpening(real, 15);
@@ -3632,11 +4003,16 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
     it('the service remembers where a pass stopped: passes out of time walk through 305 openings it cannot expire to the due one behind them', async () => {
       let ambiguous: string[] = [];
       try {
-        ambiguous = await plantMany(305, daysAgo(60), {
-          status: 'rejected',
-          documentStatus: 'rejected',
-          decidedAgoDays: 1,
-        });
+        ambiguous = await plantMany(
+          305,
+          daysAgo(60),
+          {
+            status: 'rejected',
+            documentStatus: 'rejected',
+            decidedAgoDays: 1,
+          },
+          daysAgo(1),
+        );
         const real = person();
         await opened(real);
         await ageOpening(real, 15);

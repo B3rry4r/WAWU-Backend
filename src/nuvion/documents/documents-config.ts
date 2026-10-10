@@ -1,3 +1,4 @@
+import { REVIEW_REASONS } from '../../money/opening/review-stage';
 import type { PersonRateWindow } from '../../money/person-window-limiter';
 
 /**
@@ -29,6 +30,12 @@ export const MSG = {
   noWallet: "You don't have a wallet yet. Open your wallet to continue.",
   closed:
     'Your wallet is not taking documents right now. Check where your opening stands.',
+  /**
+   * An opening the sweep closed (idle too long, or a hold that ran out): the
+   * wallet view's own words for it, said again, so the two never differ
+   * (round 4, R4-1).
+   */
+  expired: `${REVIEW_REASONS.review_expired.message} ${REVIEW_REASONS.review_expired.fix}`,
   notNeeded: 'Your wallet does not need documents.',
   inProgress:
     'We are still confirming your last upload. Check again in a moment.',

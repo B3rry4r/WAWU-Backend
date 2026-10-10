@@ -63,6 +63,8 @@ export interface ReviewedOpeningRow {
   phone: string;
   attempts: number;
   attemptStartedAt: Date;
+  /** When the account took the BVN claim it holds (R4-2). */
+  bvnVerifiedAt: Date;
   checkedAt: Date | null;
   failure: string | null;
   provider?: string | null;
@@ -483,6 +485,7 @@ export class ReviewedOpening {
         return expireIdleOpenings(tx, this.host.hasher.holdDays, now, {
           after,
           budgetMs,
+          lifetimeDays: this.host.hasher.holdLifetimeDays,
         });
       },
       { timeout: 60_000, maxWait: 5_000 },
@@ -992,6 +995,10 @@ export class ReviewedOpening {
             failure: 'correcting',
             bvnHash: claimHash,
             phone: send.phone,
+            // The claim's time moves only with the claim: a number taken
+            // (after an expiry, or typed anew) starts a lifetime; the same
+            // number kept does not, whatever the person sends (R4-2).
+            ...(claimHash === row.bvnHash ? {} : { bvnVerifiedAt: startedAt }),
           },
         });
       } catch (e) {
@@ -1005,7 +1012,7 @@ export class ReviewedOpening {
     if (taken === null) return;
     const back = (
       state: 'review' | 'open' | 'stopped' | typeof EXPIRED_STATE,
-      extra: { bvnHash?: string; phone?: string } = {},
+      extra: { bvnHash?: string; phone?: string; bvnVerifiedAt?: Date } = {},
     ) =>
       prisma.fintavaWalletOpening.updateMany({
         where: { wawuUserId: row.wawuUserId, attempts: next, state: 'opening' },
@@ -1037,7 +1044,11 @@ export class ReviewedOpening {
       });
     } catch (e) {
       // Nothing is known to have changed: the claim's BVN and phone go back.
-      await back(from, { bvnHash: row.bvnHash, phone: row.phone });
+      await back(from, {
+        bvnHash: row.bvnHash,
+        phone: row.phone,
+        bvnVerifiedAt: row.bvnVerifiedAt,
+      });
       if (e instanceof WalletProviderError && e.kind === 'under_review') {
         throw new MoneyError('identity_under_review', UNDER_REVIEW_MESSAGE);
       }
