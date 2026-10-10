@@ -172,6 +172,18 @@ async function until(ok: () => Promise<boolean> | boolean): Promise<void> {
   throw new Error('until: the condition never held');
 }
 
+/** Resolves once `n` callers have arrived, for all of them. */
+function barrier(n: number): () => Promise<void> {
+  let arrived = 0;
+  let open!: () => void;
+  const all = new Promise<void>((r) => (open = r));
+  return () => {
+    arrived += 1;
+    if (arrived >= n) open();
+    return all;
+  };
+}
+
 describe('Hold, release and refund (MONEY-18) on Fintava', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
@@ -809,22 +821,41 @@ describe('Hold, release and refund (MONEY-18) on Fintava', () => {
     expect(earning.counterpartyAccountNumber).toBeNull();
   });
 
-  it('asked twice, or by eight callers at once, a release moves the money once', async () => {
+  it('asked twice, or by eight callers that all reached the lease together, a release moves the money once', async () => {
     const creator = await person(0, false);
     const buyer = await person(300_000);
     const payment = await paid(buyer, 'paid_dm', listing(creator));
     const hold = await holdOfPayment(payment.id);
 
-    // Held at Fintava, so every caller is inside the request together.
+    // Every caller is past its checks and at the lease at the same moment
+    // (a condition, not a time), and Fintava holds the answer of the one
+    // that sends, so a second send would show.
+    const inner = holds as unknown as {
+      destination: (h: unknown) => Promise<unknown>;
+    };
+    const real = inner.destination.bind(holds);
+    const together = barrier(8);
+    const spy = jest
+      .spyOn(inner, 'destination')
+      .mockImplementation(async (h: unknown) => {
+        const found = await real(h);
+        await together();
+        return found;
+      });
     wallets.arrived = 0;
     let open!: () => void;
     wallets.gate = new Promise<void>((r) => (open = r));
-    const calls = Array.from({ length: 8 }, () =>
-      holds.release({ paymentId: payment.id }),
-    );
-    await until(() => wallets.arrived >= 1);
-    open();
-    const answers = await Promise.all(calls);
+    let answers: Awaited<ReturnType<WalletHoldService['release']>>[] = [];
+    try {
+      const calls = Array.from({ length: 8 }, () =>
+        holds.release({ paymentId: payment.id }),
+      );
+      await until(() => wallets.arrived >= 1);
+      open();
+      answers = await Promise.all(calls);
+    } finally {
+      spy.mockRestore();
+    }
     expect(wallets.arrived).toBe(1);
     // One caller sent; the others were told it is with the provider or done.
     for (const a of answers) {
@@ -839,6 +870,54 @@ describe('Hold, release and refund (MONEY-18) on Fintava', () => {
     const again = await holds.release({ paymentId: payment.id });
     expect(again.state).toBe('settled');
     expect(sendsOf(`wawu-rel-${hold.id}`)).toHaveLength(1);
+  });
+
+  it('a release and a refund asked at the same moment: one wins, the other is refused with a plain answer, one move', async () => {
+    const creator = await person(0, false);
+    const buyer = await person(300_000);
+    const payment = await paid(buyer, 'paid_dm', listing(creator));
+    const hold = await holdOfPayment(payment.id);
+    // Both have read the hold, with no action chosen, before either claims it.
+    const inner = holds as unknown as {
+      find: (ref: unknown) => Promise<unknown>;
+    };
+    const real = inner.find.bind(holds);
+    const together = barrier(2);
+    const spy = jest
+      .spyOn(inner, 'find')
+      .mockImplementation(async (ref: unknown) => {
+        const found = await real(ref);
+        await together();
+        return found;
+      });
+    let results: PromiseSettledResult<unknown>[] = [];
+    try {
+      results = await Promise.allSettled([
+        holds.release({ paymentId: payment.id }),
+        holds.refund({ paymentId: payment.id }),
+      ]);
+    } finally {
+      spy.mockRestore();
+    }
+    const won = results.filter((r) => r.status === 'fulfilled');
+    const lost = results.filter(
+      (r): r is PromiseRejectedResult => r.status === 'rejected',
+    );
+    expect(won).toHaveLength(1);
+    expect(lost).toHaveLength(1);
+    expect(lost[0].reason).toMatchObject({ code: 'other_action_chosen' });
+    const row = await holdOfPayment(payment.id);
+    expect(row.status).not.toBe('held');
+    const moves = wallets.sends.filter(
+      (x) =>
+        x.reference === `wawu-rel-${hold.id}` ||
+        x.reference === `wawu-ref-${hold.id}`,
+    );
+    expect(moves).toHaveLength(1);
+    // Never both: exactly the chosen action's reference moved money.
+    expect(moves[0].reference).toBe(
+      row.action === 'release' ? `wawu-rel-${hold.id}` : `wawu-ref-${hold.id}`,
+    );
   });
 
   it('a hold is settled one way: the other request is refused, before and after', async () => {
