@@ -1,5 +1,6 @@
 // The spec reads response bodies and edits an untyped copy of the plans file.
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call */
+import { randomBytes } from 'node:crypto';
 import { INestApplication } from '@nestjs/common';
 import request, { type Response } from 'supertest';
 import type { App } from 'supertest/types';
@@ -11,6 +12,8 @@ import {
   RECHECK_PAGE,
   RECHECK_UNTIL_MS,
 } from '../waitlist-config';
+import { REFERENCE_ATTEMPTS } from '../waitlist-config';
+import type { RandomBytes } from '../waitlist-random';
 import { WaitlistSweepService } from '../waitlist-sweep.service';
 import {
   bootWaitlist,
@@ -1492,7 +1495,6 @@ describe('Event registration link (JOIN-01) over HTTP', () => {
       layout: 'spread' | 'shared' | 'inverse',
     ) => {
       const base = Date.now() - 30 * 60_000;
-      const seq = (burstSeq++ % 16).toString(16);
       const pad = (v: number, w: number) => String(v).padStart(w, '0');
       const rows = Array.from({ length: count }, (_, i) => ({
         // ids sort the same way as i, except in the layout that reverses them
@@ -1502,7 +1504,8 @@ describe('Event registration link (JOIN-01) over HTTP', () => {
         phone: `+23481${pad(i, 8)}`,
         email: `${MARK}-burst-${tag}-${i}@test.wawu.dev`,
         consentAt: new Date(base),
-        reference: `wawu-join-${seq}${i.toString(16).padStart(35, '0')}`,
+        // The first 8 characters are the access code, unique per row and across bursts.
+        reference: `wawu-join-${(0xfe000000 + burstSeq++).toString(16)}${i.toString(16).padStart(28, '0')}`,
         amountKobo: config.eventOffers[0].priceKobo,
         createdAt: new Date(layout === 'shared' ? base : base + i * 1000),
       }));
@@ -1649,6 +1652,163 @@ describe('Event registration link (JOIN-01) over HTTP', () => {
       expect(
         await prisma.waitlistRegistration.count({
           where: { reference: oldPaid.reference },
+        }),
+      ).toBe(1);
+    });
+  });
+
+  describe('the launch access code is unique across all registrations', () => {
+    /** Draws in order, then real randomness; `drawn` counts the draws. */
+    const scripted = (queue: Buffer[]) => {
+      const fn = ((size: number) => {
+        fn.drawn += 1;
+        return queue.shift() ?? randomBytes(size);
+      }) as RandomBytes & { drawn: number };
+      fn.drawn = 0;
+      return fn;
+    };
+    /** A draw whose first four bytes (the access code) are `head` and whose rest is `tail`. */
+    const draw = (head: string, tail: number) =>
+      Buffer.from(`${head}${tail.toString(16).padStart(28, '0')}`, 'hex');
+    const codeOf = (reference: string) =>
+      reference
+        .slice('wawu-join-'.length, 'wawu-join-'.length + 8)
+        .toUpperCase();
+
+    it('stores the code the database computes from the reference: its first 8 characters after the prefix, upper-case', async () => {
+      const s = await started();
+      expect((await rowOf(s.reference)).accessCode).toBe(codeOf(s.reference));
+      expect((await rowOf(s.reference)).accessCode).toMatch(/^[0-9A-F]{8}$/);
+    });
+
+    it('a draw that lands on a taken code is refused by the database and another reference is drawn: the colliding one is never stored', async () => {
+      // 0xb1b2b3b4 is taken by the first start; the second start's first
+      // draw has the same code with a different tail; its second draw is free.
+      const random = scripted([
+        draw('b1b2b3b4', 1),
+        draw('b1b2b3b4', 2),
+        draw('c1c2c3c4', 3),
+      ]);
+      const other = await bootWaitlist(config, fake, [], [], random);
+      try {
+        const post = (body: object) =>
+          request(other.getHttpServer())
+            .post('/api/hub/waitlist/registrations')
+            .send(body);
+        const first = data(await post(person()).expect(200));
+        expect(codeOf(first.reference)).toBe('B1B2B3B4');
+        const second = data(await post(person()).expect(200));
+        // Three draws in all: the taken one was thrown away.
+        expect(random.drawn).toBe(3);
+        expect(codeOf(second.reference)).toBe('C1C2C3C4');
+        expect(second.reference).not.toBe(first.reference);
+        expect(
+          await prisma.waitlistRegistration.count({
+            where: {
+              reference: `wawu-join-b1b2b3b4${(2).toString(16).padStart(28, '0')}`,
+            },
+          }),
+        ).toBe(0);
+        // The checkout of the second start carries the reference that was stored.
+        expect(second.flutterwaveConfig.txRef).toBe(second.reference);
+        expect((await rowOf(second.reference)).status).toBe('pending');
+        // And no two rows share a code.
+        const codes = await prisma.waitlistRegistration.findMany({
+          where: { reference: { in: [first.reference, second.reference] } },
+          select: { accessCode: true },
+        });
+        expect(new Set(codes.map((c) => c.accessCode)).size).toBe(2);
+      } finally {
+        await other.close();
+      }
+    });
+
+    it('a code taken by a PAID registration is taken too: the next start draws again and nobody shares it', async () => {
+      const random = scripted([draw('d1d2d3d4', 1), draw('d1d2d3d4', 2)]);
+      const other = await bootWaitlist(config, fake, [], [], random);
+      try {
+        const post = (body: object) =>
+          request(other.getHttpServer())
+            .post('/api/hub/waitlist/registrations')
+            .send(body);
+        const paid = data(await post(person()).expect(200));
+        await verify(paid.reference, pay(paid.reference)).expect(200);
+        const next = data(await post(person()).expect(200));
+        expect(random.drawn).toBe(3);
+        expect(codeOf(next.reference)).not.toBe(codeOf(paid.reference));
+        expect((await rowOf(paid.reference)).status).toBe('paid');
+      } finally {
+        await other.close();
+      }
+    });
+
+    it('gives up after REFERENCE_ATTEMPTS draws that all land on a taken code: 503, nothing written', async () => {
+      // Every draw has the same code (a different tail each time).
+      let drawn = 0;
+      const random: RandomBytes = () => {
+        drawn += 1;
+        return draw('e1e2e3e4', drawn);
+      };
+      const other = await bootWaitlist(config, fake, [], [], random);
+      try {
+        const post = () =>
+          request(other.getHttpServer())
+            .post('/api/hub/waitlist/registrations')
+            .send(person());
+        await post().expect(200);
+        const rows = () =>
+          prisma.waitlistRegistration.count({
+            where: { fullName: { contains: MARK } },
+          });
+        const before = await rows();
+        drawn = 0;
+        const res = await post().expect(503);
+        expect(drawn).toBe(REFERENCE_ATTEMPTS);
+        expect(res.body.data).toBeNull();
+        expect(JSON.stringify(res.body)).not.toMatch(
+          /[\u2014]|prisma|unique|constraint/i,
+        );
+        expect(await rows()).toBe(before);
+      } finally {
+        await other.close();
+      }
+    });
+
+    it('the database refuses two rows with the same code whatever the code does, and refuses a written code', async () => {
+      const base = {
+        offerId: OFFER_ID,
+        fullName: `Direct code ${MARK}`,
+        consentAt: new Date(),
+        amountKobo: 1,
+      };
+      const make = (n2: number, reference: string, over: object = {}) =>
+        prisma.waitlistRegistration.create({
+          data: {
+            ...base,
+            phone: `+23481222${String(n2).padStart(4, '0')}`,
+            email: `${MARK}-code-${n2}@test.wawu.dev`,
+            reference,
+            ...over,
+          },
+        });
+      await make(1, `wawu-join-f1f2f3f4${'0'.repeat(28)}`);
+      // Same eight characters, different tail: refused.
+      await expect(
+        make(2, `wawu-join-f1f2f3f4${'1'.repeat(28)}`),
+      ).rejects.toMatchObject({ code: 'P2002' });
+      // The code is upper-case in the column, so a reference that differs only in case collides too.
+      await expect(
+        make(3, `wawu-join-F1F2F3F4${'2'.repeat(28)}`),
+      ).rejects.toMatchObject({ code: 'P2002' });
+      // The column is the database's to compute; a written value is refused.
+      await expect(
+        make(4, `wawu-join-f5f6f7f8${'0'.repeat(28)}`, {
+          accessCode: 'ZZZZZZZZ',
+        }),
+      ).rejects.toThrow();
+      expect(
+        await prisma.waitlistRegistration.count({
+          where: { fullName: `Direct code ${MARK}` },
         }),
       ).toBe(1);
     });

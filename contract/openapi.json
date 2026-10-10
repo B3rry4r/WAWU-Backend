@@ -47016,6 +47016,9 @@
           "reference": {
             "type": "string"
           },
+          "accessCode": {
+            "type": "string"
+          },
           "flutterwaveTransactionId": {
             "type": "string",
             "nullable": true
@@ -47045,6 +47048,7 @@
           "paidKobo",
           "paidAt",
           "reference",
+          "accessCode",
           "flutterwaveTransactionId",
           "claimedByWawuId",
           "claimedAt",
