@@ -4,6 +4,7 @@ import {
   nairaText,
   textCell,
 } from '../money/statements/statement-csv';
+import { accessCodeLabel } from './waitlist-contact';
 
 /** The header cells of the team's CSV, in order. Naira only. */
 export const WAITLIST_EXPORT_COLUMNS = [
@@ -18,6 +19,7 @@ export const WAITLIST_EXPORT_COLUMNS = [
   'Fee (₦)',
   'Paid (₦)',
   'Paid at',
+  'Access code',
   'Reference',
   'Transaction id',
   'Claimed at',
@@ -48,6 +50,7 @@ export function waitlistLine(r: WaitlistRegistration): string {
     nairaText(r.amountKobo),
     r.paidKobo === null ? '' : nairaText(r.paidKobo),
     r.paidAt?.toISOString() ?? '',
+    textCell(accessCodeLabel(r.accessCode)),
     textCell(r.reference),
     textCell(r.flutterwaveTxId),
     r.claimedAt?.toISOString() ?? '',

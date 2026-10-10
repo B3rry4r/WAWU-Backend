@@ -53,3 +53,14 @@ export const EMAIL_MAX = 254;
 export const REFERENCE_PREFIX = 'wawu-join-';
 /** Random bytes in a reference: 18 bytes is 144 bits, above the 128 asked. */
 export const REFERENCE_BYTES = 18;
+
+/**
+ * How many references a start may draw before it gives up. The access code
+ * (the first 8 hex characters after the prefix) is unique across all
+ * registrations, so a draw that lands on a taken code is refused by the
+ * database and a new reference is drawn. Each draw collides with probability
+ * (registrations / 2^32), so five misses in a row cannot happen in practice.
+ */
+export const REFERENCE_ATTEMPTS = 5;
+/** Characters of the access code (hex digits after REFERENCE_PREFIX), shown as two groups of four. */
+export const ACCESS_CODE_LENGTH = 8;

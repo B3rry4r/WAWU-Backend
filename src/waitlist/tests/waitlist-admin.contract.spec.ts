@@ -179,6 +179,19 @@ describe('Event registrations, the team view (JOIN-01)', () => {
       email: expect.stringContaining(MARK),
     });
     expect(paid.flutterwaveTransactionId).toMatch(/^\d+$/);
+    // The launch access code: the reference's first 8 characters after the
+    // prefix, upper-case, in two groups of four, on every row.
+    for (const r of mine) {
+      const hex = (r.reference as string)
+        .slice('wawu-join-'.length)
+        .slice(0, 8);
+      expect(r.accessCode).toBe(
+        `${hex.slice(0, 4).toUpperCase()} ${hex.slice(4).toUpperCase()}`,
+      );
+    }
+    expect(new Set(mine.map((r) => r.accessCode as string)).size).toBe(
+      mine.length,
+    );
     const dates = mine.map((r) => r.createdAt as string);
     expect([...dates].sort().reverse()).toEqual(dates);
     expect(res.body.pagination).toMatchObject({ currentPage: 1, perPage: 100 });
@@ -234,7 +247,7 @@ describe('Event registrations, the team view (JOIN-01)', () => {
       .split('\r\n')
       .filter(Boolean);
     expect(lines[0]).toBe(
-      'Registered at,Offer,Status,Full name,Phone,Email,State,What they make,Fee (₦),Paid (₦),Paid at,Reference,Transaction id,Claimed at',
+      'Registered at,Offer,Status,Full name,Phone,Email,State,What they make,Fee (₦),Paid (₦),Paid at,Access code,Reference,Transaction id,Claimed at',
     );
     const mine = lines.slice(1).filter((l) => l.includes(MARK));
     expect(mine).toHaveLength(8);
@@ -253,6 +266,11 @@ describe('Event registrations, the team view (JOIN-01)', () => {
       `"'=HYPERLINK(""http://x"",""click"") ${MARK}"`,
     );
     expect(mine.some((l) => /(^|,)=/.test(l))).toBe(false);
+    // The access code is its own column, "XXXX XXXX", just before the reference.
+    const hex = pendingRefs[0].slice('wawu-join-'.length).slice(0, 8);
+    expect(pendingLine).toContain(
+      `,${hex.slice(0, 4).toUpperCase()} ${hex.slice(4).toUpperCase()},${pendingRefs[0]},`,
+    );
     // Narrowed by status.
     const paidOnly = await http()
       .get(

@@ -1,9 +1,9 @@
-import { randomBytes } from 'node:crypto';
 import {
   BadRequestException,
   Inject,
   Injectable,
   Logger,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import type { WaitlistRegistration } from '../../generated/prisma/client';
 import { WaitlistStatus } from '../../generated/prisma/enums';
@@ -26,6 +26,7 @@ import type {
   VerifyWaitlistRegistrationDto,
 } from './dto/waitlist.dto';
 import {
+  accessCodeLabel,
   firstNameOf,
   maskPhone,
   normaliseEmail,
@@ -34,11 +35,17 @@ import {
 import {
   NAME_MAX,
   NAME_MIN,
+  REFERENCE_ATTEMPTS,
   REFERENCE_BYTES,
   REFERENCE_PREFIX,
   SHORT_TEXT_MAX,
 } from './waitlist-config';
 import { WaitlistError } from './waitlist-error';
+import {
+  type RandomBytes,
+  systemRandom,
+  WAITLIST_RANDOM,
+} from './waitlist-random';
 import {
   WAITLIST_PAYMENT_LOOKUP,
   type WaitlistPaymentLookup,
@@ -100,8 +107,8 @@ const REFERENCE_SHAPE = new RegExp(
 );
 
 /** A reference: random, at least 128 bits, safe to put in a URL. */
-export function newReference(): string {
-  return `${REFERENCE_PREFIX}${randomBytes(REFERENCE_BYTES).toString('hex')}`;
+export function newReference(random: RandomBytes = systemRandom): string {
+  return `${REFERENCE_PREFIX}${random(REFERENCE_BYTES).toString('hex')}`;
 }
 
 /**
@@ -139,6 +146,8 @@ export class WaitlistService {
     @Inject(FLUTTERWAVE_CLIENT) private readonly flutterwave: FlutterwaveClient,
     @Inject(WAITLIST_PAYMENT_LOOKUP)
     private readonly lookup: WaitlistPaymentLookup,
+    @Inject(WAITLIST_RANDOM)
+    private readonly random: RandomBytes = systemRandom,
   ) {}
 
   // ---- the offer ----------------------------------------------------------
@@ -273,29 +282,30 @@ export class WaitlistService {
         'Payments are not available right now. Please try again later.',
       );
 
-    // This person's own unpaid row is reused rather than piled up: the same
-    // offer, phone and email (a different email is a different person here).
-    const mine = await this.prisma.waitlistRegistration.findFirst({
-      where: {
-        offerId: offer.id,
-        phone,
-        email,
-        status: WaitlistStatus.pending,
-      },
-      orderBy: { createdAt: 'desc' },
-    });
-    const row = mine
-      ? await this.prisma.waitlistRegistration.update({
-          where: { id: mine.id },
-          data: {
-            fullName,
-            state,
-            makes,
-            consentAt: now,
-            amountKobo: offer.priceKobo,
-          },
-        })
-      : await this.prisma.waitlistRegistration.create({
+    // Every start is a new registration with its own random reference, which
+    // is the Flutterwave tx_ref of that one checkout. An unpaid row is never
+    // reused, even for the same offer, phone and email: a reference that
+    // came back for a second checkout would hold two transactions, and the
+    // re-check, which finds a payment by its reference, could settle only
+    // one of them and would never show the other. Unpaid rows pile up (the
+    // throttle bounds it), the re-check walks each by its own reference, and
+    // the purge deletes them after a week. When two of one person's checkouts
+    // both succeed, the second to settle becomes `failed` and is kept for a
+    // refund (settle and refuseDuplicate).
+    //
+    // The access code (the first 8 hex characters of the reference, upper
+    // case) is unique across ALL registrations: the database computes it from
+    // the reference and holds a unique index on it. A draw that lands on a
+    // taken code is refused with a unique violation (nothing is written), and
+    // a new reference is drawn, up to REFERENCE_ATTEMPTS times.
+    let row: WaitlistRegistration | null = null;
+    for (
+      let attempt = 1;
+      row === null && attempt <= REFERENCE_ATTEMPTS;
+      attempt += 1
+    ) {
+      try {
+        row = await this.prisma.waitlistRegistration.create({
           data: {
             offerId: offer.id,
             fullName,
@@ -304,10 +314,23 @@ export class WaitlistService {
             state,
             makes,
             consentAt: now,
-            reference: newReference(),
+            reference: newReference(this.random),
             amountKobo: offer.priceKobo,
           },
         });
+      } catch (e) {
+        // The only unique keys a new row can meet are the reference and the
+        // access code derived from it (its transaction id is empty).
+        if (!isUniqueViolation(e)) throw e;
+        this.logger.warn(
+          `A new reference met a taken access code (draw ${attempt} of ${REFERENCE_ATTEMPTS}); drawing another`,
+        );
+      }
+    }
+    if (row === null)
+      throw new ServiceUnavailableException(
+        'We could not start your registration just now. Please try again in a moment.',
+      );
 
     return {
       reference: row.reference,
@@ -544,6 +567,7 @@ export class WaitlistService {
       paidKobo: row.paidKobo,
       paidAt: row.paidAt?.toISOString() ?? null,
       reference: row.reference,
+      accessCode: accessCodeLabel(row.accessCode),
       flutterwaveTransactionId: row.flutterwaveTxId,
       claimedByWawuId: row.claimedByWawuId,
       claimedAt: row.claimedAt?.toISOString() ?? null,

@@ -5,6 +5,7 @@ import {
   FlutterwaveReferenceLookup,
   WAITLIST_PAYMENT_LOOKUP,
 } from './waitlist-payment-lookup';
+import { systemRandom, WAITLIST_RANDOM } from './waitlist-random';
 import { WaitlistService } from './waitlist.service';
 
 /**
@@ -29,6 +30,7 @@ import { WaitlistService } from './waitlist.service';
   imports: [ContentPieceModule],
   providers: [
     { provide: PLANS_CONFIG, useFactory: () => loadPlansConfig() },
+    { provide: WAITLIST_RANDOM, useValue: systemRandom },
     WaitlistService,
     { provide: WAITLIST_PAYMENT_LOOKUP, useClass: FlutterwaveReferenceLookup },
   ],

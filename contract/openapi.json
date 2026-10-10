@@ -26766,7 +26766,7 @@
             "description": "`reason.code` `payments_unavailable`: payments are not set up."
           }
         },
-        "summary": "Register and get the checkout settings. Reuses this person's own unpaid\nregistration (same offer, phone and email) rather than adding another.\nNothing is charged here: the payment happens in the Flutterwave checkout\nwith the answer's `flutterwaveConfig`, and counts only after\nPOST /waitlist/registrations/verify (or Flutterwave's own notice).",
+        "summary": "Register and get the checkout settings. Every call that passes the checks\nadds a new registration with a new reference, even for the same offer,\nphone and email, so each checkout has its own reference.\nNothing is charged here: the payment happens in the Flutterwave checkout\nwith the answer's `flutterwaveConfig`, and counts only after\nPOST /waitlist/registrations/verify (or Flutterwave's own notice).",
         "tags": [
           "WaitlistPublic"
         ]
@@ -47143,6 +47143,9 @@
           "reference": {
             "type": "string"
           },
+          "accessCode": {
+            "type": "string"
+          },
           "flutterwaveTransactionId": {
             "type": "string",
             "nullable": true
@@ -47172,6 +47175,7 @@
           "paidKobo",
           "paidAt",
           "reference",
+          "accessCode",
           "flutterwaveTransactionId",
           "claimedByWawuId",
           "claimedAt",
