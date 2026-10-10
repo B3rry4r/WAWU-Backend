@@ -45,6 +45,7 @@ import { ReceiptSettings } from './receipts/receipt-config';
 import { ReceiptService } from './receipts/receipt.service';
 import { WalletProviderModule } from '../wallet-provider/wallet-provider.module';
 import { MoneyLimitsModule } from './limits/money-limits.module';
+import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
 
 /**
  * The served half of the Naira wallet contract. Routes move here from
@@ -133,6 +134,9 @@ import { MoneyLimitsModule } from './limits/money-limits.module';
     // Limits (task NUV-07): validates the WAWU_LIMIT_* settings at boot and gives the
     // quote today's standing.
     MoneyLimitsModule,
+    // Identity documents and the hosted selfie for a Nuvion opening (task NUV-03,
+    // SHARED-CHANGES NUV-03 #1).
+    NuvionDocumentsModule,
   ],
   controllers: [
     MoneyPinController,

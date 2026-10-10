@@ -171,5 +171,15 @@ export const MONEY_ERROR_CODES = [
   // not set, so nothing is quoted or moved (R-42); a movement passes a limit.
   'fees_not_set',
   'limit_reached',
+  // Opening a wallet on Nuvion (NUV-02): the person's details are with the
+  // provider's compliance review; they wait, and nothing is sent again.
+  'identity_under_review',
+  // A step Open your wallet used under Fintava that a provider reviewing
+  // the person itself does not have (NUV-02 round 2, U3): permanent, not
+  // "try again".
+  'step_not_used',
+  // Opening tries from one address in an hour (NUV-02 round 3): a plain 429
+  // with its own code, beside the person's `identity_checks_exhausted`.
+  'open_address_limited',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];
