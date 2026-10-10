@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AiModule } from '../common/ai/ai.module';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { AdminAuthModule } from '../admin/auth/admin-auth.module';
+import { LivePublisherModule } from '../live/live-publisher.module';
 import { LegalIntakeController } from './legal-intake.controller';
 import { LegalIntakeOpsController } from './legal-intake-ops.controller';
 import { LegalIntakeService } from './legal-intake.service';
@@ -28,7 +29,7 @@ import {
  * from LegalController.
  */
 @Module({
-  imports: [AiModule, WawuAuthModule, AdminAuthModule],
+  imports: [AiModule, WawuAuthModule, AdminAuthModule, LivePublisherModule],
   controllers: [
     LegalIntakeController,
     LegalIntakeOpsController,

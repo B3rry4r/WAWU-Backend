@@ -389,7 +389,10 @@ describe('NUV-01: the Nuvion adapter behind WALLET_PROVIDER', () => {
         new NuvionClient(standin.settings(), 'nv_test_sk_k'),
       );
       expect(provider.capabilities).toEqual(NUVION_CAPABILITIES);
-      for (const [method, , args] of CALLS) {
+      // The accounts area is NUV-04's and no longer a stub (its own specs
+      // cover it): every other area still answers not_supported.
+      for (const [method, owner, args] of CALLS) {
+        if (owner === 'accounts') continue;
         const methods = provider as unknown as Record<
           string,
           (...a: unknown[]) => Promise<unknown>

@@ -659,6 +659,33 @@ export const EXPORT_SECTIONS: ExportSection[] = [
         orderBy: NEWEST,
       }),
   },
+  // An event registration this person claimed in the app (JOIN-01): what they
+  // told the event page and what they paid. The reference and transaction id
+  // are payment-provider references, so they stay out (rule 3).
+  {
+    key: 'eventRegistrations',
+    models: ['WaitlistRegistration'],
+    load: (prisma, me) =>
+      prisma.waitlistRegistration.findMany({
+        where: { claimedByWawuId: me },
+        select: {
+          offerId: true,
+          fullName: true,
+          phone: true,
+          email: true,
+          state: true,
+          makes: true,
+          consentAt: true,
+          status: true,
+          amountKobo: true,
+          paidKobo: true,
+          paidAt: true,
+          claimedAt: true,
+          createdAt: true,
+        },
+        orderBy: NEWEST,
+      }),
+  },
   {
     key: 'courseEnrollments',
     models: ['CourseEnrollment'],
@@ -812,6 +839,63 @@ export const EXPORT_SECTIONS: ExportSection[] = [
           refundedAt: true,
         },
         orderBy: NEWEST,
+      }),
+  },
+  {
+    // POINTS-01: the person's points lots (what they were given, what is
+    // left, when each ends), the holds that spent them and every movement.
+    // Counts of points only; no provider reference (a lot's or hold's
+    // reference is the granting task's own id, not a payment provider's).
+    key: 'pointLots',
+    models: ['PointLot'],
+    load: (prisma, me) =>
+      prisma.pointLot.findMany({
+        where: { wawuUserId: me },
+        select: {
+          id: true,
+          source: true,
+          quantity: true,
+          remaining: true,
+          expiresAt: true,
+          lapsedAt: true,
+          createdAt: true,
+        },
+        orderBy: NEWEST,
+      }),
+  },
+  {
+    key: 'pointHolds',
+    models: ['PointHold'],
+    load: (prisma, me) =>
+      prisma.pointHold.findMany({
+        where: { wawuUserId: me },
+        select: {
+          id: true,
+          purpose: true,
+          title: true,
+          quantity: true,
+          state: true,
+          createdAt: true,
+          settledAt: true,
+        },
+        orderBy: NEWEST,
+      }),
+  },
+  {
+    key: 'pointMovements',
+    models: ['PointLedger'],
+    load: (prisma, me) =>
+      prisma.pointLedger.findMany({
+        where: { wawuUserId: me },
+        select: {
+          id: true,
+          lotId: true,
+          holdId: true,
+          delta: true,
+          reason: true,
+          at: true,
+        },
+        orderBy: { seq: 'desc' },
       }),
   },
   {

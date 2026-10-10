@@ -13152,6 +13152,98 @@
         ]
       }
     },
+    "/api/hub/events/tickets/held": {
+      "get": {
+        "operationId": "EventHeldTicketsController_list",
+        "parameters": [
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "view",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "default": "upcoming",
+              "type": "string",
+              "enum": [
+                "upcoming",
+                "past"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/HeldTicketGroup"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "My tickets, upcoming or past, one row per order and tier.",
+        "tags": [
+          "EventHeldTickets"
+        ]
+      }
+    },
+    "/api/hub/events/tickets/held/{ticketId}": {
+      "get": {
+        "operationId": "EventHeldTicketsController_one",
+        "parameters": [
+          {
+            "name": "ticketId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeldTicketView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "One of my tickets, with the code the door scans.",
+        "tags": [
+          "EventHeldTickets"
+        ]
+      }
+    },
     "/api/hub/admin/creators": {
       "get": {
         "operationId": "AdminCreatorsController_listCreators",
@@ -21070,7 +21162,8 @@
                 "all",
                 "content",
                 "creators",
-                "communities"
+                "communities",
+                "schools"
               ]
             }
           }
@@ -21140,6 +21233,133 @@
         },
         "tags": [
           "SearchResponse"
+        ]
+      }
+    },
+    "/api/hub/schools": {
+      "get": {
+        "operationId": "SchoolsPublicController_list",
+        "parameters": [
+          {
+            "name": "category",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "tech",
+                "business",
+                "creative",
+                "languages",
+                "vocational"
+              ]
+            }
+          },
+          {
+            "name": "q",
+            "required": false,
+            "in": "query",
+            "description": "Matches a school's name or place, or the title of one of its shown\ncourses, ignoring case. Wildcard characters mean themselves.",
+            "schema": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "The `nextCursor` of the previous page: opaque, not to be built by hand,\nand never longer than the longest one this server gives out.",
+            "schema": {
+              "maxLength": 1498,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicSchoolsPage"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "SchoolsPublic"
+        ]
+      }
+    },
+    "/api/hub/schools/courses/{id}": {
+      "get": {
+        "operationId": "SchoolsPublicController_course",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicCourseDetail"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "SchoolsPublic"
+        ]
+      }
+    },
+    "/api/hub/schools/{id}": {
+      "get": {
+        "operationId": "SchoolsPublicController_school",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicSchoolDetail"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "SchoolsPublic"
         ]
       }
     },
@@ -22226,6 +22446,43 @@
           }
         },
         "summary": "The label to show for each category, format and kind, beside the value to\nsend (EVENTS-02): \"Business & Finance\" is `business`. Declared before\n`:id` for the same reason `mine` is.",
+        "tags": [
+          "Event"
+        ]
+      }
+    },
+    "/api/hub/events/from-prices": {
+      "get": {
+        "operationId": "EventController_fromPrices",
+        "parameters": [
+          {
+            "name": "ids",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "maxItems": 50,
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventFromPricesView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The \"from\" price a person can actually pay, for a page of events at once\n(EVENTS-01, G-271): the cheapest tier on sale now and not sold out, null\nwhen none can be bought. `priceFromNaira` on the event keeps counting\nevery tier, because the web reads it that way. Declared before `:id`.",
         "tags": [
           "Event"
         ]
@@ -26380,6 +26637,28 @@
         ]
       }
     },
+    "/api/hub/me/points": {
+      "get": {
+        "operationId": "PointsController_mine",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyPointsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Balance, live lots with their end dates, the next end, the last 20 movements.",
+        "tags": [
+          "Points"
+        ]
+      }
+    },
     "/api/hub/plans": {
       "get": {
         "operationId": "PlansController_get",
@@ -26421,6 +26700,270 @@
         "summary": "`none`, `active`, `ending` or `ended`, with what the tier gives.\n`no-store`: the answer is the caller's own.",
         "tags": [
           "MeTier"
+        ]
+      }
+    },
+    "/api/hub/waitlist/offers/current": {
+      "get": {
+        "operationId": "WaitlistPublicController_currentOffer",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaitlistOfferView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`reason.code` `no_open_offer`: no offer is open now."
+          }
+        },
+        "summary": "The offer open for registration.",
+        "tags": [
+          "WaitlistPublic"
+        ]
+      }
+    },
+    "/api/hub/waitlist/registrations": {
+      "post": {
+        "operationId": "WaitlistPublicController_register",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWaitlistRegistrationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaitlistRegistrationStartView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`reason.code` `phone_invalid`, `email_invalid`, `name_invalid` or `consent_required`; a malformed body has no `reason`."
+          },
+          "404": {
+            "description": "`reason.code` `no_open_offer`: no offer has this id."
+          },
+          "409": {
+            "description": "`reason.code` `offer_closed` (closed or not open yet) or `already_registered` (this phone or email already paid; nothing is charged)."
+          },
+          "503": {
+            "description": "`reason.code` `payments_unavailable`: payments are not set up."
+          }
+        },
+        "summary": "Register and get the checkout settings. Reuses this person's own unpaid\nregistration (same offer, phone and email) rather than adding another.\nNothing is charged here: the payment happens in the Flutterwave checkout\nwith the answer's `flutterwaveConfig`, and counts only after\nPOST /waitlist/registrations/verify (or Flutterwave's own notice).",
+        "tags": [
+          "WaitlistPublic"
+        ]
+      }
+    },
+    "/api/hub/waitlist/registrations/verify": {
+      "post": {
+        "operationId": "WaitlistPublicController_verify",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyWaitlistRegistrationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaitlistRegistrationStatusView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`reason.code` `not_found`: no registration has this reference."
+          },
+          "409": {
+            "description": "`reason.code` `payment_not_confirmed` (Flutterwave does not say it succeeded yet: check again, never pay again), `transaction_already_used` or `already_registered`."
+          },
+          "422": {
+            "description": "`reason.code` `payment_mismatch`: the payment is not this registration's (amount, currency or reference)."
+          },
+          "503": {
+            "description": "`reason.code` `payment_check_unavailable`: Flutterwave could not be reached; try the check again."
+          }
+        },
+        "summary": "Confirm a payment. The server asks Flutterwave itself (succeeded, this\nregistration's reference, naira, not less than the fee) before it marks\nthe registration paid, so the transaction id is only a claim. Idempotent:\na paid registration answers the same result again.",
+        "tags": [
+          "WaitlistPublic"
+        ]
+      }
+    },
+    "/api/hub/waitlist/registrations/{reference}": {
+      "get": {
+        "operationId": "WaitlistPublicController_status",
+        "parameters": [
+          {
+            "name": "reference",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaitlistRegistrationStatusView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`reason.code` `not_found`: the same answer for a reference that does not exist and one that was never issued."
+          }
+        },
+        "summary": "Where a registration stands: status and first name only, never a phone or email.",
+        "tags": [
+          "WaitlistPublic"
+        ]
+      }
+    },
+    "/api/hub/admin/waitlist/registrations": {
+      "get": {
+        "operationId": "WaitlistAdminController_list",
+        "parameters": [
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "offerId",
+            "required": false,
+            "in": "query",
+            "description": "Only this offer. Omitted means every offer.",
+            "schema": {
+              "maxLength": 60,
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "Only this status. Omitted means every status.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "paid",
+                "failed"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminWaitlistRegistrationView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "Registrations, newest first, every status unless `status` is given\n(`pending`, `paid` or `failed`; a `failed` row is a second payment kept\nfor a refund). `offerId` narrows to one offer.",
+        "tags": [
+          "WaitlistAdmin"
+        ]
+      }
+    },
+    "/api/hub/admin/waitlist/registrations/export": {
+      "get": {
+        "operationId": "WaitlistAdminController_export",
+        "parameters": [
+          {
+            "name": "offerId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "maxLength": 60,
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "paid",
+                "failed"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminWaitlistExportView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The same rows as a CSV file, oldest first, inside the usual envelope\n(`content` is the file; save it as `fileName`). A byte-order mark first,\nso a spreadsheet opens it as UTF-8 and shows the naira sign.",
+        "tags": [
+          "WaitlistAdmin"
         ]
       }
     },
@@ -28061,6 +28604,7 @@
               "community/image",
               "community/message",
               "event/speaker",
+              "event/banner",
               "profile/work"
             ]
           },
@@ -28548,7 +29092,7 @@
           },
           "url": {
             "type": "string",
-            "description": "The file's `fileUrl` or `key` from POST /uploads/presign: a link on WAWU\nstorage or a bare key, under `legal/document/`. Anything else is refused\nwith a 400 naming this field (N1).",
+            "description": "The file's `fileUrl` or `key` from POST /uploads/presign: a link on WAWU\nstorage or a bare key, under `legal/document/`, uploaded by the client\nthis request belongs to or by one of the legal team's accounts\n(`LEGAL_DELIVERY_UPLOADER_IDS`). Anything else, including another\nclient's document and a key nobody uploaded, is refused with a 400 naming\nthis field (N1, FIX-24).",
             "maxLength": 600,
             "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
           },
@@ -31838,6 +32382,74 @@
           "card"
         ]
       },
+      "CreateWaitlistRegistrationDto": {
+        "type": "object",
+        "properties": {
+          "offerId": {
+            "type": "string",
+            "description": "The offer the page showed (`GET /waitlist/offers/current`).",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "fullName": {
+            "type": "string",
+            "description": "Full name, as the person writes it.",
+            "minLength": 2,
+            "maxLength": 100
+          },
+          "phone": {
+            "type": "string",
+            "description": "Phone. A Nigerian mobile in any common form (`08031234567`,\n`8031234567`, `2348031234567`, `+2348031234567`), or a number from\nelsewhere written with its country code. The server stores E.164.",
+            "maxLength": 30
+          },
+          "email": {
+            "type": "string",
+            "description": "Email. The server stores it in lower case.",
+            "maxLength": 254
+          },
+          "state": {
+            "type": "string",
+            "description": "The state they are in (optional, up to 60 characters).",
+            "maxLength": 60
+          },
+          "makes": {
+            "type": "string",
+            "description": "What they make (optional, up to 60 characters).",
+            "maxLength": 60
+          },
+          "consent": {
+            "type": "boolean",
+            "description": "The consent line (with the privacy link) was accepted. Must be true."
+          }
+        },
+        "required": [
+          "offerId",
+          "fullName",
+          "phone",
+          "email",
+          "consent"
+        ]
+      },
+      "VerifyWaitlistRegistrationDto": {
+        "type": "object",
+        "properties": {
+          "reference": {
+            "type": "string",
+            "description": "The reference POST /waitlist/registrations gave.",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "transactionId": {
+            "type": "string",
+            "description": "The transaction id the payment modal handed back (digits).",
+            "pattern": "^[0-9]{1,20}$"
+          }
+        },
+        "required": [
+          "reference",
+          "transactionId"
+        ]
+      },
       "CreateAdCreativeDto": {
         "type": "object",
         "properties": {
@@ -32810,6 +33422,14 @@
           },
           "beneficiaryCount": {
             "type": "number"
+          },
+          "accountNumberStatus": {
+            "type": "string",
+            "enum": [
+              "none",
+              "on_its_way",
+              "active"
+            ]
           }
         },
         "required": [
@@ -32818,7 +33438,8 @@
           "limits",
           "pin",
           "bankTransfers",
-          "beneficiaryCount"
+          "beneficiaryCount",
+          "accountNumberStatus"
         ]
       },
       "ApprovalDeviceView": {
@@ -37779,6 +38400,184 @@
           "outcome",
           "ticket",
           "totals"
+        ]
+      },
+      "HeldTicketEventView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "startsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endsAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "timezone": {
+            "type": "string",
+            "nullable": true
+          },
+          "timeLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "format": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          },
+          "venueName": {
+            "type": "string",
+            "nullable": true
+          },
+          "bannerUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "cancelledAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "startsAt",
+          "endsAt",
+          "timezone",
+          "timeLabel",
+          "format",
+          "location",
+          "venueName",
+          "bannerUrl",
+          "status",
+          "cancelledAt"
+        ]
+      },
+      "HeldTicketStub": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "valid",
+              "checked_in",
+              "void"
+            ]
+          },
+          "checkedInAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "checkedInAt"
+        ]
+      },
+      "HeldTicketGroup": {
+        "type": "object",
+        "properties": {
+          "orderId": {
+            "type": "string"
+          },
+          "ticketTypeId": {
+            "type": "string"
+          },
+          "tierName": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "number"
+          },
+          "event": {
+            "$ref": "#/components/schemas/HeldTicketEventView"
+          },
+          "tickets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeldTicketStub"
+            }
+          }
+        },
+        "required": [
+          "orderId",
+          "ticketTypeId",
+          "tierName",
+          "quantity",
+          "event",
+          "tickets"
+        ]
+      },
+      "HeldTicketView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "orderId": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "valid",
+              "checked_in",
+              "void"
+            ]
+          },
+          "checkedInAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "tierName": {
+            "type": "string"
+          },
+          "holderName": {
+            "type": "string",
+            "nullable": true
+          },
+          "event": {
+            "$ref": "#/components/schemas/HeldTicketEventView"
+          },
+          "siblings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeldTicketStub"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "orderId",
+          "code",
+          "status",
+          "checkedInAt",
+          "tierName",
+          "holderName",
+          "event",
+          "siblings"
         ]
       },
       "QuestionOption": {
@@ -43406,6 +44205,334 @@
           "items"
         ]
       },
+      "PublicSchoolCard": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "business",
+              "tech",
+              "creative",
+              "languages",
+              "vocational"
+            ]
+          },
+          "location": {
+            "type": "string"
+          },
+          "logo": {
+            "type": "string",
+            "nullable": true
+          },
+          "foundedYear": {
+            "type": "number",
+            "nullable": true
+          },
+          "expertise": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "courseCount": {
+            "type": "number"
+          },
+          "fromPriceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "matchedCourses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "category",
+          "location",
+          "logo",
+          "foundedYear",
+          "expertise",
+          "courseCount",
+          "fromPriceKobo",
+          "matchedCourses"
+        ]
+      },
+      "PublicSchoolsPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicSchoolCard"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "PublicIntakeView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "startDate": {
+            "type": "string"
+          },
+          "schedule": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string",
+            "nullable": true
+          },
+          "capacity": {
+            "type": "number"
+          },
+          "seatsLeft": {
+            "type": "number"
+          },
+          "full": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "startDate",
+          "schedule",
+          "location",
+          "capacity",
+          "seatsLeft",
+          "full"
+        ]
+      },
+      "PublicCourseDetail": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "weeks": {
+            "type": "number"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "in_person",
+              "online",
+              "hybrid"
+            ]
+          },
+          "syllabus": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "outcomes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "school": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "category": {
+                "type": "string",
+                "enum": [
+                  "business",
+                  "tech",
+                  "creative",
+                  "languages",
+                  "vocational"
+                ]
+              },
+              "location": {
+                "type": "string"
+              },
+              "logo": {
+                "type": "string",
+                "nullable": true
+              },
+              "applyUrl": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "category",
+              "location",
+              "logo",
+              "applyUrl"
+            ]
+          },
+          "intakes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicIntakeView"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "weeks",
+          "mode",
+          "syllabus",
+          "outcomes",
+          "priceKobo",
+          "school",
+          "intakes"
+        ]
+      },
+      "PublicSchoolCourseCard": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "weeks": {
+            "type": "number"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "in_person",
+              "online",
+              "hybrid"
+            ]
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "nextIntake": {
+            "$ref": "#/components/schemas/PublicIntakeView",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "weeks",
+          "mode",
+          "priceKobo",
+          "nextIntake"
+        ]
+      },
+      "PublicSchoolDetail": {
+        "type": "object",
+        "properties": {
+          "about": {
+            "type": "string"
+          },
+          "applyUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "courses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicSchoolCourseCard"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "business",
+              "tech",
+              "creative",
+              "languages",
+              "vocational"
+            ]
+          },
+          "location": {
+            "type": "string"
+          },
+          "logo": {
+            "type": "string",
+            "nullable": true
+          },
+          "foundedYear": {
+            "type": "number",
+            "nullable": true
+          },
+          "expertise": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "courseCount": {
+            "type": "number"
+          },
+          "fromPriceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "matchedCourses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "about",
+          "applyUrl",
+          "courses",
+          "id",
+          "name",
+          "category",
+          "location",
+          "logo",
+          "foundedYear",
+          "expertise",
+          "courseCount",
+          "fromPriceKobo",
+          "matchedCourses"
+        ]
+      },
       "CommunityJoinRequest": {
         "type": "object",
         "properties": {
@@ -43935,6 +45062,68 @@
           "lastDecisionReason"
         ]
       },
+      "EventTicketRulesView": {
+        "type": "object",
+        "properties": {
+          "hostSharePercent": {
+            "type": "number"
+          },
+          "minPriceNaira": {
+            "type": "number"
+          },
+          "maxPriceNaira": {
+            "type": "number"
+          },
+          "minQuantity": {
+            "type": "number"
+          },
+          "maxQuantity": {
+            "type": "number"
+          },
+          "nameMinLength": {
+            "type": "number"
+          },
+          "nameMaxLength": {
+            "type": "number"
+          },
+          "maxTypes": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "hostSharePercent",
+          "minPriceNaira",
+          "maxPriceNaira",
+          "minQuantity",
+          "maxQuantity",
+          "nameMinLength",
+          "nameMaxLength",
+          "maxTypes"
+        ]
+      },
+      "EventFieldLimitsView": {
+        "type": "object",
+        "properties": {
+          "nameMax": {
+            "type": "number"
+          },
+          "descriptionMax": {
+            "type": "number"
+          },
+          "hostOrgMax": {
+            "type": "number"
+          },
+          "addressMax": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "nameMax",
+          "descriptionMax",
+          "hostOrgMax",
+          "addressMax"
+        ]
+      },
       "EventOptionsView": {
         "type": "object",
         "properties": {
@@ -44017,12 +45206,47 @@
                 "label"
               ]
             }
+          },
+          "tickets": {
+            "$ref": "#/components/schemas/EventTicketRulesView"
+          },
+          "fields": {
+            "$ref": "#/components/schemas/EventFieldLimitsView"
           }
         },
         "required": [
           "categories",
           "formats",
-          "types"
+          "types",
+          "tickets",
+          "fields"
+        ]
+      },
+      "EventFromPricesView": {
+        "type": "object",
+        "properties": {
+          "prices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "eventId": {
+                  "type": "string"
+                },
+                "priceFromNaira": {
+                  "type": "number",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "eventId",
+                "priceFromNaira"
+              ]
+            }
+          }
+        },
+        "required": [
+          "prices"
         ]
       },
       "EventGoingView": {
@@ -44848,6 +46072,135 @@
           "communities"
         ]
       },
+      "PointNextExpiryView": {
+        "type": "object",
+        "properties": {
+          "points": {
+            "type": "number"
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "points",
+          "expiresAt"
+        ]
+      },
+      "PointLotView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "points": {
+            "type": "number"
+          },
+          "granted": {
+            "type": "number"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "tier_bonus",
+              "pack",
+              "bump",
+              "referral",
+              "shortfall",
+              "returned"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "points",
+          "granted",
+          "source",
+          "label",
+          "expiresAt"
+        ]
+      },
+      "PointMovementView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "points": {
+            "type": "number"
+          },
+          "label": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "hold",
+              "grant",
+              "release",
+              "expire"
+            ]
+          },
+          "pending": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "points",
+          "label",
+          "reason",
+          "pending",
+          "createdAt"
+        ]
+      },
+      "MyPointsView": {
+        "type": "object",
+        "properties": {
+          "balance": {
+            "type": "number"
+          },
+          "nextExpiry": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PointNextExpiryView"
+              }
+            ],
+            "nullable": true
+          },
+          "lots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PointLotView"
+            }
+          },
+          "lotCount": {
+            "type": "number"
+          },
+          "movements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PointMovementView"
+            }
+          }
+        },
+        "required": [
+          "balance",
+          "nextExpiry",
+          "lots",
+          "lotCount",
+          "movements"
+        ]
+      },
       "MeCountsView": {
         "type": "object",
         "properties": {
@@ -45486,8 +46839,8 @@
           "state": {
             "type": "string",
             "enum": [
-              "active",
               "none",
+              "active",
               "ending",
               "ended"
             ]
@@ -45740,6 +47093,237 @@
           "checkoutBump",
           "actions",
           "caps"
+        ]
+      },
+      "AdminWaitlistRegistrationView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "offerId": {
+            "type": "string"
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "nullable": true
+          },
+          "makes": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "failed",
+              "paid"
+            ]
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "paidKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "paidAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "reference": {
+            "type": "string"
+          },
+          "flutterwaveTransactionId": {
+            "type": "string",
+            "nullable": true
+          },
+          "claimedByWawuId": {
+            "type": "string",
+            "nullable": true
+          },
+          "claimedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "offerId",
+          "fullName",
+          "phone",
+          "email",
+          "state",
+          "makes",
+          "status",
+          "amountKobo",
+          "paidKobo",
+          "paidAt",
+          "reference",
+          "flutterwaveTransactionId",
+          "claimedByWawuId",
+          "claimedAt",
+          "createdAt"
+        ]
+      },
+      "AdminWaitlistExportView": {
+        "type": "object",
+        "properties": {
+          "fileName": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "rowCount": {
+            "type": "number"
+          },
+          "content": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "fileName",
+          "contentType",
+          "rowCount",
+          "content",
+          "generatedAt"
+        ]
+      },
+      "WaitlistOfferView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "tierName": {
+            "type": "string"
+          },
+          "products": {
+            "type": "number"
+          },
+          "days": {
+            "type": "number"
+          },
+          "closesAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "priceKobo",
+          "tierName",
+          "products",
+          "days",
+          "closesAt"
+        ]
+      },
+      "WaitlistCheckoutView": {
+        "type": "object",
+        "properties": {
+          "publicKey": {
+            "type": "string"
+          },
+          "txRef": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "number"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN"
+            ]
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "customerEmail": {
+            "type": "string"
+          },
+          "customerPhone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "publicKey",
+          "txRef",
+          "amount",
+          "currency",
+          "customerName",
+          "customerEmail",
+          "customerPhone"
+        ]
+      },
+      "WaitlistRegistrationStartView": {
+        "type": "object",
+        "properties": {
+          "reference": {
+            "type": "string"
+          },
+          "offerId": {
+            "type": "string"
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "flutterwaveConfig": {
+            "$ref": "#/components/schemas/WaitlistCheckoutView"
+          }
+        },
+        "required": [
+          "reference",
+          "offerId",
+          "amountKobo",
+          "flutterwaveConfig"
+        ]
+      },
+      "WaitlistRegistrationStatusView": {
+        "type": "object",
+        "properties": {
+          "reference": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "failed",
+              "paid"
+            ]
+          },
+          "firstName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reference",
+          "status",
+          "firstName"
         ]
       },
       "NuvionWebhookAck": {

@@ -62,6 +62,7 @@ are already open:
 | `chat.message` | the two people in the chat, never once either has blocked the other |
 | `chat.read` | the other person (not when blocked) and the reader's own other phones |
 | `community.message` | the host and members whose status is `joined`; not anyone who has blocked the sender or been blocked by them |
+| `legal.thread` | the client who owns the legal matter a consultant just wrote on, and nobody else (LEGAL-02) |
 
 A person may hold 8 sockets; the 9th closes the oldest with `4409`.
 
@@ -71,6 +72,7 @@ A person may hold 8 sockets; the 9th closes the oldest with `4409`.
 { type: 'chat.message',      cursor, message: ChatMessage }
 { type: 'chat.read',         cursor, chatId, readerWawuId, mine, lastReadAt, lastReadMessageId }
 { type: 'community.message', cursor, communityId, message: CommunityMessage }
+{ type: 'legal.thread',      cursor, legalRequestId }   // socket only (LEGAL-02)
 ```
 
 `message` is the same shape the REST routes return, from the viewer's side

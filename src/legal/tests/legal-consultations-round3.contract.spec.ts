@@ -38,6 +38,35 @@ const REPO_ROOT = path.resolve(__dirname, '../../../');
 const ADMINS = adminFixtures('1e110005', 'legal-consult-r3');
 const SECRETS = adminJwtSecrets('legal-consult-r3');
 
+/**
+ * FIX-24: a delivered key needs an upload record made by the client or by
+ * one of the legal team's accounts (LEGAL_DELIVERY_UPLOADER_IDS). The keys
+ * these tests deliver are recorded as uploaded by this legal-team account.
+ */
+const LEGAL_TEAM_ID = '0000f124-0000-4000-8000-000000000024';
+const UPLOADED_KEYS: string[] = [
+  'legal/document/abc/11111111-2222-3333-4444-555555555555.pdf',
+  'legal/document/abc/a.pdf',
+  'legal/document/abc/f0.pdf',
+  'legal/document/abc/f1.pdf',
+];
+
+async function recordUploads(prisma: PrismaService): Promise<void> {
+  for (const key of UPLOADED_KEYS) {
+    await prisma.storageObject.upsert({
+      where: { key },
+      create: {
+        key,
+        wawuUserId: LEGAL_TEAM_ID,
+        bytes: 1024,
+        contentType: 'application/pdf',
+        folder: 'legal/document',
+      },
+      update: { wawuUserId: LEGAL_TEAM_ID },
+    });
+  }
+}
+
 async function isMockUp(): Promise<boolean> {
   try {
     return (await fetch(`${MOCK_WAWU_ID_URL}/health`)).ok;
@@ -80,9 +109,14 @@ describe('LEGAL-03 fix round 3 (contract)', () => {
   const as = (token: string) => ({ Authorization: `Bearer ${token}` });
 
   beforeAll(async () => {
-    for (const key of ['ADMIN_JWT_SECRET', 'ADMIN_JWT_REFRESH_SECRET']) {
+    for (const key of [
+      'ADMIN_JWT_SECRET',
+      'ADMIN_JWT_REFRESH_SECRET',
+      'LEGAL_DELIVERY_UPLOADER_IDS',
+    ]) {
       envSnapshot[key] = process.env[key];
     }
+    process.env.LEGAL_DELIVERY_UPLOADER_IDS = LEGAL_TEAM_ID;
     process.env.ADMIN_JWT_SECRET = SECRETS.access;
     process.env.ADMIN_JWT_REFRESH_SECRET = SECRETS.refresh;
     if (!(await isMockUp())) {
@@ -141,6 +175,7 @@ describe('LEGAL-03 fix round 3 (contract)', () => {
     app.useGlobalInterceptors(new ResponseInterceptor());
     await app.init();
     prisma = moduleRef.get(PrismaService);
+    await recordUploads(prisma);
     allowance = moduleRef.get(LegalAssistantAllowance);
     optionRows = await prisma.legalConsultationOption.findMany();
     await seedAdminFixtures(prisma, ADMINS);
@@ -179,6 +214,9 @@ describe('LEGAL-03 fix round 3 (contract)', () => {
           resource: 'legal_price',
           actedByAdminId: { in: ADMINS.map((a) => a.id) },
         },
+      });
+      await prisma.storageObject.deleteMany({
+        where: { key: { in: UPLOADED_KEYS }, wawuUserId: LEGAL_TEAM_ID },
       });
       await deleteAdminFixtures(prisma, ADMINS);
     }

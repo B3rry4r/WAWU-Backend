@@ -54,6 +54,24 @@ export class EventSpeakerDto {
 /** How many ticket types one submit may carry. */
 export const MAX_TICKET_TYPES_PER_EVENT = 20;
 
+/**
+ * The bounds a new ticket type is held to. Named so GET /events/options can
+ * hand the same numbers to the app's wizard (EVENTS-04) that this DTO
+ * enforces: a client never keeps its own copy of a server limit.
+ */
+export const TICKET_PRICE_MIN_NAIRA = 0;
+export const TICKET_PRICE_MAX_NAIRA = 10_000_000;
+export const TICKET_QUANTITY_MIN = 1;
+export const TICKET_QUANTITY_MAX = 1_000_000;
+export const TICKET_NAME_MIN = 2;
+export const TICKET_NAME_MAX = 60;
+
+/** The longest text each wizard field may carry (the `@MaxLength` on CreateEventDto below). */
+export const EVENT_NAME_MAX = 160;
+export const EVENT_DESCRIPTION_MAX = 5000;
+export const EVENT_HOST_ORG_MAX = 160;
+export const EVENT_ADDRESS_MAX = 300;
+
 // One message per field: class-validator reports a single constraint, and for a
 // value that is not a number it is the range one, which names the wrong problem.
 const PRICE_MESSAGE =
@@ -72,8 +90,8 @@ const QUANTITY_MESSAGE = 'quantity must be a whole number, from 1 to 1000000.';
 export class NewEventTicketTypeDto {
   @IsString()
   @Matches(/\S/, { message: 'a ticket type needs a name.' })
-  @MinLength(2)
-  @MaxLength(60)
+  @MinLength(TICKET_NAME_MIN)
+  @MaxLength(TICKET_NAME_MAX)
   name!: string;
 
   /** Naira, like every ticket price this backend stores. 0 is a free ticket. */
@@ -81,14 +99,14 @@ export class NewEventTicketTypeDto {
   // Coercion turned `""` into a free ticket and `"5000"`, `true` and `"0x10"`
   // into values the host never typed. PUT /events/:id/tickets refuses them too.
   @IsInt({ message: PRICE_MESSAGE })
-  @Min(0, { message: PRICE_MESSAGE })
-  @Max(10_000_000, { message: PRICE_MESSAGE })
+  @Min(TICKET_PRICE_MIN_NAIRA, { message: PRICE_MESSAGE })
+  @Max(TICKET_PRICE_MAX_NAIRA, { message: PRICE_MESSAGE })
   priceNaira!: number;
 
   /** How many exist. A venue has a capacity, so there is no unlimited option. */
   @IsInt({ message: QUANTITY_MESSAGE })
-  @Min(1, { message: QUANTITY_MESSAGE })
-  @Max(1_000_000, { message: QUANTITY_MESSAGE })
+  @Min(TICKET_QUANTITY_MIN, { message: QUANTITY_MESSAGE })
+  @Max(TICKET_QUANTITY_MAX, { message: QUANTITY_MESSAGE })
   quantity!: number;
 
   @IsOptional()
@@ -113,18 +131,18 @@ export class NewEventTicketTypeDto {
 export class CreateEventDto {
   @IsString()
   @Matches(/\S/, { message: 'name is required.' })
-  @MaxLength(160)
+  @MaxLength(EVENT_NAME_MAX)
   name!: string;
 
   @IsString()
   @Matches(/\S/, { message: 'description is required.' })
-  @MaxLength(5000)
+  @MaxLength(EVENT_DESCRIPTION_MAX)
   description!: string;
 
   /** The organisation running it — the old EventItem's `org`. */
   @IsString()
   @Matches(/\S/, { message: 'hostOrg is required.' })
-  @MaxLength(160)
+  @MaxLength(EVENT_HOST_ORG_MAX)
   hostOrg!: string;
 
   @IsOptional()
@@ -178,7 +196,7 @@ export class CreateEventDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(300)
+  @MaxLength(EVENT_ADDRESS_MAX)
   address?: string;
 
   /**

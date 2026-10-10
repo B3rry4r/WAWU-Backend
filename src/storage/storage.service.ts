@@ -267,6 +267,38 @@ export function deliverableKeyFrom(
   return inFolder ? key : null;
 }
 
+/** A link's host, lower-cased and without a trailing dot, or null. */
+function hostOf(link: string): string | null {
+  try {
+    const host = new URL(link).hostname.toLowerCase().replace(/\.+$/, '');
+    return host === '' ? null : host;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether a link names this bucket's host, the storage endpoint's host, or a
+ * host under either (a virtual-hosted bucket sits under the endpoint's). Any
+ * link the bucket would answer is signed for one of these hosts, so a link
+ * on any other host cannot read one of our objects. A link that does not
+ * parse names no host. Never throws.
+ */
+export function linkNamesStorage(
+  link: unknown,
+  location: BucketLocation | null,
+  endpoint: string | undefined | null,
+): boolean {
+  if (typeof link !== 'string') return false;
+  const host = hostOf(link);
+  if (host === null) return false;
+  const ours = [
+    location ? hostOf(location.origin) : null,
+    endpoint ? hostOf(endpoint) : null,
+  ].filter((h): h is string => h !== null);
+  return ours.some((h) => host === h || host.endsWith(`.${h}`));
+}
+
 /** Sizes in refusal messages are for a person to read, not a machine. */
 export function formatBytes(bytes: number): string {
   if (bytes >= 1024 ** 3) {

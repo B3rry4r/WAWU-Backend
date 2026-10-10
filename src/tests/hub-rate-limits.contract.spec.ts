@@ -51,6 +51,7 @@ import {
   STATEMENT_WAIT_MS,
   StatementSlots,
 } from '../money/statements/statement-config';
+import { WaitlistPublicController } from '../waitlist/waitlist-public.controller';
 
 /**
  * OPS-11: behind nginx, every caller gets its own rate-limit bucket, and no
@@ -272,7 +273,7 @@ describe('Rate limits behind nginx (OPS-11)', () => {
       );
     });
 
-    it('only the three payment webhooks (Flutterwave, Fintava, Nuvion: NUV-01) skip the limits; the only other overrides are admin login and refresh, the BVN check (KYC-01), the selfie match (KYC-02), the public receipt check and the receipt image and PDF (WALLET-18), and the recipient search (WALLET-08), once each', () => {
+    it('only the three payment webhooks (Flutterwave, Fintava, Nuvion: NUV-01) skip the limits; the only other overrides are admin login and refresh, the BVN check (KYC-01), the selfie match (KYC-02), the public receipt check and the receipt image and PDF (WALLET-18), the recipient search (WALLET-08), and the four public event registration routes (JOIN-01), once each', () => {
       const root = join(__dirname, '..');
       const files: string[] = [];
       const walk = (dir: string) => {
@@ -305,6 +306,7 @@ describe('Rate limits behind nginx (OPS-11)', () => {
         'money/receipts/money-receipt.controller.ts': 2,
         'money/receipts/public-receipt.controller.ts': 1,
         'money/recipients/money-recipient.controller.ts': 1,
+        'waitlist/waitlist-public.controller.ts': 4,
       });
     });
 
@@ -347,6 +349,7 @@ describe('Rate limits behind nginx (OPS-11)', () => {
         MoneyReceiptController,
         PublicReceiptController,
         MoneyRecipientController,
+        WaitlistPublicController,
       ]) {
         const proto = controller.prototype as unknown as Record<
           string,
@@ -388,6 +391,10 @@ describe('Rate limits behind nginx (OPS-11)', () => {
         'MoneyReceiptController.pdf',
         'MoneyRecipientController.search',
         'PublicReceiptController.page',
+        'WaitlistPublicController.currentOffer',
+        'WaitlistPublicController.register',
+        'WaitlistPublicController.status',
+        'WaitlistPublicController.verify',
       ]);
       // WALLET-18: the public receipt check, and drawing a receipt as an
       // image or a PDF, each set exactly these per-address limits: 10 a
@@ -452,6 +459,30 @@ describe('Rate limits behind nginx (OPS-11)', () => {
           blockDuration: undefined,
         },
       ]);
+      // JOIN-01 (round 2, lead ruling of 10 Oct 2026: many Nigerian phones sit
+      // behind one mobile-network address and a venue shares one Wi-Fi
+      // address): the four public event registration routes each set their own
+      // `medium` override and the guard counts each route apart. The two reads
+      // (the offer, a registration's status) allow 600 calls per address in 10
+      // minutes, the two writes (register, verify) 300. Only `medium` is
+      // changed; `short` keeps its 20 a second.
+      const waitlist = (on: string, limit: number) => ({
+        on: `WaitlistPublicController.${on}`,
+        name: 'medium',
+        limit,
+        ttl: 600_000,
+        blockDuration: undefined,
+      });
+      expect(
+        overrides
+          .filter((o) => o.on.startsWith('WaitlistPublicController.'))
+          .sort((a, b) => a.on.localeCompare(b.on)),
+      ).toEqual([
+        waitlist('currentOffer', 600),
+        waitlist('register', 300),
+        waitlist('status', 600),
+        waitlist('verify', 300),
+      ]);
       // KYC-02: the selfie match is charged per attempt, like the BVN check,
       // and sets exactly these per-address limits: 3 a minute and 20 an hour,
       // no block of its own.
@@ -475,6 +506,16 @@ describe('Rate limits behind nginx (OPS-11)', () => {
           blockDuration: undefined,
         },
       ]);
+      // The four event registration routes are the one deliberate exception to
+      // "no more requests": 600 and 300 are above `medium`'s 200, in a window
+      // 10 times as long. They must still be no faster over their own window
+      // than `medium` is over its (600 in 600 s is 1 a second against 3.3 a
+      // second), and `short` is not touched.
+      const LONGER_WINDOW = new Set(
+        overrides
+          .filter((o) => o.on.startsWith('WaitlistPublicController.'))
+          .map((o) => o.on),
+      );
       for (const o of overrides) {
         const base = HUB_THROTTLERS.find((t) => t.name === o.name);
         // A name the app does not register would be silently ignored.
@@ -485,13 +526,19 @@ describe('Rate limits behind nginx (OPS-11)', () => {
         });
         const limit = o.limit ?? base!.limit;
         const ttl = o.ttl ?? base!.ttl;
+        const slowerOverItsWindow =
+          o.name === 'medium' &&
+          LONGER_WINDOW.has(o.on) &&
+          ttl > base!.ttl &&
+          limit / ttl <= base!.limit / base!.ttl;
         expect({
           on: o.on,
           name: o.name,
           tightens:
-            limit <= base!.limit &&
-            ttl >= base!.ttl &&
-            (o.blockDuration === undefined || o.blockDuration >= ttl),
+            slowerOverItsWindow ||
+            (limit <= base!.limit &&
+              ttl >= base!.ttl &&
+              (o.blockDuration === undefined || o.blockDuration >= ttl)),
         }).toEqual({ on: o.on, name: o.name, tightens: true });
       }
     });

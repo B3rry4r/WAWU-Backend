@@ -77,6 +77,35 @@ const BUCKET_ORIGIN = 'https://wawu-test.storage.test.invalid';
 /** Where a delivered legal document lives on that bucket. */
 const DOCS = `${BUCKET_ORIGIN}/legal/document/u1/`;
 
+/**
+ * FIX-24: a delivered key needs an upload record made by the client or by
+ * one of the legal team's accounts (LEGAL_DELIVERY_UPLOADER_IDS). The keys
+ * these tests deliver are recorded as uploaded by this legal-team account.
+ */
+const LEGAL_TEAM_ID = '0000f124-0000-4000-8000-000000000024';
+const UPLOADED_KEYS: string[] = [
+  ...['reviewed', 'notes', 'signed', 'Final-agreement', 'a'].map(
+    (name) => `legal/document/u1/${name}.pdf`,
+  ),
+  ...Array.from({ length: 11 }, (_, i) => `legal/document/u1/f${i}.pdf`),
+];
+
+async function recordUploads(prisma: PrismaService): Promise<void> {
+  for (const key of UPLOADED_KEYS) {
+    await prisma.storageObject.upsert({
+      where: { key },
+      create: {
+        key,
+        wawuUserId: LEGAL_TEAM_ID,
+        bytes: 1024,
+        contentType: 'application/pdf',
+        folder: 'legal/document',
+      },
+      update: { wawuUserId: LEGAL_TEAM_ID },
+    });
+  }
+}
+
 describe('WAWU Legal consultations and deliverables (contract)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
@@ -161,11 +190,13 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
     for (const key of [
       'ADMIN_JWT_SECRET',
       'ADMIN_JWT_REFRESH_SECRET',
+      'LEGAL_DELIVERY_UPLOADER_IDS',
       'STORAGE_FORCE_PATH_STYLE',
       ...Object.keys(TEST_BUCKET_ENV),
     ]) {
       envSnapshot[key] = process.env[key];
     }
+    process.env.LEGAL_DELIVERY_UPLOADER_IDS = LEGAL_TEAM_ID;
     process.env.ADMIN_JWT_SECRET = SECRETS.access;
     process.env.ADMIN_JWT_REFRESH_SECRET = SECRETS.refresh;
     // Round 5 (N1): a delivered file must be a legal document on our own
@@ -214,6 +245,7 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
     await app.init();
 
     prisma = moduleRef.get(PrismaService);
+    await recordUploads(prisma);
     optionRows = await prisma.legalConsultationOption.findMany();
     priceRows = await prisma.legalServicePrice.findMany();
     await seedAdminFixtures(prisma, ADMINS);
@@ -261,6 +293,9 @@ describe('WAWU Legal consultations and deliverables (contract)', () => {
             },
           ],
         },
+      });
+      await prisma.storageObject.deleteMany({
+        where: { key: { in: UPLOADED_KEYS }, wawuUserId: LEGAL_TEAM_ID },
       });
       await deleteAdminFixtures(prisma, ADMINS);
     }
