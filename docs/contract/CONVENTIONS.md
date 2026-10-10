@@ -941,7 +941,20 @@ this applies and every answer is as in section 9.
   candidate by a keyset cursor (attempt start, then account), with no cap on
   the rows it looks at, and when its time is used it hands the place it
   reached to the next pass (round 4, N15), so openings that are not yet due
-  never keep it from the ones behind them. To start again the person sends the
+  never keep it from the ones behind them. **A hold also has a lifetime**
+  (NUV-03 round 4, R4-2): one account holds one BVN for at most
+  `IDENTITY_HOLD_LIFETIME_DAYS` (default 30, PROVISIONAL, 1 to 365, never
+  shorter than `IDENTITY_HOLD_DAYS`), counted from the day it took the claim
+  on that number (`FintavaWalletOpening.bvnVerifiedAt`, which under Nuvion is
+  when the account took, or moved to, the BVN it holds) and moved by nothing
+  the person does while the same number stays held. A file of four bytes
+  every 13 days is progress for the idle rule and does nothing for the
+  lifetime. When it ends the sweep marks the opening `expired` exactly as it
+  does an idle one (the same release, the same single notice; the stored
+  cause is `hold_lifetime_ended`). A number let go and taken again, a start
+  again after an expiry and a correction that moves the claim to another
+  number each take a new claim and so start a new lifetime; a correction that
+  keeps the same number does not. To start again the person sends the
   details to `POST /money/wallet/open` as for a correction: the same entity
   at Nuvion is corrected, BVN and NIN included, the claim is taken on the BVN
   typed (the plain `409` if another account holds it by then), and the review
@@ -1461,7 +1474,9 @@ nothing is needed.
   `NuvionEntity.progressAt` (the submit call also `submittedAt`, so a refusal
   read after it can be a new decision, section 9a). An opening being worked
   on is therefore never closed by the hold expiry for being idle; one with
-  nothing done for `IDENTITY_HOLD_DAYS` is, as section 9a says. Support sees
+  nothing done for `IDENTITY_HOLD_DAYS` is, as section 9a says, and one whose
+  account has held its BVN for `IDENTITY_HOLD_LIFETIME_DAYS` is whatever was
+  done (round 4, R4-2). Support sees
   the same time. A failure to write the time never fails the step.
 - **The same file again** (a double tap, a retry after a lost answer) is the
   answer it already got, until the opening is submitted. **A different file**
@@ -1519,7 +1534,7 @@ nothing is needed.
 | `document_request_invalid` | 400 | no or unknown `kind`, no file, a field or part we do not read, `file_back` for a proof of address, a return address that is not https or not one the server lists (origin and path prefix, `NUVION_LIVENESS_REDIRECT_ORIGINS`), or one Nuvion refused for that person | |
 | `document_file_invalid` | 422 | a file that is empty, over 10 MB, not a PDF, JPG or PNG, or two sides of different types; nothing is sent | |
 | `document_not_accepted` | 422 | Nuvion read the file or the details and refused them; nothing was kept | |
-| `documents_closed` | 409 | the opening is not taking documents now (sent, decided, stopped, or a refusal not yet corrected), or this wallet needs none | |
+| `documents_closed` | 409 | the opening is not taking documents now (sent, decided, stopped, or a refusal not yet corrected), or this wallet needs none. An opening the sweep expired answers with the wallet view's own words for it ("We closed your wallet application because it was not finished. Send your details again to start a new one."): no upload is taken, no selfie is started and nothing is sent to Nuvion until the person sends their details again (round 4, R4-1) | |
 | `document_in_progress` | 409 | the last upload of this kind is still being confirmed, or a selfie is being started | `retryAfterSeconds` |
 | `document_rate_limited` | 429 | too many uploads (or selfie starts) for now (`PROVISIONAL(NUVION-DOCUMENT-UPLOAD-LIMITS)`) | `retryAfterSeconds` |
 | `document_busy` | 503 | the server is busy with other uploads | `retryAfterSeconds` |

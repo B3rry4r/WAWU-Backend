@@ -3,6 +3,7 @@ import type { PrismaService } from '../../common/prisma/prisma.service';
 import {
   EXPIRED_BY_SUPPORT,
   EXPIRED_IDLE,
+  EXPIRED_LIFETIME,
   EXPIRED_STATE,
   HOLD_ENTITY_SELECT,
   type HoldEntity,
@@ -31,6 +32,17 @@ import { bvnRefused, NOT_PASSED, reviewStageOf } from './review-stage';
  * else the person did: NUV-03 calls `recordOpeningProgress` for each
  * document uploaded and for the submit call) and, for a refusal, the day the
  * person was told.
+ *
+ * Progress cannot keep a hold for ever (NUV-03 round 4, R4-2). A hold also
+ * has a lifetime, IDENTITY_HOLD_LIFETIME_DAYS (default 30), counted from the
+ * day the account took its claim on the number
+ * (`FintavaWalletOpening.bvnVerifiedAt`, see bvn-claim.ts) and moved by
+ * nothing the person does while the same number stays held: a 4 byte file
+ * every 13 days is progress for the idle rule and does nothing for this one.
+ * When it ends the sweep marks the opening expired exactly as it does an
+ * idle one (the same state, the same release, the same single notice); only
+ * the stored cause differs (`hold_lifetime_ended`). Starting again takes a
+ * new claim and so a new lifetime.
  */
 
 /** One day. */
@@ -62,6 +74,49 @@ export interface IdleOpening {
   attemptStartedAt: Date;
 }
 
+/** An opening with the time its account took the claim it holds. */
+export interface HeldOpening extends IdleOpening {
+  bvnVerifiedAt: Date;
+}
+
+/**
+ * Whether an opening is one whose hold can run out at all: it is at
+ * "documents needed" or refused with its BVN still held (the BVN itself was
+ * not the refused word), it has no account (or wallet), and it has an entity
+ * at the provider. Pure.
+ */
+function canExpire(
+  opening: IdleOpening,
+  entity: HoldEntity | null,
+  hasWallet: boolean,
+): entity is HoldEntity {
+  if (opening.state !== 'review' || entity === null || !entity.entityId) {
+    return false;
+  }
+  const facts = holdFactsOf(opening.state, entity, hasWallet);
+  if (facts.hasAccount) return false;
+  const stage = reviewStageOf(entity);
+  // A refusal that names only the NIN (or the documents or details) leaves
+  // the BVN on the entity, held: it can run out like any other hold. Only a
+  // refused BVN holds nothing.
+  return (
+    stage === 'needs_documents' || (stage === 'rejected' && !bvnRefused(entity))
+  );
+}
+
+/**
+ * Since when an account has held its BVN, or null when the hold cannot
+ * expire (the same openings as `idleSince`). The lifetime is counted from
+ * here. Pure.
+ */
+export function heldSince(
+  opening: HeldOpening,
+  entity: HoldEntity | null,
+  hasWallet: boolean,
+): Date | null {
+  return canExpire(opening, entity, hasWallet) ? opening.bvnVerifiedAt : null;
+}
+
 /**
  * Since when an opening has been idle, or null when it cannot expire: it is
  * not at "documents needed" or refused with its BVN still held (the BVN
@@ -73,19 +128,8 @@ export function idleSince(
   entity: HoldEntity | null,
   hasWallet: boolean,
 ): Date | null {
-  if (opening.state !== 'review' || entity === null || !entity.entityId) {
-    return null;
-  }
-  const facts = holdFactsOf(opening.state, entity, hasWallet);
-  if (facts.hasAccount) return null;
+  if (!canExpire(opening, entity, hasWallet)) return null;
   const stage = reviewStageOf(entity);
-  // A refusal that names only the NIN (or the documents or details) leaves
-  // the BVN on the entity, held: it can run out like any other hold. Only a
-  // refused BVN holds nothing.
-  const expirable =
-    stage === 'needs_documents' ||
-    (stage === 'rejected' && !bvnRefused(entity));
-  if (!expirable) return null;
   const times = [
     opening.attemptStartedAt,
     entity.correctedAt,
@@ -113,14 +157,20 @@ export type HoldClient = Pick<
  * and what the person did is read again under the lock. With an
  * `idleCutoff` the opening is expired only if it is still idle since before
  * that time, so a person who moved after the sweep read them is left alone.
+ * With a `lifetimeCutoff` it is also expired when its account took the claim
+ * it holds before that time, whatever the person did since (R4-2); given
+ * both, either one is enough, and an opening that is no longer idle but has
+ * outlived its lifetime is marked with the lifetime's cause.
  */
 export async function expireOpening(
   db: HoldClient,
   wawuUserId: string,
-  cause: typeof EXPIRED_IDLE | typeof EXPIRED_BY_SUPPORT,
+  cause:
+    typeof EXPIRED_IDLE | typeof EXPIRED_BY_SUPPORT | typeof EXPIRED_LIFETIME,
   now: Date,
   allowedStates: readonly string[] = ['review'],
   idleCutoff: Date | null = null,
+  lifetimeCutoff: Date | null = null,
 ): Promise<boolean> {
   await db.$queryRaw`SELECT 1 FROM "FintavaWalletOpening" WHERE "wawuUserId" = ${wawuUserId} FOR UPDATE`;
   const row = await db.fintavaWalletOpening.findUnique({
@@ -131,12 +181,14 @@ export async function expireOpening(
       state: true,
       attempts: true,
       attemptStartedAt: true,
+      bvnVerifiedAt: true,
     },
   });
   if (!row || row.provider !== 'nuvion' || !allowedStates.includes(row.state)) {
     return false;
   }
-  if (idleCutoff !== null) {
+  let why = cause;
+  if (idleCutoff !== null || lifetimeCutoff !== null) {
     const entity = await db.nuvionEntity.findUnique({
       where: { wawuUserId },
       select: HOLD_ENTITY_SELECT,
@@ -145,8 +197,15 @@ export async function expireOpening(
       where: { wawuUserId },
       select: { wawuUserId: true },
     });
-    const since = idleSince(row, entity, wallet !== null);
-    if (since === null || since >= idleCutoff) return false;
+    const since =
+      idleCutoff === null ? null : idleSince(row, entity, wallet !== null);
+    const held =
+      lifetimeCutoff === null ? null : heldSince(row, entity, wallet !== null);
+    const idleDue = since !== null && idleCutoff !== null && since < idleCutoff;
+    const lifetimeDue =
+      held !== null && lifetimeCutoff !== null && held < lifetimeCutoff;
+    if (!idleDue && !lifetimeDue) return false;
+    if (cause === EXPIRED_IDLE && !idleDue) why = EXPIRED_LIFETIME;
   }
   const moved = await db.fintavaWalletOpening.updateMany({
     where: {
@@ -158,7 +217,7 @@ export async function expireOpening(
     },
     data: {
       state: EXPIRED_STATE,
-      failure: cause,
+      failure: why,
       bvnHash: isReleasedBvnHash(row.bvnHash)
         ? row.bvnHash
         : releasedBvnHash(wawuUserId, row.bvnHash),
@@ -177,6 +236,7 @@ interface IdleCandidate {
   wawuUserId: string;
   state: string;
   attemptStartedAt: Date;
+  bvnVerifiedAt: Date;
 }
 
 /**
@@ -184,17 +244,20 @@ interface IdleCandidate {
  * order: at documents needed or refused (not with the provider reviewing,
  * not with an account or a wallet, not refused on the BVN itself, which holds
  * nothing and would otherwise fill every page for ever), with nothing from
- * the person since before the cutoff. A superset of the openings `idleSince`
- * accepts: it never leaves one out, and `idleSince` decides.
+ * the person since before the cutoff, or (with a `lifetimeCutoff`) holding
+ * the claim since before that one, whatever the person did. A superset of the
+ * openings `idleSince` and `heldSince` accept: it never leaves one out, and
+ * they decide.
  */
 async function idleCandidates(
   db: HoldClient,
   cutoff: Date,
+  lifetimeCutoff: Date | null,
   after: SweepCursor | null,
 ): Promise<IdleCandidate[]> {
   const notPassed = Prisma.join([...NOT_PASSED]);
   return db.$queryRaw<IdleCandidate[]>(Prisma.sql`
-    SELECT o."wawuUserId", o."state", o."attemptStartedAt"
+    SELECT o."wawuUserId", o."state", o."attemptStartedAt", o."bvnVerifiedAt"
       FROM "FintavaWalletOpening" o
       JOIN "NuvionEntity" e ON e."wawuUserId" = o."wawuUserId"
      WHERE o."provider" = 'nuvion'
@@ -207,9 +270,16 @@ async function idleCandidates(
        AND NOT EXISTS (
          SELECT 1 FROM "FintavaWallet" w WHERE w."wawuUserId" = o."wawuUserId"
        )
-       AND GREATEST(
-             o."attemptStartedAt", e."correctedAt", e."submittedAt", e."progressAt"
-           ) < ${cutoff}
+       AND (
+         GREATEST(
+           o."attemptStartedAt", e."correctedAt", e."submittedAt", e."progressAt"
+         ) < ${cutoff}
+         ${
+           lifetimeCutoff === null
+             ? Prisma.empty
+             : Prisma.sql`OR o."bvnVerifiedAt" < ${lifetimeCutoff}`
+         }
+       )
        ${
          after === null
            ? Prisma.empty
@@ -247,15 +317,28 @@ export async function expireIdleOpenings(
   db: HoldClient,
   holdDays: number,
   now: Date,
-  opts: { after?: SweepCursor | null; budgetMs?: number } = {},
+  opts: {
+    after?: SweepCursor | null;
+    budgetMs?: number;
+    /**
+     * The hold's lifetime in days (R4-2): an opening whose account took its
+     * claim longer ago than this is expired whatever it did since. Left out,
+     * only the idle rule applies.
+     */
+    lifetimeDays?: number | null;
+  } = {},
 ): Promise<SweepResult> {
   const cutoff = new Date(now.getTime() - holdDays * DAY_MS);
+  const lifetimeCutoff =
+    opts.lifetimeDays === undefined || opts.lifetimeDays === null
+      ? null
+      : new Date(now.getTime() - opts.lifetimeDays * DAY_MS);
   const budgetMs = opts.budgetMs ?? HOLD_SWEEP_BUDGET_MS;
   const started = Date.now();
   const told: string[] = [];
   let after: SweepCursor | null = opts.after ?? null;
   for (;;) {
-    const page = await idleCandidates(db, cutoff, after);
+    const page = await idleCandidates(db, cutoff, lifetimeCutoff, after);
     if (page.length > 0) {
       const ids = page.map((c) => c.wawuUserId);
       const [entities, wallets] = await Promise.all([
@@ -271,14 +354,17 @@ export async function expireIdleOpenings(
       const entityOf = new Map(entities.map((e) => [e.wawuUserId, e]));
       const walleted = new Set(wallets.map((w) => w.wawuUserId));
       for (const c of page) {
-        const since = idleSince(
-          c,
-          entityOf.get(c.wawuUserId) ?? null,
-          walleted.has(c.wawuUserId),
-        );
-        if (since === null || since >= cutoff) continue;
+        const entity = entityOf.get(c.wawuUserId) ?? null;
+        const hasWallet = walleted.has(c.wawuUserId);
+        const since = idleSince(c, entity, hasWallet);
+        const held = heldSince(c, entity, hasWallet);
+        const idleDue = since !== null && since < cutoff;
+        const lifetimeDue =
+          lifetimeCutoff !== null && held !== null && held < lifetimeCutoff;
+        if (!idleDue && !lifetimeDue) continue;
         // Read again under the opening's lock: a person who sent, corrected or
-        // uploaded since the read above is not expired.
+        // uploaded since the read above is not expired for being idle, and one
+        // that is due only by its lifetime is marked with the lifetime's cause.
         if (
           await expireOpening(
             db,
@@ -287,6 +373,7 @@ export async function expireIdleOpenings(
             now,
             ['review'],
             cutoff,
+            lifetimeCutoff,
           )
         ) {
           told.push(c.wawuUserId);

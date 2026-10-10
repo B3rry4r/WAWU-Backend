@@ -7,7 +7,7 @@ import {
   releasedBvnHash,
 } from '../../money/opening/bvn-claim';
 import { isStringifiedNull } from '../../money/opening/dto/open-wallet.dto';
-import { idleSince } from '../../money/opening/identity-hold';
+import { heldSince, idleSince } from '../../money/opening/identity-hold';
 import {
   accountOnItsWay,
   type DecisionHeld,
@@ -1047,5 +1047,90 @@ describe('NUV-02 round 4: the mask covers any length of separators between digit
     );
     expect(out).toContain('[credential]');
     expect(digitsLeft(out)).toBeLessThanOrEqual(4);
+  });
+});
+
+describe('NUV-03 round 4, R4-2: when an account took the claim it holds', () => {
+  const day = 24 * 60 * 60_000;
+  const t = (days: number) => new Date(1_700_000_000_000 + days * day);
+  const entity = (o: Record<string, unknown> = {}) => ({
+    ...base,
+    entityId: '01HXYZ0001ABCDEFGHJKMNPQRS',
+    accountId: null,
+    accountRequestedAt: null,
+    submittedAt: null,
+    progressAt: null,
+    holdExpiredAt: null,
+    ...o,
+  });
+  const opening = (o: Record<string, unknown> = {}) => ({
+    state: 'review',
+    attemptStartedAt: t(20),
+    bvnVerifiedAt: t(1),
+    ...o,
+  });
+
+  it('is the claim time, whatever the person did since: progress, a submission, a correction, a new attempt move nothing', () => {
+    expect(heldSince(opening(), entity(), false)).toEqual(t(1));
+    expect(
+      heldSince(
+        opening(),
+        entity({
+          progressAt: t(25),
+          submittedAt: t(26),
+          correctedAt: t(27),
+        }),
+        false,
+      ),
+    ).toEqual(t(1));
+    expect(
+      heldSince(opening({ attemptStartedAt: t(40) }), entity(), false),
+    ).toEqual(t(1));
+    // And the idle rule still reads the latest of them.
+    expect(idleSince(opening(), entity({ progressAt: t(25) }), false)).toEqual(
+      t(25),
+    );
+  });
+
+  it('a refusal that names only the NIN or the documents is held and can outlive its lifetime; one on the BVN holds nothing', () => {
+    const rejected = entity({
+      status: 'rejected',
+      decidedAt: t(2),
+      bvnStatus: 'approved',
+      ninStatus: 'rejected',
+    });
+    expect(heldSince(opening(), rejected, false)).toEqual(t(1));
+    expect(
+      heldSince(
+        opening(),
+        entity({
+          ...rejected,
+          documentStatus: 'rejected',
+          ninStatus: 'approved',
+        }),
+        false,
+      ),
+    ).toEqual(t(1));
+    expect(
+      heldSince(opening(), { ...rejected, bvnStatus: 'rejected' }, false),
+    ).toBeNull();
+  });
+
+  it('is null exactly where the idle rule is: being checked, approved, stopped, an account, a wallet, no entity, not in review', () => {
+    for (const status of ['pending', 'approved', 'failed', 'suspended']) {
+      expect(heldSince(opening(), entity({ status }), false)).toBeNull();
+    }
+    expect(
+      heldSince(opening(), entity({ accountId: 'acc_1' }), false),
+    ).toBeNull();
+    expect(
+      heldSince(opening(), entity({ accountRequestedAt: t(1) }), false),
+    ).toBeNull();
+    expect(heldSince(opening(), entity(), true)).toBeNull();
+    expect(heldSince(opening(), entity({ entityId: null }), false)).toBeNull();
+    expect(heldSince(opening(), null, false)).toBeNull();
+    for (const state of ['open', 'opening', 'unknown', 'stopped', 'expired']) {
+      expect(heldSince(opening({ state }), entity(), false)).toBeNull();
+    }
   });
 });

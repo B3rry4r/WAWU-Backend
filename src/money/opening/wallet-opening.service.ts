@@ -68,6 +68,8 @@ type OpeningRow = {
   phone: string;
   attempts: number;
   attemptStartedAt: Date;
+  /** When the account took the BVN claim it holds (a Nuvion hold's lifetime starts here). */
+  bvnVerifiedAt: Date;
   checkedAt: Date | null;
   failure: string | null;
   /** Which provider the opening is with (NUV-01); null is Fintava. */
@@ -81,6 +83,7 @@ const OPENING_SELECT = {
   phone: true,
   attempts: true,
   attemptStartedAt: true,
+  bvnVerifiedAt: true,
   checkedAt: true,
   failure: true,
   provider: true,
