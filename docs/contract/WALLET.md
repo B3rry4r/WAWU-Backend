@@ -48,8 +48,8 @@ caller from the token.
 | `POST /money/transfers/wawu` | `TransferView` | `WawuTransferDto`, `Idempotency-Key`, `X-Transaction-Pin` | WALLET-07 |
 | `POST /money/transfers/bank` | `TransferView` | `BankTransferDto`, `Idempotency-Key`, `X-Transaction-Pin` | WALLET-09 |
 | `GET /money/transfers/{id}` | `TransferView` | | WALLET-07 |
-| `GET /money/payments/quote?kind=&targetId=&amountKobo=` | `PaymentQuoteView` | | MONEY-17 |
-| `POST /money/payments` | `PaymentView` | `PaymentDto`, `Idempotency-Key`, `X-Transaction-Pin` | MONEY-17 |
+| `GET /money/payments/quote?kind=&targetId=&amountKobo=` | `PaymentQuoteView` | | MONEY-17 (served; CONVENTIONS.md section 14) |
+| `POST /money/payments` | `PaymentView` | `PaymentDto`, `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | MONEY-17 (served; CONVENTIONS.md section 14) |
 | `GET /money/payments/{id}` | `PaymentView` | | MONEY-19 |
 | `GET /money/holds?role=&cursor=&limit=` | `HoldPage` | | MONEY-18 |
 | `GET /money/holds/{id}` | `HoldView` | | MONEY-18 |

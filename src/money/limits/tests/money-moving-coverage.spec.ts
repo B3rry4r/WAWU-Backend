@@ -421,16 +421,21 @@ describe('NUV-07: every route that quotes or moves money answers fees_not_set fi
         'PUT money/pin',
       ]),
     );
+    // MONEY-17 serves the payment and its quote (src/money/payments/): they
+    // left the declared controller and are mounted, money-moving, here.
+    expect(
+      mounted
+        .filter(movesMoney)
+        .map((r) => r.key)
+        .sort(),
+    ).toEqual(['POST money/payments']);
+    expect(mounted.map((r) => r.key)).toContain('GET money/payments/quote');
     expect(
       declared
         .filter(movesMoney)
         .map((r) => r.key)
         .sort(),
-    ).toEqual([
-      'POST money/payments',
-      'POST money/transfers/bank',
-      'POST money/transfers/wawu',
-    ]);
+    ).toEqual(['POST money/transfers/bank', 'POST money/transfers/wawu']);
   });
 
   it('a debit can answer fees_not_set and limit_reached before any money moves (DEBIT_GATE_ERRORS)', () => {

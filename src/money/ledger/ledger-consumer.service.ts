@@ -22,6 +22,7 @@ import {
 } from './ledger-config';
 import type {
   LedgerCounterparty,
+  LedgerDebitSighting,
   LedgerDirection,
   LedgerWallet,
 } from './ledger.interface';
@@ -365,7 +366,7 @@ export class LedgerConsumerService {
       ? 'pending'
       : (status ?? (m.to?.where === 'bank_account' ? 'pending' : 'completed'));
 
-    return this.finish(event.id, async (tx) => {
+    return this.finish(event.id, async (tx, touch) => {
       const written: string[] = [];
       for (const side of sides) {
         const out = side.direction === 'out';
@@ -396,6 +397,7 @@ export class LedgerConsumerService {
           },
           tx,
         );
+        touch(r.entryId, r.debitSighting);
         if (disagreement) {
           await this.ledger.noteDiscrepancy(
             r.entryId,
@@ -474,11 +476,12 @@ export class LedgerConsumerService {
     }
     return this.finish(
       eventId,
-      async (tx) => {
+      async (tx, touch) => {
         const res = await this.ledger.applyReversal(
           { ...input, references: refs },
           tx,
         );
+        if (res.state === 'applied') touch(res.entryId);
         if (res.state === 'applied') {
           return {
             status: 'processed',
@@ -543,25 +546,38 @@ export class LedgerConsumerService {
   /**
    * Locks the delivery, re-checks it is pending, runs `write` and marks it
    * with what `write` returned, all in one transaction. `write` returning
-   * null leaves it pending (with `waitNote`).
+   * null leaves it pending (with `waitNote`). `write` names each ledger row
+   * it wrote with `touch`; once the transaction has COMMITTED, the paying
+   * features are told of those rows (a row with a payment that left
+   * `pending`), so a payment settles from a webhook as from any other path
+   * (MONEY-17 round 4, R3-3): the ledger's own notification only covers the
+   * writes it commits itself, and this one commits here.
    */
   private async finish(
     eventId: string,
     write: (
       tx: Prisma.TransactionClient,
+      touch: (entryId: string, sighting?: LedgerDebitSighting | null) => void,
     ) =>
       | Promise<{ status: 'processed' | 'failed'; note: string } | null>
       | { status: 'processed' | 'failed'; note: string }
       | null,
     waitNote = 'ledger: tried again on the next sweep',
   ): Promise<LedgerConsumeOutcome> {
+    const touched: string[] = [];
+    const sighted: LedgerDebitSighting[] = [];
     const outcome = await this.prisma.$transaction(async (tx) => {
+      touched.length = 0;
+      sighted.length = 0;
       const held = await tx.$queryRaw<Array<{ id: string }>>`
         SELECT "id" FROM "FintavaWebhookEvent"
          WHERE "id" = ${eventId} AND "processingStatus" = 'pending'
          FOR UPDATE SKIP LOCKED`;
       if (held.length === 0) return 'skipped' as const;
-      const result = await write(tx);
+      const result = await write(tx, (id, sighting) => {
+        touched.push(id);
+        if (sighting) sighted.push(sighting);
+      });
       if (result === null) return 'waiting' as const;
       await tx.fintavaWebhookEvent.update({
         where: { id: eventId },
@@ -574,6 +590,9 @@ export class LedgerConsumerService {
       return result.status;
     });
     if (outcome === 'waiting') return this.wait(eventId, waitNote);
+    if (outcome === 'processed') {
+      await this.ledger.notifyCommitted(touched, sighted);
+    }
     return outcome;
   }
 

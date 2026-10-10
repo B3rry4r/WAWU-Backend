@@ -73,6 +73,9 @@ export class MoneyErrorReason {
   @ApiPropertyOptional({ allOf: [{ $ref: getSchemaPath('PaymentQuoteView') }] })
   paymentQuote?: PaymentQuoteView;
 
+  /** payment_in_progress: the payment for this item still being confirmed (MONEY-17). */
+  paymentId?: string;
+
   /** bank_transfers_blocked: why (W18). */
   @ApiPropertyOptional({
     enum: ['kyc_pending', 'kyc_rejected', 'kyc_not_submitted'],

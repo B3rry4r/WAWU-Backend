@@ -161,6 +161,8 @@ export const MONEY_ERROR_CODES = [
   // Resetting the PIN by a code, and approving with a fingerprint or face (MONEY-14).
   'reset_codes_exhausted',
   'device_approval_refused',
+  // Pay from wallet (MONEY-17): one open payment per buyer and item.
+  'payment_in_progress',
   // Statements (WALLET-27).
   'statement_too_large',
   'statement_rate_limited',

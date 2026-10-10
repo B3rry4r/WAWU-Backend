@@ -237,6 +237,7 @@ Every refusal is the envelope this backend already answers with
 | `account_not_opened` | 422 | Fintava refused the details sent (a validation or identity refusal, such as a blacklisted NIN), or the account has no email; nothing was created and the person may try again | |
 | `reset_codes_exhausted` | 429 | the person or the phone has had today's PIN reset texts (MONEY-14); nothing is sent | `retryAfterSeconds` |
 | `device_approval_refused` | 403 | `X-Device-Approval` not accepted: not the registered phone, a wrong signature, a used, expired or another person's challenge, or no phone registered; never uses a PIN try (MONEY-14) | |
+| `payment_in_progress` | 409 | a payment for this item by this person is still being confirmed (or is under review); a second one is not taken, under any Idempotency-Key (MONEY-17) | `paymentId` |
 | `statement_rate_limited` | 429 | the person has asked for 5 statements in the last minute or 30 in the last hour (`STATEMENT_RATE_LIMITS`, PROVISIONAL), counted after the token is verified (WALLET-27) | `retryAfterSeconds` |
 | `statement_busy` | 503 | two statements are already being built and no place came free within 5 s (`STATEMENT_CONCURRENCY`, PROVISIONAL) (WALLET-27) | `retryAfterSeconds` |
 | `recipient_search_rate_limited` | 429 | the person has searched for recipients 20 times in the last minute, 120 in the last hour or 500 in the last day (`RECIPIENT_SEARCH_PERSON_LIMITS`, PROVISIONAL), counted after the token is verified (WALLET-08); also sent as the `Retry-After` header | `retryAfterSeconds` |
@@ -287,7 +288,18 @@ after a send that failed (W14).
    that point is not stored and releases the key, so the same key can be sent
    again once the cause is fixed (the right PIN after a wrong one, or after a
    top-up).
-7. Keys are kept for at least 24 hours (MONEY-17 sets the purge in config).
+7. Keys are kept for at least 24 hours: `IDEMPOTENCY_KEY_HOURS`
+   (PROVISIONAL, 48 by default, 24 to 720), then purged hourly (MONEY-17).
+8. **As built (MONEY-17, `src/money/payments/idempotency.ts`):** the key is
+   taken (rule 2) by `IdempotencyGuard`, after the wallet gate and before
+   the PIN, so taps at once reach the PIN, the quote and Fintava once; the
+   others get the replay or `idempotency_in_progress`. The row is linked to
+   the payment in the transaction that creates it, before Fintava is
+   called. A refusal before that (rule 6) deletes the row
+   (`IdempotencyFilter`). A key left `in_progress` past the money timeout
+   plus a minute is answered from its payment's record as it stands, or,
+   when no payment was made, freed. A route that moves money uses
+   `@RequireIdempotentApproval(route)` (WALLET-07 and WALLET-09 too).
 
 **Fintava has no Idempotency-Key** (`naira-api.md`). Ours is enforced here.
 The reference we send Fintava as `CustomerReference` is derived from our own
@@ -339,8 +351,15 @@ one retry at a time per payment.
   `triesLeft` (4, 3, 2, 1). The fifth wrong try in a row answers
   `423 pin_locked` with `lockedUntil` (not "0 tries left"), and so does every
   try until then, the right PIN included. The lock lasts `PIN_LOCK_MINUTES`
-  (config, provisional 30). A try is counted before the hash is compared, so
-  tries sent at the same moment cannot get past five together. A right PIN
+  (config, provisional 30). A check reserves a slot before the hash is
+  compared (one conditional update: wrong tries plus checks still running
+  stay below five), compares with no transaction, row lock or database
+  connection held, and records its result in one more update. So tries sent
+  at the same moment can never be compared past five together, a right PIN
+  never uses up a try however many arrive at once, and one person's checks
+  cannot hold up anyone else's requests; a check that finds every slot taken
+  waits for one (in memory) and answers the lock as soon as there is one. A
+  slot left by a check that died frees itself after 30 seconds. A check held up past that (a saturated thread pool) can lose its slot, so more than five wrong compares can happen; what holds is what is answered: every wrong compare counts when recorded (at most four are ever answered `pin_incorrect` before the lock), a lock already set is not extended, and a PIN that is locked at the moment a result is recorded answers `423 pin_locked`, a right PIN included (R3-2). A right PIN
   resets the count; so does the end of a lock; a reset by code
   (`/money/pin/reset/confirm`, MONEY-14) clears the lock.
 - **The guard removes the header** from the request once read (`headers` and
@@ -1221,7 +1240,9 @@ this applies and every answer is as in section 9.
   BACKEND_GAPS G-64): it answers the quote as it stands now when the token
   is this server's, for this person and this input, not expired, and both
   its total and `expectedTotalKobo` equal today's total; otherwise `409
-  quote_changed` with the new quote in `reason.feeQuote`. An unset
+  quote_changed` with the new quote in `reason.feeQuote`. A caller may
+  bind a quote to one thing with a subject (`quote(..., subject)`, `check(...,
+  subject)`; MONEY-17 binds payments to their item). An unset
   `FEE_QUOTE_KEY` makes a key at boot (one warning): quotes given before a
   restart are then re-quoted, never charged wrongly.
 
@@ -1377,6 +1398,223 @@ send `Cache-Control: no-store`, read our database only and never call Fintava.
 - **Contract.** The search declares its plain `400` (a malformed `q`, no
   `reason`) and `429` (`recipient_search_rate_limited`; the per-address 429
   has no `reason`); both lists carry `maxItems` (20 and 10).
+
+---
+
+## 14. Pay from wallet (MONEY-17)
+
+As built in round 2 (4 Oct 2026, lead rulings D1 to D4, each "Default
+(lead), owner may override"), and moved onto the wallet provider seam on 8
+Oct 2026 (MONEY-20's `WALLET_PROVIDER`; R-39, R-42, R-44): nothing in
+`src/money/payments/` names a provider's client, so the same routes pay on
+Fintava or on Nuvion, whichever the server runs.
+
+- **Routes** (`src/money/payments/`): `GET /money/payments/quote?kind=&targetId=&amountKobo=`
+  (`PaymentQuoteView`, behind the wallet gate, `no-store`) and `POST
+  /money/payments` (`PaymentDto`; `Idempotency-Key`, and the PIN or a
+  biometric approval, `@RequireApproval()`). `GET /money/payments/{id}`
+  stays declared for MONEY-19, the holds for MONEY-18.
+- **Fees and limits first** (NUV-07, BACKEND_GAPS G-410; round 6). Both
+  routes carry `@RequireFeesSet()` as their last decorator, so while the
+  running provider's fees are not set they answer `503 fees_not_set` before
+  the wallet gate, the key and the PIN. The quote's `withinDailyLimit` and
+  `remainingTodayKobo` say where WAWU's own purchase limit stands today
+  (`MoneyLimits.dailyStanding`). The payment checks the limits
+  (`MoneyLimits.assertMayMove`, kind `purchase`, the price) inside the
+  claim's transaction (READ COMMITTED, under the limits' per-person lock),
+  so two payments by one person are counted one after the other: past a
+  limit is `403 limit_reached` with `reason.limit`, nothing stored or sent,
+  the key free. The provider's own limit refusal is the same answer.
+- **Text the database can store** (round 6, R5-2). A NUL or a lone
+  surrogate in `quoteToken` or `note` is a plain `400` naming the field
+  (main's `isCleanText`), before anything is claimed; a blank note is no
+  note.
+- **What is paid for.** Each selling feature registers its kind with
+  `PayableRegistry` (MoneyModule exports it): `resolve` gives the title, the
+  price from its own record and the payee (or `404 target_not_found`, `409
+  target_not_payable`), and `onCompleted` delivers it once the debit is
+  confirmed. **Delivery is at least once**: `onCompleted` can be called
+  twice for one payment (two servers, or a delivery slower than a minute)
+  and must be idempotent. A delivery that fails is tried again on the same
+  capped backoff as the check (1, 2, 4, 8, 16, 32, then 60 minutes, with its
+  own count `deliveryAttempts` and next try `nextDeliveryAt`; the first retry
+  is a minute after completion, so it does not race the one the completion
+  started). Past `PAYMENT_REVIEW_AFTER_HOURS` (72) after completion with no
+  delivery the payment goes to review (`reviewSince`, still `completed`, the
+  item still claimed, so it is never payable again while money moved) and
+  the sweep stops. A paid payment whose kind nothing registers at boot goes
+  to review at once, logged, never skipped in silence. A kind nobody registered answers `409 target_not_payable`
+  "This can't be paid for from your wallet yet." Held kinds (paid DM,
+  ticket, bill) are refused until MONEY-18. `amountKobo` and `note` only on
+  a tip; paying for your own item is `target_not_payable`.
+- **Naira only.** A feature may say what currency its price is in
+  (`PayableTarget.currency`, ISO 4217; unset is `NGN`). Only `NGN` is paid
+  from the wallet: an item priced in another currency (R-43's dollar prices)
+  is `409 target_not_payable` "This isn't priced in naira, so it can't be
+  paid from your naira wallet." on the quote and the payment, and nothing is
+  stored, so a price in cents is never taken as kobo. Paying in dollars is
+  NUV-09's dollar wallet.
+- **The quote is bound to the item.** The payment quote's `quoteToken` is
+  the fee quote (section 11) signed with the subject
+  `payment:<kind>:<targetId>`; `POST /money/payments` checks it with the
+  same subject, so a quote for one item, or a plain `GET /money/fees/quote`
+  token, never pays another (`409 quote_changed` with `reason.paymentQuote`,
+  the quote as it stands). Expired, another person's, another price, signed
+  before a restart: the same answer.
+- **The money.** One `walletToWallet` of the price through the seam, from
+  the buyer's wallet to WAWU's own account at the provider
+  (`getPlatformAccount`, read once per process): on Fintava a
+  `/transaction/wallet-to-wallet` to the merchant wallet (R-19), on Nuvion a
+  book transfer to the operational account's `nuvion_ban` (R-42, NUV-05).
+  Our reference `wawu-pay-<payment id>` (45 characters, inside Nuvion's 64
+  for `unique_reference`). The provider takes its charge on top (R-10), as
+  the quote showed (`fee.providerFeeKobo`; `wawuFeeKobo` 0). Each payment
+  records the provider that took it (`WalletPayment.provider`).
+- **What the seam's answer means.** `walletToWallet` resolves with a receipt
+  only for a transfer the provider has completed; the payment is then
+  `completed` (or held for review when another amount moved). A transfer the
+  provider accepted and has not completed (Nuvion's `pending` or
+  `processing`) is `not_confirmed`, and a lost answer `outcome_unknown`:
+  both may have moved money (`recordMayExist`), so the payment stays
+  `pending` and is settled as below. A provider that has no such transfer
+  yet (`not_supported`, the Nuvion adapter before NUV-05), is not set up, or
+  refuses our key answers `503 provider_unreachable` and gives the key back,
+  as `not_configured` always did. Every such refusal is the provider
+  error's own answer (`toHttpException()`): a frozen wallet `423
+  wallet_frozen`, the provider's limit `403 limit_reached`, anything else
+  `503 provider_unreachable` with the provider's wait; insufficient funds
+  keeps its shortfall answer (below).
+- **WAWU's own account is never the payer** (round 6, R5-1). Before the
+  claim, the payer's wallet is compared with WAWU's account by identity,
+  not by format: the same text, or the provider's `isSameAccount` (Nuvion
+  knows one account by its NGN account number, its id and its
+  `nuvion_ban`). The same account is `503 provider_unreachable`, logged,
+  nothing sent.
+- **The real debit is the record, on every path** (round 6, lead ruling 5;
+  round 7, lead ruling R6-1). The payment records and answers the fee and
+  total the provider really took, never the quoted ones. One function
+  (`completedFigures`, `payment-figures.ts`) decides them from the
+  provider's own record, and one method completes the payment from it
+  (`completeFromRecord`) whichever job gets there first: the provider's
+  answer to the send, the payment sweep's lookup, a ledger row the status
+  check or a webhook settled, or a signed webhook that reports a charge
+  other than the quote (round 8, R7-1). That last one is the only source of
+  a Fintava charge on a lost answer (its lookups carry none): the ledger
+  keeps the buyer's row at its figures (a stop), tells the payment what the
+  provider reported (`LedgerService.onPaymentDebitSighted`, from
+  `LedgerRecordResult.debitSighting`), and the payment completes at those
+  figures through the same method, whether it is still `pending` or the
+  sweep completed it at the quote first (a late report corrects the
+  figures, the flag and the buyer's row, and nothing is delivered twice).
+  A seam record that carries the provider's charge
+  (`ProviderTransaction.feeKobo`: Nuvion's `applicable_fee`) is compared;
+  one that does not (Fintava's lookups and history) leaves the quote
+  standing. Once the provider's charge is known, the buyer's ledger row says
+  it in `providerFeeKobo` on every path, never the quoted one (round 8, F1);
+  history, statements and the receipt still read it through `feeOf`.
+  - **Above the quote** (lead ruling, 10 Oct 2026): the money left the
+    wallet at the provider's figures, so both ledger rows complete at them
+    (the buyer's row takes the provider's charge, exactly as below), and a
+    delivered purchase never sits `pending` in `GET /money/transactions`.
+    `debitReviewSince` is set on the payment and both figures are named on
+    `discrepancy` (NUV-08 reconciles it with the provider); the price moved
+    as asked, so what was paid for is delivered. A row that holds a
+    disagreement about the AMOUNT is still held (a stop); the row's note may
+    keep the quote.
+  - **Below the quote**: nobody is owed anything. Both ledger rows complete
+    at the real figures (the buyer's row takes the provider's charge), the
+    payment records them and the difference on `discrepancy`, and nothing is
+    flagged. A delivered purchase is never left `pending`.
+  - **The merchant (`in`) row completes with the payment on every path**:
+    whichever of the payment sweep and the ledger status check gets there
+    first, both rows end `completed` and the item is delivered once (R6-2).
+- **A reversal** found by the sweep (round 6, lead ruling 7): the provider
+  moved the payment and gave it back, so the payment is `reversed`, both
+  ledger sides `reversed`, nothing delivered, the item free; nothing is
+  owed back by WAWU. A reversal of another amount than the price is a stop
+  (review, the item claimed). A status word the provider has and we do not
+  know is never read as failed: still `pending`, asked again later.
+- **The provider on every ledger row** (round 6, lead ruling 6): NUV-01
+  merged first, so the ledger stamps the running provider on every row it
+  creates. For a payment that is always the payment's own provider: the
+  sweep acts only on the running provider's payments, and another
+  provider's pending payment goes to review without a ledger row. The
+  payer's wallet must be the running provider's too: NUV-01's balance read
+  answers `503 provider_unreachable` for a wallet another provider holds,
+  before anything is claimed or sent.
+- **One open payment per buyer and item** (D1.2). While a payment is
+  `pending` (under review included), another for the same person, kind and
+  target, under any Idempotency-Key and at any moment, is `409
+  payment_in_progress` with `reason.paymentId`. Held by a unique column
+  (`WalletPayment.openKey`) from the claim until the payment is completely
+  finished: cleared when it fails, is reversed, or, once paid, when what was
+  paid for is delivered (the feature's record that the buyer owns it is then
+  in place), never at the moment the provider confirms. The claim is taken before
+  the feature's "already owned" rule is read for the last time, and given
+  back (nothing sent, failed, the key freed) when that now refuses.
+- **Before money moves**, in order, none of which stores anything: the
+  wallet gate, the Idempotency-Key, the PIN, the body, the target, the
+  quote, the merchant cap (`amount_out_of_range`), an open payment for the
+  item, the provider's available balance (`402 insufficient_funds` with
+  `balanceKobo`, `totalKobo`, `shortfallKobo`, "You need ₦523.25 more in
+  your wallet."; a buyer holding exactly the total pays). When the provider
+  itself refuses for funds, the balance is read again: a real shortfall is
+  shown as above; otherwise "Your balance changed. Check it and try again."
+  with no `shortfallKobo` (D3). A shortfall shown is never ₦0.00 or less.
+  WAWU's own purchase limits are checked inside the claim, after these (see
+  "Fees and limits first").
+- **The split** is recorded on the payment (`WalletPayment`), of the price
+  only: the payee's 85% rounded down to the kobo, WAWU's 15% the rest (R-5;
+  ₦1,000 is ₦850 and ₦150, ₦999.99 is ₦849.99 and ₦150.00). No payee: all
+  of it is WAWU's. Landing the 85% in the payee's wallet is WALLET-16's.
+  Deleting the payer's account keeps the payment (the payee's share may be
+  unpaid) with the payer side set to null (`ANONYMISED` in the account data
+  map).
+- **The ledger** gets both sides (buyer `out`, merchant `in`, category
+  `purchase`, `paymentId`, the link) as `pending` in the same transaction as
+  the payment, with the quoted charge as the expected fee, then the
+  provider's figures from its answer. A difference is decided as the
+  paragraph "The real debit is the record" says (a charge below the quote,
+  as Fintava's sandbox's ₦0, completes the rows at what was taken and is kept
+  on the payment's `discrepancy`; one above completes them at what was taken
+  too and is flagged on the payment for MONEY-16 and NUV-08).
+- **Answers** (all `201` with `PaymentView`, stored for the key):
+  - `completed`: the provider moved the price.
+  - `pending`, with `statusMessage` "We're still confirming this payment.
+    Don't pay again; we'll let you know.": the outcome is not known (a
+    timeout, a 5xx, a 2xx without a transaction, a repeated reference, a
+    transfer accepted and not completed), or the provider moved another
+    amount than the price (then straight to review). **Absence is never
+    proof that no money moved** (D1): the provider having no record of the
+    transfer yet keeps it `pending`. The payment sweep (every minute) asks
+    the provider itself (`reconcileSend`: lookup by our reference, then the
+    buyer's history), backing off 1, 2, 4 ... minutes to hourly, never sends again
+    and never refunds; past `PAYMENT_REVIEW_AFTER_HOURS` (PROVISIONAL, 72) it
+    goes to manual review: still `pending`, out of the sweep, the item still
+    blocked. A payment another provider took (written before a switch of
+    `WALLET_PROVIDER`) is never asked of the running one, whose silence
+    about it says nothing: it waits for its ledger rows and goes to review
+    past the bound, its note naming the provider. Whatever settles a payment's ledger row (a webhook, MONEY-08's
+    status check, a reversal) settles the payment at once (D2), including a
+    payment under review or in its hourly backoff, and the webhook consumer's
+    own transaction: the payment hears of its ledger rows once that
+    transaction has committed (R3-3).
+  - `failed`, with `failureReason` "The payment did not go through. No money
+    left your wallet.": only the provider's own refusal of the transfer, or
+    its failed record. The provider's "not enough", a frozen wallet, or the
+    provider being unusable (no key, wrong key, merchant inactive, no such
+    transfer yet) fail the payment, give the key back, and answer `402`,
+    `423 wallet_frozen` or `503`.
+  - `reversed`: the debit came back.
+  A key answers what it stored: a payment answered `pending` stays `pending`
+  on its key after it completes; the app reads the outcome from `GET
+  /money/payments/{id}` (MONEY-19).
+- **Paid twice for one item** (D1.4): if a second payment for the same
+  person and item completes while another was open, both carry a
+  `discrepancy` for MONEY-16; the refund is MONEY-18's (BACKEND_GAPS G-70 in
+  the mobile repo).
+
+---
 
 ## 16. Points (POINTS-01)
 

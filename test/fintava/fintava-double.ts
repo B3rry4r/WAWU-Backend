@@ -31,7 +31,8 @@ export interface CannedAnswer {
   contentType?: string | null;
 }
 
-type Handler = (req: SeenRequest) => CannedAnswer;
+/** May answer later (a test's barrier): the double waits for it. */
+type Handler = (req: SeenRequest) => CannedAnswer | Promise<CannedAnswer>;
 
 export class FintavaDouble {
   readonly seen: SeenRequest[] = [];
