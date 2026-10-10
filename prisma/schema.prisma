@@ -5069,6 +5069,93 @@ model AdDailyTotal {
   @@id([campaignId, day])
 }
 
+// -----------------------------------------------------------------------------
+// Phone push (INBOX-03)
+// -----------------------------------------------------------------------------
+
+/// One phone's Expo push token. The token is the address of a phone, so it is
+/// personal data and never leaves the server: no route returns it and no log
+/// line carries it. `expoPushToken` is unique: a phone belongs to one person
+/// at a time, so when somebody else signs in on it the row moves to them
+/// (userWawuId and createdAt change; see PushTokenService). `createdAt` means
+/// "this person has owned the token since": the sender never pushes a
+/// notification written before it.
+model PushToken {
+  id              String    @id @default(uuid())
+  userWawuId      String
+  /// `ExponentPushToken[...]` or `ExpoPushToken[...]`, as the app gives it.
+  expoPushToken   String    @unique
+  /// `android` or `ios`.
+  platform        String
+  /// The phone's own id and a name for it, both optional and app-supplied.
+  deviceId        String?
+  deviceLabel     String?
+  createdAt       DateTime  @default(now())
+  /// Set by every registration; the oldest-seen token goes first when a
+  /// person is over the cap.
+  lastSeenAt      DateTime  @default(now())
+  /// Set when Expo says the phone no longer takes pushes (DeviceNotRegistered).
+  /// A disabled token is never sent to; a fresh registration of the same token
+  /// clears it.
+  disabledAt      DateTime?
+  disabledReason  String?
+
+  deliveries PushDelivery[]
+
+  @@index([userWawuId])
+  @@index([disabledAt])
+}
+
+/// One notification going to one phone. The notification table is the outbox:
+/// a row here is made for a Notification the notification service already
+/// wrote, once per phone (the unique key), so two hub instances can never push
+/// the same notification to the same phone twice. `pending` -> `claimed` (an
+/// instance took it to check it) -> `sending` (set just before the request to
+/// Expo) -> `sent` (Expo accepted it and gave a ticket) -> `delivered` (the
+/// receipt says ok); or `failed`, `skipped` or `expired` with a `reason`.
+/// Every time column holds UTC, written and compared on the database's clock.
+model PushDelivery {
+  id              String    @id @default(uuid())
+  notificationId  String
+  userWawuId      String
+  pushTokenId     String
+  pushToken       PushToken @relation(fields: [pushTokenId], references: [id], onDelete: Cascade)
+  status          String    @default("pending")
+  reason          String?
+  attempts        Int       @default(0)
+  nextAttemptAt   DateTime  @default(now())
+  /// Set while an instance holds the row (`claimed` or `sending`).
+  lockedAt        DateTime?
+  /// The batch an instance claimed this row in. Only that batch may move it
+  /// on to `sending`, so a row the reaper put back cannot be sent twice.
+  claimId         String?
+  /// True once the reaper found this row mid-send and put it back in the
+  /// queue. It is put back once only; the second time it is failed.
+  interruptedSend Boolean   @default(false)
+  /// Expo's receipt id for this send.
+  ticketId        String?
+  sentAt          DateTime?
+  /// When to ask Expo for the receipt next, and how many times it was asked.
+  receiptDueAt    DateTime?
+  receiptChecks   Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([notificationId, pushTokenId])
+  @@index([status, nextAttemptAt])
+  @@index([status, receiptDueAt])
+  @@index([userWawuId])
+}
+
+/// An account whose deletion is scheduled (`DELETE /account`). Its push
+/// tokens were deleted when the deletion was asked for, a token it registers
+/// afterwards is not stored, and the sender sends it nothing. Deleted with
+/// the account at purge.
+model PushStoppedAccount {
+  userWawuId String   @id
+  createdAt  DateTime @default(now())
+}
+
 /// ─────────────────────────────────────────────────────────────────────────
 /// NUVION WEBHOOK EVENTS (task NUV-01)
 ///
