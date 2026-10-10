@@ -146,5 +146,15 @@ id>` and the offer's `tier_days`. It proves the caller holds the registration's
 phone or email as WAWU ID proved it: the access token's `phoneVerified` and
 `emailVerified` (BACKEND_GAPS G-634 in the mobile repo; WAWU ID sends neither
 until that change merges, and until then every claim answers
-`contact_not_verified`).
+`contact_not_verified`). WAWU ID's `phoneVerified` is true only while the number
+the sign-up code was texted to is still the account's phone, so a number written
+later through WAWU ID's internal phone-change routes is not vouched for.
+
+A claim is idempotent for its own claimer (round 2): the answer it gave
+(`offerName`, `days`, `extended`, `pointsGranted`, `pointsExpireAt`) is kept on
+the registration (`claimResult`, written in the claim's own transaction), and
+the same account sending the same code again is answered with it as a 200 (the
+`tier` read fresh, as `GET /me/tier` answers) with nothing granted a second
+time. Any other account is told `already_claimed`. A row claimed before the
+answer was kept has none, and answers its claimer `claimed_by_you` (409).
 
