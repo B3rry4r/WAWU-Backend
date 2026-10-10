@@ -13152,6 +13152,98 @@
         ]
       }
     },
+    "/api/hub/events/tickets/held": {
+      "get": {
+        "operationId": "EventHeldTicketsController_list",
+        "parameters": [
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "view",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "default": "upcoming",
+              "type": "string",
+              "enum": [
+                "upcoming",
+                "past"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/HeldTicketGroup"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "My tickets, upcoming or past, one row per order and tier.",
+        "tags": [
+          "EventHeldTickets"
+        ]
+      }
+    },
+    "/api/hub/events/tickets/held/{ticketId}": {
+      "get": {
+        "operationId": "EventHeldTicketsController_one",
+        "parameters": [
+          {
+            "name": "ticketId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeldTicketView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "One of my tickets, with the code the door scans.",
+        "tags": [
+          "EventHeldTickets"
+        ]
+      }
+    },
     "/api/hub/admin/creators": {
       "get": {
         "operationId": "AdminCreatorsController_listCreators",
@@ -38023,6 +38115,184 @@
           "outcome",
           "ticket",
           "totals"
+        ]
+      },
+      "HeldTicketEventView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "startsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endsAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "timezone": {
+            "type": "string",
+            "nullable": true
+          },
+          "timeLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "format": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          },
+          "venueName": {
+            "type": "string",
+            "nullable": true
+          },
+          "bannerUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "cancelledAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "startsAt",
+          "endsAt",
+          "timezone",
+          "timeLabel",
+          "format",
+          "location",
+          "venueName",
+          "bannerUrl",
+          "status",
+          "cancelledAt"
+        ]
+      },
+      "HeldTicketStub": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "valid",
+              "checked_in",
+              "void"
+            ]
+          },
+          "checkedInAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "checkedInAt"
+        ]
+      },
+      "HeldTicketGroup": {
+        "type": "object",
+        "properties": {
+          "orderId": {
+            "type": "string"
+          },
+          "ticketTypeId": {
+            "type": "string"
+          },
+          "tierName": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "number"
+          },
+          "event": {
+            "$ref": "#/components/schemas/HeldTicketEventView"
+          },
+          "tickets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeldTicketStub"
+            }
+          }
+        },
+        "required": [
+          "orderId",
+          "ticketTypeId",
+          "tierName",
+          "quantity",
+          "event",
+          "tickets"
+        ]
+      },
+      "HeldTicketView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "orderId": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "valid",
+              "checked_in",
+              "void"
+            ]
+          },
+          "checkedInAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "tierName": {
+            "type": "string"
+          },
+          "holderName": {
+            "type": "string",
+            "nullable": true
+          },
+          "event": {
+            "$ref": "#/components/schemas/HeldTicketEventView"
+          },
+          "siblings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeldTicketStub"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "orderId",
+          "code",
+          "status",
+          "checkedInAt",
+          "tierName",
+          "holderName",
+          "event",
+          "siblings"
         ]
       },
       "QuestionOption": {
