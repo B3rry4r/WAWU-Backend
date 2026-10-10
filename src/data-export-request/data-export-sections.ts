@@ -659,6 +659,33 @@ export const EXPORT_SECTIONS: ExportSection[] = [
         orderBy: NEWEST,
       }),
   },
+  // An event registration this person claimed in the app (JOIN-01): what they
+  // told the event page and what they paid. The reference and transaction id
+  // are payment-provider references, so they stay out (rule 3).
+  {
+    key: 'eventRegistrations',
+    models: ['WaitlistRegistration'],
+    load: (prisma, me) =>
+      prisma.waitlistRegistration.findMany({
+        where: { claimedByWawuId: me },
+        select: {
+          offerId: true,
+          fullName: true,
+          phone: true,
+          email: true,
+          state: true,
+          makes: true,
+          consentAt: true,
+          status: true,
+          amountKobo: true,
+          paidKobo: true,
+          paidAt: true,
+          claimedAt: true,
+          createdAt: true,
+        },
+        orderBy: NEWEST,
+      }),
+  },
   {
     key: 'courseEnrollments',
     models: ['CourseEnrollment'],

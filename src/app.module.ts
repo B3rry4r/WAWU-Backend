@@ -82,6 +82,7 @@ import { LiveModule } from './live/live.module';
 import { InboxModule } from './inbox/inbox.module';
 import { MeModule } from './me/me.module';
 import { PlansModule } from './plans/plans.module';
+import { WaitlistModule } from './waitlist/waitlist.module';
 import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
 import { NuvionWebhookModule } from './nuvion/webhook/nuvion-webhook.module';
 import { PaymentWebhookModule } from './payment-webhook/payment-webhook.module';
@@ -390,6 +391,13 @@ import { AdsEventsModule } from './ads/ads-events.module';
     // src/plans/plans.config.json, which a bad edit stops at boot. `plans` is a
     // first segment nothing else declares; `me/tier` is a literal leaf.
     PlansModule,
+    // The event registration link (task JOIN-01): `waitlist/offers/current`,
+    // `waitlist/registrations` (register, verify, status) and the team's
+    // `admin/waitlist/registrations` (list, export). `waitlist` and
+    // `admin/waitlist` are segments no other controller declares. Declares
+    // the routes only; its service is WaitlistCoreModule's, which the
+    // Flutterwave webhook imports without moving any route.
+    WaitlistModule,
     // Fintava's webhooks (task MONEY-07): POST /webhooks/fintava, recorded
     // once, no money moved. `webhooks/fintava` is a fixed path no other
     // controller declares, beside the unchanged `webhooks/flutterwave`.

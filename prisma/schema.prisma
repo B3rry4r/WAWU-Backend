@@ -5239,3 +5239,57 @@ model PointLedger {
   @@index([lotId])
   @@index([holdId])
 }
+
+enum WaitlistStatus {
+  pending
+  paid
+  failed
+}
+
+/// One person's registration for an event offer, paid by Flutterwave checkout
+/// (JOIN-01, R-48). A waiting list, not an account: nothing here is a WAWU ID
+/// account, and no row names one until the person signs up in the app and
+/// claims it (JOIN-03 writes `claimedByWawuId` and `claimedAt`).
+///
+/// `reference` is the Flutterwave tx_ref, random and at least 128 bits. The
+/// price is copied into `amountKobo` when the person registers, so a later
+/// change to the offer never decides whether their payment counts. `phone` is
+/// E.164 and `email` lower case, both normalised by the server.
+///
+/// Also in the database, and NOT expressible here (Prisma has no partial
+/// unique index): at most one `paid` row per offer and phone, and one per
+/// offer and email (`WaitlistRegistration_one_paid_phone_key`,
+/// `WaitlistRegistration_one_paid_email_key`), and the CHECKs in the
+/// migration. `failed` is only ever a second payment for a person who is
+/// already registered (kept so it can be refunded); a payment Flutterwave
+/// does not confirm leaves the row `pending`.
+model WaitlistRegistration {
+  id              String         @id @default(uuid())
+  offerId         String
+  fullName        String
+  phone           String
+  email           String
+  state           String?
+  makes           String?
+  consentAt       DateTime
+  reference       String         @unique
+  status          WaitlistStatus @default(pending)
+  amountKobo      Int
+  currency        String         @default("NGN")
+  /// Flutterwave's transaction id; set once, when the payment is accepted
+  /// (or recorded as a duplicate), and never shared by two rows.
+  flutterwaveTxId String?        @unique
+  /// What Flutterwave confirmed was paid, in kobo.
+  paidKobo        Int?
+  paidAt          DateTime?
+  /// The WAWU ID account that claimed this payment in the app (JOIN-03).
+  claimedByWawuId String?
+  claimedAt       DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([offerId, status, createdAt])
+  @@index([phone])
+  @@index([email])
+  @@index([claimedByWawuId])
+}
