@@ -13,8 +13,9 @@ import {
 } from './pin-request-key';
 import {
   PIN_RESET_CONFIRM_ROUTE,
-  type PinRequestScope,
+  PinRequestKeys,
 } from './pin-request-keys.service';
+import type { IdempotencyScope } from '../payments/idempotency';
 import { PinResetService } from './pin-reset.service';
 
 /**
@@ -32,7 +33,10 @@ import { PinResetService } from './pin-reset.service';
 @UseGuards(WawuAuthGuard)
 @Controller('money')
 export class MoneyPinResetController {
-  constructor(private readonly resets: PinResetService) {}
+  constructor(
+    private readonly resets: PinResetService,
+    private readonly keyed: PinRequestKeys,
+  ) {}
 
   /**
    * Forgot PIN (W37): send a code to the phone on file. Asked again before
@@ -69,8 +73,10 @@ export class MoneyPinResetController {
   confirmReset(
     @CurrentUser() user: WawuJwtClaims,
     @Body() dto: ConfirmPinResetDto,
-    @CurrentPinRequestKey() key: PinRequestScope | undefined,
+    @CurrentPinRequestKey() key: IdempotencyScope | undefined,
   ): Promise<PinStateView> {
-    return this.resets.confirm(user.sub, dto, key);
+    return this.keyed.under(key, user.sub, (inTransaction) =>
+      this.resets.confirm(user.sub, dto, inTransaction),
+    );
   }
 }

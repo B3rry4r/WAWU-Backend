@@ -1,6 +1,7 @@
 import { randomInt } from 'node:crypto';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import * as argon2 from 'argon2';
+import type { Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
   OTP_SENDER,
@@ -20,11 +21,6 @@ import {
   RESET_WINDOW_MS,
 } from './pin-reset-config';
 import { lockPinPerson } from './pin-person-lock';
-import {
-  okBody,
-  PinRequestKeys,
-  type PinRequestScope,
-} from './pin-request-keys.service';
 import { pinStateView } from './transaction-pin.service';
 
 const NOT_SET_MESSAGE = 'Create your transaction PIN first.';
@@ -144,7 +140,6 @@ export class PinResetService {
     private readonly prisma: PrismaService,
     @Inject(OTP_SENDER) private readonly otp: OtpSender,
     private readonly settings: PinResetSettings,
-    private readonly keys: PinRequestKeys,
   ) {}
 
   /**
@@ -292,14 +287,15 @@ export class PinResetService {
   }
 
   /**
-   * POST /money/pin/reset/confirm. `key` is the request's Idempotency-Key,
-   * when it sent one: its answer is stored in the same transaction as the new
-   * PIN, so a repeat finds either both or neither (WALLET-06 round 2, D1).
+   * POST /money/pin/reset/confirm. `inTransaction` is a step the caller runs
+   * inside the transaction that sets the new PIN: the request's
+   * Idempotency-Key is linked to the PIN there, so a key that names the PIN
+   * means the PIN changed (WALLET-06 round 2, D1; PinRequestKeys.under).
    */
   async confirm(
     wawuUserId: string,
     dto: ConfirmPinResetDto,
-    key?: PinRequestScope,
+    inTransaction?: (tx: Prisma.TransactionClient) => Promise<void>,
   ): Promise<PinStateView> {
     // Nothing secret is compared yet, so a mismatch uses no try of the code.
     if (dto.newPin !== dto.newPinConfirmation) {
@@ -340,9 +336,8 @@ export class PinResetService {
       const row = await tx.transactionPin.findUniqueOrThrow({
         where: { wawuUserId },
       });
-      const view = pinStateView(row, now);
-      if (key) await this.keys.finishIn(tx, key, 200, okBody(view));
-      return view;
+      await inTransaction?.(tx);
+      return pinStateView(row, now);
     });
   }
 

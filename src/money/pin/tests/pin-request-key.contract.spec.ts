@@ -1,16 +1,18 @@
 import { randomUUID } from 'node:crypto';
-import * as argon2 from 'argon2';
 import {
   Money14App,
   type Person,
 } from '../../../../test/money/pin-approval-harness';
 import type { PinResetView, PinStateView } from '../../money-view.type';
 import {
-  canonicalJson,
+  bodyFingerprint,
+  IdempotencyService,
+} from '../../payments/idempotency';
+import { PaymentSettings } from '../../payments/payment-config';
+import {
   PIN_CHANGE_ROUTE,
-  PIN_KEY_KEEP_HOURS,
   PIN_RESET_CONFIRM_ROUTE,
-  PinRequestKeys,
+  pinRequestFingerprint,
   STALE_CLAIM_SECONDS,
 } from '../pin-request-keys.service';
 import { TransactionPinService } from '../transaction-pin.service';
@@ -97,7 +99,16 @@ function confirm(
 }
 
 const rowsFor = (who: Person) =>
-  t.prisma.moneyPinRequestKey.findMany({ where: { wawuUserId: who.id } });
+  t.prisma.moneyIdempotencyKey.findMany({ where: { wawuUserId: who.id } });
+
+/** The fingerprint the store keeps for a request: what a row made by hand must carry to be this request's. */
+const fingerprintOf = (
+  who: Person,
+  method: string,
+  route: string,
+  key: string,
+  body: unknown,
+) => pinRequestFingerprint({ wawuUserId: who.id, method, route, key }, body);
 
 const pinRow = (who: Person) =>
   t.prisma.transactionPin.findUniqueOrThrow({
@@ -152,9 +163,12 @@ describe('PUT /money/pin with an Idempotency-Key', () => {
     const rows = await rowsFor(who);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
+      method: 'PUT',
       route: PIN_CHANGE_ROUTE,
       key,
       state: 'done',
+      // Linked to the person's PIN in the transaction that changed it.
+      resourceId: who.id,
       responseStatus: 200,
     });
   });
@@ -185,12 +199,23 @@ describe('PUT /money/pin with an Idempotency-Key', () => {
         new RegExp(`(^|\\D)${secret}(\\D|$)`),
       );
     }
-    expect(
-      await argon2.verify(
-        row.fingerprint,
-        canonicalJson({ newPin: next, newPinConfirmation: next }),
-      ),
-    ).toBe(true);
+    // The fingerprint is the request's own, argon2id with a salt from person, route and key: the same request always
+    // gives the same text (the store compares them as text), another body or another key never does.
+    const body = { newPin: next, newPinConfirmation: next };
+    expect(row.fingerprint).toBe(
+      await fingerprintOf(who, 'PUT', PIN_CHANGE_ROUTE, row.key, body),
+    );
+    expect(row.fingerprint).not.toBe(
+      await fingerprintOf(who, 'PUT', PIN_CHANGE_ROUTE, row.key, {
+        newPin: first,
+        newPinConfirmation: first,
+      }),
+    );
+    expect(row.fingerprint).not.toBe(
+      await fingerprintOf(who, 'PUT', PIN_CHANGE_ROUTE, newKey(), body),
+    );
+    // And it is not the fast hash the payments use for a body.
+    expect(row.fingerprint).not.toBe(bodyFingerprint(body));
   });
 
   it('the same key with another body is idempotency_key_reused and changes nothing', async () => {
@@ -301,15 +326,17 @@ describe('PUT /money/pin with an Idempotency-Key', () => {
     const who = await holder(first);
     const key = newKey();
     // The first request has taken the key and has not finished.
-    await t.prisma.moneyPinRequestKey.create({
+    await t.prisma.moneyIdempotencyKey.create({
       data: {
         wawuUserId: who.id,
+        method: 'PUT',
         route: PIN_CHANGE_ROUTE,
         key,
-        fingerprint: await argon2.hash(
-          canonicalJson({ newPin: next, newPinConfirmation: next }),
-          { type: argon2.argon2id },
-        ),
+        fingerprint: await fingerprintOf(who, 'PUT', PIN_CHANGE_ROUTE, key, {
+          newPin: next,
+          newPinConfirmation: next,
+        }),
+        state: 'in_progress',
         claimId: randomUUID(),
       },
     });
@@ -331,17 +358,22 @@ describe('PUT /money/pin with an Idempotency-Key', () => {
     const next = pin();
     const who = await holder(first);
     const key = newKey();
-    const dead = await t.prisma.moneyPinRequestKey.create({
+    const dead = await t.prisma.moneyIdempotencyKey.create({
       data: {
         wawuUserId: who.id,
+        method: 'PUT',
         route: PIN_CHANGE_ROUTE,
         key,
-        fingerprint: await argon2.hash('{"x":1}', { type: argon2.argon2id }),
+        fingerprint: await fingerprintOf(who, 'PUT', PIN_CHANGE_ROUTE, key, {
+          newPin: next,
+          newPinConfirmation: next,
+        }),
+        state: 'in_progress',
         claimId: randomUUID(),
       },
     });
     await t.prisma
-      .$executeRaw`UPDATE "MoneyPinRequestKey" SET "updatedAt" = now() - ${`${STALE_CLAIM_SECONDS + 5} seconds`}::interval WHERE "claimId" = ${dead.claimId}`;
+      .$executeRaw`UPDATE "MoneyIdempotencyKey" SET "updatedAt" = now() - ${`${STALE_CLAIM_SECONDS + 5} seconds`}::interval WHERE "claimId" = ${dead.claimId}`;
     const res = await change(who, first, next, key).expect(200);
     expect(res.headers['idempotent-replayed']).toBeUndefined();
     const [row] = await rowsFor(who);
@@ -379,22 +411,24 @@ describe('PUT /money/pin with an Idempotency-Key', () => {
     expect(later.text).toBe(fresh[0].text);
   });
 
-  it('the answer is stored in the same transaction as the change: a request that lost its claim changes nothing', async () => {
+  it('the key is linked to the PIN in the same transaction as the change: a request that lost its claim changes nothing', async () => {
     const first = pin();
     const next = pin();
     const who = await holder(first);
     const before = await pinRow(who);
     const service = t.app.get(TransactionPinService);
+    const keys = t.app.get(IdempotencyService);
+    const lost = {
+      wawuUserId: who.id,
+      method: 'PUT',
+      route: PIN_CHANGE_ROUTE,
+      key: newKey(),
+      fingerprint: 'not-this-requests',
+      claimId: randomUUID(),
+    };
     await expect(
-      service.change(
-        who.id,
-        { newPin: next, newPinConfirmation: next },
-        {
-          wawuUserId: who.id,
-          route: PIN_CHANGE_ROUTE,
-          key: newKey(),
-          claimId: randomUUID(),
-        },
+      service.change(who.id, { newPin: next, newPinConfirmation: next }, (tx) =>
+        keys.attach(tx, lost, who.id),
       ),
     ).rejects.toMatchObject({ code: 'idempotency_in_progress' });
     const after = await pinRow(who);
@@ -560,16 +594,72 @@ describe('POST /money/pin/reset/confirm with an Idempotency-Key', () => {
   });
 });
 
-describe('the keys are kept for a while and then go', () => {
-  it('purge removes rows older than PIN_KEY_KEEP_HOURS and keeps the rest', async () => {
+describe('a request that died after the PIN changed (verifier D1, the store’s crash rule)', () => {
+  async function diedAfterCommit(old: boolean) {
     const first = pin();
+    const next = pin();
     const who = await holder(first);
-    const keys = t.app.get(PinRequestKeys);
+    const key = newKey();
+    const body = { newPin: next, newPinConfirmation: next };
+    // The PIN changed, the key names it, and the answer was never stored.
+    await t.prisma.moneyIdempotencyKey.create({
+      data: {
+        wawuUserId: who.id,
+        method: 'PUT',
+        route: PIN_CHANGE_ROUTE,
+        key,
+        fingerprint: await fingerprintOf(
+          who,
+          'PUT',
+          PIN_CHANGE_ROUTE,
+          key,
+          body,
+        ),
+        state: 'in_progress',
+        claimId: randomUUID(),
+        resourceId: who.id,
+      },
+    });
+    if (old) {
+      await t.prisma
+        .$executeRaw`UPDATE "MoneyIdempotencyKey" SET "updatedAt" = now() - ${`${STALE_CLAIM_SECONDS + 5} seconds`}::interval WHERE "key" = ${key} AND "wawuUserId" = ${who.id}`;
+    }
+    return { first, next, who, key };
+  }
+
+  it('a repeat is told to wait while that request could still be running', async () => {
+    const { first, next, who, key } = await diedAfterCommit(false);
+    const res = await change(who, first, next, key).expect(409);
+    expect(t.body(res).reason).toMatchObject({
+      code: 'idempotency_in_progress',
+    });
+  });
+
+  it('once it cannot be, the repeat is answered with the PIN state as it stands, and the PIN is not looked at', async () => {
+    const { next, who, key } = await diedAfterCommit(true);
+    const res = await change(who, pin(), next, key).expect(200);
+    expect(res.headers['idempotent-replayed']).toBe('true');
+    expect(t.body<PinStateView>(res).data).toMatchObject({
+      isSet: true,
+      triesLeft: 5,
+    });
+    expect((await pinRow(who)).failedTries).toBe(0);
+    const [row] = await rowsFor(who);
+    expect(row.state).toBe('done');
+  });
+});
+
+describe('the keys are kept for a while and then go (the store’s own purge)', () => {
+  it('PIN keys older than the store’s keep time are purged with the payments’, and newer ones stay', async () => {
+    const who = await holder(pin());
+    const hours = t.app.get(PaymentSettings).idempotencyKeyHours;
+    expect(hours).toBeGreaterThanOrEqual(24);
     const mk = async (hoursAgo: number) => {
       const key = newKey();
-      await t.prisma.moneyPinRequestKey.create({
+      await t.prisma.moneyIdempotencyKey.create({
         data: {
           wawuUserId: who.id,
+          method: 'PUT',
           route: PIN_CHANGE_ROUTE,
           key,
           fingerprint: 'x',
@@ -580,13 +670,14 @@ describe('the keys are kept for a while and then go', () => {
         },
       });
       await t.prisma
-        .$executeRaw`UPDATE "MoneyPinRequestKey" SET "updatedAt" = now() - ${`${hoursAgo} hours`}::interval WHERE "key" = ${key} AND "wawuUserId" = ${who.id}`;
+        .$executeRaw`UPDATE "MoneyIdempotencyKey" SET "updatedAt" = now() - ${`${hoursAgo} hours`}::interval WHERE "key" = ${key} AND "wawuUserId" = ${who.id}`;
       return key;
     };
-    const old = await mk(PIN_KEY_KEEP_HOURS + 1);
-    const fresh = await mk(PIN_KEY_KEEP_HOURS - 1);
-    expect(PIN_KEY_KEEP_HOURS).toBeGreaterThanOrEqual(24);
-    expect(await keys.purge()).toBeGreaterThanOrEqual(1);
+    const old = await mk(hours + 1);
+    const fresh = await mk(hours - 1);
+    expect(await t.app.get(IdempotencyService).purge()).toBeGreaterThanOrEqual(
+      1,
+    );
     const left = (await rowsFor(who)).map((r) => r.key);
     expect(left).toContain(fresh);
     expect(left).not.toContain(old);
@@ -599,7 +690,7 @@ describe('nothing secret is kept or logged', () => {
     const logs = t.log.lines.join('\n');
     const answers = t.answered.join('\n');
     const rows = JSON.stringify(
-      await t.prisma.moneyPinRequestKey.findMany({
+      await t.prisma.moneyIdempotencyKey.findMany({
         where: { wawuUserId: { in: t.users } },
         select: {
           wawuUserId: true,

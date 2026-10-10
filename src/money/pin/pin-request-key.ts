@@ -23,13 +23,15 @@ import {
 } from '../money-contract';
 import { MoneyError } from '../money-error';
 import {
-  canonicalJson,
   IDEMPOTENCY_KEY_HEADER,
   IDEMPOTENT_REPLAYED_HEADER,
+  IdempotencyService,
+  IdempotentReplay,
+  type IdempotencyScope,
+} from '../payments/idempotency';
+import {
   KEY_UNUSABLE_MESSAGE,
-  PinRequestKeys,
-  PinRequestReplay,
-  type PinRequestScope,
+  pinRequestFingerprint,
 } from './pin-request-keys.service';
 import {
   takeDeviceApproval,
@@ -39,9 +41,9 @@ import {
 
 /**
  * The guard, the filter and the two route decorators of the optional
- * Idempotency-Key on the PIN routes. The rules and the store are in
- * pin-request-keys.service.ts (kept apart so the PIN service can use them
- * without a circular import through the PIN guard).
+ * Idempotency-Key on the PIN routes. The rules and the way the answer is kept
+ * are in pin-request-keys.service.ts; the store is the payments' own
+ * (`IdempotencyService`, MONEY-17).
  */
 const KEY_FORMAT = /^[A-Za-z0-9_-]{8,128}$/;
 const ROUTE_KEY = 'wawu:pin-request-key-route';
@@ -49,7 +51,7 @@ const SCOPE_KEY = 'wawuPinRequestKeyScope';
 
 type KeyedRequest = Request & {
   user?: WawuJwtClaims;
-  [SCOPE_KEY]?: PinRequestScope;
+  [SCOPE_KEY]?: IdempotencyScope;
 };
 
 /**
@@ -60,7 +62,7 @@ type KeyedRequest = Request & {
 @Injectable()
 export class PinRequestKeyGuard implements CanActivate {
   constructor(
-    private readonly keys: PinRequestKeys,
+    private readonly keys: IdempotencyService,
     private readonly reflector: Reflector,
   ) {}
 
@@ -79,10 +81,18 @@ export class PinRequestKeyGuard implements CanActivate {
       if (typeof raw !== 'string' || !KEY_FORMAT.test(raw)) {
         throw new MoneyError('idempotency_key_required', KEY_UNUSABLE_MESSAGE);
       }
-      req[SCOPE_KEY] = await this.keys.claim(
-        { wawuUserId, route, key: raw },
-        canonicalJson(req.body),
-      );
+      const id = {
+        wawuUserId,
+        method: req.method.toUpperCase(),
+        route,
+        key: raw,
+      };
+      const scope: IdempotencyScope = {
+        ...id,
+        fingerprint: await pinRequestFingerprint(id, req.body),
+      };
+      scope.claimId = await this.keys.claim(scope);
+      req[SCOPE_KEY] = scope;
       return true;
     } catch (err) {
       // Answered here, so the PIN guard never reads these: they go unread,
@@ -97,8 +107,9 @@ export class PinRequestKeyGuard implements CanActivate {
 /**
  * On a route with a key decorator: writes a replay exactly as first sent,
  * with `Idempotent-Replayed: true`; for any other exception, gives back the
- * key this request took (the PIN, the body or the code refused it, so
- * nothing changed), then answers as AllExceptionsFilter does.
+ * key this request took while it names no PIN yet (the PIN, the body or the
+ * code refused it, so nothing changed), then answers as AllExceptionsFilter
+ * does.
  */
 @Injectable()
 @Catch()
@@ -106,11 +117,11 @@ export class PinRequestKeyFilter implements ExceptionFilter {
   private readonly logger = new Logger(PinRequestKeyFilter.name);
   private readonly fallback = new AllExceptionsFilter();
 
-  constructor(private readonly keys: PinRequestKeys) {}
+  constructor(private readonly keys: IdempotencyService) {}
 
   async catch(exception: unknown, host: ArgumentsHost): Promise<void> {
     const http = host.switchToHttp();
-    if (exception instanceof PinRequestReplay) {
+    if (exception instanceof IdempotentReplay) {
       http
         .getResponse<Response>()
         .status(exception.status)
@@ -122,7 +133,7 @@ export class PinRequestKeyFilter implements ExceptionFilter {
     const scope = http.getRequest<KeyedRequest>()[SCOPE_KEY];
     if (scope) {
       try {
-        await this.keys.release(scope);
+        await this.keys.release(scope, true);
       } catch (err) {
         this.logger.error(
           `pin request key: a refused request's key was not given back (${err instanceof Error ? err.name : 'error'})`,
@@ -135,7 +146,7 @@ export class PinRequestKeyFilter implements ExceptionFilter {
 
 /** The key this request holds, or undefined when it sent none. */
 export const CurrentPinRequestKey = createParamDecorator(
-  (_data: unknown, ctx: ExecutionContext): PinRequestScope | undefined =>
+  (_data: unknown, ctx: ExecutionContext): IdempotencyScope | undefined =>
     ctx.switchToHttp().getRequest<KeyedRequest>()[SCOPE_KEY],
 );
 

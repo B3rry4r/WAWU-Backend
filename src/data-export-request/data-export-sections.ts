@@ -949,11 +949,6 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
     { model: 'ApprovalDevice', reason: 'A device key is a secret.' },
     { model: 'ApprovalChallenge', reason: 'A one-time challenge is a secret.' },
     {
-      model: 'MoneyPinRequestKey',
-      reason:
-        'The answer to one PIN change, kept two days so a repeat is answered the same; it holds a hash of a request that carries a new PIN.',
-    },
-    {
       model: 'WalletIdentity',
       reason: 'Keyed BVN and NIN hashes are identity records.',
     },

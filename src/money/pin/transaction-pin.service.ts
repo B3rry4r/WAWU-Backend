@@ -1,17 +1,13 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as argon2 from 'argon2';
+import type { Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { ChangePinDto, SetPinDto } from '../dto/money-request.dto';
 import { MoneyError } from '../money-error';
 import { isUniqueViolation } from '../prisma-unique';
 import type { PinStateView } from '../money-view.type';
 import { lockPinPerson } from './pin-person-lock';
-import {
-  okBody,
-  PinRequestKeys,
-  type PinRequestScope,
-} from './pin-request-keys.service';
 
 /**
  * Wrong tries in a row before the PIN locks. The ticket's number (MONEY-09,
@@ -146,7 +142,6 @@ export class TransactionPinService {
   constructor(
     private readonly prisma: PrismaService,
     config: ConfigService,
-    private readonly keys: PinRequestKeys,
   ) {
     this.lockMs =
       pinLockMinutes(config.get<string>(PIN_LOCK_MINUTES_KEY)) * 60_000;
@@ -189,14 +184,15 @@ export class TransactionPinService {
    * TransactionPinGuard on the same request; this replaces it and ends any
    * PIN reset that is still open.
    *
-   * `key` is the request's Idempotency-Key, when it sent one: its answer is
-   * stored in the same transaction as the change, so a repeat finds either
-   * both or neither (WALLET-06 round 2, D1).
+   * `inTransaction` is a step the caller runs inside the transaction that
+   * changes the PIN: the request's Idempotency-Key is linked to the PIN there,
+   * so a key that names the PIN means the PIN changed (WALLET-06 round 2, D1;
+   * PinRequestKeys.under).
    */
   async change(
     wawuUserId: string,
     dto: ChangePinDto,
-    key?: PinRequestScope,
+    inTransaction?: (tx: Prisma.TransactionClient) => Promise<void>,
   ): Promise<PinStateView> {
     if (dto.newPin !== dto.newPinConfirmation) {
       throw new MoneyError('pin_mismatch', MISMATCH_MESSAGE);
@@ -221,9 +217,8 @@ export class TransactionPinService {
           where: { wawuUserId, usedAt: null, supersededAt: null },
           data: { supersededAt: now },
         });
-        const view = pinStateView(changed, new Date());
-        if (key) await this.keys.finishIn(tx, key, 200, okBody(view));
-        return view;
+        await inTransaction?.(tx);
+        return pinStateView(changed, new Date());
       });
     } catch (err) {
       if (isNoMatch(err)) throw new MoneyError('pin_not_set', NOT_SET_MESSAGE);

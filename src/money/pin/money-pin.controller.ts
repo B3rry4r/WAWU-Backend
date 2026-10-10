@@ -19,10 +19,8 @@ import {
   CurrentPinRequestKey,
   RequireTransactionPinWithKey,
 } from './pin-request-key';
-import {
-  PIN_CHANGE_ROUTE,
-  type PinRequestScope,
-} from './pin-request-keys.service';
+import { PIN_CHANGE_ROUTE, PinRequestKeys } from './pin-request-keys.service';
+import type { IdempotencyScope } from '../payments/idempotency';
 import { RequireTransactionPin } from './transaction-pin.guard';
 import { TransactionPinService } from './transaction-pin.service';
 
@@ -44,7 +42,10 @@ import { TransactionPinService } from './transaction-pin.service';
 @UseGuards(WawuAuthGuard)
 @Controller('money')
 export class MoneyPinController {
-  constructor(private readonly pins: TransactionPinService) {}
+  constructor(
+    private readonly pins: TransactionPinService,
+    private readonly keyed: PinRequestKeys,
+  ) {}
 
   /** Is a PIN set, when it last changed, tries left, and the lock if any. */
   @Get('pin')
@@ -86,9 +87,11 @@ export class MoneyPinController {
   change(
     @CurrentUser() user: WawuJwtClaims,
     @Body() dto: ChangePinDto,
-    @CurrentPinRequestKey() key: PinRequestScope | undefined,
+    @CurrentPinRequestKey() key: IdempotencyScope | undefined,
   ): Promise<PinStateView> {
-    return this.pins.change(user.sub, dto, key);
+    return this.keyed.under(key, user.sub, (inTransaction) =>
+      this.pins.change(user.sub, dto, inTransaction),
+    );
   }
 
   /**
