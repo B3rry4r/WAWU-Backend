@@ -28,7 +28,7 @@ import { pinStateView } from './transaction-pin.service';
  * - it never arrived: the repeat is the request, and runs;
  * - it is still running: `409 idempotency_in_progress`, wait and ask again;
  * - someone else changed the PIN meanwhile: the repeat is refused as any
- *   request with a wrong PIN or a dead code is, and says so.
+ *   request with a wrong PIN or a code that no longer works is, and says so.
  *
  * Without the header nothing here runs and nothing is stored: the routes
  * answer exactly as before. The same key sent with another body is `409

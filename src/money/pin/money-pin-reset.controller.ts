@@ -58,7 +58,7 @@ export class MoneyPinResetController {
 
   // An optional Idempotency-Key makes a repeat answer the first outcome
   // (WALLET-06 round 2): a code works once, so without it the repeat of a
-  // reset that landed is refused as a dead code. See pin-request-keys.service.ts.
+  // reset that landed is refused as a code already used. See pin-request-keys.service.ts.
   /** The code and the new PIN. Clears the lock and the wrong-try count, and turns biometric approval off. */
   @Post('pin/reset/confirm')
   @HttpCode(200)
