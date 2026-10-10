@@ -49,7 +49,7 @@ export class CreateProductDraftDto {
   description?: string;
 
   @IsOptional()
-  @IsIn(CATEGORY_IDS as unknown as string[], {
+  @IsIn(CATEGORY_IDS, {
     message: `category must be one of: ${CATEGORY_IDS.join(', ')}`,
   })
   category?: CategoryId;
@@ -102,7 +102,7 @@ export class UpdateProductDraftDto {
   description?: string;
 
   @IsOptional()
-  @IsIn(CATEGORY_IDS as unknown as string[], {
+  @IsIn(CATEGORY_IDS, {
     message: `category must be one of: ${CATEGORY_IDS.join(', ')}`,
   })
   category?: CategoryId;

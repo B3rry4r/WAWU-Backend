@@ -22,7 +22,7 @@ import { StorageModule } from '../../storage/storage.module';
 import { TICK_UPLOADS } from '../../common/creator-allowance';
 import { PLANS_CONFIG, type PlansConfig } from '../plans-config';
 import { PlansModule } from '../plans.module';
-import type { MyTierView, PlansView } from '../plans-view.type';
+import type { MyTierView, PlansView, PlanTierView } from '../plans-view.type';
 
 /**
  * TIER-02 over HTTP, on the real database and the real modules: "Publishing,
@@ -70,6 +70,9 @@ type Envelope = {
   reason?: any;
 };
 const body = (r: Response): Envelope => r.body as Envelope;
+/** The tier offers a refusal carried, as the plan's own type. */
+const tiersOf = (r: Response): PlanTierView[] =>
+  (body(r).reason as { tiers: PlanTierView[] }).tiers;
 
 const STORAGE_ENV: Record<string, string> = {
   STORAGE_ENDPOINT: 'https://bucket.example-storage.dev',
@@ -149,9 +152,9 @@ describe('Publishing needs a tier (TIER-02) over HTTP', () => {
       contentLength: 1000,
     });
   const myTier = async (id: string): Promise<MyTierView> =>
-    body(await get(id, '/me/tier').expect(200)).data;
+    body(await get(id, '/me/tier').expect(200)).data as MyTierView;
   const plansFor = async (id: string): Promise<PlansView> =>
-    body(await get(id, '/plans').expect(200)).data;
+    body(await get(id, '/plans').expect(200)).data as PlansView;
 
   /** A tier row as the purchase path will write it: index 0 is the cheapest. */
   async function giveTier(
@@ -322,14 +325,10 @@ describe('Publishing needs a tier (TIER-02) over HTTP', () => {
       });
       expect(body(res).reason.message).toBe(body(res).message);
       // The offers ARE GET /plans' tiers: same ids, same order, same prices.
-      expect(
-        body(res).reason.tiers.map((t: any) => [
-          t.id,
-          t.priceMinor,
-          t.products,
-        ]),
-      ).toEqual(plan.tiers.map((t) => [t.id, t.priceMinor, t.products]));
-      expect(body(res).reason.tiers.map((t: any) => t.preselected)).toEqual(
+      expect(tiersOf(res).map((t) => [t.id, t.priceMinor, t.products])).toEqual(
+        plan.tiers.map((t) => [t.id, t.priceMinor, t.products]),
+      );
+      expect(tiersOf(res).map((t) => t.preselected)).toEqual(
         plan.tiers.map((t) => t.preselected),
       );
     });
@@ -375,7 +374,7 @@ describe('Publishing needs a tier (TIER-02) over HTTP', () => {
       const plan = await plansFor(id);
       expect(plan.currency).toBe('USD');
       expect(body(res).reason.currency).toBe('USD');
-      expect(body(res).reason.tiers.map((t: any) => t.priceMinor)).toEqual(
+      expect(tiersOf(res).map((t) => t.priceMinor)).toEqual(
         plan.tiers.map((t) => t.priceMinor),
       );
       // One currency in the whole answer.
@@ -429,7 +428,7 @@ describe('Publishing needs a tier (TIER-02) over HTTP', () => {
         },
       });
       // Way two: a tier that allows more.
-      expect(body(res).reason.tiers.map((t: any) => t.id)).toEqual(
+      expect(tiersOf(res).map((t) => t.id)).toEqual(
         plan.tiers.filter((t) => t.products > first.products).map((t) => t.id),
       );
       expect(body(res).reason.tiers.length).toBeGreaterThan(0);
