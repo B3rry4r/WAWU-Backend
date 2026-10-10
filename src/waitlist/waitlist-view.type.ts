@@ -73,6 +73,8 @@ export interface AdminWaitlistRegistrationView {
   paidKobo: number | null;
   paidAt: string | null;
   reference: string;
+  /** The launch access code the payer sees, "XXXX XXXX": the first 8 characters of the reference after `wawu-join-`, upper-case, unique across all registrations. */
+  accessCode: string;
   flutterwaveTransactionId: string | null;
   /** The WAWU ID account that claimed the payment in the app; null until claimed. */
   claimedByWawuId: string | null;

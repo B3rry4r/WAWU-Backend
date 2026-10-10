@@ -1,5 +1,5 @@
 import { toLocalNigerianPhone } from '../wallet-provider/nigerian-phone';
-import { EMAIL_MAX } from './waitlist-config';
+import { ACCESS_CODE_LENGTH, EMAIL_MAX } from './waitlist-config';
 
 /**
  * A phone as the registration stores it (JOIN-01). Nigerian mobiles in any of
@@ -35,4 +35,14 @@ export function maskPhone(e164: string): string {
 /** The first word of a full name, for the pages that greet the person. */
 export function firstNameOf(fullName: string): string {
   return fullName.trim().split(/\s+/)[0] ?? '';
+}
+
+/**
+ * The launch access code as the payer reads it: "XXXX XXXX". `code` is the
+ * stored 8 character, upper-case code (the database computes it from the
+ * reference, see `WaitlistRegistration.accessCode`).
+ */
+export function accessCodeLabel(code: string): string {
+  const half = ACCESS_CODE_LENGTH / 2;
+  return `${code.slice(0, half)} ${code.slice(half)}`;
 }

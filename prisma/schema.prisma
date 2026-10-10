@@ -5451,6 +5451,12 @@ model WaitlistRegistration {
   makes           String?
   consentAt       DateTime
   reference       String         @unique
+  /// The launch access code the payer sees as "XXXX XXXX": the first 8
+  /// characters of the reference after `wawu-join-`, upper-case. A column the
+  /// database computes from `reference` (GENERATED ALWAYS ... STORED), so it
+  /// can never disagree with the reference and the code never writes it; the
+  /// unique index is what makes it unique across ALL registrations.
+  accessCode      String         @unique @default(dbgenerated())
   status          WaitlistStatus @default(pending)
   amountKobo      Int
   currency        String         @default("NGN")
