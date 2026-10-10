@@ -70,9 +70,9 @@ export class WaitlistSweepService {
    * many it marked paid.
    *
    * The pages are walked with a keyset cursor on (createdAt, id), the same
-   * order the query sorts by, so a row is never read twice or skipped: not
-   * when rows leave the window because this run just marked them paid, not
-   * when many rows share one created time, and not when the run is long. A
+   * order the query sorts by, so each row is read once and none is passed
+   * over: even when rows leave the window because this run just marked them
+   * paid, when many rows share one created time, or when the run is long. A
    * run that stopped after one page would leave the same oldest rows first
    * every time and a newer payer unreached.
    */
