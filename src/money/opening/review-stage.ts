@@ -197,6 +197,17 @@ export function numbersFailed(r: ReviewRecord): boolean {
   return notPassed(r.bvnStatus) || notPassed(r.ninStatus);
 }
 
+/**
+ * True when the review refused the BVN itself (its own word is a not-passed
+ * word). A refusal about the NIN, the documents or the details leaves the BVN
+ * on Nuvion's entity as it was, so whoever holds it keeps holding it (round
+ * 4, N11). Any other word for the BVN (pending, approved, one we do not
+ * know) is not a refusal: the safe side is to keep the hold.
+ */
+export function bvnRefused(r: ReviewRecord): boolean {
+  return notPassed(r.bvnStatus);
+}
+
 /** The review as GET /money/wallet tells it. */
 export function reviewViewOf(r: ReviewRecord): WalletReviewView {
   const stage = reviewStageOf(r);
@@ -270,16 +281,12 @@ export interface DecisionRead {
   identificationStatus: string | null;
 }
 
-/** A check word that is still waiting for a verdict. */
-function waiting(word: string | null): boolean {
-  const w = (word ?? '').trim().toLowerCase();
-  return w === '' || w === 'pending' || w === 'incomplete';
-}
-
 /**
- * Whether any check came to a verdict that differs from the one recorded: a
- * word that is not "waiting" and not what was held. A check going back to
- * `pending` (a new document uploaded) is not a verdict.
+ * Whether any check came to a failing verdict that differs from the one
+ * recorded: a not-passed word (`NOT_PASSED`) that is not what was held. A
+ * check going back to `pending` (a new document uploaded) is not a verdict,
+ * and neither is a check that comes back approving (round 4, N13): that is
+ * the review progressing, not a new rejection.
  */
 export function verdictMoved(held: DecisionHeld, read: DecisionRead): boolean {
   const pairs: Array<[string | null, string | null]> = [
@@ -291,7 +298,7 @@ export function verdictMoved(held: DecisionHeld, read: DecisionRead): boolean {
   ];
   return pairs.some(
     ([was, now]) =>
-      !waiting(now) &&
+      notPassed(now) &&
       (now ?? '').trim().toLowerCase() !== (was ?? '').trim().toLowerCase(),
   );
 }
@@ -306,10 +313,12 @@ export function verdictMoved(held: DecisionHeld, read: DecisionRead): boolean {
  *   decision (a replay, a delivery that only bumped Nuvion's `updated`):
  *   the same decision, nothing changes and nobody is told twice;
  * - the same word again after the person submitted (corrected details, a
- *   resubmit): new when Nuvion's check words moved to a verdict since they
- *   were recorded. With every word as it was, nothing says a review
- *   happened: the entity is only echoing the submission itself (Nuvion's
- *   `entities.updated` fires for our own PATCH), so it is not new.
+ *   resubmit): new when one of Nuvion's check words moved to a failing
+ *   verdict since they were recorded (N13: a check coming back approving, or
+ *   going back to waiting, is not a rejection). With every word as it was,
+ *   nothing says a review happened: the entity is only echoing the
+ *   submission itself (Nuvion's `entities.updated` fires for our own PATCH),
+ *   so it is not new.
  *
  * Nuvion's own `updated` time is not read: it moves for things that are not
  * decisions and may not move for one that is.

@@ -2188,22 +2188,16 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       await open(other).expect(409);
     });
 
-    it.each([
-      ['the BVN', { bvnStatus: 'rejected' }],
-      ['the NIN', { ninStatus: 'rejected' }],
-    ])(
-      'a rejection that names the identity itself (%s) lets the BVN go at once',
-      async (_what, words) => {
-        const owner = person();
-        const other = person({ bvn: owner.body.bvn });
-        const e = await opened(owner);
-        decide(e, 'rejected', words);
-        await handler.handle(delivery(e));
-        expect(await held(owner)).toBe(false);
-        fresh();
-        await open(other).expect(200);
-      },
-    );
+    it('a rejection of the BVN itself lets the BVN go at once', async () => {
+      const owner = person();
+      const other = person({ bvn: owner.body.bvn });
+      const e = await opened(owner);
+      decide(e, 'rejected', { bvnStatus: 'rejected' });
+      await handler.handle(delivery(e));
+      expect(await held(owner)).toBe(false);
+      fresh();
+      await open(other).expect(200);
+    });
 
     it.each(['failed', 'suspended'])(
       'an entity with an account that Nuvion later says is %s keeps its BVN held (support decides) (N1)',
@@ -2596,8 +2590,8 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
     }
 
     it('openings refused on the BVN hold nothing and never fill the sweep: an expirable one behind a page of them still expires', async () => {
-      // More than one pass may look at (HOLD_SWEEP_MAX_EXAMINED): only the
-      // candidate query's own filter keeps them out of the way.
+      // More than a page: the candidate query's own filter keeps them out of
+      // the sweep's way altogether (they would cost it a read each).
       for (let i = 0; i < 520; i += 1) {
         await plant(60, { status: 'rejected', bvnStatus: 'rejected' });
       }
@@ -3137,6 +3131,496 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       expect(b.headers['content-type']).toBe(a.headers['content-type']);
       expect(b.headers['cache-control']).toBe(a.headers['cache-control']);
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // Round 4: the verifier's N11 to N15 (round 3 verifier report), the lead's
+  // rulings for this round.
+  // -------------------------------------------------------------------------
+  describe('round 4, N11: a BVN Nuvion has approved stays held while the opening is alive', () => {
+    const NIN_ONLY: Words = {
+      bvnStatus: 'approved',
+      ninStatus: 'rejected',
+      documentStatus: 'approved',
+      addressProofStatus: 'approved',
+    };
+
+    it('a refusal that names the NIN only: a stranger with the same BVN is refused, nothing is sent, and the owner corrects her NIN with her own BVN', async () => {
+      const owner = person();
+      const stranger = person({ bvn: owner.body.bvn });
+      const e = await opened(owner);
+      decide(e, 'rejected', NIN_ONLY);
+      await handler.handle(delivery(e));
+      const view = (await wallet(owner)).review!;
+      expect(view.stage).toBe('rejected');
+      expect(view.reasons.map((r) => r.code)).toEqual(['nin_not_verified']);
+      expect(await held(owner)).toBe(true);
+      fresh();
+      const res = await open(stranger).expect(409);
+      expect(body(res).reason).toEqual({
+        code: 'identity_has_wallet',
+        message: HELD,
+      });
+      expect(standin.seen).toEqual([]);
+      expect(await row(stranger)).toBeNull();
+      await open(owner, { ...owner.body, nin: digits(11) }).expect(200);
+      const patch = sent('PATCH', `/individual-entities/${e.id}`);
+      expect(patch).toHaveLength(1);
+      const p = (patch[0].body as { person: Record<string, unknown> }).person;
+      // A refusal of the NIN sends both numbers again.
+      expect(p.bvn).toBe(owner.body.bvn);
+      expect(typeof p.nin).toBe('string');
+      expect(await held(owner)).toBe(true);
+      await open(stranger).expect(409);
+    });
+
+    it('eight races of the owner correcting against a stranger opening with her BVN: the stranger wins none', async () => {
+      let strangerWins = 0;
+      let ownerRefused = 0;
+      for (let k = 0; k < 8; k += 1) {
+        const owner = person();
+        const stranger = person({ bvn: owner.body.bvn });
+        const e = await opened(owner);
+        decide(e, 'rejected', NIN_ONLY);
+        await handler.handle(delivery(e));
+        fresh();
+        const [mine, theirs] = await Promise.all(
+          k % 2 === 0
+            ? [open(owner), open(stranger)]
+            : [open(stranger), open(owner)].reverse(),
+        );
+        if (theirs.status === 200) strangerWins += 1;
+        if (mine.status !== 200) ownerRefused += 1;
+        expect(
+          creates().filter(
+            (c) =>
+              (c.body as { person: { bvn: string } }).person.bvn ===
+              owner.body.bvn,
+          ),
+        ).toHaveLength(0);
+      }
+      expect(strangerWins).toBe(0);
+      expect(ownerRefused).toBe(0);
+    });
+
+    it.each([
+      'rejected',
+      'REJECTED',
+      ' rejected ',
+      'failed',
+      'declined',
+      'not-approved',
+      'invalid',
+      'unverified',
+    ])(
+      'the BVN word %j is the BVN refused: the hold is let go',
+      async (word) => {
+        const owner = person();
+        const other = person({ bvn: owner.body.bvn });
+        const e = await opened(owner);
+        decide(e, 'rejected', {
+          bvnStatus: word,
+          ninStatus: 'approved',
+          documentStatus: 'approved',
+          addressProofStatus: 'approved',
+        });
+        await handler.handle(delivery(e));
+        expect(await held(owner)).toBe(false);
+        fresh();
+        await open(other).expect(200);
+      },
+    );
+
+    it.each([
+      'approved',
+      'pending',
+      'suspended',
+      'denied',
+      'mismatch',
+      'refused',
+      'error',
+      'no_match',
+    ])(
+      'the BVN word %j is not a refusal of the BVN: the hold stays (the safe side)',
+      async (word) => {
+        const owner = person();
+        const other = person({ bvn: owner.body.bvn });
+        const e = await opened(owner);
+        decide(e, 'rejected', {
+          bvnStatus: word,
+          ninStatus: 'rejected',
+          documentStatus: 'approved',
+          addressProofStatus: 'approved',
+        });
+        await handler.handle(delivery(e));
+        expect(await held(owner)).toBe(true);
+        fresh();
+        await open(other).expect(409);
+      },
+    );
+
+    it('a refusal of the NIN holds the BVN, so it can run out like any other hold: idle for the hold days it expires and the BVN is let go', async () => {
+      const x = person();
+      const y = person({ bvn: x.body.bvn });
+      const e = await opened(x);
+      decide(e, 'rejected', NIN_ONLY);
+      await handler.handle(delivery(e));
+      await open(y).expect(409);
+      await ageOpening(x, 15);
+      await openingSvc().expireIdleHolds();
+      expect(await row(x)).toMatchObject({
+        state: 'expired',
+        failure: EXPIRED_IDLE,
+      });
+      expect(await held(x)).toBe(false);
+      fresh();
+      await open(y).expect(200);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe('round 4, N12: the address limit holds under any burst', () => {
+    const place = () => `198.18.${randomInt(1, 250)}.${randomInt(1, 250)}`;
+    const reserved = (people: Person[]) =>
+      prisma.bvnCheckAttempt.count({
+        where: {
+          wawuUserId: { in: people.map((p) => p.id) },
+          outcome: 'reserved',
+        },
+      });
+    const tries = (people: Person[]) =>
+      prisma.bvnCheckAttempt.findMany({
+        where: {
+          wawuUserId: { in: people.map((p) => p.id) },
+          addressKey: { not: null },
+        },
+      });
+    const kinds = (res: Response[]) => ({
+      ok: res.filter((r) => r.status === 200).length,
+      limited: res.filter(
+        (r) =>
+          r.status === 429 && body(r).reason?.code === 'open_address_limited',
+      ).length,
+    });
+
+    it('25 accounts open at once from one address (the file sets 4): exactly 4 proceed and 21 are open_address_limited, with 4 entities and nothing left reserved', async () => {
+      const a = place();
+      const who = Array.from({ length: 25 }, () => person());
+      const res = await Promise.all(who.map((p) => openFrom(p, a)));
+      expect(kinds(res)).toEqual({ ok: 4, limited: 21 });
+      expect(creates()).toHaveLength(4);
+      const rows = await tries(who);
+      expect(rows).toHaveLength(4);
+      expect(rows.every((r) => r.outcome === 'opening')).toBe(true);
+      expect(await reserved(who)).toBe(0);
+      expect(
+        await prisma.fintavaWalletOpening.count({
+          where: { wawuUserId: { in: who.map((p) => p.id) } },
+        }),
+      ).toBe(4);
+      const next = await openFrom(person(), a).expect(429);
+      expect(body(next).reason?.code).toBe('open_address_limited');
+    });
+
+    it('25 probes of one held BVN at once from one address: exactly 4 learn the answer, the other 21 are limited', async () => {
+      const holder = person();
+      await open(holder).expect(200);
+      const a = place();
+      const who = Array.from({ length: 25 }, () =>
+        person({ bvn: holder.body.bvn }),
+      );
+      const res = await Promise.all(who.map((p) => openFrom(p, a)));
+      expect(res.filter((r) => r.status === 409)).toHaveLength(4);
+      expect(kinds(res).limited).toBe(21);
+      expect(await reserved(who)).toBe(0);
+      expect(await tries(who)).toHaveLength(4);
+    });
+
+    it('25 corrections at once from one address: exactly 4 are sent, 21 are limited, and each person keeps the refusal they had', async () => {
+      const who = Array.from({ length: 25 }, () => person());
+      const made: Held[] = [];
+      for (const p of who) made.push(await opened(p, 'documents'));
+      fresh();
+      const a = place();
+      const res = await Promise.all(who.map((p) => openFrom(p, a)));
+      expect(kinds(res)).toEqual({ ok: 4, limited: 21 });
+      expect(sent('PATCH', /^\/individual-entities\//)).toHaveLength(4);
+      expect(await reserved(who)).toBe(0);
+      const refused = res
+        .map((r, k) => ({ r, p: who[k] }))
+        .filter((x) => x.r.status === 429);
+      for (const { p } of refused.slice(0, 3)) {
+        expect((await wallet(p)).review?.stage).toBe('rejected');
+      }
+    });
+
+    it('ten taps by one person at one address take one place: the three other accounts the limit leaves all proceed, the next is limited', async () => {
+      const a = place();
+      const x = person();
+      const taps = await Promise.all(
+        Array.from({ length: 10 }, () => openFrom(x, a)),
+      );
+      expect(taps.map((r) => r.status)).toEqual(Array(10).fill(200));
+      expect(creates()).toHaveLength(1);
+      expect(await tries([x])).toHaveLength(1);
+      expect(await reserved([x])).toBe(0);
+      const others = [person(), person(), person()];
+      for (const o of others) await openFrom(o, a).expect(200);
+      await openFrom(person(), a).expect(429);
+    });
+
+    it('a request that fails before its claim gives its place back', async () => {
+      const a = place();
+      const x = person();
+      const fail = jest
+        .spyOn(prisma.fintavaWalletOpening, 'create')
+        .mockRejectedValueOnce(new Error('the database went away'));
+      try {
+        const res = await openFrom(x, a);
+        expect(res.status).toBe(500);
+      } finally {
+        fail.mockRestore();
+      }
+      expect(await reserved([x])).toBe(0);
+      expect(await tries([x])).toHaveLength(0);
+      for (let i = 0; i < 4; i += 1) await openFrom(person(), a).expect(200);
+      await openFrom(person(), a).expect(429);
+    });
+
+    it('a request with no client address writes no place', async () => {
+      const x = person();
+      await open(x).expect(200);
+      expect(
+        await prisma.bvnCheckAttempt.findMany({ where: { wawuUserId: x.id } }),
+      ).toEqual([
+        expect.objectContaining({ outcome: 'opening', addressKey: null }),
+      ]);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe('round 4, N13: only a check moving to a failing word is a new rejection', () => {
+    const notes = (who: Person) =>
+      prisma.notification.count({
+        where: { userWawuId: who.id, kind: 'identity_review' },
+      });
+
+    it('after a document refusal and the correction, the document check comes back approved with the entity still rejected: no notice, no new stage, and the decision time does not move', async () => {
+      const x = person();
+      const e = await opened(x, 'documents');
+      fresh();
+      await open(x).expect(200);
+      expect((await wallet(x)).review?.stage).toBe('needs_documents');
+      await sleep(5);
+      const told = await notes(x);
+      const decidedAt = (await entityRow(x))!.decidedAt;
+      e.documentStatus = 'approved';
+      e.updated += 1;
+      await handler.handle(delivery(e));
+      await handler.handle(delivery(e));
+      const view = (await wallet(x)).review!;
+      expect(view).toMatchObject({
+        stage: 'needs_documents',
+        canResubmit: false,
+        reasons: [],
+      });
+      expect(await notes(x)).toBe(told);
+      expect((await entityRow(x))!.decidedAt).toEqual(decidedAt);
+      expect((await entityRow(x))!.documentStatus).toBe('approved');
+      // A failing word is still a rejection: told once, may send again.
+      e.addressProofStatus = 'rejected';
+      e.updated += 1;
+      await handler.handle(delivery(e));
+      expect((await wallet(x)).review).toMatchObject({
+        stage: 'rejected',
+        canResubmit: true,
+      });
+      expect(await notes(x)).toBe(told + 1);
+    });
+
+    it('after a BVN correction, the BVN check comes back approved with the entity still rejected: not a new rejection', async () => {
+      const x = person();
+      const e = await opened(x, 'bvn');
+      fresh();
+      await open(x, { ...x.body, bvn: newBvn() }).expect(200);
+      await sleep(5);
+      const told = await notes(x);
+      e.bvnStatus = 'approved';
+      e.ninStatus = 'approved';
+      e.updated += 1;
+      await handler.handle(delivery(e));
+      expect((await wallet(x)).review?.stage).toBe('needs_documents');
+      expect(await notes(x)).toBe(told);
+    });
+
+    it('a check going back to waiting and then to a failing word is a rejection, told once', async () => {
+      const x = person();
+      const e = await opened(x, 'documents');
+      fresh();
+      await open(x).expect(200);
+      await sleep(5);
+      const told = await notes(x);
+      e.documentStatus = 'pending';
+      e.updated += 1;
+      await handler.handle(delivery(e));
+      expect(await notes(x)).toBe(told);
+      e.documentStatus = 'rejected';
+      e.updated += 1;
+      await handler.handle(delivery(e));
+      await handler.handle(delivery(e));
+      expect((await wallet(x)).review?.stage).toBe('rejected');
+      expect(await notes(x)).toBe(told + 1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe('round 4, N14: any length of separators between any digits is masked', () => {
+    const digitsIn = (script: 'ascii' | 'fullwidth' | 'arabic', n: string) =>
+      script === 'ascii'
+        ? n
+        : n.replace(/\d/g, (d) =>
+            String.fromCharCode(
+              (script === 'fullwidth' ? 0xff10 : 0x0660) + Number(d),
+            ),
+          );
+    const NUMBER = '22217390137';
+    const GAPS = [1, 9, 39, 40, 41, 60, 100];
+    const SEPARATORS = ['/', '+', 'x', 'X', '-', ' ', '_'];
+    const CASES: Array<[string, string]> = [];
+    for (const script of ['ascii', 'fullwidth', 'arabic'] as const) {
+      for (const sep of SEPARATORS) {
+        for (const gap of GAPS)
+          CASES.push([`${script} ${sep} x ${gap}`, `${script}|${sep}|${gap}`]);
+      }
+    }
+
+    it.each(CASES)(
+      '%s: stored words and the log of a refused create keep at most the last 4 digits',
+      async (_name, spec) => {
+        const [script, sep, gap] = spec.split('|') as [
+          'ascii' | 'fullwidth' | 'arabic',
+          string,
+          string,
+        ];
+        const glue = sep.repeat(Number(gap));
+        const n = digitsIn(script, NUMBER);
+        const text = `BVN ${n.slice(0, 4)}${glue}${n.slice(4, 7)}${glue}${n.slice(7)} does not match`;
+        const stored = person();
+        const e = await opened(stored);
+        e.extra = { rejection_reason: text };
+        decide(e, 'rejected');
+        await handler.handle(delivery(e));
+        const words = (await entityRow(stored))!.rejectionReasons.join(' | ');
+        expect(words).toContain('does not match');
+        expect(words.replace(/\D/g, '').length).toBeLessThanOrEqual(4);
+        const before = captured.length;
+        const refused = person();
+        createMode = { refuse: 'error_validation_error', message: text };
+        await open(refused).expect(422);
+        createMode = 'ok';
+        const logged = captured.slice(before).join('\n');
+        const at = logged.indexOf('BVN');
+        const shown = logged.slice(at, logged.indexOf('does not match') + 14);
+        expect(shown).toContain('does not match');
+        const folded = shown
+          .replace(/[０-９]/g, (c) => String(c.charCodeAt(0) - 0xff10))
+          .replace(/[٠-٩]/g, (c) => String(c.charCodeAt(0) - 0x0660));
+        expect(folded.replace(/\D/g, '').length).toBeLessThanOrEqual(4);
+      },
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  describe('round 4, N15: the expiry sweep walks through every due opening', () => {
+    /** `count` openings and their entities written straight to the tables. */
+    async function plantMany(
+      count: number,
+      startedAt: Date,
+      entity: {
+        status: string;
+        documentStatus?: string;
+        decidedAgoDays?: number;
+      },
+    ): Promise<string[]> {
+      const ids = Array.from({ length: count }, () => {
+        const id = randomUUID();
+        users.push(id);
+        return id;
+      });
+      await prisma.fintavaWalletOpening.createMany({
+        data: ids.map((id, k) => ({
+          wawuUserId: id,
+          state: 'review',
+          bvnHash: `planted-${id}`,
+          bvnVerifiedAt: startedAt,
+          phone: `+23481${digits(8)}${k}`,
+          attemptStartedAt: startedAt,
+          provider: 'nuvion',
+        })),
+      });
+      await prisma.nuvionEntity.createMany({
+        data: ids.map((id) => ({
+          wawuUserId: id,
+          entityId: ulid('01ENT'),
+          status: entity.status,
+          documentStatus: entity.documentStatus ?? null,
+          decidedAt:
+            entity.decidedAgoDays === undefined
+              ? null
+              : new Date(Date.now() - entity.decidedAgoDays * 24 * 60 * 60_000),
+        })),
+      });
+      return ids;
+    }
+    const daysAgo = (d: number) => new Date(Date.now() - d * 24 * 60 * 60_000);
+
+    /** The planted rows leave with the test: later sweeps must not read them. */
+    const unplant = async (ids: string[]) => {
+      await prisma.nuvionEntity.deleteMany({
+        where: { wawuUserId: { in: ids } },
+      });
+      await prisma.fintavaWalletOpening.deleteMany({
+        where: { wawuUserId: { in: ids } },
+      });
+    };
+
+    it('600 openings the query cannot tell from expirable ones (told yesterday, started long ago) in front of one that is due: the due one expires in the next pass', async () => {
+      let kept: string[] = [];
+      try {
+        kept = await plantMany(600, daysAgo(60), {
+          status: 'rejected',
+          documentStatus: 'rejected',
+          decidedAgoDays: 1,
+        });
+        const real = person();
+        await opened(real);
+        await ageOpening(real, 15);
+        await openingSvc().expireIdleHolds();
+        expect((await row(real))!.state).toBe('expired');
+        expect(
+          await prisma.fintavaWalletOpening.count({
+            where: { wawuUserId: { in: kept }, state: 'review' },
+          }),
+        ).toBe(600);
+      } finally {
+        await unplant(kept);
+      }
+    }, 120_000);
+
+    it('205 openings due at the same instant are all expired in one pass (the cursor does not skip the ones that share an instant across a page)', async () => {
+      let ids: string[] = [];
+      try {
+        ids = await plantMany(205, daysAgo(20), { status: 'incomplete' });
+        await openingSvc().expireIdleHolds();
+        expect(
+          await prisma.fintavaWalletOpening.count({
+            where: { wawuUserId: { in: ids }, state: 'expired' },
+          }),
+        ).toBe(205);
+      } finally {
+        await unplant(ids);
+      }
+    }, 120_000);
   });
 
   // -------------------------------------------------------------------------

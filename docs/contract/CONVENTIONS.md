@@ -901,18 +901,23 @@ this applies and every answer is as in section 9.
 - **Who holds a BVN.** A BVN is held by one account for as long as Nuvion's
   entity for that account still carries it in a live state. It is held while
   the opening is with Nuvion (being made, documents needed, being checked),
-  once Nuvion approved it, after a refusal that is only about the documents
-  or the details (the entity keeps the BVN and the person corrects the
-  documents), and always once an account is recorded or was requested,
-  whatever Nuvion says later: a failed or suspended entity **with** an
-  account keeps its hold, and support decides. It is let go at once by a
-  refusal that names the identity itself (the BVN or the NIN refused), by a
-  failed or suspended entity that has no account, and by a create Nuvion
-  refused. A correction after a refusal moves the claim only in the step that
-  sends the new number to Nuvion (the review named the BVN or NIN: both go
-  again and the claim moves to the BVN typed; it named something else: no
-  number goes, the number typed is not used, and the claim keeps the BVN
-  Nuvion already has). A lost answer sent again keeps its claim until a
+  once Nuvion approved it, after a refusal about anything but the BVN itself
+  (the documents, the details or the NIN: the entity keeps the BVN and the
+  person corrects what was named), and always once an account is recorded or
+  was requested, whatever Nuvion says later: a failed or suspended entity
+  **with** an account keeps its hold, and support decides. It is let go at
+  once by a refusal of the BVN itself (the review's word for the BVN is a
+  not-passed word: `rejected`, `failed`, `declined`, `not-approved`,
+  `invalid` or `unverified`, in any case), by a failed or suspended entity
+  that has no account, and by a create Nuvion refused. A BVN Nuvion has
+  approved for the person stays held while the opening is alive, whatever
+  else the refusal names (round 4, N11): any other word for the BVN
+  (approved, pending, a word we do not know) is held, the safe side. A
+  correction after a refusal moves the claim only in the step that sends the
+  new number to Nuvion (the review named the BVN or the NIN: both go again
+  and the claim moves to the BVN typed; it named something else: no number
+  goes, the number typed is not used, and the claim keeps the BVN Nuvion
+  already has). A lost answer sent again keeps its claim until a
   create really goes out. Another account asking for a held BVN or phone gets
   `409 identity_has_wallet`, "We can't use this BVN or phone number for a new
   wallet. If it's yours, contact support.", the same words whether the holder
@@ -920,7 +925,8 @@ this applies and every answer is as in section 9.
   stable. Nuvion approving an entity whose BVN another account holds by then
   opens no account: the opening is stopped for review.
 - **A hold runs out.** An opening that sits at `needs_documents`, or was
-  refused only for its documents or details, with no progress from the person
+  refused with its BVN still held (anything but the BVN itself refused: the
+  documents, the details or the NIN), with no progress from the person
   for `IDENTITY_HOLD_DAYS` (default 14, PROVISIONAL, 1 to 365) is marked
   `expired` by a sweep that runs every minute where the schedule runs (one
   pass at a time across servers, each opening by a conditional update): its
@@ -930,8 +936,12 @@ this applies and every answer is as in section 9.
   last submission, `NuvionEntity.progressAt` (NUV-03 sets it for each
   document uploaded and for the submit call, `recordOpeningProgress`), and,
   for a refusal, the day the person was told. An opening being checked,
-  approved, stopped, with an account or a wallet, or refused on the identity
-  (which holds nothing) never expires. To start again the person sends the
+  approved, stopped, with an account or a wallet, or refused on the BVN
+  itself (which holds nothing) never expires. The sweep reads every
+  candidate by a keyset cursor (attempt start, then account), with no cap on
+  the rows it looks at, and when its time is used it hands the place it
+  reached to the next pass (round 4, N15), so openings that are not yet due
+  never keep it from the ones behind them. To start again the person sends the
   details to `POST /money/wallet/open` as for a correction: the same entity
   at Nuvion is corrected, BVN and NIN included, the claim is taken on the BVN
   typed (the plain `409` if another account holds it by then), and the review
@@ -965,7 +975,18 @@ this applies and every answer is as in section 9.
   body, no email), count for nothing. **From one address**, at most
   `OPEN_ATTEMPTS_PER_ADDRESS_PER_HOUR` (default 10, PROVISIONAL) such tries in
   a rolling hour across every account: the next is `429 open_address_limited`
-  with `retryAfterSeconds`, before anything is claimed. The address is the
+  with `retryAfterSeconds`, before anything is claimed. The limit holds under
+  any burst (round 4, N12): the address's place is taken in one atomic step
+  before the claim (a lock on the address in the database, inside one
+  transaction that counts the hour's tries and writes the place only when one
+  is free; `BvnCheckAttempt.outcome` `reserved`, which the person's day does
+  not count), the place becomes the try when the claim is taken and is given
+  back when it is not, so 25 accounts opening at once from one address on one
+  server or on several sharing the database let exactly the limit in and
+  answer the rest `open_address_limited`. A second request of an account
+  whose first still holds a place on that address (a double tap) takes none.
+  A place left by a server that died stays counted against the address until
+  its hour is out. The address is the
   caller's as the proxy gives it (`X-Forwarded-For`, as the BVN check's
   limit reads it); an IPv6 address stands for its /64, so rotating through
   the addresses of one connection is still one place. It is stored only as a
@@ -977,8 +998,11 @@ this applies and every answer is as in section 9.
   another). The same word again is new only after the person submitted
   since the last decision (corrected details, or NUV-03's submit call:
   `NuvionEntity.submittedAt`) **and** a check Nuvion reports came to a
-  verdict that differs from the one recorded (not back to `pending`, which a
-  new document does). With no submission since the last decision it is the
+  failing verdict that differs from the one recorded (a not-passed word:
+  `rejected`, `failed`, `declined`, `not-approved`, `invalid`, `unverified`;
+  not back to `pending`, which a new document does, and not an approving
+  word, which is the review progressing and leaves the stage, the decision
+  time and the notices as they were: round 4, N13). With no submission since the last decision it is the
   same decision whatever Nuvion bumped; with every word as it was recorded
   it is the echo of the submission itself (Nuvion's `entities.updated` fires
   for our own PATCH). Nuvion's own `updated` time is not read: it moves for
@@ -997,10 +1021,14 @@ this applies and every answer is as in section 9.
   7 or more digits is cut to its last 4 after every separator is removed
   from between the digits, however many there are (any width of space, tab,
   newline, punctuation, slash, underscore, bracket, dash, zero-width
-  character, or the letter x)
-  and every Unicode decimal digit is read as 0 to 9 (full-width and
-  Arabic-Indic digits too). A letter or digit glued to the number is cut
-  with it where the stored words are masked.
+  character, or the letter x or X, in any number: a run of 40 or more
+  slashes or pluses between groups of full-width digits is masked like a
+  run of one) and every Unicode decimal digit is read as 0 to 9 (full-width
+  and Arabic-Indic digits too), before anything else is masked (round 4,
+  N14). A letter or digit glued to the number is cut with it where the stored
+  words are masked. **A letter between groups is not a separator**: "1234
+  and 5678 and 9012" is three short numbers and a sentence, and is kept as
+  written.
 
 ## 10. Saved beneficiaries and the payout account (WALLET-14)
 

@@ -10,7 +10,7 @@ import {
   isReleasedBvnHash,
   releasedBvnHash,
 } from './bvn-claim';
-import { NOT_PASSED, numbersFailed, reviewStageOf } from './review-stage';
+import { bvnRefused, NOT_PASSED, reviewStageOf } from './review-stage';
 
 /**
  * How long an unfinished opening may hold a BVN, and the ways it lets go
@@ -42,8 +42,19 @@ export const HOLD_SWEEP_LOCK = 'nuvion-identity-hold-expiry';
 /** The opening rows the sweep reads at a time. */
 export const HOLD_SWEEP_BATCH = 100;
 
-/** The most opening rows one pass looks at (the rest wait for the next pass). */
-export const HOLD_SWEEP_MAX_EXAMINED = 500;
+/**
+ * How long one pass may keep reading pages (round 4, N15). A pass is one
+ * transaction of at most a minute, so it stops reading well inside that and
+ * hands the place it reached to the next pass (`SweepCursor`); no number of
+ * openings it cannot expire can keep it from the ones behind them.
+ */
+export const HOLD_SWEEP_BUDGET_MS = 30_000;
+
+/** Where a pass stopped in the candidates' order (attempt start, then account). */
+export interface SweepCursor {
+  at: Date;
+  id: string;
+}
 
 /** What the sweep reads of an opening. */
 export interface IdleOpening {
@@ -53,8 +64,9 @@ export interface IdleOpening {
 
 /**
  * Since when an opening has been idle, or null when it cannot expire: it is
- * not at "documents needed" or refused only about documents or details, it
- * has an account (or a wallet), or it has no entity at the provider. Pure.
+ * not at "documents needed" or refused with its BVN still held (the BVN
+ * itself was not the refused word), it has an account (or a wallet), or it
+ * has no entity at the provider. Pure.
  */
 export function idleSince(
   opening: IdleOpening,
@@ -67,9 +79,12 @@ export function idleSince(
   const facts = holdFactsOf(opening.state, entity, hasWallet);
   if (facts.hasAccount) return null;
   const stage = reviewStageOf(entity);
+  // A refusal that names only the NIN (or the documents or details) leaves
+  // the BVN on the entity, held: it can run out like any other hold. Only a
+  // refused BVN holds nothing.
   const expirable =
     stage === 'needs_documents' ||
-    (stage === 'rejected' && !numbersFailed(entity));
+    (stage === 'rejected' && !bvnRefused(entity));
   if (!expirable) return null;
   const times = [
     opening.attemptStartedAt,
@@ -167,15 +182,15 @@ interface IdleCandidate {
 /**
  * The openings that could have run out, oldest first, after a place in that
  * order: at documents needed or refused (not with the provider reviewing,
- * not with an account or a wallet, not refused on the BVN or the NIN, which
- * hold nothing and would otherwise fill every page for ever), with nothing
- * from the person since before the cutoff. A superset of the openings
- * `idleSince` accepts: it never leaves one out, and `idleSince` decides.
+ * not with an account or a wallet, not refused on the BVN itself, which holds
+ * nothing and would otherwise fill every page for ever), with nothing from
+ * the person since before the cutoff. A superset of the openings `idleSince`
+ * accepts: it never leaves one out, and `idleSince` decides.
  */
 async function idleCandidates(
   db: HoldClient,
   cutoff: Date,
-  after: { at: Date; id: string } | null,
+  after: SweepCursor | null,
 ): Promise<IdleCandidate[]> {
   const notPassed = Prisma.join([...NOT_PASSED]);
   return db.$queryRaw<IdleCandidate[]>(Prisma.sql`
@@ -189,7 +204,6 @@ async function idleCandidates(
        AND e."accountRequestedAt" IS NULL
        AND lower(btrim(e."status")) IN ('incomplete', 'rejected')
        AND COALESCE(lower(btrim(e."bvnStatus")), '') NOT IN (${notPassed})
-       AND COALESCE(lower(btrim(e."ninStatus")), '') NOT IN (${notPassed})
        AND NOT EXISTS (
          SELECT 1 FROM "FintavaWallet" w WHERE w."wawuUserId" = o."wawuUserId"
        )
@@ -206,59 +220,84 @@ async function idleCandidates(
   `);
 }
 
+/** What one pass did: the people to tell, and where it stopped (null: it read to the end). */
+export interface SweepResult {
+  told: string[];
+  resumeAfter: SweepCursor | null;
+}
+
 /**
  * The openings whose hold has run out, expired in one pass. Run inside a
  * transaction that holds the pass's advisory lock, so one sweep runs at a
  * time across servers; every opening is still marked by a conditional
  * update, so a second pass finds it done. The people to tell, in order.
- * Pages through the candidates (at most `HOLD_SWEEP_MAX_EXAMINED` a pass), so
- * a page of openings that cannot expire never hides the ones behind it.
+ *
+ * Round 4, N15: the pass pages through every candidate by a keyset cursor
+ * (attempt start, then account), so a candidate that shares its instant with
+ * the page's last one is never skipped and rows leaving the set mid-pass
+ * move nothing. There is no cap on the rows it looks at: openings the query
+ * cannot tell from expirable ones (`idleSince` says no) cost a read and never
+ * hide the ones behind them. A pass stops only when it has read to the end or
+ * its time is used (`budgetMs`, inside the transaction's own limit); it then
+ * hands back where it stopped, and the next pass starts there (`after`), so
+ * even a very long run of such rows is walked through, a page at a time. The
+ * entity and wallet rows of a page are read in two queries, not two a row.
  */
 export async function expireIdleOpenings(
   db: HoldClient,
   holdDays: number,
   now: Date,
-): Promise<string[]> {
+  opts: { after?: SweepCursor | null; budgetMs?: number } = {},
+): Promise<SweepResult> {
   const cutoff = new Date(now.getTime() - holdDays * DAY_MS);
+  const budgetMs = opts.budgetMs ?? HOLD_SWEEP_BUDGET_MS;
+  const started = Date.now();
   const told: string[] = [];
-  let after: { at: Date; id: string } | null = null;
-  let examined = 0;
-  while (examined < HOLD_SWEEP_MAX_EXAMINED) {
+  let after: SweepCursor | null = opts.after ?? null;
+  for (;;) {
     const page = await idleCandidates(db, cutoff, after);
-    for (const c of page) {
-      const [entity, wallet] = await Promise.all([
-        db.nuvionEntity.findUnique({
-          where: { wawuUserId: c.wawuUserId },
-          select: HOLD_ENTITY_SELECT,
+    if (page.length > 0) {
+      const ids = page.map((c) => c.wawuUserId);
+      const [entities, wallets] = await Promise.all([
+        db.nuvionEntity.findMany({
+          where: { wawuUserId: { in: ids } },
+          select: { wawuUserId: true, ...HOLD_ENTITY_SELECT },
         }),
-        db.fintavaWallet.findUnique({
-          where: { wawuUserId: c.wawuUserId },
+        db.fintavaWallet.findMany({
+          where: { wawuUserId: { in: ids } },
           select: { wawuUserId: true },
         }),
       ]);
-      const since = idleSince(c, entity, wallet !== null);
-      if (since === null || since >= cutoff) continue;
-      // Read again under the opening's lock: a person who sent, corrected or
-      // uploaded since the read above is not expired.
-      if (
-        await expireOpening(
-          db,
-          c.wawuUserId,
-          EXPIRED_IDLE,
-          now,
-          ['review'],
-          cutoff,
-        )
-      ) {
-        told.push(c.wawuUserId);
+      const entityOf = new Map(entities.map((e) => [e.wawuUserId, e]));
+      const walleted = new Set(wallets.map((w) => w.wawuUserId));
+      for (const c of page) {
+        const since = idleSince(
+          c,
+          entityOf.get(c.wawuUserId) ?? null,
+          walleted.has(c.wawuUserId),
+        );
+        if (since === null || since >= cutoff) continue;
+        // Read again under the opening's lock: a person who sent, corrected or
+        // uploaded since the read above is not expired.
+        if (
+          await expireOpening(
+            db,
+            c.wawuUserId,
+            EXPIRED_IDLE,
+            now,
+            ['review'],
+            cutoff,
+          )
+        ) {
+          told.push(c.wawuUserId);
+        }
       }
     }
-    examined += page.length;
-    if (page.length < HOLD_SWEEP_BATCH) break;
+    if (page.length < HOLD_SWEEP_BATCH) return { told, resumeAfter: null };
     const last = page[page.length - 1];
     after = { at: last.attemptStartedAt, id: last.wawuUserId };
+    if (Date.now() - started >= budgetMs) return { told, resumeAfter: after };
   }
-  return told;
 }
 
 /**

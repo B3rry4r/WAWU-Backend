@@ -35,8 +35,14 @@ import {
   expireIdleOpenings,
   expireOpening,
   HOLD_SWEEP_LOCK,
+  type SweepCursor,
+  type SweepResult,
 } from './identity-hold';
-import { addressKeyOf, OpeningAttempts } from './opening-attempts';
+import {
+  type AddressPlace,
+  addressKeyOf,
+  OpeningAttempts,
+} from './opening-attempts';
 import {
   expiredViewOf,
   isNewDecision,
@@ -137,6 +143,11 @@ interface Send {
   input: OpenNairaWalletDto;
   /** The keyed hash of the caller's address, or null when there is none. */
   addressKey: string | null;
+  /**
+   * The place held on that address while this request takes its claim
+   * (`ReviewedOpening.withPlace`), null when none is held.
+   */
+  place: AddressPlace | null;
 }
 
 /** The moment before a create goes out found the claim no longer ours. */
@@ -204,6 +215,9 @@ export class ReviewedOpening {
 
   /** Today's tries that name a BVN or NIN (BVN_CHECKS_PER_DAY). */
   private readonly attempts: OpeningAttempts;
+
+  /** Where the expiry sweep's last pass stopped, null when it read to the end. */
+  private sweepAfter: SweepCursor | null = null;
 
   constructor(private readonly host: ReviewedOpeningHost) {
     this.attempts = new OpeningAttempts(
@@ -291,6 +305,7 @@ export class ReviewedOpening {
       details,
       input,
       addressKey: addressKeyOf(host.hasher, address),
+      place: null,
     };
 
     let row = await host.opening(wawuUserId);
@@ -330,19 +345,19 @@ export class ReviewedOpening {
           ) {
             return;
           }
-          await this.attempts.assertLeft(wawuUserId, send.addressKey);
-          const attempt = await this.claim(wawuUserId, row, 'unknown', send);
+          const attempt = await this.withPlace(wawuUserId, send, () =>
+            this.claim(wawuUserId, row, 'unknown', send),
+          );
           if (attempt === null) return;
-          await this.attempts.spend(wawuUserId, false, send.addressKey);
           await this.create(wawuUserId, attempt, send, row.attemptStartedAt);
           return;
         }
         case 'failed': {
           if (await this.settleFromRecord(row)) return;
-          await this.attempts.assertLeft(wawuUserId, send.addressKey);
-          const attempt = await this.claim(wawuUserId, row, 'failed', send);
+          const attempt = await this.withPlace(wawuUserId, send, () =>
+            this.claim(wawuUserId, row, 'failed', send),
+          );
           if (attempt === null) return;
-          await this.attempts.spend(wawuUserId, false, send.addressKey);
           await this.create(wawuUserId, attempt, send, null);
           return;
         }
@@ -351,11 +366,52 @@ export class ReviewedOpening {
           return;
       }
     }
-    await this.attempts.assertLeft(wawuUserId, send.addressKey);
-    const attempt = await this.claim(wawuUserId, null, 'new', send);
+    const attempt = await this.withPlace(wawuUserId, send, () =>
+      this.claim(wawuUserId, null, 'new', send),
+    );
     if (attempt === null) return;
-    await this.attempts.spend(wawuUserId, false, send.addressKey);
     await this.create(wawuUserId, attempt, send, null);
+  }
+
+  /**
+   * One try, from the limits to the claim (N12). The day's and the address's
+   * limits are read first (`assertLeft`, the early 429), then the address's
+   * place is taken atomically (`reservePlace`: counted and written under the
+   * address's lock), then `take` claims the opening. A claim that was taken
+   * makes the place the try; one that was not (another request holds the
+   * opening) or that failed gives the place back, so a double tap never uses
+   * the address up and a burst from one address lets exactly the limit in.
+   * A request that finds the same account's earlier request holding a place
+   * on the address (a double tap) takes none and claims nothing. An answer
+   * that the number is another account's keeps the place as the try
+   * (`heldByAnother`). `take` answers the attempt number it holds, or
+   * null when it holds none.
+   */
+  private async withPlace(
+    wawuUserId: string,
+    send: Send,
+    take: () => Promise<number | null>,
+  ): Promise<number | null> {
+    await this.attempts.assertLeft(wawuUserId, send.addressKey);
+    const taken = await this.attempts.reservePlace(wawuUserId, send.addressKey);
+    // A double tap: the same account's earlier request holds a place and is
+    // taking the claim. This one claims nothing, as when it finds the
+    // opening held.
+    if (taken.concurrent) return null;
+    send.place = taken.place;
+    try {
+      const attempt = await take();
+      if (attempt !== null) {
+        await this.attempts.spend(wawuUserId, false, send.place);
+        send.place = null;
+      }
+      return attempt;
+    } finally {
+      // Not taken, or failed: the place goes back (a no-op once spent).
+      const place = send.place;
+      send.place = null;
+      await this.attempts.give(place);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -416,16 +472,24 @@ export class ReviewedOpening {
    */
   async expireIdle(): Promise<string[]> {
     const now = await this.host.dbNow();
-    return this.prisma.$transaction(
-      async (tx) => {
+    const after = this.sweepAfter;
+    const out = await this.prisma.$transaction(
+      async (tx): Promise<SweepResult> => {
         const [lock] = await tx.$queryRaw<Array<{ locked: boolean }>>`
           SELECT pg_try_advisory_xact_lock(hashtextextended(${HOLD_SWEEP_LOCK}, 0)) AS "locked"
         `;
-        if (!lock?.locked) return [];
-        return expireIdleOpenings(tx, this.host.hasher.holdDays, now);
+        if (!lock?.locked) return { told: [], resumeAfter: after };
+        return expireIdleOpenings(tx, this.host.hasher.holdDays, now, {
+          after,
+        });
       },
       { timeout: 60_000, maxWait: 5_000 },
     );
+    // Where this pass stopped (null: it read to the end) is where the next
+    // starts, so a long run of openings that cannot expire never hides the
+    // ones behind it (N15).
+    this.sweepAfter = out.resumeAfter;
+    return out.told;
   }
 
   /**
@@ -643,7 +707,7 @@ export class ReviewedOpening {
       if (row === null && (await this.host.opening(wawuUserId)) !== null) {
         return null;
       }
-      return this.heldByAnother(wawuUserId, send.addressKey);
+      return this.heldByAnother(wawuUserId, send);
     }
   }
 
@@ -654,11 +718,17 @@ export class ReviewedOpening {
    * at once learns the answer at most `BVN_CHECKS_PER_DAY` times; past it
    * the answer is the 429).
    */
-  private async heldByAnother(
-    wawuUserId: string,
-    addressKey: string | null,
-  ): Promise<never> {
-    await this.attempts.spend(wawuUserId, true, addressKey);
+  private async heldByAnother(wawuUserId: string, send: Send): Promise<never> {
+    // The place held for this request becomes the try (counted against the
+    // day after it is written; over the day's limit it is the 429).
+    const place = send.place;
+    send.place = null;
+    try {
+      await this.attempts.spend(wawuUserId, true, place);
+    } catch (e) {
+      await this.attempts.give(place);
+      throw e;
+    }
     throw new MoneyError('identity_has_wallet', OPENING_HELD_MESSAGE);
   }
 
@@ -893,38 +963,39 @@ export class ReviewedOpening {
     from: 'review' | typeof EXPIRED_STATE,
   ): Promise<void> {
     const prisma = this.prisma;
-    await this.attempts.assertLeft(row.wawuUserId, send.addressKey);
     const next = row.attempts + 1;
-    const startedAt = await this.host.dbNow();
     const numbersAgain = from === EXPIRED_STATE || numbersFailed(entity);
     const claimHash = numbersAgain
       ? this.host.hasher.hash('bvn', send.bvn)
       : heldBvnHash(row.wawuUserId, row.bvnHash);
-    let claimed;
-    try {
-      claimed = await prisma.fintavaWalletOpening.updateMany({
-        where: {
-          wawuUserId: row.wawuUserId,
-          attempts: row.attempts,
-          state: from,
-        },
-        data: {
-          state: 'opening',
-          attempts: next,
-          attemptStartedAt: startedAt,
-          failure: 'correcting',
-          bvnHash: claimHash,
-          phone: send.phone,
-        },
-      });
-    } catch (e) {
-      if (isUniqueViolation(e)) {
-        return this.heldByAnother(row.wawuUserId, send.addressKey);
+    const taken = await this.withPlace(row.wawuUserId, send, async () => {
+      const startedAt = await this.host.dbNow();
+      let claimed;
+      try {
+        claimed = await prisma.fintavaWalletOpening.updateMany({
+          where: {
+            wawuUserId: row.wawuUserId,
+            attempts: row.attempts,
+            state: from,
+          },
+          data: {
+            state: 'opening',
+            attempts: next,
+            attemptStartedAt: startedAt,
+            failure: 'correcting',
+            bvnHash: claimHash,
+            phone: send.phone,
+          },
+        });
+      } catch (e) {
+        if (isUniqueViolation(e)) {
+          return this.heldByAnother(row.wawuUserId, send);
+        }
+        throw e;
       }
-      throw e;
-    }
-    if (claimed.count !== 1) return;
-    await this.attempts.spend(row.wawuUserId, false, send.addressKey);
+      return claimed.count === 1 ? next : null;
+    });
+    if (taken === null) return;
     const back = (
       state: 'review' | 'open' | 'stopped' | typeof EXPIRED_STATE,
       extra: { bvnHash?: string; phone?: string } = {},

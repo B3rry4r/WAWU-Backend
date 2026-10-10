@@ -454,6 +454,10 @@ function maskSecretRuns(text: string, secret: string): string {
  */
 const DIGIT_RUN = /\d(?:(?:[^\p{L}\d]|[xX])*\d)+/gu;
 
+/** Private-use marks standing for a masked credential and a masked blob while the digits are masked. */
+const CREDENTIAL_MARK = '\uE001';
+const DATA_MARK = '\uE000';
+
 /** A run of 7 or more digits (every separator dropped) cut to its last 4. */
 function maskDigitRun(run: string): string {
   const digits = run.replace(/\D/g, '');
@@ -473,16 +477,30 @@ function maskDigitRun(run: string): string {
  * slashes, commas, underscores, colons, brackets, any width of space, tabs,
  * newlines, zero-width characters, full-width and Arabic-Indic digits), and
  * an email down to its domain. Capped at 200 characters.
+ *
+ * Round 4, N14: the separators between two groups of digits may be of any
+ * number, in any digit script (digits are folded before the other passes, so
+ * a run of 40 or more slashes, pluses or x between groups is masked like any
+ * other). What is not a separator is a letter: "1234 and 5678 and 9012" is
+ * three short numbers and a sentence, and stays as it is.
  */
 export function maskNuvionText(text: string, secrets: string[] = []): string {
   let out = text.slice(0, 2000);
   for (const secret of secrets) out = maskSecretRuns(out, secret);
-  return foldDigits(
-    out
-      .replace(/bearer\s+\S+/gi, '[credential]')
-      .replace(/[A-Za-z0-9+/]{40,}={0,2}/g, '[data]'),
-  )
+  // Digits are written 0 to 9 first, so the passes below see a number as the
+  // same run in whatever script it was written (a long run of slashes or
+  // pluses between groups of full-width digits must not cut the base64 pass
+  // in two and leave the number in the clear: round 4, N14).
+  //
+  // A credential or a blob is first a private-use mark, which is no letter or
+  // digit, so a number split by one (1234, forty slashes, 5678) is still one
+  // run to the digit pass; the marks become their words afterwards.
+  return foldDigits(out)
+    .replace(/bearer\s+\S+/gi, CREDENTIAL_MARK)
+    .replace(/[A-Za-z0-9+/]{40,}={0,2}/g, DATA_MARK)
     .replace(DIGIT_RUN, maskDigitRun)
+    .replace(new RegExp(CREDENTIAL_MARK, 'g'), '[credential]')
+    .replace(new RegExp(DATA_MARK, 'g'), '[data]')
     .replace(/[^\s@"']+@([^\s@"']+)/g, '***@$1')
     .slice(0, 200);
 }

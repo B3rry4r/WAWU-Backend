@@ -30,11 +30,20 @@ import { MoneyError } from '../money-error';
  * an opening already in flight, being checked or stopped send and claim
  * nothing, so they count for nothing and a double tap never burns the limit.
  *
- * Before the claim the limits are read (over either: `429`, nothing claimed).
- * After it the attempt is written; an answer that says "held by another
- * account" writes first and counts after, so a burst of probes at once learns
- * that answer at most `perDay` times, and from one address at most
- * `perAddress` times an hour.
+ * Before the claim the limits are read (over either: `429`, nothing claimed:
+ * `assertLeft`, a read that only turns most refusals away early). The
+ * address's hour is then held by one atomic step (`reservePlace`, round 4,
+ * N12): under a lock on the address, inside one transaction, the hour's tries
+ * are counted and, only when one is free, the place is written. A burst of
+ * requests from one address, on one server or on several sharing the
+ * database, is let through one at a time, so exactly the limit proceed. The
+ * place is the try's own row (`outcome` `reserved`, which the person's day does
+ * not count): `spend` makes it the try once the claim is taken, `give` takes
+ * it back when the claim is not (another request of the account holds the
+ * opening, or the request failed before the claim). An answer that says "held
+ * by another account" keeps the place as the try and counts the person's day
+ * after, so a burst of probes learns that answer at most `perDay` times, and
+ * from one address at most `perAddress` times an hour.
  *
  * The address limit (round 3): the same rows, counted by the keyed hash of
  * the caller's address over a rolling hour, across every account, so one
@@ -45,6 +54,35 @@ import { MoneyError } from '../money-error';
 
 /** `BvnCheckAttempt.outcome` of a row written for an opening attempt. */
 export const OPENING_ATTEMPT_OUTCOME = 'opening';
+
+/**
+ * `BvnCheckAttempt.outcome` of a place held on an address for a request that
+ * has not yet taken its claim (N12). The person's day does not count it.
+ */
+export const OPENING_PLACE_OUTCOME = 'reserved';
+
+/** A place held on the caller's address (the row it is written as). */
+export interface AddressPlace {
+  readonly id: string;
+}
+
+/**
+ * How long a place held for a request that has not yet taken its claim is
+ * taken to be a request still in flight. A request of the same account that
+ * finds one meets its own double tap: it does nothing and takes no place, as
+ * the second of two taps does when the first holds the opening. A place older
+ * than this belongs to a request that never finished (a server that died); it
+ * is ignored here and stays counted against the address until its hour is out.
+ */
+export const PLACE_IN_FLIGHT_MS = 60_000;
+
+/** What `reservePlace` found. */
+export interface PlaceReservation {
+  /** The place taken, or null when the request has no client address. */
+  place: AddressPlace | null;
+  /** Another request of this account already holds a place on this address. */
+  concurrent: boolean;
+}
 
 export const OPENING_ATTEMPTS_EXHAUSTED_MESSAGE =
   'You have used today’s tries to open your wallet. Try again later.';
@@ -107,7 +145,10 @@ export function addressKeyOf(
 
 export class OpeningAttempts {
   constructor(
-    private readonly prisma: Pick<PrismaService, 'bvnCheckAttempt'>,
+    private readonly prisma: Pick<
+      PrismaService,
+      'bvnCheckAttempt' | '$transaction'
+    >,
     private readonly perDay: number,
     private readonly perAddressPerHour: number = Number.MAX_SAFE_INTEGER,
   ) {}
@@ -118,33 +159,30 @@ export class OpeningAttempts {
 
   /**
    * BvnCheckAttempt as KYC-01's `reserveDailyAttempt` counts it, for the
-   * rows written for an opening (their `outcome`), carrying the address key
-   * of the request that made them.
+   * rows written for an opening (their `outcome`). The person's day does not
+   * count a place held on an address that has not yet become a try.
    */
-  private ledger(addressKey: string | null): DailyAttemptLedger {
+  private ledger(): DailyAttemptLedger {
+    const counted = { outcome: { not: OPENING_PLACE_OUTCOME } };
     return {
       create: async (wawuUserId) =>
         (
           await this.prisma.bvnCheckAttempt.create({
-            data: {
-              wawuUserId,
-              outcome: OPENING_ATTEMPT_OUTCOME,
-              ...(addressKey !== null ? { addressKey } : {}),
-            },
+            data: { wawuUserId, outcome: OPENING_ATTEMPT_OUTCOME },
             select: { id: true },
           })
         ).id,
       count: (wawuUserId, since) =>
         this.prisma.bvnCheckAttempt.count({
-          where: { wawuUserId, createdAt: { gt: since } },
+          where: { wawuUserId, createdAt: { gt: since }, ...counted },
         }),
       remove: async (id) => {
-        await this.prisma.bvnCheckAttempt.delete({ where: { id } });
+        await this.prisma.bvnCheckAttempt.deleteMany({ where: { id } });
       },
       oldestSince: async (wawuUserId, since) =>
         (
           await this.prisma.bvnCheckAttempt.findFirst({
-            where: { wawuUserId, createdAt: { gt: since } },
+            where: { wawuUserId, createdAt: { gt: since }, ...counted },
             orderBy: { createdAt: 'asc' },
             select: { createdAt: true },
           })
@@ -170,7 +208,7 @@ export class OpeningAttempts {
 
   /** When the person's day frees a place, or null while one is free. */
   private async personOpensAt(wawuUserId: string): Promise<Date | null> {
-    const ledger = this.ledger(null);
+    const ledger = this.ledger();
     const since = this.since(BVN_CHECK_WINDOW_MS);
     if ((await ledger.count(wawuUserId, since)) < this.perDay) return null;
     const oldest = await ledger.oldestSince(wawuUserId, since);
@@ -245,32 +283,105 @@ export class OpeningAttempts {
   }
 
   /**
-   * Writes one attempt. With `refuseOver`, an attempt beyond either limit (a
-   * burst raced past `assertLeft`) is taken back out and the 429 is thrown:
-   * the day's, by KYC-01's `reserveDailyAttempt`; the address's hour, by
-   * counting after the write in the same way. Without it the attempt stands
-   * (the request already holds its claim).
+   * Takes one of the address's places for this request, atomically (N12).
+   * Under a lock on the address (a transaction-scoped advisory lock, so it
+   * orders requests across servers sharing the database), inside one
+   * READ COMMITTED transaction: the hour's rows of the address are counted
+   * and, only when the limit leaves one, the place is written. Two requests
+   * therefore never both see the last free place. Over the limit it is the
+   * 429 and nothing is written. `place` is null, with nothing written, when
+   * the request has no client address.
+   *
+   * A request of the same account that finds its own earlier request still
+   * holding a place on this address (`PLACE_IN_FLIGHT_MS`) is a double tap:
+   * it takes no place and answers `concurrent`, so ten taps never use ten
+   * places up. The caller must `spend` the place when its claim is taken, or
+   * `give` it back; a place left by a server that died in between stays
+   * counted against the address until its hour is out (the safe side).
+   */
+  async reservePlace(
+    wawuUserId: string,
+    addressKey: string | null,
+  ): Promise<PlaceReservation> {
+    if (addressKey === null) return { place: null, concurrent: false };
+    const since = this.since(OPEN_ADDRESS_WINDOW_MS);
+    const flying = this.since(PLACE_IN_FLIGHT_MS);
+    return this.prisma.$transaction(
+      async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`open-address:${addressKey}`}, 0))`;
+        const mine = await tx.bvnCheckAttempt.findFirst({
+          where: {
+            wawuUserId,
+            addressKey,
+            outcome: OPENING_PLACE_OUTCOME,
+            createdAt: { gt: flying },
+          },
+          select: { id: true },
+        });
+        if (mine) return { place: null, concurrent: true };
+        const where = { addressKey, createdAt: { gt: since } };
+        const used = await tx.bvnCheckAttempt.count({ where });
+        if (used >= this.perAddressPerHour) {
+          const oldest = await tx.bvnCheckAttempt.findFirst({
+            where,
+            orderBy: { createdAt: 'asc' },
+            select: { createdAt: true },
+          });
+          throw this.addressLimited(
+            secondsUntilFree(oldest?.createdAt ?? null, OPEN_ADDRESS_WINDOW_MS),
+          );
+        }
+        const row = await tx.bvnCheckAttempt.create({
+          data: { wawuUserId, outcome: OPENING_PLACE_OUTCOME, addressKey },
+          select: { id: true },
+        });
+        return { place: { id: row.id }, concurrent: false };
+      },
+      { maxWait: 10_000, timeout: 15_000 },
+    );
+  }
+
+  /** Gives a place back (the claim was not taken, or the request failed). */
+  async give(place: AddressPlace | null): Promise<void> {
+    if (place === null) return;
+    await this.prisma.bvnCheckAttempt.deleteMany({ where: { id: place.id } });
+  }
+
+  /**
+   * Writes one attempt: the place held for it (`reservePlace`) becomes the
+   * try, or, for a request with no client address (`place` null), a row is
+   * written. With `refuseOver`, an attempt beyond the day's limit (a burst
+   * raced past `assertLeft`) is taken back out and the 429 is thrown, by
+   * KYC-01's `reserveDailyAttempt` (the row first, the count after). Without
+   * it the attempt stands (the request already holds its claim).
    */
   async spend(
     wawuUserId: string,
     refuseOver: boolean,
-    addressKey: string | null = null,
+    place: AddressPlace | null = null,
   ): Promise<void> {
-    const ledger = this.ledger(addressKey);
+    const ledger: DailyAttemptLedger =
+      place === null
+        ? this.ledger()
+        : {
+            ...this.ledger(),
+            create: async () => {
+              await this.prisma.bvnCheckAttempt.updateMany({
+                where: { id: place.id },
+                data: { outcome: OPENING_ATTEMPT_OUTCOME },
+              });
+              return place.id;
+            },
+          };
     if (!refuseOver) {
       await ledger.create(wawuUserId);
       return;
     }
-    const { id } = await reserveDailyAttempt(
+    await reserveDailyAttempt(
       ledger,
       wawuUserId,
       this.perDay,
       (retryAfterSeconds) => this.exhausted(retryAfterSeconds),
     );
-    if (addressKey === null) return;
-    const { used, oldest } = await this.addressUse(addressKey);
-    if (used <= this.perAddressPerHour) return;
-    await ledger.remove(id);
-    throw this.addressLimited(secondsUntilFree(oldest, OPEN_ADDRESS_WINDOW_MS));
   }
 }

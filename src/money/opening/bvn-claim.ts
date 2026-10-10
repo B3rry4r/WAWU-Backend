@@ -1,7 +1,7 @@
 import type { PrismaService } from '../../common/prisma/prisma.service';
 import {
+  bvnRefused,
   type EntityStage,
-  numbersFailed,
   type ReviewRecord,
   reviewStageOf,
 } from './review-stage';
@@ -16,14 +16,17 @@ import {
  * that is no longer so:
  *
  * - **held**: the opening is with the provider (being made, documents still
- *   needed, being checked), was approved, or was refused only for its
- *   documents or details (the entity keeps the BVN and the person corrects
- *   the documents); and always once an account is recorded, whatever the
- *   provider later says (a failed or suspended entity with an account keeps
- *   its hold: support decides);
- * - **let go at once**: a refusal that names the identity itself (the BVN or
- *   the NIN refused), and a failed or suspended entity that has no account
- *   (and a create the provider refused, where nothing was made);
+ *   needed, being checked), was approved, or was refused for anything but
+ *   the BVN itself: its documents, its details or its NIN (the entity keeps
+ *   the BVN, and the person corrects what was named); and always once an
+ *   account is recorded, whatever the provider later says (a failed or
+ *   suspended entity with an account keeps its hold: support decides);
+ * - **let go at once**: a refusal of the BVN itself (the review's word for
+ *   the BVN is a not-passed word), and a failed or suspended entity that has
+ *   no account (and a create the provider refused, where nothing was made).
+ *   A BVN the provider approved for this person stays held while the opening
+ *   is alive, whatever else the refusal names (round 4, N11: a refusal about
+ *   the NIN let a stranger take an approved BVN);
  * - **let go by time**: an opening that sits at "documents needed", or was
  *   refused only for its documents, with nothing from the person for
  *   IDENTITY_HOLD_DAYS is marked `expired` (src/money/opening/
@@ -74,8 +77,8 @@ export interface HoldFacts {
   hasEntity: boolean;
   /** The stage of the provider's review, from what is stored of it. */
   stage: EntityStage;
-  /** The review named the BVN or the NIN as what failed. */
-  numbersRefused: boolean;
+  /** The review refused the BVN itself (not only the NIN or the documents). */
+  bvnRefused: boolean;
   /** An account is recorded or was requested (or a wallet exists). */
   hasAccount: boolean;
 }
@@ -95,9 +98,9 @@ export function holdsBvn(f: HoldFacts): boolean {
     case 'approved':
       return true;
     case 'rejected':
-      // Only the identity itself refused lets the BVN go; a refusal about
-      // the documents or the details leaves the BVN on the entity.
-      return f.hasAccount || !f.numbersRefused;
+      // Only a refusal of the BVN itself lets it go; a refusal about the
+      // NIN, the documents or the details leaves the BVN on the entity.
+      return f.hasAccount || !f.bvnRefused;
     case 'stopped':
       return f.hasAccount;
   }
@@ -168,7 +171,7 @@ export function holdFactsOf(
     state,
     hasEntity: !!entity?.entityId,
     stage: entity ? reviewStageOf(entity) : 'needs_documents',
-    numbersRefused: entity ? numbersFailed(entity) : false,
+    bvnRefused: entity ? bvnRefused(entity) : false,
     hasAccount:
       hasWallet ||
       (entity !== null &&

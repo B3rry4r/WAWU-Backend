@@ -1,6 +1,7 @@
 import {
   type HoldFacts,
   heldBvnHash,
+  holdFactsOf,
   holdsBvn,
   isReleasedBvnHash,
   releasedBvnHash,
@@ -362,7 +363,7 @@ describe('NUV-02 round 3: does the opening still hold its BVN (N1, N2)', () => {
     state: 'review',
     hasEntity: true,
     stage: 'needs_documents',
-    numbersRefused: false,
+    bvnRefused: false,
     hasAccount: false,
     ...o,
   });
@@ -378,17 +379,17 @@ describe('NUV-02 round 3: does the opening still hold its BVN (N1, N2)', () => {
     ],
     [
       'refused with nothing named (the details)',
-      { stage: 'rejected', numbersRefused: false },
+      { stage: 'rejected', bvnRefused: false },
       true,
     ],
     [
-      'refused on the BVN or the NIN (the identity itself)',
-      { stage: 'rejected', numbersRefused: true },
+      'refused on the BVN itself',
+      { stage: 'rejected', bvnRefused: true },
       false,
     ],
     [
       'refused on the BVN, but an account is recorded',
-      { stage: 'rejected', numbersRefused: true, hasAccount: true },
+      { stage: 'rejected', bvnRefused: true, hasAccount: true },
       true,
     ],
     [
@@ -498,16 +499,165 @@ describe('NUV-02 round 3: is a decision read back a new one (N4)', () => {
     ).toBe(false);
   });
 
-  it('a new verdict word is one that is not waiting and not what was held', () => {
+  it('a new failing verdict word is a not-passed word that is not what was held (N13)', () => {
     const h = held({ bvnStatus: 'rejected' });
     expect(verdictMoved(h, read({ bvnStatus: 'rejected' }))).toBe(false);
     expect(verdictMoved(h, read({ bvnStatus: 'pending' }))).toBe(false);
     expect(verdictMoved(h, read({ bvnStatus: null }))).toBe(false);
-    expect(verdictMoved(h, read({ bvnStatus: 'approved' }))).toBe(true);
     expect(verdictMoved(h, read({ ninStatus: 'Rejected ' }))).toBe(true);
     expect(verdictMoved(h, read({ identificationStatus: 'failed' }))).toBe(
       true,
     );
+  });
+
+  it.each([
+    'approved',
+    'Approved ',
+    'pending',
+    'incomplete',
+    '',
+    null,
+    'verified',
+    'denied',
+  ])(
+    'a check coming back %j is not a failing verdict, whatever it was held at (N13)',
+    (word) => {
+      for (const field of [
+        'bvnStatus',
+        'ninStatus',
+        'documentStatus',
+        'addressProofStatus',
+        'identificationStatus',
+      ] as const) {
+        for (const was of ['pending', 'rejected', 'approved', null]) {
+          expect(
+            verdictMoved(held({ [field]: was }), read({ [field]: word })),
+          ).toBe(false);
+        }
+      }
+    },
+  );
+
+  it.each([
+    'rejected',
+    'REJECTED',
+    ' failed ',
+    'declined',
+    'not-approved',
+    'not_approved',
+    'invalid',
+    'unverified',
+  ])('a check coming to the failing word %j is a verdict', (word) => {
+    for (const field of [
+      'bvnStatus',
+      'ninStatus',
+      'documentStatus',
+      'addressProofStatus',
+      'identificationStatus',
+    ] as const) {
+      expect(
+        verdictMoved(held({ [field]: 'pending' }), read({ [field]: word })),
+      ).toBe(true);
+    }
+  });
+
+  it('after a submission, a check that came back approving with the entity still rejected is not a new decision, but a failing word beside it is (N13)', () => {
+    const h = held({ submittedAt: t(5), documentStatus: 'rejected' });
+    expect(isNewDecision(h, read({ documentStatus: 'approved' }))).toBe(false);
+    expect(
+      isNewDecision(h, read({ bvnStatus: 'approved', ninStatus: 'approved' })),
+    ).toBe(false);
+    expect(
+      isNewDecision(
+        h,
+        read({ documentStatus: 'approved', addressProofStatus: 'rejected' }),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe('NUV-02 round 4: only the BVN itself refused lets the BVN go (N11)', () => {
+  const entity = (o: Record<string, unknown> = {}) => ({
+    ...base,
+    entityId: '01HXYZ0001ABCDEFGHJKMNPQRS',
+    accountId: null,
+    accountRequestedAt: null,
+    submittedAt: null,
+    progressAt: null,
+    holdExpiredAt: null,
+    ...o,
+  });
+  const holds = (o: Record<string, unknown>) =>
+    holdsBvn(
+      holdFactsOf('review', entity({ status: 'rejected', ...o }), false),
+    );
+
+  it.each([
+    'rejected',
+    'REJECTED',
+    ' rejected ',
+    'failed',
+    'declined',
+    'not-approved',
+    'not_approved',
+    'invalid',
+    'unverified',
+  ])('the BVN word %j is a refusal of the BVN: not held', (word) => {
+    expect(holds({ bvnStatus: word, ninStatus: 'approved' })).toBe(false);
+    expect(holds({ bvnStatus: word, ninStatus: 'rejected' })).toBe(false);
+  });
+
+  it.each([
+    'approved',
+    'pending',
+    'incomplete',
+    null,
+    'suspended',
+    'denied',
+    'mismatch',
+    'refused',
+    'error',
+    'no_match',
+  ])(
+    'the BVN word %j is not a refusal of the BVN: held, whatever the NIN and the documents say',
+    (word) => {
+      for (const ninStatus of ['rejected', 'approved', 'pending']) {
+        expect(
+          holds({
+            bvnStatus: word,
+            ninStatus,
+            documentStatus: 'rejected',
+            addressProofStatus: 'rejected',
+          }),
+        ).toBe(true);
+      }
+    },
+  );
+
+  it('a BVN refusal does not let go once an account is recorded', () => {
+    expect(
+      holds({
+        bvnStatus: 'rejected',
+        ninStatus: 'rejected',
+        accountId: 'acc_1',
+      }),
+    ).toBe(true);
+  });
+
+  it('a refusal that names only the NIN can run out like any hold; one that names the BVN holds nothing and never does', () => {
+    const day = 24 * 60 * 60_000;
+    const t = (days: number) => new Date(1_700_000_000_000 + days * day);
+    const opening = { state: 'review', attemptStartedAt: t(0) };
+    const ninOnly = entity({
+      status: 'rejected',
+      decidedAt: t(2),
+      bvnStatus: 'approved',
+      ninStatus: 'rejected',
+    });
+    expect(idleSince(opening, ninOnly, false)).toEqual(t(2));
+    expect(
+      idleSince(opening, { ...ninOnly, bvnStatus: 'rejected' }, false),
+    ).toBeNull();
   });
 });
 
@@ -742,5 +892,148 @@ describe('NUV-02 round 3: the place an address stands for (the per-address limit
     );
     expect(addressPlaceOf('::')).toBe('0000:0000:0000:0000/64');
     expect(addressPlaceOf('not-an-address')).toBe('not-an-address');
+  });
+});
+
+describe('NUV-02 round 4: the mask covers any length of separators between digit groups, in any digit script (N14)', () => {
+  const NUMBER = '27391845062';
+  const to = (base: number) => (v: string) =>
+    v.replace(/\d/g, (d) => String.fromCodePoint(base + Number(d)));
+  const SCRIPTS: Array<[string, (v: string) => string]> = [
+    ['ascii', (v) => v],
+    ['fullwidth', to(0xff10)],
+    ['arabic-indic', to(0x0660)],
+    ['persian', to(0x06f0)],
+    ['devanagari', to(0x0966)],
+    ['bengali', to(0x09e6)],
+    ['thai', to(0x0e50)],
+    ['mathematical bold', to(0x1d7ce)],
+    ['mathematical monospace', to(0x1d7f6)],
+    ['tibetan', to(0x0f20)],
+    ['n’ko', to(0x07c0)],
+    [
+      'circled',
+      (v) =>
+        v.replace(/\d/g, (d) =>
+          d === '0' ? '\u24ea' : String.fromCodePoint(0x2460 + Number(d) - 1),
+        ),
+    ],
+    [
+      'mixed',
+      (v) =>
+        [...v]
+          .map((c, i) =>
+            i % 3 === 0
+              ? to(0x0660)(c)
+              : i % 3 === 1
+                ? to(0xff10)(c)
+                : to(0x0966)(c),
+          )
+          .join(''),
+    ],
+  ];
+  const SEPARATORS: Array<[string, string]> = [
+    ['space', ' '],
+    ['tab', '\t'],
+    ['newline', '\n'],
+    ['no-break space', '\u00a0'],
+    ['ideographic space', '\u3000'],
+    ['zero-width space', '\u200b'],
+    ['zero-width joiner', '\u200d'],
+    ['dash', '-'],
+    ['en dash', '\u2013'],
+    ['dot', '.'],
+    ['comma', ','],
+    ['underscore', '_'],
+    ['slash', '/'],
+    ['plus', '+'],
+    ['x', 'x'],
+    ['X', 'X'],
+    ['equals', '='],
+    ['brackets', ')('],
+    ['star', '*'],
+    ['emoji', '\u{1F600}'],
+  ];
+  const GAPS = [1, 2, 9, 39, 40, 41, 60, 100, 300];
+  const digitsLeft = (text: string): number =>
+    text
+      .normalize('NFKC')
+      .replace(
+        /[\u0660-\u0669\u06f0-\u06f9\u0966-\u096f\u09e6-\u09ef\u0e50-\u0e59\u0f20-\u0f29\u07c0-\u07c9]/gu,
+        '0',
+      )
+      .replace(/[^0-9]/g, '').length;
+  const SHAPES: Array<
+    [string, (to: (v: string) => string, glue: string) => string]
+  > = [
+    [
+      'grouped',
+      (f, g) =>
+        [NUMBER.slice(0, 4), NUMBER.slice(4, 7), NUMBER.slice(7)]
+          .map(f)
+          .join(g),
+    ],
+    ['single digits', (f, g) => [...NUMBER].map(f).join(g)],
+    // A long run that is itself a blob, with spaces on both sides: the digit
+    // groups either side must still be one number.
+    [
+      'spaced run',
+      (f, g) => `${f(NUMBER.slice(0, 4))} ${g} ${f(NUMBER.slice(4))}`,
+    ],
+  ];
+
+  for (const [scriptName, f] of SCRIPTS) {
+    it(`${scriptName}: every separator, every shape, every gap keeps at most the last 4 digits (text and stored words)`, () => {
+      const leaks: string[] = [];
+      for (const [sepName, sep] of SEPARATORS) {
+        for (const gap of GAPS) {
+          const glue = sep.repeat(gap);
+          for (const [shape, build] of SHAPES) {
+            const text = `BVN ${build(f, glue)} is not valid`;
+            for (const [fn, mask] of [
+              ['maskNuvionText', (t: string) => maskNuvionText(t)],
+              ['maskReviewWords', (t: string) => maskReviewWords(t)],
+            ] as const) {
+              const out = mask(text);
+              if (digitsLeft(out) > 4) {
+                leaks.push(
+                  `${sepName} x ${gap} / ${shape} / ${fn}: ${out.slice(0, 60)}`,
+                );
+              }
+            }
+          }
+        }
+      }
+      expect(leaks).toEqual([]);
+    });
+  }
+
+  it('the last 4 are shown and nothing else of the number is (a long run of slashes with a space either side is one gap), and a run glued to the digits is masked whole as data', () => {
+    const run = '/'.repeat(45);
+    const spaced = maskNuvionText(`BVN 2739 ${run} 184 ${run} 5062 is wrong`);
+    expect(spaced).toContain('5062');
+    expect(digitsLeft(spaced)).toBe(4);
+    expect(spaced).toContain('is wrong');
+    const glued = maskNuvionText(`BVN 2739${run}184${run}5062 is wrong`);
+    expect(digitsLeft(glued)).toBe(0);
+    expect(glued).toContain('[data]');
+  });
+
+  it('a letter is not a separator: digits split by words are separate short numbers and stay as written', () => {
+    for (const text of [
+      'amounts 1234 and 5678 and 9012',
+      'ddd 1234a5678a9012 z',
+      '2739 then 1845 then 062',
+    ]) {
+      expect(maskNuvionText(text)).toBe(text);
+    }
+  });
+
+  it('a credential or a blob between two digit groups is still one gap, and its own words stay', () => {
+    const out = maskNuvionText(
+      `ref 2739 ${'A'.repeat(60)} 1845062 and Bearer abc.def.ghi`,
+    );
+    expect(out).toContain('[credential]');
+    expect(digitsLeft(out)).toBeLessThanOrEqual(4);
   });
 });
