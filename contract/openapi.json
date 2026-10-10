@@ -26850,6 +26850,47 @@
         ]
       }
     },
+    "/api/hub/waitlist/claims": {
+      "post": {
+        "operationId": "WaitlistClaimController_claim",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimWaitlistRegistrationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaitlistClaimView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`reason.code` `code_invalid`: not 8 letters and numbers. A malformed body has no `reason`."
+          },
+          "404": {
+            "description": "`reason.code` `code_not_found`: the same answer for a code that does not exist, is not paid, or is not tied to a phone or email the caller has proven."
+          },
+          "409": {
+            "description": "`reason.code` `contact_not_verified` (the account has no proven phone or email), `code_refunded` (an extra payment being refunded), `already_claimed` (by another account), `claimed_by_you` or `offer_unavailable`."
+          }
+        },
+        "summary": "Claim a paid registration with its launch access code. The caller must\nhold the registration's phone or email, proven to WAWU ID; the code alone\nis never enough. Gives what the registration's plan gives, its days\ncounted from now, once.",
+        "tags": [
+          "WaitlistClaim"
+        ]
+      }
+    },
     "/api/hub/admin/waitlist/registrations": {
       "get": {
         "operationId": "WaitlistAdminController_list",
@@ -32448,6 +32489,20 @@
         "required": [
           "reference",
           "transactionId"
+        ]
+      },
+      "ClaimWaitlistRegistrationDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The launch access code from the registration page: 8 letters and numbers\n(0 to 9, A to F), written \"XXXX XXXX\". Spaces, dashes and lower case are\naccepted; the server reads it without them.",
+            "minLength": 1,
+            "maxLength": 40
+          }
+        },
+        "required": [
+          "code"
         ]
       },
       "CreateAdCreativeDto": {
@@ -47150,6 +47205,9 @@
             "type": "string",
             "nullable": true
           },
+          "claimed": {
+            "type": "boolean"
+          },
           "claimedByWawuId": {
             "type": "string",
             "nullable": true
@@ -47177,6 +47235,7 @@
           "reference",
           "accessCode",
           "flutterwaveTransactionId",
+          "claimed",
           "claimedByWawuId",
           "claimedAt",
           "createdAt"
@@ -47207,6 +47266,38 @@
           "rowCount",
           "content",
           "generatedAt"
+        ]
+      },
+      "WaitlistClaimView": {
+        "type": "object",
+        "properties": {
+          "offerName": {
+            "type": "string"
+          },
+          "days": {
+            "type": "number"
+          },
+          "extended": {
+            "type": "boolean"
+          },
+          "pointsGranted": {
+            "type": "number"
+          },
+          "pointsExpireAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "tier": {
+            "$ref": "#/components/schemas/MyTierView"
+          }
+        },
+        "required": [
+          "offerName",
+          "days",
+          "extended",
+          "pointsGranted",
+          "pointsExpireAt",
+          "tier"
         ]
       },
       "WaitlistOfferView": {

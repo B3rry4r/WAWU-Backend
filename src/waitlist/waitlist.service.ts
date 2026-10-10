@@ -116,8 +116,8 @@ export function newReference(random: RandomBytes = systemRandom): string {
  * registers on the website and pays the event fee by Flutterwave checkout.
  * It is a waiting list, not an account: nothing here creates, reads or
  * writes a WAWU ID account. Turning a paid registration into a plan is
- * JOIN-03's claim in the app; this service leaves `claimedByWawuId` and
- * `claimedAt` null.
+ * JOIN-03's claim in the app (WaitlistClaimService, a signed-in route); this
+ * service never writes `claimedByWawuId` or `claimedAt`.
  *
  * ── THE MONEY PATH ───────────────────────────────────────────────────────
  * Register writes a `pending` row (the price copied onto it), answers the
@@ -569,6 +569,7 @@ export class WaitlistService {
       reference: row.reference,
       accessCode: accessCodeLabel(row.accessCode),
       flutterwaveTransactionId: row.flutterwaveTxId,
+      claimed: row.claimedByWawuId !== null,
       claimedByWawuId: row.claimedByWawuId,
       claimedAt: row.claimedAt?.toISOString() ?? null,
       createdAt: row.createdAt.toISOString(),

@@ -1,3 +1,5 @@
+import type { MyTierView } from '../plans/plans-view.type';
+
 /**
  * What the event registration routes answer (JOIN-01, R-48). Naira only:
  * `...Kobo` fields are whole kobo; the checkout's `amount` is naira, the unit
@@ -56,6 +58,25 @@ export interface WaitlistRegistrationStatusView {
   firstName: string;
 }
 
+/**
+ * POST /waitlist/claims (JOIN-03): what the code gave and what the person now
+ * holds. Never another person's details.
+ */
+export interface WaitlistClaimView {
+  /** The offer's name, as the registration page showed it. */
+  offerName: string;
+  /** The days this claim gave, counted from now. */
+  days: number;
+  /** True when the person already held a tier that had not ended and the days were added to its end. */
+  extended: boolean;
+  /** Bonus points added as one lot; 0 when the plan carries none. */
+  pointsGranted: number;
+  /** When the bonus points end (ISO 8601); null when none were added. */
+  pointsExpireAt: string | null;
+  /** The person's tier now, exactly as `GET /me/tier` answers it. */
+  tier: MyTierView;
+}
+
 /** One row of the team's list (admin). */
 export interface AdminWaitlistRegistrationView {
   id: string;
@@ -76,6 +97,8 @@ export interface AdminWaitlistRegistrationView {
   /** The launch access code the payer sees, "XXXX XXXX": the first 8 characters of the reference after `wawu-join-`, upper-case, unique across all registrations. */
   accessCode: string;
   flutterwaveTransactionId: string | null;
+  /** True once an account has claimed the payment in the app. */
+  claimed: boolean;
   /** The WAWU ID account that claimed the payment in the app; null until claimed. */
   claimedByWawuId: string | null;
   claimedAt: string | null;

@@ -1,6 +1,10 @@
 import { Module } from '@nestjs/common';
 import { AdminAuthModule } from '../admin/auth/admin-auth.module';
+import { WawuAuthModule } from '../common/auth/wawu-auth.module';
+import { PlansModule } from '../plans/plans.module';
 import { WaitlistAdminController } from './waitlist-admin.controller';
+import { WaitlistClaimController } from './waitlist-claim.controller';
+import { WaitlistClaimService } from './waitlist-claim.service';
 import { WaitlistCoreModule } from './waitlist-core.module';
 import { WaitlistPublicController } from './waitlist-public.controller';
 import { WaitlistSweepService } from './waitlist-sweep.service';
@@ -17,13 +21,23 @@ import { WaitlistSweepService } from './waitlist-sweep.service';
  * (`shouldUseMockFlutterwave`, which refuses a production boot without a
  * real key). AdminAuthModule gives the admin routes their guards.
  *
+ * JOIN-03 adds the claim: `POST /waitlist/claims`, a signed-in route that
+ * turns a paid registration into the plan (WaitlistClaimService, through
+ * PlansModule's TierGrantService, the one place a tier is granted). It lives
+ * here and not in WaitlistCoreModule, which the Flutterwave webhook imports
+ * and must stay free of routes and of PlansModule's controllers.
+ *
  * Listed in AppModule after PlansModule; it imports nothing that declares a
- * controller other than AdminAuthModule (already early), so no other route
- * moves in the order.
+ * controller other than AdminAuthModule and PlansModule (both already early,
+ * PlansModule listed just above), so no other route moves in the order.
  */
 @Module({
-  imports: [AdminAuthModule, WaitlistCoreModule],
-  controllers: [WaitlistPublicController, WaitlistAdminController],
-  providers: [WaitlistSweepService],
+  imports: [AdminAuthModule, WawuAuthModule, PlansModule, WaitlistCoreModule],
+  controllers: [
+    WaitlistPublicController,
+    WaitlistClaimController,
+    WaitlistAdminController,
+  ],
+  providers: [WaitlistSweepService, WaitlistClaimService],
 })
 export class WaitlistModule {}

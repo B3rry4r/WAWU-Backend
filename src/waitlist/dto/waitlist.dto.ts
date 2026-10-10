@@ -72,6 +72,19 @@ export class VerifyWaitlistRegistrationDto {
   transactionId!: string;
 }
 
+/** POST /waitlist/claims (JOIN-03). */
+export class ClaimWaitlistRegistrationDto {
+  /**
+   * The launch access code from the registration page: 8 letters and numbers
+   * (0 to 9, A to F), written "XXXX XXXX". Spaces, dashes and lower case are
+   * accepted; the server reads it without them.
+   */
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  code!: string;
+}
+
 /** GET /admin/waitlist/registrations. */
 export class AdminWaitlistListQueryDto extends PaginationQueryDto {
   /** Only this offer. Omitted means every offer. */

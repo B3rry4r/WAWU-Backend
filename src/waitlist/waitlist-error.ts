@@ -30,6 +30,24 @@ export const WAITLIST_ERROR_STATUS = {
   email_invalid: 400,
   name_invalid: 400,
   consent_required: 400,
+  /** The access code is not 8 letters and numbers (JOIN-03). */
+  code_invalid: 400,
+  /**
+   * No code the caller can claim: the code does not exist, is not paid, or is
+   * not tied to a phone or email the caller has verified. One answer for all
+   * three, so the route cannot be used to find out which codes exist (JOIN-03).
+   */
+  code_not_found: 404,
+  /** The caller has no verified phone or email on their account to match with (JOIN-03). */
+  contact_not_verified: 409,
+  /** The code belongs to an extra payment that is being refunded (JOIN-03). */
+  code_refunded: 409,
+  /** The code was claimed already, by another account (JOIN-03). */
+  already_claimed: 409,
+  /** The caller claimed this code already (JOIN-03). */
+  claimed_by_you: 409,
+  /** The offer this code was bought under is no longer in the plans file (JOIN-03). */
+  offer_unavailable: 409,
 } as const;
 
 export type WaitlistErrorCode = keyof typeof WAITLIST_ERROR_STATUS;
