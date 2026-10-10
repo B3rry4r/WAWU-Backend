@@ -17033,6 +17033,68 @@
         ]
       }
     },
+    "/api/hub/push-tokens": {
+      "post": {
+        "operationId": "PushTokenController_register",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterPushTokenDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushTokenRegistered"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Register this phone for the signed-in person. Idempotent: call it on every\nstart. `registered` is false, and nothing is stored, when the account's\ndeletion has been asked for.",
+        "tags": [
+          "PushToken"
+        ]
+      },
+      "delete": {
+        "operationId": "PushTokenController_remove",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemovePushTokenDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushTokenRemoved"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Remove this phone (sign-out). Removing a token twice, or one that is not yours, is a 200 with `removed: false`.",
+        "tags": [
+          "PushToken"
+        ]
+      }
+    },
     "/api/hub/content/{id}/comments": {
       "get": {
         "operationId": "CommentController_list",
@@ -26745,7 +26807,7 @@
             "description": "`reason.code` `payments_unavailable`: payments are not set up."
           }
         },
-        "summary": "Register and get the checkout settings. Reuses this person's own unpaid\nregistration (same offer, phone and email) rather than adding another.\nNothing is charged here: the payment happens in the Flutterwave checkout\nwith the answer's `flutterwaveConfig`, and counts only after\nPOST /waitlist/registrations/verify (or Flutterwave's own notice).",
+        "summary": "Register and get the checkout settings. Every call that passes the checks\nadds a new registration with a new reference, even for the same offer,\nphone and email, so each checkout has its own reference.\nNothing is charged here: the payment happens in the Flutterwave checkout\nwith the answer's `flutterwaveConfig`, and counts only after\nPOST /waitlist/registrations/verify (or Flutterwave's own notice).",
         "tags": [
           "WaitlistPublic"
         ]
@@ -30613,6 +30675,49 @@
       "DeleteAccountDto": {
         "type": "object",
         "properties": {}
+      },
+      "RegisterPushTokenDto": {
+        "type": "object",
+        "properties": {
+          "expoPushToken": {
+            "type": "string",
+            "description": "The phone's Expo push token, `ExponentPushToken[...]` or `ExpoPushToken[...]`, exactly as the app got it.",
+            "maxLength": 300
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "android",
+              "ios"
+            ]
+          },
+          "deviceId": {
+            "type": "string",
+            "description": "The phone's own id, if the app has one.",
+            "maxLength": 200
+          },
+          "deviceLabel": {
+            "type": "string",
+            "description": "A name for the phone (\"Pixel 8\"), if the app has one.",
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "expoPushToken",
+          "platform"
+        ]
+      },
+      "RemovePushTokenDto": {
+        "type": "object",
+        "properties": {
+          "expoPushToken": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "expoPushToken"
+        ]
       },
       "CreateCommentDto": {
         "type": "object",
@@ -42311,6 +42416,28 @@
           "deletionScheduledAt"
         ]
       },
+      "PushTokenRegistered": {
+        "type": "object",
+        "properties": {
+          "registered": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "registered"
+        ]
+      },
+      "PushTokenRemoved": {
+        "type": "object",
+        "properties": {
+          "removed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "removed"
+        ]
+      },
       "CommentAuthor": {
         "type": "object",
         "properties": {
@@ -47235,6 +47362,9 @@
           "reference": {
             "type": "string"
           },
+          "accessCode": {
+            "type": "string"
+          },
           "flutterwaveTransactionId": {
             "type": "string",
             "nullable": true
@@ -47264,6 +47394,7 @@
           "paidKobo",
           "paidAt",
           "reference",
+          "accessCode",
           "flutterwaveTransactionId",
           "claimedByWawuId",
           "claimedAt",

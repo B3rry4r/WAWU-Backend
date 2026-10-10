@@ -55,8 +55,9 @@ export class WaitlistPublicController {
   }
 
   /**
-   * Register and get the checkout settings. Reuses this person's own unpaid
-   * registration (same offer, phone and email) rather than adding another.
+   * Register and get the checkout settings. Every call that passes the checks
+   * adds a new registration with a new reference, even for the same offer,
+   * phone and email, so each checkout has its own reference.
    * Nothing is charged here: the payment happens in the Flutterwave checkout
    * with the answer's `flutterwaveConfig`, and counts only after
    * POST /waitlist/registrations/verify (or Flutterwave's own notice).

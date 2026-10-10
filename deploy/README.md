@@ -176,6 +176,16 @@ OPEN_ATTEMPTS_PER_ADDRESS_PER_HOUR=
 WALLET_BANK_NAME=
 WALLET_LICENCE_LINE=
 WALLET_DEPOSIT_INSURANCE_LINE=
+# Phone push (INBOX-03, docs/contract/PUSH.md). OFF unless PUSH_ENABLED is
+# exactly `true`: with it empty nothing is sent to Expo, so staging and a copy
+# of production never push by accident. Android needs the owner's FCM
+# credentials uploaded to Expo first (owner input). EXPO_ACCESS_TOKEN is
+# needed only if the Expo project turned on enhanced push security.
+# EXPO_PUSH_BASE_URL may stay empty (https://exp.host); any other host stops
+# the server at boot.
+PUSH_ENABLED=
+EXPO_ACCESS_TOKEN=
+EXPO_PUSH_BASE_URL=
 # Receipts (WALLET-18): the address a receipt's code opens, without the
 # code: https://<the API's public host>/api/hub/r. Empty: receipts print
 # wawu/r/<code> with no link. Receipts print WALLET_BANK_NAME and
