@@ -6,6 +6,7 @@ import request from 'supertest';
 import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
+import { WawuIdClient } from '../../common/auth/wawu-id.client';
 import { AllExceptionsFilter } from '../../common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../../common/interceptors/response.interceptor';
 import { EventModule } from '../../event/event.module';
@@ -200,7 +201,7 @@ describe('The door answers a scan asked again with the same key (EVENTS-09 round
       .set(auth(hostToken))
       .send({ wawuUserId: STAFF_SUB })
       .expect(201);
-  });
+  }, 120_000);
 
   afterAll(async () => {
     if (prisma) await sweep();
@@ -231,7 +232,11 @@ describe('The door answers a scan asked again with the same key (EVENTS-09 round
     });
     expect(first.headers['idempotent-replayed']).toBeUndefined();
 
+    // A repeat is answered from the kept row: WAWU ID is not asked again and nothing is rewritten.
+    const asked = jest.spyOn(app.get(WawuIdClient), 'lookupPublicIdentities');
     const again = await scan(code, key).expect(201);
+    expect(asked).not.toHaveBeenCalled();
+    asked.mockRestore();
     expect(again.headers['idempotent-replayed']).toBe('true');
     // The same bytes, not only the same data.
     expect(again.text).toBe(first.text);
@@ -253,6 +258,39 @@ describe('The door answers a scan asked again with the same key (EVENTS-09 round
     const rescan = await scan(code, newKey()).expect(201);
     expect(answer(rescan).outcome).toBe('already_used');
     expect(rescan.headers['idempotent-replayed']).toBeUndefined();
+  });
+
+  it('the check-in and its kept answer are one transaction: when the answer cannot be kept the ticket is not checked in, and the same key then works', async () => {
+    const code = freshCode();
+    const key = newKey();
+    // A fault in the database: the kept answer can be taken (empty) but not written.
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "EventDoorScan" ADD CONSTRAINT door_scan_fault CHECK ("response" = '') NOT VALID`,
+    );
+    try {
+      const failed = await scan(code, key);
+      expect(failed.status).not.toBe(201);
+      const row = await prisma.eventTicket.findUniqueOrThrow({
+        where: { code },
+      });
+      expect(row.status).toBe('valid');
+      expect(row.checkedInAt).toBeNull();
+      expect(
+        await prisma.eventDoorScan.count({
+          where: { scannerWawuId: HOST_SUB, key },
+        }),
+      ).toBe(0);
+    } finally {
+      await prisma.$executeRawUnsafe(
+        `ALTER TABLE "EventDoorScan" DROP CONSTRAINT IF EXISTS door_scan_fault`,
+      );
+    }
+    // The phone asks again with the same key and is let in, once.
+    const again = await scan(code, key).expect(201);
+    expect(answer(again).outcome).toBe('valid');
+    expect(
+      (await prisma.eventTicket.findUniqueOrThrow({ where: { code } })).status,
+    ).toBe('checked_in');
   });
 
   it("a repeat is the first answer even when others scanned in between: the counts are the first answer's, not live", async () => {
