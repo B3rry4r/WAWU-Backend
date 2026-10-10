@@ -451,24 +451,37 @@ describe('Claiming a paid event registration in the app (JOIN-03) over HTTP', ()
         await identity(b, { verifiedPhone: row0.phone });
         const r2 = await claim(mint(b, noFlags), row0.accessCode).expect(409);
         expect(reason(r2).code).toBe('contact_not_verified');
-        // Somebody else's proof of the same phone is not the caller's.
+        const still = await prisma.waitlistRegistration.findUniqueOrThrow({
+          where: { id: row0.id },
+        });
+        expect(still.claimedByWawuId).toBeNull();
+      });
+
+      it("does not count another person's proof of the same phone", async () => {
+        // The only passed check in the table is the owner's, for the number both tokens carry.
+        await prisma.walletIdentity.deleteMany({
+          where: { wawuUserId: { startsWith: WHO } },
+        });
+        const row = await registration(person());
         const owner: Who = {
           sub: `${WHO}hub-o-${next()}`,
-          phone: row0.phone,
+          phone: row.phone,
           email: `o-${next()}@test.wawu.dev`,
         };
         subs.add(owner.sub);
         await identity(owner);
-        const c = {
+        const claimant = {
           sub: `${WHO}hub-c-${next()}`,
-          phone: row0.phone,
+          phone: row.phone,
           email: `c-${next()}@test.wawu.dev`,
         };
-        subs.add(c.sub);
-        const r3 = await claim(mint(c, noFlags), row0.accessCode).expect(409);
-        expect(reason(r3).code).toBe('contact_not_verified');
+        subs.add(claimant.sub);
+        const res = await claim(mint(claimant, noFlags), row.accessCode).expect(
+          409,
+        );
+        expect(reason(res).code).toBe('contact_not_verified');
         const still = await prisma.waitlistRegistration.findUniqueOrThrow({
-          where: { id: row0.id },
+          where: { id: row.id },
         });
         expect(still.claimedByWawuId).toBeNull();
       });
