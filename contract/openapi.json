@@ -22238,6 +22238,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Optional. One value per message, made by the app when the person first sends it and sent again unchanged on every retry of that same message (never reused for another). Per sender and key the message is stored and charged once; a repeat answers with the first message as stored (the same status and body) and the header `Idempotent-Replayed: true`. The same key for other words or another room is `409` with `reason: idempotency_key_reused`. Without it the send behaves as it always has.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
           }
         ],
         "requestBody": {

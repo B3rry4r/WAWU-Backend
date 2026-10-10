@@ -1136,6 +1136,9 @@ model CommunityMessage {
   imageUrl      String?
   costInCredits Int       @default(1)
   sentAt        DateTime  @default(now())
+  /// INBOX-05 round 5. The row of `CommunityMessageKey` for the key this message was sent with, when the sender gave one.
+  /// Nothing reads it from a message; it is only the other side of that table's relation.
+  idempotencyKey CommunityMessageKey?
 
   @@index([communityId])
   @@index([senderWawuId])
@@ -1143,6 +1146,22 @@ model CommunityMessage {
   /// message and counts the messages after a read mark: both walk one room's
   /// messages in time order, and this index serves them without a sort.
   @@index([communityId, sentAt])
+}
+
+/// INBOX-05 round 5 (verifier defect 21). The `Idempotency-Key` a sender gave when they posted a community message:
+/// one row per (sender, key), pointing at the message that key stored. The primary key is the unique index that makes
+/// a message stored and charged ONCE per sender and key, even when two requests with the same key arrive at the same
+/// moment on two servers: the database refuses the second row, so the second request answers with the first message
+/// (see CommunityMessageService.store). A separate table, not a column on CommunityMessage, so no read of a message
+/// (the list, a live event, a catch-up, the data export) can carry a key; a message sent without a key has no row here.
+model CommunityMessageKey {
+  senderWawuId String
+  key          String
+  messageId    String           @unique
+  message      CommunityMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  createdAt    DateTime         @default(now())
+
+  @@id([senderWawuId, key])
 }
 
 model CreditsState {

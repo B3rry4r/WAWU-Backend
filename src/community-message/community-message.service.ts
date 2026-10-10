@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   HttpException,
   HttpStatus,
   Injectable,
@@ -70,6 +71,24 @@ const LOW_CREDITS_THRESHOLD = 5;
  * Nobody loses a free send they paid for, because nobody ever paid.
  */
 type MessageEntitlement = 'host' | 'credits';
+
+/**
+ * What a send answers with: the stored message, and whether it is the answer to an EARLIER request with the same
+ * `Idempotency-Key` (a repeat) rather than a message this request stored.
+ */
+export interface SentMessage {
+  message: CommunityMessage;
+  replayed: boolean;
+}
+
+/** Prisma's unique-constraint refusal (P2002). */
+function isUniqueViolation(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    (err as { code?: unknown }).code === 'P2002'
+  );
+}
 
 /**
  * CommunityMessage resource — frozen endpoints `GET /communities/:id/messages`
@@ -249,11 +268,13 @@ export class CommunityMessageService {
    *
    * KYC is deliberately NOT consulted: it gates being PAID, not sending.
    */
-  private async resolveEntitlement(
+  private resolveEntitlement(
     community: { hostWawuId: string; kind: CommunityKind },
     senderWawuId: string,
   ): Promise<MessageEntitlement> {
-    return senderWawuId === community.hostWawuId ? 'host' : 'credits';
+    return Promise.resolve(
+      senderWawuId === community.hostWawuId ? 'host' : 'credits',
+    );
   }
 
   /**
@@ -368,20 +389,95 @@ export class CommunityMessageService {
    * None of that applies to an ENTITLED send (see resolveEntitlement) —
    * there is no debit and no ledger row to keep in step with the message, so
    * it is a plain single INSERT and needs no transaction.
+   *
+   * AN OPTIONAL `Idempotency-Key` (INBOX-05 round 5, verifier defect 21). A
+   * phone that sent a message and never heard the answer sends it again, and
+   * without a key the Hub could not tell that repeat from a second message: it
+   * was stored and charged twice. A send may now carry the key the phone made
+   * for that one message. Per sender and key the message is stored and
+   * charged ONCE; a repeat answers with the first message exactly as it was
+   * stored (the same status and body, with `Idempotent-Replayed: true`), and
+   * nothing is stored, charged or published again.
+   *
+   *  - The arbiter is a UNIQUE index, not a read followed by a write: the
+   *    key's row (`CommunityMessageKey`, primary key sender + key) is inserted
+   *    in the same statement group as the message, so two requests with one
+   *    key arriving at the same moment, even on two servers, cannot both get
+   *    in. The database refuses the second; its transaction rolls back,
+   *    credit and all; and it answers with the first message.
+   *  - The message row goes in BEFORE the debit, so a repeat is refused by
+   *    the index before it can touch the balance. Debiting first would make
+   *    a repeat of a send that took the sender's last credit answer 402
+   *    instead of the first message.
+   *  - A cheap read before all that answers the ordinary (not racing) repeat
+   *    without opening a transaction. It is a shortcut only; the index
+   *    decides a race.
+   *  - The same key with a different room or different words is not a repeat:
+   *    409 `idempotency_key_reused`, nothing stored (the same rule the money
+   *    routes follow, docs/contract/CONVENTIONS.md section 4). A repeat is
+   *    checked for access like any send first, so a person who has since
+   *    lost the room is refused, not answered.
+   *  - Without the header none of this runs and nothing changes.
    */
   async create(
     communityId: string,
     senderWawuId: string,
     dto: CreateCommunityMessageDto,
-  ): Promise<CommunityMessage> {
-    const message = await this.store(communityId, senderWawuId, dto);
-    // After the commit, so a listener that hydrates the message finds it.
-    await this.live.publish({
-      kind: 'community.message',
+    idempotencyKey?: string,
+  ): Promise<SentMessage> {
+    const sent = await this.store(
       communityId,
-      messageId: message.id,
+      senderWawuId,
+      dto,
+      idempotencyKey,
+    );
+    // A repeat was published when the request that stored it ran.
+    if (!sent.replayed) {
+      // After the commit, so a listener that hydrates the message finds it.
+      await this.live.publish({
+        kind: 'community.message',
+        communityId,
+        messageId: sent.message.id,
+      });
+    }
+    return sent;
+  }
+
+  /**
+   * The message a sender already stored under this key, if any. A plain read
+   * of the row the unique index guards; used as the shortcut before a send
+   * and as the answer after the index refused a second one.
+   */
+  private async earlierSend(
+    senderWawuId: string,
+    key: string,
+  ): Promise<CommunityMessage | null> {
+    const row = await this.prisma.communityMessageKey.findUnique({
+      where: { senderWawuId_key: { senderWawuId, key } },
+      include: { message: true },
     });
-    return message;
+    return row?.message ?? null;
+  }
+
+  /** A repeat answers with the first message; the same key for other words or another room is refused. */
+  private replayOf(
+    earlier: CommunityMessage,
+    communityId: string,
+    text: string | null,
+    imageUrl: string | null,
+  ): SentMessage {
+    if (
+      earlier.communityId !== communityId ||
+      earlier.text !== text ||
+      earlier.imageUrl !== imageUrl
+    ) {
+      throw new ConflictException({
+        message:
+          'That Idempotency-Key was already used for a different message. Send this one with a new key.',
+        reason: 'idempotency_key_reused',
+      });
+    }
+    return { message: earlier, replayed: true };
   }
 
   /** Checks, charges and stores one message (everything `create` did before INBOX-02). */
@@ -389,7 +485,8 @@ export class CommunityMessageService {
     communityId: string,
     senderWawuId: string,
     dto: CreateCommunityMessageDto,
-  ): Promise<CommunityMessage> {
+    idempotencyKey?: string,
+  ): Promise<SentMessage> {
     // Text, an image, or both — never neither. Checked before the community
     // is even looked up, and long before a credit is debited: an empty
     // message must never cost anybody anything. (The DTO cannot express this
@@ -410,94 +507,125 @@ export class CommunityMessageService {
     );
     await this.assertMember(communityId, senderWawuId, community.hostWawuId);
 
+    // A repeat that is not racing anything: answered from the row, nothing
+    // stored or charged (see create() for why the index, not this, decides).
+    if (idempotencyKey) {
+      const earlier = await this.earlierSend(senderWawuId, idempotencyKey);
+      if (earlier) return this.replayOf(earlier, communityId, text, imageUrl);
+    }
+
     const entitlement = await this.resolveEntitlement(community, senderWawuId);
 
-    // ENTITLED SEND — the host in their own room. Nothing about credits
-    // happens on this path AT ALL:
-    //   - no CreditsState row is read, created or debited (so an entitled
-    //     sender's 7-day trial is neither consumed nor started by sending,
-    //     and no balance they bought is silently drained);
-    //   - the 402 gate is never reached, so a host can never be locked out
-    //     of their own community;
-    //   - NO CreditSpend row is written. That ledger is what the host's 90%
-    //     is computed from (CreatorEarningsService), and no credit was spent
-    //     here by anybody. Writing a row for a free message would invent
-    //     earnings out of nothing — and for the host's own messages it would
-    //     be the host paying themselves, inflating their own payout every
-    //     time they answered a question in their room.
-    // The message row records `costInCredits: 0`, which is the truth.
-    if (entitlement !== 'credits') {
-      return this.prisma.communityMessage.create({
-        data: {
-          communityId,
-          senderWawuId,
-          text,
-          imageUrl,
-          costInCredits: FREE_MESSAGE_COST_IN_CREDITS,
-        },
-      });
-    }
+    // The key's row, written with the message by the same nested create.
+    const keyRow = idempotencyKey
+      ? { create: { senderWawuId, key: idempotencyKey } }
+      : undefined;
 
-    const cost = MESSAGE_COST_IN_CREDITS;
-
-    // Hoisted out of the transaction closure so the credits-low warning
-    // below can tell a real debit from a trial-covered send. Read only after
-    // the transaction has committed.
-    let spentRealBalance = false;
-
-    const message = await this.prisma.$transaction(async (tx) => {
-      const creditsState = await this.getOrCreateCreditsState(senderWawuId, tx);
-
-      const { count } = await tx.creditsState.updateMany({
-        where: { userWawuId: senderWawuId, creditBalance: { gte: cost } },
-        data: { creditBalance: { decrement: cost } },
-      });
-      spentRealBalance = count > 0;
-
-      // Every metered message costs a credit now that the trial is gone, so
-      // a failed debit is the whole test: there is no second way through.
-      if (!spentRealBalance) {
-        throw new HttpException(
-          {
-            message:
-              'You are out of WAWU Credits. Buy more to keep messaging in this community.',
-            reason: 'insufficient_credits',
+    try {
+      // ENTITLED SEND — the host in their own room. Nothing about credits
+      // happens on this path AT ALL:
+      //   - no CreditsState row is read, created or debited (so an entitled
+      //     sender's 7-day trial is neither consumed nor started by sending,
+      //     and no balance they bought is silently drained);
+      //   - the 402 gate is never reached, so a host can never be locked out
+      //     of their own community;
+      //   - NO CreditSpend row is written. That ledger is what the host's 90%
+      //     is computed from (CreatorEarningsService), and no credit was spent
+      //     here by anybody. Writing a row for a free message would invent
+      //     earnings out of nothing — and for the host's own messages it would
+      //     be the host paying themselves, inflating their own payout every
+      //     time they answered a question in their room.
+      // The message row records `costInCredits: 0`, which is the truth.
+      if (entitlement !== 'credits') {
+        const message = await this.prisma.communityMessage.create({
+          data: {
+            communityId,
+            senderWawuId,
+            text,
+            imageUrl,
+            costInCredits: FREE_MESSAGE_COST_IN_CREDITS,
+            idempotencyKey: keyRow,
           },
-          HttpStatus.PAYMENT_REQUIRED,
-        );
+        });
+        return { message, replayed: false };
       }
 
-      const message = await tx.communityMessage.create({
-        data: {
-          communityId,
-          senderWawuId,
-          text,
-          imageUrl,
-          costInCredits: cost,
-        },
+      const cost = MESSAGE_COST_IN_CREDITS;
+
+      // Hoisted out of the transaction closure so the credits-low warning
+      // below can tell a real debit from a trial-covered send. Read only after
+      // the transaction has committed.
+      let spentRealBalance = false;
+
+      const message = await this.prisma.$transaction(async (tx) => {
+        await this.getOrCreateCreditsState(senderWawuId, tx);
+
+        // The message (and its key) goes in BEFORE the debit: a repeat of a
+        // keyed send is refused by the unique index here, before it can touch
+        // the balance, and the refusal rolls the whole transaction back.
+        const message = await tx.communityMessage.create({
+          data: {
+            communityId,
+            senderWawuId,
+            text,
+            imageUrl,
+            costInCredits: cost,
+            idempotencyKey: keyRow,
+          },
+        });
+
+        const { count } = await tx.creditsState.updateMany({
+          where: { userWawuId: senderWawuId, creditBalance: { gte: cost } },
+          data: { creditBalance: { decrement: cost } },
+        });
+        spentRealBalance = count > 0;
+
+        // Every metered message costs a credit now that the trial is gone, so
+        // a failed debit is the whole test: there is no second way through.
+        // Throwing rolls the message row back with it.
+        if (!spentRealBalance) {
+          throw new HttpException(
+            {
+              message:
+                'You are out of WAWU Credits. Buy more to keep messaging in this community.',
+              reason: 'insufficient_credits',
+            },
+            HttpStatus.PAYMENT_REQUIRED,
+          );
+        }
+
+        await this.creditSpendService.record(
+          {
+            userWawuId: senderWawuId,
+            communityId,
+            creatorWawuId: community.hostWawuId,
+            creditsSpent: cost,
+          },
+          tx,
+        );
+
+        return message;
       });
 
-      await this.creditSpendService.record(
-        {
-          userWawuId: senderWawuId,
-          communityId,
-          creatorWawuId: community.hostWawuId,
-          creditsSpent: cost,
-        },
-        tx,
-      );
+      // AFTER the commit, never inside it: a notification must not be able to
+      // roll back a message the sender has already paid a credit for, and the
+      // balance it reports has to be the committed one.
+      if (spentRealBalance) {
+        await this.warnIfCreditsLow(senderWawuId, cost);
+      }
 
-      return message;
-    });
-
-    // AFTER the commit, never inside it: a notification must not be able to
-    // roll back a message the sender has already paid a credit for, and the
-    // balance it reports has to be the committed one.
-    if (spentRealBalance) {
-      await this.warnIfCreditsLow(senderWawuId, cost);
+      return { message, replayed: false };
+    } catch (error) {
+      // Two sends with one key at the same moment: the database let one key
+      // row in and refused this one, and the transaction rolled back, credit
+      // and all. The first request has committed by now (the index waits for
+      // it), so its message is the answer.
+      if (idempotencyKey && isUniqueViolation(error)) {
+        const earlier = await this.earlierSend(senderWawuId, idempotencyKey);
+        if (earlier) return this.replayOf(earlier, communityId, text, imageUrl);
+      }
+      throw error;
     }
-
-    return message;
   }
 
   /**

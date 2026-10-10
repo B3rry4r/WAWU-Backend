@@ -286,6 +286,19 @@ after a send that failed (W14).
    top-up).
 7. Keys are kept for at least 24 hours (MONEY-17 sets the purge in config).
 
+**Not only money: community messages.** `POST /communities/:id/messages` takes an
+OPTIONAL `Idempotency-Key` (the same 8 to 128 characters of `[A-Za-z0-9_-]`; INBOX-05
+round 5). Without it the route behaves exactly as it always has. With it, per
+`(wawuUserId, key)` the message is stored and its credit charged once; a repeat answers
+with the first message as stored (same status and body) and `Idempotent-Replayed: true`,
+and stores, charges and publishes nothing. The unique index is the lock, not a read:
+two requests with one key at the same moment, on one server or two, still store once
+(`CommunityMessageKey`, primary key sender plus key, written with the message before the
+credit is taken). The same key for other words or another room is
+`409` with `reason: idempotency_key_reused`. A refusal (402, 403, 400) stores nothing and
+leaves the key free to use once the cause is fixed. The app makes one key per message and
+sends it again unchanged on every retry of that message.
+
 **Fintava has no Idempotency-Key** (`naira-api.md`). Ours is enforced here.
 The reference we send Fintava as `CustomerReference` is derived from our own
 transaction id, not from the app's key (which is only unique per person).
