@@ -2132,7 +2132,10 @@
             "description": "reason.code meter_not_found: Fintava does not know this meter for this company."
           },
           "429": {
-            "description": "reason.code bills_rate_limited, with retryAfterSeconds."
+            "description": "reason.code bills_rate_limited, with retryAfterSeconds and the same number of seconds in the Retry-After header."
+          },
+          "502": {
+            "description": "reason.code meter_unconfirmed: Fintava answered, but with neither a name nor a plain \"no such meter\". The meter is neither found nor refused: try again."
           },
           "503": {
             "description": "reason.code bills_unavailable (bills are not switched on) or provider_unreachable (Fintava did not answer)."
@@ -2143,7 +2146,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "S4 and S10. The name and address Fintava holds for a meter. 422 `meter_not_found` is S10. 404 `biller_not_found` is a\n`code` that is not on the list now. 503 `bills_unavailable` is S13. 429 `bills_rate_limited` carries\n`retryAfterSeconds` (and `Retry-After`). Answers are `no-store`: they name someone else.",
+        "summary": "S4 and S10. The name and address Fintava holds for a meter, found only when Fintava names an owner. 422\n`meter_not_found` is S10. 502 `meter_unconfirmed` is an answer that is neither a name nor \"no such meter\" (S4 says the\nmeter could not be confirmed). 404 `biller_not_found` is a `code` that is not on the list now. 503 `bills_unavailable`\nis S13. 429 `bills_rate_limited` carries `retryAfterSeconds` (and `Retry-After`). Answers are `no-store`: they name\nsomeone else.",
         "tags": [
           "BillsCatalogue"
         ]
@@ -38309,8 +38312,7 @@
             ]
           },
           "name": {
-            "type": "string",
-            "nullable": true
+            "type": "string"
           },
           "address": {
             "type": "string",

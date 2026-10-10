@@ -31,8 +31,11 @@ export interface MeterPreviewView {
   /** The code the check was made against, with its plan. */
   code: string;
   plan: MeterPlan;
-  /** The name the meter is registered to; null when Fintava's answer carries none (the screen then says only that the meter was found). */
-  name: string | null;
-  /** Where it is registered; null when Fintava's answer carries none. */
+  /**
+   * The name the meter is registered to, at most 200 characters. Never empty and never the company's own name: an
+   * answer that names no owner is `404`-style `meter_not_found` or `meter_unconfirmed`, not a found meter.
+   */
+  name: string;
+  /** Where it is registered, at most 200 characters; null when Fintava's answer carries none. */
   address: string | null;
 }

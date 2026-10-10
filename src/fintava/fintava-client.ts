@@ -22,6 +22,7 @@ import {
   type FintavaCallKind,
   type FintavaErrorKind,
 } from './fintava-error';
+import { readMeterAnswer } from './fintava-meter-answer';
 import { decideFintavaRetry } from './fintava-reconcile';
 import {
   readSelfieAnswer,
@@ -129,46 +130,6 @@ function scalars(o: Obj): Scalars {
     }
   }
   return out;
-}
-
-/** A key as compared: lower case, with every non-letter and non-digit taken out (`Customer_Name` is `customername`). */
-function keyForm(key: string): string {
-  return key.toLowerCase().replace(/[^a-z0-9]/g, '');
-}
-
-const METER_NAME_KEYS = [
-  'customername',
-  'name',
-  'accountname',
-  'consumername',
-  'fullname',
-  'customerfullname',
-];
-const METER_ADDRESS_KEYS = [
-  'address',
-  'customeraddress',
-  'consumeraddress',
-  'serviceaddress',
-];
-
-/**
- * The name and address on a meter preview's success body. Its shape has not
- * been seen (no sandbox meter is known, question 11), so the first key of
- * each list that holds text is taken, whatever its capitals or separators.
- * Anything else is left unread: a body that names no owner gives nulls.
- */
-function readMeterOwner(o: Obj): {
-  name: string | null;
-  address: string | null;
-} {
-  const byKey = new Map<string, string>();
-  for (const [k, v] of Object.entries(o)) {
-    if (typeof v === 'string' && v.trim() !== '')
-      byKey.set(keyForm(k), v.trim());
-  }
-  const first = (keys: string[]) =>
-    keys.map((k) => byKey.get(k)).find((v) => v !== undefined) ?? null;
-  return { name: first(METER_NAME_KEYS), address: first(METER_ADDRESS_KEYS) };
 }
 
 function readTransaction(v: unknown): FintavaTransaction {
@@ -650,6 +611,7 @@ export class FintavaClient {
       messages?: string[];
       reference?: string | null;
       recordMayExist?: boolean;
+      serviceNotAvailable?: boolean;
     },
   ): FintavaError {
     const messages = this.clean(args.messages ?? []);
@@ -660,6 +622,7 @@ export class FintavaClient {
       messages,
       reference: args.reference ?? null,
       recordMayExist: args.recordMayExist,
+      serviceNotAvailable: args.serviceNotAvailable,
     });
     this.logger.warn(
       `${op.name}: ${args.kind}` +
@@ -1758,22 +1721,51 @@ export class FintavaClient {
   //     carries it: cable answered 201 "service not currently available".
   // -------------------------------------------------------------------------
 
-  /** `GET /billing/discos`: limits are per disco; postpaid codes included. */
+  /**
+   * `GET /billing/discos`: limits are per disco; postpaid codes included. A row
+   * Fintava got wrong (a null or unreadable limit, no code) is skipped and the
+   * skip logged, so one bad row cannot take the list away from everyone
+   * (BILLS-01 D7). A list in which no row can be read is not readable.
+   */
   async listDiscos(): Promise<FintavaDisco[]> {
     const op: Op = { name: 'list discos', method: 'GET', call: 'read' };
     const answer = await this.request(op, '/billing/discos');
     return this.read(op, answer, (data) => {
       if (!Array.isArray(data)) throw new FintavaShapeError('rows missing');
-      return data.map((row) => {
-        const o = obj(row, 'disco');
-        return {
-          code: str(o, 'code'),
-          description: strOrNull(o, 'description') ?? str(o, 'code'),
-          minimumKobo: fintavaAmountToKobo(o.minimum_value),
-          maximumKobo: fintavaAmountToKobo(o.maximum_value),
-          available: o.is_available === 'Yes',
-        };
+      const discos: FintavaDisco[] = [];
+      data.forEach((row: unknown, i) => {
+        try {
+          const o = obj(row, 'disco');
+          discos.push({
+            code: str(o, 'code'),
+            description: strOrNull(o, 'description') ?? str(o, 'code'),
+            minimumKobo: fintavaAmountToKobo(o.minimum_value),
+            maximumKobo: fintavaAmountToKobo(o.maximum_value),
+            available: o.is_available === 'Yes',
+          });
+        } catch (e) {
+          if (!(
+            e instanceof FintavaShapeError || e instanceof FintavaAmountError
+          )) {
+            throw e;
+          }
+          // The row's place and code only: its values are Fintava's, and the
+          // amount error would repeat one.
+          const code =
+            isObj(row) && typeof row.code === 'string' ? row.code : '';
+          this.logger.warn(
+            `${op.name}: skipped row ${i + 1}` +
+              (code
+                ? ` "${maskFintavaText(code, [this.#apiKey]).slice(0, 80)}"`
+                : '') +
+              ' (not readable)',
+          );
+        }
       });
+      if (data.length > 0 && discos.length === 0) {
+        throw new FintavaShapeError('no row could be read');
+      }
+      return discos;
     });
   }
 
@@ -1803,17 +1795,42 @@ export class FintavaClient {
       }
       throw e;
     }
-    // A 2xx is a meter Fintava knows (a meter it does not know is a 400), so
-    // a body without a `data` object is still a found meter, with no owner.
-    return this.read(op, answer, (data, body) => {
-      const record = isObj(data) ? data : body;
-      const owner = readMeterOwner(record);
-      return {
-        details: scalars(record),
-        ownerName: owner.name,
-        ownerAddress: owner.address,
-      };
-    });
+    // A 2xx is read for what it says (`fintava-meter-answer.ts`): a meter is
+    // found only when `data` names an owner. Fintava styles failures inside a
+    // 2xx, and a body nobody has seen the success shape of is never trusted
+    // to mean "found".
+    const reading = readMeterAnswer(answer.body);
+    switch (reading.kind) {
+      case 'owner':
+        return {
+          details: scalars(reading.data),
+          ownerName: reading.name,
+          ownerAddress: reading.address,
+        };
+      case 'not_found':
+        return null;
+      case 'service_unavailable':
+        throw this.fail(op, {
+          kind: 'unavailable',
+          status: answer.status,
+          messages: ['service not currently available'],
+          serviceNotAvailable: true,
+        });
+      case 'failed':
+        // The status the body carries is judged as the same status on the
+        // wire is, above.
+        if (reading.failure === 'refused' || reading.failure === 'not_found') {
+          return null;
+        }
+        throw this.fail(op, {
+          kind: reading.failure,
+          status: reading.status,
+          messages: reading.messages,
+        });
+      case 'unreadable':
+        // No messages: the body might name someone, and it is not logged.
+        throw this.fail(op, { kind: 'bad_response', status: answer.status });
+    }
   }
 
   /**

@@ -125,6 +125,14 @@ describe('BILLS-01 electricity catalogue and meter check over HTTP', () => {
       .set('Authorization', token)
       .send(send);
 
+  /** The service as the module builds it, with its own settings and a client on the double. */
+  function serviceWith(values: Record<string, string>): BillsCatalogueService {
+    const config = {
+      get: (k: string) => values[k],
+    } as unknown as ConfigService;
+    return new BillsCatalogueService(new FintavaClient(config), config);
+  }
+
   beforeAll(async () => {
     await double.start();
     ENV.FINTAVA_BASE_URL = double.baseUrl;
@@ -316,16 +324,6 @@ describe('BILLS-01 electricity catalogue and meter check over HTTP', () => {
       expect(body(res).reason?.code).toBe('provider_unreachable');
     });
 
-    /** The service as the module builds it, with its own settings and a client on the double. */
-    function serviceWith(
-      values: Record<string, string>,
-    ): BillsCatalogueService {
-      const config = {
-        get: (k: string) => values[k],
-      } as unknown as ConfigService;
-      return new BillsCatalogueService(new FintavaClient(config), config);
-    }
-
     it('is `available: false` when the server has no Fintava key, and nothing is sent', async () => {
       const bare = serviceWith({ ...ENV, FINTAVA_API_KEY: '' });
       expect(await bare.electricityBillers()).toEqual({
@@ -432,39 +430,6 @@ describe('BILLS-01 electricity catalogue and meter check over HTTP', () => {
         meternumber: '04123456789',
         disco: 'AEDC',
         planType: 'prepaid',
-      });
-    });
-
-    it('answers a found meter whose body names no owner with nulls, never a made-up name', async () => {
-      listAnswers();
-      double.on(
-        'POST',
-        '/billing/preview-meter',
-        found({ meter_number: '04123456789', status: 'active' }),
-      );
-      const res = await preview({
-        code: 'AEDC',
-        meterNumber: '04123456789',
-      }).expect(200);
-      expect(body<MeterPreviewView>(res).data).toMatchObject({
-        name: null,
-        address: null,
-      });
-    });
-
-    it('answers a found meter whose success body has no data object as found, with no owner', async () => {
-      listAnswers();
-      double.on('POST', '/billing/preview-meter', {
-        status: 200,
-        body: { status: 200, message: 'ok' },
-      });
-      const res = await preview({
-        code: 'AEDC',
-        meterNumber: '04123456789',
-      }).expect(200);
-      expect(body<MeterPreviewView>(res).data).toMatchObject({
-        name: null,
-        address: null,
       });
     });
 
@@ -629,6 +594,448 @@ describe('BILLS-01 electricity catalogue and meter check over HTTP', () => {
           .reason!.message,
       );
       for (const m of said) expect(m).not.toMatch(/fintava|—/i);
+    });
+
+    /**
+     * The 24 answers the BILLS-01 verifier sent to the meter check (D2). The real success body has never been seen
+     * (question 11), so a meter is "found" only for a body that names an owner under a key a person's name is kept
+     * under, and that name is not the company's own. Every failure Fintava styles inside a 2xx, and every body the Hub
+     * cannot read, is an answer that is not green.
+     */
+    describe("every kind of answer to a meter check (the verifier's 24 shapes, D2)", () => {
+      type Shape = [
+        label: string,
+        answer: { status: number; body?: unknown; contentType?: string },
+        expected:
+          | { status: 200; name: string; address: string | null }
+          | { status: number; code: string },
+      ];
+      const html = '<html><body>Bad gateway page</body></html>';
+      const shapes: Shape[] = [
+        [
+          'a name and an address',
+          {
+            status: 200,
+            body: {
+              data: {
+                Customer_Name: 'Chidinma Okoro',
+                Address: '14 Admiralty Way',
+                Meter_Number: '04123456789',
+              },
+              status: 200,
+              message: 'Meter details fetched',
+            },
+          },
+          { status: 200, name: 'Chidinma Okoro', address: '14 Admiralty Way' },
+        ],
+        [
+          'a name and no address',
+          {
+            status: 200,
+            body: {
+              data: { customerName: 'Tunde Bakare' },
+              status: 200,
+              message: 'ok',
+            },
+          },
+          { status: 200, name: 'Tunde Bakare', address: null },
+        ],
+        [
+          'data an empty object',
+          { status: 200, body: { data: {}, status: 200, message: 'ok' } },
+          { status: 422, code: 'meter_not_found' },
+        ],
+        [
+          'data null',
+          { status: 200, body: { data: null, status: 200, message: 'ok' } },
+          { status: 422, code: 'meter_not_found' },
+        ],
+        [
+          'an owner nested one level down',
+          {
+            status: 200,
+            body: {
+              data: { customer: { name: 'Nested Person', address: 'Nested' } },
+              status: 200,
+            },
+          },
+          { status: 502, code: 'meter_unconfirmed' },
+        ],
+        [
+          'the company’s own name in `name`',
+          {
+            status: 200,
+            body: {
+              data: {
+                name: 'IKEJA ELECTRIC',
+                disco: 'Ikeja_Electric_Bill_Payment',
+                type: 'prepaid',
+              },
+              status: 200,
+            },
+          },
+          { status: 502, code: 'meter_unconfirmed' },
+        ],
+        [
+          'a 201 "service not currently available" (as cable answers today)',
+          {
+            status: 201,
+            body: { status: 201, message: 'service not currently available' },
+          },
+          { status: 503, code: 'bills_unavailable' },
+        ],
+        [
+          'a 200 whose body says status 400 "Meter not found"',
+          {
+            status: 200,
+            body: { status: 400, message: 'Meter not found', data: null },
+          },
+          { status: 422, code: 'meter_not_found' },
+        ],
+        [
+          'data a string',
+          { status: 200, body: { data: 'a string', status: 200 } },
+          { status: 502, code: 'meter_unconfirmed' },
+        ],
+        [
+          'an HTML page with a 200',
+          { status: 200, body: html, contentType: 'text/html' },
+          { status: 502, code: 'meter_unconfirmed' },
+        ],
+        [
+          'data an array',
+          { status: 200, body: { data: [{ name: 'A' }], status: 200 } },
+          { status: 502, code: 'meter_unconfirmed' },
+        ],
+        [
+          'a number for the name and an object for the address',
+          {
+            status: 200,
+            body: {
+              data: { name: 12345, address: { line: 'x' } },
+              status: 200,
+            },
+          },
+          { status: 502, code: 'meter_unconfirmed' },
+        ],
+        [
+          'a padded name and an empty address',
+          {
+            status: 200,
+            body: {
+              data: { Customer_Name: '  Ngozi Eze  ', Address: '' },
+              status: 200,
+            },
+          },
+          { status: 200, name: 'Ngozi Eze', address: null },
+        ],
+        [
+          'JSON cut off in the middle',
+          {
+            status: 200,
+            body: '{"data": {"Customer_Name": "Broken',
+            contentType: 'application/json',
+          },
+          { status: 502, code: 'meter_unconfirmed' },
+        ],
+        [
+          'a script tag in the name (text, never markup)',
+          {
+            status: 200,
+            body: {
+              data: {
+                Customer_Name: 'Ada <script>alert(1)</script> Obi',
+                Address: '1 "Quote" Road',
+              },
+              status: 200,
+            },
+          },
+          {
+            status: 200,
+            name: 'Ada <script>alert(1)</script> Obi',
+            address: '1 "Quote" Road',
+          },
+        ],
+        [
+          'a name and an address in plain capitals',
+          {
+            status: 200,
+            body: {
+              data: { Customer_Name: 'Zainab', Address: 'Abuja' },
+              status: 200,
+              message: 'ok',
+            },
+          },
+          { status: 200, name: 'Zainab', address: 'Abuja' },
+        ],
+        [
+          'the bare 400 "Http Exception"',
+          { status: 400, body: fintavaError(400, 'Http Exception') },
+          { status: 422, code: 'meter_not_found' },
+        ],
+        [
+          'a 404',
+          { status: 404, body: fintavaError(404, 'Meter not found') },
+          { status: 422, code: 'meter_not_found' },
+        ],
+        [
+          'a 500',
+          { status: 500, body: fintavaError(500, 'read ECONNRESET') },
+          { status: 503, code: 'provider_unreachable' },
+        ],
+        [
+          'a 403 merchant not active',
+          { status: 403, body: fintavaError(403, 'Merchant is not active') },
+          { status: 503, code: 'bills_unavailable' },
+        ],
+        [
+          'a 401 refused key',
+          { status: 401, body: fintavaError(401, 'Invalid API key') },
+          { status: 503, code: 'bills_unavailable' },
+        ],
+        [
+          'a 429',
+          { status: 429, body: fintavaError(429, 'Too many requests') },
+          { status: 503, code: 'provider_unreachable' },
+        ],
+        [
+          'a 400 in the validation shape',
+          {
+            status: 400,
+            body: fintavaValidation('meternumber must be a number string'),
+          },
+          { status: 422, code: 'meter_not_found' },
+        ],
+        [
+          'a 400 "Unable to find customers"',
+          { status: 400, body: fintavaError(400, 'Unable to find customers') },
+          { status: 503, code: 'provider_unreachable' },
+        ],
+      ];
+
+      it.each(shapes)('%s', async (_label, answer, expected) => {
+        listAnswers();
+        double.on('POST', '/billing/preview-meter', answer);
+        const res = await preview({
+          code: 'Ikeja_Electric_Bill_Payment',
+          meterNumber: '04123456789',
+        }).expect(expected.status);
+        if ('name' in expected) {
+          expect(body<MeterPreviewView>(res).data).toMatchObject({
+            name: expected.name,
+            address: expected.address,
+          });
+        } else {
+          expect(body(res).data).toBeNull();
+          expect(body(res).reason?.code).toBe(expected.code);
+          // Whatever was wrong, nothing of Fintava's own words reaches the app.
+          expect(res.text).not.toMatch(
+            /fintava|econnreset|api key|<html|script/i,
+          );
+        }
+      });
+
+      it('answers found only with a name in the data: 24 shapes, 5 found, none green by mistake', () => {
+        const found = shapes.filter(([, , e]) => e.status === 200);
+        expect(shapes).toHaveLength(24);
+        expect(found).toHaveLength(5);
+      });
+
+      it('compares the owner with the company’s own name whatever the capitals, spaces and plan words', async () => {
+        listAnswers();
+        for (const name of [
+          'Ikeja Electric',
+          'IKEJA ELECTRIC',
+          'ikeja-electric',
+          'Ikeja Electric Prepaid',
+          'Ikeja Electric Bill Payment',
+          'Ikeja_Electric_Bill_Payment',
+        ]) {
+          double.on('POST', '/billing/preview-meter', {
+            status: 200,
+            body: { data: { name }, status: 200 },
+          });
+          const res = await preview({
+            code: 'Ikeja_Electric_Bill_Payment',
+            meterNumber: '04123456789',
+          }).expect(502);
+          expect(body(res).reason?.code).toBe('meter_unconfirmed');
+        }
+        // Another company's name on an Ikeja meter is a person's name as far as the Hub can tell.
+        double.on('POST', '/billing/preview-meter', {
+          status: 200,
+          body: { data: { name: 'Eko Ikeja' }, status: 200 },
+        });
+        await preview({
+          code: 'Ikeja_Electric_Bill_Payment',
+          meterNumber: '04123456789',
+        }).expect(200);
+      });
+
+      it('says in plain words that the meter could not be confirmed, with no provider name or em-dash', async () => {
+        listAnswers();
+        double.on('POST', '/billing/preview-meter', {
+          status: 200,
+          body: { data: 'x' },
+        });
+        const res = await preview({
+          code: 'AEDC',
+          meterNumber: '04123456789',
+        }).expect(502);
+        expect(body(res).reason).toEqual({
+          code: 'meter_unconfirmed',
+          message: "We couldn't confirm this meter. Try again.",
+        });
+        expect(body(res).reason?.message).not.toMatch(/fintava|—/i);
+      });
+
+      it('logs none of the body of an answer it could not read', async () => {
+        listAnswers();
+        double.on('POST', '/billing/preview-meter', {
+          status: 200,
+          body: {
+            data: {
+              customer: { name: 'Chidinma Okoro', address: 'Admiralty' },
+            },
+          },
+        });
+        await preview({ code: 'AEDC', meterNumber: '04123456789' }).expect(502);
+        expect(logger.lines.join('\n')).not.toMatch(
+          /04123456789|Chidinma|Admiralty/,
+        );
+      });
+    });
+
+    it('caps the text it passes on at 200 characters, name and address alike (D9)', async () => {
+      listAnswers();
+      double.on('POST', '/billing/preview-meter', {
+        status: 200,
+        body: {
+          data: {
+            Customer_Name: 'X'.repeat(5000),
+            Address: `${'Y'.repeat(199)}😀tail`,
+          },
+          status: 200,
+        },
+      });
+      const res = await preview({
+        code: 'AEDC',
+        meterNumber: '04123456789',
+      }).expect(200);
+      const data = body<MeterPreviewView>(res).data!;
+      expect(data.name).toBe('X'.repeat(200));
+      // Counted in characters a person sees, never half of an emoji.
+      expect([...data.address!]).toHaveLength(200);
+      expect(data.address).toBe(`${'Y'.repeat(199)}😀`);
+    });
+
+    it('a name of exactly 200 characters is passed on whole', async () => {
+      listAnswers();
+      double.on('POST', '/billing/preview-meter', {
+        status: 200,
+        body: { data: { name: 'N'.repeat(200) }, status: 200 },
+      });
+      const res = await preview({
+        code: 'AEDC',
+        meterNumber: '04123456789',
+      }).expect(200);
+      expect(body<MeterPreviewView>(res).data!.name).toBe('N'.repeat(200));
+    });
+
+    it('sends Retry-After with the 429 (D5), the same whole seconds as the body', async () => {
+      listAnswers();
+      double.on('POST', '/billing/preview-meter', {
+        status: 400,
+        body: fintavaError(400, 'Http Exception'),
+      });
+      const busy = auth();
+      for (let i = 0; i < PER_MINUTE; i += 1)
+        await preview({ code: 'AEDC', meterNumber: '04123456789' }, busy);
+      const res = await preview(
+        { code: 'AEDC', meterNumber: '04123456789' },
+        busy,
+      ).expect(429);
+      const seconds = body(res).reason?.retryAfterSeconds;
+      expect(seconds).toBeGreaterThanOrEqual(1);
+      expect(res.headers['retry-after']).toBe(String(seconds));
+      expect(res.headers['cache-control']).toBe('no-store');
+    });
+
+    it('sends no Retry-After with an answer that is not a 429', async () => {
+      listAnswers();
+      double.on('POST', '/billing/preview-meter', {
+        status: 400,
+        body: fintavaError(400, 'Http Exception'),
+      });
+      const res = await preview({
+        code: 'AEDC',
+        meterNumber: '04123456789',
+      }).expect(422);
+      expect(res.headers['retry-after']).toBeUndefined();
+    });
+
+    it('forgets the kept list when a check says bills are not switched on, so S2 draws S13 at once (D6)', async () => {
+      const kept = serviceWith({ ...ENV, BILLS_CATALOGUE_CACHE_SECONDS: '60' });
+      listAnswers();
+      expect((await kept.electricityBillers()).available).toBe(true);
+      expect(listCalls()).toBe(1);
+      // The merchant goes inactive: the list still looks fine in the cache, the check is refused.
+      double.on('POST', '/billing/preview-meter', {
+        status: 403,
+        body: fintavaError(403, 'Merchant is not active'),
+      });
+      listAnswers({
+        status: 403,
+        body: fintavaError(403, 'Merchant is not active'),
+      });
+      await expect(
+        kept.previewMeter(randomUUID(), {
+          code: 'AEDC',
+          meterNumber: '04123456789',
+        }),
+      ).rejects.toMatchObject({ code: 'bills_unavailable' });
+      // The next list read goes to Fintava again and is S13, not the minute-old list.
+      expect(await kept.electricityBillers()).toEqual({
+        available: false,
+        billers: [],
+      });
+      expect(listCalls()).toBe(2);
+    });
+
+    it('forgets the kept list for a 2xx "service not currently available" too (D6)', async () => {
+      const kept = serviceWith({ ...ENV, BILLS_CATALOGUE_CACHE_SECONDS: '60' });
+      listAnswers();
+      await kept.electricityBillers();
+      double.on('POST', '/billing/preview-meter', {
+        status: 201,
+        body: { status: 201, message: 'service not currently available' },
+      });
+      await expect(
+        kept.previewMeter(randomUUID(), {
+          code: 'AEDC',
+          meterNumber: '04123456789',
+        }),
+      ).rejects.toMatchObject({ code: 'bills_unavailable' });
+      await kept.electricityBillers();
+      expect(listCalls()).toBe(2);
+    });
+
+    it('keeps the list when a check fails for a reason that says nothing about the list (a meter not found)', async () => {
+      const kept = serviceWith({ ...ENV, BILLS_CATALOGUE_CACHE_SECONDS: '60' });
+      listAnswers();
+      await kept.electricityBillers();
+      double.on('POST', '/billing/preview-meter', {
+        status: 400,
+        body: fintavaError(400, 'Http Exception'),
+      });
+      await expect(
+        kept.previewMeter(randomUUID(), {
+          code: 'AEDC',
+          meterNumber: '04123456789',
+        }),
+      ).rejects.toMatchObject({ code: 'meter_not_found' });
+      await kept.electricityBillers();
+      expect(listCalls()).toBe(1);
     });
   });
 

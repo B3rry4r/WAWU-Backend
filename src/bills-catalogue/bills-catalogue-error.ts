@@ -14,6 +14,11 @@ export const BILLS_ERROR_STATUS = {
   bills_unavailable: 503,
   /** Fintava did not answer, or answered something unreadable. */
   provider_unreachable: 503,
+  /**
+   * Fintava answered the meter check, but not with a name or with a plain "no such meter": the Hub cannot say the meter
+   * exists or that it does not. The app says so and offers Try again; it never draws a meter as found.
+   */
+  meter_unconfirmed: 502,
   /** The person has asked for their meter check too often. */
   bills_rate_limited: 429,
 } as const;

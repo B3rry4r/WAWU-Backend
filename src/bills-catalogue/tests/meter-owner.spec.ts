@@ -7,7 +7,7 @@ import { FintavaClient } from '../../fintava/fintava-client';
 /**
  * What the Fintava client reads off a meter preview's success body (BILLS-01). The real body has never been seen (no
  * sandbox meter is known, question 11), so the keys are a list of likely ones read whatever their capitals or separators;
- * these tests pin that list, and that an unknown body gives nulls rather than a guess.
+ * these tests pin that list, and that an unknown body is refused rather than guessed (round 2, D2).
  */
 const double = new FintavaDouble();
 const client = () =>
@@ -72,20 +72,19 @@ describe('previewMeter reads the owner of a meter', () => {
     });
   });
 
-  it('reads the owner off the body itself when the answer has no data object', async () => {
+  it('does not read an owner off the body itself when the answer has no data object (D2)', async () => {
     answer({ status: 200, message: 'ok', customerName: 'Ada Eze' });
-    expect(await ask()).toMatchObject({
-      ownerName: 'Ada Eze',
-      ownerAddress: null,
-    });
+    await expect(ask()).rejects.toMatchObject({ kind: 'bad_response' });
   });
 
-  it('gives nulls for a body that names no owner, and for values that are not text', async () => {
+  it('is `bad_response`, not a found meter with no owner, for a body that names no owner or values that are not text (D2)', async () => {
     answer({
       data: { meter: '04123456789', name: 12345, address: { line: 'x' } },
       status: 200,
     });
-    expect(await ask()).toMatchObject({ ownerName: null, ownerAddress: null });
+    await expect(ask()).rejects.toMatchObject({ kind: 'bad_response' });
+    answer({ data: { meter: '04123456789', status: 'active' }, status: 200 });
+    await expect(ask()).rejects.toMatchObject({ kind: 'bad_response' });
   });
 
   it('keeps the address out of `details`, which drops address fields on purpose', async () => {
