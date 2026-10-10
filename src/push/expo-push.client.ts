@@ -1,0 +1,221 @@
+import { Injectable, Logger } from '@nestjs/common';
+import {
+  EXPO_RECEIPT_CHUNK,
+  EXPO_SEND_CHUNK,
+  PUSH_REQUEST_TIMEOUT_MS,
+  loadPushSettings,
+} from './push-config';
+import type { ExpoMessage } from './push-message';
+
+/**
+ * One ticket per message, in the order the messages were sent. Shapes are
+ * Expo's: `{status:'ok', id}` or `{status:'error', message, details:{error}}`.
+ */
+export type ExpoTicket =
+  | { status: 'ok'; id: string }
+  | {
+      status: 'error';
+      message?: string;
+      details?: { error?: string };
+    };
+
+export type ExpoReceipt =
+  | { status: 'ok' }
+  | {
+      status: 'error';
+      message?: string;
+      details?: { error?: string };
+    };
+
+/**
+ * What came of one send request.
+ *
+ *  tickets   Expo took the request; one ticket per message, in order.
+ *  retry     Expo took nothing (429, 5xx, no connection, or a refusal that is
+ *            not Expo's own, such as a proxy's 403): safe to send again.
+ *  rejected  Expo refused the request itself (a 4xx carrying Expo's error
+ *            shape): sending it again cannot help.
+ *  unknown   No answer in time, or one that cannot be read. Expo may have taken
+ *            the messages, so they are never sent again.
+ */
+export type SendOutcome =
+  | { kind: 'tickets'; tickets: ExpoTicket[] }
+  | { kind: 'retry'; reason: string; retryAfterSeconds: number | null }
+  | { kind: 'rejected'; reason: string }
+  | { kind: 'unknown'; reason: string };
+
+export type ReceiptOutcome =
+  | { kind: 'receipts'; receipts: Record<string, ExpoReceipt> }
+  | { kind: 'failed'; reason: string };
+
+/**
+ * Expo's push HTTP API (send and getReceipts), written against its documented
+ * shapes and its server SDK (expo-server-sdk 7.2.0 `ExpoClient`, whose
+ * constants and error handling this follows). The caller chunks: a send takes
+ * at most EXPO_SEND_CHUNK messages, a receipt request at most EXPO_RECEIPT_CHUNK ids.
+ *
+ * No message, token or response body is ever logged: a token is the address
+ * of a phone.
+ */
+@Injectable()
+export class ExpoPushClient {
+  private readonly logger = new Logger(ExpoPushClient.name);
+
+  /** How long one request may take before it is treated as unanswered. A field so a spec can shorten it. */
+  requestTimeoutMs = PUSH_REQUEST_TIMEOUT_MS;
+
+  async send(messages: ExpoMessage[]): Promise<SendOutcome> {
+    if (messages.length === 0) return { kind: 'tickets', tickets: [] };
+    if (messages.length > EXPO_SEND_CHUNK) {
+      return { kind: 'rejected', reason: 'chunk_too_large' };
+    }
+    const res = await this.post('/--/api/v2/push/send', messages);
+    if (res.kind !== 'ok') return res;
+
+    const data = (res.body as { data?: unknown } | null)?.data;
+    if (!Array.isArray(data) || data.length !== messages.length) {
+      return { kind: 'unknown', reason: 'unreadable_answer' };
+    }
+    return { kind: 'tickets', tickets: data as ExpoTicket[] };
+  }
+
+  async getReceipts(ids: string[]): Promise<ReceiptOutcome> {
+    if (ids.length === 0) return { kind: 'receipts', receipts: {} };
+    if (ids.length > EXPO_RECEIPT_CHUNK) {
+      return { kind: 'failed', reason: 'chunk_too_large' };
+    }
+    const res = await this.post('/--/api/v2/push/getReceipts', { ids });
+    if (res.kind === 'ok') {
+      const data = (res.body as { data?: unknown } | null)?.data;
+      if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        return { kind: 'failed', reason: 'unreadable_answer' };
+      }
+      return {
+        kind: 'receipts',
+        receipts: data as Record<string, ExpoReceipt>,
+      };
+    }
+    return { kind: 'failed', reason: res.reason };
+  }
+
+  private async post(
+    path: string,
+    payload: unknown,
+  ): Promise<
+    | { kind: 'ok'; body: unknown }
+    | { kind: 'retry'; reason: string; retryAfterSeconds: number | null }
+    | { kind: 'rejected'; reason: string }
+    | { kind: 'unknown'; reason: string }
+  > {
+    const settings = loadPushSettings();
+    const headers: Record<string, string> = {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    };
+    if (settings.accessToken) {
+      headers.Authorization = `Bearer ${settings.accessToken}`;
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(`${settings.baseUrl}${path}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(this.requestTimeoutMs),
+      });
+    } catch (error) {
+      // Read by name, not `instanceof Error`: the abort arrives as a
+      // DOMException from fetch's own realm, which a sandboxed `Error` (a
+      // test runner's) does not recognise, and a timeout taken for "no
+      // connection" would be sent again.
+      const name =
+        typeof error === 'object' && error !== null && 'name' in error
+          ? String((error as { name: unknown }).name)
+          : '';
+      if (name === 'TimeoutError' || name === 'AbortError') {
+        return { kind: 'unknown', reason: 'timeout' };
+      }
+      // Nothing reached Expo (refused, DNS, reset before an answer).
+      return {
+        kind: 'retry',
+        reason: 'no_connection',
+        retryAfterSeconds: null,
+      };
+    }
+
+    const text = await response.text().catch(() => '');
+    let body: unknown = null;
+    try {
+      body = text === '' ? null : JSON.parse(text);
+    } catch {
+      body = null;
+    }
+
+    if (response.status === 200) {
+      const errors = (body as { errors?: unknown[] } | null)?.errors;
+      if (Array.isArray(errors) && errors.length > 0) {
+        return { kind: 'rejected', reason: errorCode(errors[0]) };
+      }
+      return { kind: 'ok', body };
+    }
+
+    if (response.status === 429 || response.status >= 500) {
+      return {
+        kind: 'retry',
+        reason: `http_${response.status}`,
+        retryAfterSeconds: parseRetryAfter(response.headers.get('retry-after')),
+      };
+    }
+
+    // A 4xx is Expo's refusal only when it carries Expo's error shape. A
+    // proxy, firewall or gateway in between answers 403 or 407 with a body of
+    // its own: that is not Expo saying no, so it is retried like a 5xx (up to
+    // the cap) and the log does not send the operator to the access token.
+    const errors = (body as { errors?: unknown[] } | null)?.errors;
+    if (!Array.isArray(errors) || errors.length === 0) {
+      this.logger.warn(
+        `HTTP ${response.status} without an answer from Expo (a proxy or firewall in between?); the send will be retried.`,
+      );
+      return {
+        kind: 'retry',
+        reason: `http_${response.status}`,
+        retryAfterSeconds: null,
+      };
+    }
+    const code = errorCode(errors[0]);
+    if (response.status === 401 || response.status === 403) {
+      this.logger.error(
+        `Expo refused the push credentials (HTTP ${response.status}, ${code}). Check EXPO_ACCESS_TOKEN.`,
+      );
+    }
+    return { kind: 'rejected', reason: code };
+  }
+}
+
+/**
+ * The wait a `Retry-After` header asks for, in seconds, or null to use the
+ * normal backoff. Only the header's plain form counts: whole seconds, digits
+ * only (RFC 9110 delay-seconds). Anything else is ignored rather than
+ * guessed at: text, a negative or zero value, a fraction, scientific notation
+ * ("1e20"), a number too long to be one, and an HTTP date (reading one would
+ * need this server's clock, and the push tables run on the database's alone).
+ *
+ * A long wait is returned as it is: the sender caps it, on the database's
+ * clock, at PUSH_RETRY.retryAfterMaxSeconds and at what is left of the
+ * delivery's own time to live.
+ */
+export function parseRetryAfter(header: string | null): number | null {
+  if (header === null) return null;
+  const text = header.trim();
+  if (!/^\d+$/.test(text)) return null;
+  const seconds = Number(text);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+}
+
+function errorCode(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && /^[A-Z_a-z0-9]{1,80}$/.test(code)
+    ? code
+    : 'expo_error';
+}
