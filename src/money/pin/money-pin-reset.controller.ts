@@ -56,9 +56,6 @@ export class MoneyPinResetController {
     return this.resets.start(user.sub, { email: user.email ?? null });
   }
 
-  // An optional Idempotency-Key makes a repeat answer the first outcome
-  // (WALLET-06 round 2): a code works once, so without it the repeat of a
-  // reset that landed is refused as a code already used. See pin-request-keys.service.ts.
   /** The code and the new PIN. Clears the lock and the wrong-try count, and turns biometric approval off. */
   @Post('pin/reset/confirm')
   @HttpCode(200)
@@ -75,6 +72,10 @@ export class MoneyPinResetController {
     @Body() dto: ConfirmPinResetDto,
     @CurrentPinRequestKey() key: IdempotencyScope | undefined,
   ): Promise<PinStateView> {
+    // An optional Idempotency-Key makes a repeat answer the first outcome
+    // (WALLET-06 round 2): a code works once, so without it the repeat of a
+    // reset that landed is refused as a code already used. See
+    // pin-request-keys.service.ts.
     return this.keyed.under(key, user.sub, (inTransaction) =>
       this.resets.confirm(user.sub, dto, inTransaction),
     );

@@ -68,10 +68,6 @@ export class MoneyPinController {
     return this.pins.set(user.sub, dto);
   }
 
-  // An optional Idempotency-Key makes a repeat answer the first outcome
-  // (WALLET-06 round 2): the key is looked at after the wallet gate and BEFORE
-  // the PIN, because the PIN a landed request was sent under is no longer the
-  // PIN. See pin-request-keys.service.ts.
   /** Change the PIN. The current PIN is X-Transaction-Pin. */
   @Put('pin')
   @BuiltBy('MONEY-09')
@@ -89,6 +85,10 @@ export class MoneyPinController {
     @Body() dto: ChangePinDto,
     @CurrentPinRequestKey() key: IdempotencyScope | undefined,
   ): Promise<PinStateView> {
+    // An optional Idempotency-Key makes a repeat answer the first outcome
+    // (WALLET-06 round 2): the key is looked at after the wallet gate and
+    // BEFORE the PIN, because the PIN a landed request was sent under is no
+    // longer the PIN. See pin-request-keys.service.ts.
     return this.keyed.under(key, user.sub, (inTransaction) =>
       this.pins.change(user.sub, dto, inTransaction),
     );
