@@ -1596,7 +1596,11 @@ describe('Hold, release and refund (MONEY-18) on Fintava', () => {
       where: { payerWawuUserId: payer, waiting: 'payee_wallet' },
     });
   afterEach(async () => {
-    for (const payer of clonedFor.splice(0)) await dropWaiters(payer);
+    const payers = clonedFor.splice(0);
+    for (const payer of payers) await dropWaiters(payer);
+    // A pass that ran out of time left its place in the service; one that
+    // reads to the end gives it up, so the next test starts from the front.
+    if (payers.length > 0) await holds.sweep(later());
   });
 
   it('F4 a hold behind more than a thousand that wait for a wallet is reached by the first pass, and the waiters rest instead of being due on every pass', async () => {
