@@ -21,6 +21,23 @@ export const BANK_UNREACHABLE_MESSAGE =
   'We could not reach the bank right now. Try again in a moment.';
 
 /**
+ * A name check that did not confirm the account, by why (NUV-06, lead ruling
+ * 2): each its own plain sentence, none naming a provider. All are
+ * `422 name_check_failed`, so the app's switch on `reason.code` is
+ * unchanged; the sentence tells the person what to fix. A provider whose
+ * check says only yes or no (Fintava's) gets NAME_CHECK_FAILED_MESSAGE.
+ */
+export const NAME_CHECK_ANSWERS = {
+  not_found: 'We could not find an account with that number at that bank.',
+  bank_not_supported:
+    'We cannot check accounts at that bank yet. Choose another bank.',
+  bad_format:
+    'An account number has ten digits. Check the number and the bank.',
+  multiple_matches:
+    'More than one account matched. Check the number and the bank.',
+} as const;
+
+/**
  * How long Fintava's bank list is kept in memory before it is asked for
  * again. The list is the same 358 banks run after run (mobile repo
  * `docs/fintava/sandbox/01-bank-list.md`); an hour keeps a save to one
@@ -86,15 +103,41 @@ export class BankAccountCheckService {
     } catch (e) {
       throw this.refusal(e);
     }
+    // No answer in time says nothing about the account: the person is told
+    // to try again, not that the account is wrong (NUV-06).
+    if (answer.outcome === 'timeout') throw this.unreachable();
     const accountName = answer.accountName?.trim() ?? '';
     if (
       !answer.matched ||
       accountName === '' ||
       answer.accountNumber !== accountNumber
     ) {
-      throw new MoneyError('name_check_failed', NAME_CHECK_FAILED_MESSAGE);
+      const why =
+        answer.outcome !== undefined && answer.outcome !== 'matched'
+          ? answer.outcome
+          : null;
+      throw new MoneyError(
+        'name_check_failed',
+        why === null ? NAME_CHECK_FAILED_MESSAGE : NAME_CHECK_ANSWERS[why],
+      );
     }
     return { bankCode, bankName: bank.name, accountNumber, accountName };
+  }
+
+  /**
+   * What a row saved from this check records about it (NUV-06): under Nuvion
+   * the bank's code in Nuvion's list and when the name was confirmed, so the
+   * row is not checked again before its first Nuvion send; under any other
+   * provider nothing (the row is checked by name before its first Nuvion
+   * send, the Fintava days' rule).
+   */
+  checkedStamp(bankCode: string): {
+    nuvionBankCode: string | null;
+    nuvionCheckedAt: Date | null;
+  } {
+    return this.provider.name === 'nuvion'
+      ? { nuvionBankCode: bankCode, nuvionCheckedAt: new Date() }
+      : { nuvionBankCode: null, nuvionCheckedAt: null };
   }
 
   /**
@@ -102,7 +145,7 @@ export class BankAccountCheckService {
    * that arrive while it is being fetched wait for that same answer rather
    * than each asking Fintava (single flight). A failed fetch is not kept.
    */
-  private bankList(): Promise<Map<string, ProviderBank>> {
+  bankList(): Promise<Map<string, ProviderBank>> {
     if (this.banks && Date.now() - this.banks.at < BANK_LIST_TTL_MS) {
       return Promise.resolve(this.banks.byCode);
     }

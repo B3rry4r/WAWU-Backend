@@ -142,6 +142,15 @@ export class NuvionWalletProvider implements WalletProvider {
     return area;
   }
 
+  /** The payouts area (NUV-06): the bank list, the name check, NIP sends and the transfers read back. */
+  get payouts(): NuvionPayoutsArea {
+    const area = this.areas.payouts;
+    if (!(area instanceof NuvionPayoutsArea)) {
+      throw new Error("The payouts area of this adapter is not Nuvion's.");
+    }
+    return area;
+  }
+
   // Identity (opening, documents)
   checkIdentity(bvn: string) {
     return this.areas.opening.checkIdentity(bvn);
