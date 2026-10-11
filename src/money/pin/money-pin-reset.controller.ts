@@ -7,6 +7,15 @@ import { ConfirmPinResetDto } from '../dto/money-request.dto';
 import { RequireOpenWallet } from '../gate/wallet-gate';
 import { BuiltBy, MoneyErrors, WALLET_GATE_ERRORS } from '../money-contract';
 import type { PinResetView, PinStateView } from '../money-view.type';
+import {
+  CurrentPinRequestKey,
+  RequireOpenWalletWithKey,
+} from './pin-request-key';
+import {
+  PIN_RESET_CONFIRM_ROUTE,
+  PinRequestKeys,
+} from './pin-request-keys.service';
+import type { IdempotencyScope } from '../payments/idempotency';
 import { PinResetService } from './pin-reset.service';
 
 /**
@@ -24,7 +33,10 @@ import { PinResetService } from './pin-reset.service';
 @UseGuards(WawuAuthGuard)
 @Controller('money')
 export class MoneyPinResetController {
-  constructor(private readonly resets: PinResetService) {}
+  constructor(
+    private readonly resets: PinResetService,
+    private readonly keyed: PinRequestKeys,
+  ) {}
 
   /**
    * Forgot PIN (W37): send a code to the phone on file. Asked again before
@@ -48,7 +60,7 @@ export class MoneyPinResetController {
   @Post('pin/reset/confirm')
   @HttpCode(200)
   @BuiltBy('MONEY-14')
-  @RequireOpenWallet()
+  @RequireOpenWalletWithKey(PIN_RESET_CONFIRM_ROUTE)
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'reset_code_invalid',
@@ -58,7 +70,14 @@ export class MoneyPinResetController {
   confirmReset(
     @CurrentUser() user: WawuJwtClaims,
     @Body() dto: ConfirmPinResetDto,
+    @CurrentPinRequestKey() key: IdempotencyScope | undefined,
   ): Promise<PinStateView> {
-    return this.resets.confirm(user.sub, dto);
+    // An optional Idempotency-Key makes a repeat answer the first outcome
+    // (WALLET-06 round 2): a code works once, so without it the repeat of a
+    // reset that landed is refused as a code already used. See
+    // pin-request-keys.service.ts.
+    return this.keyed.under(key, user.sub, (inTransaction) =>
+      this.resets.confirm(user.sub, dto, inTransaction),
+    );
   }
 }

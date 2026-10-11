@@ -24,9 +24,12 @@ import {
 import { WalletProviderLimitError } from '../../wallet-provider/wallet-provider-limit';
 import { WalletBalanceService } from '../balance/wallet-balance.service';
 import {
+  HELD_PAYMENT_KINDS,
   PAYER_CHOSEN_AMOUNT_KINDS,
   type PaymentKind,
 } from '../dto/money-enums';
+import { HoldViewService } from '../holds/hold-view.service';
+import { releaseConditionOf } from '../holds/hold-rules';
 import type {
   PaymentDto,
   PaymentQuoteQueryDto,
@@ -48,6 +51,7 @@ import {
 import { MoneyError } from '../money-error';
 import type {
   FeeQuoteView,
+  HoldView,
   PaymentQuoteView,
   PaymentStatus,
   PaymentView,
@@ -246,6 +250,7 @@ export class WalletPaymentService implements OnModuleInit {
     private readonly keys: IdempotencyService,
     private readonly settings: PaymentSettings,
     private readonly limits: MoneyLimits,
+    private readonly holds: HoldViewService,
   ) {}
 
   onModuleInit(): void {
@@ -260,7 +265,12 @@ export class WalletPaymentService implements OnModuleInit {
               where: { id: row.resourceId },
             })
           : null;
-        return p ? { status: 201, body: successBody(this.view(p)) } : null;
+        return p
+          ? {
+              status: 201,
+              body: successBody(this.view(p, await this.holdOf(p))),
+            }
+          : null;
       },
     );
     // A payment's ledger row settled by anything settles the payment now.
@@ -758,11 +768,18 @@ export class WalletPaymentService implements OnModuleInit {
     const p = await this.prisma.walletPayment.findUniqueOrThrow({
       where: { id: seen.id },
     });
+    // A payment a person has to look at for its charge (N2) is neither
+    // completed nor corrected by any path: only a person clears it.
+    if (p.chargeReviewSince) return p;
     const figures = completedFigures(
       { providerFeeKobo: p.providerFeeKobo, totalKobo: p.totalKobo },
       rec,
       this.provider.label,
+      BigInt(this.settings.chargeReviewAboveKobo),
     );
+    if (figures.verdict === 'untrusted') {
+      return this.toChargeReview(p, figures.note ?? 'charge not trusted');
+    }
     const price = koboNumber(p.priceKobo);
     const notes: string[] = [];
     const sighted = <T extends LedgerMovementInput>(m: T): T => ({
@@ -868,18 +885,92 @@ export class WalletPaymentService implements OnModuleInit {
       // Completed before this record came (and delivered, or being
       // delivered, by whoever completed it): only the figures and the note
       // follow the record. `complete()` would do nothing for it.
-      if (note !== payment.discrepancy) {
-        await this.prisma.walletPayment.updateMany({
-          where: { id: p.id, status: 'completed' },
-          data: { discrepancy: note },
-        });
-        payment = await this.prisma.walletPayment.findUniqueOrThrow({
-          where: { id: p.id },
-        });
-      }
-      return payment;
+      return this.keepNote(payment, note);
     }
-    return this.complete(payment, note, handler);
+    const done = await this.complete(payment, note, handler);
+    // Another job may have completed the payment between the figures above
+    // and `complete()`: the update there found it no longer `pending` and
+    // wrote nothing, so this path's note (both figures) would be lost
+    // (MONEY-17 round 8, D8-1). It is written the way the branch above does.
+    return done.status === 'completed' ? this.keepNote(done, note) : done;
+  }
+
+  /**
+   * A `completed` payment keeps every note a path made for it, once each:
+   * the note is joined to what the row holds, by a conditional update that
+   * only ever touches a completed payment.
+   */
+  private async keepNote(
+    payment: PaymentRow,
+    note: string | null,
+  ): Promise<PaymentRow> {
+    if (!note) return payment;
+    const joined = joinNotes(payment.discrepancy, ...note.split('; '));
+    if (joined === payment.discrepancy) return payment;
+    await this.prisma.walletPayment.updateMany({
+      where: { id: payment.id, status: 'completed' },
+      data: { discrepancy: joined },
+    });
+    return this.prisma.walletPayment.findUniqueOrThrow({
+      where: { id: payment.id },
+    });
+  }
+
+  /**
+   * The provider's charge is not believed (N2): below 0, or above the quote
+   * by more than PAYMENT_CHARGE_REVIEW_ABOVE_KOBO. The payment is neither
+   * completed nor delivered at it, and no figure of the provider's is
+   * written to it or to the ledger. A `pending` payment leaves the sweep for
+   * a person (`reviewSince`, the item stays claimed, as every review does);
+   * a payment already completed and delivered at the quote is only marked.
+   * The buyer's ledger row gets the same words, so the ledger's own checks
+   * leave it for the person too.
+   */
+  private async toChargeReview(
+    p: PaymentRow,
+    note: string,
+  ): Promise<PaymentRow> {
+    // The ledger row first: if this stops between the two, the next path
+    // finds the charge untrusted again and finishes (the note is joined once).
+    if (!p.chargeReviewSince) {
+      try {
+        const out = await this.prisma.fintavaLedgerEntry.findFirst({
+          where: {
+            customerReference: p.customerReference,
+            direction: 'out',
+            walletKind: 'user',
+          },
+          select: { id: true },
+        });
+        if (out) await this.ledger.noteDiscrepancy(out.id, note);
+      } catch (e) {
+        this.logger.error(
+          `payment ${p.id}: the ledger row could not be marked (${e instanceof Error ? e.name : 'error'})`,
+        );
+      }
+    }
+    const now = new Date();
+    const discrepancy = joinNotes(p.discrepancy, note);
+    const { count } = await this.prisma.walletPayment.updateMany({
+      where: {
+        id: p.id,
+        status: { in: ['pending', 'completed'] },
+        chargeReviewSince: null,
+      },
+      data: {
+        chargeReviewSince: now,
+        ...(p.status === 'pending'
+          ? { reviewSince: p.reviewSince ?? now, nextCheckAt: null }
+          : {}),
+        discrepancy,
+      },
+    });
+    if (count > 0) {
+      this.logger.error(
+        `payment ${p.id}: ${note}; sent to review, nothing is delivered at it`,
+      );
+    }
+    return this.prisma.walletPayment.findUniqueOrThrow({ where: { id: p.id } });
   }
 
   /**
@@ -1425,7 +1516,7 @@ export class WalletPaymentService implements OnModuleInit {
       balanceKobo,
       shortfallKobo:
         balanceKobo === null ? null : Math.max(0, fee.totalKobo - balanceKobo),
-      willBeHeld: false,
+      willBeHeld: HELD_PAYMENT_KINDS.includes(kind),
       withinDailyLimit: fee.withinDailyLimit,
       remainingTodayKobo: fee.remainingTodayKobo,
       quoteToken: fee.quoteToken,
@@ -1580,20 +1671,46 @@ export class WalletPaymentService implements OnModuleInit {
     // the claim goes now.
     const owner = handler ?? this.registry.get(p.kind as PaymentKind);
     const delivers = !!owner?.onCompleted && !!p.payerWawuUserId;
-    const { count } = await this.prisma.walletPayment.updateMany({
-      where: { id: p.id, status: 'pending' },
-      data: {
-        status: 'completed',
-        completedAt: now,
-        ...(delivers
-          ? // The request's own delivery has a minute before the sweep
-            // takes it over (R3-1: the sweep's backoff starts here).
-            { nextDeliveryAt: new Date(now.getTime() + MINUTE) }
-          : { openKey: null }),
-        reviewSince: null,
-        nextCheckAt: null,
-        ...(discrepancy ? { discrepancy } : {}),
-      },
+    // A held kind (R-19) completes into a hold, in the same transaction: the
+    // payment is `completed` exactly when its price is held, never one
+    // without the other (MONEY-18).
+    const condition = releaseConditionOf(p.kind);
+    const count = await this.prisma.$transaction(async (tx) => {
+      const { count: won } = await tx.walletPayment.updateMany({
+        where: { id: p.id, status: 'pending' },
+        data: {
+          status: 'completed',
+          completedAt: now,
+          ...(delivers
+            ? // The request's own delivery has a minute before the sweep
+              // takes it over (R3-1: the sweep's backoff starts here).
+              { nextDeliveryAt: new Date(now.getTime() + MINUTE) }
+            : { openKey: null }),
+          reviewSince: null,
+          nextCheckAt: null,
+          ...(discrepancy ? { discrepancy } : {}),
+        },
+      });
+      if (won === 1 && condition) {
+        await tx.walletHold.create({
+          data: {
+            paymentId: p.id,
+            payerWawuUserId: p.payerWawuUserId,
+            payeeWawuUserId: p.payeeWawuUserId,
+            kind: p.kind,
+            targetId: p.targetId,
+            title: p.title,
+            releaseCondition: condition,
+            amountKobo: p.priceKobo,
+            payeeShareKobo: p.payeeShareKobo,
+            wawuShareKobo: p.wawuShareKobo,
+            merchantAccountNumber: p.merchantAccountNumber,
+            provider: p.provider,
+            heldAt: now,
+          },
+        });
+      }
+      return won;
     });
     let row = await this.prisma.walletPayment.findUniqueOrThrow({
       where: { id: p.id },
@@ -1739,6 +1856,12 @@ export class WalletPaymentService implements OnModuleInit {
       return false;
     }
     try {
+      const hold = releaseConditionOf(p.kind)
+        ? await this.prisma.walletHold.findUnique({
+            where: { paymentId: p.id },
+            select: { id: true },
+          })
+        : null;
       await handler.onCompleted({
         paymentId: p.id,
         payerWawuUserId: p.payerWawuUserId,
@@ -1747,6 +1870,7 @@ export class WalletPaymentService implements OnModuleInit {
         priceKobo: koboNumber(p.priceKobo),
         payeeWawuUserId: p.payeeWawuUserId,
         note: p.note,
+        holdId: hold?.id ?? null,
       });
       // Delivered: only now is the buyer's claim on the item given up, so
       // the feature's record of ownership is in place before another
@@ -1786,12 +1910,28 @@ export class WalletPaymentService implements OnModuleInit {
     scope: IdempotencyScope,
     p: PaymentRow,
   ): Promise<PaymentView> {
-    const view = this.view(p);
+    const view = this.view(p, await this.holdOf(p));
     await this.keys.finish(scope, 201, successBody(view));
     return view;
   }
 
-  view(p: PaymentRow): PaymentView {
+  /** The hold a held kind's completed payment sits in, as the app reads it; null for any other payment. */
+  async holdOf(p: PaymentRow): Promise<HoldView | null> {
+    if (!HELD_PAYMENT_KINDS.includes(p.kind as PaymentKind)) return null;
+    if (p.status !== 'completed') return null;
+    try {
+      return await this.holds.forPayment(p.id);
+    } catch (e) {
+      // The answer is never worth less than its money: a hold that cannot be
+      // read now is read on the next ask.
+      this.logger.warn(
+        `payment ${p.id}: its hold could not be read (${e instanceof Error ? e.name : 'error'})`,
+      );
+      return null;
+    }
+  }
+
+  view(p: PaymentRow, hold: HoldView | null = null): PaymentView {
     const providerFeeKobo = koboNumber(p.providerFeeKobo);
     const wawuFeeKobo = koboNumber(p.wawuFeeKobo);
     const status = p.status as PaymentStatus;
@@ -1809,7 +1949,7 @@ export class WalletPaymentService implements OnModuleInit {
       },
       totalKobo: koboNumber(p.totalKobo),
       reference: p.customerReference,
-      hold: null,
+      hold,
       failureReason: status === 'failed' ? p.failureReason : null,
       statusMessage: status === 'pending' ? STILL_CONFIRMING_MESSAGE : null,
       createdAt: p.createdAt.toISOString(),
