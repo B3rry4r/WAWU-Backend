@@ -113,10 +113,22 @@ export async function reconcileBankSend(
     };
   }
   if (walked.state === 'found') {
+    const t = walked.transfer;
+    // Only a bank send of ours counts as found: a record that carries the
+    // reference but is another rail's (a book transfer, a card), money in, or
+    // another currency says nothing about this send, so it does not answer
+    // as one. It does not prove that no money moved either: `unknown`.
+    if (
+      t.paymentType !== NUVION_BANK_TRANSFER_TYPE ||
+      t.type !== 'outflow' ||
+      t.currency !== NUVION_NAIRA
+    ) {
+      return { state: 'unknown', why: 'unrecognised' };
+    }
     return {
       state: 'found',
       source: 'history',
-      transaction: payoutTransaction(walked.transfer),
+      transaction: payoutTransaction(t),
     };
   }
   if (walked.state === 'incomplete') {
@@ -219,7 +231,14 @@ export function outflowProblem(
   if (fresh.paymentType !== NUVION_BANK_TRANSFER_TYPE) {
     return 'the transfer is not a bank transfer';
   }
-  if (fresh.amountKobo !== d.amountKobo || fresh.feeKobo !== d.feeKobo) {
+  // The amount always; the charge when both state one. A delivery that
+  // carries no charge is no disagreement with a record that states it (the
+  // record is what is recorded); a record that states none is judged by the
+  // caller (nothing is written from it).
+  if (
+    fresh.amountKobo !== d.amountKobo ||
+    (fresh.feeStated && d.feeStated && fresh.feeKobo !== d.feeKobo)
+  ) {
     return `Nuvion's record says ${fresh.amountKobo} kobo (fee ${fresh.feeKobo}), the delivery ${d.amountKobo} (fee ${d.feeKobo})`;
   }
   if (
@@ -354,6 +373,17 @@ export class NuvionBankOutflowRecorder {
         `Nuvion says the transfer is still ${t.status}`,
       );
     }
+    if (status !== 'failed' && !t.feeStated) {
+      // The money moved (or moved and came back) and Nuvion's record does not
+      // say what it charged. A charge is never taken as 0, and the quote is
+      // not confirmed by silence: nothing is written, the row stays as the
+      // sending feature left it, and a later read that states the charge
+      // records it.
+      return this.waitOrFail(
+        d,
+        `Nuvion's record of the ${t.status} transfer states no fee; nothing recorded until it does`,
+      );
+    }
     const r = await this.recordOutflow(
       t,
       side.wallet,
@@ -366,8 +396,18 @@ export class NuvionBankOutflowRecorder {
     );
   }
 
-  /** One `out` row on the sender's wallet for this send; the same row every time. */
-  recordOutflow(
+  /**
+   * One `out` row on the sender's wallet for this send; the same row every
+   * time. A completed or reversed send is recorded only from a record that
+   * states Nuvion's charge (a charge is never taken as 0): called with one
+   * that does not, it throws and writes nothing. Nuvion's charge, once
+   * stated, is what the row says as its provider charge; when the row held
+   * another one (the quote), Nuvion's is recorded and the difference is
+   * written on the row's `discrepancy` with both figures (the quote never
+   * overwrites what Nuvion says; the row's own fee and total stand as the
+   * sending feature wrote them).
+   */
+  async recordOutflow(
     t: NuvionPayoutReading,
     wallet: LedgerWallet,
     status: TransferStatus,
@@ -379,7 +419,13 @@ export class NuvionBankOutflowRecorder {
       accountName: string | null;
     } | null = null,
   ): Promise<LedgerRecordResult> {
-    return this.ledger.record({
+    const charged = status !== 'failed';
+    if (charged && !t.feeStated) {
+      throw new Error(
+        'a send whose record states no fee is not recorded as done',
+      );
+    }
+    const r = await this.ledger.record({
       wallet,
       direction: 'out',
       status,
@@ -387,8 +433,8 @@ export class NuvionBankOutflowRecorder {
       amountKobo: t.amountKobo,
       feeKobo: t.feeKobo,
       totalKobo: t.amountKobo + t.feeKobo,
-      // What Nuvion took is its own record; the feature that sent the money
-      // quoted its fee (with WAWU's on top, R-10) and keeps its figures. A
+      // The feature that sent the money quoted its fee (with WAWU's on top,
+      // R-10) and keeps its figures; Nuvion's charge is taken below. A
       // different amount is still a disagreement.
       figuresStand: true,
       providerFeeKobo: t.feeStated ? t.feeKobo : null,
@@ -409,6 +455,44 @@ export class NuvionBankOutflowRecorder {
       sourceEventId,
       occurredAt: t.createdAt,
     });
+    if (!charged) return r;
+    const note = await this.takeProviderCharge(r.entryId, t.feeKobo);
+    return note === null
+      ? r
+      : {
+          ...r,
+          discrepancy: r.discrepancy ? `${r.discrepancy}; ${note}` : note,
+        };
+  }
+
+  /**
+   * Nuvion's stated charge is the row's provider charge. A row that held
+   * another one (the quote, written before the answer) takes Nuvion's, and
+   * the difference is written on its `discrepancy` with both figures, in the
+   * same transaction, so a crash between the two leaves neither. A row that
+   * holds none, or the same, is left as it is. Returns the note written, or
+   * null when there was nothing to write.
+   */
+  private takeProviderCharge(
+    entryId: string,
+    stated: number,
+  ): Promise<string | null> {
+    return this.prisma.$transaction(async (tx) => {
+      const rows = await tx.$queryRaw<
+        Array<{ providerFeeKobo: bigint | null }>
+      >`
+        SELECT "providerFeeKobo" FROM "FintavaLedgerEntry"
+         WHERE "id" = ${entryId} FOR UPDATE`;
+      const quoted = rows[0]?.providerFeeKobo ?? null;
+      if (quoted === null || quoted === BigInt(stated)) return null;
+      await tx.fintavaLedgerEntry.update({
+        where: { id: entryId },
+        data: { providerFeeKobo: BigInt(stated) },
+      });
+      const note = `Nuvion charged ${stated} kobo, the quote was ${quoted} kobo; Nuvion's figure is recorded`;
+      await this.ledger.noteDiscrepancy(entryId, note, tx);
+      return note;
+    });
   }
 
   // -- refunded --------------------------------------------------------------
@@ -424,6 +508,16 @@ export class NuvionBankOutflowRecorder {
       return done(`a ${credit.currency} refund: not the naira wallet`);
     }
     if (credit.sourcePaymentId === null) {
+      if (
+        credit.paymentType !== null &&
+        credit.paymentType !== NUVION_BANK_TRANSFER_TYPE
+      ) {
+        // Another rail's refund that names no send (a book transfer's credit
+        // is NUV-05's): not a bank send's, so not a stop here.
+        return done(
+          `a ${credit.paymentType} refund that names no send: not a bank send's`,
+        );
+      }
       return failed(
         'a refund that names no send it reverses; nothing applied (review)',
       );
@@ -473,6 +567,15 @@ export class NuvionBankOutflowRecorder {
       return this.waitOrFail(
         d,
         `Nuvion says the reversed send is still ${original.status}`,
+      );
+    }
+    if (status === 'completed') {
+      // Nuvion's record of the send has not caught up with the credit (a
+      // plausible race): the same delivery is tried again, as NUV-05 does,
+      // and kept for review only after the wait limit.
+      return this.waitOrFail(
+        d,
+        `Nuvion still shows the send as ${original.status} although a refund names it`,
       );
     }
     if (status !== 'reversed') {

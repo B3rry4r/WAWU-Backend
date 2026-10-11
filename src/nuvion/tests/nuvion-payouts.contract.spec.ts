@@ -48,10 +48,11 @@ import {
 } from '../../money/saved-accounts/saved-account-target.service';
 import { WALLET_PROVIDER } from '../../wallet-provider/wallet-provider.interface';
 import { nuvionWalletId } from '../areas/accounts';
+import { PrismaNuvionBookStore } from '../areas/book-store';
 import { reconcileBankSend } from '../handlers/outflows-bank';
 import { NuvionPayoutsHandler } from '../handlers/payouts.handler';
 import { NuvionClient } from '../nuvion-client';
-import { NuvionWalletProvider } from '../nuvion-wallet-provider';
+import { NuvionWalletProvider, nuvionAreas } from '../nuvion-wallet-provider';
 import { signNuvionDelivery } from '../webhook/nuvion-signature';
 import { NuvionWebhookDispatcher } from '../webhook/nuvion-webhook-dispatcher.service';
 import { NuvionWebhookModule } from '../webhook/nuvion-webhook.module';
@@ -134,11 +135,9 @@ describe('NUV-06: sending to a bank and paying out', () => {
       saved[k] = process.env[k];
       process.env[k] = v;
     }
-    provider = new NuvionWalletProvider(
-      new NuvionClient(
-        standin.settings({ operationalAccountId: pay.operationalAccountId }),
-        'nv_test_sk_NUV06payoutsKEY0000000000',
-      ),
+    const client = new NuvionClient(
+      standin.settings({ operationalAccountId: pay.operationalAccountId }),
+      'nv_test_sk_NUV06payoutsKEY0000000000',
     );
     moduleRef = await Test.createTestingModule({
       imports: [
@@ -151,7 +150,20 @@ describe('NUV-06: sending to a bank and paying out', () => {
       providers: [WawuJwtStrategy, WawuIdClient],
     })
       .overrideProvider(WALLET_PROVIDER)
-      .useValue(provider)
+      // As production builds it (NuvionModule): the areas over one client,
+      // with the book store NUV-05's handler needs. Without the store that
+      // handler answers `wait` to every outflow ("no record of book transfers
+      // is attached") and nothing here would reach the ledger.
+      .useFactory({
+        factory: (db: PrismaService) => {
+          provider = new NuvionWalletProvider(
+            client,
+            nuvionAreas(client, { bookStore: new PrismaNuvionBookStore(db) }),
+          );
+          return provider;
+        },
+        inject: [PrismaService],
+      })
       .setLogger(new QuietLogger())
       .compile();
     app = moduleRef.createNestApplication(HUB_APP_OPTIONS);
@@ -508,7 +520,7 @@ describe('NUV-06: sending to a bank and paying out', () => {
       expect((await entriesFor(reference))[0].status).toBe('reversed');
     });
 
-    it('a refund that gives back less, names no send, or names a send Nuvion shows as completed is a stop kept for review', async () => {
+    it('a refund that gives back less, or names no send, is a stop kept for review', async () => {
       const p = await person();
       const { reference, id } = await sendFrom(p);
       pay.settle(id, 'successful');
@@ -531,20 +543,81 @@ describe('NUV-06: sending to a bank and paying out', () => {
       expect(meta.processingStatus).toBe('failed');
       expect(meta.note).toMatch(/names no send/);
 
-      // A refund for a send Nuvion still shows as completed.
+      expect((await entriesFor(reference))[0].status).toBe('completed');
+    });
+
+    it('D3: a refund that names a send Nuvion still shows as completed waits for the record, then reverses it once; past the wait it is a stop for review', async () => {
+      const p = await person();
+      const { reference, id } = await sendFrom(p);
+      pay.settle(id, 'successful');
+      await deliverAndDispatch('outflows.completed', pay.delivery(id));
+      const { credit } = pay.reverse(id);
+      pay.transfer(id).status = 'successful'; // the record has not caught up yet
+      const d = await deliverAndDispatch(
+        'outflows.refunded',
+        pay.delivery(credit.id),
+      );
+      expect(d.processingStatus).toBe('pending');
+      expect(d.note).toMatch(/still shows the send as successful/);
+      expect((await entriesFor(reference))[0].status).toBe('completed');
+      pay.transfer(id).status = 'reversed'; // now it has
+      const again = await dispatch(d.eventId);
+      expect(again.processingStatus).toBe('processed');
+      expect((await entriesFor(reference)).map((r) => r.status)).toEqual([
+        'reversed',
+      ]);
+
+      // A record that never catches up is kept for review once the wait is over.
       const q = await person();
-      const sent = await sendFrom(q);
-      pay.settle(sent.id, 'successful');
-      const fake = pay.reverse(sent.id);
-      pay.transfer(sent.id).status = 'successful';
-      const shows = await deliverAndDispatch(
+      const stuck = await sendFrom(q);
+      pay.settle(stuck.id, 'successful');
+      await deliverAndDispatch('outflows.completed', pay.delivery(stuck.id));
+      const fake = pay.reverse(stuck.id);
+      pay.transfer(stuck.id).status = 'successful';
+      const waiting = await deliverAndDispatch(
         'outflows.refunded',
         pay.delivery(fake.credit.id),
       );
-      expect(shows.processingStatus).toBe('failed');
-      expect(shows.note).toMatch(/not reversed/);
-      expect(await entriesFor(sent.reference)).toHaveLength(0);
-      expect((await entriesFor(reference))[0].status).toBe('completed');
+      expect(waiting.processingStatus).toBe('pending');
+      await prisma.nuvionWebhookEvent.update({
+        where: { id: waiting.id },
+        data: { receivedAt: new Date(Date.now() - 80 * 3_600_000) },
+      });
+      const over = await dispatch(waiting.eventId);
+      expect(over.processingStatus).toBe('failed');
+      expect(over.note).toMatch(/waited past the limit/);
+      expect((await entriesFor(stuck.reference)).map((r) => r.status)).toEqual([
+        'completed',
+      ]);
+    });
+
+    it("N8: a book transfer's refund credit that names no send is left to NUV-05's handler, not a stop here", async () => {
+      const p = await person();
+      const before = await prisma.fintavaLedgerEntry.count({
+        where: { wawuUserId: p.id },
+      });
+      const d = await deliverAndDispatch('outflows.refunded', {
+        id: standinId('01CRD'),
+        amount: 5_000,
+        currency: 'NGN',
+        unique_reference: `${RUN}-book-credit`,
+        account_id: p.accountId,
+        entity_id: p.entityId,
+        status: 'successful',
+        type: 'inflow',
+        payment_type: 'book-transfer',
+        applicable_fee: 0,
+        created: Date.now(),
+      });
+      // This handler leaves it alone; NUV-05's handler (which does not hold
+      // this reference either) leaves it alone too: nothing is flagged.
+      expect(d.processingStatus).toBe('processed');
+      expect(d.note).toMatch(
+        /NUV-06: a book-transfer refund that names no send/,
+      );
+      expect(
+        await prisma.fintavaLedgerEntry.count({ where: { wawuUserId: p.id } }),
+      ).toBe(before);
     });
 
     it('a card refund is not a bank send and is left alone', async () => {
@@ -692,6 +765,161 @@ describe('NUV-06: sending to a bank and paying out', () => {
         totalKobo: 1_006_500n,
         discrepancy: null,
         fintavaTransactionId: id,
+      });
+    });
+
+    describe('the fee: a charge Nuvion does not state is never 0, and one that differs from the quote is not lost', () => {
+      /** The sending feature's pending row, quoted as R-10 says: Nuvion's charge plus WAWU's on top. */
+      async function quote(p: Person, reference: string, amountKobo: number) {
+        await moduleRef.get(LedgerService).record({
+          wallet: {
+            kind: 'user',
+            wawuUserId: p.id,
+            accountNumber: p.accountNumber,
+          },
+          direction: 'out',
+          status: 'pending',
+          category: 'transfer',
+          amountKobo,
+          feeKobo: 6_500,
+          totalKobo: amountKobo + 6_500,
+          providerFeeKobo: pay.fee,
+          wawuFeeKobo: 6_500 - pay.fee,
+          counterparty: {
+            kind: 'bank_account',
+            name: HOLDER,
+            accountNumber: NUMBER,
+            bankCode: '044',
+            bankName: 'Access Bank',
+          },
+          references: { customerReference: reference },
+          source: 'send',
+        });
+      }
+      const asRecord = (id: string) =>
+        pay.transfer(id) as unknown as Record<string, unknown>;
+
+      it('D1b: a completed record that states no fee writes no row (not a fee of 0), and is recorded once the record states it', async () => {
+        const p = await person();
+        const { reference, id } = await sendFrom(p);
+        pay.settle(id, 'successful');
+        const t = asRecord(id);
+        const stated = t.applicable_fee;
+        delete t.applicable_fee;
+        const d = await deliverAndDispatch(
+          'outflows.completed',
+          pay.delivery(id),
+        );
+        expect(d.processingStatus).toBe('pending');
+        expect(d.note).toMatch(/states no fee/);
+        expect(await entriesFor(reference)).toHaveLength(0);
+        // Nuvion's record now states its charge: the same delivery is recorded, once.
+        t.applicable_fee = stated;
+        const later = await dispatch(d.eventId);
+        expect(later.processingStatus).toBe('processed');
+        const rows = await entriesFor(reference);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({
+          status: 'completed',
+          feeKobo: BigInt(pay.fee),
+          providerFeeKobo: BigInt(pay.fee),
+          discrepancy: null,
+        });
+      });
+
+      it("D1b: a row the sending feature wrote stays as it wrote it (pending, its quote) while Nuvion's record states no fee", async () => {
+        const p = await person();
+        const { reference, id } = await sendFrom(p, { amountKobo: 1_000_000n });
+        await quote(p, reference, 1_000_000);
+        pay.settle(id, 'successful');
+        delete asRecord(id).applicable_fee;
+        const d = await deliverAndDispatch(
+          'outflows.completed',
+          pay.delivery(id),
+        );
+        expect(d.processingStatus).toBe('pending');
+        const rows = await entriesFor(reference);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({
+          status: 'pending',
+          feeKobo: 6_500n,
+          totalKobo: 1_006_500n,
+          providerFeeKobo: BigInt(pay.fee),
+          discrepancy: null,
+        });
+        // Past the wait it is kept for review, and the row is still untouched.
+        await prisma.nuvionWebhookEvent.update({
+          where: { id: d.id },
+          data: { receivedAt: new Date(Date.now() - 80 * 3_600_000) },
+        });
+        const over = await dispatch(d.eventId);
+        expect(over.processingStatus).toBe('failed');
+        expect((await entriesFor(reference))[0].status).toBe('pending');
+      });
+
+      it('D1b: a refund of a send whose record states no fee waits too; a failed send needs no fee', async () => {
+        const p = await person();
+        const { reference, id } = await sendFrom(p);
+        pay.settle(id, 'successful');
+        await deliverAndDispatch('outflows.completed', pay.delivery(id));
+        const { original, credit } = pay.reverse(id);
+        delete (original as unknown as Record<string, unknown>).applicable_fee;
+        const d = await deliverAndDispatch(
+          'outflows.refunded',
+          pay.delivery(credit.id),
+        );
+        expect(d.processingStatus).toBe('pending');
+        expect(d.note).toMatch(/states no fee/);
+        expect((await entriesFor(reference))[0].status).toBe('completed');
+
+        const q = await person();
+        const failedSend = await sendFrom(q);
+        pay.settle(failedSend.id, 'failed');
+        delete asRecord(failedSend.id).applicable_fee;
+        const f = await deliverAndDispatch(
+          'outflows.failed',
+          pay.delivery(failedSend.id),
+        );
+        expect(f.processingStatus).toBe('processed');
+        expect(
+          (await entriesFor(failedSend.reference)).map((r) => r.status),
+        ).toEqual(['failed']);
+      });
+
+      it("D1c: Nuvion's charge differs from the quote: Nuvion's is recorded and the row says both, once", async () => {
+        const p = await person();
+        const { reference, id } = await sendFrom(p, { amountKobo: 1_000_000n });
+        await quote(p, reference, 1_000_000);
+        pay.settle(id, 'successful');
+        asRecord(id).applicable_fee = 3_000;
+        const d = await deliverAndDispatch(
+          'outflows.completed',
+          pay.delivery(id),
+        );
+        expect(d.processingStatus).toBe('processed');
+        expect(d.note).toMatch(/3000 kobo, the quote was 2345 kobo/);
+        const rows = await entriesFor(reference);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({
+          status: 'completed',
+          // The sending feature's own fee and total stand, as it wrote them.
+          feeKobo: 6_500n,
+          totalKobo: 1_006_500n,
+          wawuFeeKobo: BigInt(6_500 - pay.fee),
+          providerFeeKobo: 3_000n,
+        });
+        const note = rows[0].discrepancy;
+        expect(note).toMatch(/3000 kobo, the quote was 2345 kobo/);
+        // The same send again (another event, a replay): nothing changes, no second note.
+        await deliverAndDispatch(
+          'outflows.completed',
+          distinct(pay.delivery(id)),
+        );
+        await dispatch(d.eventId);
+        const again = await entriesFor(reference);
+        expect(again).toHaveLength(1);
+        expect(again[0].discrepancy).toBe(note);
+        expect(again[0].providerFeeKobo).toBe(3_000n);
       });
     });
 

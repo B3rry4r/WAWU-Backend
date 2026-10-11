@@ -357,8 +357,14 @@ export class NuvionPayoutsArea implements NuvionPayoutsMethods {
    *   that moved nothing, or `outcome_unknown` (a lost answer, a 5xx, an
    *   answer in flight) that is found again by the reference, never sent
    *   again under a new one;
-   * - a repeated reference whose original differs from this send, or that
-   *   has failed, is `duplicate_reference` (the reference is used up).
+   * - a transfer that is this very send and that Nuvion's record says
+   *   `failed` (a new reference answered so at once, or a repeat's original)
+   *   is a failed send of the kind its reason names, `recordMayExist` false;
+   *   a repeated reference whose original differs from this send, was
+   *   reversed, or (told by a 409) has failed, is `duplicate_reference` (the
+   *   reference is used up);
+   * - a transfer whose record states no `applicable_fee` is not a receipt
+   *   (`not_confirmed`, `recordMayExist` true): a charge is never taken as 0.
    */
   async bankTransfer(
     input: ProviderBankTransferInput,
@@ -468,6 +474,21 @@ export class NuvionPayoutsArea implements NuvionPayoutsMethods {
       }
     }
     const transfer = sent.transfer;
+    if (!transfer.feeStated) {
+      // The transfer exists and Nuvion's record does not say what it
+      // charged. A charge is never taken as 0 (as NUV-05's book area): this
+      // is not a receipt. Money may have moved, so the send is reconciled by
+      // its reference, never sent again; its delivery or a later read says.
+      throw new NuvionError({
+        kind: 'not_confirmed',
+        operation: op.name,
+        messages: [
+          `${AREA}: the transfer is made, but its record states no fee`,
+        ],
+        reference,
+        recordMayExist: true,
+      });
+    }
     return {
       ourReference: reference,
       providerReference: transfer.uniqueReference ?? reference,
@@ -536,8 +557,9 @@ export class NuvionPayoutsArea implements NuvionPayoutsMethods {
     t: NuvionPayoutReading,
     asked: Payee,
     ctx: SendContext,
+    opts: { allowFailed?: boolean } = {},
   ): Promise<{ ok: true; payee: Payee } | { ok: false; problem: string }> {
-    const problem = transferProblem(t, { ...ctx, payee: null });
+    const problem = transferProblem(t, { ...ctx, payee: null }, opts);
     if (problem !== null) return { ok: false, problem };
     const used: Payee = {
       counterpartyId: t.counterpartyId ?? asked.counterpartyId,
@@ -603,11 +625,11 @@ export class NuvionPayoutsArea implements NuvionPayoutsMethods {
       });
     }
     const t = read.transfer;
-    const same = await this.sameSend(t, payee, ctx);
+    const same = await this.sameSend(t, payee, ctx, { allowFailed: true });
     if (!same.ok) {
-      // The reference names a different send, or one that has already
-      // failed: the reference is used up. Money may have moved for whatever
-      // it names, so it is reconciled, never charged or sent again.
+      // The reference names a different send, or one that was reversed: the
+      // reference is used up. Money may have moved for whatever it names, so
+      // it is reconciled, never charged or sent again.
       throw new NuvionError({
         kind: 'duplicate_reference',
         operation: op.name,
@@ -615,6 +637,24 @@ export class NuvionPayoutsArea implements NuvionPayoutsMethods {
         messages: [`${AREA}: ${same.problem}`],
         reference: ctx.reference,
         recordMayExist: true,
+        requestId: answer.requestId,
+      });
+    }
+    if (t.status.toLowerCase() === 'failed') {
+      // This very send, and Nuvion's own record says it failed (a new
+      // reference answered `failed` at once, or the original of a repeat
+      // that had failed): it is a failed send, and nothing moved. The
+      // reason Nuvion gives names the kind. The reference now names that
+      // failed transfer, so a new attempt takes a new reference.
+      throw new NuvionError({
+        kind: payoutFailureKind(t.statusReason),
+        operation: op.name,
+        httpStatus: answer.httpStatus,
+        messages: [
+          `${AREA}: Nuvion reports the transfer failed${t.statusReason ? ` (${t.statusReason})` : ''}`,
+        ],
+        reference: ctx.reference,
+        recordMayExist: false,
         requestId: answer.requestId,
       });
     }
@@ -1194,6 +1234,12 @@ export function transferProblem(
     /** Null: the payee is judged by the caller (a repeated reference's original). */
     payee: Payee | null;
   },
+  /**
+   * `allowFailed`: the status `failed` is not a problem (the caller reads it
+   * and says the send failed). `reversed` always is: money went and came
+   * back, and the reference is used up.
+   */
+  opts: { allowFailed?: boolean } = {},
 ): string | null {
   if (t.uniqueReference !== null && t.uniqueReference !== expect.reference) {
     return 'the transfer carries another reference';
@@ -1233,10 +1279,34 @@ export function transferProblem(
     return 'the transfer goes to another account';
   }
   const status = t.status.toLowerCase();
-  if (status === 'failed' || status === 'reversed') {
+  if (
+    (status === 'failed' && opts.allowFailed !== true) ||
+    status === 'reversed'
+  ) {
     return `the transfer has already ${status === 'failed' ? 'failed' : 'been reversed'}`;
   }
   return null;
+}
+
+/**
+ * What a send that Nuvion's own record says `failed` is, as the seam's kind
+ * (the same reading NUV-05 gives a failed book transfer): its
+ * `status_reason` names the cause, and anything it does not name is a plain
+ * refusal.
+ */
+export function payoutFailureKind(
+  reason: string | null,
+): 'insufficient_funds' | 'wallet_inactive' | 'refused' {
+  const r = (reason ?? '').toLowerCase();
+  if (r.includes('insufficient')) return 'insufficient_funds';
+  if (
+    r.includes('not_active') ||
+    r.includes('frozen') ||
+    r.includes('inactive')
+  ) {
+    return 'wallet_inactive';
+  }
+  return 'refused';
 }
 
 /** The holder, the number and the bank a lookup answered, field by field. */

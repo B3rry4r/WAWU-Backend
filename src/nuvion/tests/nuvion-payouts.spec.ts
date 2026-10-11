@@ -22,6 +22,7 @@ import {
   NUVION_BANK_LIST_TTL_MS,
   NuvionPayoutsArea,
   payeeKey,
+  payoutFailureKind,
   readPayoutTransfer,
   transferProblem,
 } from '../areas/payouts';
@@ -909,12 +910,22 @@ describe('NUV-06: the payouts area against the Nuvion stand-in', () => {
       );
       expect(other.kind).toBe('duplicate_reference');
       expect(other.recordMayExist).toBe(true);
-      // The original fails: the reference is used up.
+      // The original fails. The reference names that failed transfer: asked
+      // again, Nuvion returns it, and it is told as what it is, a failed send
+      // (N7), whose reference is not sent again; Nuvion telling the reference
+      // is a duplicate (a 409) keeps the reference "used up".
       pay.settle(first.transactionId!, 'failed');
       const used = await fails(
         send(entityId, { reference, amountKobo: 100_000n, payee: first.payee }),
       );
-      expect(used.kind).toBe('duplicate_reference');
+      expect(used.kind).toBe('refused');
+      expect(used.recordMayExist).toBe(false);
+      pay.failNext(/\/transfers$/, 'error_duplicate_resource', 409);
+      const told = await fails(
+        send(entityId, { reference, amountKobo: 100_000n, payee: first.payee }),
+      );
+      expect(told.kind).toBe('duplicate_reference');
+      expect(told.recordMayExist).toBe(true);
       expect(pay.byReference(reference)).toHaveLength(1);
       // A new reference sends it again.
       const fresh = await send(entityId, {
@@ -934,6 +945,141 @@ describe('NUV-06: the payouts area against the Nuvion stand-in', () => {
       const e = await fails(send(entityId, { reference }));
       expect(e.kind).toBe('not_confirmed');
       expect(e.recordMayExist).toBe(true);
+    });
+
+    it('D1a: a transfer whose record states no applicable_fee is not a receipt (a charge is never 0), and is not sent again', async () => {
+      const { entityId, account } = person();
+      const reference = ref();
+      const first = await send(entityId, { reference });
+      const t = pay.transfer(first.transactionId!) as unknown as Record<
+        string,
+        unknown
+      >;
+      const fee = t.applicable_fee;
+      delete t.applicable_fee;
+      // A repeat is answered with the original, which states no charge.
+      const e = await fails(send(entityId, { reference, payee: first.payee }));
+      expect(e.kind).toBe('not_confirmed');
+      expect(e.recordMayExist).toBe(true);
+      expect(e.requestNotSent).toBe(false);
+      // The same through a 409 (Nuvion says it is a duplicate; the original is found).
+      pay.failNext(/\/transfers$/, 'error_duplicate_resource', 409);
+      const told = await fails(
+        send(entityId, { reference, payee: first.payee }),
+      );
+      expect(told.kind).toBe('not_confirmed');
+      // A first answer without the charge, for a reference Nuvion had not seen.
+      const fresh = ref();
+      pay.answerNext('POST', /^\/transfers$/, {
+        status: 201,
+        body: {
+          status: 'success',
+          message: 'ok',
+          data: {
+            id: standinId('01TRF'),
+            amount: 250_000,
+            currency: 'NGN',
+            unique_reference: fresh,
+            account_id: account.id,
+            entity_id: entityId,
+            status: 'pending',
+            type: 'outflow',
+            payment_type: 'bank-transfer',
+          },
+        },
+      });
+      const none = await fails(
+        send(entityId, { reference: fresh, payee: first.payee }),
+      );
+      expect(none.kind).toBe('not_confirmed');
+      expect(none.recordMayExist).toBe(true);
+      expect(none.messages.join(' ')).toMatch(/states no fee/);
+      expect(pay.byReference(reference)).toHaveLength(1);
+      t.applicable_fee = fee;
+      // Once the record states the charge it is the receipt.
+      const again = await send(entityId, { reference, payee: first.payee });
+      expect(again.feeKobo).toBe(BigInt(pay.fee));
+    });
+
+    it('N7: a new reference answered failed at once is a failed send of the kind its reason names, not duplicate_reference', async () => {
+      const { entityId, account } = person();
+      const cases: Array<[string | undefined, string]> = [
+        ['insufficient_funds', 'insufficient_funds'],
+        ['account_frozen', 'wallet_inactive'],
+        ['source_not_active', 'wallet_inactive'],
+        ['invalid_account_details', 'refused'],
+        [undefined, 'refused'],
+      ];
+      for (const [reason, kind] of cases) {
+        const reference = ref();
+        pay.answerNext('POST', /^\/transfers$/, {
+          status: 201,
+          body: {
+            status: 'success',
+            message: 'ok',
+            data: {
+              id: standinId('01TRF'),
+              amount: 250_000,
+              currency: 'NGN',
+              unique_reference: reference,
+              account_id: account.id,
+              entity_id: entityId,
+              status: 'failed',
+              ...(reason === undefined ? {} : { status_reason: reason }),
+              type: 'outflow',
+              payment_type: 'bank-transfer',
+              applicable_fee: pay.fee,
+            },
+          },
+        });
+        const e = await fails(send(entityId, { reference }));
+        expect([reason, e.kind]).toEqual([reason, kind]);
+        // Nuvion says nothing moved: the caller may give the money back.
+        expect(e.recordMayExist).toBe(false);
+        expect(e.requestNotSent).toBe(false);
+        expect(e.messages.join(' ')).toMatch(
+          /Nuvion reports the transfer failed/,
+        );
+      }
+      // A failed answer for another amount than this send is not this send.
+      const reference = ref();
+      pay.answerNext('POST', /^\/transfers$/, {
+        status: 201,
+        body: {
+          status: 'success',
+          message: 'ok',
+          data: {
+            id: standinId('01TRF'),
+            amount: 1,
+            currency: 'NGN',
+            unique_reference: reference,
+            account_id: account.id,
+            entity_id: entityId,
+            status: 'failed',
+            type: 'outflow',
+            payment_type: 'bank-transfer',
+            applicable_fee: pay.fee,
+          },
+        },
+      });
+      const other = await fails(send(entityId, { reference }));
+      expect(other.kind).toBe('duplicate_reference');
+      expect(other.recordMayExist).toBe(true);
+      // A reversed original is never a failed send: the money came back, the reference is used up.
+      const first = await send(entityId, { amountKobo: 100_000n });
+      pay.settle(first.transactionId!, 'successful');
+      pay.reverse(first.transactionId!);
+      const reversed = await fails(
+        send(entityId, {
+          reference: first.ourReference,
+          amountKobo: 100_000n,
+          payee: first.payee,
+        }),
+      );
+      expect(reversed.kind).toBe('duplicate_reference');
+      expect(payoutFailureKind('Insufficient balance')).toBe(
+        'insufficient_funds',
+      );
     });
 
     it('a figure that is not whole kobo in the transfer answered is refused', () => {
@@ -1051,12 +1197,35 @@ describe('NUV-06: the payouts area against the Nuvion stand-in', () => {
       for (const [over, why] of cases) {
         expect(transferProblem(transfer(over), expect_)).toMatch(why);
       }
+      // A caller that reads the status itself lets `failed` through, never `reversed`.
+      expect(
+        transferProblem(transfer({ status: 'failed' }), expect_, {
+          allowFailed: true,
+        }),
+      ).toBeNull();
+      expect(
+        transferProblem(transfer({ status: 'reversed' }), expect_, {
+          allowFailed: true,
+        }),
+      ).toMatch(/been reversed/);
+      expect(
+        transferProblem(transfer({ status: 'failed', amount: 1 }), expect_, {
+          allowFailed: true,
+        }),
+      ).toMatch(/names a transfer of 1 kobo/);
     });
 
     it('a delivery is the send it names only when Nuvion records the same one', () => {
       const delivered = transfer();
       expect(
         outflowProblem(transfer({ id: delivered.id }), { delivered }),
+      ).toBeNull();
+      // A delivery that carries no charge is no disagreement with a record
+      // that states one (the record is what is recorded).
+      expect(
+        outflowProblem(transfer({ id: delivered.id }), {
+          delivered: transfer({ id: delivered.id, applicable_fee: undefined }),
+        }),
       ).toBeNull();
       const cases: Array<[Record<string, unknown>, RegExp]> = [
         [{ id: standinId('01TRF') }, /another transfer/],
@@ -1234,6 +1403,50 @@ describe('NUV-06: the payouts area against the Nuvion stand-in', () => {
       // One page was read and the walk stopped at the old row.
       expect(standin.seen.filter((x) => x.path === '/transfers')).toHaveLength(
         1,
+      );
+    });
+
+    it('N1: a record that carries the reference but is not a bank send of ours is never found as one', async () => {
+      const { entityId, account } = person();
+      const reference = ref();
+      const sent = await send(entityId, { reference });
+      const holder = { kind: 'customer', customerId: entityId } as const;
+      // The control: our own bank send is found.
+      const control = await reconcileBankSend(area, reference, holder);
+      expect(control).toMatchObject({
+        state: 'found',
+        transaction: { id: sent.transactionId, outcome: 'pending' },
+      });
+      const stored = pay.transfer(sent.transactionId!);
+      const keep = { ...stored };
+      const looks: Array<[string, Record<string, unknown>]> = [
+        ['a book transfer', { payment_type: 'book-transfer' }],
+        ['a momo transfer', { payment_type: 'momo-transfer' }],
+        ['no payment type', { payment_type: undefined }],
+        ['money in', { type: 'inflow' }],
+        ['no direction', { type: undefined }],
+        ['dollars', { currency: 'USD' }],
+      ];
+      for (const [what, over] of looks) {
+        Object.assign(stored, keep, over);
+        const r = await reconcileBankSend(area, reference, holder);
+        expect([what, r]).toEqual([
+          what,
+          { state: 'unknown', why: 'unrecognised' },
+        ]);
+        // Never a conclusion either way: the advice waits.
+        expect(
+          decideBankRetry('bank_transfer', r, {
+            attemptedAt: new Date(Date.now() - 3_600_000),
+            now: new Date(),
+            resendAfterMs: 600_000,
+          }),
+        ).toEqual({ action: 'wait', why: 'unrecognised' });
+      }
+      Object.assign(stored, keep);
+      expect(account.id).toBeTruthy();
+      expect((await reconcileBankSend(area, reference, holder)).state).toBe(
+        'found',
       );
     });
 
