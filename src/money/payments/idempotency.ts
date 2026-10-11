@@ -79,6 +79,13 @@ export interface IdempotencyScope {
   /** Set once this request holds the key: its own claim, never a later one's. */
   claimId?: string;
   /**
+   * The body the payment service stored as this request's answer, when the
+   * route answers its own view of the payment (`WalletPaymentService.
+   * presentRoute`, TIER-03): the route returns exactly this, so the first
+   * answer and every replay are the same text.
+   */
+  answered?: unknown;
+  /**
    * What the route wants its stale resolver to know about the repeat that is
    * asking (the PIN routes pass the new PIN the request carries). Held in
    * memory for this request only: never stored, never logged.

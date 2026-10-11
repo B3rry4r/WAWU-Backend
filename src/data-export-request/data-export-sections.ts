@@ -649,6 +649,28 @@ export const EXPORT_SECTIONS: ExportSection[] = [
         },
       }),
   },
+  // What this person bought of the maker plan from their wallet (TIER-03).
+  // The payment reference is a payment id, so it stays out (rule 3).
+  {
+    key: 'tierPurchases',
+    models: ['MakerPurchase'],
+    load: (prisma, me) =>
+      prisma.makerPurchase.findMany({
+        where: { wawuUserId: me },
+        select: {
+          kind: true,
+          tierId: true,
+          fromTierId: true,
+          bump: true,
+          currency: true,
+          amountMinor: true,
+          method: true,
+          status: true,
+          createdAt: true,
+        },
+        orderBy: NEWEST,
+      }),
+  },
   {
     key: 'eventPasses',
     models: ['EventPass'],

@@ -376,6 +376,41 @@ model MakerTier {
   updatedAt          DateTime @updatedAt
 }
 
+/// A tier bought, renewed or upgraded from the wallet (TIER-03), written once
+/// the payment is confirmed, in the same transaction that grants what it
+/// bought (the tier and its dates, the event pass, the bonus points, the
+/// first Voice Intro, the checkout offer's points). `paymentRef` is the id of
+/// the wallet payment that paid for it (WalletPayment.id), the primary key
+/// and so unique: a payment confirmed twice, on two servers or from the
+/// request and the sweep, finds its row and grants nothing a second time. It
+/// is also the purchase's id in GET /plans/purchases/{id}.
+///
+/// Only a PAID purchase has a row; a payment still confirming, failed or
+/// reversed is read from the payment itself, so no row ever says "paid" for
+/// money that did not move. `status` has the one value `paid` today; a later
+/// task that takes a purchase before its money arrives (TIER-05) adds its own.
+///
+/// `amountMinor` is the plan's price in the minor unit of `currency` (the
+/// tier's, or the difference on an upgrade, plus the checkout offer's when
+/// `bump`), never the provider's charge. `kind` is `tier` (a first purchase,
+/// or after the last one ended), `renew` (the same tier again) or `upgrade`
+/// (from `fromTierId` to `tierId`). The account purge deletes it.
+model MakerPurchase {
+  paymentRef  String          @id
+  wawuUserId  String
+  kind        String
+  tierId      String
+  fromTierId  String?
+  bump        Boolean         @default(false)
+  currency    BillingCurrency
+  amountMinor Int
+  method      String          @default("wallet")
+  status      String          @default("paid")
+  createdAt   DateTime        @default(now())
+
+  @@index([wawuUserId, createdAt])
+}
+
 /// A pass to the Christmas event, issued with a tier (W44). One row per
 /// purchase that issued one: `purchaseRef` is unique, so a repeated payment
 /// confirmation issues it once. `type` names an event pass in
