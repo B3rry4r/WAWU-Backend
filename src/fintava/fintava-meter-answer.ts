@@ -35,9 +35,48 @@ export type MeterReading =
 
 export type MeterData = Record<string, unknown>;
 
+/** A `status` (the body's or `data`'s) that is one of these words says the call failed. */
+const FAILED_STATUS_WORDS = new Set(['failed', 'failure', 'fail', 'error']);
+
+/** Spaces of every kind: the ordinary one, tabs and newlines, the no-break space, the line separator, the byte order mark. */
+const SPACES = /\s+/g;
+/**
+ * Characters nobody can see, apart from spaces: controls, format characters (zero-width space and joiners, a soft hyphen,
+ * a word joiner), the combining grapheme joiner, the Braille blank and the Hangul fillers. A name made only of these and
+ * spaces is blank.
+ */
+const HIDDEN = /[\p{Cc}\p{Cf}\u034f\u115f\u1160\u2800\u3164\uffa0]/gu;
+
 const SERVICE_OFF =
   /not currently available|service (is )?(currently |temporarily )?unavailable|(currently|temporarily) unavailable/i;
 const NO_SUCH_METER = /not found|no such meter|invalid meter|does not exist/i;
+
+/**
+ * What a body can put where a person's name goes when there is no person (BILLS-01 round 3, R2-1). The success body has
+ * never been seen, and some bill APIs answer an unknown meter with a placeholder in the name field, so a name that is one
+ * of these is no owner: the Hub says it could not confirm the meter. The one list, case-insensitive: add a word here,
+ * nowhere else.
+ * - A string is the whole name, compared in lower case with runs of spaces as one, invisible characters out and a closing
+ *   full stop or colon dropped (the verifier's N/A, null, undefined, Unknown, -, ERROR, 0, Not Available, and None, Nil).
+ * - A pattern is a sentence that says there is no such meter or that the service is off, found anywhere in the name (the
+ *   verifier's "Meter not found", "Invalid meter number", "Customer not found" are such sentences, as is "Service not
+ *   currently available"); they are the same two patterns the reader uses on a body's message.
+ */
+export const NOT_AN_OWNER: readonly (string | RegExp)[] = [
+  'n/a',
+  'null',
+  'undefined',
+  'unknown',
+  'none',
+  'nil',
+  'error',
+  'failed',
+  'not available',
+  '-',
+  '0',
+  NO_SUCH_METER,
+  SERVICE_OFF,
+];
 
 /** A key as compared: lower case, with every non-letter and non-digit taken out (`Customer_Name` is `customername`). */
 function keyForm(key: string): string {
@@ -69,11 +108,16 @@ function statusOf(v: unknown): number | null {
   return typeof n === 'number' && Number.isInteger(n) ? n : null;
 }
 
-/** The first of `keys` (in this order) that holds non-blank text in `data`, trimmed. */
+/** The text with every space and every invisible character taken out. */
+function visible(text: string): string {
+  return text.replace(SPACES, '').replace(HIDDEN, '');
+}
+
+/** The first of `keys` (in this order) that holds text a person can see in `data`, trimmed. */
 function firstText(data: MeterData, keys: readonly string[]): string | null {
   const byKey = new Map<string, string>();
   for (const [k, v] of Object.entries(data)) {
-    if (typeof v === 'string' && v.trim() !== '')
+    if (typeof v === 'string' && visible(v) !== '')
       byKey.set(keyForm(k), v.trim());
   }
   for (const k of keys) {
@@ -81,6 +125,47 @@ function firstText(data: MeterData, keys: readonly string[]): string | null {
     if (v !== undefined) return v;
   }
   return null;
+}
+
+/** A name as compared: invisible characters out, runs of spaces as one, lower case, a closing full stop or colon off. */
+function nameWords(name: string): string {
+  return name
+    .replace(SPACES, ' ')
+    .replace(HIDDEN, '')
+    .trim()
+    .toLowerCase()
+    .replace(/[.!?:;,]+$/, '');
+}
+
+/** A name that says there is no person: an entry of `NOT_AN_OWNER`. */
+function isNotAnOwner(name: string): boolean {
+  const words = nameWords(name);
+  return NOT_AN_OWNER.some((entry) =>
+    typeof entry === 'string' ? entry === words : entry.test(words),
+  );
+}
+
+/** A value as an error flag reads it: JavaScript's own truthiness (`error: true`, `error: "Meter not found"`). */
+const flagged = (v: unknown): boolean => Boolean(v);
+
+/** A status that is a word for failure, or a number from 400. */
+function failedStatus(v: unknown): boolean {
+  if (typeof v === 'string' && FAILED_STATUS_WORDS.has(v.trim().toLowerCase()))
+    return true;
+  const n = statusOf(v);
+  return n !== null && n >= 400;
+}
+
+/**
+ * Whether an object (the body, or its `data`) flags a failure anywhere a failure is flagged: `success: false`, a truthy
+ * `error`, a `statusCode` from 400, a `status` of failed or error (or a number from 400).
+ */
+function flagsFailure(o: Record<string, unknown>): boolean {
+  if (o.success === false || o.success === 'false') return true;
+  if (flagged(o.error)) return true;
+  const code = statusOf(o.statusCode);
+  if (code !== null && code >= 400) return true;
+  return failedStatus(o.status);
 }
 
 export function readMeterAnswer(body: unknown): MeterReading {
@@ -103,7 +188,9 @@ export function readMeterAnswer(body: unknown): MeterReading {
   if (data === null) return { kind: 'not_found' };
   if (!isRecord(data)) return { kind: 'unreadable' };
   if (Object.keys(data).length === 0) return { kind: 'not_found' };
+  // A found meter needs no failure flag anywhere in the body, and a name a person could have (R2-1).
+  if (flagsFailure(body) || flagsFailure(data)) return { kind: 'unreadable' };
   const name = firstText(data, NAME_KEYS);
-  if (name === null) return { kind: 'unreadable' };
+  if (name === null || isNotAnOwner(name)) return { kind: 'unreadable' };
   return { kind: 'owner', name, address: firstText(data, ADDRESS_KEYS), data };
 }
