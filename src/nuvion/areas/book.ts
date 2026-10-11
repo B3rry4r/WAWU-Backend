@@ -202,10 +202,6 @@ export function bookTransactionOf(
   };
 }
 
-function requestNotSent(e: WalletProviderError): boolean {
-  return (e as { requestNotSent?: unknown }).requestNotSent === true;
-}
-
 /** What `status_reason` of a failed transfer says, as a seam kind. */
 function failureKind(
   reason: string | null,
@@ -655,7 +651,7 @@ export class NuvionBookArea implements NuvionBookMethods {
       if (found) return this.afterAnswer(row, found, op, null);
       throw e;
     }
-    if (requestNotSent(e)) {
+    if (e.requestNotSent) {
       // The connection never opened: Nuvion has no record of this request.
       await store.markRefused(
         row.reference,

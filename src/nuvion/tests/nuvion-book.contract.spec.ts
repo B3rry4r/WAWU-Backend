@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { createServer, type AddressInfo } from 'node:net';
 import { ConfigModule } from '@nestjs/config';
 import { Test, type TestingModule } from '@nestjs/testing';
 import {
@@ -25,7 +26,6 @@ import { nuvionWalletId } from '../areas/accounts';
 import { NuvionBookArea } from '../areas/book';
 import { PrismaNuvionBookStore } from '../areas/book-store';
 import { NuvionClient } from '../nuvion-client';
-import { NuvionError } from '../nuvion-error';
 
 /**
  * NUV-05's book transfer area against the Nuvion stand-in over a real
@@ -1027,40 +1027,57 @@ describe('NUV-05: book transfers and the operational account', () => {
       expect(r).toEqual({ state: 'unknown', why: 'unreachable' });
     });
 
-    it('a request that provably never reached Nuvion is refused in the log, so the reference is not used up', async () => {
+    it('a request that provably never reached Nuvion (a refused connection) is refused in the log, so the reference is not used up', async () => {
       const p = await person(1_000_000);
+      const q = await person(0);
       const reference = ref('never');
+      // A port nothing listens on: the connection is refused, nothing is
+      // written (MONEY-18 round 3: `requestNotSent` from the syscall).
+      const probe = createServer();
+      await new Promise<void>((resolve) =>
+        probe.listen(0, '127.0.0.1', resolve),
+      );
+      const closedPort = (probe.address() as AddressInfo).port;
+      await new Promise<void>((resolve) => probe.close(() => resolve()));
       const client = new NuvionClient(
-        standin.settings({ operationalAccountId: book.operational.id }),
+        standin.settings({
+          baseUrl: `http://127.0.0.1:${closedPort}`,
+          operationalAccountId: book.operational.id,
+        }),
         KEY,
       );
-      const real = client.post.bind(client);
-      jest.spyOn(client, 'post').mockImplementationOnce(() => {
-        const err = new NuvionError({
-          kind: 'outcome_unknown',
-          operation: 'book transfer',
-          messages: ['no connection'],
-          reference,
-        });
-        Object.assign(err, { requestNotSent: true });
-        return Promise.reject(err);
-      });
-      const a = new NuvionBookArea(client, client.settings, store, {
+      const refusing = new NuvionBookArea(client, client.settings, store, {
         settleStepsMs: [],
       });
       const e = await failure(
-        sendFrom(p, operationalBan(), 100_000, reference, a),
+        sendFrom(p, q.accountNumber, 100_000, reference, refusing),
       );
       expect(e.kind).toBe('outcome_unknown');
+      expect(e.requestNotSent).toBe(true);
       const row = await prisma.nuvionBookTransfer.findUniqueOrThrow({
         where: { reference },
       });
       expect(row.status).toBe('refused');
+      expect(book.byReference(reference)).toHaveLength(0);
       // Sent again under the same reference: one transfer.
-      void real;
-      const ok = await sendFrom(p, operationalBan(), 100_000, reference, a);
+      const ok = await sendFrom(p, q.accountNumber, 100_000, reference);
       expect(ok.amountKobo).toBe(100_000n);
       expect(book.byReference(reference)).toHaveLength(1);
+    });
+
+    it('a connection lost after the request was written is an unknown outcome, never a refusal in the log', async () => {
+      const p = await person(1_000_000);
+      const reference = ref('written');
+      book.loseAnswerNext(true);
+      const e = await failure(
+        sendFrom(p, operationalBan(), 100_000, reference),
+      );
+      expect(e.kind).toBe('outcome_unknown');
+      expect(e.requestNotSent).toBe(false);
+      const row = await prisma.nuvionBookTransfer.findUniqueOrThrow({
+        where: { reference },
+      });
+      expect(row.status).toBe('sending');
     });
   });
 
