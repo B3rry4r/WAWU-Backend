@@ -2120,3 +2120,85 @@ When another job completes a payment between a path's figures update and its
 `complete()`, the path's note (both figures) is still written, once, to the
 completed payment (`keepNote`, a conditional update that only touches a
 completed payment).
+
+---
+
+## 21. Provider webhook deliveries are not kept for ever (FIX-20)
+
+(Numbered 21 because MONEY-16 and WALLET-16 both add a section 19 on their
+branches; the lead renumbers at merge.)
+
+`FintavaWebhookEvent` and `NuvionWebhookEvent` keep each signed delivery's raw
+body and a parsed copy of it: names, account numbers, narrations. Neither table
+has a person column, so **retention, not the account purge or the data export,
+covers these rows**. The purge map (`src/account-purge/account-data-map.ts`)
+and the export list (`src/data-export-request/data-export-sections.ts`) say so
+in their comments and name neither table; a person's own money history is the
+ledger, which the purge and the export do cover.
+
+**The rule.** A daily job (`src/webhook-retention/`, 02:40 server time) clears
+the raw body (`rawBody` becomes empty) and the parsed copy (`payload` becomes
+JSON null) of a delivery when both are true:
+
+- it was received more than `WEBHOOK_RETENTION_DAYS` ago (default **90**,
+  PROVISIONAL, whole days from 7 to 3650, anything else stops the app at boot);
+  the period counts from the time received, not the time processed; and
+- its state says nothing can still read it.
+
+**Which states are cleared, and which are held.** A held row keeps its body
+whatever its age, and the job reports how many such rows are past the period.
+The table is `WEBHOOK_STATE_RULES` in
+`src/webhook-retention/webhook-retention-config.ts`, typed over each enum, so a
+new state does not compile until it is classified.
+
+| State | Fintava | Nuvion | Why |
+|---|---|---|---|
+| `processed` | cleared | cleared | Every consumer is finished with it. The ledger keeps the references and the figures; each Nuvion handler re-fetches from Nuvion before it acts on money. |
+| `test` | no such state | cleared | Nuvion's own test delivery: no data, nothing acts on it. |
+| `pending` | held | held | A consumer has not used it yet: the ledger sweep and the Nuvion dispatcher read its payload. It may be resting after a wait, held by a worker, waiting for a consumer that is not built yet (Fintava cards, an event no Nuvion handler lists), or left for a rollback to the other provider. |
+| `failed` | held | held | The consumer could not use it. That is a stop for review (a reversal with no debit, a disagreement), and the body is the evidence. |
+| `unrecognised` | held | held | Kept for review: an event nobody documents is how a real payload format is learned. |
+
+Nothing marks a review closed, so a held row stays until a person or a
+consumer finishes with it (BACKEND_GAPS G-750).
+
+**What stays on a cleared row.** Everything the repeat check and every reader
+needs: the id, the event, the references (`reference`, `dataReference`,
+`dataCustomerReference`; the ledger's absent check reads them), the SHA-256 of
+the body, the outcome (`processingStatus`, `note`), `receivedAt` and
+`processedAt`, and `bodyClearedAt`, the time the body went. The database holds
+the rule: `*_body_cleared_check` refuses `bodyClearedAt` on a row that still has
+a body (and on a Fintava row without its `bodySha256`).
+
+**A delivery sent again after clearing is still a repeat.** The receivers'
+inserts are `ON CONFLICT DO NOTHING` on unique keys the job never touches, so
+the answer is `200 duplicate`, no row is written, the body is not put back, and
+the ledger or the handler is not told again:
+
+- Fintava sends no event id and no timestamp, so its key is `bodySha256`, the
+  SHA-256 of the exact bytes it signed. It is the only protection against a
+  captured signed body being replayed, which is why a Fintava row without one
+  is never cleared.
+- Nuvion's keys are `eventId` and the signed pair (`signedAt`, `bodySha256`),
+  and the signature check refuses a timestamp more than 20 minutes from our
+  clock before the insert is reached.
+
+**Safe to run twice, on two servers, and while a delivery arrives.**
+
+- A batch is one statement: it picks up to 200 rows, locks them
+  (`FOR UPDATE SKIP LOCKED`) and clears them together. It is a transaction of
+  its own, so no lock outlives it. A run stops starting batches after 10
+  minutes and leaves the rest to the next day.
+- Two servers running the job at once share the rows between them; a row is
+  cleared by one of them. A row a consumer holds is skipped and cleared by the
+  next run. A second run finds nothing to clear and writes nothing.
+- The receiver never waits for the job: a repeat of a delivery that is being
+  cleared answers `duplicate` at once (`ON CONFLICT DO NOTHING` does not wait on
+  a row lock), and a new delivery is a new row, received after the cutoff.
+
+**A new reader of these tables.** A reader of `rawBody` or `payload` reads only
+rows in a held state, as the ledger sweep and the Nuvion dispatcher do (they
+read `pending` rows, locked and re-checked as `pending`). The readers are listed
+in `WEBHOOK_TABLE_READERS`, and `webhook-retention-readers.spec.ts` fails when a
+file touches either table without being listed there. A reader that needs a
+cleared state's body changes `WEBHOOK_STATE_RULES` in its own task, on purpose.

@@ -4079,11 +4079,13 @@ model FintavaWebhookEvent {
 
   /// The body exactly as delivered: the bytes the signature covers, kept
   /// byte for byte (`bytea`, so a NUL or any other byte fits). Personal data
-  /// lives here and in `payload`, never in a log.
+  /// lives here and in `payload`, never in a log. Empty once `bodyClearedAt`
+  /// is set (FIX-20: src/webhook-retention/).
   rawBody Bytes
   /// The same body parsed, with every NUL (`\u0000`) in a key or a string
   /// replaced by U+FFFD: Postgres json cannot hold a NUL, and a delivery it
-  /// refused would be retried and lost. `rawBody` keeps the original.
+  /// refused would be retried and lost. `rawBody` keeps the original. JSON
+  /// null once `bodyClearedAt` is set.
   payload Json
 
   /// The key (MONEY-08 round 3): the SHA-256, hex, of `rawBody`, the exact
@@ -4099,6 +4101,20 @@ model FintavaWebhookEvent {
   note             String?
   receivedAt       DateTime                 @default(now())
   processedAt      DateTime?
+
+  /// When the retention job cleared `rawBody` and `payload` (FIX-20): the
+  /// delivery's personal data is not kept for ever. Null until then. What
+  /// stays is everything the repeat check and the readers need: the id, the
+  /// event, the references, `bodySha256` (the key a delivery sent again
+  /// lands on), the outcome and the times. Only a `processed` row is ever
+  /// cleared (src/webhook-retention/webhook-retention-config.ts says which
+  /// states are held and why). A row where this is set always has an empty
+  /// body, a JSON null `payload` and a `bodySha256`
+  /// (`FintavaWebhookEvent_body_cleared_check`). Partial index
+  /// `FintavaWebhookEvent_body_retention_idx` (processingStatus,
+  /// receivedAt) WHERE bodyClearedAt IS NULL is in the migration only:
+  /// Prisma cannot write a partial index.
+  bodyClearedAt DateTime?
 
   /// Was the unique key until MONEY-08 round 3; now only an index.
   @@index([event, reference, fintavaStatus])
@@ -5367,10 +5383,11 @@ model NuvionWebhookEvent {
   /// The SHA-256, hex, of `rawBody`.
   bodySha256 String
   /// The body exactly as delivered (the bytes the signature covers). Its
-  /// personal data stays here and in `payload`, never in a log.
+  /// personal data stays here and in `payload`, never in a log. Empty once
+  /// `bodyClearedAt` is set (FIX-20: src/webhook-retention/).
   rawBody    Bytes
   /// The same body parsed, every NUL in a key or string replaced by U+FFFD
-  /// (Postgres json cannot hold one).
+  /// (Postgres json cannot hold one). JSON null once `bodyClearedAt` is set.
   payload    Json
 
   processingStatus NuvionWebhookProcessing @default(pending)
@@ -5384,6 +5401,17 @@ model NuvionWebhookEvent {
   claimedUntil     DateTime?
   receivedAt       DateTime                @default(now())
   processedAt      DateTime?
+
+  /// When the retention job cleared `rawBody` and `payload` (FIX-20); null
+  /// until then. What stays is what the repeat check reads (`eventId`, and
+  /// `signedAt` with `bodySha256`) and the outcome and times; a delivery
+  /// sent again after clearing is still a repeat. Only a `processed` or a
+  /// `test` row is ever cleared (src/webhook-retention/). A row where this
+  /// is set always has an empty body and a JSON null `payload`
+  /// (`NuvionWebhookEvent_body_cleared_check`). Partial index
+  /// `NuvionWebhookEvent_body_retention_idx` (processingStatus, receivedAt)
+  /// WHERE bodyClearedAt IS NULL is in the migration only.
+  bodyClearedAt    DateTime?
 
   @@unique([signedAt, bodySha256])
   @@index([processingStatus, event, receivedAt])

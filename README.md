@@ -414,10 +414,17 @@ dashboard and puts the dashboard's webhook secret in
   constant time, and fails closed (401) when the secret is unset. The raw
   bytes exist because the app is created with `rawBody: true`
   (`src/hub-app-options.ts`).
-- **Exactly once**: Fintava sends no event id, so each delivery is stored in
-  `FintavaWebhookEvent` under the unique key (event, transaction reference,
-  Fintava's status), with an `ON CONFLICT DO NOTHING` insert. A retry, a
-  replay or two copies at once leave one row and answer `duplicate`.
+- **Exactly once**: Fintava sends no event id and no timestamp, so each
+  delivery is stored in `FintavaWebhookEvent` under the unique key
+  `bodySha256`, the SHA-256 of the exact bytes it signed (MONEY-08 round 3),
+  with an `ON CONFLICT DO NOTHING` insert. A retry, a replay or two copies at
+  once leave one row and answer `duplicate`.
+- **Not kept for ever** (FIX-20): a daily job clears the raw body and the
+  parsed copy of a finished delivery after `WEBHOOK_RETENTION_DAYS` (90 by
+  default; `.env.example`). The row stays with its hash, so a delivery sent
+  again after clearing is still a `duplicate`. A pending, failed or
+  unrecognised delivery keeps its body. Nuvion's `NuvionWebhookEvent` follows
+  the same rule. See `docs/contract/CONVENTIONS.md`, section 21.
 - **Records only**: no money moves and no balance changes here. Rows are
   `pending` for the ledger (MONEY-10) and the pending sweep (MONEY-08);
   an event nobody documents is `unrecognised`.

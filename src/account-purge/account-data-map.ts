@@ -308,6 +308,18 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // not the account at Nuvion, which stays there; deletion needs an empty
   // wallet first (R-17).
   { model: 'NuvionEntity', column: 'wawuUserId', disposition: 'OWNED' },
+  // FIX-20. FintavaWebhookEvent and NuvionWebhookEvent, the stored provider
+  // deliveries, have no person column: each keeps the delivery's raw body and
+  // a parsed copy, which hold names, account numbers and narrations, and the
+  // purge cannot find a person's rows in them. RETENTION covers these rows,
+  // not the purge: a daily job (src/webhook-retention/) clears the body and
+  // the parsed copy once a delivery is older than WEBHOOK_RETENTION_DAYS (90
+  // by default) and finished with, and keeps the ids, references, hash,
+  // outcome and times that make a repeat a repeat. A delivery still pending,
+  // failed or held for review keeps its body until a consumer or a person is
+  // done with it (docs/contract/CONVENTIONS.md section 21). A person's own
+  // money history is the ledger (FintavaLedgerEntry above), which the purge
+  // does cover, so neither table is named in this map.
   // NUV-05. NuvionBookTransfer, the log of every book transfer sent on
   // Nuvion, has no person column (like NuvionWebhookEvent): it names Nuvion's
   // account ids, a person's account number, the amount and WAWU's reference,
