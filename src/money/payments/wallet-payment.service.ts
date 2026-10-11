@@ -39,6 +39,12 @@ import {
   FeeQuoteService,
 } from '../fees/fee-quote.service';
 import type { OpenWallet } from '../gate/wallet-gate';
+import {
+  BALANCE_CHANGED_MESSAGE,
+  insufficientAfterProviderRefusal,
+  insufficientFunds,
+  nairaText,
+} from '../insufficient-funds';
 import type {
   LedgerDebitSighting,
   LedgerMovementInput,
@@ -77,6 +83,8 @@ export const PAY_ROUTE = 'POST money/payments';
 export const NOT_PAYABLE_YET_MESSAGE =
   "This can't be paid for from your wallet yet.";
 export const OWN_ITEM_MESSAGE = "You can't pay yourself for this.";
+/** Someone else's payment is the same 404 as one nobody holds (CONVENTIONS.md section 3). */
+export const PAYMENT_NOT_FOUND_MESSAGE = 'We could not find that payment.';
 /** Only when the provider refused the transfer or said it failed: its word, not our inference. */
 export const PAYMENT_FAILED_REASON =
   'The payment did not go through. No money left your wallet.';
@@ -94,9 +102,6 @@ export const STILL_CONFIRMING_MESSAGE =
  */
 export const FINISHING_MESSAGE =
   "Your payment went through and we're finishing it. Don't pay again.";
-/** The provider refused for funds although a fresh balance read covers the total (lead ruling D3). */
-export const BALANCE_CHANGED_MESSAGE =
-  'Your balance changed. Check it and try again.';
 /** What the provider sees on the transfer. Names nobody and nothing personal. */
 export const PAYMENT_NARRATION = 'WAWU purchase';
 
@@ -107,13 +112,9 @@ const MINUTE = 60_000;
 
 type PaymentRow = Prisma.WalletPaymentGetPayload<object>;
 
-/** ₦1,323.25 from 132325, integer arithmetic only (no float, no locale). */
-export function nairaText(kobo: number): string {
-  const naira = Math.floor(kobo / 100);
-  const rest = String(kobo % 100).padStart(2, '0');
-  const grouped = String(naira).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  return `₦${grouped}.${rest}`;
-}
+// The one wording of "not enough in your wallet" lives in ../insufficient-funds
+// (task MONEY-19); these names stay importable from here.
+export { BALANCE_CHANGED_MESSAGE, nairaText };
 
 /** The success envelope ResponseInterceptor sends, as the text a replay repeats. */
 export function successBody(data: unknown): string {
@@ -233,6 +234,12 @@ export const isOpenKeyClash = (e: unknown) => isUniqueViolationOn(e, 'openKey');
  *   MONEY-16 to report (a stop, not a fix).
  * - **Delivery is at least once:** a feature's `onCompleted` can run twice
  *   for one payment and must be idempotent.
+ * - **Polled by its id** (MONEY-19, `read`): the app asks `GET
+ *   /money/payments/{id}` after `pending` and after `payment_in_progress`.
+ *   `PaymentView.delivered` says whether what was paid for has reached the
+ *   buyer (a paid payment still being delivered is "paid, still opening");
+ *   the answer to the payment itself says the same, read after the delivery
+ *   ran. The poll reads our record only and never asks the provider.
  */
 @Injectable()
 export class WalletPaymentService implements OnModuleInit {
@@ -361,7 +368,7 @@ export class WalletPaymentService implements OnModuleInit {
     // The provider's balance, never ours: a 503 or a 423 here moves nothing.
     const { availableKobo } = await this.balances.balance(wallet);
     if (availableKobo < fee.totalKobo) {
-      throw this.insufficient(availableKobo, fee.totalKobo);
+      throw insufficientFunds(availableKobo, fee.totalKobo);
     }
     const merchant = await this.merchant.account();
     if (await this.isWawuAccount(wallet, merchant)) {
@@ -626,7 +633,7 @@ export class WalletPaymentService implements OnModuleInit {
       // back so the same payment can be sent again (CONVENTIONS section 4).
       await this.keys.release(scope);
       if (refusal.kind === 'insufficient_funds') {
-        throw this.providerSaidInsufficient(
+        throw insufficientAfterProviderRefusal(
           await this.balanceOrNull(wallet),
           koboNumber(payment.totalKobo),
         );
@@ -1524,35 +1531,6 @@ export class WalletPaymentService implements OnModuleInit {
     };
   }
 
-  /** Our own balance read was short: the shortfall is always 1 kobo or more. */
-  private insufficient(balanceKobo: number, totalKobo: number): MoneyError {
-    const shortfallKobo = totalKobo - balanceKobo;
-    return new MoneyError(
-      'insufficient_funds',
-      `You need ${nairaText(shortfallKobo)} more in your wallet.`,
-      { balanceKobo, totalKobo, shortfallKobo },
-    );
-  }
-
-  /**
-   * The provider refused for funds after our read said there was enough
-   * (lead ruling D3): a real shortfall on a fresh read is shown; otherwise
-   * the balance moved or the provider took more than quoted, and nothing below 1 kobo
-   * is ever shown as a shortfall.
-   */
-  private providerSaidInsufficient(
-    balanceKobo: number | null,
-    totalKobo: number,
-  ): MoneyError {
-    if (balanceKobo !== null && balanceKobo < totalKobo) {
-      return this.insufficient(balanceKobo, totalKobo);
-    }
-    return new MoneyError('insufficient_funds', BALANCE_CHANGED_MESSAGE, {
-      ...(balanceKobo === null ? {} : { balanceKobo }),
-      totalKobo,
-    });
-  }
-
   /** The provider's available balance, or null when it did not answer (the quote shows no figure). */
   private async balanceOrNull(
     wallet: Pick<OpenWallet, 'wawuUserId' | 'walletId'>,
@@ -1742,7 +1720,14 @@ export class WalletPaymentService implements OnModuleInit {
       }
     }
     const h = handler ?? this.registry.get(row.kind as PaymentKind);
-    if (h) await this.fulfil(row, h);
+    if (h && (await this.fulfil(row, h))) {
+      // The delivery recorded itself (`fulfilledAt`, and the claim given up):
+      // the row this request answers with says so (`PaymentView.delivered`),
+      // not what it held before the feature ran.
+      row = await this.prisma.walletPayment.findUniqueOrThrow({
+        where: { id: p.id },
+      });
+    }
     return row;
   }
 
@@ -1915,6 +1900,23 @@ export class WalletPaymentService implements OnModuleInit {
     return view;
   }
 
+  /**
+   * One payment as it stands now (`GET /money/payments/{id}`, task MONEY-19):
+   * what the app polls after a `pending` answer (H18, E10) or a
+   * `payment_in_progress` (`reason.paymentId`). Only the payer reads it:
+   * another person's payment, and an id nobody holds, are the same `404
+   * not_found`. It reads our own record only (the sweep, the ledger's
+   * settlement and the webhooks are what move a payment on) and never asks
+   * the wallet provider, so a poll costs the provider nothing.
+   */
+  async read(wallet: OpenWallet, id: string): Promise<PaymentView> {
+    const p = await this.prisma.walletPayment.findFirst({
+      where: { id, payerWawuUserId: wallet.wawuUserId },
+    });
+    if (!p) throw new MoneyError('not_found', PAYMENT_NOT_FOUND_MESSAGE);
+    return this.view(p, await this.holdOf(p));
+  }
+
   /** The hold a held kind's completed payment sits in, as the app reads it; null for any other payment. */
   async holdOf(p: PaymentRow): Promise<HoldView | null> {
     if (!HELD_PAYMENT_KINDS.includes(p.kind as PaymentKind)) return null;
@@ -1935,6 +1937,11 @@ export class WalletPaymentService implements OnModuleInit {
     const providerFeeKobo = koboNumber(p.providerFeeKobo);
     const wawuFeeKobo = koboNumber(p.wawuFeeKobo);
     const status = p.status as PaymentStatus;
+    // The buyer's claim on the item (`openKey`) is given up exactly when what
+    // was paid for is delivered, or when there is nothing to deliver
+    // (`complete`, `fulfil`): a paid payment that still holds it is "paid,
+    // still opening" (H18).
+    const delivered = status === 'completed' && p.openKey === null;
     return {
       id: p.id,
       kind: p.kind as PaymentKind,
@@ -1951,7 +1958,13 @@ export class WalletPaymentService implements OnModuleInit {
       reference: p.customerReference,
       hold,
       failureReason: status === 'failed' ? p.failureReason : null,
-      statusMessage: status === 'pending' ? STILL_CONFIRMING_MESSAGE : null,
+      delivered,
+      statusMessage:
+        status === 'pending'
+          ? STILL_CONFIRMING_MESSAGE
+          : status === 'completed' && !delivered
+            ? FINISHING_MESSAGE
+            : null,
       createdAt: p.createdAt.toISOString(),
       completedAt: p.completedAt ? p.completedAt.toISOString() : null,
     };
