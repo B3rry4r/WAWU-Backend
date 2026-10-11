@@ -16,6 +16,6 @@
 --
 -- Rollback (also in rollback.sql):
 --   ALTER TABLE "WaitlistRegistration" DROP COLUMN "claimResult";
---   DELETE FROM "_prisma_migrations" WHERE migration_name = '20261020230000_waitlist_claim_result';
+--   DELETE FROM "_prisma_migrations" WHERE migration_name = '20261021060000_waitlist_claim_result';
 
 ALTER TABLE "WaitlistRegistration" ADD COLUMN "claimResult" JSONB;
