@@ -10,6 +10,7 @@ import {
 } from './statements/statement-config';
 import { StatementService } from './statements/statement.service';
 import { LedgerModule } from './ledger/ledger.module';
+import { MoneyInNoticeModule } from './money-in-notice/money-in-notice.module';
 import { WalletBalanceService } from './balance/wallet-balance.service';
 import { FeeSettings } from './fees/fee-config';
 import { FeeQuoteService } from './fees/fee-quote.service';
@@ -155,6 +156,11 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
  * WALLET-27: statements (`/money/statements`), the caller's completed
  * movements over a period of Lagos days as a CSV file, behind the wallet
  * gate, read from the ledger only; it never calls Fintava.
+ *
+ * WALLET-10: money in, told once (`MoneyInNoticeModule`): a sweep over the
+ * credited ledger rows writes one `money_in` notification per row, honouring
+ * the person's "Money in" switch. It adds no route and never calls the
+ * provider.
  */
 @Module({
   imports: [
@@ -169,6 +175,8 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     // Identity documents and the hosted selfie for a Nuvion opening (task NUV-03,
     // SHARED-CHANGES NUV-03 #1).
     NuvionDocumentsModule,
+    // Money in, told once (task WALLET-10): the sweep over credited ledger rows.
+    MoneyInNoticeModule,
   ],
   controllers: [
     MoneyPinController,

@@ -60,7 +60,7 @@ decides nothing about categories by itself:
 
 | Pushed | Switch |
 |---|---|
-| `sale`, `tip_received` | Money in (`moneyIn`) |
+| `sale`, `tip_received`, `money_in` | Money in (`moneyIn`) |
 | `dm_refunded` | Refunds (`refunds`) |
 | `new_follower` | New followers (`newFollowers`) |
 | `dm_deadline` | Paid questions (`dmReminders`) |

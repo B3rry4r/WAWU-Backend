@@ -552,6 +552,24 @@ project with enhanced push security) and `EXPO_PUSH_BASE_URL` (default
 `https://exp.host`) are optional; both are listed in `deploy/README.md` and
 `.env.example`. Android needs the owner's FCM credentials uploaded to Expo.
 
+## Money in (WALLET-10)
+
+A bank transfer into a person's account is a completed `in` row of category
+`top_up` in the ledger (`src/money/ledger/`; Fintava's `account_funded` through
+the ledger sweep, Nuvion's `inflows.completed` through NUV-04's handler). A
+sweep in every Hub (`src/money/money-in-notice/`, every 10 seconds) turns each
+such row into one `money_in` notification, which the push sender above then
+sends to the person's phones. It reads the ledger, never the webhook event, and
+never calls the provider; a server tells only the rows of the provider it runs.
+
+Exactly once: the notification and its mark (`MoneyInNotice`, primary key the
+ledger row) are written in one transaction with the row locked, so a replayed
+delivery, a credit delivered twice or out of order, two Hubs and a stop
+between the row and the push all end in one notification. With the person's
+"Money in" switch (Z3) off, only the mark is written (`muted`): nothing is
+sent and nothing waits. `MONEY_IN_NOTICE_WINDOW_HOURS` (default 72, in
+`.env.example`) bounds how far back a pass reads.
+
 ## Blocking and data export (SETTINGS-04)
 
 **A block hides people from each other, both ways.** `BlockedAccountService`

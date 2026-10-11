@@ -4452,11 +4452,62 @@ model FintavaLedgerEntry {
 
   references FintavaLedgerReference[]
 
+  /// WALLET-10: the answer to "was the person told about this credit": one
+  /// row once the money-in notice sweep has dealt with it. Only `in` rows of
+  /// category `top_up` on a person's wallet ever get one.
+  moneyInNotice MoneyInNotice?
+
   @@index([wawuUserId, occurredAt])
   @@index([accountNumber, occurredAt])
   @@index([status, occurredAt])
   @@index([customerReference])
   @@index([status, nextCheckAt])
+  /// WALLET-10: the money-in notice sweep reads the credits the Hub learned of
+  /// lately (`direction`, `category`, then `createdAt`), every few seconds.
+  @@index([direction, category, createdAt])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// MONEY IN, TOLD ONCE (task WALLET-10, BACKEND_GAPS G-33)
+///
+/// One row per credited ledger row (`direction` in, `category` top_up, on a
+/// person's wallet) that the money-in notice sweep has dealt with: the
+/// primary key is the exactly-once rule. The row is written in the same
+/// transaction as the Notification it answers (NotificationService.emit takes
+/// the transaction), so there is never a notification without its row here,
+/// nor a row here claiming one that was not written: a stop between the two
+/// writes undoes both, and the next sweep does them again. Two Hub processes,
+/// a replayed delivery or a ledger row seen twice meet on this key.
+///
+/// Notified from the ledger rows, never from the webhook event (G-33): the
+/// event table has one `processingStatus` for every consumer, and the ledger
+/// marks an `account_funded` delivery processed once it is a ledger row.
+///
+/// `outcome`:
+///   sent    a `money_in` notification was written (the push sender takes it
+///           from the Notification table, INBOX-03)
+///   muted   the person's "Money in" switch (Z3) was off: nothing was written
+///           and nothing waits to be sent if they switch it on
+///   before  the credit was in the ledger when this table was made: it is not
+///           news (the migration marks every such row)
+///
+/// `notificationId` is the Notification written when `sent`. It is not a
+/// foreign key: the person may delete the notification, and the answer here
+/// must stay. No column here names a person; the row goes with its ledger row
+/// (cascade) when an account is deleted.
+/// ─────────────────────────────────────────────────────────────────────────
+enum MoneyInNoticeOutcome {
+  sent
+  muted
+  before
+}
+
+model MoneyInNotice {
+  entryId        String               @id
+  entry          FintavaLedgerEntry   @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  outcome        MoneyInNoticeOutcome
+  notificationId String?
+  createdAt      DateTime             @default(now())
 }
 
 /// Every reference one ledger row is known by. The primary key is the
