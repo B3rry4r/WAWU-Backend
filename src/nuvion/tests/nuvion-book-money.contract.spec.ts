@@ -165,6 +165,21 @@ describe('NUV-05 end to end: pay from the wallet and held money over Nuvion book
   const fintavaHits: string[] = [];
   const users: string[] = [];
   const delivered: CompletedPayment[] = [];
+
+  /**
+   * The payment is delivered exactly once. A payment's status turns
+   * `completed` a moment BEFORE its delivery is claimed and made (MONEY-18
+   * round 3), so the delivery is waited for, and then a rest is given so a
+   * second one would show.
+   */
+  async function deliveredOnce(paymentId: string): Promise<void> {
+    await until(
+      () => delivered.filter((d) => d.paymentId === paymentId).length >= 1,
+      'the payment to be delivered',
+    );
+    await new Promise((r) => setTimeout(r, 200));
+    expect(delivered.filter((d) => d.paymentId === paymentId)).toHaveLength(1);
+  }
   const previous: Record<string, string | undefined> = {};
   let clock = Date.now();
   const later = (ms = 2 * 60_000) => {
@@ -882,10 +897,16 @@ describe('NUV-05 end to end: pay from the wallet and held money over Nuvion book
         book.settle(reference, 'successful');
         const stored = await deliverAndDispatch('outflows.completed', t);
         expect(stored.processingStatus).toBe('processed');
-        await until(
-          async () => (await paymentRow(view.id)).status === 'completed',
-          'the payment to complete at the stated charge',
-        );
+        // The payment turns `completed`, then its figures and the note of the
+        // difference are written (two steps): the end state is waited for.
+        await until(async () => {
+          const q = await paymentRow(view.id);
+          return (
+            q.status === 'completed' &&
+            q.providerFeeKobo === BigInt(charge) &&
+            (q.discrepancy ?? '').includes(note)
+          );
+        }, 'the payment to complete at the stated charge with its note');
         const p = await paymentRow(view.id);
         expect(p.providerFeeKobo).toBe(BigInt(charge));
         expect(p.totalKobo).toBe(BigInt(total));
@@ -898,9 +919,7 @@ describe('NUV-05 end to end: pay from the wallet and held money over Nuvion book
           feeKobo: String(charge),
           totalKobo: String(total),
         });
-        expect(delivered.filter((d) => d.paymentId === view.id)).toHaveLength(
-          1,
-        );
+        await deliveredOnce(view.id);
       },
     );
 
@@ -982,7 +1001,7 @@ describe('NUV-05 end to end: pay from the wallet and held money over Nuvion book
       );
       expect(book.createRequests).toHaveLength(sent);
       expect(book.byReference(reference)).toHaveLength(1);
-      expect(delivered.filter((d) => d.paymentId === view.id)).toHaveLength(1);
+      await deliveredOnce(view.id);
       expect((await rowsOf(reference)).map((r) => r.status)).toEqual([
         'completed',
         'completed',
