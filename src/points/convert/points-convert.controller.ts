@@ -41,8 +41,8 @@ import type {
 
 /**
  * Convert points to cash (task POINTS-04, PT6, R-43). `points/convert` is a
- * path nothing else declares (`GET /me/points` is the points view); the quote
- * is declared before the id so `quote` is never read as one.
+ * path nothing else uses (`GET /me/points` is the points view); the quote
+ * route comes before the id route, so `quote` cannot be taken for an id.
  */
 @ApiBearerAuth('wawu-id')
 @UseGuards(WawuAuthGuard)
