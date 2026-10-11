@@ -316,16 +316,19 @@ describe('NUV-01: the Nuvion adapter behind WALLET_PROVIDER', () => {
         [{ accountNumber: '0123456789', bankCode: '090270' }],
       ],
       ['bankTransfer', 'payouts', [{ reference: 'r2', amountKobo: 100n }]],
-      ['findTransactionByReference', 'reconcile', ['r3']],
-      ['findTransactionById', 'reconcile', ['t1']],
+      // NUV-05: a book transfer's lookups are the book area's until NUV-08
+      // widens them to every rail (SHARED-CHANGES NUV-05 #1).
+      ['findTransactionByReference', 'book', ['r3']],
+      ['findTransactionById', 'book', ['t1']],
       [
         'listTransactions',
         'reconcile',
         [{ kind: 'merchant' }, { page: 1, take: 10 }],
       ],
-      ['reconcileSend', 'reconcile', ['r4', { kind: 'merchant' }]],
-      ['confirmMovement', 'reconcile', [{ references: ['r5'] }]],
-      ['secondaryReferenceOf', 'reconcile', [{ id: 't2' }]],
+      ['reconcileSend', 'book', ['r4', { kind: 'merchant' }]],
+      ['confirmMovement', 'book', [{ references: ['r5'] }]],
+      ['secondaryReferenceOf', 'book', [{ id: 't2' }]],
+      ['isSameAccount', 'book', ['a1', 'a2']],
     ];
 
     it('each method calls its own area with the same arguments, and only that area', async () => {
@@ -377,7 +380,7 @@ describe('NUV-01: the Nuvion adapter behind WALLET_PROVIDER', () => {
         resendAfterMs: 1,
       };
       provider.decideRetry('bank_transfer', { state: 'absent' }, clock);
-      expect(calls[0].startsWith('reconcile.decideRetry(')).toBe(true);
+      expect(calls[0].startsWith('book.decideRetry(')).toBe(true);
       expect(provider.deliveries.read('e', {}, 'r')).toEqual({
         kind: 'unreadable',
         why: 'reconcile',
@@ -411,10 +414,17 @@ describe('NUV-01: the Nuvion adapter behind WALLET_PROVIDER', () => {
       await expect(
         provider.findCustomerByPhone('+2348031234567', () => 'd'),
       ).resolves.toEqual({ state: 'unknown', why: 'empty_answer' });
-      // The accounts area is NUV-04's and no longer a stub (its own specs
-      // cover it): every other area still answers not_supported.
+      // The accounts area is NUV-04's and the book area NUV-05's, no longer
+      // stubs (their own specs cover them): every other area still answers
+      // not_supported.
       for (const [method, owner, args] of CALLS) {
-        if (owner === 'accounts' || FILLED.includes(method)) continue;
+        if (
+          owner === 'accounts' ||
+          owner === 'book' ||
+          FILLED.includes(method)
+        ) {
+          continue;
+        }
         const methods = provider as unknown as Record<
           string,
           (...a: unknown[]) => Promise<unknown>

@@ -21,6 +21,7 @@ import {
   type NuvionAccountsMethods,
 } from './areas/accounts';
 import { NuvionBookArea, type NuvionBookMethods } from './areas/book';
+import { type NuvionBookStore } from './areas/book-store';
 import {
   NuvionDocumentsArea,
   type NuvionDocumentsMethods,
@@ -62,13 +63,21 @@ export interface NuvionAreas {
   reconcile: NuvionReconcileMethods;
 }
 
-/** The areas over one client. */
-export function nuvionAreas(client: NuvionClient): NuvionAreas {
+/**
+ * The areas over one client. `deps.bookStore` is the record of book
+ * transfers and of which Nuvion account a number is (NUV-05,
+ * `PrismaNuvionBookStore`): the factory gives it the database. Without it
+ * the book area sends nothing (`not_configured`).
+ */
+export function nuvionAreas(
+  client: NuvionClient,
+  deps: { bookStore?: NuvionBookStore } = {},
+): NuvionAreas {
   return {
     opening: new NuvionOpeningArea(client),
     documents: new NuvionDocumentsArea(client),
     accounts: new NuvionAccountsArea(client),
-    book: new NuvionBookArea(client, client.settings),
+    book: new NuvionBookArea(client, client.settings, deps.bookStore),
     payouts: new NuvionPayoutsArea(client),
     reconcile: new NuvionReconcileArea(client),
   };
@@ -86,9 +95,9 @@ export function nuvionAreas(client: NuvionClient): NuvionAreas {
  * | opening.ts | NUV-02 | checkIdentity, openWallet, findCustomerByPhone, getCustomerMatch, listCustomerSightings |
  * | documents.ts | NUV-03 | matchSelfie, startLivenessSession, getLivenessResult, submitKyc |
  * | accounts.ts | NUV-04 | getWalletAccount, getBalance |
- * | book.ts | NUV-05 | getPlatformAccount, walletToWallet |
+ * | book.ts | NUV-05 | getPlatformAccount, walletToWallet, isSameAccount, and for book transfers findTransactionByReference, findTransactionById, reconcileSend, decideRetry, confirmMovement, secondaryReferenceOf |
  * | payouts.ts | NUV-06 | listBanks, checkAccountName, bankTransfer |
- * | reconcile.ts | NUV-08 | deliveries, the lookups, listTransactions, reconcileSend, decideRetry, confirmMovement, secondaryReferenceOf |
+ * | reconcile.ts | NUV-08 | deliveries, listTransactions (the statement); NUV-08 widens the lookups above to every rail |
  *
  * A method whose area has no Nuvion call yet answers `not_supported`:
  * nothing is sent and nothing moves.
@@ -131,6 +140,15 @@ export class NuvionWalletProvider implements WalletProvider {
 
   get deliveries() {
     return this.areas.reconcile.deliveries;
+  }
+
+  /** The book transfer area (NUV-05): the handler reads transfers through it. */
+  get book(): NuvionBookArea {
+    const area = this.areas.book;
+    if (!(area instanceof NuvionBookArea)) {
+      throw new Error("The book area of this adapter is not Nuvion's.");
+    }
+    return area;
   }
 
   /** The documents area (NUV-03): the upload, the submission and the hosted selfie. */
@@ -214,23 +232,23 @@ export class NuvionWalletProvider implements WalletProvider {
 
   // Transactions
   findTransactionByReference(reference: string) {
-    return this.areas.reconcile.findTransactionByReference(reference);
+    return this.areas.book.findTransactionByReference(reference);
   }
   findTransactionById(id: string) {
-    return this.areas.reconcile.findTransactionById(id);
+    return this.areas.book.findTransactionById(id);
   }
   listTransactions(holder: ProviderHolder, query: ProviderPageQuery) {
     return this.areas.reconcile.listTransactions(holder, query);
   }
   reconcileSend(reference: string, holder: ProviderHolder, since?: Date) {
-    return this.areas.reconcile.reconcileSend(reference, holder, since);
+    return this.areas.book.reconcileSend(reference, holder, since);
   }
   decideRetry(
     kind: ProviderSendKind,
     reconciliation: ProviderReconciliation,
     clock: { attemptedAt: Date; now: Date; resendAfterMs: number },
   ) {
-    return this.areas.reconcile.decideRetry(kind, reconciliation, clock);
+    return this.areas.book.decideRetry(kind, reconciliation, clock);
   }
   confirmMovement(input: {
     references: readonly string[];
@@ -239,9 +257,13 @@ export class NuvionWalletProvider implements WalletProvider {
     around: Date;
     limits: ProviderConfirmLimits;
   }) {
-    return this.areas.reconcile.confirmMovement(input);
+    return this.areas.book.confirmMovement(input);
   }
   secondaryReferenceOf(t: ProviderTransaction) {
-    return this.areas.reconcile.secondaryReferenceOf(t);
+    return this.areas.book.secondaryReferenceOf(t);
+  }
+  /** Whether two names are one account at Nuvion (NUV-05, MONEY-17 R5-1). */
+  isSameAccount(a: string, b: string) {
+    return this.areas.book.isSameAccount(a, b);
   }
 }
