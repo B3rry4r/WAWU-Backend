@@ -2218,7 +2218,7 @@ balance (MONEY-11): nothing here is added up into one, and the routes say
     provably never reached the provider (`requestNotSent`) is this, and is
     sent again under the same reference.
   - `not_supported`: the running provider has no way to make this move yet
-    (Nuvion before NUV-05's book transfers merge). An error in the log on every
+    (a Nuvion adapter without its book transfers, NUV-05). An error in the log on every
     try saying so; the earning waits and lands once the provider can.
   - `refused`: the provider refused and nothing moved; a person looks past the
     review bound.

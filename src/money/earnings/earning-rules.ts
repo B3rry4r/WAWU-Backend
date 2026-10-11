@@ -27,7 +27,7 @@ export type EarningStatus = (typeof EARNING_STATUSES)[number];
  * - `provider`: the provider is out of reach or not set up, or the sale is
  *   another provider's.
  * - `not_supported`: the running provider has no way to make this move yet
- *   (Nuvion before NUV-05's book transfers). Logged as an error on every
+ *   (a Nuvion adapter without its book transfers). Logged as an error on every
  *   try; the earning waits and lands once the provider can.
  * - `refused`: the provider refused and nothing moved; a person looks past the
  *   review bound.
