@@ -45,17 +45,69 @@ const SPACES = /\s+/g;
  */
 const INVISIBLE = '\\p{Cc}\\p{Cf}\\u034f\\u115f\\u1160\\u2800\\u3164\\uffa0';
 const HIDDEN = new RegExp(`[${INVISIBLE}]`, 'gu');
-const LEADING_INVISIBLE = new RegExp(`^(?:\\s|[${INVISIBLE}])+`, 'u');
-const HAS_VISIBLE = new RegExp(`[^\\s${INVISIBLE}]`, 'u');
+/** Reads one character: is it a space or an invisible character? Used to fill the tables below, one character at a time. */
+const BLANK_CHAR = new RegExp(`^[\\s${INVISIBLE}]$`, 'u');
 
-/** The text with the spaces and invisible characters at its start taken off. */
+let blankTable: Uint8Array | null = null;
+/** The characters above U+FFFF that are blank, as they are met (there are about a hundred; a visible one is never kept). */
+const blankAstral = new Set<number>();
+
+/**
+ * For every UTF-16 code unit outside the surrogates, 1 when it is a space or an invisible character, 0 when a person can
+ * see it. Built once, on first use, from the same pattern that defines "invisible" above, so the two cannot disagree.
+ */
+function blankUnits(): Uint8Array {
+  if (blankTable === null) {
+    const table = new Uint8Array(0x10000);
+    for (let unit = 0; unit < 0x10000; unit += 1) {
+      if (unit >= 0xd800 && unit <= 0xdfff) continue;
+      table[unit] = BLANK_CHAR.test(String.fromCharCode(unit)) ? 1 : 0;
+    }
+    blankTable = table;
+  }
+  return blankTable;
+}
+
+/**
+ * Where the first character a person can see is in `text`, or `text.length` when there is none. A plain loop with a table,
+ * so a text of millions of invisible characters costs one pass and no regular expression stack. A lone surrogate counts as
+ * visible, as the pattern has always read it.
+ *
+ * It replaces `text.replace(/^(?:\s|[invisible])+/u, '')`, which kept an entry on the regular expression engine's backtrack
+ * stack for every character it matched and threw "Maximum call stack size exceeded" out of the request for a text of
+ * several million of them (BILLS-01 hotfix 2: it did so on the deploy's test runner at five million).
+ */
+function firstVisibleIndex(text: string): number {
+  const table = blankUnits();
+  const length = text.length;
+  let i = 0;
+  while (i < length) {
+    const unit = text.charCodeAt(i);
+    if (unit < 0xd800 || unit > 0xdfff) {
+      if (table[unit] === 0) return i;
+      i += 1;
+      continue;
+    }
+    const point = text.codePointAt(i) ?? unit;
+    if (point < 0x10000) return i;
+    if (!blankAstral.has(point)) {
+      if (!BLANK_CHAR.test(String.fromCodePoint(point))) return i;
+      blankAstral.add(point);
+    }
+    i += 2;
+  }
+  return length;
+}
+
+/** The text with the spaces and invisible characters at its start taken off; empty when it has nothing a person can see. */
 export function withoutLeadingInvisible(text: string): string {
-  return text.replace(LEADING_INVISIBLE, '');
+  const at = firstVisibleIndex(text);
+  return at === 0 ? text : text.slice(at);
 }
 
 /** Whether `text` holds anything a person can see (a letter, a digit, a mark), without copying it. */
 export function hasVisibleText(text: string): boolean {
-  return HAS_VISIBLE.test(text);
+  return firstVisibleIndex(text) < text.length;
 }
 
 const SERVICE_OFF =
