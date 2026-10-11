@@ -9032,9 +9032,6 @@
                       "id": {
                         "type": "string"
                       },
-                      "status": {
-                        "type": "string"
-                      },
                       "kind": {
                         "type": "string",
                         "enum": [
@@ -9049,6 +9046,9 @@
                         ]
                       },
                       "title": {
+                        "type": "string"
+                      },
+                      "status": {
                         "type": "string"
                       },
                       "applicantWawuId": {
@@ -9225,9 +9225,9 @@
                     },
                     "required": [
                       "id",
-                      "status",
                       "kind",
                       "title",
+                      "status",
                       "applicantWawuId",
                       "reference",
                       "appliedDate",
@@ -9273,9 +9273,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -9290,6 +9287,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -9466,9 +9466,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -9573,9 +9573,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -9590,6 +9587,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -9766,9 +9766,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -9814,9 +9814,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -9831,6 +9828,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -10007,9 +10007,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -10056,9 +10056,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -10073,6 +10070,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -10249,9 +10249,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -10297,9 +10297,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -10314,6 +10311,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -10490,9 +10490,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -10669,9 +10669,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -10686,6 +10683,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -10862,9 +10862,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -10920,9 +10920,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -10937,6 +10934,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -11113,9 +11113,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -11170,9 +11170,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -11187,6 +11184,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -11363,9 +11363,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -12079,6 +12079,10 @@
                           "id": {
                             "type": "string"
                           },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
                           "status": {
                             "type": "string",
                             "enum": [
@@ -12088,10 +12092,6 @@
                               "paid",
                               "cancelled"
                             ]
-                          },
-                          "createdAt": {
-                            "type": "string",
-                            "format": "date-time"
                           },
                           "flutterwaveTxRef": {
                             "type": "string"
@@ -12163,8 +12163,8 @@
                         "required": [
                           "items",
                           "id",
-                          "status",
                           "createdAt",
+                          "status",
                           "flutterwaveTxRef",
                           "flutterwaveTxId",
                           "refundError",
@@ -12246,6 +12246,10 @@
                     "id": {
                       "type": "string"
                     },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
                     "status": {
                       "type": "string",
                       "enum": [
@@ -12255,10 +12259,6 @@
                         "paid",
                         "cancelled"
                       ]
-                    },
-                    "createdAt": {
-                      "type": "string",
-                      "format": "date-time"
                     },
                     "flutterwaveTxRef": {
                       "type": "string"
@@ -12329,8 +12329,8 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "createdAt",
+                    "status",
                     "flutterwaveTxRef",
                     "flutterwaveTxId",
                     "refundError",
@@ -18774,11 +18774,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "updatedAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "nullable": true
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -18789,6 +18784,11 @@
                     },
                     "title": {
                       "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "nullable": true
                     },
                     "updated": {
                       "type": "string",
@@ -18958,9 +18958,9 @@
                   },
                   "required": [
                     "id",
-                    "updatedAt",
                     "kind",
                     "title",
+                    "updatedAt",
                     "updated",
                     "country",
                     "subtitle",
@@ -19015,11 +19015,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "updatedAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "nullable": true
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -19030,6 +19025,11 @@
                     },
                     "title": {
                       "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "nullable": true
                     },
                     "updated": {
                       "type": "string",
@@ -19199,9 +19199,9 @@
                   },
                   "required": [
                     "id",
-                    "updatedAt",
                     "kind",
                     "title",
+                    "updatedAt",
                     "updated",
                     "country",
                     "subtitle",
@@ -19688,16 +19688,16 @@
                           "id": {
                             "type": "string"
                           },
+                          "imageUrl": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "status": {
                             "type": "string",
                             "enum": [
                               "live",
                               "coming"
                             ]
-                          },
-                          "imageUrl": {
-                            "type": "string",
-                            "nullable": true
                           },
                           "slug": {
                             "type": "string"
@@ -19878,8 +19878,8 @@
                         "required": [
                           "name",
                           "id",
-                          "status",
                           "imageUrl",
+                          "status",
                           "slug",
                           "category",
                           "featured",
@@ -19913,16 +19913,16 @@
                               "id": {
                                 "type": "string"
                               },
+                              "imageUrl": {
+                                "type": "string",
+                                "nullable": true
+                              },
                               "status": {
                                 "type": "string",
                                 "enum": [
                                   "live",
                                   "coming"
                                 ]
-                              },
-                              "imageUrl": {
-                                "type": "string",
-                                "nullable": true
                               },
                               "slug": {
                                 "type": "string"
@@ -20090,8 +20090,8 @@
                             "required": [
                               "name",
                               "id",
-                              "status",
                               "imageUrl",
+                              "status",
                               "slug",
                               "category",
                               "featured",
@@ -20167,16 +20167,16 @@
                     "id": {
                       "type": "string"
                     },
+                    "imageUrl": {
+                      "type": "string",
+                      "nullable": true
+                    },
                     "status": {
                       "type": "string",
                       "enum": [
                         "live",
                         "coming"
                       ]
-                    },
-                    "imageUrl": {
-                      "type": "string",
-                      "nullable": true
                     },
                     "slug": {
                       "type": "string"
@@ -20380,8 +20380,8 @@
                   "required": [
                     "name",
                     "id",
-                    "status",
                     "imageUrl",
+                    "status",
                     "slug",
                     "category",
                     "featured",
@@ -20491,13 +20491,13 @@
                     "id": {
                       "type": "string"
                     },
+                    "title": {
+                      "type": "string"
+                    },
                     "updatedAt": {
                       "type": "string",
                       "format": "date-time",
                       "nullable": true
-                    },
-                    "title": {
-                      "type": "string"
                     },
                     "description": {
                       "type": "string"
@@ -20801,8 +20801,8 @@
                   },
                   "required": [
                     "id",
-                    "updatedAt",
                     "title",
+                    "updatedAt",
                     "description",
                     "format",
                     "fileUrl",
@@ -23125,12 +23125,12 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "createdAt": {
                       "type": "string",
                       "format": "date-time"
+                    },
+                    "status": {
+                      "type": "string"
                     },
                     "topics": {
                       "type": "array",
@@ -23153,8 +23153,8 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "createdAt",
+                    "status",
                     "topics",
                     "mentorId",
                     "requesterWawuId",
@@ -33789,6 +33789,138 @@
           "generatedAt"
         ]
       },
+      "PaginationMeta": {
+        "type": "object",
+        "properties": {
+          "currentPage": {
+            "type": "number"
+          },
+          "nextPage": {
+            "type": "number",
+            "nullable": true
+          },
+          "perPage": {
+            "type": "number"
+          },
+          "total": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "currentPage",
+          "nextPage",
+          "perPage",
+          "total"
+        ]
+      },
+      "NotificationsResponse": {
+        "type": "object",
+        "properties": {
+          "unreadCount": {
+            "type": "number"
+          },
+          "items": {
+            "type": "object",
+            "properties": {
+              "statusCode": {
+                "type": "number",
+                "enum": [
+                  200
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "data": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "userWawuId": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "body": {
+                      "type": "string"
+                    },
+                    "tone": {
+                      "type": "string"
+                    },
+                    "amount": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "creditsCount": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "actionLabel": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "read": {
+                      "type": "boolean"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "imageUrl": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "actionHref": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "campaignId": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "userWawuId",
+                    "kind",
+                    "title",
+                    "body",
+                    "tone",
+                    "amount",
+                    "creditsCount",
+                    "actionLabel",
+                    "read",
+                    "createdAt",
+                    "imageUrl",
+                    "actionHref",
+                    "campaignId"
+                  ]
+                }
+              },
+              "pagination": {
+                "$ref": "#/components/schemas/PaginationMeta"
+              }
+            },
+            "required": [
+              "statusCode",
+              "message",
+              "data",
+              "pagination"
+            ]
+          }
+        },
+        "required": [
+          "unreadCount",
+          "items"
+        ]
+      },
       "FeeQuotePartView": {
         "type": "object",
         "properties": {
@@ -35182,138 +35314,6 @@
           "accessToken",
           "refreshToken",
           "expiresIn"
-        ]
-      },
-      "PaginationMeta": {
-        "type": "object",
-        "properties": {
-          "currentPage": {
-            "type": "number"
-          },
-          "nextPage": {
-            "type": "number",
-            "nullable": true
-          },
-          "perPage": {
-            "type": "number"
-          },
-          "total": {
-            "type": "number"
-          }
-        },
-        "required": [
-          "currentPage",
-          "nextPage",
-          "perPage",
-          "total"
-        ]
-      },
-      "NotificationsResponse": {
-        "type": "object",
-        "properties": {
-          "unreadCount": {
-            "type": "number"
-          },
-          "items": {
-            "type": "object",
-            "properties": {
-              "statusCode": {
-                "type": "number",
-                "enum": [
-                  200
-                ]
-              },
-              "message": {
-                "type": "string"
-              },
-              "data": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string"
-                    },
-                    "userWawuId": {
-                      "type": "string"
-                    },
-                    "createdAt": {
-                      "type": "string",
-                      "format": "date-time"
-                    },
-                    "kind": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "body": {
-                      "type": "string"
-                    },
-                    "tone": {
-                      "type": "string"
-                    },
-                    "amount": {
-                      "type": "number",
-                      "nullable": true
-                    },
-                    "creditsCount": {
-                      "type": "number",
-                      "nullable": true
-                    },
-                    "actionLabel": {
-                      "type": "string",
-                      "nullable": true
-                    },
-                    "read": {
-                      "type": "boolean"
-                    },
-                    "imageUrl": {
-                      "type": "string",
-                      "nullable": true
-                    },
-                    "actionHref": {
-                      "type": "string",
-                      "nullable": true
-                    },
-                    "campaignId": {
-                      "type": "string",
-                      "nullable": true
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "userWawuId",
-                    "createdAt",
-                    "kind",
-                    "title",
-                    "body",
-                    "tone",
-                    "amount",
-                    "creditsCount",
-                    "actionLabel",
-                    "read",
-                    "imageUrl",
-                    "actionHref",
-                    "campaignId"
-                  ]
-                }
-              },
-              "pagination": {
-                "$ref": "#/components/schemas/PaginationMeta"
-              }
-            },
-            "required": [
-              "statusCode",
-              "message",
-              "data",
-              "pagination"
-            ]
-          }
-        },
-        "required": [
-          "unreadCount",
-          "items"
         ]
       },
       "StorageUsage": {
@@ -36999,6 +36999,13 @@
           "id": {
             "type": "string"
           },
+          "title": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -37007,13 +37014,6 @@
               "live",
               "removed"
             ]
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "title": {
-            "type": "string"
           },
           "creatorWawuId": {
             "type": "string"
@@ -37097,9 +37097,9 @@
         },
         "required": [
           "id",
-          "status",
-          "createdAt",
           "title",
+          "createdAt",
+          "status",
           "creatorWawuId",
           "slug",
           "contentType",
@@ -37127,6 +37127,13 @@
           "id": {
             "type": "string"
           },
+          "title": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -37135,13 +37142,6 @@
               "live",
               "removed"
             ]
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "title": {
-            "type": "string"
           },
           "creatorWawuId": {
             "type": "string"
@@ -37237,9 +37237,9 @@
         },
         "required": [
           "id",
-          "status",
-          "createdAt",
           "title",
+          "createdAt",
+          "status",
           "creatorWawuId",
           "slug",
           "contentType",
@@ -37475,6 +37475,13 @@
           "id": {
             "type": "string"
           },
+          "title": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -37483,13 +37490,6 @@
               "live",
               "removed"
             ]
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "title": {
-            "type": "string"
           },
           "creatorWawuId": {
             "type": "string"
@@ -37591,9 +37591,9 @@
         },
         "required": [
           "id",
-          "status",
-          "createdAt",
           "title",
+          "createdAt",
+          "status",
           "creatorWawuId",
           "slug",
           "contentType",
@@ -38066,6 +38066,9 @@
           "id": {
             "type": "string"
           },
+          "amount": {
+            "type": "number"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -38073,9 +38076,6 @@
               "awaiting_response",
               "responded"
             ]
-          },
-          "amount": {
-            "type": "number"
           },
           "creatorWawuId": {
             "type": "string"
@@ -38135,8 +38135,8 @@
         },
         "required": [
           "id",
-          "status",
           "amount",
+          "status",
           "creatorWawuId",
           "senderWawuId",
           "text",
@@ -43746,11 +43746,6 @@
           "id": {
             "type": "string"
           },
-          "updatedAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
-          },
           "kind": {
             "type": "string",
             "enum": [
@@ -43761,6 +43756,11 @@
           },
           "title": {
             "type": "string"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
           },
           "updated": {
             "type": "string",
@@ -43798,9 +43798,9 @@
         },
         "required": [
           "id",
-          "updatedAt",
           "kind",
           "title",
+          "updatedAt",
           "updated",
           "country",
           "subtitle",
@@ -43847,13 +43847,13 @@
           "id": {
             "type": "string"
           },
+          "title": {
+            "type": "string"
+          },
           "updatedAt": {
             "type": "string",
             "format": "date-time",
             "nullable": true
-          },
-          "title": {
-            "type": "string"
           },
           "description": {
             "type": "string"
@@ -43891,8 +43891,8 @@
         },
         "required": [
           "id",
-          "updatedAt",
           "title",
+          "updatedAt",
           "description",
           "format",
           "fileUrl",
