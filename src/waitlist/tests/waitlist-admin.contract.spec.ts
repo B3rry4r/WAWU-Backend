@@ -1,5 +1,5 @@
 // The spec reads response bodies.
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return */
 import { generateKeyPairSync } from 'node:crypto';
 import { INestApplication } from '@nestjs/common';
 import * as jwt from 'jsonwebtoken';
@@ -7,7 +7,7 @@ import request from 'supertest';
 import type { App } from 'supertest/types';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { PlansConfig } from '../../plans/plans-config';
-import { WaitlistService } from '../waitlist.service';
+import { newReference, WaitlistService } from '../waitlist.service';
 import {
   bootWaitlist,
   configWith,
@@ -173,6 +173,7 @@ describe('Event registrations, the team view (JOIN-01)', () => {
       status: 'paid',
       amountKobo: config.eventOffers[0].priceKobo,
       paidKobo: config.eventOffers[0].priceKobo,
+      claimed: false,
       claimedByWawuId: null,
       claimedAt: null,
       phone: expect.stringMatching(/^\+23490\d{8}$/),
@@ -247,7 +248,7 @@ describe('Event registrations, the team view (JOIN-01)', () => {
       .split('\r\n')
       .filter(Boolean);
     expect(lines[0]).toBe(
-      'Registered at,Offer,Status,Full name,Phone,Email,State,What they make,Fee (₦),Paid (₦),Paid at,Access code,Reference,Transaction id,Claimed at',
+      'Registered at,Offer,Status,Full name,Phone,Email,State,What they make,Fee (₦),Paid (₦),Refund due (₦),Paid at,Access code,Reference,Transaction id,Claimed,Claimed at',
     );
     const mine = lines.slice(1).filter((l) => l.includes(MARK));
     expect(mine).toHaveLength(8);
@@ -256,7 +257,7 @@ describe('Event registrations, the team view (JOIN-01)', () => {
     const paidLine = mine.find(
       (l) => l.includes(paidRefs[1]) === false && l.includes(',paid,'),
     )!;
-    expect(paidLine).toContain(`,${fee},${fee},`);
+    expect(paidLine).toContain(`,${fee},${fee},,`);
     const pendingLine = mine.find((l) => l.includes(pendingRefs[0]))!;
     expect(pendingLine).toContain(`,pending,`);
     expect(pendingLine).toContain(`,${fee},,,`);
@@ -337,5 +338,101 @@ describe('Event registrations, the team view (JOIN-01)', () => {
         .set(as('superadmin'));
       expect(res.status).toBe(404);
     }
+  });
+
+  it('shows who has claimed a payment in the app and when, and a refund is not counted as paid (JOIN-03)', async () => {
+    const claimedAt = new Date('2026-10-17T09:30:00.000Z');
+    const base = {
+      offerId: OFFER_ID,
+      consentAt: new Date(),
+      amountKobo: config.eventOffers[0].priceKobo,
+      paidKobo: config.eventOffers[0].priceKobo,
+      paidAt: new Date(),
+    };
+    const make = (n: number, over: Record<string, unknown>) =>
+      prisma.waitlistRegistration.create({
+        data: {
+          ...base,
+          fullName: `Claim Admin ${n} ${MARK}`,
+          phone: `+23490${String(40_000_000 + n).slice(-8)}`,
+          email: `${MARK}-claim-${n}@test.wawu.dev`,
+          reference: newReference(),
+          flutterwaveTxId: `admin-claim-${n}-${Date.now()}`,
+          ...over,
+        } as never,
+      });
+    const claimedRow = await make(1, {
+      status: 'paid',
+      claimedByWawuId: 'j03-admin-claimant',
+      claimedAt,
+    });
+    const openRow = await make(2, { status: 'paid' });
+    const refundRow = await make(3, { status: 'failed' });
+
+    const list = await http()
+      .get(
+        `/api/hub/admin/waitlist/registrations?offerId=${OFFER_ID}&perPage=100`,
+      )
+      .set(as('finance'))
+      .expect(200);
+    const byId = (id: string) =>
+      (list.body.data as any[]).find((r) => r.id === id);
+    expect(byId(claimedRow.id)).toMatchObject({
+      claimed: true,
+      claimedByWawuId: 'j03-admin-claimant',
+      claimedAt: claimedAt.toISOString(),
+    });
+    expect(byId(openRow.id)).toMatchObject({
+      claimed: false,
+      claimedByWawuId: null,
+      claimedAt: null,
+    });
+    // The list still says what a refund row was charged.
+    expect(byId(refundRow.id)).toMatchObject({
+      status: 'failed',
+      paidKobo: base.paidKobo,
+      claimed: false,
+    });
+
+    const res = await http()
+      .get(`/api/hub/admin/waitlist/registrations/export?offerId=${OFFER_ID}`)
+      .set(as('finance'))
+      .expect(200);
+    const lines = (res.body.data.content as string)
+      .slice(1)
+      .split('\r\n')
+      .filter(Boolean);
+    const header = lines[0].split(',');
+    const cellsOf = (row: { reference: string }) =>
+      lines.find((l) => l.includes(row.reference))!.split(',');
+    const col = (name: string) => header.indexOf(name);
+    const fee = (base.amountKobo / 100).toFixed(2);
+
+    const claimedCells = cellsOf(claimedRow);
+    expect(claimedCells[col('Claimed')]).toBe('yes');
+    expect(claimedCells[col('Claimed at')]).toBe(claimedAt.toISOString());
+    expect(claimedCells[col('Paid (₦)')]).toBe(fee);
+    expect(claimedCells[col('Refund due (₦)')]).toBe('');
+
+    const openCells = cellsOf(openRow);
+    expect(openCells[col('Claimed')]).toBe('no');
+    expect(openCells[col('Claimed at')]).toBe('');
+
+    // A refund is money owed back, not income: the Paid column is empty and
+    // the amount is in its own column, so a filter on a non-empty Paid cannot
+    // count it as revenue.
+    const refundCells = cellsOf(refundRow);
+    expect(refundCells[col('Status')]).toBe('failed');
+    expect(refundCells[col('Fee (₦)')]).toBe(fee);
+    expect(refundCells[col('Paid (₦)')]).toBe('');
+    expect(refundCells[col('Refund due (₦)')]).toBe(fee);
+    expect(refundCells[col('Transaction id')]).toBe(refundRow.flutterwaveTxId);
+    // Only the refund row of this test has a refund amount (these three rows hold no quoted comma, so a plain split keeps the columns).
+    const refunds = lines
+      .slice(1)
+      .filter((l) => l.includes('Claim Admin'))
+      .map((l) => l.split(',')[col('Refund due (₦)')])
+      .filter((c) => c !== '');
+    expect(refunds).toEqual([fee]);
   });
 });
