@@ -228,6 +228,10 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // Working someone's door (EVENTS-05) is this person's role on that event;
   // it goes with them. A ticket they let in stays let in.
   { model: 'EventDoorStaff', column: 'staffWawuId', disposition: 'OWNED' },
+  // The first answer to each scan this person made at a door (EVENTS-09 round
+  // 2), kept a day or two so a scan asked again is answered the same. It goes
+  // with them; the ticket they let in stays let in.
+  { model: 'EventDoorScan', column: 'scannerWawuId', disposition: 'OWNED' },
   {
     model: 'CreatorNoResponseTracker',
     column: 'creatorWawuId',
