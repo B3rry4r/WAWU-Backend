@@ -61,11 +61,12 @@ function buildService(opts: {
       }),
     },
     creatorState: {
-      // The row is created on demand, so a creator's first upload does not
-      // depend on one already existing.
-      upsert: jest.fn((args: unknown) => {
+      // The row is created on demand, insert-or-nothing (round 2, D2), so a
+      // creator's first upload does not depend on one already existing and
+      // two first uploads sent together do not collide on it.
+      createMany: jest.fn((args: unknown) => {
         upserted.push(args);
-        return Promise.resolve(state);
+        return Promise.resolve({ count: 1 });
       }),
       updateMany: jest.fn(
         ({ where }: { where: { slotsUsed: { lt: number } } }) => {
@@ -225,7 +226,10 @@ describe('ContentPieceService upload allowances (TIER-02)', () => {
       tier: tier(3),
     });
     await service.create('creator-1', dto('free'));
-    expect(tx.creatorState.upsert).toHaveBeenCalled();
+    expect(tx.creatorState.createMany).toHaveBeenCalledWith({
+      data: [{ wawuUserId: 'creator-1' }],
+      skipDuplicates: true,
+    });
     expect(tx.contentPiece.create).toHaveBeenCalled();
   });
 

@@ -154,14 +154,24 @@ conditional update, so two publishes at once cannot pass the limit). A draft
 does not count. A piece that is removed (`DELETE /content/:id`), turned down
 or taken down gives its place back; sending a turned-down piece again takes
 one. Removal is the unpublish: there is no route that turns a live piece back
-into a draft, because a draft holds no file.
+into a draft, because a draft holds no file. A piece gives its place back
+once, however many requests remove it at the same moment: the removal changes
+the row conditionally on the status it read, only the request that changed it
+frees the place, and the others answer `404`, as a repeat removal does. A
+person's counter row is made insert-or-nothing before the first claim, so two
+first publishes sent together both succeed.
 
 **The refusal.** `402`, the contract's one error shape (CONVENTIONS section
 3), `reason.code`:
 
 - `tier_required`: no running tier and no tick that has not ended.
   `tierState` is `none` or `ended`.
-- `product_limit_reached`: every product they may have is published.
+- `product_limit_reached`: every product they may have is published. The
+  `message` names only the ways on that the answer carries: both ("Add more
+  products or move up a tier") while a higher tier and extra products are
+  offered, one of them when only that one is, and the limit alone ("You've
+  used all 25 of your product places.") for a tick holder at the tick-era cap,
+  where nothing can be bought. The number is the allowance.
 
 `reason` is flat: `code`, `message`, `tierState`, `productsUsed`,
 `productsAllowed`, and the offers `currency`, `tiers`, `extraProducts` (absent
@@ -202,5 +212,6 @@ publishing still needs (`contentType`, `description`, `category`,
 (so Publish opens the offers), then finishes the draft check
 (`400 draft_incomplete`), then creates the piece and deletes the draft in one
 transaction. A person keeps at most `PRODUCT_DRAFTS_MAX` drafts
-(`PROVISIONAL(PRODUCT-DRAFTS-MAX)`; `409 draft_limit_reached`).
+(`PROVISIONAL(PRODUCT-DRAFTS-MAX)`; `409 draft_limit_reached`), counted under
+a per-person lock, so drafts sent together cannot pass it.
 

@@ -40,12 +40,53 @@ const GATED: Record<string, string> = {
 
 /**
  * Routes with a file-shaped body that are NOT a product's file, and why.
- * A new entry needs that reason.
+ * A new entry needs that reason. The names are read by pattern (below), so a
+ * route lands here whenever a body gains a property ending `Asset`, `Url` or
+ * `Key`, and someone has to say what it is.
  */
-const NOT_GATED: Record<string, string> = {};
+const NOT_GATED: Record<string, string> = {
+  // Profile content: "build a profile free" (R-43); a wallet must open
+  // before a first purchase, so identity documents never wait for a tier.
+  'PATCH users/me': 'profile pictures and social links (avatar, cover, links)',
+  'POST kyc': 'an identity document, needed to open a wallet and buy a tier',
+  // Not a person's own product.
+  'POST communities/:id/messages': 'a picture in a community chat',
+  'POST communities': 'a community picture',
+  'PATCH communities/:id': 'a community picture',
+  'POST communities/rooms': 'a community room picture',
+  'POST events': 'an event banner and links; hosting by tier is E21',
+  'PATCH events/:id': 'an event banner and links; hosting by tier is E21',
+  // Staff and operations: not a creator publishing.
+  'POST legal/ops/requests/:id/deliver':
+    'a legal desk hands a document to a client (a service delivery)',
+  'POST services/ops/applications/:id/approve':
+    'staff approve a service application with a certificate link',
+  'POST admin/schools': 'an admin writes a link to a school application page',
+  'PATCH admin/schools/:id':
+    'an admin writes a link to a school application page',
+  'PATCH learn/playbook': 'an admin writes the learn playbook',
+  'POST learn/guides': 'an admin writes a learn guide',
+  'PATCH learn/guides/:id': 'an admin writes a learn guide',
+  'POST admin/notifications/campaigns': 'an admin campaign picture',
+  'PATCH admin/notifications/campaigns/:id': 'an admin campaign picture',
+  'POST admin/professionals/:id/document-url':
+    'an admin asks for a signed link to read a professional document',
+  // Not a file at all: a link or a key that only has a file-like name.
+  'PUT money/device': 'a device public key, not a file',
+  'POST money/identity/liveness':
+    'the address the identity check returns the person to',
+  'POST payments/hosted-link': 'the address a payment returns the person to',
+};
 
-/** Properties of a request body that carry a product's file or name where a file goes. */
-const FILE_PROPERTIES = ['previewAsset', 'fullAsset', 'folder'];
+/**
+ * Properties of a request body that carry a file, or name where one goes:
+ * `folder` (an upload folder) and any property whose name ends `Asset`, `Url`
+ * or `Key` (`previewAsset`, `fullAsset`, `assetUrl`, `fileKey`). A pattern and
+ * not a list of names, so a body that gains a file under a NEW name is seen
+ * (round 2, T5: a property called `assetUrl` was not).
+ */
+const isFileProperty = (name: string): boolean =>
+  name === 'folder' || /(Asset|Url|Key)$/.test(name);
 
 type Route = {
   key: string;
@@ -124,7 +165,7 @@ function routesOf(
         controller: controller.name,
         handler: name,
         gated: interceptors.includes(PublishingOffersInterceptor),
-        fileProperties: FILE_PROPERTIES.filter((p) => props.includes(p)),
+        fileProperties: [...new Set(props.filter(isFileProperty))],
       });
     }
   }
@@ -163,6 +204,14 @@ describe('the publishing gate covers every route that publishes or takes a file 
   it('every listed route is mounted', () => {
     const keys = new Set(mounted.map((r) => r.key));
     expect(Object.keys(GATED).filter((k) => !keys.has(k))).toEqual([]);
+  });
+
+  it('every route that says why it is not gated is mounted and does take a file-shaped body', () => {
+    const byKey = new Map(mounted.map((r) => [r.key, r]));
+    const stale = Object.keys(NOT_GATED).filter(
+      (k) => (byKey.get(k)?.fileProperties.length ?? 0) === 0,
+    );
+    expect(stale).toEqual([]);
   });
 
   it('a mounted route whose body can carry a product file is gated, or says why it is not', () => {

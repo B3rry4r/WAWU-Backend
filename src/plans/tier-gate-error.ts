@@ -77,11 +77,21 @@ export class TierGateError extends HttpException {
     this.offers = offers;
   }
 
-  /** The same refusal with its offers filled in. */
+  /**
+   * The same refusal with its offers filled in. The sentence for
+   * `product_limit_reached` is written again from the offers, so it never
+   * promises a way on the body does not carry.
+   */
   withOffers(offers: TierGateOffers): TierGateError {
     return new TierGateError(
       this.code,
-      (this.getResponse() as { message: string }).message,
+      this.code === 'product_limit_reached'
+        ? productLimitMessage(
+            this.facts.productsUsed,
+            this.facts.productsAllowed,
+            offers,
+          )
+        : (this.getResponse() as { message: string }).message,
       this.facts,
       offers,
     );
@@ -95,7 +105,27 @@ export function tierRequiredMessage(tierState: MyTierState): string {
     : 'Publishing and uploading files need a tier. Pick one to carry on. Drafts stay free.';
 }
 
-/** The sentence for `product_limit_reached`. */
-export function productLimitMessage(used: number, allowed: number): string {
-  return `You have used ${used} of ${allowed} products. Add more products or move up a tier to publish another.`;
+/**
+ * The sentence for `product_limit_reached`. It names only the ways on that
+ * the answer carries (the tiers that allow more, extra products): a person at
+ * the tick-era cap, or at the top of the ladder with nothing to buy, is told
+ * the limit and nothing they cannot do (TIER-02 round 2, D4). With no offers
+ * known, both ways are named. No em-dash.
+ */
+export function productLimitMessage(
+  used: number,
+  allowed: number,
+  offers?: Pick<TierGateOffers, 'tiers' | 'extraProducts'>,
+): string {
+  const moreProducts = offers ? offers.extraProducts !== null : true;
+  const higherTier = offers ? offers.tiers.length > 0 : true;
+  if (!moreProducts && !higherTier)
+    return `You've used all ${allowed} of your product places.`;
+  const ways =
+    moreProducts && higherTier
+      ? 'Add more products or move up a tier'
+      : moreProducts
+        ? 'Add more products'
+        : 'Move up a tier';
+  return `You have used ${used} of ${allowed} products. ${ways} to publish another.`;
 }

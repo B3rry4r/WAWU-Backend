@@ -38,6 +38,13 @@ import type { MyContentCounts, MyContentItem } from './dto/my-content.view';
  */
 const STANDARD_COMMISSION_RATE = 0.15;
 
+/**
+ * How many times `delete` reads a piece again when its status moved between
+ * the read and the write. Two moves in a row (rejected, sent again, rejected
+ * again) inside one request's few milliseconds is not a case worth more.
+ */
+const DELETE_ATTEMPTS = 3;
+
 export interface FlutterwaveConfigResponse {
   flutterwaveConfig: {
     txRef: string;
@@ -470,30 +477,54 @@ export class ContentPieceService {
    * piece already had its slot returned at review time (`occupiesASlot` in
    * `create()` never counted it); returning it again here would let one
    * upload free two slots.
+   *
+   * One piece gives its place back once, however many requests remove it
+   * (TIER-02 round 2, D1: six `DELETE`s sent together used to free six).
+   * The flip is conditional on the status this request read INSIDE the
+   * transaction, so of any number of requests only the one whose write
+   * changed the row decrements, and it decrements for the status it really
+   * changed from. A request that loses answers as a repeat delete does, 404.
+   * If the status moved between the read and the write (an admin rejected the
+   * piece, or the creator sent it again) the read is taken again.
    */
   async delete(id: string, requesterWawuId: string): Promise<void> {
-    const existing = await this.prisma.contentPiece.findUnique({
-      where: { id },
-    });
-    if (!existing || existing.status === 'removed') {
-      throw new NotFoundException('Content not found');
-    }
-    if (existing.creatorWawuId !== requesterWawuId) {
-      throw new ForbiddenException('You can only delete your own content.');
-    }
-
     await this.prisma.$transaction(async (tx) => {
-      await tx.contentPiece.update({
-        where: { id },
-        data: { status: 'removed' },
-      });
-
-      if (existing.status !== 'rejected') {
-        await tx.creatorState.updateMany({
-          where: { wawuUserId: existing.creatorWawuId, slotsUsed: { gt: 0 } },
-          data: { slotsUsed: { decrement: 1 } },
+      for (let attempt = 0; attempt < DELETE_ATTEMPTS; attempt += 1) {
+        const existing = await tx.contentPiece.findUnique({
+          where: { id },
+          select: { status: true, creatorWawuId: true },
         });
+        if (!existing || existing.status === 'removed') {
+          throw new NotFoundException('Content not found');
+        }
+        if (existing.creatorWawuId !== requesterWawuId) {
+          throw new ForbiddenException('You can only delete your own content.');
+        }
+
+        // Only a row still in the status just read is changed. That status
+        // is not `removed` (checked above), so a piece another request has
+        // already removed never matches and frees nothing.
+        const flipped = await tx.contentPiece.updateMany({
+          where: {
+            id,
+            creatorWawuId: requesterWawuId,
+            status: existing.status,
+          },
+          data: { status: 'removed' },
+        });
+        if (flipped.count === 0) continue;
+
+        if (existing.status !== 'rejected') {
+          await tx.creatorState.updateMany({
+            where: { wawuUserId: requesterWawuId, slotsUsed: { gt: 0 } },
+            data: { slotsUsed: { decrement: 1 } },
+          });
+        }
+        return;
       }
+      throw new ConflictException(
+        'This piece changed while you removed it. Try again.',
+      );
     });
   }
 
@@ -506,6 +537,24 @@ export class ContentPieceService {
         .replace(/^-+|-+$/g, '')
         .slice(0, 80) || 'content'
     );
+  }
+
+  /**
+   * The person's place counter, made if it is not there yet, so the claim
+   * that follows always finds a row. Insert-or-nothing and not an upsert:
+   * an upsert reads first and then inserts, so two first publishes sent
+   * together both missed the row and the loser answered 409 "That record
+   * already exists." to a publish that was fine (TIER-02 round 2, D2). Here
+   * the second request waits for the first to commit and does nothing.
+   */
+  private async ensureCreatorState(
+    tx: Prisma.TransactionClient,
+    wawuUserId: string,
+  ): Promise<void> {
+    await tx.creatorState.createMany({
+      data: [{ wawuUserId }],
+      skipDuplicates: true,
+    });
   }
 
   /**
@@ -582,11 +631,7 @@ export class ContentPieceService {
       // The row is created on demand: it used to exist only once a creator had
       // paid for a subscription, so requiring one here would be the payment
       // gate under another name.
-      await tx.creatorState.upsert({
-        where: { wawuUserId: creatorWawuId },
-        create: { wawuUserId: creatorWawuId },
-        update: {},
-      });
+      await this.ensureCreatorState(tx, creatorWawuId);
 
       // Claimed conditionally, so the cap holds even against a concurrent
       // upload that read the same count.
@@ -877,11 +922,7 @@ export class ContentPieceService {
       if (flipped.count === 0) return;
       await this.stampUpdated(tx, id);
 
-      await tx.creatorState.upsert({
-        where: { wawuUserId: creatorWawuId },
-        create: { wawuUserId: creatorWawuId },
-        update: {},
-      });
+      await this.ensureCreatorState(tx, creatorWawuId);
       const claimed = await tx.creatorState.updateMany({
         where: {
           wawuUserId: creatorWawuId,

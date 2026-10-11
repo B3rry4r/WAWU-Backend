@@ -16,6 +16,7 @@ import { ResponseInterceptor } from '../../common/interceptors/response.intercep
 import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ContentPieceModule } from '../../content-piece/content-piece.module';
+import { ContentPieceService } from '../../content-piece/content-piece.service';
 import { PRODUCT_DRAFTS_MAX } from '../../content-piece/product-draft.service';
 import { CreatorStateModule } from '../../creator-state/creator-state.module';
 import { StorageModule } from '../../storage/storage.module';
@@ -23,6 +24,7 @@ import { TICK_UPLOADS } from '../../common/creator-allowance';
 import { PLANS_CONFIG, type PlansConfig } from '../plans-config';
 import { PlansModule } from '../plans.module';
 import type { MyTierView, PlansView, PlanTierView } from '../plans-view.type';
+import { PublishingGate } from '../publishing-gate.service';
 
 /**
  * TIER-02 over HTTP, on the real database and the real modules: "Publishing,
@@ -194,6 +196,17 @@ describe('Publishing needs a tier (TIER-02) over HTTP', () => {
       },
     });
   }
+  /** The professional (green) tick alone, which counts as a tick like the creator one. */
+  async function giveProfessionalTick(id: string, endsInDays: number | null) {
+    await prisma.userProfile.update({
+      where: { wawuUserId: id },
+      data: {
+        professionalVerifiedAt: new Date(Date.now() - 400 * DAY),
+        professionalVerifiedUntil:
+          endsInDays === null ? null : new Date(Date.now() + endsInDays * DAY),
+      },
+    });
+  }
   /** A piece in a given state, written straight to the table (the way an admin or an old publish leaves one). */
   async function seedPiece(
     id: string,
@@ -259,6 +272,10 @@ describe('Publishing needs a tier (TIER-02) over HTTP', () => {
     prisma = app.get(PrismaService);
     config = app.get<PlansConfig>(PLANS_CONFIG);
   }, 60_000);
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
 
   afterAll(async () => {
     const where = { wawuUserId: { in: people } };
@@ -921,6 +938,394 @@ describe('Publishing needs a tier (TIER-02) over HTTP', () => {
         draftsAllowed: PRODUCT_DRAFTS_MAX,
       });
       expect(body(res).message).not.toContain('—');
+    });
+  });
+
+  // ── 8. Round 2: the places stay true under repeats and races ──────────────
+
+  describe('removing a piece gives its place back once (round 2, D1)', () => {
+    it('six DELETEs of one piece sent together free one place, and the rest answer as a repeat does', async () => {
+      const id = await creator();
+      await giveTier(id, 0);
+      const ids: string[] = [];
+      for (let n = 1; n <= config.tiers[0].products; n += 1)
+        ids.push(body(await publish(id).expect(201)).data.id);
+      const taps = await Promise.all(
+        Array.from({ length: 6 }, () => del(id, `/content/${ids[1]}`)),
+      );
+      expect(taps.filter((t) => t.status === 204)).toHaveLength(1);
+      expect(taps.filter((t) => t.status === 404)).toHaveLength(5);
+      // One place came back, not six: the next publish takes it and the one
+      // after is refused at the tier's products, never above them.
+      expect((await myTier(id)).productsUsed).toBe(
+        config.tiers[0].products - 1,
+      );
+      await publish(id).expect(201);
+      await publish(id).expect(402);
+      expect(
+        await prisma.contentPiece.count({
+          where: { creatorWawuId: id, status: { not: 'removed' } },
+        }),
+      ).toBe(config.tiers[0].products);
+      // A repeat later is the 404 it always was.
+      await del(id, `/content/${ids[1]}`).expect(404);
+    });
+
+    it('a piece turned down already gave its place back: removing it returns nothing more', async () => {
+      const id = await creator();
+      await giveTier(id, 0);
+      await publish(id).expect(201);
+      const rejected = await seedPiece(id, 'rejected');
+      await del(id, `/content/${rejected.id}`).expect(204);
+      expect((await myTier(id)).productsUsed).toBe(1);
+      const removed = await prisma.contentPiece.findUnique({
+        where: { id: rejected.id },
+      });
+      expect(removed?.status).toBe('removed');
+    });
+
+    it('a DELETE that read the piece before an admin turned it down returns the place once, not twice', async () => {
+      const id = await creator();
+      await giveTier(id, 0);
+      const piece = body(await publish(id).expect(201)).data;
+      await publish(id).expect(201);
+      expect((await myTier(id)).productsUsed).toBe(2);
+
+      // The admin's reject, as AdminContentReviewService writes it: a
+      // conditional flip of a pending piece and the place back, in one
+      // transaction.
+      const adminRejects = async () => {
+        await prisma.$transaction(async (tx) => {
+          const flipped = await tx.contentPiece.updateMany({
+            where: { id: piece.id, status: 'pending' },
+            data: { status: 'rejected' },
+          });
+          expect(flipped.count).toBe(1);
+          await tx.creatorState.updateMany({
+            where: { wawuUserId: id, slotsUsed: { gt: 0 } },
+            data: { slotsUsed: { decrement: 1 } },
+          });
+        });
+      };
+      // Make the interleaving happen on purpose: the delete's first read of
+      // the piece answers `pending`, and the admin's decision lands right
+      // after it, before the delete writes anything.
+      type Delegate = Record<string, (...args: unknown[]) => Promise<unknown>>;
+      const realTransaction = prisma.$transaction.bind(prisma) as unknown as (
+        fn: (tx: object) => Promise<unknown>,
+      ) => Promise<unknown>;
+      let rejected = false;
+      const afterFirstRead = (tx: object): object =>
+        new Proxy(tx, {
+          get(target, prop) {
+            const value: unknown = Reflect.get(target, prop);
+            if (prop !== 'contentPiece') return value;
+            return new Proxy(value as Delegate, {
+              get(delegate, method: string) {
+                const call = delegate[method];
+                if (method !== 'findUnique') return call;
+                return async (...args: unknown[]) => {
+                  const row = await call.apply(delegate, args);
+                  if (!rejected) {
+                    rejected = true;
+                    await adminRejects();
+                  }
+                  return row;
+                };
+              },
+            });
+          },
+        });
+      jest
+        .spyOn(prisma, '$transaction')
+        .mockImplementationOnce((fn: (tx: object) => Promise<unknown>) =>
+          realTransaction((tx) => fn(afterFirstRead(tx))),
+        );
+
+      const service = app.get(ContentPieceService, { strict: false });
+      await service.delete(piece.id, id);
+      expect(rejected).toBe(true);
+
+      // The reject gave the place back; the delete found the piece turned
+      // down and gave nothing more.
+      expect((await myTier(id)).productsUsed).toBe(1);
+      const after = await prisma.contentPiece.findUnique({
+        where: { id: piece.id },
+      });
+      expect(after?.status).toBe('removed');
+    });
+  });
+
+  describe('a first publish is never refused for having no counter yet (round 2, D2)', () => {
+    it('two first publishes sent together both go, twelve times over', async () => {
+      const outcomes: string[] = [];
+      for (let run = 0; run < 12; run += 1) {
+        const id = await creator();
+        await giveTier(id, 1);
+        // No CreatorState row yet: the first publish makes it.
+        const sent = await Promise.all([publish(id), publish(id)]);
+        outcomes.push(sent.map((r) => r.status).join('/'));
+        expect((await myTier(id)).productsUsed).toBe(2);
+      }
+      expect(outcomes).toEqual(Array.from({ length: 12 }, () => '201/201'));
+    });
+
+    it('a turned-down piece sent again by a person with no counter row goes too', async () => {
+      const id = await creator();
+      await giveTier(id, 0);
+      const rejected = await seedPiece(id, 'rejected');
+      expect(
+        await prisma.creatorState.count({ where: { wawuUserId: id } }),
+      ).toBe(0);
+      await post(id, `/content/${rejected.id}/resubmit`).expect(200);
+      expect((await myTier(id)).productsUsed).toBe(1);
+    });
+  });
+
+  describe('the draft limit holds under a crowd (round 2, D3)', () => {
+    it('thirty drafts sent together leave exactly the limit', async () => {
+      const id = await creator();
+      const sent = await Promise.all(
+        Array.from({ length: PRODUCT_DRAFTS_MAX + 10 }, (_, n) =>
+          post(id, '/product-drafts', { title: `Crowd ${n}` }),
+        ),
+      );
+      expect(sent.filter((r) => r.status === 201)).toHaveLength(
+        PRODUCT_DRAFTS_MAX,
+      );
+      expect(sent.filter((r) => r.status === 409)).toHaveLength(10);
+      expect(
+        await prisma.productDraft.count({ where: { wawuUserId: id } }),
+      ).toBe(PRODUCT_DRAFTS_MAX);
+      // Every kept draft is listed: none is hidden past the page.
+      expect(
+        body(await get(id, '/product-drafts').expect(200)).data,
+      ).toHaveLength(PRODUCT_DRAFTS_MAX);
+    });
+
+    it("another person's full set of drafts does not stop this person's first", async () => {
+      const full = await creator();
+      await prisma.productDraft.createMany({
+        data: Array.from({ length: PRODUCT_DRAFTS_MAX }, (_, n) => ({
+          wawuUserId: full,
+          title: `Filler ${n}`,
+        })),
+      });
+      const other = await creator();
+      await post(other, '/product-drafts', { title: 'My first' }).expect(201);
+    });
+  });
+
+  describe('the limit sentence names only the ways on the answer carries (round 2, D4)', () => {
+    it('a tick holder at the tick-era cap is told the limit and nothing to buy', async () => {
+      const id = await creator();
+      await giveTick(id, null);
+      await prisma.creatorState.create({
+        data: { wawuUserId: id, slotsUsed: TICK_UPLOADS },
+      });
+      const res = await publish(id).expect(402);
+      expect(body(res).reason.tiers).toEqual([]);
+      expect(body(res).reason.extraProducts).toBeNull();
+      expect(body(res).message).toBe(
+        `You've used all ${TICK_UPLOADS} of your product places.`,
+      );
+      expect(body(res).reason.message).toBe(body(res).message);
+      expect(body(res).message).not.toContain('—');
+      expect(body(res).message).not.toMatch(/tier/i);
+    });
+
+    it('a person who can still move up and add products is told both', async () => {
+      const id = await creator();
+      await giveTier(id, 0);
+      for (let n = 1; n <= config.tiers[0].products; n += 1)
+        await publish(id).expect(201);
+      const res = await publish(id).expect(402);
+      expect(body(res).message).toBe(
+        `You have used ${config.tiers[0].products} of ${config.tiers[0].products} products. Add more products or move up a tier to publish another.`,
+      );
+    });
+
+    it('a person on the top tier, who can only add products, is told only that', async () => {
+      const id = await creator();
+      const top = config.tiers.length - 1;
+      await giveTier(id, top);
+      for (let n = 1; n <= config.tiers[top].products; n += 1)
+        await publish(id).expect(201);
+      const res = await publish(id).expect(402);
+      expect(body(res).reason.tiers).toEqual([]);
+      expect(body(res).message).toBe(
+        `You have used ${config.tiers[top].products} of ${config.tiers[top].products} products. Add more products to publish another.`,
+      );
+    });
+  });
+
+  // ── 9. Round 2: the cases the verifier's mutants found untested ───────────
+
+  describe('what the verifier found untested (round 2, T1 to T5)', () => {
+    it('T1: a professional tick alone keeps publishing, and shows the same 25', async () => {
+      const id = await creator();
+      await giveProfessionalTick(id, 30);
+      await publish(id).expect(201);
+      const state = body(await get(id, '/creator/state').expect(200)).data;
+      expect(state).toMatchObject({ slotsUsed: 1, slotsTotal: TICK_UPLOADS });
+      // And it stops when that tick ends, like the creator one.
+      await prisma.userProfile.update({
+        where: { wawuUserId: id },
+        data: { professionalVerifiedUntil: new Date(Date.now() - 1000) },
+      });
+      const res = await publish(id).expect(402);
+      expect(body(res).reason.code).toBe('tier_required');
+    });
+
+    it('T2: two turned-down pieces sent again together at 2 of 3 take one place between them', async () => {
+      const id = await creator();
+      await giveTier(id, 0);
+      await publish(id).expect(201);
+      await publish(id).expect(201);
+      const a = await seedPiece(id, 'rejected');
+      const b = await seedPiece(id, 'rejected');
+      const sent = await Promise.all([
+        post(id, `/content/${a.id}/resubmit`),
+        post(id, `/content/${b.id}/resubmit`),
+      ]);
+      expect(sent.map((r) => r.status).sort()).toEqual([200, 402]);
+      const lost = sent.find((r) => r.status === 402)!;
+      expect(body(lost).reason.code).toBe('product_limit_reached');
+      expect((await myTier(id)).productsUsed).toBe(config.tiers[0].products);
+      // The one that lost is still turned down, and not half sent.
+      expect(
+        await prisma.contentPiece.count({
+          where: { creatorWawuId: id, status: 'rejected' },
+        }),
+      ).toBe(1);
+    });
+
+    it('T2: a resend and a publish together at 2 of 3 take one place between them', async () => {
+      const id = await creator();
+      await giveTier(id, 0);
+      await publish(id).expect(201);
+      await publish(id).expect(201);
+      const rejected = await seedPiece(id, 'rejected');
+      const sent = await Promise.all([
+        post(id, `/content/${rejected.id}/resubmit`),
+        publish(id),
+      ]);
+      expect(sent.filter((r) => r.status === 402)).toHaveLength(1);
+      expect((await myTier(id)).productsUsed).toBe(config.tiers[0].products);
+    });
+
+    it('T2: six taps on Send again for one turned-down piece take one place', async () => {
+      const id = await creator();
+      await giveTier(id, 0);
+      await publish(id).expect(201);
+      await publish(id).expect(201);
+      const rejected = await seedPiece(id, 'rejected');
+      const sent = await Promise.all(
+        Array.from({ length: 6 }, () =>
+          post(id, `/content/${rejected.id}/resubmit`),
+        ),
+      );
+      // The piece goes once. A tap that read it as turned down just before
+      // the first one committed and asks for room just after it can be told
+      // the limit (it is now full); no tap is told anything else.
+      expect(sent.some((r) => r.status === 200)).toBe(true);
+      for (const r of sent.filter((x) => x.status !== 200)) {
+        expect(r.status).toBe(402);
+        expect(body(r).reason.code).toBe('product_limit_reached');
+      }
+      expect((await myTier(id)).productsUsed).toBe(config.tiers[0].products);
+      const after = await prisma.contentPiece.findUnique({
+        where: { id: rejected.id },
+      });
+      expect(after?.status).toBe('pending');
+    });
+
+    it('T3: at the limit, a piece that is waiting can still have its file swapped', async () => {
+      const id = await creator();
+      await giveTier(id, 0);
+      const ids: string[] = [];
+      for (let n = 1; n <= config.tiers[0].products; n += 1)
+        ids.push(body(await publish(id).expect(201)).data.id);
+      await publish(id).expect(402);
+      // The piece already has its place: an edit needs a way to publish,
+      // not a free place.
+      await patch(id, `/content/${ids[0]}`, {
+        fullAsset: 'https://cdn.example.com/swapped.mp4',
+      }).expect(200);
+      expect((await myTier(id)).productsUsed).toBe(config.tiers[0].products);
+    });
+
+    it('T4: with no tier, an unfinished draft is told tier_required, not what it lacks', async () => {
+      const id = await creator();
+      const draft = body(
+        await post(id, '/product-drafts', { title: 'Half done' }).expect(201),
+      ).data;
+      expect(draft.missing.length).toBeGreaterThan(0);
+      const res = await post(id, `/product-drafts/${draft.id}/publish`, {
+        previewAsset: 'https://cdn.example.com/h.jpg',
+        fullAsset: 'https://cdn.example.com/h.mp4',
+      }).expect(402);
+      expect(body(res).reason.code).toBe('tier_required');
+    });
+
+    it('T5: a free draft publishes at nothing, whatever price it still carries', async () => {
+      const id = await creator();
+      await giveTier(id, 0);
+      const draft = body(
+        await post(id, '/product-drafts', {
+          title: 'Changed my mind',
+          contentType: 'pdf',
+          description: 'Was priced, now free',
+          category: 'business_entrepreneurship',
+          accessType: 'paid',
+          price: 900,
+        }).expect(201),
+      ).data;
+      await patch(id, `/product-drafts/${draft.id}`, {
+        accessType: 'free',
+      }).expect(200);
+      const stored = await prisma.productDraft.findUnique({
+        where: { id: draft.id },
+      });
+      expect(stored?.price).toBe(900);
+      const res = await post(id, `/product-drafts/${draft.id}/publish`, {
+        previewAsset: 'https://cdn.example.com/free.jpg',
+        fullAsset: 'https://cdn.example.com/free.pdf',
+      }).expect(201);
+      expect(body(res).data).toMatchObject({ accessType: 'free', price: 0 });
+    });
+
+    it('T5: a publish that loses its place because the tier ended meanwhile is told tier_required', async () => {
+      const id = await creator();
+      await giveTier(id, 0);
+      await publish(id).expect(201);
+      await publish(id).expect(201);
+      // The gate looks and finds room (2 of 3, running). Then, before the
+      // claim, another publish takes the last place and the tier ends.
+      const gate = app.get(PublishingGate, { strict: false });
+      const looked = gate.assertRoomForProduct.bind(gate);
+      jest
+        .spyOn(gate, 'assertRoomForProduct')
+        .mockImplementationOnce(async (who: string) => {
+          const allowance = await looked(who);
+          await prisma.creatorState.update({
+            where: { wawuUserId: id },
+            data: { slotsUsed: config.tiers[0].products },
+          });
+          await prisma.makerTier.update({
+            where: { wawuUserId: id },
+            data: {
+              activeFrom: new Date(Date.now() - config.tiers[0].days * DAY),
+              activeUntil: new Date(Date.now() - 1000),
+            },
+          });
+          return allowance;
+        });
+      const res = await publish(id).expect(402);
+      expect(body(res).reason).toMatchObject({
+        code: 'tier_required',
+        tierState: 'ended',
+      });
     });
   });
 });

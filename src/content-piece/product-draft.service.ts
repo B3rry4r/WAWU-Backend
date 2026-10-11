@@ -85,36 +85,44 @@ export class ProductDraftService {
     private readonly gate: PublishingGate,
   ) {}
 
+  /**
+   * Counted and inserted under a per-person transaction lock, so drafts
+   * sent at the same moment (a double tap, two devices) cannot pass the
+   * maximum together: each waits for the one before it to commit and counts
+   * after it (TIER-02 round 2, D3: 30 sent together over two Hubs left 22).
+   * The lock is on the person, so one person's drafts never wait on another's.
+   */
   async create(
     wawuUserId: string,
     dto: CreateProductDraftDto,
   ): Promise<ProductDraftView> {
-    const kept = await this.prisma.productDraft.count({
-      where: { wawuUserId },
-    });
-    if (kept >= PRODUCT_DRAFTS_MAX) {
-      throw new ConflictException({
-        message: `You can keep ${PRODUCT_DRAFTS_MAX} drafts. Delete or publish one to start another.`,
-        reason: {
-          code: 'draft_limit_reached',
+    const row = await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`product-drafts:${wawuUserId}`}, 0))`;
+      const kept = await tx.productDraft.count({ where: { wawuUserId } });
+      if (kept >= PRODUCT_DRAFTS_MAX) {
+        throw new ConflictException({
           message: `You can keep ${PRODUCT_DRAFTS_MAX} drafts. Delete or publish one to start another.`,
-          draftsKept: kept,
-          draftsAllowed: PRODUCT_DRAFTS_MAX,
+          reason: {
+            code: 'draft_limit_reached',
+            message: `You can keep ${PRODUCT_DRAFTS_MAX} drafts. Delete or publish one to start another.`,
+            draftsKept: kept,
+            draftsAllowed: PRODUCT_DRAFTS_MAX,
+          },
+        });
+      }
+      return tx.productDraft.create({
+        data: {
+          wawuUserId,
+          title: dto.title.trim(),
+          contentType: dto.contentType,
+          description: dto.description,
+          category: dto.category,
+          specializations: dto.specializations ?? [],
+          tags: dto.tags ?? [],
+          accessType: dto.accessType,
+          price: dto.price,
         },
       });
-    }
-    const row = await this.prisma.productDraft.create({
-      data: {
-        wawuUserId,
-        title: dto.title.trim(),
-        contentType: dto.contentType,
-        description: dto.description,
-        category: dto.category,
-        specializations: dto.specializations ?? [],
-        tags: dto.tags ?? [],
-        accessType: dto.accessType,
-        price: dto.price,
-      },
     });
     return toView(row);
   }
