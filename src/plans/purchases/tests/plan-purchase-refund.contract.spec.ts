@@ -1,3 +1,4 @@
+import request from 'supertest';
 import {
   api,
   bootTierApp,
@@ -9,6 +10,7 @@ import { MERCHANT_ACCOUNT } from '../../../../test/fintava/fintava-double';
 import { body } from '../../../../test/payments/poll-helpers';
 import { WalletHoldService } from '../../../money/holds/wallet-hold.service';
 import type { CompletedPayment } from '../../../money/payments/payable-registry';
+import type { TransactionPage } from '../../../money/money-view.type';
 import type { MyPointsView } from '../../../points/points-view.type';
 import { loadPlansConfig, priceIn } from '../../plans-config';
 import type { MyTierView } from '../../plans-view.type';
@@ -195,6 +197,22 @@ describe('A plan that cannot be granted when its payment confirms is paid back (
       reference: hold.customerReference,
     });
     expect(h.wallets.kobo.get(p.accountNumber)).toBe(walletTaken + diff);
+
+    // The wallet history shows it: the purchase going out and the refund coming
+    // back, linked to the same tier, the refund as a refund.
+    const history = body<TransactionPage>(
+      await request(h.app.getHttpServer())
+        .get('/api/hub/money/transactions')
+        .set('Authorization', p.auth),
+    ).data!.items.filter((r) => r.link?.kind === 'tier');
+    const refundRow = history.find((r) => r.category === 'refund');
+    expect(refundRow).toMatchObject({
+      direction: 'in',
+      amountKobo: diff,
+      status: 'completed',
+    });
+    expect(refundRow!.description).not.toMatch(/\u2014/);
+    expect(history.filter((r) => r.category === 'purchase')).toHaveLength(2);
 
     // Replayed: the sweeps again, the confirmation delivered again (two
     // servers), the hold sweep. Nothing moves a second time.
