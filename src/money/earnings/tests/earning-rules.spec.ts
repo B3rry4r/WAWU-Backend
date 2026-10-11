@@ -1,3 +1,8 @@
+import { CronExpression } from '@nestjs/schedule';
+import {
+  SCHEDULE_CRON_OPTIONS,
+  SCHEDULER_NAME,
+} from '@nestjs/schedule/dist/schedule.constants';
 import { WalletProviderError } from '../../../wallet-provider/wallet-provider-error';
 import { providerLimitError } from '../../../wallet-provider/wallet-provider-limit';
 import { decodeEarningCursor, encodeEarningCursor } from '../earning-cursor';
@@ -6,6 +11,7 @@ import {
   NOT_SETTLED_HERE,
   waitingAfterRefusal,
 } from '../earning-rules';
+import { EarningSettlementService } from '../earning-settlement.service';
 import { currentLagosMonth } from '../earnings-view.service';
 import { HELD_PAYMENT_KINDS } from '../../dto/money-enums';
 
@@ -148,6 +154,23 @@ describe('the rules of an earning landing (WALLET-16)', () => {
       expect(currentLagosMonth(new Date('2026-12-31T23:00:00Z'))).toBe(
         '2027-01',
       );
+    });
+  });
+
+  describe('the sweep', () => {
+    it('is a cron job of its own that runs every minute, so a sale lands within a minute of being finished and a wallet that opens is paid within a minute', () => {
+      const sweep: unknown = Object.getOwnPropertyDescriptor(
+        EarningSettlementService.prototype,
+        'sweep',
+      )?.value;
+      expect(Reflect.getMetadata(SCHEDULER_NAME, sweep as object)).toBe(
+        'money-earning-settle',
+      );
+      expect(
+        Reflect.getMetadata(SCHEDULE_CRON_OPTIONS, sweep as object) as {
+          cronTime: string;
+        },
+      ).toMatchObject({ cronTime: CronExpression.EVERY_MINUTE });
     });
   });
 });
