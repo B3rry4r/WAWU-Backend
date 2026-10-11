@@ -42,6 +42,8 @@ export const LINK_KIND_LABELS: Record<PaymentKind, string> = {
   paid_dm: 'Paid question',
   event_ticket: 'Event ticket',
   bill: 'Bill',
+  tier: 'Tier',
+  tier_bump: 'Tier and points',
   points_cash_out: `${POINTS_WORD_TITLE} to cash`,
 };
 

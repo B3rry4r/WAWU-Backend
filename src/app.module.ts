@@ -82,6 +82,7 @@ import { LiveModule } from './live/live.module';
 import { InboxModule } from './inbox/inbox.module';
 import { MeModule } from './me/me.module';
 import { PlansModule } from './plans/plans.module';
+import { PlanPurchasesModule } from './plans/purchases/plan-purchases.module';
 import { PointsConvertModule } from './points/convert/points-convert.module';
 import { WaitlistModule } from './waitlist/waitlist.module';
 import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
@@ -393,6 +394,11 @@ import { PushModule } from './push/push.module';
     // src/plans/plans.config.json, which a bad edit stops at boot. `plans` is a
     // first segment nothing else declares; `me/tier` is a literal leaf.
     PlansModule,
+    // Buy, renew or upgrade a tier from the wallet (task TIER-03): `plans/purchases`
+    // (the quote, the purchase and one purchase by id), and the payment kinds `tier`
+    // and `tier_bump` registered with the wallet payments. `plans/purchases` is a
+    // path nothing else declares, listed after PlansModule and MoneyModule.
+    PlanPurchasesModule,
     // Convert points to cash (task POINTS-04): `points/convert/quote`,
     // `points/convert` (POST) and `points/convert/{id}`, and the sweep that
     // finishes a conversion whose answer was lost. `points` is a first segment
