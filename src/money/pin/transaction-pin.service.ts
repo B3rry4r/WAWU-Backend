@@ -1,11 +1,13 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as argon2 from 'argon2';
+import type { Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { ChangePinDto, SetPinDto } from '../dto/money-request.dto';
 import { MoneyError } from '../money-error';
 import { isUniqueViolation } from '../prisma-unique';
 import type { PinStateView } from '../money-view.type';
+import { lockPinPerson } from './pin-person-lock';
 
 /**
  * Wrong tries in a row before the PIN locks. The ticket's number (MONEY-09,
@@ -179,19 +181,45 @@ export class TransactionPinService {
 
   /**
    * PUT /money/pin. The current PIN has already been checked by
-   * TransactionPinGuard on the same request; this only replaces it.
+   * TransactionPinGuard on the same request; this replaces it and ends any
+   * PIN reset that is still open.
+   *
+   * `inTransaction` is a step the caller runs inside the transaction that
+   * changes the PIN: the request's Idempotency-Key is linked to the PIN there,
+   * so a key that names the PIN means the PIN changed (WALLET-06 round 2, D1;
+   * PinRequestKeys.under).
    */
-  async change(wawuUserId: string, dto: ChangePinDto): Promise<PinStateView> {
+  async change(
+    wawuUserId: string,
+    dto: ChangePinDto,
+    inTransaction?: (tx: Prisma.TransactionClient) => Promise<void>,
+  ): Promise<PinStateView> {
     if (dto.newPin !== dto.newPinConfirmation) {
       throw new MoneyError('pin_mismatch', MISMATCH_MESSAGE);
     }
     const pinHash = await hashPin(dto.newPin);
     try {
-      const row = await this.prisma.transactionPin.update({
-        where: { wawuUserId },
-        data: { pinHash, failedTries: 0, lockedUntil: null, setAt: new Date() },
+      // One transaction: the new PIN and the end of every reset still open
+      // (BACKEND_GAPS G-50). A code texted before this change must not work
+      // afterwards: confirming it would overwrite the PIN just chosen.
+      return await this.prisma.$transaction(async (tx) => {
+        // The person's lock first, the one a reset's start and confirm take
+        // (WALLET-06 round 2, D2): without it this took the PIN row and then
+        // the reset rows while a confirm took them the other way round, and
+        // one of the two could be refused as a deadlock.
+        await lockPinPerson(tx, wawuUserId);
+        const now = new Date();
+        const changed = await tx.transactionPin.update({
+          where: { wawuUserId },
+          data: { pinHash, failedTries: 0, lockedUntil: null, setAt: now },
+        });
+        await tx.transactionPinReset.updateMany({
+          where: { wawuUserId, usedAt: null, supersededAt: null },
+          data: { supersededAt: now },
+        });
+        await inTransaction?.(tx);
+        return pinStateView(changed, new Date());
       });
-      return pinStateView(row, new Date());
     } catch (err) {
       if (isNoMatch(err)) throw new MoneyError('pin_not_set', NOT_SET_MESSAGE);
       throw err;

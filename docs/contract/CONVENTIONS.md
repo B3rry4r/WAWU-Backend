@@ -301,6 +301,38 @@ after a send that failed (W14).
    when no payment was made, freed. A route that moves money uses
    `@RequireIdempotentApproval(route)` (WALLET-07 and WALLET-09 too).
 
+**On the PIN routes (optional).** `PUT /money/pin` and `POST /money/pin/reset/confirm`
+move no money, so they do not need a key, but they take one if it is sent
+(WALLET-06 round 2). A phone whose answer to a PIN change or a reset was lost
+sends the same request again with the same key, instead of judging by whether
+`changedAt` moved (which is also true when someone else changed the PIN) or
+spending a wrong-PIN try to ask. Without the header nothing is stored and the
+routes answer as they always did. With it, the store and rules 1 to 7 above
+are the payments' own (`MoneyIdempotencyKey`, `IdempotencyService`), with these
+differences:
+
+- The key is optional. One that is sent but is not 8 to 128 of `[A-Za-z0-9_-]`
+  is `400 idempotency_key_required` (refused, not ignored).
+- The replay is answered before the PIN guard, because the PIN a landed change
+  was sent under is no longer the PIN: a repeat uses no try. A repeat of a
+  change someone else has beaten is not a replay (nothing was stored): it runs,
+  and is refused for its PIN (`403 pin_incorrect`) or its dead code (`400
+  reset_code_invalid`).
+- The key is linked to the person's PIN in the same transaction that changes
+  it, and the answer is stored right after. A row that names the PIN means the
+  PIN changed; one that names nothing and is more than a minute old means the
+  request died first and the key is free again; one that names the PIN, has no
+  answer and is more than a minute old is answered with the PIN's state as it
+  stands.
+- The fingerprint of the body is argon2id (salted from person, route and key,
+  so the same request always gives the same text), not SHA-256, because the
+  body holds the new PIN; the stored answer is the PIN's state, never a PIN or
+  a code.
+- The two codes `idempotency_key_reused` and `idempotency_in_progress` are
+  documented in the header's description, not in the route's `reason.code`
+  lists: those lists are how `money-moving-coverage.spec.ts` tells a route
+  moves money, and these two do not.
+
 **Fintava has no Idempotency-Key** (`naira-api.md`). Ours is enforced here.
 The reference we send Fintava as `CustomerReference` is derived from our own
 transaction id, not from the app's key (which is only unique per person).
@@ -1445,7 +1477,7 @@ Fintava or on Nuvion, whichever the server runs.
   the sweep stops. A paid payment whose kind nothing registers at boot goes
   to review at once, logged, never skipped in silence. A kind nobody registered answers `409 target_not_payable`
   "This can't be paid for from your wallet yet." Held kinds (paid DM,
-  ticket, bill) are refused until MONEY-18. `amountKobo` and `note` only on
+  ticket, bill) register like any other and complete into a hold (section 18). `amountKobo` and `note` only on
   a tip; paying for your own item is `target_not_payable`.
 - **Naira only.** A feature may say what currency its price is in
   (`PayableTarget.currency`, ISO 4217; unset is `NGN`). Only `NGN` is paid
@@ -1611,8 +1643,9 @@ Fintava or on Nuvion, whichever the server runs.
   /money/payments/{id}` (MONEY-19).
 - **Paid twice for one item** (D1.4): if a second payment for the same
   person and item completes while another was open, both carry a
-  `discrepancy` for MONEY-16; the refund is MONEY-18's (BACKEND_GAPS G-70 in
-  the mobile repo).
+  `discrepancy` for MONEY-16. The hold's refund (section 18) does not cover
+  it: an ordinary payment has no hold, and which of the two payments is the
+  extra is a person's call (BACKEND_GAPS G-70 in the mobile repo).
 
 ---
 
@@ -1786,7 +1819,131 @@ lists the ones it can answer.
 
 ---
 
-## 18. Publishing needs a tier (TIER-02)
+## 18. Hold, release and refund (MONEY-18)
+
+Money held between a payer and a payee (R-19): a paid DM, an event ticket and
+a bill are paid into WAWU's own account at the wallet provider (section 14),
+and the price waits there until something happens. It is then **released** to
+the payee or **refunded** to the payer. Fintava has no way to reserve part of
+a balance, so a hold is a row of ours plus money in WAWU's account; the
+provider's balance is still the only balance (MONEY-11) and nothing here is
+added up into one.
+
+- **Routes** (`src/money/holds/`, behind the wallet gate, `no-store`, from our
+  own records: they never call the provider, so none answers
+  `provider_unreachable`): `GET /money/holds?role=payer|payee&cursor=&limit=`
+  (`HoldPage`, newest first by `heldAt`) and `GET /money/holds/{id}`
+  (`HoldView`; its payer and its payee read it, anybody else gets `404
+  not_found`). The cursor is `h1.` plus base64url of the last hold's time and
+  id; one the server did not write is a plain `400` ("cursor is not one this
+  list gave."). No route releases or refunds: a client never moves a hold.
+- **A hold comes to be** in the same transaction as the completion of a
+  payment of a held kind (`WalletHold`, one per payment): the payment is
+  `completed` exactly when its price is held. `PaymentView.hold` carries it
+  (`status: held`), `GET /money/payments/quote` says `willBeHeld: true`, and
+  the feature's `onCompleted` is told its id (`CompletedPayment.holdId`).
+  What releases each kind is fixed: `paid_dm` `dm_answered`, `event_ticket`
+  `event_took_place`, `bill` `bill_delivered` (`holds/hold-rules.ts`). The
+  buyer's ledger row stays a `purchase`; they paid the price and the
+  provider's charge (R-10) and the price is not spendable: it is already in
+  WAWU's account.
+- **The owning feature decides, once** (`WalletHoldService`, exported by
+  `MoneyModule`; nothing else moves a hold):
+  - `release({ paymentId } | { holdId })`: the payee's 85% moves from WAWU's
+    account to the payee's wallet; the 15% is WAWU's and stays; with no payee
+    (a bill) or a share under a kobo nothing moves and the hold is over.
+    The payment's `payeeSettledAt` is set when it is paid, so WALLET-16 never
+    lands the same share again (WALLET-16 skips a payment that has a hold).
+  - `refund(...)`: the **price** moves back to the payer's wallet. The
+    provider's charge on the original payment is not returned (R-10).
+  - The provider's charge on either move is WAWU's, paid from its 15% (R-31):
+    the person receives the whole figure. It is recorded on the hold
+    (`providerFeeKobo`) and on the merchant-side ledger row.
+  - **Once, one way.** The first request sets `action` in one conditional
+    update; the same request again is the same hold (it answers where the
+    move stands); the other request is a `HoldRequestError`
+    (`other_action_chosen`), before and after settling. A payment with no
+    hold is `no_such_hold`. The database holds the same rules (the migration's
+    CHECKs and trigger): an action never changes once set, a settled hold
+    never changes, a refund returns exactly the price, a release only follows
+    a release. The hold id is the movement's Idempotency-Key: the provider
+    sees our reference, `wawu-rel-<hold id>` or `wawu-ref-<hold id>` (45
+    characters, inside Nuvion's 64), unique in our table and refused as a
+    repeat by the provider.
+  - Answers are `HoldSettlement { state: settled | pending | waiting |
+    review, waiting, status }`; `status` stays `held` until the provider
+    **confirmed** the move (its answer, or its record of our reference).
+- **The provider's record is the truth** (the same rules as section 14).
+  A move whose outcome is unknown (a timeout, a 5xx, a transfer accepted and
+  not finished, a repeated reference) is `pending`: `sentAt` is set, the
+  provider is asked about our reference (`reconcileSend` on WAWU's own
+  account; backing off 1, 2, 4 ... 60 minutes), the move is never sent again
+  and never read as "nothing moved". Past `PAYMENT_REVIEW_AFTER_HOURS` (72)
+  with no answer it goes to review (`reviewSince`): out of the sweep, the
+  money where it is, a person decides. Only the provider's own record that
+  the move **failed** starts a new try, under a new reference
+  (`wawu-rel-<id>-2`); a record that it was completed and then **reversed**,
+  or that another amount moved, is review. A lookup that carries no charge
+  (Fintava's) leaves the schedule's charge on the merchant-side row; a record
+  that carries it (Nuvion's `applicable_fee`) is used.
+- **Waiting is not failing** (`waiting` on the hold): the hold stays `held`
+  and the money stays in WAWU's account.
+  - `payee_wallet`, `payer_wallet`: the person has no wallet yet (R-11: the
+    creator keeps earning). Tried every minute with no back-off; lands within
+    a minute of the wallet opening. No review bound.
+  - `recipient_frozen`: the provider refuses a move into a frozen wallet
+    (G-10). Paid on unfreeze, tried hourly. No review bound.
+  - `funds`: the provider says WAWU's own account cannot cover the move
+    (amount plus its charge): an error in the log on every try, retried.
+  - `provider`: the provider is out of reach or not set up, or it is another
+    provider's hold (written before a switch of `WALLET_PROVIDER`; this
+    server sends nothing for it).
+  - `refused`: the provider refused and nothing moved; retried under the same
+    reference, and a person looks past the review bound.
+  Nothing is refunded because a release is stuck, or the other way round.
+- **Limits.** A move above the cap on one move through WAWU's account
+  (`MERCHANT_MAX_PER_TXN_KOBO`, Fintava) is refused, never split: review. The
+  move into WAWU's own account is never made, however the provider names it.
+- **The ledger.** On confirmation both sides are written under our reference,
+  category `earning` (a release) or `refund`, linked to the item: WAWU's
+  account `out` (with the provider's charge) and the person's wallet `in`
+  (the payee's row names the payer; a refund's names WAWU; no account number
+  of the other side). Best effort, like every ledger write after the money
+  moved; the signed delivery and the status check write them too.
+- **For the nightly check (MONEY-16):** `WalletHoldService.openTotals()` is
+  the count and the sum, in kobo, of the holds still `held` for the running
+  provider (a move whose confirmation is awaited is still held). It is
+  compared with the provider's own balance, never shown as one.
+- **Account deletion** keeps a hold when its payer goes (the payer's id and
+  the account a refund went to are cleared, `ANONYMISED`); a payee's goes
+  `COUNTERPARTY`. A refund with nobody to return to is review.
+
+### The provider's charge on a purchase must be believable (N2)
+
+(MONEY-17's finding N2, carried into MONEY-18.) A payment's charge **below 0**,
+or **above the quoted one by more than** `PAYMENT_CHARGE_REVIEW_ABOVE_KOBO`
+(PROVISIONAL, default 100000 kobo, 0 to 100000000) is not trusted on any path
+that completes a payment (the answer to the send, the sweep's lookup, a ledger
+row settled by another job, a signed report): the payment is not completed or
+delivered at it. A `pending` payment goes to review with both figures on
+`discrepancy` (`charge not trusted: <provider> reported <total> kobo (fee <fee>),
+quoted <total> kobo (fee <fee>); held for review`), `chargeReviewSince` and
+`reviewSince` set, out of the sweep, the item still claimed; the buyer is told
+it is being confirmed. The buyer's ledger row gets the same words and stays as
+it is. No figure the provider reported is written to the payment or the ledger.
+**Sticky:** no later path completes or corrects it; a person clears it. A
+payment already completed and delivered at the quote is only marked
+(`chargeReviewSince`, the words on `discrepancy`). A charge exactly at the cap
+above the quote is believed (completed, flagged `debitReviewSince`, as before).
+
+### D8-1 (MONEY-17 round 8)
+
+When another job completes a payment between a path's figures update and its
+`complete()`, the path's note (both figures) is still written, once, to the
+completed payment (`keepNote`, a conditional update that only touches a
+completed payment).
+
+## 19. Publishing needs a tier (TIER-02)
 
 Publishing a piece, or taking a file for one, answers `402` in this one error
 shape when the person has no way to publish or has used every product they

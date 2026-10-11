@@ -63,6 +63,8 @@ const SERVED_MONEY_ROUTES: Record<string, string> = {
   'GET /api/hub/money/fees/quote': 'WALLET-15',
   'GET /api/hub/money/payments/quote': 'MONEY-17',
   'POST /api/hub/money/payments': 'MONEY-17',
+  'GET /api/hub/money/holds': 'MONEY-18',
+  'GET /api/hub/money/holds/{id}': 'MONEY-18',
   'POST /api/hub/money/transactions/{id}/receipt': 'WALLET-18',
   'GET /api/hub/money/transactions/{id}/receipt/image': 'WALLET-18',
   'GET /api/hub/money/transactions/{id}/receipt/pdf': 'WALLET-18',
