@@ -345,6 +345,9 @@ export class LedgerService {
   private readonly debitListeners: Array<
     (e: LedgerDebitSighting) => Promise<unknown>
   > = [];
+  private readonly debitTransactionListeners: Array<
+    (tx: Prisma.TransactionClient, e: LedgerDebitSighting) => Promise<unknown>
+  > = [];
 
   /**
    * NUV-01 (SHARED-CHANGES NUV-01 #2, lead ruling 8): every row this
@@ -381,6 +384,27 @@ export class LedgerService {
     listener: (e: LedgerDebitSighting) => Promise<unknown>,
   ): void {
     this.debitListeners.push(listener);
+  }
+
+  /**
+   * Called INSIDE the ledger's own transaction, awaited, at the moment a
+   * signed report of a payment's debit (a webhook) is found to carry another
+   * charge than the buyer's row holds (MONEY-18 round 2, F1). The report and
+   * what the paying feature does about it commit together or not at all, so
+   * there is no instant at which the ledger knows the report and the payment
+   * does not: a payment completing on any other path (the sweep's lookup
+   * carries no charge) meets the feature's mark, never a report in flight.
+   * The listener does the feature's own conditional writes on `tx` and
+   * nothing else; an error here rolls the report's ledger write back, and
+   * the delivery is applied again.
+   */
+  onPaymentDebitSightedInTransaction(
+    listener: (
+      tx: Prisma.TransactionClient,
+      e: LedgerDebitSighting,
+    ) => Promise<unknown>,
+  ): void {
+    this.debitTransactionListeners.push(listener);
   }
 
   /**
@@ -888,6 +912,12 @@ export class LedgerService {
             totalKobo: s.totalKobo,
           }
         : null;
+    if (debitSighting) {
+      // In the same transaction as the report (F1): see the listener.
+      for (const listener of this.debitTransactionListeners) {
+        await listener(tx, debitSighting);
+      }
+    }
     return {
       entryId: keeper.id,
       created: false,
