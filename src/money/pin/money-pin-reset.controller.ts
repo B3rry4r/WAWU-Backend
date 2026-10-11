@@ -66,6 +66,7 @@ export class MoneyPinResetController {
     'reset_code_invalid',
     'pin_mismatch',
     'pin_not_set',
+    'pin_changed_again',
   )
   confirmReset(
     @CurrentUser() user: WawuJwtClaims,
