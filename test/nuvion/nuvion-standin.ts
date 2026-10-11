@@ -211,7 +211,8 @@ export class NuvionStandin {
     this.seen.length = 0;
   }
 
-  async start(): Promise<void> {
+  /** Listens on a free port, or on `port` (a built Hub run needs a fixed one). */
+  async start(port = 0): Promise<void> {
     this.defaults();
     this.server = createServer((req, res) => {
       void this.read(req).then((seen) => {
@@ -252,7 +253,7 @@ export class NuvionStandin {
       });
     });
     await new Promise<void>((resolve) =>
-      this.server!.listen(0, '127.0.0.1', () => resolve()),
+      this.server!.listen(port, '127.0.0.1', () => resolve()),
     );
     this.port = (this.server.address() as AddressInfo).port;
   }

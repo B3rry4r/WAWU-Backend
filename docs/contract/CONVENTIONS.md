@@ -1547,14 +1547,34 @@ Fintava or on Nuvion, whichever the server runs.
   provider accepted and has not completed (Nuvion's `pending` or
   `processing`) is `not_confirmed`, and a lost answer `outcome_unknown`:
   both may have moved money (`recordMayExist`), so the payment stays
-  `pending` and is settled as below. A provider that has no such transfer
-  yet (`not_supported`, the Nuvion adapter before NUV-05), is not set up, or
-  refuses our key answers `503 provider_unreachable` and gives the key back,
-  as `not_configured` always did. Every such refusal is the provider
+  `pending` and is settled as below. A provider that cannot make the
+  transfer (`not_supported`), is not set up, or refuses our key answers `503
+  provider_unreachable` and gives the key back, as `not_configured` always
+  did. Every such refusal is the provider
   error's own answer (`toHttpException()`): a frozen wallet `423
   wallet_frozen`, the provider's limit `403 limit_reached`, anything else
   `503 provider_unreachable` with the provider's wait; insufficient funds
   keeps its shortfall answer (below).
+- **Nuvion's book transfer** (NUV-05). `POST /transfers` with
+  `payment_type: "book-transfer"`, the receiver named by its `nuvion_ban`,
+  our reference as `unique_reference`, the buyer's `entity_id` (WAWU's
+  operational account sends with none). Nuvion answers `pending` first
+  ("all transfers are asynchronous"), so the adapter reads the transfer
+  again for a few seconds (`NUVION_BOOK_SETTLE_STEPS_MS`, under four
+  seconds in all) before it answers `not_confirmed`; nothing is sent again
+  meanwhile. Every book transfer is written to `NuvionBookTransfer` BEFORE
+  it is sent (the log of our reference, the accounts, the amount, Nuvion's
+  id once read): Nuvion has no lookup by our reference, so a transfer whose
+  answer was lost is found again from that row, by the sender's transfers
+  (`GET /transfers?entity_id=&account_id=`), never sent under a new
+  reference; a repeat of one reference is Nuvion's original, and a
+  reference reused for other accounts or another amount is never sent
+  (`duplicate_reference`, nothing leaves). Nuvion's `outflows.created`,
+  `.completed`, `.failed`, `.cancelled` and `.refunded` are read back from
+  Nuvion before they are acted on and merge the transfer's state into the
+  ledger rows the payment wrote (completed at the charge Nuvion states as
+  `applicable_fee`, failed, or reversed), once, in any order and however
+  many times they come.
 - **WAWU's own account is never the payer** (round 6, R5-1). Before the
   claim, the payer's wallet is compared with WAWU's account by identity,
   not by format: the same text, or the provider's `isSameAccount` (Nuvion

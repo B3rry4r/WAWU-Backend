@@ -5617,6 +5617,75 @@ model NuvionOnboarding {
   @@index([submittedAt])
 }
 
+/// ─────────────────────────────────────────────────────────────────────────
+/// BOOK TRANSFERS ON NUVION (task NUV-05, R-42)
+///
+/// The log of every book transfer this server sends on Nuvion: a payment from
+/// a person's wallet into WAWU's operational account, a release or a refund
+/// out of it, a send between two people. Nuvion has no lookup by our
+/// reference (`GET /transfers/{id}` is the only read of one transfer), so the
+/// id of every transfer whose answer was read is kept here beside our
+/// reference, and a transfer whose answer was LOST is found again by walking
+/// the sender's transfers (each carries its `unique_reference`).
+///
+/// The row is written BEFORE the send (`sending`), so a crash or a lost
+/// answer still leaves the record of what was attempted: which accounts,
+/// which amount, since when. `reference` is unique, so one reference is one
+/// row on every server; a reference is never sent for other accounts or
+/// another amount (the log refuses it before Nuvion is asked), and Nuvion's
+/// own idempotency on `unique_reference` returns the original for a repeat.
+///
+/// `status` is Nuvion's word as last read (`pending`, `processing`,
+/// `successful`, `failed`, `reversed`), `sending` while no answer was read
+/// (the request may or may not have reached Nuvion), or `refused` when
+/// Nuvion answered that it made nothing (the reference may be sent again).
+/// A status only moves forward; `successful` is never undone by a late
+/// `pending`. Never a balance: the balance is Nuvion's `available`.
+///
+/// `fromEntityId` / `toEntityId` are null for WAWU's operational account
+/// (its transfers carry no entity: it is the authenticating entity's own).
+/// No person column: a person's wallet is named by the account number their
+/// `FintavaWallet` row holds, which WAWU's records already decide.
+/// ─────────────────────────────────────────────────────────────────────────
+model NuvionBookTransfer {
+  id                String    @id @default(uuid())
+  /// Our reference, sent as `unique_reference` (at most 64 characters).
+  reference         String    @unique
+  /// Nuvion's transfer id, once an answer or a read gave it.
+  nuvionId          String?   @unique
+  /// The account debited (Nuvion's id) and its entity.
+  fromAccountId     String
+  fromEntityId      String?
+  /// True for WAWU's operational account.
+  fromOperational   Boolean   @default(false)
+  /// The number WAWU's records name the sending side by (a person's account
+  /// number, or the operational account's `nuvion_ban`).
+  fromAccountNumber String
+  /// The account credited, and the `nuvion_ban` the transfer named it by.
+  toAccountId       String
+  toEntityId        String?
+  toOperational     Boolean   @default(false)
+  toAccountNumber   String
+  toNuvionBan       String
+  amountKobo        BigInt
+  /// Nuvion's `applicable_fee` once its record says (kobo).
+  feeKobo           BigInt?
+  narration         String?
+  status            String    @default("sending")
+  /// Nuvion's `status_reason`, masked, or our note.
+  statusReason      String?
+  sentAt            DateTime  @default(now())
+  /// When an answer to the send was read.
+  answeredAt        DateTime?
+  /// When Nuvion's record of the transfer was last read.
+  readAt            DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([fromAccountId, sentAt])
+  @@index([toAccountId])
+}
+
 // -----------------------------------------------------------------------------
 // POINTS (task POINTS-01, R-43)
 //
