@@ -4,11 +4,24 @@
 -- once. No price or points figure is stored here except the amount that was
 -- charged: the figures live in src/plans/plans.config.json.
 --
--- Additive: one new table. No existing table, column, index or row is
--- touched, and no relation is added to an existing model, so no live
--- response gains a key (protected route registry, H-1).
+-- Additive: one new table and one CHECK on an existing one (below). No
+-- existing column, index or row is touched, and no relation is added to an
+-- existing model, so no live response gains a key (protected route registry,
+-- H-1).
+--
+-- The CHECK (round 2, lead note N7 of TIER-01): "PersonBilling" may not hold
+-- a currency fixed by a first purchase without the purchase that fixed it.
+-- Only this task writes `first_purchase` (always with the payment's id), and
+-- it is not deployed yet, so no row can break the check; `support` rows (a
+-- person at WAWU, by hand) name no purchase and stay as they are. The other
+-- N7 state, a "MakerTier" whose "activeFrom" is in the future, is NOT checked
+-- here: a CHECK against the database clock would refuse a grant when the
+-- application server's clock runs ahead of the database's, after the money was
+-- taken, and TIER-01's own spec grants "as of" a fixed date later than today.
+-- The code never writes it (specs kill a mutant that does).
 --
 -- Rollback:
+--   ALTER TABLE "PersonBilling" DROP CONSTRAINT "PersonBilling_firstPurchaseRef_check";
 --   DROP TABLE "MakerPurchase";
 --   DELETE FROM "_prisma_migrations" WHERE migration_name = '20261021140000_maker_purchase';
 
@@ -38,3 +51,7 @@ CREATE TABLE "MakerPurchase" (
 
 -- CreateIndex
 CREATE INDEX "MakerPurchase_wawuUserId_createdAt_idx" ON "MakerPurchase"("wawuUserId", "createdAt");
+
+-- A currency fixed by a first purchase names that purchase (lead note N7).
+ALTER TABLE "PersonBilling" ADD CONSTRAINT "PersonBilling_firstPurchaseRef_check"
+    CHECK ("fixedBy" <> 'first_purchase' OR "purchaseRef" IS NOT NULL);

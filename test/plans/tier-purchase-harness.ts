@@ -389,10 +389,25 @@ export async function bootTierApp(
         where: { payerWawuUserId: { in: users } },
         select: { customerReference: true },
       });
+      // A tier payment that could not be granted has a hold (its refund).
+      const holds = await prisma.walletHold.findMany({
+        where: { payerWawuUserId: { in: users } },
+        select: { customerReference: true },
+      });
       await prisma.fintavaLedgerEntry.deleteMany({
         where: {
-          customerReference: { in: rows.map((r) => r.customerReference) },
+          customerReference: {
+            in: [
+              ...rows.map((r) => r.customerReference),
+              ...holds.flatMap((h) =>
+                h.customerReference ? [h.customerReference] : [],
+              ),
+            ],
+          },
         },
+      });
+      await prisma.walletHold.deleteMany({
+        where: { payerWawuUserId: { in: users } },
       });
       await prisma.walletPayment.deleteMany({
         where: { payerWawuUserId: { in: users } },

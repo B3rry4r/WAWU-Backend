@@ -3,6 +3,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import type { OpenWallet } from '../../money/gate/wallet-gate';
 import { MoneyError } from '../../money/money-error';
 import type { PaymentStatus, PaymentView } from '../../money/money-view.type';
+import { WalletHoldService } from '../../money/holds/wallet-hold.service';
 import type { IdempotencyScope } from '../../money/payments/idempotency';
 import {
   type CompletedPayment,
@@ -65,6 +66,19 @@ export const PLAN_PURCHASE_ROUTE = 'POST plans/purchases';
 
 export const PURCHASE_NOT_FOUND_MESSAGE = 'We could not find that purchase.';
 
+/**
+ * What a purchase says once the plan could not be granted after the payment
+ * confirmed and the money is going back (TIER-03 round 2): while the move is
+ * on its way, and once the provider has confirmed it.
+ */
+export const REFUNDING_MESSAGE =
+  'We could not give you this plan, so we are paying your money back to your wallet.';
+export const REFUNDED_MESSAGE =
+  'We could not give you this plan, so we paid your money back to your wallet.';
+
+/** The hold's `releaseCondition` for a tier payment that is being refunded. */
+export const PLAN_REFUND_CONDITION = 'plan_granted';
+
 /** A day, in milliseconds. */
 const DAY_MS = 86_400_000;
 
@@ -105,6 +119,17 @@ const OPEN_PAYMENT_STATES = [
  *   same moment at most one goes on.
  * - **Nothing is written for a payment that is not paid.** A pending,
  *   failed or reversed payment is read from the payment itself.
+ * - **A plan that cannot be granted is paid back.** If, when the payment
+ *   confirms, the purchase no longer fits what the person holds (the tier an
+ *   upgrade came from ended while it confirmed, another tier was granted, the
+ *   currency was fixed another way), nothing is granted and the whole price
+ *   goes back to the payer through MONEY-18's refund (a send from WAWU's
+ *   account under our own reference, once, one way; WAWU pays the provider's
+ *   charge on that move, R-31). The tier payment is not a held kind, so a
+ *   `WalletHold` is written for it only here, in the same lock the grant
+ *   takes, and exactly one of the two outcomes can happen to a payment: the
+ *   purchase row (granted) or the hold (refunded). The delivery then returns
+ *   normally, so the person is free to buy again at once.
  */
 @Injectable()
 export class PlanPurchaseService implements OnModuleInit {
@@ -119,6 +144,7 @@ export class PlanPurchaseService implements OnModuleInit {
     private readonly points: PointsService,
     private readonly payments: WalletPaymentService,
     private readonly registry: PayableRegistry,
+    private readonly holds: WalletHoldService,
   ) {}
 
   onModuleInit(): void {
@@ -307,102 +333,187 @@ export class PlanPurchaseService implements OnModuleInit {
   /**
    * The payment is confirmed: grant what it bought, once. Idempotent and safe
    * to run on two servers at once (see the class comment). A purchase that no
-   * longer fits what the person holds (their tier changed while the payment
-   * was confirming) is NOT granted: it throws, the payment service tries
-   * again and then sends it to review with the money safe in WAWU's account.
+   * longer fits what the person holds (their tier changed, or the one an
+   * upgrade came from ended, while the payment was confirming) is NOT
+   * granted: nothing is written for the grant and the whole price goes back
+   * to the payer (`refund`), once. Anything else that goes wrong throws, and
+   * the payment service tries again and then sends it to review with the
+   * money safe in WAWU's account.
    */
   private async deliver(payment: CompletedPayment): Promise<void> {
     const terms = termsOf(payment.kind, payment.targetId);
     if (terms === null)
       throw new Error(`Payment ${payment.paymentId} names no tier terms.`);
-    const tier = tierById(this.config, terms.tierId);
-    if (tier === null)
-      throw new Error(`The plans file names no tier "${terms.tierId}".`);
     if (
       !Number.isSafeInteger(payment.priceKobo) ||
       payment.priceKobo < 1 ||
       payment.priceKobo > INT4_MAX
     )
       throw new Error(`Payment ${payment.paymentId} has no usable price.`);
+    const refusal = await this.grantOnce(payment, terms);
+    if (refusal !== null) await this.refund(payment, refusal);
+  }
+
+  /**
+   * The grant, in one READ COMMITTED transaction (Prisma's default, and what
+   * `fixAtFirstPurchase` needs). Null when the payment was granted, now or by
+   * an earlier delivery; otherwise why it cannot be, with nothing written (a
+   * refusal rolls the transaction back).
+   */
+  private async grantOnce(
+    payment: CompletedPayment,
+    terms: PurchaseTerms,
+  ): Promise<string | null> {
+    const tier = tierById(this.config, terms.tierId);
+    if (tier === null)
+      return `The plans file names no tier "${terms.tierId}" any more.`;
 
     const wawuUserId = payment.payerWawuUserId;
     const sourceRef = payment.paymentId;
     const now = new Date();
-    // READ COMMITTED, Prisma's default and what `fixAtFirstPurchase` needs.
-    await this.prisma.$transaction(async (tx) => {
-      await lockPersonTier(tx, wawuUserId);
-      // The once-per-payment gate: the row's key is the payment's id.
-      const { count } = await tx.makerPurchase.createMany({
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await lockPersonTier(tx, wawuUserId);
+        // A payment already being paid back is never granted, whatever has
+        // changed since: the refund and the grant are decided under this lock
+        // and exclude each other.
+        const paidBack = await tx.walletHold.findUnique({
+          where: { paymentId: sourceRef },
+          select: { id: true },
+        });
+        if (paidBack)
+          throw new TierGrantRefusal(
+            'This payment is being paid back, so it is not granted.',
+          );
+        // The once-per-payment gate: the row's key is the payment's id.
+        const { count } = await tx.makerPurchase.createMany({
+          data: [
+            {
+              paymentRef: sourceRef,
+              wawuUserId,
+              kind: terms.kind,
+              tierId: terms.tierId,
+              fromTierId: terms.fromTierId,
+              bump: terms.bump,
+              currency: PAYMENT_CURRENCY,
+              amountMinor: payment.priceKobo,
+            },
+          ],
+          skipDuplicates: true,
+        });
+        if (count === 0) return;
+
+        const fixed = await this.billing.fixAtFirstPurchase(
+          { wawuUserId, purchaseRef: sourceRef },
+          tx,
+        );
+        if (fixed !== PAYMENT_CURRENCY)
+          throw new TierGrantRefusal(
+            'The person is billed in another currency than the one that was paid.',
+          );
+
+        const held = await tx.makerTier.findUnique({ where: { wawuUserId } });
+        const running =
+          held !== null && held.activeUntil.getTime() > now.getTime();
+        if (terms.kind === 'upgrade') {
+          await this.grants.upgrade(tx, {
+            wawuUserId,
+            fromTierId: terms.fromTierId ?? '',
+            tierId: terms.tierId,
+            sourceRef,
+            now,
+          });
+        } else {
+          // A first purchase meets a tier that began to run while it was
+          // confirming only when it is the same tier (then it extends it, as
+          // a renewal); a renewal needs the tier it renews.
+          const fits =
+            terms.kind === 'renew'
+              ? held !== null && held.tierId === terms.tierId
+              : !running || held.tierId === terms.tierId;
+          if (!fits)
+            throw new TierGrantRefusal(
+              'The person holds another tier than the one this purchase was priced for.',
+            );
+          await this.grants.grant(tx, {
+            wawuUserId,
+            tierId: terms.tierId,
+            sourceRef,
+            now,
+          });
+        }
+        // The points of the checkout bump: a bought lot, last in the transaction.
+        if (terms.bump)
+          await this.points.grant(
+            {
+              wawuUserId,
+              source: 'bump',
+              sourceRef,
+              points: this.bumpPoints(),
+              expiresAt: new Date(
+                now.getTime() + this.config.points.boughtExpiryDays * DAY_MS,
+              ),
+            },
+            { tx, now },
+          );
+      });
+      return null;
+    } catch (e) {
+      if (e instanceof TierGrantRefusal) return e.message;
+      throw e;
+    }
+  }
+
+  /**
+   * Pays a payment that cannot be granted back to its payer, in full, through
+   * MONEY-18's refund: a `WalletHold` is written for it (the tier payment is
+   * not a held kind, so it has none), then refunded. Under the person's tier
+   * lock, so it excludes the grant: a delivery that granted the payment first
+   * leaves nothing to pay back. Safe to run again, and on two servers: the
+   * hold is one row per payment, the refund is asked once, and the move goes
+   * out under one reference of ours that the provider refuses to repeat.
+   */
+  private async refund(payment: CompletedPayment, why: string): Promise<void> {
+    const decided = await this.prisma.$transaction(async (tx) => {
+      await lockPersonTier(tx, payment.payerWawuUserId);
+      const granted = await tx.makerPurchase.findUnique({
+        where: { paymentRef: payment.paymentId },
+        select: { paymentRef: true },
+      });
+      if (granted) return false;
+      const p = await tx.walletPayment.findUniqueOrThrow({
+        where: { id: payment.paymentId },
+      });
+      await tx.walletHold.createMany({
         data: [
           {
-            paymentRef: sourceRef,
-            wawuUserId,
-            kind: terms.kind,
-            tierId: terms.tierId,
-            fromTierId: terms.fromTierId,
-            bump: terms.bump,
-            currency: PAYMENT_CURRENCY,
-            amountMinor: payment.priceKobo,
+            paymentId: p.id,
+            payerWawuUserId: p.payerWawuUserId,
+            payeeWawuUserId: null,
+            kind: p.kind,
+            targetId: p.targetId,
+            title: p.title,
+            releaseCondition: PLAN_REFUND_CONDITION,
+            amountKobo: p.priceKobo,
+            payeeShareKobo: p.payeeShareKobo,
+            wawuShareKobo: p.wawuShareKobo,
+            merchantAccountNumber: p.merchantAccountNumber,
+            provider: p.provider,
+            heldAt: new Date(),
           },
         ],
         skipDuplicates: true,
       });
-      if (count === 0) return;
-
-      const fixed = await this.billing.fixAtFirstPurchase(
-        { wawuUserId, purchaseRef: sourceRef },
-        tx,
-      );
-      if (fixed !== PAYMENT_CURRENCY)
-        throw new TierGrantRefusal(
-          'The person is billed in another currency than the one that was paid.',
-        );
-
-      const held = await tx.makerTier.findUnique({ where: { wawuUserId } });
-      const running =
-        held !== null && held.activeUntil.getTime() > now.getTime();
-      if (terms.kind === 'upgrade') {
-        await this.grants.upgrade(tx, {
-          wawuUserId,
-          fromTierId: terms.fromTierId ?? '',
-          tierId: terms.tierId,
-          sourceRef,
-          now,
-        });
-      } else {
-        // A first purchase meets a tier that began to run while it was
-        // confirming only when it is the same tier (then it extends it, as a
-        // renewal); a renewal needs the tier it renews.
-        const fits =
-          terms.kind === 'renew'
-            ? held !== null && held.tierId === terms.tierId
-            : !running || held.tierId === terms.tierId;
-        if (!fits)
-          throw new TierGrantRefusal(
-            'The person holds another tier than the one this purchase was priced for.',
-          );
-        await this.grants.grant(tx, {
-          wawuUserId,
-          tierId: terms.tierId,
-          sourceRef,
-          now,
-        });
-      }
-      // The points of the checkout bump: a bought lot, last in the transaction.
-      if (terms.bump)
-        await this.points.grant(
-          {
-            wawuUserId,
-            source: 'bump',
-            sourceRef,
-            points: this.bumpPoints(),
-            expiresAt: new Date(
-              now.getTime() + this.config.points.boughtExpiryDays * DAY_MS,
-            ),
-          },
-          { tx, now },
-        );
+      return true;
     });
+    if (!decided) return;
+    this.logger.warn(
+      `payment ${payment.paymentId}: the plan could not be granted (${why}); the price is being refunded`,
+    );
+    await this.holds.refund(
+      { paymentId: payment.paymentId },
+      `plan not granted: ${why}`,
+    );
   }
 
   private bumpPoints(): number {
@@ -421,6 +532,14 @@ export class PlanPurchaseService implements OnModuleInit {
     const row = await this.prisma.makerPurchase.findUnique({
       where: { paymentRef: view.id },
     });
+    // Only a payment that could not be granted has a hold (the tier payment
+    // is not a held kind): its price is going back, or has gone back.
+    const payback = row
+      ? null
+      : await this.prisma.walletHold.findUnique({
+          where: { paymentId: view.id },
+          select: { status: true },
+        });
     return {
       id: view.id,
       kind: terms.kind,
@@ -430,8 +549,14 @@ export class PlanPurchaseService implements OnModuleInit {
       method: 'wallet',
       currency: row?.currency ?? PAYMENT_CURRENCY,
       amountMinor: row?.amountMinor ?? view.priceKobo,
-      status: row ? 'paid' : statusOf(view.status),
-      statusMessage: row ? null : (view.failureReason ?? view.statusMessage),
+      status: row ? 'paid' : payback ? 'refunded' : statusOf(view.status),
+      statusMessage: row
+        ? null
+        : payback
+          ? payback.status === 'refunded'
+            ? REFUNDED_MESSAGE
+            : REFUNDING_MESSAGE
+          : (view.failureReason ?? view.statusMessage),
       payment: view,
       grant: row ? await this.grantView(row.wawuUserId, row.paymentRef) : null,
       createdAt: view.createdAt,

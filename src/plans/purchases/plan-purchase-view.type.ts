@@ -20,8 +20,13 @@ import type { PlanPaymentKind, PlanPurchaseKind } from './plan-purchase-terms';
  * is being opened (`payment.delivered` says which; the app polls). `paid`: the
  * plan is granted. `failed`: the provider refused it; nothing moved.
  * `reversed`: the money went back to the buyer; nothing was granted.
+ * `refunded`: the payment was confirmed but the plan could not be granted (the
+ * tier an upgrade came from ended while it confirmed, say), so the whole price
+ * is going back to the buyer's wallet or has gone back (`statusMessage` says
+ * which); nothing was granted, and the buyer may buy again at once.
  */
-export type PlanPurchaseStatus = 'pending' | 'paid' | 'failed' | 'reversed';
+export type PlanPurchaseStatus =
+  'pending' | 'paid' | 'failed' | 'reversed' | 'refunded';
 
 /** What a paid purchase gave. */
 export interface PlanPurchaseGrantView {
