@@ -1177,6 +1177,20 @@ describe('the nightly check against the wallet provider (MONEY-16)', () => {
       );
     });
 
+    it('does not list a refund owed to a payer because its payee is gone', async () => {
+      const gone = randomUUID();
+      const pg = await payment({ payee: gone, priceKobo: 100_000 });
+      await hold(pg, {
+        status: 'held',
+        action: 'refund',
+        actionAt: ago(HOUR),
+        waiting: 'payer_wallet',
+      });
+      books.merchant.availableKobo = 99_999_999;
+      const r = await report();
+      expect(refsOf(r, 'hold_payee_deleted')).toEqual([]);
+    });
+
     it("leaves a settled hold and another provider's payment out of the list", async () => {
       const settled = await payment();
       await hold(settled, {

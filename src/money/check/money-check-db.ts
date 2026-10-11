@@ -507,7 +507,14 @@ export async function checkHolds(ctx: DbCheckContext): Promise<void> {
   // A payee with no wallet yet waits (R-11); one with no account is owed money
   // nobody can be paid.
   const withPayee = await prisma.walletHold.findMany({
-    where: { AND: [base, { payeeWawuUserId: { not: null } }] },
+    // A refund goes to the payer, whatever became of the payee.
+    where: {
+      AND: [
+        base,
+        { payeeWawuUserId: { not: null } },
+        { OR: [{ action: null }, { action: 'release' }] },
+      ],
+    },
     select: {
       id: true,
       payeeShareKobo: true,
