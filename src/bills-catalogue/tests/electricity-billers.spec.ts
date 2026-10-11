@@ -193,6 +193,7 @@ describe('readBillsCatalogueConfig (PROVISIONAL settings)', () => {
       presetsKobo: PRESETS,
       cacheSeconds: 60,
       previewPerMinute: 30,
+      providerTextMaxBytes: 1024,
     });
   });
 
@@ -224,6 +225,23 @@ describe('readBillsCatalogueConfig (PROVISIONAL settings)', () => {
     expect(() => read({ BILLS_PREVIEW_PER_MINUTE: '0' })).toThrow(
       /BILLS_PREVIEW_PER_MINUTE/,
     );
+    for (const bad of ['63', '65537', 'abc', '1.5', '-1']) {
+      expect(() => read({ BILLS_PROVIDER_TEXT_MAX_BYTES: bad })).toThrow(
+        /BILLS_PROVIDER_TEXT_MAX_BYTES/,
+      );
+    }
+  });
+
+  it('takes the byte bound on a name from 64 to 65536 (R3-6)', () => {
+    expect(
+      read({ BILLS_PROVIDER_TEXT_MAX_BYTES: '64' }).providerTextMaxBytes,
+    ).toBe(64);
+    expect(
+      read({ BILLS_PROVIDER_TEXT_MAX_BYTES: '65536' }).providerTextMaxBytes,
+    ).toBe(65_536);
+    expect(
+      read({ BILLS_PROVIDER_TEXT_MAX_BYTES: '2048' }).providerTextMaxBytes,
+    ).toBe(2048);
   });
 
   it('allows a cache of 0, which asks Fintava every time', () => {

@@ -2,10 +2,16 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { FintavaClient } from '../fintava/fintava-client';
 import { FintavaError } from '../fintava/fintava-error';
+import {
+  isNotAnOwner,
+  nameWordsOf,
+  withoutLeadingInvisible,
+} from '../fintava/fintava-meter-answer';
 import type { FintavaDisco } from '../fintava/fintava.interface';
 import { PersonWindowLimiter } from '../money/person-window-limiter';
 import { BillsError, BILLS_RETRY_AFTER_SECONDS } from './bills-catalogue-error';
 import {
+  BILLS_CATALOGUE_DEFAULTS,
   readBillsCatalogueConfig,
   type BillsCatalogueConfig,
 } from './bills-catalogue-config';
@@ -15,8 +21,8 @@ import type {
   ElectricityBillersView,
   MeterPreviewView,
 } from './bills-catalogue.views';
-import { electricityBillers } from './electricity-billers';
-import { clipGraphemes } from './graphemes';
+import { companyShortNames, electricityBillers } from './electricity-billers';
+import { boundBytes, clipGraphemes } from './graphemes';
 
 /**
  * Fintava answers like this when its bills service cannot be used at all, however often we ask: no key or base URL in
@@ -32,11 +38,21 @@ const UNUSABLE = new Set<string>([
 export const PROVIDER_TEXT_MAX = 200;
 
 /**
- * Text cut to `PROVIDER_TEXT_MAX` characters a person sees, without trailing spaces. The cut falls between graphemes
- * (R2-5): a family emoji, a flag, or a letter with its accent is kept whole or left out whole, never split.
+ * Text cut to `PROVIDER_TEXT_MAX` characters a person sees, without trailing spaces. The spaces and invisible characters at
+ * its start come off first (a name that opens with 250 zero-width spaces would be cut to nothing but them otherwise), then
+ * the text is read only as far as `maxBytes` bytes (R3-6: a name of five megabytes costs no more than one of that size),
+ * then the cut falls between graphemes (R2-5): a family emoji, a flag, or a letter with its accent is kept whole or left
+ * out whole, never split. When the byte bound cut the text, its last grapheme may be only part of one and is left out.
  */
-export function clipProviderText(text: string): string {
-  return clipGraphemes(text, PROVIDER_TEXT_MAX).trimEnd();
+export function clipProviderText(
+  text: string,
+  maxBytes: number = BILLS_CATALOGUE_DEFAULTS.providerTextMaxBytes,
+): string {
+  const { text: bounded, cut } = boundBytes(
+    withoutLeadingInvisible(text),
+    maxBytes,
+  );
+  return clipGraphemes(bounded, PROVIDER_TEXT_MAX, undefined, cut).trimEnd();
 }
 
 /** A name as compared with a company's: lower case, letters and digits only. */
@@ -173,20 +189,29 @@ export class BillsCatalogueService {
           "We couldn't find this meter. Check the number.",
         );
       }
-      const name = clipProviderText(preview.ownerName);
+      const name = clipProviderText(
+        preview.ownerName,
+        this.config.providerTextMaxBytes,
+      );
+      // A name with nothing left once the invisible start is off and the bound has cut (the text starts with a character a
+      // person can see, so only the cut can leave nothing), or the company's own, says nothing about who owns the meter
+      // (R3-6, R3-1).
       if (name === '' || this.isCompanyName(name, biller)) {
-        // A name that is the company's own says nothing about who owns the meter.
         throw this.unconfirmed();
       }
+      const address =
+        preview.ownerAddress === null
+          ? ''
+          : clipProviderText(
+              preview.ownerAddress,
+              this.config.providerTextMaxBytes,
+            );
       return {
         meterNumber: dto.meterNumber,
         code: biller.code,
         plan: biller.plan,
         name,
-        address:
-          preview.ownerAddress === null
-            ? null
-            : clipProviderText(preview.ownerAddress) || null,
+        address: address === '' ? null : address,
       };
     } catch (e) {
       if (e instanceof FintavaError) {
@@ -221,7 +246,13 @@ export class BillsCatalogueService {
     );
   }
 
-  /** True when `name` is one of the ways the company itself is written: its name, with either plan word, Fintava's own wording, its code. */
+  /**
+   * True when `name` is the company itself and not a person: its name, with either plan word, Fintava's own wording, its
+   * code (the same letters and digits whatever the capitals, spaces and marks), or a name made only of the company's own
+   * words (its name, code, description and short names such as IKEDC) and the words a company's name is made of (plc,
+   * limited, distribution company, disco, electric, electricity, prepaid, bill payment; R3-1). One word that is none of
+   * those makes it an owner: another company's name on this meter, or "Ikeja Ada".
+   */
   private isCompanyName(name: string, biller: ElectricityBillerView): boolean {
     const listed = this.kept?.discos.find((d) => d.code === biller.code);
     const own = [
@@ -232,6 +263,11 @@ export class BillsCatalogueService {
       listed?.description,
     ];
     const given = nameForm(name);
-    return own.some((o) => o !== undefined && nameForm(o) === given);
+    if (own.some((o) => o !== undefined && nameForm(o) === given)) return true;
+    const words = new Set<string>();
+    for (const text of [...own, ...companyShortNames(biller.code)]) {
+      if (text !== undefined) for (const w of nameWordsOf(text)) words.add(w);
+    }
+    return isNotAnOwner(name, words);
   }
 }

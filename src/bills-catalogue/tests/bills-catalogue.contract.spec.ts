@@ -12,6 +12,12 @@ import { Test } from '@nestjs/testing';
 import * as jwt from 'jsonwebtoken';
 import request, { type Response } from 'supertest';
 import type { App } from 'supertest/types';
+import {
+  CONTROL_FLAG_BODIES,
+  FAILURE_FLAG_BODIES,
+  PLACEHOLDER_NAMES_125,
+  REAL_OWNERS,
+} from '../../../test/bills/not-an-owner';
 import { NOT_GREEN_BODIES } from '../../../test/bills/not-green-bodies';
 import { SANDBOX_DISCOS } from '../../../test/bills/sandbox-discos';
 import {
@@ -867,6 +873,283 @@ describe('BILLS-01 electricity catalogue and meter check over HTTP', () => {
 
       it('has all 22 of the verifier’s bodies', () => {
         expect(NOT_GREEN_BODIES).toHaveLength(22);
+      });
+
+      describe('a rule, not a list (BILLS-01 round 4, R3-1, R3-2, R3-6)', () => {
+        const IKEJA = 'Ikeja_Electric_Bill_Payment';
+        const nameBody = (name: string, address = '14 Admiralty Way') => ({
+          data: { Customer_Name: name, Address: address },
+          status: 200,
+          message: 'Meter details fetched',
+        });
+        const ask = (code: string, bodyAnswer: unknown) => {
+          listAnswers();
+          double.on('POST', '/billing/preview-meter', {
+            status: 200,
+            body: bodyAnswer,
+          });
+          return preview({ code, meterNumber: '04123456789' });
+        };
+        const unconfirmed = (res: Response) => {
+          expect(res.status).toBe(502);
+          expect(body(res).data).toBeNull();
+          expect(body(res).reason?.code).toBe('meter_unconfirmed');
+        };
+
+        it('has all 125 of the verifier’s spellings and 48 failure flags', () => {
+          expect(PLACEHOLDER_NAMES_125).toHaveLength(125);
+          expect(FAILURE_FLAG_BODIES).toHaveLength(48);
+          expect(CONTROL_FLAG_BODIES).toHaveLength(7);
+        });
+
+        it.each(PLACEHOLDER_NAMES_125.map((n) => [n]))(
+          'the verifier’s spelling %j, on an Ikeja meter, is never a meter found',
+          async (name) => {
+            unconfirmed(await ask(IKEJA, nameBody(name)));
+          },
+        );
+
+        it.each(FAILURE_FLAG_BODIES)(
+          'the verifier’s flag %s is never a meter found',
+          async (_label, flagged) => {
+            unconfirmed(await ask(IKEJA, flagged));
+          },
+        );
+
+        it.each(CONTROL_FLAG_BODIES)(
+          'the verifier’s control %s is still a meter found',
+          async (_label, control) => {
+            const res = await ask(IKEJA, control).then((r) => r);
+            expect(res.status).toBe(200);
+            expect(body<MeterPreviewView>(res).data!.name).toBe('Ada Eze');
+          },
+        );
+
+        it.each(REAL_OWNERS.map((n) => [n]))(
+          'a real owner, %s, is still found',
+          async (name) => {
+            const res = await ask(IKEJA, nameBody(name));
+            expect(res.status).toBe(200);
+            expect(body<MeterPreviewView>(res).data!.name).toBe(name);
+          },
+        );
+
+        it.each([
+          [IKEJA, 'Ikeja Electric Bill Payment Prepaid'],
+          [IKEJA, 'IKEDC Plc'],
+          [IKEJA, 'Ikeja Electric Token Purchase'],
+          [IKEJA, 'Ikeja'],
+          ['Eko_Prepaid', 'Eko Electric Plc'],
+          ['Eko_Prepaid', 'Eko Electricity Distribution Company'],
+          ['Eko_Prepaid', 'EKEDC'],
+          ['Eko_Prepaid', 'EKEDP'],
+          ['Eko_Prepaid', 'Eko Disco'],
+          ['Eko_Prepaid', 'Eko Prepaid Limited'],
+          ['Eko_Postpaid', 'Eko Electric Plc'],
+          ['AEDC', 'AEDC Plc'],
+          ['AEDC', 'Abuja Electric Distribution Company Limited'],
+          ['AEDC', 'Abuja Disco'],
+          ['Jos_Disco', 'JED'],
+          ['Jos_Disco', 'JEDC'],
+          ['Jos_Disco', 'Jos Electricity Plc'],
+          ['Jos_Disco', 'Jos Disco Ltd'],
+          ['Jos_Disco', 'Jos Electricity Distribution Company Plc'],
+          ['PhED_Electricity', 'Port Harcourt Electric Plc'],
+          ['PhED_Electricity', 'PHED'],
+          ['PhED_Electricity', 'PHEDC'],
+          ['Aba_Power_Prepaid', 'Aba Power Limited'],
+          ['Aba_Power_Prepaid', 'APLE'],
+          ['Kano_Electricity_Disco', 'KEDCO'],
+          ['Ibadan_Disco_Prepaid', 'IBEDC Plc'],
+          ['Enugu_Electricity_Distribution_Prepaid', 'EEDC'],
+          ['Kaduna_Electricity_Disco', 'KAEDCO Limited'],
+          ['BEDC', 'BEDC Plc'],
+        ])(
+          'on %s, the company’s own name in a form, %j, is not an owner (R3-1)',
+          async (code, name) => {
+            unconfirmed(await ask(code, nameBody(name)));
+          },
+        );
+
+        it.each([
+          [IKEJA, 'IkejaElectric'],
+          [IKEJA, 'IKEJAELECTRICPREPAID'],
+          [IKEJA, 'ikeja_electric'],
+          ['Jos_Disco', 'JosDisco'],
+          ['Jos_Disco', 'josdisco'],
+        ])(
+          'on %s, the company’s name written as one word, %j, is not an owner',
+          async (code, name) => {
+            unconfirmed(await ask(code, nameBody(name)));
+          },
+        );
+
+        it('Fintava’s own wording for the company, whatever it holds, is the company too: a name made of it is not an owner', async () => {
+          const rows = JSON.parse(JSON.stringify(SANDBOX_DISCOS)) as {
+            data: { code: string; description: string }[];
+          };
+          const row = rows.data.find((r) => r.code === 'AEDC')!;
+          row.description = 'Abuja Electricity Marketing Unit';
+          double.on('GET', '/billing/discos', { status: 200, body: rows });
+          for (const [name, found] of [
+            ['Marketing Unit', false],
+            ['Abuja Marketing', false],
+            ['Marketing Unit Okoro', true],
+          ] as const) {
+            double.on('POST', '/billing/preview-meter', {
+              status: 200,
+              body: nameBody(name),
+            });
+            const res = await preview({
+              code: 'AEDC',
+              meterNumber: '04123456789',
+            });
+            expect(res.status).toBe(found ? 200 : 502);
+          }
+        });
+
+        it.each([
+          [IKEJA, 'Ikeja Ada'],
+          [IKEJA, 'Eko Ikeja'],
+          [IKEJA, 'Eko Electric Plc'],
+          ['Eko_Prepaid', 'Ikeja Electric Plc'],
+          ['Jos_Disco', 'Jos Okoro'],
+          ['AEDC', 'Dangote Cement Plc'],
+          ['AEDC', 'AEDC Okafor'],
+        ])(
+          'on %s, a name with a word that is neither the company’s nor a form, %j, is an owner',
+          async (code, name) => {
+            const res = await ask(code, nameBody(name));
+            expect(res.status).toBe(200);
+            expect(body<MeterPreviewView>(res).data!.name).toBe(name);
+          },
+        );
+
+        describe('the name and the address are bounded before the cut (R3-6)', () => {
+          const marks = (n: number) => String.fromCodePoint(0x301).repeat(n);
+
+          it.each([
+            ['a zero-width space', '\u200b'],
+            ['a Braille blank', '\u2800'],
+            ['a Hangul filler', '\u3164'],
+          ])(
+            'a name behind 250 of %s is read, and the address too',
+            async (_k, blank) => {
+              const res = await ask(
+                'AEDC',
+                nameBody(
+                  `${blank.repeat(250)}Ada Eze`,
+                  `${blank.repeat(250)}14 Admiralty Way`,
+                ),
+              );
+              expect(res.status).toBe(200);
+              expect(body<MeterPreviewView>(res).data).toMatchObject({
+                name: 'Ada Eze',
+                address: '14 Admiralty Way',
+              });
+            },
+          );
+
+          it('an address of nothing a person can see, however long, is none', async () => {
+            const res = await ask(
+              'AEDC',
+              nameBody('Ada Eze', '\u200b'.repeat(250)),
+            );
+            expect(res.status).toBe(200);
+            expect(body<MeterPreviewView>(res).data!.address).toBeNull();
+          });
+
+          it.each([
+            ['one letter and 1,500 marks', `e${marks(1500)}`],
+            [
+              'a chain of 400 emoji joined by a joiner',
+              Array(400).fill('\u{1F468}').join('\u200d'),
+            ],
+          ])(
+            '%s is one character a person sees, longer than the bound, so it is no name',
+            async (_k, name) => {
+              unconfirmed(await ask('AEDC', nameBody(name)));
+            },
+          );
+
+          it('150 letters with ten accents each are cut to the whole letters that fit the bound', async () => {
+            const unit = `a${marks(10)}`;
+            const res = await ask('AEDC', nameBody(unit.repeat(150)));
+            expect(res.status).toBe(200);
+            const name = body<MeterPreviewView>(res).data!.name;
+            expect(Buffer.byteLength(name, 'utf8')).toBeLessThanOrEqual(1024);
+            expect(name).toBe(unit.repeat(name.length / unit.length));
+          });
+
+          it('an address that is one long character is none, and the meter is still found', async () => {
+            const res = await ask(
+              'AEDC',
+              nameBody('Ada Eze', `e${marks(1500)}`),
+            );
+            expect(res.status).toBe(200);
+            expect(body<MeterPreviewView>(res).data).toMatchObject({
+              name: 'Ada Eze',
+              address: null,
+            });
+          });
+
+          it('a name of five megabytes answers at once, cut to 200 characters', async () => {
+            const segment = jest.spyOn(Intl.Segmenter.prototype, 'segment');
+            try {
+              const started = Date.now();
+              const res = await ask(
+                'AEDC',
+                nameBody('N'.repeat(5_000_000), 'A'.repeat(5_000_000)),
+              );
+              const took = Date.now() - started;
+              expect(res.status).toBe(200);
+              expect(body<MeterPreviewView>(res).data).toMatchObject({
+                name: 'N'.repeat(200),
+                address: 'A'.repeat(200),
+              });
+              // The cut once took 3.9 s on its own for a name this size.
+              expect(took).toBeLessThan(3000);
+              const longest = Math.max(
+                ...segment.mock.calls.map(([text]) => String(text).length),
+              );
+              expect(longest).toBeLessThanOrEqual(1024);
+            } finally {
+              segment.mockRestore();
+            }
+          });
+
+          it('a name of five megabytes of invisible characters answers at once as not confirmed', async () => {
+            const started = Date.now();
+            unconfirmed(
+              await ask('AEDC', nameBody('\u200b'.repeat(5_000_000))),
+            );
+            expect(Date.now() - started).toBeLessThan(3000);
+          });
+
+          it('a name of five megabytes of one letter and marks answers at once as not confirmed', async () => {
+            const started = Date.now();
+            unconfirmed(await ask('AEDC', nameBody(`e${marks(2_500_000)}`)));
+            expect(Date.now() - started).toBeLessThan(3000);
+          });
+
+          it('takes the bound from the Hub’s setting (BILLS_PROVIDER_TEXT_MAX_BYTES), for the name and for the address', async () => {
+            const svc = serviceWith({
+              ...ENV,
+              BILLS_PROVIDER_TEXT_MAX_BYTES: '64',
+            });
+            listAnswers();
+            double.on('POST', '/billing/preview-meter', {
+              status: 200,
+              body: nameBody('N'.repeat(100), 'A'.repeat(150)),
+            });
+            const got = await svc.previewMeter(randomUUID(), {
+              code: 'AEDC',
+              meterNumber: '04123456789',
+            });
+            expect(got.name).toBe('N'.repeat(63));
+            expect(got.address).toBe('A'.repeat(63));
+          });
+        });
       });
 
       it('compares the owner with the company’s own name whatever the capitals, spaces and plan words', async () => {

@@ -1756,12 +1756,18 @@ export class FintavaClient {
             maximumKobo: fintavaAmountToKobo(o.maximum_value),
             available: o.is_available === 'Yes',
           };
-          // A company no amount fits (a negative limit, or a minimum above
-          // its maximum) is not listed: S3 would offer a row nobody can pay
-          // (BILLS-01 round 3, R2-4).
-          // (A negative maximum is one of the two: below a minimum of nothing
-          // or above, or itself below a negative minimum.)
-          if (disco.minimumKobo < 0 || disco.minimumKobo > disco.maximumKobo) {
+          // A company no amount fits (a negative limit, a minimum above its
+          // maximum, or a maximum of nothing, which with a minimum that is not
+          // negative and not above it is a minimum of nothing too) is not
+          // listed: S3 would offer a row nobody can pay (BILLS-01 round 3,
+          // R2-4; round 4, R3-5).
+          // (A negative maximum is one of the first two: below a minimum of
+          // nothing or above, or itself below a negative minimum.)
+          if (
+            disco.minimumKobo < 0 ||
+            disco.minimumKobo > disco.maximumKobo ||
+            disco.maximumKobo === 0
+          ) {
             skip('limits do not fit');
             return;
           }

@@ -5,11 +5,24 @@ import {
 } from '../../../test/fintava/fintava-double';
 import { FintavaClient } from '../fintava-client';
 import { FintavaError } from '../fintava-error';
-import { readMeterAnswer } from '../fintava-meter-answer';
+import {
+  COMPANY_FORM_WORDS,
+  PLACEHOLDER_WORDS,
+  isNotAnOwner,
+  nameWordsOf,
+  readMeterAnswer,
+} from '../fintava-meter-answer';
 import {
   NOT_GREEN_BODIES,
   PLACEHOLDER_NAMES,
 } from '../../../test/bills/not-green-bodies';
+import {
+  COMPANY_FORM_COUNT,
+  CONTROL_FLAG_BODIES,
+  FAILURE_FLAG_BODIES,
+  PLACEHOLDER_NAMES_125,
+  REAL_OWNERS,
+} from '../../../test/bills/not-an-owner';
 
 /**
  * How the Fintava client reads a meter preview (BILLS-01 round 2, D2). The success body has never been seen (question
@@ -334,6 +347,550 @@ describe('readMeterAnswer: what is never a green found meter (BILLS-01 round 3, 
     });
   });
 
+  describe('a rule, not a list (BILLS-01 round 4, R3-1 and R3-2)', () => {
+    it('has the verifier’s 125 spellings, 55 flag shapes (48 failures, 7 controls)', () => {
+      expect(PLACEHOLDER_NAMES_125).toHaveLength(125);
+      expect(FAILURE_FLAG_BODIES).toHaveLength(48);
+      expect(CONTROL_FLAG_BODIES).toHaveLength(7);
+    });
+
+    it.each(PLACEHOLDER_NAMES_125.slice(COMPANY_FORM_COUNT))(
+      'the verifier’s placeholder %j names no one',
+      (name) => {
+        expect(
+          readMeterAnswer(owner({ Customer_Name: name, Address: '1 Road' })),
+        ).toEqual({
+          kind: 'unreadable',
+        });
+      },
+    );
+
+    it.each(REAL_OWNERS)('still names the owner %s', (name) => {
+      expect(readMeterAnswer(owner({ Customer_Name: name }))).toMatchObject({
+        kind: 'owner',
+        name,
+      });
+    });
+
+    it.each(FAILURE_FLAG_BODIES)(
+      'the verifier’s flag %s is not a meter found',
+      (_label, body) => {
+        expect(readMeterAnswer(body)).toEqual({ kind: 'unreadable' });
+      },
+    );
+
+    it.each(CONTROL_FLAG_BODIES)(
+      'the verifier’s control %s is still a meter found',
+      (_label, body) => {
+        expect(readMeterAnswer(body)).toMatchObject({
+          kind: 'owner',
+          name: 'Ada Eze',
+        });
+      },
+    );
+
+    it.each([
+      ['Plc', 'Plc'],
+      ['PLC.', 'PLC.'],
+      ['Limited', 'Limited'],
+      ['Ltd', 'Ltd'],
+      ['Distribution Company', 'Distribution Company'],
+      ['Disco', 'Disco'],
+      ['Electric', 'Electric'],
+      ['Electricity', 'Electricity'],
+      ['a form with nothing else', 'Electric Distribution Company Limited'],
+      ['placeholder words and a form', 'Unknown Plc'],
+    ])('is not an owner when the name is only %s', (_k, name) => {
+      expect(readMeterAnswer(owner({ name }))).toEqual({ kind: 'unreadable' });
+    });
+
+    it.each([
+      ['one word of a person among placeholders', 'Customer Ada'],
+      ['a number is not a name', 'Ada 2'],
+      ['a form beside a person’s name', 'Ada Okoro Ltd'],
+      ['the words of a placeholder in a longer name', 'Meter Okoro Number'],
+    ])('is an owner when it holds a word that is neither: %s', (_k, name) => {
+      expect(readMeterAnswer(owner({ name }))).toMatchObject({
+        kind: 'owner',
+        name,
+      });
+    });
+
+    it('reads only the start of a very long name, so a hostile one costs no more than a short one', () => {
+      const started = Date.now();
+      // Five megabytes of "null": nothing but placeholders in the part that is read.
+      expect(
+        readMeterAnswer(owner({ name: 'null '.repeat(1_000_000) })),
+      ).toEqual({ kind: 'unreadable' });
+      // A real name followed by five megabytes of spaces is still the owner.
+      const padded = readMeterAnswer(
+        owner({ name: `Ada Eze${' '.repeat(5_000_000)}` }),
+      );
+      // (Not compared as whole objects: a failure would print five megabytes.)
+      expect(padded.kind).toBe('owner');
+      expect(padded.kind === 'owner' && padded.name === 'Ada Eze').toBe(true);
+      expect(Date.now() - started).toBeLessThan(3000);
+    });
+
+    it.each([...PLACEHOLDER_WORDS, ...COMPANY_FORM_WORDS].map((w) => [w]))(
+      'the word %s alone names no one, and the word twice names no one',
+      (word) => {
+        for (const name of [word, `${word} ${word}`, word.toUpperCase()]) {
+          expect(readMeterAnswer(owner({ name }))).toEqual({
+            kind: 'unreadable',
+          });
+        }
+      },
+    );
+
+    it('one word of a person among the placeholder and company words makes an owner', () => {
+      for (const w of [...PLACEHOLDER_WORDS, ...COMPANY_FORM_WORDS]) {
+        expect(readMeterAnswer(owner({ name: `${w} Okonkwo` }))).toMatchObject({
+          kind: 'owner',
+          name: `${w} Okonkwo`,
+        });
+      }
+    });
+
+    it('reads a name as words: case, width, spaces of every kind and every n/a spelling folded', () => {
+      expect(nameWordsOf('  Ada\t\u00a0 EZE ')).toEqual(['ada', 'eze']);
+      expect(nameWordsOf('\uff21\uff44\uff41')).toEqual(['ada']);
+      expect(nameWordsOf('A\u200bda')).toEqual(['ada']);
+      for (const na of [
+        'n/a',
+        'N/A',
+        'n / a',
+        'N\\A',
+        'n.a',
+        'N.A.',
+        '#N/A',
+        'NA',
+      ]) {
+        expect(nameWordsOf(na)).toEqual(['na']);
+      }
+      expect(nameWordsOf('Ada n/a Eze')).toEqual(['ada', 'na', 'eze']);
+      expect(nameWordsOf('Ian/Anna')).toEqual(['ian', 'anna']);
+      expect(nameWordsOf('')).toEqual([]);
+      expect(nameWordsOf('...')).toEqual([]);
+    });
+
+    it('reads no more than the first 2,000 characters of a name', () => {
+      expect(nameWordsOf('x '.repeat(5000))).toHaveLength(1000);
+      expect(nameWordsOf(`${'y'.repeat(1994)} zz abc`)).toEqual([
+        'y'.repeat(1994),
+        'zz',
+        'ab',
+      ]);
+    });
+
+    it('takes the extra words a caller adds, and only whole words', () => {
+      const company = new Set(['ikeja', 'ikedc']);
+      expect(isNotAnOwner('IKEDC', company)).toBe(true);
+      expect(isNotAnOwner('Ikeja Plc', company)).toBe(true);
+      expect(isNotAnOwner('Ikejaland', company)).toBe(false);
+      expect(isNotAnOwner('Ikeja Ada', company)).toBe(false);
+      expect(isNotAnOwner('Ikeja Plc')).toBe(false);
+    });
+
+    it.each([
+      'success',
+      'successful',
+      'isSuccess',
+      'isSuccessful',
+      'valid',
+      'isValid',
+      'verified',
+      'isVerified',
+      'found',
+      'isFound',
+      'exists',
+      'exist',
+      'ok',
+      'status',
+      'Is_Valid',
+      'SUCCESS',
+    ])(
+      'an explicit no under %s is a failure, at the top and in data',
+      (key) => {
+        expect(
+          readMeterAnswer({ [key]: false, data: { name: 'Ada Eze' } }),
+        ).toEqual({
+          kind: 'unreadable',
+        });
+        expect(
+          readMeterAnswer({ data: { name: 'Ada Eze', [key]: false } }),
+        ).toEqual({
+          kind: 'unreadable',
+        });
+      },
+    );
+
+    it.each([
+      false,
+      0,
+      'false',
+      'FALSE',
+      ' False ',
+      '0',
+      'no',
+      'No',
+      'n',
+      'f',
+      'off',
+    ])('%j is a no', (no) => {
+      expect(
+        readMeterAnswer({ success: no, data: { name: 'Ada Eze' } }),
+      ).toEqual({
+        kind: 'unreadable',
+      });
+    });
+
+    it.each([
+      true,
+      1,
+      'true',
+      'yes',
+      'ok',
+      'success',
+      200,
+      '200',
+      'on',
+      null,
+      '',
+    ])('%j is not a no', (yes) => {
+      expect(
+        readMeterAnswer({ success: yes, data: { name: 'Ada Eze' } }),
+      ).toMatchObject({
+        kind: 'owner',
+      });
+    });
+
+    it.each([
+      'status',
+      'message',
+      'messages',
+      'error',
+      'errors',
+      'errorMessage',
+      'error_msg',
+      'reason',
+    ])('failure words under %s are a failure, as text and in a list', (key) => {
+      expect(
+        readMeterAnswer({ [key]: 'It failed', data: { name: 'Ada Eze' } }),
+      ).toEqual({
+        kind: 'unreadable',
+      });
+      expect(
+        readMeterAnswer({
+          [key]: ['fine', 'it failed'],
+          data: { name: 'Ada Eze' },
+        }),
+      ).toEqual({
+        kind: 'unreadable',
+      });
+      expect(
+        readMeterAnswer({ data: { name: 'Ada Eze', [key]: 'It failed' } }),
+      ).toEqual({
+        kind: 'unreadable',
+      });
+    });
+
+    it.each([
+      'failed',
+      'failure',
+      'Failures',
+      'it fails',
+      'error',
+      'errors',
+      'invalid',
+      'unable to do it',
+      'unsuccessful',
+      'unsuccessfully done',
+      'unauthorized',
+      'Unauthorised',
+      'forbidden',
+      'denied',
+      'rejected',
+      'reject',
+      'declined',
+      'decline',
+      'refused',
+      'refusal',
+      'inactive',
+      'expired',
+      'exception',
+      'bad request',
+      'timed out',
+      'time out',
+      'timeout',
+      'not found',
+      'not available',
+      'not registered',
+      'not valid',
+      'not successful',
+      'unavailable',
+      'no such thing',
+      'does not exist',
+      'did not exist',
+      "doesn't exist",
+      'doesn\u2019t exist',
+      'could not',
+      "couldn't",
+      'couldn\u2019t',
+      'cannot',
+      "can't",
+      'can\u2019t',
+    ])('the words "%s" in a message are a failure', (said) => {
+      expect(
+        readMeterAnswer({ data: { name: 'Ada Eze', message: said } }),
+      ).toEqual({
+        kind: 'unreadable',
+      });
+    });
+
+    it.each([
+      'Meter details fetched',
+      'Customer details retrieved successfully',
+      'ok',
+      'success',
+      'Successful',
+      'active',
+      'pending',
+      'verified',
+      'Records fetched',
+      'fine',
+    ])('the message "%s" is not a failure', (said) => {
+      expect(
+        readMeterAnswer({ message: said, data: { name: 'Ada Eze' } }),
+      ).toMatchObject({
+        kind: 'owner',
+      });
+    });
+
+    it.each(['error', 'errors', 'errorMessage', 'errorMsg'])(
+      'anything in %s is a failure, and nothing in it is not',
+      (key) => {
+        for (const held of [true, 1, 'x', ' x ', ['x'], { a: 1 }, 'false']) {
+          expect(
+            readMeterAnswer({ [key]: held, data: { name: 'Ada Eze' } }),
+          ).toEqual({
+            kind: 'unreadable',
+          });
+        }
+        for (const empty of [false, 0, null, undefined, '', '   ', [], {}]) {
+          expect(
+            readMeterAnswer({ [key]: empty, data: { name: 'Ada Eze' } }),
+          ).toMatchObject({
+            kind: 'owner',
+          });
+        }
+      },
+    );
+
+    it.each([
+      'statusCode',
+      'responseCode',
+      'responseStatus',
+      'httpStatus',
+      'httpCode',
+    ])(
+      'a result code under %s: 0, 00 and 200 to 399 pass, the rest and the words do not',
+      (key) => {
+        for (const good of [
+          0,
+          '0',
+          '00',
+          '000',
+          200,
+          '200',
+          201,
+          299,
+          300,
+          399,
+          '399',
+          'success',
+          'OK',
+          'approved',
+        ]) {
+          expect(
+            readMeterAnswer({ [key]: good, data: { name: 'Ada Eze' } }),
+          ).toMatchObject({
+            kind: 'owner',
+          });
+        }
+        for (const bad of [
+          1,
+          '01',
+          99,
+          '99',
+          100,
+          199,
+          400,
+          '400',
+          404,
+          500,
+          599,
+          999,
+          'x',
+          'declined',
+          'Internal',
+          true,
+        ]) {
+          expect(
+            readMeterAnswer({ [key]: bad, data: { name: 'Ada Eze' } }),
+          ).toEqual({
+            kind: 'unreadable',
+          });
+        }
+        for (const none of [null, undefined, '']) {
+          expect(
+            readMeterAnswer({ [key]: none, data: { name: 'Ada Eze' } }),
+          ).toMatchObject({
+            kind: 'owner',
+          });
+        }
+      },
+    );
+
+    it('a plain code is a result code only as a number of up to three digits', () => {
+      for (const bad of [1, '01', '99', 150, 400, '500', 999]) {
+        expect(
+          readMeterAnswer({ code: bad, data: { name: 'Ada Eze' } }),
+        ).toEqual({
+          kind: 'unreadable',
+        });
+      }
+      for (const good of [
+        0,
+        '00',
+        200,
+        '201',
+        399,
+        1000,
+        '1000',
+        '12345',
+        'AEDC',
+        'x',
+        4.5,
+        null,
+      ]) {
+        expect(
+          readMeterAnswer({ code: good, data: { name: 'Ada Eze' } }),
+        ).toMatchObject({
+          kind: 'owner',
+        });
+      }
+    });
+
+    it('looks for a failure four levels down and ten items into a list, and not further', () => {
+      const deep = (n: number): Record<string, unknown> =>
+        n === 0 ? { error: 'x' } : { next: deep(n - 1) };
+      // The body is level 0 and data level 1: an object four levels below the body is read, one five levels below is not.
+      expect(
+        readMeterAnswer({ data: { name: 'Ada Eze', ...deep(3) } }),
+      ).toEqual({
+        kind: 'unreadable',
+      });
+      expect(
+        readMeterAnswer({ data: { name: 'Ada Eze', ...deep(4) } }),
+      ).toMatchObject({
+        kind: 'owner',
+      });
+      const list = (at: number) =>
+        Array.from({ length: 12 }, (_v, i) =>
+          i === at ? { valid: false } : { valid: true },
+        );
+      expect(
+        readMeterAnswer({ data: { name: 'Ada Eze', checks: list(9) } }),
+      ).toEqual({
+        kind: 'unreadable',
+      });
+      expect(
+        readMeterAnswer({ data: { name: 'Ada Eze', checks: list(10) } }),
+      ).toMatchObject({
+        kind: 'owner',
+      });
+      expect(
+        readMeterAnswer({
+          data: {
+            name: 'Ada Eze',
+            notes: [...Array(9).fill('fine'), 'it failed'],
+          },
+        }),
+      ).toMatchObject({ kind: 'owner' });
+      expect(
+        readMeterAnswer({
+          message: [...Array(9).fill('fine'), 'it failed'],
+          data: { name: 'Ada Eze' },
+        }),
+      ).toEqual({ kind: 'unreadable' });
+      expect(
+        readMeterAnswer({
+          message: [...Array(10).fill('fine'), 'it failed'],
+          data: { name: 'Ada Eze' },
+        }),
+      ).toMatchObject({ kind: 'owner' });
+    });
+
+    it.each([
+      ['success "No"', { success: 'No' }],
+      ['ok false', { ok: false }],
+      ['ok "0"', { ok: '0' }],
+      ['valid "false"', { valid: 'false' }],
+      ['status "F"', { status: 'f' }],
+      [
+        'a result code "00" is a success and "55" a failure',
+        { responseCode: '55' },
+      ],
+      ['a result code in words', { responseCode: 'error' }],
+      ['a 3 digit code of 150', { code: 150 }],
+      [
+        'a failure two levels down',
+        { data: { name: 'Ada Eze', meta: { error: 'x' } } },
+      ],
+      [
+        'a failure in a list in data',
+        { data: { name: 'Ada Eze', checks: [{ valid: false }] } },
+      ],
+      ['message "Could not verify"', { message: 'Could not verify the meter' }],
+      ['message "Request timed out"', { message: 'Request timed out' }],
+      ['message "Not authorized"', { message: 'Unauthorized' }],
+      ['message "Bad request"', { message: 'Bad Request' }],
+      [
+        'a message list holding a failure',
+        { message: ['ok', 'Meter is not valid'] },
+      ],
+    ])('flags a failure beside a name: %s', (_k, extra) => {
+      const body =
+        'data' in extra ? extra : { ...extra, data: { name: 'Ada Eze' } };
+      expect(readMeterAnswer(body)).toEqual({ kind: 'unreadable' });
+    });
+
+    it.each([
+      ['a result code "00"', { responseCode: '00' }],
+      ['a result code 0', { responseCode: 0 }],
+      ['a result code "200"', { responseCode: '200' }],
+      ['a result code "success"', { responseCode: 'success' }],
+      ['code a disco code', { data: { name: 'Ada Eze', code: 'AEDC' } }],
+      [
+        'code a customer code of four digits',
+        { data: { name: 'Ada Eze', code: '12345' } },
+      ],
+      ['success "yes"', { success: 'yes' }],
+      ['status "pending"', { status: 'pending' }],
+      [
+        'message "Meter details fetched successfully"',
+        { message: 'Meter details fetched successfully' },
+      ],
+      ['an empty error list', { errors: [] }],
+      ['valid true, found true', { valid: true, found: true }],
+    ])('does not flag %s', (_k, extra) => {
+      const body =
+        'data' in extra ? extra : { ...extra, data: { name: 'Ada Eze' } };
+      expect(readMeterAnswer(body)).toMatchObject({ kind: 'owner' });
+    });
+  });
+
   describe('which name key wins, and what an empty data array is (round 2 test gaps V5 and V6)', () => {
     it('an empty data array is unreadable, not nobody', () => {
       expect(readMeterAnswer({ status: 200, data: [] })).toEqual({
@@ -343,12 +900,12 @@ describe('readMeterAnswer: what is never a green found meter (BILLS-01 round 3, 
 
     it('takes the first of the name keys in this order: customer name, name, account name, consumer name, full name', () => {
       const order = [
-        ['Customer_Name', 'A'],
-        ['name', 'B'],
-        ['accountName', 'C'],
-        ['consumerName', 'D'],
-        ['fullName', 'E'],
-        ['customerFullName', 'F'],
+        ['Customer_Name', 'Ada'],
+        ['name', 'Bola'],
+        ['accountName', 'Chika'],
+        ['consumerName', 'Dayo'],
+        ['fullName', 'Efe'],
+        ['customerFullName', 'Femi'],
       ] as const;
       for (let i = 0; i < order.length; i += 1) {
         const data = Object.fromEntries(order.slice(i));
