@@ -134,6 +134,7 @@ export const MONEY_ERROR_CODES = [
   'pin_incorrect',
   'pin_locked',
   'pin_mismatch',
+  'pin_changed_again',
   'reset_code_invalid',
   'insufficient_funds',
   'daily_limit_exceeded',

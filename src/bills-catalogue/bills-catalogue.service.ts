@@ -16,6 +16,7 @@ import type {
   MeterPreviewView,
 } from './bills-catalogue.views';
 import { electricityBillers } from './electricity-billers';
+import { clipGraphemes } from './graphemes';
 
 /**
  * Fintava answers like this when its bills service cannot be used at all, however often we ask: no key or base URL in
@@ -30,9 +31,12 @@ const UNUSABLE = new Set<string>([
 /** The most characters of Fintava's text (an owner's name or address) the Hub passes on (D9). */
 export const PROVIDER_TEXT_MAX = 200;
 
-/** Text cut to `PROVIDER_TEXT_MAX` characters a person sees (never half of an emoji), without trailing spaces. */
+/**
+ * Text cut to `PROVIDER_TEXT_MAX` characters a person sees, without trailing spaces. The cut falls between graphemes
+ * (R2-5): a family emoji, a flag, or a letter with its accent is kept whole or left out whole, never split.
+ */
 export function clipProviderText(text: string): string {
-  return Array.from(text).slice(0, PROVIDER_TEXT_MAX).join('').trimEnd();
+  return clipGraphemes(text, PROVIDER_TEXT_MAX).trimEnd();
 }
 
 /** A name as compared with a company's: lower case, letters and digits only. */
@@ -50,7 +54,9 @@ function nameForm(text: string): string {
  * - Nothing a meter check answers is logged: the name and address on a meter belong to someone else.
  * - A meter is "found" only for an owner's name that is not the company's own. The success body has never been seen, so
  *   everything else (no name, an unreadable body, a name that is the company's) is an answer that is not green.
- * - A check that finds Fintava's bills service off drops the kept list, so the next ask for the list says so too.
+ * - A check that finds Fintava's bills service off holds "off" for the cache window (R2-U1): the
+ *   list says `available: false` without asking Fintava, so a list that still answers cannot flip S2 back to the normal
+ *   screen a moment after the check sent the person to S13. Once the window passes, the next ask goes to Fintava again.
  */
 @Injectable()
 export class BillsCatalogueService {
@@ -58,6 +64,8 @@ export class BillsCatalogueService {
   readonly limiter: PersonWindowLimiter;
   private kept: { at: number; discos: FintavaDisco[] } | null = null;
   private asking: Promise<FintavaDisco[]> | null = null;
+  /** Until when a check that found bills off holds "off" (milliseconds on `now`); null when none does. */
+  private offUntil: number | null = null;
   /** The clock; a test may replace it. */
   now: () => number = () => Date.now();
 
@@ -100,6 +108,10 @@ export class BillsCatalogueService {
 
   /** Reads Fintava's list. `null` is "bills cannot be used" (S13); anything else that fails is a 503 to try again. */
   private async read(): Promise<ElectricityBillersView | null> {
+    if (this.offUntil !== null) {
+      if (this.now() < this.offUntil) return null;
+      this.offUntil = null;
+    }
     let discos: FintavaDisco[];
     try {
       discos = await this.discos();
@@ -179,8 +191,10 @@ export class BillsCatalogueService {
     } catch (e) {
       if (e instanceof FintavaError) {
         if (UNUSABLE.has(e.kind) || e.serviceNotAvailable) {
-          // The list we kept may still say "available"; do not let S2 keep drawing it.
-          this.kept = null;
+          // The list we kept may still say "available", and Fintava's list may still answer: neither may flip S2 back to the
+          // normal screen. Bills stay off for the cache window, without asking Fintava again (R2-U1); the kept list is
+          // older than the window by then, so it is not read again either.
+          this.offUntil = this.now() + this.config.cacheSeconds * 1000;
           throw new BillsError(
             'bills_unavailable',
             "Bill payments aren't switched on yet.",
@@ -207,12 +221,13 @@ export class BillsCatalogueService {
     );
   }
 
-  /** True when `name` is one of the ways the company itself is written: its name, with its plan, Fintava's own wording, its code. */
+  /** True when `name` is one of the ways the company itself is written: its name, with either plan word, Fintava's own wording, its code. */
   private isCompanyName(name: string, biller: ElectricityBillerView): boolean {
     const listed = this.kept?.discos.find((d) => d.code === biller.code);
     const own = [
       biller.name,
-      `${biller.name} ${biller.plan}`,
+      `${biller.name} prepaid`,
+      `${biller.name} postpaid`,
       biller.code,
       listed?.description,
     ];

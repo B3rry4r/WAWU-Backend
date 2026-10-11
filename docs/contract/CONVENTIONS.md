@@ -213,6 +213,7 @@ Every refusal is the envelope this backend already answers with
 | `pin_incorrect` | 403 | wrong PIN | `triesLeft` |
 | `pin_locked` | 423 | too many wrong PINs | `lockedUntil` |
 | `pin_mismatch` | 400 | the two entries of a new PIN differ | |
+| `pin_changed_again` | 409 | a repeat (same Idempotency-Key) of a PIN change or reset whose first request landed but whose answer was never stored, arriving more than a minute later, after the PIN was changed again | |
 | `reset_code_invalid` | 400 | wrong or expired reset code | `triesLeft` |
 | `insufficient_funds` | 402 | balance below the total (H17, I6, S11, W13); one wording for every route, built by `insufficientFunds()` in `src/money/insufficient-funds.ts` (MONEY-19) | `balanceKobo`, `totalKobo`, `shortfallKobo` |
 | `daily_limit_exceeded` | 403 | the send or purchase passes today's limit; stopped before money moves | `totalKobo`, `remainingTodayKobo` |
@@ -344,10 +345,26 @@ differences:
   request died first and the key is free again; one that names the PIN, has no
   answer and is more than a minute old is answered with the PIN's state as it
   stands.
-- The fingerprint of the body is argon2id (salted from person, route and key,
-  so the same request always gives the same text), not SHA-256, because the
-  body holds the new PIN; the stored answer is the PIN's state, never a PIN or
-  a code.
+- The fingerprint of the body is an HMAC-SHA256 under a key only the Hub
+  holds, not SHA-256, because the body holds the new PIN: the key is derived
+  from `WAWU_ID_INTERNAL_SERVICE_KEY` (already required to start in
+  production, so no new setting) with the fixed label
+  `wawu-hub:pin-request-fingerprint:v1`, and the person, route and key are in
+  what is signed, so the same request always gives the same text and a read
+  of the table alone reveals no PIN. A row written before this (argon2id,
+  `$argon2id$...`) is read as it was until it expires; nothing writes that
+  form any more. The stored answer is the PIN's state, never a PIN or a code.
+- The two refusals the store gives a repeat are worded for the PIN, not for a
+  payment: `idempotency_in_progress` says "Your PIN change is still going
+  through. Check again in a moment." (a reset: "Your PIN reset is still going
+  through. ..."), and `idempotency_key_reused` says "Start again to change your
+  PIN." (a reset: "Start again to reset your PIN."). Same codes, same shape.
+- A row that names the PIN, has no answer and is more than a minute old is
+  answered `200` with the PIN's state only if the PIN is still the one the
+  repeated request carries (its hash verifies against that request's new PIN;
+  nothing is counted); otherwise `409 pin_changed_again` ("Your PIN was
+  changed again since. Check it in Wallet settings."), and nothing is stored,
+  so each repeat is answered from the PIN as it stands.
 - The two codes `idempotency_key_reused` and `idempotency_in_progress` are
   documented in the header's description, not in the route's `reason.code`
   lists: those lists are how `money-moving-coverage.spec.ts` tells a route
