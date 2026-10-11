@@ -127,9 +127,10 @@ describe('Not enough money, and still confirming (MONEY-19), Nuvion stood in', (
   async function quoted(
     p: Person,
     targetId: string,
+    kind = 'content_unlock',
   ): Promise<PaymentQuoteView> {
     const res = await request(app.getHttpServer())
-      .get(`${BASE}/quote?kind=content_unlock&targetId=${targetId}`)
+      .get(`${BASE}/quote?kind=${kind}&targetId=${targetId}`)
       .set('Authorization', p.auth);
     expect(res.status).toBe(200);
     const q = body<PaymentQuoteView>(res).data!;
@@ -264,18 +265,51 @@ describe('Not enough money, and still confirming (MONEY-19), Nuvion stood in', (
         delivered.push(p);
       },
     });
+    // A held kind (R-19): its payment completes into a hold (MONEY-18).
+    moduleRef.get(PayableRegistry).register({
+      kind: 'event_ticket',
+      resolve: async ({ targetId }) => {
+        await Promise.resolve();
+        if (!targetId.startsWith('t-')) {
+          throw new MoneyError('target_not_found', 'That event is gone.');
+        }
+        return {
+          title: `Ticket ${targetId}`,
+          priceKobo: PRICE,
+          payee: creator,
+        };
+      },
+      onCompleted: async (p) => {
+        await Promise.resolve();
+        delivered.push(p);
+      },
+    });
   });
 
   afterAll(async () => {
     if (prisma) {
       const rows = await prisma.walletPayment.findMany({
         where: { payerWawuUserId: { in: users } },
+        select: { id: true, customerReference: true },
+      });
+      const holdRows = await prisma.walletHold.findMany({
+        where: { paymentId: { in: rows.map((r) => r.id) } },
         select: { customerReference: true },
       });
       await prisma.fintavaLedgerEntry.deleteMany({
         where: {
-          customerReference: { in: rows.map((r) => r.customerReference) },
+          customerReference: {
+            in: [
+              ...rows.map((r) => r.customerReference),
+              ...holdRows
+                .map((h) => h.customerReference)
+                .filter((r): r is string => !!r),
+            ],
+          },
         },
+      });
+      await prisma.walletHold.deleteMany({
+        where: { paymentId: { in: rows.map((r) => r.id) } },
       });
       await prisma.walletPayment.deleteMany({
         where: { payerWawuUserId: { in: users } },
@@ -584,6 +618,32 @@ describe('Not enough money, and still confirming (MONEY-19), Nuvion stood in', (
           (c.args as { reference: string }).reference === view.reference,
       ),
     ).toHaveLength(1);
+  });
+
+  it("a held kind's payment (a ticket) is polled with its hold, the same answer it was paid with (R-19, MONEY-18)", async () => {
+    const p = await buyer(500_000);
+    const q = await quoted(p, 't-held', 'event_ticket');
+    expect(q).toMatchObject({ willBeHeld: true });
+    nuvion.mode = 'successful';
+    const paid = body<PaymentView>(await pay(p, q)).data!;
+    expect(paid).toMatchObject({
+      status: 'completed',
+      delivered: true,
+      hold: {
+        paymentId: paid.id,
+        kind: 'event_ticket',
+        status: 'held',
+        amountKobo: PRICE,
+        releaseCondition: 'event_took_place',
+      },
+    });
+    expect(await polled(p, paid.id)).toEqual(paid);
+    // A payment that is not held polls with no hold.
+    const plain = body<PaymentView>(
+      await pay(p, await quoted(p, 'p-not-held')),
+    ).data!;
+    expect(plain.hold).toBeNull();
+    expect((await polled(p, plain.id)).hold).toBeNull();
   });
 
   it('a payment paid at once is polled as the same answer it was paid with', async () => {
