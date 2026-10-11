@@ -14041,6 +14041,16 @@
               "type": "string",
               "pattern": "^[0-9]{4}$"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Optional. One value per attempt to change the PIN, made by the app when the person first confirms (a UUID) and sent again unchanged when the answer was lost. If the first request landed, its answer comes back with the header Idempotent-Replayed: true and the PIN is not checked again. The same key with another body is 409 idempotency_key_reused; while the first is still running, 409 idempotency_in_progress with retryAfterSeconds; a value that is not 8 to 128 of [A-Za-z0-9_-] is 400 idempotency_key_required. A refused request gives the key back.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
           }
         ],
         "requestBody": {
@@ -14257,7 +14267,18 @@
     "/api/hub/money/pin/reset/confirm": {
       "post": {
         "operationId": "MoneyPinResetController_confirmReset",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Optional. One value per attempt to change the PIN, made by the app when the person first confirms (a UUID) and sent again unchanged when the answer was lost. If the first request landed, its answer comes back with the header Idempotent-Replayed: true and the PIN is not checked again. The same key with another body is 409 idempotency_key_reused; while the first is still running, 409 idempotency_in_progress with retryAfterSeconds; a value that is not 8 to 128 of [A-Za-z0-9_-] is 400 idempotency_key_required. A refused request gives the key back.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -34111,6 +34132,9 @@
           "resendAvailableAt": {
             "type": "string"
           },
+          "resendInSeconds": {
+            "type": "number"
+          },
           "expiresAt": {
             "type": "string"
           }
@@ -34119,6 +34143,7 @@
           "resetId",
           "sentTo",
           "resendAvailableAt",
+          "resendInSeconds",
           "expiresAt"
         ]
       },
@@ -38532,6 +38557,17 @@
           "latestUpdateLabel"
         ]
       },
+      "ElectricityPresetView": {
+        "type": "object",
+        "properties": {
+          "amountKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "amountKobo"
+        ]
+      },
       "ElectricityBillerView": {
         "type": "object",
         "properties": {
@@ -38554,10 +38590,10 @@
           "maximumKobo": {
             "type": "integer"
           },
-          "presetsKobo": {
+          "presets": {
             "type": "array",
             "items": {
-              "type": "number"
+              "$ref": "#/components/schemas/ElectricityPresetView"
             }
           }
         },
@@ -38567,7 +38603,7 @@
           "plan",
           "minimumKobo",
           "maximumKobo",
-          "presetsKobo"
+          "presets"
         ]
       },
       "ElectricityBillersView": {

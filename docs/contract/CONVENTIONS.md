@@ -121,7 +121,12 @@ more routes adds them to `SERVED_MONEY_ROUTES` in
 - The contract says so too: every field and parameter whose name ends in
   `Kobo` is `"type": "integer"` in `contract/openapi.json`, responses and
   errors included (`scripts/enrich-contract.js` reads the name;
-  `money-contract.spec.ts` checks every one).
+  `money-contract.spec.ts` checks every one). That rule covers a field that
+  holds one figure. A list of amounts is therefore a list of objects, each
+  with an `amountKobo` field, and never an array of numbers in a field named
+  `...Kobo` (an array is not an integer): the electricity quick amounts are
+  `presets: [{ "amountKobo": 500000 }]` on `GET /bills/electricity/billers`
+  (BILLS-01, round 3 hotfix), not `presetsKobo: [500000]`.
 - A balance is only ever Fintava's (`GET /money/wallet/balance`,
   `availableBalance`). No route sums ledger rows and calls the result a
   balance.
@@ -300,6 +305,38 @@ after a send that failed (W14).
    plus a minute is answered from its payment's record as it stands, or,
    when no payment was made, freed. A route that moves money uses
    `@RequireIdempotentApproval(route)` (WALLET-07 and WALLET-09 too).
+
+**On the PIN routes (optional).** `PUT /money/pin` and `POST /money/pin/reset/confirm`
+move no money, so they do not need a key, but they take one if it is sent
+(WALLET-06 round 2). A phone whose answer to a PIN change or a reset was lost
+sends the same request again with the same key, instead of judging by whether
+`changedAt` moved (which is also true when someone else changed the PIN) or
+spending a wrong-PIN try to ask. Without the header nothing is stored and the
+routes answer as they always did. With it, the store and rules 1 to 7 above
+are the payments' own (`MoneyIdempotencyKey`, `IdempotencyService`), with these
+differences:
+
+- The key is optional. One that is sent but is not 8 to 128 of `[A-Za-z0-9_-]`
+  is `400 idempotency_key_required` (refused, not ignored).
+- The replay is answered before the PIN guard, because the PIN a landed change
+  was sent under is no longer the PIN: a repeat uses no try. A repeat of a
+  change someone else has beaten is not a replay (nothing was stored): it runs,
+  and is refused for its PIN (`403 pin_incorrect`) or its dead code (`400
+  reset_code_invalid`).
+- The key is linked to the person's PIN in the same transaction that changes
+  it, and the answer is stored right after. A row that names the PIN means the
+  PIN changed; one that names nothing and is more than a minute old means the
+  request died first and the key is free again; one that names the PIN, has no
+  answer and is more than a minute old is answered with the PIN's state as it
+  stands.
+- The fingerprint of the body is argon2id (salted from person, route and key,
+  so the same request always gives the same text), not SHA-256, because the
+  body holds the new PIN; the stored answer is the PIN's state, never a PIN or
+  a code.
+- The two codes `idempotency_key_reused` and `idempotency_in_progress` are
+  documented in the header's description, not in the route's `reason.code`
+  lists: those lists are how `money-moving-coverage.spec.ts` tells a route
+  moves money, and these two do not.
 
 **Fintava has no Idempotency-Key** (`naira-api.md`). Ours is enforced here.
 The reference we send Fintava as `CustomerReference` is derived from our own
