@@ -16198,7 +16198,9 @@
                 "school_fee",
                 "paid_dm",
                 "event_ticket",
-                "bill"
+                "bill",
+                "tier",
+                "tier_bump"
               ]
             }
           },
@@ -21267,6 +21269,16 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "tier": {
+                            "type": "string",
+                            "enum": [
+                              "basic",
+                              "verified_user",
+                              "verified_business",
+                              "certified_professional",
+                              "trusted_partner"
+                            ]
+                          },
                           "id": {
                             "type": "string"
                           },
@@ -21282,16 +21294,6 @@
                             "type": "string",
                             "format": "date-time",
                             "nullable": true
-                          },
-                          "tier": {
-                            "type": "string",
-                            "enum": [
-                              "basic",
-                              "verified_user",
-                              "verified_business",
-                              "certified_professional",
-                              "trusted_partner"
-                            ]
                           },
                           "documents": {
                             "type": "array",
@@ -21312,10 +21314,10 @@
                           }
                         },
                         "required": [
+                          "tier",
                           "id",
                           "status",
                           "reviewedAt",
-                          "tier",
                           "documents",
                           "wawuUserId",
                           "submittedAt",
@@ -21331,6 +21333,16 @@
                           "items": {
                             "type": "object",
                             "properties": {
+                              "tier": {
+                                "type": "string",
+                                "enum": [
+                                  "basic",
+                                  "verified_user",
+                                  "verified_business",
+                                  "certified_professional",
+                                  "trusted_partner"
+                                ]
+                              },
                               "id": {
                                 "type": "string"
                               },
@@ -21346,16 +21358,6 @@
                                 "type": "string",
                                 "format": "date-time",
                                 "nullable": true
-                              },
-                              "tier": {
-                                "type": "string",
-                                "enum": [
-                                  "basic",
-                                  "verified_user",
-                                  "verified_business",
-                                  "certified_professional",
-                                  "trusted_partner"
-                                ]
                               },
                               "documents": {
                                 "type": "array",
@@ -21376,10 +21378,10 @@
                               }
                             },
                             "required": [
+                              "tier",
                               "id",
                               "status",
                               "reviewedAt",
-                              "tier",
                               "documents",
                               "wawuUserId",
                               "submittedAt",
@@ -21436,6 +21438,16 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "tier": {
+                      "type": "string",
+                      "enum": [
+                        "basic",
+                        "verified_user",
+                        "verified_business",
+                        "certified_professional",
+                        "trusted_partner"
+                      ]
+                    },
                     "id": {
                       "type": "string"
                     },
@@ -21451,16 +21463,6 @@
                       "type": "string",
                       "format": "date-time",
                       "nullable": true
-                    },
-                    "tier": {
-                      "type": "string",
-                      "enum": [
-                        "basic",
-                        "verified_user",
-                        "verified_business",
-                        "certified_professional",
-                        "trusted_partner"
-                      ]
                     },
                     "documents": {
                       "type": "array",
@@ -21481,10 +21483,10 @@
                     }
                   },
                   "required": [
+                    "tier",
                     "id",
                     "status",
                     "reviewedAt",
-                    "tier",
                     "documents",
                     "wawuUserId",
                     "submittedAt",
@@ -21531,6 +21533,16 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "tier": {
+                      "type": "string",
+                      "enum": [
+                        "basic",
+                        "verified_user",
+                        "verified_business",
+                        "certified_professional",
+                        "trusted_partner"
+                      ]
+                    },
                     "id": {
                       "type": "string"
                     },
@@ -21546,16 +21558,6 @@
                       "type": "string",
                       "format": "date-time",
                       "nullable": true
-                    },
-                    "tier": {
-                      "type": "string",
-                      "enum": [
-                        "basic",
-                        "verified_user",
-                        "verified_business",
-                        "certified_professional",
-                        "trusted_partner"
-                      ]
                     },
                     "documents": {
                       "type": "array",
@@ -21576,10 +21578,10 @@
                     }
                   },
                   "required": [
+                    "tier",
                     "id",
                     "status",
                     "reviewedAt",
-                    "tier",
                     "documents",
                     "wawuUserId",
                     "submittedAt",
@@ -21626,6 +21628,16 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "tier": {
+                      "type": "string",
+                      "enum": [
+                        "basic",
+                        "verified_user",
+                        "verified_business",
+                        "certified_professional",
+                        "trusted_partner"
+                      ]
+                    },
                     "id": {
                       "type": "string"
                     },
@@ -21641,16 +21653,6 @@
                       "type": "string",
                       "format": "date-time",
                       "nullable": true
-                    },
-                    "tier": {
-                      "type": "string",
-                      "enum": [
-                        "basic",
-                        "verified_user",
-                        "verified_business",
-                        "certified_professional",
-                        "trusted_partner"
-                      ]
                     },
                     "documents": {
                       "type": "array",
@@ -21671,10 +21673,10 @@
                     }
                   },
                   "required": [
+                    "tier",
                     "id",
                     "status",
                     "reviewedAt",
-                    "tier",
                     "documents",
                     "wawuUserId",
                     "submittedAt",
@@ -27940,6 +27942,301 @@
         ]
       }
     },
+    "/api/hub/plans/purchases/quote": {
+      "get": {
+        "operationId": "PlanPurchasesController_quote",
+        "parameters": [
+          {
+            "name": "kind",
+            "required": true,
+            "in": "query",
+            "description": "`tier` (a first purchase, or after the last ended), `renew` (the tier held) or `upgrade` (to a bigger tier).",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "tier",
+                "renew",
+                "upgrade"
+              ]
+            }
+          },
+          {
+            "name": "tierId",
+            "required": true,
+            "in": "query",
+            "description": "A tier in the plans file (`GET /plans`).",
+            "schema": {
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            }
+          },
+          {
+            "name": "bump",
+            "required": false,
+            "in": "query",
+            "description": "Buy the checkout bump's extra points with it (VF6).",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanPurchaseQuoteView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable, payment_in_progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The pay sheet (VF6) before the PIN: the purchase priced in the caller's\nbilling currency (an upgrade is the difference of the two prices), the\nwallet provider's charge on top, the total, the wallet's balance and the\nshortfall, and the signed quote `POST /plans/purchases` sends back.\nNothing is reserved. A purchase that does not fit what the caller holds\nis `target_not_payable` with the reason in words; a plan payment still\ngoing through is `payment_in_progress`.",
+        "tags": [
+          "PlanPurchases"
+        ]
+      }
+    },
+    "/api/hub/plans/purchases": {
+      "post": {
+        "operationId": "PlanPurchasesController_buy",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanPurchaseDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanPurchaseView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, device_approval_refused, daily_limit_exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, target_not_payable, payment_in_progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable, fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Pays for a tier from the wallet, once: the tier and its dates, the bonus\npoints as one lot with its expiry, the event pass and the first Voice\nIntro are granted when the payment is confirmed, and the checkout bump's\npoints with them when it was bought. Answers 201 with the purchase:\n`paid`, `pending` while the provider has not confirmed the debit yet\n(poll `GET /plans/purchases/{id}`; it is never sent again), or `failed`\nwhen the provider refused it and nothing moved. The same Idempotency-Key\nand body answer the first result again (`Idempotent-Replayed: true`)\nwithout checking the PIN. Not enough money is `402 insufficient_funds`\nwith the shortfall; no wallet is `409 wallet_not_open`.",
+        "tags": [
+          "PlanPurchases"
+        ]
+      }
+    },
+    "/api/hub/plans/purchases/{id}": {
+      "get": {
+        "operationId": "PlanPurchasesController_read",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanPurchaseView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One purchase as it stands now: what the app polls after `pending`.\nOnly the buyer reads it; another person's purchase and an id nobody\nholds are the same `404 not_found`. It reads our own records only.",
+        "tags": [
+          "PlanPurchases"
+        ]
+      }
+    },
     "/api/hub/waitlist/offers/current": {
       "get": {
         "operationId": "WaitlistPublicController_currentOffer",
@@ -31674,7 +31971,9 @@
               "school_fee",
               "paid_dm",
               "event_ticket",
-              "bill"
+              "bill",
+              "tier",
+              "tier_bump"
             ],
             "type": "string"
           },
@@ -33649,6 +33948,53 @@
           "card"
         ]
       },
+      "PlanPurchaseDto": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "tier",
+              "renew",
+              "upgrade"
+            ],
+            "type": "string"
+          },
+          "tierId": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$"
+          },
+          "bump": {
+            "type": "boolean",
+            "description": "Buy the checkout bump's extra points with it. Default: no."
+          },
+          "method": {
+            "type": "string",
+            "description": "How it is paid: from the wallet.",
+            "enum": [
+              "wallet"
+            ]
+          },
+          "expectedTotalKobo": {
+            "type": "integer",
+            "description": "`payment.totalKobo` from the purchase quote the person saw. A different server total is `quote_changed`.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`payment.quoteToken` from that quote: the server checks it is its own, for this person and this purchase, and not past its end.",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "kind",
+          "tierId",
+          "method",
+          "expectedTotalKobo",
+          "quoteToken"
+        ]
+      },
       "CreateWaitlistRegistrationDto": {
         "type": "object",
         "properties": {
@@ -34071,7 +34417,9 @@
               "legal_fee",
               "school_fee",
               "paid_dm",
-              "event_ticket"
+              "event_ticket",
+              "tier",
+              "tier_bump"
             ]
           },
           "targetId": {
@@ -35087,7 +35435,9 @@
               "legal_fee",
               "school_fee",
               "paid_dm",
-              "event_ticket"
+              "event_ticket",
+              "tier",
+              "tier_bump"
             ]
           },
           "status": {
@@ -35106,7 +35456,8 @@
             "enum": [
               "dm_answered",
               "event_took_place",
-              "bill_delivered"
+              "bill_delivered",
+              "plan_granted"
             ]
           },
           "payer": {
@@ -35179,7 +35530,9 @@
               "legal_fee",
               "school_fee",
               "paid_dm",
-              "event_ticket"
+              "event_ticket",
+              "tier",
+              "tier_bump"
             ]
           },
           "targetId": {
@@ -35264,7 +35617,9 @@
               "legal_fee",
               "school_fee",
               "paid_dm",
-              "event_ticket"
+              "event_ticket",
+              "tier",
+              "tier_bump"
             ]
           },
           "targetId": {
@@ -45143,6 +45498,16 @@
           "submission": {
             "type": "object",
             "properties": {
+              "tier": {
+                "type": "string",
+                "enum": [
+                  "basic",
+                  "verified_user",
+                  "verified_business",
+                  "certified_professional",
+                  "trusted_partner"
+                ]
+              },
               "id": {
                 "type": "string"
               },
@@ -45158,16 +45523,6 @@
                 "type": "string",
                 "format": "date-time",
                 "nullable": true
-              },
-              "tier": {
-                "type": "string",
-                "enum": [
-                  "basic",
-                  "verified_user",
-                  "verified_business",
-                  "certified_professional",
-                  "trusted_partner"
-                ]
               },
               "documents": {
                 "type": "array",
@@ -45188,10 +45543,10 @@
               }
             },
             "required": [
+              "tier",
               "id",
               "status",
               "reviewedAt",
-              "tier",
               "documents",
               "wawuUserId",
               "submittedAt",
@@ -49129,6 +49484,211 @@
           "month",
           "items",
           "nextCursor"
+        ]
+      },
+      "PlanPurchaseQuoteView": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "tier",
+              "renew",
+              "upgrade"
+            ]
+          },
+          "tierId": {
+            "type": "string"
+          },
+          "fromTierId": {
+            "type": "string",
+            "nullable": true
+          },
+          "bump": {
+            "type": "boolean"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN",
+              "USD"
+            ]
+          },
+          "planMinor": {
+            "type": "integer"
+          },
+          "bumpMinor": {
+            "type": "integer"
+          },
+          "bumpPoints": {
+            "type": "integer"
+          },
+          "paymentKind": {
+            "type": "string",
+            "enum": [
+              "tier",
+              "tier_bump"
+            ]
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentQuoteView"
+          }
+        },
+        "required": [
+          "kind",
+          "tierId",
+          "fromTierId",
+          "bump",
+          "currency",
+          "planMinor",
+          "bumpMinor",
+          "bumpPoints",
+          "paymentKind",
+          "payment"
+        ]
+      },
+      "PlanPurchaseGrantView": {
+        "type": "object",
+        "properties": {
+          "tier": {
+            "$ref": "#/components/schemas/MyTierSummaryView"
+          },
+          "activeFrom": {
+            "type": "string"
+          },
+          "activeUntil": {
+            "type": "string"
+          },
+          "productsAllowed": {
+            "type": "integer"
+          },
+          "bonusPoints": {
+            "type": "integer"
+          },
+          "bonusPointsExpireAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "bumpPoints": {
+            "type": "integer"
+          },
+          "bumpPointsExpireAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "eventPass": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PlanEventPassView"
+              }
+            ],
+            "nullable": true
+          },
+          "firstVoiceIntroIncluded": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "tier",
+          "activeFrom",
+          "activeUntil",
+          "productsAllowed",
+          "bonusPoints",
+          "bonusPointsExpireAt",
+          "bumpPoints",
+          "bumpPointsExpireAt",
+          "eventPass",
+          "firstVoiceIntroIncluded"
+        ]
+      },
+      "PlanPurchaseView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "tier",
+              "renew",
+              "upgrade"
+            ]
+          },
+          "tierId": {
+            "type": "string"
+          },
+          "fromTierId": {
+            "type": "string",
+            "nullable": true
+          },
+          "bump": {
+            "type": "boolean"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "wallet"
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN",
+              "USD"
+            ]
+          },
+          "amountMinor": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "failed",
+              "reversed",
+              "refunded",
+              "paid"
+            ]
+          },
+          "statusMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentView"
+          },
+          "grant": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PlanPurchaseGrantView"
+              }
+            ],
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "paidAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "tierId",
+          "fromTierId",
+          "bump",
+          "method",
+          "currency",
+          "amountMinor",
+          "status",
+          "statusMessage",
+          "payment",
+          "grant",
+          "createdAt",
+          "paidAt"
         ]
       },
       "AdminWaitlistRegistrationView": {
