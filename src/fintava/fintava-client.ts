@@ -72,6 +72,7 @@ import type {
   FintavaWalletState,
   FintavaWalletTransferInput,
 } from './fintava.interface';
+import { connectionNeverOpened } from '../wallet-provider/connection-never-opened';
 import { toLocalNigerianPhone } from '../wallet-provider/nigerian-phone';
 
 // ---------------------------------------------------------------------------
@@ -359,7 +360,9 @@ class FintavaDeadline {
         },
         (e: unknown) => {
           this.#onTimeout = null;
-          reject(e instanceof Error ? e : new Error('fetch failed'));
+          reject(
+            e instanceof Error ? e : new Error('fetch failed', { cause: e }),
+          );
         },
       );
     });
@@ -611,6 +614,7 @@ export class FintavaClient {
       messages?: string[];
       reference?: string | null;
       recordMayExist?: boolean;
+      requestNotSent?: boolean;
       serviceNotAvailable?: boolean;
     },
   ): FintavaError {
@@ -622,6 +626,7 @@ export class FintavaClient {
       messages,
       reference: args.reference ?? null,
       recordMayExist: args.recordMayExist,
+      requestNotSent: args.requestNotSent,
       serviceNotAvailable: args.serviceNotAvailable,
     });
     this.logger.warn(
@@ -679,11 +684,14 @@ export class FintavaClient {
     const deadline = new FintavaDeadline(this.timeoutFor(op.call));
     // No answer, or an answer cut short by the deadline, is not evidence
     // about the money (a send may have landed).
-    const lost = (why: string) =>
+    // A connection that never opened proves the request was not sent
+    // (`requestNotSent`); every other loss stays an unknown outcome.
+    const lost = (why: string, requestNotSent = false) =>
       this.fail(op, {
         kind: op.call === 'write' ? 'outcome_unknown' : 'unavailable',
         messages: [why],
         reference: opts.reference,
+        requestNotSent,
       });
     let res: Response;
     let read: BodyRead;
@@ -699,8 +707,10 @@ export class FintavaClient {
             redirect: 'error',
           }),
         );
-      } catch {
-        throw lost(deadline.timedOut ? 'timed out' : 'no connection');
+      } catch (e) {
+        throw deadline.timedOut
+          ? lost('timed out')
+          : lost('no connection', connectionNeverOpened(e));
       }
       read = await readBody(res, cap, deadline);
     } finally {

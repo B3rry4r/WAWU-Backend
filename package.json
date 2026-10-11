@@ -22,6 +22,8 @@
     "_comment:protected:lock": "Re-records every expectation in .pipeline/protected-registry.json from what the code answers now. An owner decision, never a fix for a red run (docs/WORKFLOW.md section 9).",
     "protected:lock": "PROTECTED_ROUTES_RECORD=1 npm run test:protected",
     "protected:callers": "python3 scripts/protected-routes/extract-callers.py",
+    "_comment:test:netns": "MONEY-18 round 4. The real-socket route-failure rig, in a private network namespace (root or sudo, unshare, iptables). Exits non-zero when a row is wrong AND when it cannot make the namespace: cannot run is a failure, never a pass. deploy.yml runs it with sudo after jest.",
+    "test:netns": "bash test/netns/run.sh",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",

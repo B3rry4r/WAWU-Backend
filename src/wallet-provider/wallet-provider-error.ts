@@ -85,6 +85,16 @@ export class WalletProviderError extends Error {
    * failed. A caller never refunds or charges again while this is true.
    */
   readonly recordMayExist: boolean;
+  /**
+   * True only when the request PROVABLY never reached the provider: the
+   * connection was refused or the host name did not resolve while the
+   * connection was being made (`connectionNeverOpened`: the error code AND
+   * the syscall that raised it, round 3). The provider has no record of it, so a caller
+   * that moves held money (MONEY-18 round 2, O1) may send it again under the
+   * same reference. `recordMayExist` is unchanged by it: a caller that does
+   * not read this flag keeps treating a lost write as an unknown outcome.
+   */
+  readonly requestNotSent: boolean;
   /** What a refusal built from this error tells the app to wait. */
   readonly retryAfterSeconds: number;
 
@@ -96,6 +106,7 @@ export class WalletProviderError extends Error {
     messages?: string[];
     reference?: string | null;
     recordMayExist?: boolean;
+    requestNotSent?: boolean;
     retryAfterSeconds?: number;
   }) {
     const status = args.httpStatus ?? null;
@@ -113,6 +124,7 @@ export class WalletProviderError extends Error {
     this.recordMayExist =
       args.recordMayExist ??
       WALLET_PROVIDER_UNKNOWN_OUTCOMES.includes(args.kind);
+    this.requestNotSent = args.requestNotSent ?? false;
     this.retryAfterSeconds =
       args.retryAfterSeconds ?? DEFAULT_PROVIDER_RETRY_AFTER_SECONDS;
   }

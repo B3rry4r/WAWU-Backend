@@ -35,7 +35,9 @@ export type HoldAction = 'release' | 'refund';
  * Why nothing has moved yet, when a settlement is waiting:
  * - `payee_wallet`, `payer_wallet`: the person has no wallet (yet). The
  *   money waits in WAWU's account and lands within a minute of the wallet
- *   opening (R-11); tried every minute, no back-off.
+ *   opening (R-11). Looked at again after a rest that doubles with the
+ *   hold's age, a minute to an hour (`walletWaitRestMs`), and at once in the
+ *   first sweep after the person has a wallet.
  * - `recipient_frozen`: the provider refuses a move into or out of a frozen
  *   wallet (BACKEND_GAPS G-10): paid on unfreeze, tried hourly.
  * - `funds`: the provider says WAWU's own account cannot cover the move.
@@ -54,11 +56,41 @@ export const HOLD_WAITING = [
 ] as const;
 export type HoldWaiting = (typeof HOLD_WAITING)[number];
 
-/** Waiting for a person's wallet: tried every minute, with no back-off. */
+/** Waiting for a person's wallet: a doubling rest, woken when the wallet exists. */
 export const WALLET_WAITS: readonly HoldWaiting[] = [
   'payee_wallet',
   'payer_wallet',
 ];
+
+const MINUTE_MS = 60_000;
+
+/**
+ * The rest before the next look at a hold that waits for a person's wallet
+ * (MONEY-18 round 2, F4). It doubles with the hold's age, from a minute to an
+ * hour: a first look after a minute, then at 2, 4, 8 ... minutes of age, then
+ * hourly, so a creator who never opens a wallet costs one look an hour and
+ * not one every pass. Someone who does open one is not made to wait for it:
+ * the sweep wakes a hold the moment its person has a wallet.
+ */
+export function walletWaitRestMs(ageMs: number): number {
+  const age = Number.isFinite(ageMs) ? Math.max(0, ageMs) : 0;
+  return Math.min(60 * MINUTE_MS, Math.max(MINUTE_MS, age));
+}
+
+/**
+ * How long one pass of the hold sweep may keep reading pages (MONEY-18 round
+ * 2, F4; the shape of NUV-02 round 4's N15). A pass reads every due hold by a
+ * keyset cursor, with no cap on the rows it looks at, and stops only at the
+ * end or when this much time is used, handing the place it reached to the
+ * next pass. The sweep runs every minute, so it stops well inside one.
+ */
+export const HOLD_SWEEP_BUDGET_MS = 45_000;
+
+/** Where a pass of the hold sweep stopped, in the order (actionAt, id). */
+export interface HoldSweepCursor {
+  at: Date;
+  id: string;
+}
 
 /**
  * Where a settlement stands, as the owning feature is told:

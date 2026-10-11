@@ -94,6 +94,15 @@ jobs:
       - name: Contract tests
         run: npx jest --runInBand --forceExit
 
+      - name: Route failures on real sockets (npm run test:netns, with sudo)
+        # MONEY-18 round 4. The one proof that a route dying under an open
+        # connection is never read as "the request was not sent" needs a
+        # private network namespace and iptables, so it is a script and not a
+        # jest test (a test that cannot get a namespace has to skip). The
+        # runner has passwordless sudo. If a namespace cannot be made here the
+        # script exits non-zero and this job fails: cannot run is a failure.
+        run: sudo env "PATH=$PATH" npm run test:netns
+
   deploy:
     name: Deploy to droplet
     needs: test

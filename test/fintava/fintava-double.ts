@@ -105,6 +105,27 @@ export class FintavaDouble {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 
+  /**
+   * Stops listening on the double's port (a connection to it is then
+   * refused, as when a provider is down) and keeps everything else: routes,
+   * what was seen. `resume()` listens on the same port again.
+   */
+  async pause(): Promise<void> {
+    await this.stop();
+  }
+
+  async resume(): Promise<void> {
+    const server = this.server;
+    if (!server) return;
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(this.port, '127.0.0.1', () => {
+        server.off('error', reject);
+        resolve();
+      });
+    });
+  }
+
   private async handle(req: IncomingMessage): Promise<CannedAnswer> {
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(chunk as Buffer);

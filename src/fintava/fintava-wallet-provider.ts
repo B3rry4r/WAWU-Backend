@@ -72,6 +72,7 @@ export function toWalletProviderError(e: unknown): unknown {
     messages: e.messages,
     reference: e.reference,
     recordMayExist: e.recordMayExist,
+    requestNotSent: e.requestNotSent,
     retryAfterSeconds: FINTAVA_DEFAULTS.retryAfterSeconds,
   });
 }
