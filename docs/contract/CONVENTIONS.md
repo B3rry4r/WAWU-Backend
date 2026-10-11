@@ -1153,6 +1153,30 @@ this applies and every answer is as in section 9.
   confirm the account, or a bank code not in the list, is `422
   name_check_failed` and nothing is saved; Fintava not answering (or the
   key refused) is `503 provider_unreachable` with `retryAfterSeconds`.
+- **Under Nuvion the same two checks (NUV-06), with a sentence of their
+  own for each way the account is not confirmed.** The bank list is
+  Nuvion's (`GET /bank-codes/NG`) and the name check is its
+  `POST /counterparty-lookups`. All four are `422 name_check_failed`, so
+  the app's switch on `reason.code` is the same; the message says what to
+  fix: no account with that number at that bank, a bank the check cannot
+  ask (including a code not in the list; nothing is asked), a number that
+  is not ten digits (nothing is asked), or more than one account found. A
+  check that got no answer in time (Nuvion's own timeout, its lookup
+  service down, or ours running out) is `503 provider_unreachable`, not a
+  wrong account. Fintava's yes-or-no answer keeps its one sentence.
+  `bank_not_supported` and the others are sentences, not new codes: the
+  contract's `MoneyErrorReason` is unchanged.
+- **A saved account carries what Nuvion needs to send to it (NUV-06).**
+  `MoneyBeneficiary` and `MoneyPayoutAccount` hold `nuvionBankCode` (the
+  bank's code in Nuvion's list) and `nuvionCheckedAt` (when the holder's name
+  was last confirmed through Nuvion; null on a row from the Fintava days,
+  which is matched to Nuvion's list by code, else by bank name, and
+  checked by name again before its first Nuvion send:
+  `SavedAccountTargetService`), and the ids of Nuvion's counterparty and
+  payment detail once a send has made them (`nuvionCounterpartyId`,
+  `nuvionPaymentDetailId`; a payout account also holds WAWU's operational
+  account's own pair). None is in any response. Saving a different account
+  as the payout account clears the ids.
 - **The BVN name.** The BVN check (KYC-01) keeps, with every passed check,
   the keyed hash of each word of the BVN record's first and last name,
   bound to the person and the check: HMAC-SHA256 under `IDENTITY_HASH_KEY`

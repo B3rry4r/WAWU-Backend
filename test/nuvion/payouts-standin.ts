@@ -86,6 +86,11 @@ function paged<T extends { id: string }>(
   };
 }
 
+/** A body field as text: a string or a number as it is, anything else as the default. */
+function str(v: unknown, fallback = ''): string {
+  return typeof v === 'string' || typeof v === 'number' ? String(v) : fallback;
+}
+
 const notFound = (): StandinAnswer => ({
   status: 404,
   body: errorBody('error_resource_not_found', 'Resource does not exist'),
@@ -277,8 +282,8 @@ export class NuvionPayoutsStandin {
       account_id: t.account_id,
       amount: t.amount,
       currency: t.currency,
-      unique_reference: `${t.unique_reference}_reversal`,
-      counterparty_id: `acct-${String(t.account_id)}-bank-return`,
+      unique_reference: `${str(t.unique_reference)}_reversal`,
+      counterparty_id: `acct-${str(t.account_id)}-bank-return`,
       status: 'successful',
       status_reason: 'bank_returned',
       narration: `REVERSAL | ${t.id}`,
@@ -376,8 +381,8 @@ export class NuvionPayoutsStandin {
     this.route('POST', '/counterparty-lookups', (req) => {
       this.lookups.push(req.body);
       const b = (req.body ?? {}) as Record<string, unknown>;
-      const number = String(b.account_number ?? '');
-      const code = String(b.bank_code ?? '');
+      const number = str(b.account_number);
+      const code = str(b.bank_code);
       if (b.country !== 'NG' || !/^\d{10}$/.test(number)) {
         return {
           status: 422,
@@ -425,13 +430,12 @@ export class NuvionPayoutsStandin {
           body: errorBody('error_validation_error', 'type is required'),
         };
       }
-      const entityId = String(b.entity_id ?? PARENT_ENTITY);
+      const entityId = str(b.entity_id, PARENT_ENTITY);
       const c: StandinCounterparty = {
         id: standinId('01CPY'),
         entity_id: entityId,
-        type: String(b.type),
-        nickname:
-          `${String(profile.first_name ?? '')} ${String(profile.last_name ?? '')}`.trim(),
+        type: str(b.type),
+        nickname: `${str(profile.first_name)} ${str(profile.last_name)}`.trim(),
         status: 'active',
         profile,
         meta: (b.meta ?? {}) as Record<string, string>,
@@ -468,14 +472,14 @@ export class NuvionPayoutsStandin {
     this.route('POST', '/payment-details', (req) => {
       this.paymentDetailRequests.push(req.body);
       const b = (req.body ?? {}) as Record<string, unknown>;
-      const c = this.counterparties.get(String(b.counterparty_id));
-      const entityId = String(b.entity_id ?? PARENT_ENTITY);
+      const c = this.counterparties.get(str(b.counterparty_id));
+      const entityId = str(b.entity_id, PARENT_ENTITY);
       if (!c || c.entity_id !== entityId) return notFound();
       if (
         b.payment_method !== 'bank-transfer' ||
         b.currency !== 'NGN' ||
         b.country !== 'NG' ||
-        !/^\d{10}$/.test(String(b.account_number ?? '')) ||
+        !/^\d{10}$/.test(str(b.account_number)) ||
         !b.bank_code ||
         !b.account_holder_name ||
         !b.bank_name
@@ -492,13 +496,13 @@ export class NuvionPayoutsStandin {
         id: standinId('01PDT'),
         payment_method: 'bank-transfer',
         currency: 'NGN',
-        account_holder_name: String(b.account_holder_name),
+        account_holder_name: str(b.account_holder_name),
         counterparty_id: c.id,
         entity_id: entityId,
         country: 'NG',
-        bank_code: String(b.bank_code),
-        account_number: String(b.account_number),
-        bank_name: String(b.bank_name),
+        bank_code: str(b.bank_code),
+        account_number: str(b.account_number),
+        bank_name: str(b.bank_name),
         deleted: 0,
       };
       this.paymentDetails.set(d.id, d);
@@ -599,7 +603,7 @@ export class NuvionPayoutsStandin {
         return { status: 0, hangUp: true };
       }
       const b = (req.body ?? {}) as Record<string, unknown>;
-      const reference = String(b.unique_reference ?? '');
+      const reference = str(b.unique_reference);
       if (this.processing.delete(reference)) {
         return {
           status: 409,
@@ -609,11 +613,11 @@ export class NuvionPayoutsStandin {
           ),
         };
       }
-      const account = this.nuv.accounts.get(String(b.account_id));
-      const entityId = String(b.entity_id ?? PARENT_ENTITY);
+      const account = this.nuv.accounts.get(str(b.account_id));
+      const entityId = str(b.entity_id, PARENT_ENTITY);
       if (!account || account.entity_id !== entityId) return notFound();
-      const detail = this.paymentDetails.get(String(b.payment_detail_id));
-      const counterparty = this.counterparties.get(String(b.counterparty_id));
+      const detail = this.paymentDetails.get(str(b.payment_detail_id));
+      const counterparty = this.counterparties.get(str(b.counterparty_id));
       if (
         !detail ||
         !counterparty ||
@@ -658,7 +662,7 @@ export class NuvionPayoutsStandin {
       const t: StandinTransfer = {
         id: standinId('01TRF'),
         amount,
-        currency: String(b.currency),
+        currency: str(b.currency),
         unique_reference: reference,
         counterparty_id: counterparty.id,
         payment_detail_id: detail.id,

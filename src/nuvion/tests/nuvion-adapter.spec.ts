@@ -400,6 +400,10 @@ describe('NUV-01: the Nuvion adapter behind WALLET_PROVIDER', () => {
         'openWallet',
         'findCustomerByPhone',
         'submitKyc',
+        // NUV-06 (nuvion-payouts.spec.ts): the payouts area is real now.
+        'listBanks',
+        'checkAccountName',
+        'bankTransfer',
       ];
       await expect(
         provider.openWallet({ firstName: 'A' } as never),

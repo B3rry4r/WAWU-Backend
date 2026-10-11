@@ -92,7 +92,15 @@ export class BankAccountCheckService {
     if (!this.provider.configured) throw this.unreachable();
     const bank = (await this.bankList()).get(bankCode);
     if (!bank) {
-      throw new MoneyError('name_check_failed', NAME_CHECK_FAILED_MESSAGE);
+      // A bank the provider's list does not hold. Nuvion's list is the bank
+      // list of the app, so its own plain answer (NUV-06); Fintava keeps its
+      // one.
+      throw new MoneyError(
+        'name_check_failed',
+        this.provider.name === 'nuvion'
+          ? NAME_CHECK_ANSWERS.bank_not_supported
+          : NAME_CHECK_FAILED_MESSAGE,
+      );
     }
     let answer: ProviderAccountName;
     try {

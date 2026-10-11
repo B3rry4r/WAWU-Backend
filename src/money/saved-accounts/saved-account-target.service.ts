@@ -118,7 +118,7 @@ type Row = {
  * row after the first send (`rememberPayee`) and handed back on every later
  * one. A payout account has two pairs: the person's own (their withdrawal)
  * and WAWU's operational account's (WAWU's payouts to them, R-31), because a
- * counterparty belongs to the entity that pays.
+ * counterparty sits under the entity that pays.
  */
 @Injectable()
 export class SavedAccountTargetService {

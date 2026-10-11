@@ -302,7 +302,7 @@ export class NuvionBankOutflowRecorder {
     }
     if (delivered.paymentType !== NUVION_BANK_TRANSFER_TYPE) {
       return done(
-        `a ${delivered.paymentType} transfer: not a bank send (NUV-05 records book transfers)`,
+        `the transfer is by ${delivered.paymentType}, not a bank send (NUV-05 records book transfers)`,
       );
     }
     if (delivered.currency !== NUVION_NAIRA) {

@@ -627,7 +627,7 @@ export class NuvionPayoutsArea implements NuvionPayoutsMethods {
 
   /**
    * The account a send debits: WAWU's operational account (no entity: it
-   * belongs to the authenticating entity), or the person's one live naira
+   * sits under the authenticating entity), or the person's one live naira
    * `checking` account (`GET /accounts?entity_id=`). More than one, or none,
    * is a stop: never a guess at which one money leaves.
    */
@@ -1112,8 +1112,12 @@ export class NuvionPayoutsArea implements NuvionPayoutsMethods {
    * becomes `unavailable` with `requestNotSent`, so the send is asked again
    * under the same reference.
    */
-  private beforeTransfer(e: unknown, op: NuvionOp, reference: string): unknown {
-    if (!(e instanceof WalletProviderError)) return e;
+  private beforeTransfer(e: unknown, op: NuvionOp, reference: string): Error {
+    if (!(e instanceof WalletProviderError)) {
+      return e instanceof Error
+        ? e
+        : new Error('a send failed before the transfer');
+    }
     switch (e.kind) {
       case 'outcome_unknown':
       case 'not_confirmed':
