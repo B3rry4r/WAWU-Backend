@@ -58,9 +58,10 @@ function kobo(text: string | null | undefined): number {
  * rows (`e`): the payee's 85% of
  * - an ordinary sale, once it is finished: an `EarningSettlement` (owed until
  *   the provider confirmed the move into the wallet, then landed);
- * - a held kind (paid DM, ticket), once its hold is RELEASED to the payee.
- *   A hold whose owner has not decided is `held`, not earned; a refunded one
- *   is the payer's.
+ * - a held kind (paid DM, ticket), once the owning feature has released its
+ *   hold to the payee (`action` is `release`): earned at once, landed when
+ *   the move is confirmed. A hold whose owner has not decided is `held`, not
+ *   earned; a refunded one is the payer's.
  * `at` is when it was earned: the sale's completion, or the release.
  */
 function earned(person: string): Prisma.Sql {

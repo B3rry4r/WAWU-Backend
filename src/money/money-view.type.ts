@@ -583,8 +583,9 @@ export interface EarningsPeriodView {
  *
  * An earning is the payee's 85% of a finished sale: an ordinary sale (unlock,
  * tip, legal fee, school fees) once it is paid and delivered, a held kind
- * (paid DM, ticket) once its hold is released to the payee. A held price not
- * yet released is `held`, not earned.
+ * (paid DM, ticket) once the owning feature has released its hold to the
+ * payee (it is then earned, and waiting until the move is confirmed). A held
+ * price not yet released is `held`, not earned.
  */
 export interface EarningsView {
   /** Everything ever earned. */

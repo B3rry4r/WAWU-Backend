@@ -16423,7 +16423,7 @@
             "name": "month",
             "required": false,
             "in": "query",
-            "description": "The month the pieces earned in, YYYY-MM in Africa/Lagos time. The\ncurrent month when absent. A cursor belongs to the month it was given\nfor.",
+            "description": "The month the pieces earned in, YYYY-MM in Africa/Lagos time. The\ncurrent month when absent. A cursor is good only for the month it was\ngiven for.",
             "schema": {
               "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
               "type": "string"

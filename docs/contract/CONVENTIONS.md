@@ -2118,9 +2118,10 @@ balance (MONEY-11): nothing here is added up into one, and the routes say
   for is delivered (or has nothing to deliver: `openKey` is given up, section
   14) and neither `reviewSince` nor `chargeReviewSince` is set; a delivery or a
   charge in question waits for a person, and its earning with it. A held kind
-  is earned when its hold is RELEASED to the payee (section 18); a hold nobody
-  has decided is `held` (money paid, not earned), a refunded one is the
-  payer's. WAWU's own sales (credits, ticks, bills: no payee), a share under a
+  is earned once the owning feature has RELEASED its hold to the payee
+  (section 18; earned at once, `waiting` until the provider confirmed the
+  move); a hold nobody has decided is `held` (money paid, not earned), a
+  refunded one is the payer's. WAWU's own sales (credits, ticks, bills: no payee), a share under a
   kobo, and the web's Flutterwave sales (`GET /content/mine/earnings`, which is
   unchanged) are not earnings here.
 - **Routes** (`src/money/earnings/`, `no-store`, from our own records of the
