@@ -881,9 +881,10 @@ describe('NUV-06: sending to a bank and paying out', () => {
           pay.delivery(failedSend.id),
         );
         expect(f.processingStatus).toBe('processed');
-        expect(
-          (await entriesFor(failedSend.reference)).map((r) => r.status),
-        ).toEqual(['failed']);
+        const failedRows = await entriesFor(failedSend.reference);
+        expect(failedRows.map((r) => r.status)).toEqual(['failed']);
+        // A failed send charged nothing and Nuvion stated nothing: no provider charge is written.
+        expect(failedRows[0].providerFeeKobo).toBeNull();
       });
 
       it("a failed send charged nothing: a charge on its record is not a charge, and the row's quote stands without a note", async () => {
