@@ -6,6 +6,10 @@ import {
 import { FintavaClient } from '../fintava-client';
 import { FintavaError } from '../fintava-error';
 import { readMeterAnswer } from '../fintava-meter-answer';
+import {
+  NOT_GREEN_BODIES,
+  PLACEHOLDER_NAMES,
+} from '../../../test/bills/not-green-bodies';
 
 /**
  * How the Fintava client reads a meter preview (BILLS-01 round 2, D2). The success body has never been seen (question
@@ -157,6 +161,226 @@ describe('readMeterAnswer: the body of a 2xx preview', () => {
     expect(
       readMeterAnswer({ status: 201, data: { name: 'Ada Eze' } }),
     ).toMatchObject({ kind: 'owner' });
+  });
+});
+
+describe('readMeterAnswer: what is never a green found meter (BILLS-01 round 3, R2-1)', () => {
+  const owner = (data: Record<string, unknown>, more = {}) => ({
+    status: 200,
+    message: 'Meter details fetched',
+    data,
+    ...more,
+  });
+
+  it('has the verifier’s 22 bodies, no more and no fewer', () => {
+    expect(NOT_GREEN_BODIES).toHaveLength(22);
+  });
+
+  it.each(NOT_GREEN_BODIES)(
+    'cannot read %s as a meter found',
+    (_label, body) => {
+      expect(readMeterAnswer(body)).toEqual({ kind: 'unreadable' });
+    },
+  );
+
+  describe('a name that is a placeholder or a failure word', () => {
+    it.each(PLACEHOLDER_NAMES)('%s', (name) => {
+      expect(readMeterAnswer(owner({ Customer_Name: name }))).toEqual({
+        kind: 'unreadable',
+      });
+    });
+
+    it.each([
+      ['capitals', 'N/a'],
+      ['all capitals', 'UNKNOWN'],
+      ['all small', 'meter not found'],
+      ['spaces round it', '   Unknown   '],
+      ['spaces inside it', 'Customer   not   found'],
+      ['a full stop after it', 'Unknown.'],
+      ['an exclamation mark after it', 'N/A!'],
+      ['a question mark after it', 'Unknown?'],
+      ['a colon after it', 'Unknown:'],
+      ['a semicolon after it', 'Unknown;'],
+      ['a comma after it', 'Unknown,'],
+      ['several marks after it', 'Unknown...'],
+      ['a failure word', 'Failed'],
+      ['a long gap between words', 'Not        Available'],
+      ['a tab between words', 'Not\tAvailable'],
+      ['an invisible character inside it', 'Un\u200bknown'],
+      ['a no-break space', 'Not\u00a0Available'],
+      ['"none"', 'None'],
+      ['"nil"', 'nil'],
+      ['a failure sentence', 'Invalid meter number supplied'],
+      ['"service not currently available"', 'Service not currently available'],
+    ])('is a placeholder with %s', (_k, name) => {
+      expect(readMeterAnswer(owner({ name }))).toEqual({ kind: 'unreadable' });
+    });
+
+    it.each([
+      'Ada Unknown Eze',
+      'Nil Okoro',
+      'Null Obi',
+      'Chidinma Okoro',
+      'Ọlá Adéwálé',
+    ])('still names the owner %s', (name) => {
+      expect(readMeterAnswer(owner({ name }))).toMatchObject({
+        kind: 'owner',
+        name,
+      });
+    });
+  });
+
+  describe('a name that is blank once invisible characters are taken out', () => {
+    it.each([
+      ['a zero-width space', '\u200b'],
+      ['a zero-width non-joiner', '\u200c'],
+      ['a zero-width joiner', '\u200d'],
+      ['a byte order mark', '\ufeff'],
+      ['a soft hyphen', '\u00ad'],
+      ['a word joiner', '\u2060'],
+      ['a no-break space', '\u00a0'],
+      ['a line separator', '\u2028'],
+      ['a tab and a newline', '\t\n'],
+      ['a Braille blank', '\u2800'],
+      ['a Hangul filler', '\u3164'],
+      ['a Hangul choseong filler', '\u115f'],
+      ['a Hangul jungseong filler', '\u1160'],
+      ['a halfwidth Hangul filler', '\uffa0'],
+      ['a combining grapheme joiner', '\u034f'],
+      ['several kinds together', ' \u200b\u2800\u3164\ufeff\u00a0 '],
+    ])('%s is no name', (_k, name) => {
+      expect(readMeterAnswer(owner({ name }))).toEqual({ kind: 'unreadable' });
+    });
+
+    it('an address of invisible characters is no address', () => {
+      expect(
+        readMeterAnswer(owner({ name: 'Ada Eze', address: '\u200b\u2800' })),
+      ).toMatchObject({ kind: 'owner', name: 'Ada Eze', address: null });
+    });
+
+    it('skips a blank name key and reads the next one that holds a name', () => {
+      expect(
+        readMeterAnswer(owner({ Customer_Name: '\u200b', name: 'Ada Eze' })),
+      ).toMatchObject({ kind: 'owner', name: 'Ada Eze' });
+    });
+  });
+
+  describe('a body that flags a failure beside a name', () => {
+    const named = { name: 'Ada Eze' };
+    it.each([
+      ['success false', { success: false, data: named }],
+      ['success "false"', { success: 'false', data: named }],
+      ['error true', { error: true, data: named }],
+      ['error text', { error: 'oops', data: named }],
+      ['error object', { error: { code: 1 }, data: named }],
+      ['error 1', { error: 1, data: named }],
+      ['data.error true', { data: { ...named, error: true } }],
+      ['data.error text', { data: { ...named, error: 'oops' } }],
+      ['statusCode 400', { statusCode: 400, data: named }],
+      ['statusCode 404', { statusCode: 404, data: named }],
+      ['statusCode 499', { statusCode: 499, data: named }],
+      ['statusCode 500', { statusCode: 500, data: named }],
+      ['statusCode 599', { statusCode: 599, data: named }],
+      ['statusCode "500" as text', { statusCode: '500', data: named }],
+      ['data.statusCode 500', { data: { ...named, statusCode: 500 } }],
+      ['status "failed"', { status: 'failed', data: named }],
+      ['status "Failed" in capitals', { status: 'Failed', data: named }],
+      ['status " failure "', { status: ' failure ', data: named }],
+      ['status "error"', { status: 'ERROR', data: named }],
+      ['data.status "failed"', { data: { ...named, status: 'failed' } }],
+      ['data.status "error"', { data: { ...named, status: 'Error' } }],
+      ['data.status 400', { data: { ...named, status: 400 } }],
+      ['data.status 500', { data: { ...named, status: 500 } }],
+    ])('%s is not green', (_k, body) => {
+      expect(readMeterAnswer(body)).toEqual({ kind: 'unreadable' });
+    });
+
+    it.each([
+      ['success true', { success: true, data: named }],
+      ['error false', { error: false, data: named }],
+      ['error null', { error: null, data: named }],
+      ['error empty text', { error: '', data: named }],
+      ['error 0', { error: 0, data: named }],
+      ['data.error null', { data: { ...named, error: null } }],
+      ['statusCode 200', { statusCode: 200, data: named }],
+      ['statusCode 399', { statusCode: 399, data: named }],
+      ['status "success"', { status: 'success', data: named }],
+      ['status "ok"', { status: 'ok', data: named }],
+      ['data.status "active"', { data: { ...named, status: 'active' } }],
+      ['data.status 200', { data: { ...named, status: 200 } }],
+      ['data.status 399', { data: { ...named, status: 399 } }],
+    ])('%s is still green', (_k, body) => {
+      expect(readMeterAnswer(body)).toMatchObject({
+        kind: 'owner',
+        name: 'Ada Eze',
+      });
+    });
+
+    it('answers "no such meter" or "service off" first when the body says so too', () => {
+      expect(
+        readMeterAnswer({
+          error: true,
+          message: 'Meter not found',
+          data: named,
+        }),
+      ).toEqual({ kind: 'not_found' });
+      expect(
+        readMeterAnswer({
+          success: false,
+          message: 'service not currently available',
+          data: named,
+        }),
+      ).toEqual({ kind: 'service_unavailable' });
+    });
+  });
+
+  describe('which name key wins, and what an empty data array is (round 2 test gaps V5 and V6)', () => {
+    it('an empty data array is unreadable, not nobody', () => {
+      expect(readMeterAnswer({ status: 200, data: [] })).toEqual({
+        kind: 'unreadable',
+      });
+    });
+
+    it('takes the first of the name keys in this order: customer name, name, account name, consumer name, full name', () => {
+      const order = [
+        ['Customer_Name', 'A'],
+        ['name', 'B'],
+        ['accountName', 'C'],
+        ['consumerName', 'D'],
+        ['fullName', 'E'],
+        ['customerFullName', 'F'],
+      ] as const;
+      for (let i = 0; i < order.length; i += 1) {
+        const data = Object.fromEntries(order.slice(i));
+        // Written in reverse, so the object’s own order cannot be what decides.
+        const reversed = Object.fromEntries(Object.entries(data).reverse());
+        expect(readMeterAnswer(owner(reversed))).toMatchObject({
+          kind: 'owner',
+          name: order[i][1],
+        });
+      }
+    });
+
+    it('takes the first of the address keys in this order', () => {
+      const keys = [
+        'address',
+        'customerAddress',
+        'consumerAddress',
+        'serviceAddress',
+      ];
+      for (let i = 0; i < keys.length; i += 1) {
+        // Written in reverse, so the object’s own order cannot be what decides.
+        const data = Object.fromEntries(
+          keys
+            .slice(i)
+            .map((k, j) => [k, String(i + j + 1)])
+            .reverse(),
+        ) as Record<string, string>;
+        expect(
+          readMeterAnswer(owner({ name: 'Ada Eze', ...data })),
+        ).toMatchObject({ address: String(i + 1) });
+      }
+    });
   });
 });
 
