@@ -161,7 +161,6 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // this account exists and names nobody else.
   { model: 'PersonBilling', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'MakerTier', column: 'wawuUserId', disposition: 'OWNED' },
-  { model: 'EventPass', column: 'wawuUserId', disposition: 'OWNED' },
   // A tier this account bought, renewed or upgraded from its wallet
   // (TIER-03): what it was and what it cost. OWNED, like VerificationPurchase
   // above: the row exists only because this account bought something and
@@ -169,6 +168,7 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // (WalletPayment below, anonymised); its id is this row's key and is not a
   // link anyone follows once the account is gone.
   { model: 'MakerPurchase', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'EventPass', column: 'wawuUserId', disposition: 'OWNED' },
   // An event registration this account claimed in the app (JOIN-01; claimed by
   // JOIN-03, POST /waitlist/claims): its name, phone, email and the payment that
   // bought the plan. It names this account only after the claim, so it goes

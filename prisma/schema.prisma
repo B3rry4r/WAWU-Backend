@@ -376,20 +376,6 @@ model MakerTier {
   updatedAt          DateTime @updatedAt
 }
 
-/// A pass to the Christmas event, issued with a tier (W44). One row per
-/// purchase that issued one: `purchaseRef` is unique, so a repeated payment
-/// confirmation issues it once. `type` names an event pass in
-/// src/plans/plans.config.json; the reader shows a person's best one.
-model EventPass {
-  id          String   @id @default(uuid())
-  wawuUserId  String
-  type        String
-  purchaseRef String   @unique
-  createdAt   DateTime @default(now())
-
-  @@index([wawuUserId])
-}
-
 /// A tier bought, renewed or upgraded from the wallet (TIER-03), written once
 /// the payment is confirmed, in the same transaction that grants what it
 /// bought (the tier and its dates, the event pass, the bonus points, the
@@ -423,6 +409,20 @@ model MakerPurchase {
   createdAt   DateTime        @default(now())
 
   @@index([wawuUserId, createdAt])
+}
+
+/// A pass to the Christmas event, issued with a tier (W44). One row per
+/// purchase that issued one: `purchaseRef` is unique, so a repeated payment
+/// confirmation issues it once. `type` names an event pass in
+/// src/plans/plans.config.json; the reader shows a person's best one.
+model EventPass {
+  id          String   @id @default(uuid())
+  wawuUserId  String
+  type        String
+  purchaseRef String   @unique
+  createdAt   DateTime @default(now())
+
+  @@index([wawuUserId])
 }
 
 /// One featured work on somebody's profile (ME-16): what M33 shows under
