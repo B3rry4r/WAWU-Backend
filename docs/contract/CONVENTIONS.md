@@ -2100,3 +2100,90 @@ When another job completes a payment between a path's figures update and its
 `complete()`, the path's note (both figures) is still written, once, to the
 completed payment (`keepNote`, a conditional update that only touches a
 completed payment).
+
+## 19. Send to a WAWU user (WALLET-07)
+
+`POST /money/transfers/wawu` and `GET /money/transfers/{id}`
+(`src/money/transfers/`), served; sending to a bank account (WALLET-09) is
+still declared. Finding the person is WALLET-08.
+
+- **The request.** Headers `Idempotency-Key` (required, section 4) and
+  `X-Transaction-Pin` or `X-Device-Approval` (section 5). Body
+  `WawuTransferDto`: `recipientWawuUserId`, `amountKobo` (what they get),
+  `expectedTotalKobo` and `quoteToken` (both from `GET /money/fees/quote?
+  kind=wawu_transfer`, BACKEND_GAPS G-64), and an optional `note` (trimmed,
+  at most 100 characters, no NUL). Answers `201` with `TransferView`.
+- **What moves.** One wallet-to-wallet transfer of `amountKobo` from the
+  sender's wallet to the receiver's, at the provider the server runs (Fintava,
+  or Nuvion's book transfer), under OUR reference `wawu-send-<id>` (also
+  `TransferView.reference`). The sender's balance falls by the quoted
+  `totalKobo` (the amount, the provider's charge and WAWU's fee, R-10); the
+  receiver's rises by exactly `amountKobo`. WAWU's fee is collected by the
+  provider in the same transfer (Fintava's dashboard "Merchant charges",
+  `docs/fintava/fees.md`), so there is no second transfer and no second
+  provider charge. What the provider's own record says it took is the record:
+  a charge other than the quote is kept on the send (`TransferView.fee` and
+  `totalKobo` say what really left, the provider's part first and WAWU's what
+  is left), a believable excess is flagged for NUV-08, and a charge below 0 or
+  above the quote by more than `PAYMENT_CHARGE_REVIEW_ABOVE_KOBO` is not
+  believed: the send stays `pending`, in review, and nothing the provider
+  reported is written.
+- **Who it may go to, answered before the PIN.** Guards run in this order:
+  the wallet gate, the key (a repeat of a finished send is answered here and
+  is never re-judged), the recipient, then the PIN. A refusal at the
+  recipient uses no PIN try and gives the key back.
+
+  | Recipient | Answer |
+  |---|---|
+  | yourself | `400 self_transfer` "You can't send money to yourself." |
+  | nobody the Hub knows | `404 recipient_not_found` "We could not find that person." |
+  | an account whose deletion is scheduled | `404 recipient_not_found` "This account is closed." |
+  | a block between you, in either direction | `403 recipient_blocked` "You can't send money to this person." (never says who blocked whom) |
+  | no open wallet at the provider this server runs | `409 recipient_has_no_wallet` |
+
+  A value that is not a user id is the plain validation `400`, after the PIN
+  like every malformed field. No answer of either route carries a phone
+  number: the recipient is `MoneyPartyView` (id, name, handle, avatar, tick).
+- **Before money moves**, in order: `fees_not_set`, the wallet, the key, the
+  recipient, the PIN, the body, the quote (`409 quote_changed` with
+  `reason.feeQuote`), the provider's available balance (`402
+  insufficient_funds` with `balanceKobo`, `totalKobo` and `shortfallKobo`,
+  CONVENTIONS section 14a; BACKEND_GAPS G-481; nothing claimed, the key given
+  back), WAWU's limits inside the claim (`403 limit_reached`).
+- **Once per key.** The send, the sender's pending ledger row and the key's
+  link to it are written in one transaction BEFORE the provider hears of it.
+  A retry, two taps at once on one Hub or on two, and a Hub that dies between
+  the provider's answer and our write all end in one transfer: the provider
+  is asked about the send by our reference and is never sent it twice.
+- **`status`.** `completed`; `failed` (the provider refused it or its own
+  record says it failed: nothing left the wallet); `reversed` (the provider
+  moved it and reversed it); `pending`. A `pending` send is one whose
+  outcome is not known: the answer was lost, or the provider accepted it
+  and has not finished. It carries `statusMessage` "We're still confirming
+  this send. Don't send it again; we'll let you know."; nothing says no money
+  moved (absence at the provider is never proof, lead ruling D1). The app
+  polls `GET /money/transfers/{id}`; the sweep (every minute, backing off to
+  hourly) asks the provider by reference and settles it; past
+  `PAYMENT_REVIEW_AFTER_HOURS` it goes to review, still `pending`. The one
+  exception to "never sent again": a request that PROVABLY never reached the
+  provider (a refused connection, a host name that did not resolve, decided
+  by error code and syscall) fails the send, answers `503
+  provider_unreachable` and gives the key back, so the same key sends it
+  again as a NEW send under a new reference.
+- **Ledger.** The sender's `out` row (`category: transfer`, counterparty the
+  receiver, the fee split and the note) is pending from the claim; the
+  receiver's `in` row is written only once the send is confirmed, so nobody
+  sees money coming in that has not arrived. `TransferView.transactionId` is
+  the sender's row (`TransactionView.id`), what the receipt routes are keyed
+  by (BACKEND_GAPS G-66).
+- **`GET /money/transfers/{id}`** reads our record only (never the provider),
+  `Cache-Control: no-store`, behind the wallet gate, not behind the fee
+  settings, the key or the PIN. Only the sender reads it: another person's
+  send and an id nobody holds are the same `404 not_found`.
+- **Providers.** Under Fintava the send works as above. Under Nuvion it is a
+  book transfer (NUV-05); until that area is served the adapter answers
+  `not_supported`, and the send answers `503 provider_unreachable`, fails,
+  and gives the key back before any money moves.
+- **Deleting an account** keeps the send for the other person: each side's
+  user id, account number and name are set to null when that person is
+  purged, and the sender's note goes with the sender.

@@ -10,6 +10,7 @@ import {
   Injectable,
   Logger,
   SetMetadata,
+  type Type,
   UseFilters,
   UseGuards,
 } from '@nestjs/common';
@@ -423,10 +424,17 @@ export const CurrentIdempotencyScope = createParamDecorator(
  * wallet already found). Documents `Idempotency-Key` as required, and both
  * approval headers.
  */
-export function RequireIdempotentApproval(route: string): MethodDecorator {
+export function RequireIdempotentApproval(
+  route: string,
+  ...beforeApproval: Type<CanActivate>[]
+): MethodDecorator {
   return applyDecorators(
     SetMetadata(ROUTE_KEY, route),
-    UseGuards(WalletGateGuard, IdempotencyGuard),
+    // `beforeApproval`: guards of the route's own that must answer BEFORE the
+    // PIN is looked at, and after a repeat has been answered (WALLET-07: who
+    // the money is going to). A refusal from one gives the key back
+    // (IdempotencyFilter), and uses no PIN try.
+    UseGuards(WalletGateGuard, IdempotencyGuard, ...beforeApproval),
     RequireApproval(),
     UseFilters(IdempotencyFilter),
     IdempotencyKeyHeader(),
