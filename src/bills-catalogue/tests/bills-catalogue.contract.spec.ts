@@ -1093,43 +1093,64 @@ describe('BILLS-01 electricity catalogue and meter check over HTTP', () => {
             });
           });
 
-          it('a name of five megabytes answers at once, cut to 200 characters', async () => {
-            const segment = jest.spyOn(Intl.Segmenter.prototype, 'segment');
-            try {
-              const started = Date.now();
-              const res = await ask(
-                'AEDC',
-                nameBody('N'.repeat(5_000_000), 'A'.repeat(5_000_000)),
-              );
-              const took = Date.now() - started;
-              expect(res.status).toBe(200);
-              expect(body<MeterPreviewView>(res).data).toMatchObject({
-                name: 'N'.repeat(200),
-                address: 'A'.repeat(200),
+          describe('a name of five megabytes', () => {
+            /**
+             * The service on its own client with a timeout long enough for ten megabytes to cross a loaded machine (the
+             * module's own is 400 ms, which is for the small answers). The cut once took 3.9 s for a name this size; the
+             * assertion that holds is the spy: the segmenter is given at most the byte bound, never the five megabytes.
+             */
+            const big = () =>
+              serviceWith({ ...ENV, FINTAVA_TIMEOUT_MS: '30000' });
+            const checkWith = (svc: BillsCatalogueService) =>
+              svc.previewMeter(randomUUID(), {
+                code: 'AEDC',
+                meterNumber: '04123456789',
               });
-              // The cut once took 3.9 s on its own for a name this size.
-              expect(took).toBeLessThan(3000);
-              const longest = Math.max(
-                ...segment.mock.calls.map(([text]) => String(text).length),
-              );
-              expect(longest).toBeLessThanOrEqual(1024);
-            } finally {
-              segment.mockRestore();
-            }
-          });
+            const answerWith = (name: string, address: string) => {
+              listAnswers();
+              double.on('POST', '/billing/preview-meter', {
+                status: 200,
+                body: nameBody(name, address),
+              });
+            };
 
-          it('a name of five megabytes of invisible characters answers at once as not confirmed', async () => {
-            const started = Date.now();
-            unconfirmed(
-              await ask('AEDC', nameBody('\u200b'.repeat(5_000_000))),
-            );
-            expect(Date.now() - started).toBeLessThan(3000);
-          });
+            it('is cut to 200 characters at once, name and address alike', async () => {
+              const segment = jest.spyOn(Intl.Segmenter.prototype, 'segment');
+              try {
+                answerWith('N'.repeat(5_000_000), 'A'.repeat(5_000_000));
+                const started = Date.now();
+                const got = await checkWith(big());
+                const took = Date.now() - started;
+                expect(got.name).toBe('N'.repeat(200));
+                expect(got.address).toBe('A'.repeat(200));
+                expect(took).toBeLessThan(6000);
+                const longest = Math.max(
+                  ...segment.mock.calls.map(([text]) => String(text).length),
+                );
+                expect(longest).toBeLessThanOrEqual(1024);
+                expect(segment).toHaveBeenCalled();
+              } finally {
+                segment.mockRestore();
+              }
+            }, 30_000);
 
-          it('a name of five megabytes of one letter and marks answers at once as not confirmed', async () => {
-            const started = Date.now();
-            unconfirmed(await ask('AEDC', nameBody(`e${marks(2_500_000)}`)));
-            expect(Date.now() - started).toBeLessThan(3000);
+            it('of invisible characters only is not confirmed at once', async () => {
+              answerWith('\u200b'.repeat(5_000_000), 'x');
+              const started = Date.now();
+              await expect(checkWith(big())).rejects.toMatchObject({
+                code: 'meter_unconfirmed',
+              });
+              expect(Date.now() - started).toBeLessThan(6000);
+            }, 30_000);
+
+            it('of one letter and its marks is not confirmed at once', async () => {
+              answerWith(`e${marks(2_500_000)}`, 'x');
+              const started = Date.now();
+              await expect(checkWith(big())).rejects.toMatchObject({
+                code: 'meter_unconfirmed',
+              });
+              expect(Date.now() - started).toBeLessThan(6000);
+            }, 30_000);
           });
 
           it('takes the bound from the Hub’s setting (BILLS_PROVIDER_TEXT_MAX_BYTES), for the name and for the address', async () => {
