@@ -376,7 +376,7 @@ export class PrismaNuvionBookStore implements NuvionBookStore {
     now: Date,
     opts: { answered?: boolean } = {},
   ): Promise<BookTransferRow | null> {
-    // The id is kept once: an update that would replace one is not made (the
+    // The id is kept once: another id never overwrites the one stored (the
     // caller compares the transfer with the row before it gets here).
     await this.prisma.nuvionBookTransfer.updateMany({
       where: {
