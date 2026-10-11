@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 
 /**
  * A local stand-in for WAWU ID's mail route for the nightly check's report
- * (task MONEY-16, BACKEND_GAPS G-680): `POST /internal/users/:userId/money-check-report`.
+ * (task MONEY-16, BACKEND_GAPS G-690): `POST /internal/users/:userId/money-check-report`.
  * It records who was mailed which facts and the service key that came with
  * them, and can be told to refuse a person (a 404 is what WAWU ID answers
  * until it builds the route). Nothing leaves this machine.
@@ -62,7 +62,7 @@ export class WawuIdMailDouble {
           serviceKey: req.headers['x-service-key'] as string | undefined,
           body,
         });
-        res.end(JSON.stringify({ data: { sent: true } }));
+        res.end(JSON.stringify({ data: { emailed: true } }));
       });
     });
     await new Promise<void>((resolve) =>

@@ -40,7 +40,11 @@ import {
   checkPayments,
   type DbCheckContext,
 } from './money-check-db';
-import { mailOf, MoneyCheckMailer } from './money-check-mailer';
+import {
+  mailOf,
+  MoneyCheckMailer,
+  MoneyCheckMailRefused,
+} from './money-check-mailer';
 import { MoneyCheckScope } from './money-check-scope';
 import { FindingSink } from './money-check-sink';
 import { isNight, lagosMinuteOfDay, lagosNight } from './money-check-time';
@@ -277,6 +281,7 @@ export class MoneyCheckService {
           this.doneNight = night;
         }
       }
+      await this.closeStale(now);
       await this.sendDue(now);
     } catch (e) {
       this.logger.error(
@@ -284,6 +289,57 @@ export class MoneyCheckService {
       );
     } finally {
       this.ticking = false;
+    }
+  }
+
+  /**
+   * Closes any run whose last try died and that nothing will make again
+   * (round 2, VF-3): a `running` row whose process is gone, or a `failed`
+   * row whose rest is over. The night ends `incomplete`, mailed like any
+   * other, at any hour: a night is never left `running` because the catch-up
+   * window passed.
+   *
+   * It runs AFTER the tick has tried tonight's run, so a row of the night
+   * being made, with tries left, has already been taken over and made again
+   * by then; what is left to close is what nothing will make again.
+   *
+   * Left alone: a lease that has not run out, and a run a person made by hand
+   * that failed (they saw the failure and run it again, or ask for `--again`).
+   */
+  async closeStale(now: Date): Promise<void> {
+    try {
+      const stale = await this.prisma.moneyCheckRun.findMany({
+        where: {
+          provider: this.provider.name,
+          status: { in: ['running', 'failed'] },
+          leaseUntil: { lte: now },
+          NOT: { status: 'failed', byHand: true },
+        },
+        orderBy: [{ night: 'asc' }, { sequence: 'asc' }],
+        take: 20,
+        select: {
+          id: true,
+          attempt: true,
+          night: true,
+          startedAt: true,
+          status: true,
+          failure: true,
+        },
+      });
+      for (const r of stale) {
+        await this.giveUp(
+          r.id,
+          r.attempt,
+          r.night,
+          r.startedAt,
+          now,
+          r.status === 'failed' ? storedFailure(r.failure) : RUN_DIED,
+        );
+      }
+    } catch (e) {
+      this.logger.error(
+        `money check: closing old runs failed (${e instanceof Error ? e.name : 'error'})`,
+      );
     }
   }
 
@@ -346,7 +402,7 @@ export class MoneyCheckService {
       await this.prune(now);
     } catch (e) {
       this.logger.error(
-        `money check: the finished run ${runId} was not handed on (${reasonOf(e)})`,
+        `money check: the finished run ${runId} was not handed on (${logReason(e)})`,
       );
     }
   }
@@ -410,6 +466,7 @@ export class MoneyCheckService {
           night,
           row.startedAt,
           now,
+          row.status === 'failed' ? storedFailure(row.failure) : RUN_DIED,
         ),
       };
     }
@@ -521,9 +578,9 @@ export class MoneyCheckService {
     opts: RunOptions,
     now: Date,
   ): Promise<RunOutcome> {
-    const why = reasonOf(e);
+    const failure = failureOf(e);
     this.logger.error(
-      `money check ${run.night}: try ${run.attempt} failed (${why})`,
+      `money check ${run.night}: try ${run.attempt} failed (${failure.code}${e instanceof Error ? `, ${e.name}` : ''})`,
     );
     if (!run.byHand && run.attempt >= RUN_ATTEMPTS) {
       return this.giveUp(
@@ -532,9 +589,10 @@ export class MoneyCheckService {
         run.night,
         run.startedAt,
         now,
-        why,
+        failure,
       );
     }
+    const why = failureText(failure);
     await this.prisma.moneyCheckRun.updateMany({
       where: { id: run.id, status: 'running', attempt: run.attempt },
       data: {
@@ -557,14 +615,14 @@ export class MoneyCheckService {
     night: string,
     startedAt: Date,
     now: Date,
-    why = 'the run did not finish',
+    failure: RunFailure = RUN_DIED,
   ): Promise<RunOutcome> {
     const report = failureReport(
       this.provider.name,
       night,
       startedAt,
       now,
-      why,
+      failure,
     );
     const { count } = await this.prisma.moneyCheckRun.updateMany({
       where: {
@@ -582,7 +640,7 @@ export class MoneyCheckService {
         mismatchCount: 0,
         lookCount: 0,
         report: report as unknown as Prisma.InputJsonValue,
-        failure: why,
+        failure: failureText(failure),
         leaseUntil: now,
         emailedTo: [],
         nextEmailAt: now,
@@ -684,8 +742,43 @@ export class MoneyCheckService {
     await this.beat(run);
     await checkHeldRecords(db);
     await this.heldFigures(held);
+    await this.nameNewWallets(st, wallets);
 
     return this.assemble(st, held);
+  }
+
+  /**
+   * A wallet opened while the run was going is not in the list it read at the
+   * start, so "N of N" does not count it and nothing compared it. It is named
+   * in the report instead of being left out silently; tomorrow's run reads it
+   * (round 2, VF-5).
+   */
+  private async nameNewWallets(
+    st: RunState,
+    snapshot: readonly WalletRef[],
+  ): Promise<void> {
+    const had = new Set(snapshot.map((w) => w.wawuUserId));
+    const PAGE = 5000;
+    let opened = 0;
+    let after: string | undefined;
+    for (;;) {
+      const page = await this.prisma.fintavaWallet.findMany({
+        where: {
+          AND: [
+            rowsOf(this.provider.name),
+            this.scope.walletWhere(),
+            ...(after === undefined ? [] : [{ wawuUserId: { gt: after } }]),
+          ],
+        },
+        select: { wawuUserId: true },
+        orderBy: { wawuUserId: 'asc' },
+        take: PAGE,
+      });
+      for (const w of page) if (!had.has(w.wawuUserId)) opened += 1;
+      if (page.length < PAGE) break;
+      after = page[page.length - 1].wawuUserId;
+    }
+    st.sink.notice('wallets_opened_during_run', opened);
   }
 
   /** The provider is not set up here: nothing can be compared with it. */
@@ -874,6 +967,7 @@ export class MoneyCheckService {
       baseKobo: bigint;
       availableKobo: bigint;
       differenceKobo: bigint;
+      bookedDiffers: boolean;
     } | null = null;
     const waits = this.settings.recheckMs;
     for (let i = 0; i <= waits.length; i += 1) {
@@ -886,6 +980,7 @@ export class MoneyCheckService {
         const cmp = compareBalance(after, balance);
         if (cmp.match) {
           st.sink.compared('balances', 1);
+          if (cmp.bookedDiffers) st.sink.notice('balance_booked_differs', 1);
           return 'done';
         }
         confirmed += 1;
@@ -893,6 +988,7 @@ export class MoneyCheckService {
           baseKobo: cmp.baseKobo,
           availableKobo: balance.availableKobo,
           differenceKobo: cmp.differenceKobo,
+          bookedDiffers: cmp.bookedDiffers,
         };
         if (confirmed >= 2) break;
       }
@@ -900,6 +996,7 @@ export class MoneyCheckService {
     }
     if (last === null) return 'moving';
     st.sink.compared('balances', 1);
+    if (last.bookedDiffers) st.sink.notice('balance_booked_differs', 1);
     const more = last.differenceKobo > 0n;
     st.sink.add({
       check: 'balances',
@@ -1324,7 +1421,7 @@ export class MoneyCheckService {
       } catch (e) {
         failed += 1;
         this.logger.warn(
-          `money check ${run.night}: the report was not taken for one recipient (${reasonOf(e)})`,
+          `money check ${run.night}: the report was not taken for one recipient (${logReason(e)})`,
         );
       }
     }
@@ -1371,11 +1468,59 @@ export class MoneyCheckService {
   }
 }
 
-/** Why a try failed, in a few plain words and no provider text. */
-function reasonOf(e: unknown): string {
-  if (e instanceof WalletProviderError) return `the provider failed: ${e.kind}`;
-  if (e instanceof Error) return `${e.name}: ${e.message}`.slice(0, 300);
-  return 'an unknown error';
+/**
+ * Why a night could not be made: a code and one fixed sentence, nothing else
+ * (round 2, VF-8). It is stored on the run and read out in the emailed note,
+ * so it never carries an exception's own text, which could hold a value from
+ * a library, the database or the provider.
+ */
+export interface RunFailure {
+  code: string;
+  sentence: string;
+}
+
+/** The run's process was lost and nobody took the night up again. */
+export const RUN_DIED: RunFailure = {
+  code: 'run_died',
+  sentence: 'The run stopped before it finished and was not made again.',
+};
+
+const INTERNAL_ERROR: RunFailure = {
+  code: 'internal_error',
+  sentence:
+    'The check stopped on an error inside the Hub. The Hub log names it.',
+};
+
+/** What a thrown error is reported as. Provider failures keep their closed kind. */
+export function failureOf(e: unknown): RunFailure {
+  if (e instanceof WalletProviderError) {
+    return {
+      code: `provider_${e.kind}`,
+      sentence:
+        'The wallet provider failed while the check was reading from it.',
+    };
+  }
+  return INTERNAL_ERROR;
+}
+
+/** How a failure is stored on the run: `code: sentence`. */
+export function failureText(f: RunFailure): string {
+  return `${f.code}: ${f.sentence}`;
+}
+
+const STORED_FAILURE = /^([a-z][a-z_]{2,39}): ([A-Za-z0-9 .,'()-]{1,200})$/;
+
+/** A failure read back from the run row; anything that is not one of ours is a lost run. */
+export function storedFailure(text: string | null): RunFailure {
+  const m = text === null ? null : STORED_FAILURE.exec(text);
+  return m ? { code: m[1], sentence: m[2] } : RUN_DIED;
+}
+
+/** What an error is called in the Hub's own log (never stored, never mailed). */
+function logReason(e: unknown): string {
+  if (e instanceof MoneyCheckMailRefused) return e.message;
+  if (e instanceof WalletProviderError) return `provider ${e.kind}`;
+  return e instanceof Error ? e.name : 'an unknown error';
 }
 
 /** The report of a night that could not be made. */
@@ -1384,8 +1529,11 @@ export function failureReport(
   night: string,
   startedAt: Date,
   finishedAt: Date,
-  why: string,
+  failure: RunFailure | null = null,
 ): MoneyCheckReport {
+  const note = failure
+    ? `The run did not finish. ${failure.sentence} (${failure.code}).`
+    : 'The run did not finish.';
   return {
     version: 1,
     provider,
@@ -1401,7 +1549,7 @@ export function failureReport(
       state: 'incomplete' as const,
       checked: 0,
       found: 0,
-      note: `The run did not finish: ${why}.`,
+      note,
     })),
     held: {
       openCount: 0,

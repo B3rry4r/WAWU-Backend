@@ -8,8 +8,10 @@
  *   held money that is not where it should be, a merchant charge that did
  *   not land). The provider's record is the truth; the check only reports.
  * - a LOOK is something a person at WAWU has to decide, though nothing
- *   differs: a payment or a hold in review, money owed to a deleted payee,
- *   a ledger row the ledger itself marked as disagreeing with the provider.
+ *   differs: a payment or a hold in review, money owed to a deleted payee, a
+ *   refund waiting for a payer's wallet, a ledger row on an account with no
+ *   wallet, a ledger row the ledger itself marked as disagreeing with the
+ *   provider.
  *
  * Every amount in a report is kobo written as decimal text. A reference is
  * an id WAWU wrote (a ledger row, a payment, a hold, our reference at the
@@ -61,6 +63,7 @@ export type FindingKind =
   | 'ledger_discrepancy'
   | 'ledger_pending_old'
   | 'failed_send_no_reversal'
+  | 'ledger_no_wallet'
   | 'payment_rows'
   // payments
   | 'payment_in_review'
@@ -72,6 +75,7 @@ export type FindingKind =
   | 'hold_in_review'
   | 'hold_move_stuck'
   | 'hold_waiting_past_limit'
+  | 'hold_refund_waiting_payer_wallet'
   | 'hold_payee_deleted';
 
 export interface Finding {

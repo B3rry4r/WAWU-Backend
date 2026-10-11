@@ -305,9 +305,11 @@ function judgePair(
     });
   };
   if (o === 'completed') {
-    if (l === 'failed') {
+    // A send the ledger calls failed or reversed (the money came back) while
+    // the provider lists it completed: the money did not come back.
+    if (l === 'failed' || l === 'reversed') {
       differs(
-        'The provider shows this send completed and the ledger shows it failed.',
+        `The provider shows this send completed and the ledger shows it ${l}.`,
       );
     } else if (l === 'pending' && settled) {
       differs(
@@ -333,9 +335,9 @@ function judgePair(
     differs(
       'The ledger shows this send completed and the provider still has it pending.',
     );
-  } else if (l === 'failed' && settled) {
+  } else if ((l === 'failed' || l === 'reversed') && settled) {
     differs(
-      'The ledger shows this send failed and the provider still has it pending.',
+      `The ledger shows this send ${l} and the provider still has it pending.`,
     );
   }
 }
@@ -424,6 +426,11 @@ export interface BalanceComparison {
   highKobo: bigint;
   /** The provider's available balance less the base (negative: it has less). */
   differenceKobo: bigint;
+  /**
+   * The provider's booked figure is not its available one (it holds or has
+   * pending something). Only a notice: it never decides a match.
+   */
+  bookedDiffers: boolean;
 }
 
 /**
@@ -431,8 +438,14 @@ export interface BalanceComparison {
  * completed `out`. A `pending` send may or may not have left, a `pending`
  * receipt may or may not have arrived, and a failed bank send nobody has seen
  * come back may not have, so the balance may sit anywhere in between without
- * a difference. Either of the provider's two figures inside the range is a
- * match.
+ * a difference.
+ *
+ * The figure compared is the AVAILABLE balance alone: it is the one the app
+ * shows (docs/fintava/naira-api.md). The booked figure never rescues a
+ * wallet whose available figure is outside the range (round 2, VF-1): a
+ * pending item nobody recorded is exactly the difference this check exists to
+ * find, and the booked figure would hide it. A booked figure that differs from
+ * the available one is reported as a notice (`bookedDiffers`).
  */
 export function compareBalance(
   sums: LedgerSums,
@@ -441,13 +454,14 @@ export function compareBalance(
   const baseKobo = sums.completedIn - sums.completedOut;
   const lowKobo = baseKobo - sums.pendingOut - sums.uncertainOut;
   const highKobo = baseKobo + sums.pendingIn;
-  const within = (v: bigint): boolean => v >= lowKobo && v <= highKobo;
   return {
-    match: within(balance.availableKobo) || within(balance.bookedKobo),
+    match:
+      balance.availableKobo >= lowKobo && balance.availableKobo <= highKobo,
     baseKobo,
     lowKobo,
     highKobo,
     differenceKobo: balance.availableKobo - baseKobo,
+    bookedDiffers: balance.bookedKobo !== balance.availableKobo,
   };
 }
 

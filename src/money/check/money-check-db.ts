@@ -83,7 +83,8 @@ async function addRows<T>(
  *   (`discrepancy`): a mismatch until a person settles it;
  * - a row still `pending` after the ledger's confirm window;
  * - a failed bank send nobody has seen come back (BACKEND_GAPS G-39), past
- *   that window.
+ *   that window;
+ * - a row on an account that has no wallet row (round 2, VF-5).
  */
 export async function checkLedgerRows(ctx: DbCheckContext): Promise<void> {
   const { prisma, now, sink } = ctx;
@@ -181,7 +182,73 @@ export async function checkLedgerRows(ctx: DbCheckContext): Promise<void> {
     ],
   );
 
+  await checkRowsWithoutWallet(ctx);
   await checkPaymentRows(ctx);
+}
+
+/**
+ * Ledger rows on a wallet account that has no wallet row. The wallet row is
+ * deleted with the account (account purge), and the wallet loop reads wallet
+ * rows, so a deleted account's last rows are compared by nothing: neither its
+ * balance nor its history. They are listed here, with a count, so the report
+ * says so (round 2, VF-5). Rows inside the movement window only: the ones a
+ * person would still be asked about.
+ */
+async function checkRowsWithoutWallet(ctx: DbCheckContext): Promise<void> {
+  const { prisma, sink } = ctx;
+  const inScope = ledgerRows(ctx, {
+    walletKind: 'user',
+    ...(ctx.windowFrom ? { occurredAt: { gte: ctx.windowFrom } } : {}),
+  });
+  const accounts = (
+    await prisma.fintavaLedgerEntry.groupBy({
+      by: ['accountNumber'],
+      where: inScope,
+    })
+  ).map((a) => a.accountNumber);
+  const orphans: string[] = [];
+  for (let i = 0; i < accounts.length; i += PAGE) {
+    const chunk = accounts.slice(i, i + PAGE);
+    const have = new Set(
+      (
+        await prisma.fintavaWallet.findMany({
+          where: {
+            AND: [rowsOf(ctx.provider), { accountNumber: { in: chunk } }],
+          },
+          select: { accountNumber: true },
+        })
+      ).map((w) => w.accountNumber),
+    );
+    for (const a of chunk) if (!have.has(a)) orphans.push(a);
+  }
+  if (orphans.length === 0) return;
+  const where: Prisma.FintavaLedgerEntryWhereInput = {
+    AND: [inScope, { accountNumber: { in: orphans } }],
+  };
+  await addRows(
+    ctx,
+    'ledger_rows',
+    'look',
+    await prisma.fintavaLedgerEntry.findMany({
+      where,
+      select: { id: true, amountKobo: true },
+      orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
+      take: REPORT_KEEP,
+    }),
+    () => prisma.fintavaLedgerEntry.count({ where }),
+    (r) => [
+      {
+        check: 'ledger_rows',
+        severity: 'look',
+        kind: 'ledger_no_wallet',
+        ref: r.id,
+        detail:
+          'This row is on an account that has no wallet, so no balance or history was compared for it.',
+        amountKobo: r.amountKobo.toString(),
+      },
+    ],
+  );
+  sink.notice('ledger_accounts_without_wallet', orphans.length);
 }
 
 /**
@@ -401,7 +468,11 @@ export async function checkPayments(ctx: DbCheckContext): Promise<void> {
 // holds
 // ---------------------------------------------------------------------------
 
-/** Waits that mean a person is missing, not that the provider is slow. */
+/**
+ * Waits that mean a person is missing, not that the provider is slow. Neither
+ * is a "waiting past the limit" finding: a payee's wait is a notice (R-11), a
+ * payer's wait is a look of its own (below).
+ */
 const PERSON_WAITS = ['payee_wallet', 'payer_wallet'];
 
 /**
@@ -413,6 +484,8 @@ const PERSON_WAITS = ['payee_wallet', 'payer_wallet'];
  *   provider refusing, a frozen wallet);
  * - money owed to a payee whose account was deleted (BACKEND_GAPS G-461):
  *   nobody is left to pay and nothing in WAWU says what to do with it.
+ * - a refund owed to a payer who has no wallet to receive it (round 2, VF-4):
+ *   the payer paid from a wallet, so one missing is not a normal wait.
  * A payee who has not opened a wallet yet is not a problem (R-11): their
  * earnings wait for them. Those are counted as a notice.
  */
@@ -502,6 +575,41 @@ export async function checkHolds(ctx: DbCheckContext): Promise<void> {
         },
       ];
     },
+  );
+
+  // A refund waiting for the payer's wallet. The payer paid from a wallet, so
+  // this is not the wait of a creator who has not opened one yet (R-11): it is
+  // listed every night until a person looks. A hold in review is already
+  // listed above.
+  const payerWait: Prisma.WalletHoldWhereInput = {
+    AND: [
+      base,
+      { action: 'refund', waiting: 'payer_wallet', reviewSince: null },
+      { sentAt: null },
+    ],
+  };
+  await addRows(
+    ctx,
+    'holds',
+    'look',
+    await prisma.walletHold.findMany({
+      where: payerWait,
+      select: { id: true, amountKobo: true },
+      orderBy: [{ actionAt: 'asc' }, { id: 'asc' }],
+      take: REPORT_KEEP,
+    }),
+    () => prisma.walletHold.count({ where: payerWait }),
+    (h) => [
+      {
+        check: 'holds',
+        severity: 'look',
+        kind: 'hold_refund_waiting_payer_wallet',
+        ref: h.id,
+        detail:
+          "A refund is owed to the payer and the payer has no wallet to receive it. The money stays in WAWU's account until a person looks.",
+        amountKobo: h.amountKobo.toString(),
+      },
+    ],
   );
 
   // A payee with no wallet yet waits (R-11); one with no account is owed money

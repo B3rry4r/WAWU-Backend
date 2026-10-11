@@ -1,4 +1,5 @@
 import { ConfigService } from '@nestjs/config';
+import { WalletProviderError } from '../../../wallet-provider/wallet-provider-error';
 import {
   MoneyCheckConfigError,
   MoneyCheckSettings,
@@ -6,7 +7,13 @@ import {
   timeSetting,
   wholeSetting,
 } from '../money-check-config';
-import { mailOf, MoneyCheckMailer } from '../money-check-mailer';
+import {
+  mailOf,
+  MoneyCheckMailer,
+  MoneyCheckMailRefused,
+  plainRef,
+  plainSentence,
+} from '../money-check-mailer';
 import { FindingSink } from '../money-check-sink';
 import { isNight, lagosMinuteOfDay, lagosNight } from '../money-check-time';
 import {
@@ -16,7 +23,14 @@ import {
   REPORT_KEEP,
   REPORT_MAIL,
 } from '../money-check-types';
-import { failureReport, verdictOf } from '../money-check.service';
+import {
+  failureOf,
+  failureReport,
+  failureText,
+  RUN_DIED,
+  storedFailure,
+  verdictOf,
+} from '../money-check.service';
 
 /** The settings, the clock, the sink, the verdict and the email's shape (task MONEY-16). */
 
@@ -274,13 +288,88 @@ describe('a night that could not be made', () => {
       '2026-10-12',
       new Date('2026-10-12T01:30:00Z'),
       new Date('2026-10-12T02:10:00Z'),
-      'the provider failed: unavailable',
+      failureOf(
+        new WalletProviderError({
+          kind: 'unavailable',
+          provider: 'fintava',
+          operation: 'getBalance',
+        }),
+      ),
     );
     expect(r.verdict).toBe('incomplete');
     expect(r.checks).toHaveLength(CHECK_IDS.length);
     expect(r.checks.every((c) => c.state === 'incomplete')).toBe(true);
-    expect(r.checks[0].note).toContain('the provider failed: unavailable');
+    expect(r.checks[0].note).toBe(
+      'The run did not finish. The wallet provider failed while the check was reading from it. (provider_unavailable).',
+    );
     expect(r.mismatches).toEqual([]);
+  });
+
+  it('says the run did not finish once, not twice, when it has no reason to give (VF-7)', () => {
+    const r = failureReport(
+      'fintava',
+      '2026-10-12',
+      new Date('2026-10-12T01:30:00Z'),
+      new Date('2026-10-12T02:10:00Z'),
+    );
+    expect(r.checks[0].note).toBe('The run did not finish.');
+    const lost = failureReport(
+      'fintava',
+      '2026-10-12',
+      new Date('2026-10-12T01:30:00Z'),
+      new Date('2026-10-12T02:10:00Z'),
+      RUN_DIED,
+    );
+    expect(lost.checks[0].note).toBe(
+      'The run did not finish. The run stopped before it finished and was not made again. (run_died).',
+    );
+    expect(lost.checks[0].note?.match(/did not finish/g)).toHaveLength(1);
+  });
+});
+
+describe('why a night failed (VF-8)', () => {
+  it('is a code and one fixed sentence, whatever the error said', () => {
+    const plain = failureOf(
+      new Error('connect ECONNREFUSED 10.0.0.5:5432 password=hunter2'),
+    );
+    expect(plain).toEqual({
+      code: 'internal_error',
+      sentence:
+        'The check stopped on an error inside the Hub. The Hub log names it.',
+    });
+    expect(failureText(plain)).not.toContain('hunter2');
+    expect(failureOf('a string')).toEqual(plain);
+    expect(failureOf(null)).toEqual(plain);
+  });
+
+  it("keeps a provider failure's closed kind and never its text", () => {
+    const f = failureOf(
+      new WalletProviderError({
+        kind: 'rate_limited',
+        provider: 'fintava',
+        operation: 'listTransactions',
+        messages: ['Account 0123456789 is throttled'],
+      }),
+    );
+    expect(f).toEqual({
+      code: 'provider_rate_limited',
+      sentence:
+        'The wallet provider failed while the check was reading from it.',
+    });
+    expect(failureText(f)).toBe(
+      'provider_rate_limited: The wallet provider failed while the check was reading from it.',
+    );
+  });
+
+  it('is read back from the row only when it is one of ours', () => {
+    const ours = failureOf(new Error('x'));
+    expect(storedFailure(failureText(ours))).toEqual(ours);
+    expect(storedFailure(failureText(RUN_DIED))).toEqual(RUN_DIED);
+    expect(storedFailure(null)).toEqual(RUN_DIED);
+    expect(storedFailure('Error: planted failure 0123456789')).toEqual(
+      RUN_DIED,
+    );
+    expect(storedFailure('internal_error: has an @ in it')).toEqual(RUN_DIED);
   });
 });
 
@@ -290,7 +379,6 @@ describe("the email's facts", () => {
     '2026-10-12',
     new Date('2026-10-12T01:30:00Z'),
     new Date('2026-10-12T02:10:00Z'),
-    'x',
   );
 
   it('carry counts, references and kobo, and no more than the mail holds', () => {
@@ -355,10 +443,66 @@ describe('the mailer', () => {
       '2026-10-12',
       new Date('2026-10-12T01:30:00Z'),
       new Date('2026-10-12T02:10:00Z'),
-      'x',
     ),
     { mismatchCount: 0, lookCount: 0 },
   );
+
+  it('says what WAWU ID would not take in words with no body text in them', async () => {
+    const real = global.fetch;
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(
+        new Response('{"message":"Secret detail 0123456789"}', { status: 400 }),
+      ) as never;
+    try {
+      const err = await new MoneyCheckMailer(
+        config({ WAWU_ID_INTERNAL_SERVICE_KEY: 'k' }),
+      )
+        .send('owner', mail)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(MoneyCheckMailRefused);
+      expect((err as Error).message).toBe(
+        'WAWU ID refused the money check report (HTTP 400).',
+      );
+    } finally {
+      global.fetch = real;
+    }
+  });
+
+  it('does not take a 200 that says nothing was sent', async () => {
+    const real = global.fetch;
+    try {
+      for (const answer of [
+        { data: { emailed: false } },
+        { data: { sent: false } },
+      ]) {
+        global.fetch = jest
+          .fn()
+          .mockResolvedValue(new Response(JSON.stringify(answer))) as never;
+        await expect(
+          new MoneyCheckMailer(
+            config({ WAWU_ID_INTERNAL_SERVICE_KEY: 'k' }),
+          ).send('owner', mail),
+        ).rejects.toBeInstanceOf(MoneyCheckMailRefused);
+      }
+      for (const answer of [
+        { data: { emailed: true } },
+        { data: { sent: true } },
+        {},
+      ]) {
+        global.fetch = jest
+          .fn()
+          .mockResolvedValue(new Response(JSON.stringify(answer))) as never;
+        await expect(
+          new MoneyCheckMailer(
+            config({ WAWU_ID_INTERNAL_SERVICE_KEY: 'k' }),
+          ).send('owner', mail),
+        ).resolves.toBeUndefined();
+      }
+    } finally {
+      global.fetch = real;
+    }
+  });
 
   it('will not send in production without WAWU IDs service key', async () => {
     const was = process.env.NODE_ENV;
@@ -371,5 +515,69 @@ describe('the mailer', () => {
       if (was === undefined) delete process.env.NODE_ENV;
       else process.env.NODE_ENV = was;
     }
+  });
+});
+
+describe('what is sent to WAWU ID is what it takes', () => {
+  it('cuts a sentence to letters, digits, spaces and plain punctuation', () => {
+    expect(
+      plainSentence(
+        `The provider ${String.fromCharCode(0x2014)} said "no" to \u20A650 at ada@example.test (see https://x.test/a).`,
+        400,
+      ),
+    ).toBe(
+      'The provider said "no" to 50 at ada example.test (see https: x.test a).',
+    );
+    expect(plainSentence('   ', 400)).toBe('No details.');
+    expect(plainSentence('a'.repeat(500), 400)).toHaveLength(400);
+  });
+
+  it('gives a reference the length of a phone number a word in front of it', () => {
+    expect(plainRef('4a9c7f0e-23d1-4b8e-9d52-1f6a5c0e7b11')).toBe(
+      '4a9c7f0e-23d1-4b8e-9d52-1f6a5c0e7b11',
+    );
+    expect(plainRef('wawu-account')).toBe('wawu-account');
+    expect(plainRef('08031234567')).toBe('ref-08031234567');
+    expect(plainRef('0123456789')).toBe('ref-0123456789');
+    expect(plainRef('2348031234567')).toBe('ref-2348031234567');
+    expect(plainRef('0803-123-4567')).toBe('ref-0803-123-4567');
+    // A provider's long session id is a reference a person can look up.
+    expect(plainRef('110022113344556677889900112233')).toBe(
+      '110022113344556677889900112233',
+    );
+    expect(plainRef('a b/c@d')).toBe('a_b_c_d');
+    expect(plainRef('-x')).toBe('r-x');
+    expect(plainRef('x'.repeat(200))).toHaveLength(80);
+  });
+
+  it('is applied to every sentence and reference the mail carries', () => {
+    const base = failureReport(
+      'fintava',
+      '2026-10-12',
+      new Date('2026-10-12T01:30:00Z'),
+      new Date('2026-10-12T02:10:00Z'),
+    );
+    const report: MoneyCheckReport = {
+      ...base,
+      verdict: 'differences',
+      checks: base.checks.map((c, i) =>
+        i === 0 ? { ...c, note: 'Not checked \u20A6 here.' } : c,
+      ),
+      mismatches: [
+        {
+          check: 'movements',
+          severity: 'mismatch',
+          kind: 'provider_only',
+          ref: '08031234567',
+          detail: `One ${String.fromCharCode(0x2014)} two`,
+        },
+      ],
+    };
+    const mail = mailOf(report, { mismatchCount: 1, lookCount: 0 });
+    expect(mail.items[0].ref).toBe('ref-08031234567');
+    expect(mail.items[0].detail).toBe('One two');
+    expect(mail.checks[0].note).toBe('Not checked here.');
+    // The stored report keeps what the check wrote.
+    expect(report.mismatches[0].ref).toBe('08031234567');
   });
 });

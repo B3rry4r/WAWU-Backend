@@ -415,7 +415,8 @@ app.post("/internal/users/:userId/pin-reset-code", requireServiceKey, (req, res)
   res.json({ data: { sent: true } });
 });
 // The nightly money check's report email (MONEY-16). Mirrors the route WAWU ID
-// is to build (BACKEND_GAPS G-680): POST /internal/users/:userId/money-check-report
+// builds (BACKEND_GAPS G-690, wawu-id wmt/MONEY-16):
+// POST /internal/users/:userId/money-check-report
 // { night, provider, verdict, walletsTotal, walletsChecked, mismatchCount,
 // lookCount, checks, held, items, itemsOmitted, notices, ranAt }. The Hub names
 // the person and gives the counts and references (never a name, a phone number
@@ -442,7 +443,7 @@ app.post("/internal/users/:userId/money-check-report", requireServiceKey, (req, 
     report: b,
     sentAt: new Date().toISOString(),
   });
-  res.json({ data: { sent: true } });
+  res.json({ data: { emailed: true } });
 });
 app.get("/internal/mail-outbox", requireServiceKey, (_req, res) => {
   res.json({ data: MAIL_OUTBOX });

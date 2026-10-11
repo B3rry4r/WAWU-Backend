@@ -17,6 +17,7 @@ import { LEDGER_ABSENT_FAILURE } from '../../ledger/ledger.service';
 import { parseArgs, summaryOf } from '../money-check-cli';
 import { MoneyCheckSettings } from '../money-check-config';
 import { MoneyCheckScope } from '../money-check-scope';
+import { lagosMinuteOfDay, lagosNight } from '../money-check-time';
 import {
   MoneyCheckService,
   type RunOptions,
@@ -100,6 +101,8 @@ describe('the nightly check against the wallet provider (MONEY-16)', () => {
   let cfg: MoneyCheckSettings;
   const saved: Record<string, string | undefined> = {};
   const profiles: string[] = [];
+  /** Wallets a payment's payer has, outside the check's scope: not orphans, not checked. */
+  const strays: string[] = [];
   let seq = 0;
   let nightNo = 0;
   const usedAccounts = new Set<string>();
@@ -322,6 +325,14 @@ describe('the nightly check against the wallet provider (MONEY-16)', () => {
           walletId: randomUUID(),
           accountNumber: acct(),
         };
+        // The payer has a wallet (a payment is made from one), but it is not
+        // one this spec asks the check to compare (not in `scope.users`).
+        if (over.payer === undefined) {
+          await prisma.fintavaWallet.create({
+            data: { ...buyer, provider: over.provider ?? 'fintava' },
+          });
+          strays.push(payer);
+        }
         await row({
           wallet: buyer,
           direction: 'out',
@@ -444,7 +455,7 @@ describe('the nightly check against the wallet provider (MONEY-16)', () => {
       where: { customerReference: { startsWith: PREFIX } },
     });
     await prisma.fintavaWallet.deleteMany({
-      where: { wawuUserId: { in: scope.users } },
+      where: { wawuUserId: { in: [...scope.users, ...strays] } },
     });
     await prisma.userProfile.deleteMany({
       where: { wawuUserId: { in: profiles } },
@@ -452,6 +463,7 @@ describe('the nightly check against the wallet provider (MONEY-16)', () => {
     scope.users = [];
     scope.failWalletQuery = false;
     profiles.length = 0;
+    strays.length = 0;
     books.wallets.clear();
     books.debits.length = 0;
     books.fail.clear();
@@ -1468,7 +1480,11 @@ describe('the nightly check against the wallet provider (MONEY-16)', () => {
         where: { night: n },
       });
       expect(r).toMatchObject({ status: 'failed', attempt: 1, verdict: null });
-      expect(r.failure).toContain('planted failure');
+      // A code and one fixed sentence; the exception's own text is not kept.
+      expect(r.failure).toBe(
+        'internal_error: The check stopped on an error inside the Hub. The Hub log names it.',
+      );
+      expect(r.failure).not.toContain('planted failure');
       // It rests before the next try.
       expect((await run({ night: n })).state).toBe('busy');
       expect(r.leaseUntil.getTime()).toBeGreaterThan(Date.now() + 10 * MIN);
@@ -1494,10 +1510,21 @@ describe('the nightly check against the wallet provider (MONEY-16)', () => {
         verdict: 'incomplete',
         attempt: 3,
       });
-      expect(r.failure).toContain('planted failure');
+      expect(r.failure).toBe(
+        'internal_error: The check stopped on an error inside the Hub. The Hub log names it.',
+      );
       const stored = r.report as unknown as MoneyCheckReport;
       expect(stored.verdict).toBe('incomplete');
       expect(stored.checks.every((c) => c.state === 'incomplete')).toBe(true);
+      // The note says the run did not finish once, with the code, and keeps
+      // the exception's text out of the row, the report and the mail.
+      expect(stored.checks[0].note).toBe(
+        'The run did not finish. The check stopped on an error inside the Hub. The Hub log names it. (internal_error).',
+      );
+      expect(JSON.stringify(stored)).not.toContain('planted failure');
+      expect(JSON.stringify(mail.mailed[0].body)).not.toContain(
+        'planted failure',
+      );
       // Told, not silent: the owners are told the night could not be made.
       expect(mail.mailed).toHaveLength(2);
       expect(mail.mailed[0].body).toMatchObject({ verdict: 'incomplete' });
@@ -2191,6 +2218,604 @@ describe('the nightly check against the wallet provider (MONEY-16)', () => {
       expect(summaryOf({ state: 'busy', runId: 'x' })).toEqual({
         state: 'busy',
         runId: 'x',
+      });
+    });
+  });
+  // -------------------------------------------------------------------------
+  // Round 2: the verifier's findings (VF-1 to VF-8), each one planted
+  // -------------------------------------------------------------------------
+
+  describe('round 2: what the verifier found', () => {
+    const FAILED_INTERNALLY =
+      'internal_error: The check stopped on an error inside the Hub. The Hub log names it.';
+
+    /** A wallet with 100,000 in and one 30,000 send, both sides agreeing: 70,000. */
+    async function base(): Promise<Wallet> {
+      const a = await wallet(70_000);
+      await row({ wallet: a, direction: 'in', amountKobo: 100_000 });
+      await send(a, 30_000);
+      return a;
+    }
+
+    describe('VF-1: the available balance alone decides', () => {
+      it('reports a wallet whose available figure is 5,000 under the ledger when the booked figure agrees with the ledger', async () => {
+        const a = await base();
+        const real = provider.getBalance.bind(provider);
+        jest.spyOn(provider, 'getBalance').mockImplementation(async (w) => {
+          const b = await real(w);
+          return {
+            availableKobo: b.availableKobo - 5_000n,
+            bookedKobo: b.availableKobo,
+          };
+        });
+        const r = await report();
+        expect(r.verdict).toBe('differences');
+        expect(r.mismatches).toEqual([
+          expect.objectContaining({
+            check: 'balances',
+            kind: 'balance_differs',
+            ref: a.walletId,
+            amountKobo: '70000',
+            otherKobo: '65000',
+          }),
+        ]);
+      });
+
+      it('is clean when the available figure agrees, and counts a booked figure that does not as a notice only', async () => {
+        await base();
+        const real = provider.getBalance.bind(provider);
+        jest.spyOn(provider, 'getBalance').mockImplementation(async (w) => {
+          const b = await real(w);
+          return { availableKobo: b.availableKobo, bookedKobo: 12_345n };
+        });
+        const r = await report();
+        expect(r.verdict).toBe('clean');
+        expect(r.notices.balance_booked_differs).toEqual({ count: 1 });
+      });
+
+      it('says nothing about the booked figure when it is the available one', async () => {
+        await base();
+        const r = await report();
+        expect(r.verdict).toBe('clean');
+        expect(r.notices.balance_booked_differs).toBeUndefined();
+      });
+
+      it('counts a wallet once in the notice when it is read again before a difference is confirmed', async () => {
+        await base();
+        const real = provider.getBalance.bind(provider);
+        jest.spyOn(provider, 'getBalance').mockImplementation(async (w) => {
+          const b = await real(w);
+          return {
+            availableKobo: b.availableKobo - 1n,
+            bookedKobo: b.availableKobo,
+          };
+        });
+        const r = await report();
+        expect(r.verdict).toBe('differences');
+        expect(r.notices.balance_booked_differs).toEqual({ count: 1 });
+      });
+    });
+
+    describe('VF-2: three behaviours that no spec pinned, and one that was not flagged', () => {
+      it('P4b: a merchant charge ABOVE the ledger fee is reported', async () => {
+        const a = await wallet(100_000 - 55_000);
+        await row({ wallet: a, direction: 'in', amountKobo: 100_000 });
+        const s = await row({
+          wallet: a,
+          direction: 'out',
+          amountKobo: 50_000,
+          feeKobo: 5_000,
+          wawuFeeKobo: 1_000,
+        });
+        theirs(a, s.ref, 50_000, { merchantCommKobo: 1_500 });
+        const r = await report();
+        expect(r.verdict).toBe('differences');
+        expect(r.mismatches).toEqual([
+          expect.objectContaining({
+            check: 'merchant_charges',
+            kind: 'merchant_charge_differs',
+            ref: s.id,
+            amountKobo: '1000',
+            otherKobo: '1500',
+          }),
+        ]);
+      });
+
+      it("H7: a ledger row in another provider's name is not counted in this provider's balance", async () => {
+        const a = await base();
+        // Fintava holds 40,000 more than its own rows account for; the 40,000
+        // credit is in Nuvion's name, so it does not explain the balance.
+        await row({
+          wallet: a,
+          direction: 'in',
+          amountKobo: 40_000,
+          provider: 'nuvion',
+        });
+        books.wallets.get(a.walletId)!.availableKobo += 40_000;
+        const r = await report();
+        expect(r.verdict).toBe('differences');
+        expect(r.mismatches).toEqual([
+          expect.objectContaining({
+            check: 'balances',
+            kind: 'balance_differs',
+            ref: a.walletId,
+            amountKobo: '70000',
+            otherKobo: '110000',
+          }),
+        ]);
+      });
+
+      it("P10: a completed payment whose row on WAWU's account is only pending is a mismatch", async () => {
+        const p = await payment({ priceKobo: 20_000 });
+        await hold(p);
+        await prisma.fintavaLedgerEntry.updateMany({
+          where: {
+            customerReference: p.customerReference,
+            walletKind: 'merchant',
+          },
+          data: { status: 'pending' },
+        });
+        books.merchant.availableKobo = 400_000;
+        const r = await report();
+        expect(r.mismatches).toHaveLength(1);
+        expect(r.mismatches[0]).toMatchObject({
+          check: 'ledger_rows',
+          kind: 'payment_rows',
+          ref: p.id,
+          amountKobo: '20000',
+        });
+        expect(r.mismatches[0].detail).toContain(
+          "the row on WAWU's account is pending",
+        );
+      });
+
+      it("P10: the same when it is the payer's row that is only pending", async () => {
+        const p = await payment({ priceKobo: 20_000 });
+        await hold(p);
+        await prisma.fintavaLedgerEntry.updateMany({
+          where: {
+            customerReference: p.customerReference,
+            walletKind: 'user',
+          },
+          data: { status: 'pending' },
+        });
+        books.merchant.availableKobo = 400_000;
+        const r = await report();
+        const f = r.mismatches.find((m) => m.kind === 'payment_rows');
+        expect(f).toMatchObject({ ref: p.id });
+        expect(f?.detail).toContain("the row on the payer's wallet is pending");
+      });
+
+      it('H12: a send the ledger calls reversed while the provider lists it SUCCESS is flagged as a movement', async () => {
+        const a = await wallet(70_000);
+        await row({ wallet: a, direction: 'in', amountKobo: 100_000 });
+        const s = await row({
+          wallet: a,
+          direction: 'out',
+          amountKobo: 30_000,
+          status: 'reversed',
+        });
+        theirs(a, s.ref, 30_000);
+        const r = await report();
+        expect(r.verdict).toBe('differences');
+        expect(r.mismatches.filter((m) => m.check === 'movements')).toEqual([
+          expect.objectContaining({
+            kind: 'status_differs',
+            ref: s.id,
+            detail:
+              'The provider shows this send completed and the ledger shows it reversed.',
+          }),
+        ]);
+      });
+    });
+
+    describe('VF-3: a night whose last try died is closed at any hour', () => {
+      // 20:00 in Lagos: well after the catch-up window of a 02:30 start.
+      const LATE = new Date(Date.UTC(2091, 2, 4, 19, 0, 0));
+      const STALE_NIGHT = '2091-03-03';
+
+      async function stale(over: Record<string, unknown> = {}) {
+        const id = randomUUID();
+        await prisma.moneyCheckRun.create({
+          data: {
+            id,
+            provider: 'fintava',
+            night: STALE_NIGHT,
+            status: 'running',
+            attempt: 3,
+            startedAt: ago(30 * HOUR),
+            leaseUntil: ago(29 * HOUR),
+            ...over,
+          },
+        });
+        return id;
+      }
+
+      it('S1: a running row of an earlier night is ended incomplete, with its reason, and mailed once', async () => {
+        const id = await stale();
+        expect(service.dueNight(LATE)).toBeNull();
+        await service.tick(LATE);
+        const r = await prisma.moneyCheckRun.findUniqueOrThrow({
+          where: { id },
+        });
+        expect(r).toMatchObject({
+          status: 'finished',
+          verdict: 'incomplete',
+          attempt: 3,
+          failure:
+            'run_died: The run stopped before it finished and was not made again.',
+        });
+        expect(r.finishedAt).not.toBeNull();
+        expect(mail.mailed.map((m) => m.userId).sort()).toEqual([
+          'owner-one',
+          'owner-two',
+        ]);
+        expect(mail.mailed[0].body).toMatchObject({
+          night: STALE_NIGHT,
+          verdict: 'incomplete',
+        });
+        // Done: another tick neither runs it again nor mails it again.
+        await service.tick(new Date(LATE.getTime() + 5 * MIN));
+        expect(mail.mailed).toHaveLength(2);
+        expect(await prisma.moneyCheckRun.count()).toBe(1);
+      });
+
+      it('a running row with tries left is closed too once nothing will make the night again', async () => {
+        const id = await stale({ attempt: 1 });
+        await service.tick(LATE);
+        expect(
+          await prisma.moneyCheckRun.findUniqueOrThrow({ where: { id } }),
+        ).toMatchObject({
+          status: 'finished',
+          verdict: 'incomplete',
+          attempt: 1,
+        });
+      });
+
+      it('a failed row whose rest is over is closed with the reason its last try gave', async () => {
+        const id = await stale({
+          status: 'failed',
+          attempt: 2,
+          failure:
+            'provider_unavailable: The wallet provider failed while the check was reading from it.',
+        });
+        await service.tick(LATE);
+        const r = await prisma.moneyCheckRun.findUniqueOrThrow({
+          where: { id },
+        });
+        expect(r).toMatchObject({
+          status: 'finished',
+          verdict: 'incomplete',
+          failure:
+            'provider_unavailable: The wallet provider failed while the check was reading from it.',
+        });
+        expect((r.report as unknown as MoneyCheckReport).checks[0].note).toBe(
+          'The run did not finish. The wallet provider failed while the check was reading from it. (provider_unavailable).',
+        );
+      });
+
+      it('leaves a run alive (its lease has not run out) alone', async () => {
+        const id = await stale({ leaseUntil: new Date(LATE.getTime() + HOUR) });
+        await service.tick(LATE);
+        expect(
+          await prisma.moneyCheckRun.findUniqueOrThrow({ where: { id } }),
+        ).toMatchObject({ status: 'running', verdict: null });
+        expect(mail.mailed).toEqual([]);
+      });
+
+      it('leaves a failed run made by hand to the person who saw it fail', async () => {
+        const id = await stale({
+          status: 'failed',
+          attempt: 1,
+          byHand: true,
+          failure: FAILED_INTERNALLY,
+          leaseUntil: ago(HOUR),
+        });
+        await service.tick(LATE);
+        expect(
+          await prisma.moneyCheckRun.findUniqueOrThrow({ where: { id } }),
+        ).toMatchObject({ status: 'failed', verdict: null });
+        // ...and a run made by hand that died with nobody watching is closed.
+        const died = await stale({ night: '2091-03-02', byHand: true });
+        await service.tick(new Date(LATE.getTime() + MIN));
+        expect(
+          await prisma.moneyCheckRun.findUniqueOrThrow({ where: { id: died } }),
+        ).toMatchObject({ status: 'finished', verdict: 'incomplete' });
+      });
+
+      it('makes the night being made now again before it gives up on anything: its own tries take it over', async () => {
+        // The real clock (the finished run is pruned against it): the hour of
+        // the run is set to five minutes ago, so tonight's run is due now.
+        const now = new Date();
+        const lagosMinute = lagosMinuteOfDay(now);
+        const was = cfg.minuteOfDay;
+        (cfg as { minuteOfDay: number | null }).minuteOfDay = Math.max(
+          0,
+          lagosMinute - 5,
+        );
+        try {
+          const tonight = lagosNight(now);
+          expect(service.dueNight(now)).toBe(tonight);
+          const id = await stale({ night: tonight, attempt: 1 });
+          // The service remembers the night it saw finished (an earlier test
+          // in this file ran tonight's): this process has not.
+          (service as unknown as { doneNight: string | null }).doneNight = null;
+          await service.tick(now);
+          expect(
+            await prisma.moneyCheckRun.findUniqueOrThrow({ where: { id } }),
+          ).toMatchObject({ status: 'finished', verdict: 'clean', attempt: 2 });
+        } finally {
+          (cfg as { minuteOfDay: number | null }).minuteOfDay = was;
+        }
+      });
+
+      it('closes an old night even when the schedule is off', async () => {
+        const was = cfg.minuteOfDay;
+        (cfg as { minuteOfDay: number | null }).minuteOfDay = null;
+        try {
+          const id = await stale();
+          await service.tick(LATE);
+          expect(
+            (await prisma.moneyCheckRun.findUniqueOrThrow({ where: { id } }))
+              .verdict,
+          ).toBe('incomplete');
+        } finally {
+          (cfg as { minuteOfDay: number | null }).minuteOfDay = was;
+        }
+      });
+    });
+
+    describe('VF-4: a refund waiting for the payer wallet is something to look at', () => {
+      it('Q3: it is a look, so the night is not clean', async () => {
+        const p = await payment({ priceKobo: 50_000 });
+        const h = await hold(p, {
+          action: 'refund',
+          actionAt: ago(80 * HOUR),
+          waiting: 'payer_wallet',
+        });
+        books.merchant.availableKobo = 400_000;
+        const r = await report();
+        expect(r.verdict).toBe('needs_a_look');
+        expect(r.look).toEqual([
+          expect.objectContaining({
+            check: 'holds',
+            severity: 'look',
+            kind: 'hold_refund_waiting_payer_wallet',
+            ref: h.id,
+            amountKobo: '50000',
+          }),
+        ]);
+      });
+
+      it('is listed from the first night, not only past the review bound', async () => {
+        const p = await payment({ priceKobo: 50_000 });
+        await hold(p, {
+          action: 'refund',
+          actionAt: ago(MIN),
+          waiting: 'payer_wallet',
+        });
+        books.merchant.availableKobo = 400_000;
+        const r = await report();
+        expect(kinds(r)).toEqual(['holds:hold_refund_waiting_payer_wallet']);
+      });
+
+      it('is listed once when the hold is also in review', async () => {
+        const p = await payment({ priceKobo: 50_000 });
+        await hold(p, {
+          action: 'refund',
+          actionAt: ago(80 * HOUR),
+          waiting: 'payer_wallet',
+          reviewSince: ago(HOUR),
+        });
+        books.merchant.availableKobo = 400_000;
+        const r = await report();
+        expect(kinds(r)).toEqual(['holds:hold_in_review']);
+      });
+
+      it("still keeps a payee's wait a notice and not a look (R-11)", async () => {
+        const p = await payment({ priceKobo: 50_000 });
+        await hold(p, {
+          action: 'release',
+          actionAt: ago(80 * HOUR),
+          waiting: 'payee_wallet',
+        });
+        books.merchant.availableKobo = 400_000;
+        const r = await report();
+        expect(r.verdict).toBe('clean');
+        expect(r.notices.holds_waiting_for_payee_wallet).toEqual({
+          count: 1,
+          amountKobo: '42500',
+        });
+      });
+
+      it('lists a refund waiting for the payer wallet whatever else a refund waits for is not', async () => {
+        const p = await payment({ priceKobo: 50_000 });
+        await hold(p, {
+          action: 'refund',
+          actionAt: ago(MIN),
+          waiting: 'funds',
+        });
+        books.merchant.availableKobo = 400_000;
+        // Waiting on WAWU's own funds for a minute is not yet a look.
+        expect((await report()).verdict).toBe('clean');
+      });
+    });
+
+    describe('VF-5: what the run did not compare is named', () => {
+      /** A wallet object that has no row in the wallet table. */
+      const ghostWallet = (): Wallet => ({
+        wawuUserId: randomUUID(),
+        customerId: randomUUID(),
+        walletId: randomUUID(),
+        accountNumber: acct(),
+      });
+
+      it('(a) lists ledger rows on an account with no wallet row, with a count and the references', async () => {
+        const a = await wallet(1_000);
+        await row({ wallet: a, direction: 'in', amountKobo: 1_000 });
+        const gone = ghostWallet();
+        const r1 = await row({
+          wallet: gone,
+          direction: 'in',
+          amountKobo: 7_000,
+        });
+        const r2 = await row({
+          wallet: gone,
+          direction: 'out',
+          amountKobo: 2_000,
+          ageMs: 20 * HOUR,
+        });
+        const r = await report();
+        expect(r.verdict).toBe('needs_a_look');
+        expect(
+          r.look
+            .filter((f) => f.kind === 'ledger_no_wallet')
+            .map((f) => f.ref)
+            .sort(),
+        ).toEqual([r1.id, r2.id].sort());
+        expect(r.look.find((f) => f.ref === r1.id)).toMatchObject({
+          check: 'ledger_rows',
+          severity: 'look',
+          amountKobo: '7000',
+        });
+        expect(r.notices.ledger_accounts_without_wallet).toEqual({ count: 1 });
+        expect(r.checks.find((c) => c.id === 'ledger_rows')).toMatchObject({
+          state: 'needs_a_look',
+          found: 2,
+        });
+        // It reaches the mail with its count.
+        expect(mail.mailed[0].body).toMatchObject({ lookCount: 2 });
+      });
+
+      it('leaves out rows older than the window, a wallet that exists, and another provider', async () => {
+        const a = await wallet(1_000);
+        await row({ wallet: a, direction: 'in', amountKobo: 1_000 });
+        const gone = ghostWallet();
+        await row({
+          wallet: gone,
+          direction: 'in',
+          amountKobo: 7_000,
+          ageMs: 80 * HOUR,
+        });
+        await row({
+          wallet: ghostWallet(),
+          direction: 'in',
+          amountKobo: 7_000,
+          provider: 'nuvion',
+        });
+        const r = await report();
+        expect(r.verdict).toBe('clean');
+        expect(r.notices.ledger_accounts_without_wallet).toBeUndefined();
+      });
+
+      it('(a) counts the rows beyond what a report keeps', async () => {
+        const a = await wallet(0);
+        void a;
+        const gone = ghostWallet();
+        await prisma.fintavaLedgerEntry.createMany({
+          data: Array.from({ length: 503 }, (_, i) => ({
+            id: randomUUID(),
+            walletKind: 'user' as const,
+            wawuUserId: gone.wawuUserId,
+            accountNumber: gone.accountNumber,
+            direction: 'in' as const,
+            status: 'completed' as const,
+            category: 'transfer' as const,
+            amountKobo: 1n,
+            feeKobo: 0n,
+            totalKobo: 1n,
+            customerReference: `${PREFIX}bulk-${i}`,
+            source: 'send' as const,
+            occurredAt: ago(5 * HOUR),
+            createdAt: ago(5 * HOUR),
+            provider: 'fintava',
+          })),
+        });
+        const r = await report();
+        expect(
+          r.look.filter((f) => f.kind === 'ledger_no_wallet'),
+        ).toHaveLength(500);
+        expect(r.omitted.look).toBe(3);
+        const stored = await prisma.moneyCheckRun.findFirstOrThrow({});
+        expect(stored.lookCount).toBe(503);
+      });
+
+      it('(b) names a wallet opened while the run was going, and the next run checks it', async () => {
+        const a = await wallet(1_000);
+        await row({ wallet: a, direction: 'in', amountKobo: 1_000 });
+        const real = provider.getBalance.bind(provider);
+        let opened: Wallet | null = null;
+        jest.spyOn(provider, 'getBalance').mockImplementation(async (w) => {
+          if (opened === null) {
+            opened = await wallet(500);
+            // The ledger says 999,999, Fintava says 500: tomorrow finds it.
+            await row({ wallet: opened, direction: 'in', amountKobo: 999_999 });
+          }
+          return real(w);
+        });
+        const first = await report();
+        expect(first.wallets).toEqual({ total: 1, checked: 1, notChecked: {} });
+        expect(first.verdict).toBe('clean');
+        expect(first.notices.wallets_opened_during_run).toEqual({ count: 1 });
+        const next = await report();
+        expect(next.wallets).toEqual({ total: 2, checked: 2, notChecked: {} });
+        expect(next.notices.wallets_opened_during_run).toBeUndefined();
+        expect(next.mismatches).toEqual([
+          expect.objectContaining({
+            kind: 'balance_differs',
+            ref: opened!.walletId,
+          }),
+        ]);
+      });
+
+      it('(b) says nothing when no wallet was opened', async () => {
+        await wallet(0);
+        const r = await report();
+        expect(r.notices.wallets_opened_during_run).toBeUndefined();
+      });
+    });
+
+    describe('VF-7 and VF-8: the note says one sentence, and never an exception', () => {
+      it('the note a given-up night carries says it once, with a code, and holds no exception text', async () => {
+        const id = randomUUID();
+        const n = night();
+        await prisma.moneyCheckRun.create({
+          data: {
+            id,
+            provider: 'fintava',
+            night: n,
+            status: 'running',
+            attempt: 3,
+            startedAt: ago(40 * MIN),
+            leaseUntil: ago(30 * MIN),
+          },
+        });
+        await run({ night: n });
+        const r = await prisma.moneyCheckRun.findUniqueOrThrow({
+          where: { id },
+        });
+        const note = (r.report as unknown as MoneyCheckReport).checks[0].note;
+        expect(note).toBe(
+          'The run did not finish. The run stopped before it finished and was not made again. (run_died).',
+        );
+        expect(note?.match(/did not finish/g)).toHaveLength(1);
+        const body = mail.mailed[0].body as { checks: Array<{ note: string }> };
+        expect(body.checks[0].note).toBe(note);
+      });
+
+      it('a try that threw stores the code and the fixed sentence, not what the error said', async () => {
+        scope.failWalletQuery = true;
+        const n = night();
+        const o = await run({ night: n });
+        expect(o).toMatchObject({ state: 'failed', why: FAILED_INTERNALLY });
+        const r = await prisma.moneyCheckRun.findFirstOrThrow({
+          where: { night: n },
+        });
+        expect(r.failure).toBe(FAILED_INTERNALLY);
+        // The Hub's log names the error class and the code, not its message.
+        const log = logger.lines.join('\n');
+        expect(log).toContain('internal_error, Error');
+        expect(log).not.toContain('planted failure');
       });
     });
   });

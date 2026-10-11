@@ -275,7 +275,10 @@ describe('compareMovements', () => {
     ['pending', 'failed', ['status_differs']],
     ['failed', 'completed', ['status_differs']],
     ['failed', 'pending', ['status_differs']],
-    ['reversed', 'completed', []],
+    // Round 2, VF-2: a send the ledger calls reversed (the money came back)
+    // while the provider lists it completed or still pending is a mismatch.
+    ['reversed', 'completed', ['status_differs']],
+    ['reversed', 'pending', ['status_differs']],
     ['reversed', 'failed', []],
     ['completed', 'completed', []],
     ['pending', 'pending', []],
@@ -290,6 +293,51 @@ describe('compareMovements', () => {
       expect(r.findings.map((f) => f.kind)).toEqual([...kinds]);
     },
   );
+
+  it('a reversed ledger send listed as completed names what the ledger says', () => {
+    const r = compare(
+      [ledger({ id: 'a', status: 'reversed' })],
+      [provider({ id: 'a' })],
+    );
+    expect(r.findings).toEqual([
+      expect.objectContaining({
+        severity: 'mismatch',
+        kind: 'status_differs',
+        ref: 'a',
+        detail:
+          'The provider shows this send completed and the ledger shows it reversed.',
+      }),
+    ]);
+  });
+
+  it('a reversed ledger send the provider still has pending is a mismatch only once settled', () => {
+    const young = compare(
+      [
+        ledger({
+          id: 'a',
+          status: 'reversed',
+          occurredAt: ago(10),
+          createdAt: ago(10),
+        }),
+      ],
+      [
+        provider({
+          id: 'a',
+          outcome: 'pending',
+          status: 'PENDING',
+          createdAt: ago(40).toISOString(),
+        }),
+      ],
+    );
+    expect(young.findings).toEqual([]);
+    const old = compare(
+      [ledger({ id: 'a', status: 'reversed' })],
+      [provider({ id: 'a', outcome: 'pending', status: 'PENDING' })],
+    );
+    expect(old.findings.map((f) => f.detail)).toEqual([
+      'The ledger shows this send reversed and the provider still has it pending.',
+    ]);
+  });
 
   it('a pending ledger row young enough for its webhook is not a status mismatch yet', () => {
     const r = compare(
@@ -389,15 +437,35 @@ describe('the balance', () => {
     expect(compareBalance(sums, b(43_499n)).match).toBe(false);
   });
 
-  it("either of the provider's two figures inside the range is a match", () => {
+  it('compares the available figure alone: the booked one never rescues it (VF-1)', () => {
     const sums = sumLedger([group({ direction: 'in', totalKobo: 10_000n })]);
+    // Available 5,000 under the ledger, booked equal to it: a difference.
     expect(
-      compareBalance(sums, { availableKobo: 9_000n, bookedKobo: 10_000n })
+      compareBalance(sums, { availableKobo: 5_000n, bookedKobo: 10_000n }),
+    ).toMatchObject({ match: false, differenceKobo: -5_000n });
+    // Available inside the range, booked far outside it: still a match.
+    expect(
+      compareBalance(sums, { availableKobo: 10_000n, bookedKobo: 99_999n })
         .match,
     ).toBe(true);
     expect(
       compareBalance(sums, { availableKobo: 9_000n, bookedKobo: 9_500n }).match,
     ).toBe(false);
+  });
+
+  it('says when the booked figure is not the available one, and decides nothing by it', () => {
+    const sums = sumLedger([group({ direction: 'in', totalKobo: 10_000n })]);
+    expect(
+      compareBalance(sums, { availableKobo: 10_000n, bookedKobo: 10_000n })
+        .bookedDiffers,
+    ).toBe(false);
+    expect(
+      compareBalance(sums, { availableKobo: 10_000n, bookedKobo: 12_000n }),
+    ).toMatchObject({ match: true, bookedDiffers: true });
+    expect(
+      compareBalance(sums, { availableKobo: 9_000n, bookedKobo: 10_000n })
+        .bookedDiffers,
+    ).toBe(true);
   });
 
   it('reports the difference as the provider less the ledger', () => {
