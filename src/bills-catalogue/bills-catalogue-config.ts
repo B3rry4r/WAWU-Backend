@@ -11,7 +11,7 @@ export interface BillsCatalogueConfig {
   cacheSeconds: number;
   /** Meter checks one person may make a minute, counted after the token is verified. PROVISIONAL(BILLS-PREVIEW-PER-MINUTE, owner=YOU, why=Fintava publishes no rate limit for the meter check and it is free, so the limit only protects it from a stuck screen). */
   previewPerMinute: number;
-  /** The most bytes (UTF-8) of Fintava's text, an owner's name or address, the Hub reads before it cuts the text to 200 characters a person sees (R3-6: a name of one letter and a thousand marks is one character, so the character cut alone is no bound). PROVISIONAL(BILLS-TEXT-BYTES, owner=YOU, why=nothing in Fintava's docs or the rulings bounds a name's size; 1,024 bytes holds 200 characters of any script, and the owner may change it). */
+  /** The most bytes (UTF-8) of Fintava's text, an owner's name or address, the Hub reads before it cuts the text to 200 characters a person sees (R3-6: a name of one letter and a thousand marks is one character, so the character cut alone is no bound). PROVISIONAL(BILLS-TEXT-BYTES, owner=YOU, why=nothing in Fintava's docs or the rulings bounds a name's size so 1024 bytes is a guess: it holds 200 ordinary characters of any script and cuts a name that is one long chain of marks or joiners). */
   providerTextMaxBytes: number;
 }
 
