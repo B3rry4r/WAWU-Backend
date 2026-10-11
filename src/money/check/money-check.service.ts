@@ -690,7 +690,7 @@ export class MoneyCheckService {
 
   /** The provider is not set up here: nothing can be compared with it. */
   private notSetUp(st: RunState, wallets: number): void {
-    const note = `${this.provider.label} is not set up on this server.`;
+    const note = `Not checked: ${this.provider.label} is not set up on this server.`;
     for (const id of [
       'movements',
       'merchant_movements',
@@ -750,14 +750,14 @@ export class MoneyCheckService {
       sink.cannot(
         'balances',
         'not_checked',
-        `${this.provider.label} cannot be asked for a wallet balance yet.`,
+        `Not checked on this provider: ${this.provider.label} cannot be asked for a wallet balance yet.`,
       );
     }
     if (unsupported.history) {
       sink.cannot(
         'movements',
         'not_checked',
-        `${this.provider.label} cannot list a wallet's debits yet.`,
+        `Not checked on this provider: ${this.provider.label} cannot list a wallet's debits yet.`,
       );
     }
     if (unreadable.balance > 0 || unreadable.moving > 0) {
@@ -1055,7 +1055,7 @@ export class MoneyCheckService {
       if (!(e instanceof WalletProviderError)) throw e;
       const notSupported = e.kind === 'not_supported';
       const note = notSupported
-        ? `${this.provider.label} cannot be asked for WAWU's own account yet.`
+        ? `Not checked on this provider: ${this.provider.label} cannot be asked for WAWU's own account yet.`
         : "WAWU's own account could not be read.";
       st.sink.cannot(
         'merchant_movements',
@@ -1105,7 +1105,7 @@ export class MoneyCheckService {
         'merchant_movements',
         e.kind === 'not_supported' ? 'not_checked' : 'incomplete',
         e.kind === 'not_supported'
-          ? `${this.provider.label} cannot list WAWU's debits yet.`
+          ? `Not checked on this provider: ${this.provider.label} cannot list WAWU's debits yet.`
           : "WAWU's debits could not be read.",
       );
     }
@@ -1191,7 +1191,7 @@ export class MoneyCheckService {
           sink.cannot(
             'merchant_charges',
             'not_checked',
-            `${this.provider.label} cannot show WAWU's charge on a send yet.`,
+            `Not checked on this provider: ${this.provider.label} cannot show WAWU's charge on a send yet.`,
           );
           return;
         }
