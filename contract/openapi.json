@@ -38559,6 +38559,17 @@
           "latestUpdateLabel"
         ]
       },
+      "ElectricityPresetView": {
+        "type": "object",
+        "properties": {
+          "amountKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "amountKobo"
+        ]
+      },
       "ElectricityBillerView": {
         "type": "object",
         "properties": {
@@ -38581,10 +38592,10 @@
           "maximumKobo": {
             "type": "integer"
           },
-          "presetsKobo": {
+          "presets": {
             "type": "array",
             "items": {
-              "type": "number"
+              "$ref": "#/components/schemas/ElectricityPresetView"
             }
           }
         },
@@ -38594,7 +38605,7 @@
           "plan",
           "minimumKobo",
           "maximumKobo",
-          "presetsKobo"
+          "presets"
         ]
       },
       "ElectricityBillersView": {

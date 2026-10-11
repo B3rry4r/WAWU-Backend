@@ -121,7 +121,12 @@ more routes adds them to `SERVED_MONEY_ROUTES` in
 - The contract says so too: every field and parameter whose name ends in
   `Kobo` is `"type": "integer"` in `contract/openapi.json`, responses and
   errors included (`scripts/enrich-contract.js` reads the name;
-  `money-contract.spec.ts` checks every one).
+  `money-contract.spec.ts` checks every one). That rule covers a field that
+  holds one figure. A list of amounts is therefore a list of objects, each
+  with an `amountKobo` field, and never an array of numbers in a field named
+  `...Kobo` (an array is not an integer): the electricity quick amounts are
+  `presets: [{ "amountKobo": 500000 }]` on `GET /bills/electricity/billers`
+  (BILLS-01, round 3 hotfix), not `presetsKobo: [500000]`.
 - A balance is only ever Fintava's (`GET /money/wallet/balance`,
   `availableBalance`). No route sums ledger rows and calls the result a
   balance.
