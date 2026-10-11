@@ -140,11 +140,11 @@ export function electricityBillers(
       plan: known.plan,
       minimumKobo: disco.minimumKobo,
       maximumKobo: disco.maximumKobo,
-      presetsKobo: presetsWithin(
+      presets: presetsWithin(
         presetsKobo,
         disco.minimumKobo,
         disco.maximumKobo,
-      ),
+      ).map((amountKobo) => ({ amountKobo })),
     });
   }
   return [...rows.values()].sort(

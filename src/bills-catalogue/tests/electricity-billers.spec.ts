@@ -115,8 +115,8 @@ describe('electricityBillers: S3 is what Fintava lists (BILLS-01)', () => {
 
   it('offers only the quick amounts that fit the company’s own limits', () => {
     // Port Harcourt: ₦500 to ₦100,000 prepaid, so all four fit; the amounts are the configured ones, smallest first.
-    expect(find('Port Harcourt Electric', 'prepaid')?.presetsKobo).toEqual(
-      PRESETS,
+    expect(find('Port Harcourt Electric', 'prepaid')?.presets).toEqual(
+      PRESETS.map((amountKobo) => ({ amountKobo })),
     );
     // Eko prepaid starts at ₦1,000: ₦2,000 and up fit; a company that starts above a preset drops it.
     const high = electricityBillers(
@@ -130,7 +130,10 @@ describe('electricityBillers: S3 is what Fintava lists (BILLS-01)', () => {
       ],
       PRESETS,
     );
-    expect(high[0].presetsKobo).toEqual([500_000, 1_000_000]);
+    expect(high[0].presets).toEqual([
+      { amountKobo: 500_000 },
+      { amountKobo: 1_000_000 },
+    ]);
     // Ibadan lists a minimum of 0: nothing below one kobo is offered.
     expect(presetsWithin([0, 100, 200_000], 0, 500_000)).toEqual([
       100, 200_000,
@@ -171,7 +174,11 @@ describe('electricityBillers: S3 is what Fintava lists (BILLS-01)', () => {
     const text = JSON.stringify(rows);
     expect(text).not.toMatch(/fintava|—/i);
     for (const r of rows) {
-      for (const n of [r.minimumKobo, r.maximumKobo, ...r.presetsKobo])
+      for (const n of [
+        r.minimumKobo,
+        r.maximumKobo,
+        ...r.presets.map((p) => p.amountKobo),
+      ])
         expect(Number.isInteger(n)).toBe(true);
     }
   });
