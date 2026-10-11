@@ -51,6 +51,16 @@ export interface ColumnRule {
 export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // ── the account's own contributions to shared surfaces ──────────────────
   { model: 'Comment', column: 'authorWawuId', disposition: 'AUTHORED' },
+  // The key a community message was sent under (INBOX-05, defect 21): one row
+  // per message, made by the same person, so it is their sending record. It
+  // is listed before CommunityMessage, which it points at, and it would also
+  // go with the message through the foreign key; saying so here keeps the
+  // drift guard honest and the purge from depending on a cascade.
+  {
+    model: 'CommunityMessageKey',
+    column: 'senderWawuId',
+    disposition: 'AUTHORED',
+  },
   {
     model: 'CommunityMessage',
     column: 'senderWawuId',
