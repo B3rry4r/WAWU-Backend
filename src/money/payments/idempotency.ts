@@ -78,6 +78,13 @@ export interface IdempotencyScope {
   fingerprint: string;
   /** Set once this request holds the key: its own claim, never a later one's. */
   claimId?: string;
+  /**
+   * The body the payment service stored as this request's answer, when the
+   * route answers its own view of the payment (`WalletPaymentService.
+   * presentRoute`, TIER-03): the route returns exactly this, so the first
+   * answer and every replay are the same text.
+   */
+  answered?: unknown;
 }
 
 /** JSON with every object's keys sorted, so the same body is the same text. */

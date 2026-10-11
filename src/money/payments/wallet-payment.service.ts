@@ -80,6 +80,13 @@ import { completedFigures, joinNotes } from './payment-figures';
 /** The route a payment's Idempotency-Key is scoped to. */
 export const PAY_ROUTE = 'POST money/payments';
 
+/**
+ * How a route that pays for its own thing (a tier, TIER-03) answers: its own
+ * view built from the payment, stored under the request's Idempotency-Key in
+ * place of the bare payment, so a replay is the same body as the first answer.
+ */
+export type PaymentPresenter = (view: PaymentView) => Promise<unknown>;
+
 export const NOT_PAYABLE_YET_MESSAGE =
   "This can't be paid for from your wallet yet.";
 export const OWN_ITEM_MESSAGE = "You can't pay yourself for this.";
@@ -245,6 +252,8 @@ export const isOpenKeyClash = (e: unknown) => isUniqueViolationOn(e, 'openKey');
 export class WalletPaymentService implements OnModuleInit {
   private readonly logger = new Logger(WalletPaymentService.name);
   private sweeping = false;
+  /** Routes that answer their own view of a payment, by the route their key is scoped to. */
+  private readonly presenters = new Map<string, PaymentPresenter>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -263,8 +272,22 @@ export class WalletPaymentService implements OnModuleInit {
   onModuleInit(): void {
     // A key left `in_progress` by a request that died (a restart mid-send)
     // is answered from its payment once the send can no longer be running.
+    this.staleAnswer(PAY_ROUTE, (view) => Promise.resolve(view));
+    // A payment's ledger row settled by anything settles the payment now.
+    this.ledger.onPaymentSettled((e) => this.settle(e.paymentId));
+    // A signed report of a charge other than the quote reaches the payment
+    // too (R7-1): the ledger holds the row's figures, the payment completes
+    // at the provider's.
+    this.ledger.onPaymentDebitSighted((e) => this.completeFromSighting(e));
+  }
+
+  /**
+   * A key left `in_progress` on `route` by a request that died is answered
+   * from its payment's record as it stands, through `present`.
+   */
+  private staleAnswer(route: string, present: PaymentPresenter): void {
     this.keys.onStale(
-      PAY_ROUTE,
+      route,
       this.provider.timings.moneyTimeoutMs + MINUTE,
       async (row) => {
         const p = row.resourceId
@@ -275,17 +298,29 @@ export class WalletPaymentService implements OnModuleInit {
         return p
           ? {
               status: 201,
-              body: successBody(this.view(p, await this.holdOf(p))),
+              body: successBody(
+                await present(this.view(p, await this.holdOf(p))),
+              ),
             }
           : null;
       },
     );
-    // A payment's ledger row settled by anything settles the payment now.
-    this.ledger.onPaymentSettled((e) => this.settle(e.paymentId));
-    // A signed report of a charge other than the quote reaches the payment
-    // too (R7-1): the ledger holds the row's figures, the payment completes
-    // at the provider's.
-    this.ledger.onPaymentDebitSighted((e) => this.completeFromSighting(e));
+  }
+
+  /**
+   * A feature route that pays through this service and answers its own view
+   * of the payment (TIER-03's `POST /plans/purchases`): the answer stored
+   * under its Idempotency-Key, and the answer to a request that died
+   * mid-payment, are `present(payment)` and not the bare payment, so every
+   * replay is the body the first answer was. The route returns
+   * `scope.answered`.
+   */
+  presentRoute(route: string, present: PaymentPresenter): void {
+    if (route === PAY_ROUTE || this.presenters.has(route)) {
+      throw new Error(`WalletPaymentService: ${route} already has an answer.`);
+    }
+    this.presenters.set(route, present);
+    this.staleAnswer(route, present);
   }
 
   // -------------------------------------------------------------------------
@@ -1896,6 +1931,12 @@ export class WalletPaymentService implements OnModuleInit {
     p: PaymentRow,
   ): Promise<PaymentView> {
     const view = this.view(p, await this.holdOf(p));
+    const present = this.presenters.get(scope.route);
+    if (present) {
+      scope.answered = await present(view);
+      await this.keys.finish(scope, 201, successBody(scope.answered));
+      return view;
+    }
     await this.keys.finish(scope, 201, successBody(view));
     return view;
   }
