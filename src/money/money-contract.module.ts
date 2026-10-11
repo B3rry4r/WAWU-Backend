@@ -1,5 +1,4 @@
 import { Module } from '@nestjs/common';
-import { MoneyPaymentController } from './money-payment.controller';
 import { MoneyTransferController } from './money-transfer.controller';
 
 /**
@@ -14,9 +13,10 @@ import { MoneyTransferController } from './money-transfer.controller';
  * is declared here and served as well. Served so far: the transaction PIN
  * (MONEY-09, MoneyModule), the balance (MONEY-11), the wallet itself
  * (MONEY-12), the history (MONEY-15), the fee quote (WALLET-15) and the
- * recipient search and recent recipients (WALLET-08).
+ * recipient search and recent recipients (WALLET-08), the payment (MONEY-17)
+ * and its poll (MONEY-19) and the holds (MONEY-18).
  */
 @Module({
-  controllers: [MoneyTransferController, MoneyPaymentController],
+  controllers: [MoneyTransferController],
 })
 export class MoneyContractModule {}

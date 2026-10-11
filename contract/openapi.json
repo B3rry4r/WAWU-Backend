@@ -16415,6 +16415,73 @@
         "x-wawu-built-by": "MONEY-17"
       }
     },
+    "/api/hub/money/payments/{id}": {
+      "get": {
+        "operationId": "MoneyPaymentsController_payment",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One payment as it stands now: what the app polls after `pending` (H18,\nE10) or after `payment_in_progress` (`reason.paymentId`). `pending`\nbecomes `completed`, `failed` or `reversed` once the provider says\nwhich; `delivered` is true once what was paid for has reached the buyer\n(a `completed` payment with `delivered` false is \"paid, still opening\").\nOnly the payer reads it: another person's payment is the same `404\nnot_found` as one nobody holds. It reads our record only, never the\nprovider, and moves nothing, so it is not behind the fee settings, the\nkey or the PIN. Declared after the quote so `payments/quote` is never\nread as an id.",
+        "tags": [
+          "MoneyPayments"
+        ],
+        "x-wawu-built-by": "MONEY-19"
+      }
+    },
     "/api/hub/money/holds": {
       "get": {
         "operationId": "MoneyHoldsController_list",
@@ -29202,75 +29269,6 @@
         "description": "Declared by MONEY-04, not served yet: WALLET-07 serves it.",
         "x-wawu-served": false
       }
-    },
-    "/api/hub/money/payments/{id}": {
-      "get": {
-        "operationId": "MoneyPaymentController_payment",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PaymentView"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "reason.code: not_found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "One payment, as it stands now. Only the payer can read it.",
-        "tags": [
-          "MoneyPayment"
-        ],
-        "x-wawu-built-by": "MONEY-19",
-        "description": "Declared by MONEY-04, not served yet: MONEY-19 serves it.",
-        "x-wawu-served": false
-      }
     }
   },
   "info": {
@@ -31251,7 +31249,7 @@
           },
           "balanceKobo": {
             "type": "integer",
-            "description": "insufficient_funds: Fintava's available balance when the payment was refused."
+            "description": "insufficient_funds: the wallet provider's available balance when the movement was refused."
           },
           "totalKobo": {
             "type": "integer",
@@ -35307,6 +35305,9 @@
             "type": "string",
             "nullable": true
           },
+          "delivered": {
+            "type": "boolean"
+          },
           "statusMessage": {
             "type": "string",
             "nullable": true
@@ -35331,6 +35332,7 @@
           "reference",
           "hold",
           "failureReason",
+          "delivered",
           "statusMessage",
           "createdAt",
           "completedAt"

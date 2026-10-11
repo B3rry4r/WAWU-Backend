@@ -4,6 +4,8 @@ import {
   Get,
   Header,
   HttpCode,
+  Param,
+  ParseUUIDPipe,
   Post,
   Query,
   UseGuards,
@@ -32,10 +34,9 @@ import {
 import { PAY_ROUTE, WalletPaymentService } from './wallet-payment.service';
 
 /**
- * Pay from wallet (task MONEY-17). Declared by MONEY-04, served here
- * (docs/contract/CONVENTIONS.md sections 0 and 14). `GET
- * /money/payments/{id}` (MONEY-19) and the holds (MONEY-18) stay declared
- * in money-payment.controller.ts.
+ * Pay from wallet (task MONEY-17) and the poll of one payment (task
+ * MONEY-19). Declared by MONEY-04, served here (docs/contract/CONVENTIONS.md
+ * sections 0 and 14). The holds are MONEY-18's (holds/money-holds.controller.ts).
  */
 @ApiBearerAuth('wawu-id')
 @UseGuards(WawuAuthGuard)
@@ -104,5 +105,29 @@ export class MoneyPaymentsController {
     @Body() dto: PaymentDto,
   ): Promise<PaymentView> {
     return this.payments.pay(wallet, dto, scope);
+  }
+
+  /**
+   * One payment as it stands now: what the app polls after `pending` (H18,
+   * E10) or after `payment_in_progress` (`reason.paymentId`). `pending`
+   * becomes `completed`, `failed` or `reversed` once the provider says
+   * which; `delivered` is true once what was paid for has reached the buyer
+   * (a `completed` payment with `delivered` false is "paid, still opening").
+   * Only the payer reads it: another person's payment is the same `404
+   * not_found` as one nobody holds. It reads our record only, never the
+   * provider, and moves nothing, so it is not behind the fee settings, the
+   * key or the PIN. Declared after the quote so `payments/quote` is never
+   * read as an id.
+   */
+  @Get('payments/:id')
+  @Header('Cache-Control', 'no-store')
+  @BuiltBy('MONEY-19')
+  @RequireOpenWallet()
+  @MoneyErrors(...WALLET_GATE_ERRORS, 'not_found')
+  payment(
+    @CurrentWallet() wallet: OpenWallet,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<PaymentView> {
+    return this.payments.read(wallet, id);
   }
 }
