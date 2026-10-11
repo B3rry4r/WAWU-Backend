@@ -205,6 +205,38 @@ describe('Points to cash survives a kill, a second process and a deleted account
     expect(await h.points.balanceOf(p.id)).toBe(1000);
   });
 
+  it('a driver holding an old copy of the row cannot send once another has, however late it comes', async () => {
+    const p = await h.person(0);
+    await h.lots(p, [{ points: 2000, days: 30 }]);
+    const { id, reference } = await killedAfterHold(p, 1000);
+    const old = await h.prisma.pointConversion.findUniqueOrThrow({
+      where: { id },
+    });
+    // Another driver took the lease (the move was handed over) and the lease
+    // has since run out; the old copy still says nothing was sent.
+    await h.prisma.pointConversion.update({
+      where: { id },
+      data: { sentAt: new Date(), nextAttemptAt: new Date(Date.now() - 1_000) },
+    });
+    const send = (
+      h.cashOut as unknown as {
+        send(c: typeof old, now: Date): Promise<unknown>;
+      }
+    ).send.bind(h.cashOut);
+    await send(old, new Date(Date.now() + 10 * 60_000));
+    expect(h.sendsOf(reference)).toHaveLength(0);
+    expect(h.wallets.arrived).toBe(0);
+    const st = await h.state(id);
+    expect(st.conversion.attempts).toBe(0);
+    expect(st.conversion.status).toBe('held');
+    expect(st.hold?.state).toBe('held');
+    // Left with a person, so a later test's sweep does not find it due.
+    await h.prisma.pointConversion.update({
+      where: { id },
+      data: { reviewSince: new Date() },
+    });
+  });
+
   it('two Hub processes drive one conversion at once: one send, one payment, one commit', async () => {
     const p = await h.person(0);
     await h.lots(p, [{ points: 3000, days: 30 }]);
