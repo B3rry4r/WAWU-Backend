@@ -1,4 +1,5 @@
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
+import { ConfigService } from '@nestjs/config';
 import {
   Money14App,
   type Person,
@@ -10,9 +11,15 @@ import {
 } from '../../payments/idempotency';
 import { PaymentSettings } from '../../payments/payment-config';
 import {
+  CHANGED_AGAIN_MESSAGE,
+  FINGERPRINT_LABEL,
+  FINGERPRINT_PREFIX,
+  FINGERPRINT_SECRET_KEY,
   PIN_CHANGE_ROUTE,
+  PIN_KEY_WORDS,
   PIN_RESET_CONFIRM_ROUTE,
-  pinRequestFingerprint,
+  PinRequestFingerprints,
+  PinRequestKeys,
   STALE_CLAIM_SECONDS,
 } from '../pin-request-keys.service';
 import { TransactionPinService } from '../transaction-pin.service';
@@ -101,6 +108,8 @@ function confirm(
 const rowsFor = (who: Person) =>
   t.prisma.moneyIdempotencyKey.findMany({ where: { wawuUserId: who.id } });
 
+const fingerprints = () => t.app.get(PinRequestFingerprints);
+
 /** The fingerprint the store keeps for a request: what a row made by hand must carry to be this request's. */
 const fingerprintOf = (
   who: Person,
@@ -108,7 +117,16 @@ const fingerprintOf = (
   route: string,
   key: string,
   body: unknown,
-) => pinRequestFingerprint({ wawuUserId: who.id, method, route, key }, body);
+) => fingerprints().of({ wawuUserId: who.id, method, route, key }, body);
+
+/** The form written before round 3 (argon2id): what a row made by an older Hub carries. */
+const legacyFingerprintOf = (
+  who: Person,
+  method: string,
+  route: string,
+  key: string,
+  body: unknown,
+) => fingerprints().legacy({ wawuUserId: who.id, method, route, key }, body);
 
 const pinRow = (who: Person) =>
   t.prisma.transactionPin.findUniqueOrThrow({
@@ -173,14 +191,14 @@ describe('PUT /money/pin with an Idempotency-Key', () => {
     });
   });
 
-  it('the stored answer is the PIN state and nothing else: no PIN, and the body only as an argon2id hash', async () => {
+  it('the stored answer is the PIN state and nothing else: no PIN, and the body only as a keyed fingerprint (N3)', async () => {
     const first = pin();
     const next = pin();
     const who = await holder(first);
     const key = newKey();
     await change(who, first, next, key).expect(200);
     const [row] = await rowsFor(who);
-    expect(row.fingerprint).toMatch(/^\$argon2id\$/);
+    expect(row.fingerprint).toMatch(/^hmac-sha256:v1:[0-9a-f]{64}$/);
     expect(row.fingerprint).not.toContain(next);
     const stored = JSON.parse(row.responseBody!) as object;
     expect(stored).toMatchObject({
@@ -199,20 +217,20 @@ describe('PUT /money/pin with an Idempotency-Key', () => {
         new RegExp(`(^|\\D)${secret}(\\D|$)`),
       );
     }
-    // The fingerprint is the request's own, argon2id with a salt from person, route and key: the same request always
-    // gives the same text (the store compares them as text), another body or another key never does.
+    // The fingerprint is the request's own, keyed with the server's secret and carrying person, route and key: the
+    // same request always gives the same text (the store compares them as text), another body or another key never does.
     const body = { newPin: next, newPinConfirmation: next };
     expect(row.fingerprint).toBe(
-      await fingerprintOf(who, 'PUT', PIN_CHANGE_ROUTE, row.key, body),
+      fingerprintOf(who, 'PUT', PIN_CHANGE_ROUTE, row.key, body),
     );
     expect(row.fingerprint).not.toBe(
-      await fingerprintOf(who, 'PUT', PIN_CHANGE_ROUTE, row.key, {
+      fingerprintOf(who, 'PUT', PIN_CHANGE_ROUTE, row.key, {
         newPin: first,
         newPinConfirmation: first,
       }),
     );
     expect(row.fingerprint).not.toBe(
-      await fingerprintOf(who, 'PUT', PIN_CHANGE_ROUTE, newKey(), body),
+      fingerprintOf(who, 'PUT', PIN_CHANGE_ROUTE, newKey(), body),
     );
     // And it is not the fast hash the payments use for a body.
     expect(row.fingerprint).not.toBe(bodyFingerprint(body));
@@ -332,7 +350,7 @@ describe('PUT /money/pin with an Idempotency-Key', () => {
         method: 'PUT',
         route: PIN_CHANGE_ROUTE,
         key,
-        fingerprint: await fingerprintOf(who, 'PUT', PIN_CHANGE_ROUTE, key, {
+        fingerprint: fingerprintOf(who, 'PUT', PIN_CHANGE_ROUTE, key, {
           newPin: next,
           newPinConfirmation: next,
         }),
@@ -344,10 +362,12 @@ describe('PUT /money/pin with an Idempotency-Key', () => {
     expect(t.body(waiting).reason).toMatchObject({
       code: 'idempotency_in_progress',
       retryAfterSeconds: 2,
+      message: PIN_KEY_WORDS['pin:change'].inProgress,
     });
     const reused = await change(who, first, pin(), key).expect(409);
     expect(t.body(reused).reason).toMatchObject({
       code: 'idempotency_key_reused',
+      message: PIN_KEY_WORDS['pin:change'].reused,
     });
     expect((await pinRow(who)).failedTries).toBe(0);
     await t.approveWithPin(who, first).expect(200);
@@ -364,7 +384,7 @@ describe('PUT /money/pin with an Idempotency-Key', () => {
         method: 'PUT',
         route: PIN_CHANGE_ROUTE,
         key,
-        fingerprint: await fingerprintOf(who, 'PUT', PIN_CHANGE_ROUTE, key, {
+        fingerprint: fingerprintOf(who, 'PUT', PIN_CHANGE_ROUTE, key, {
           newPin: next,
           newPinConfirmation: next,
         }),
@@ -531,7 +551,7 @@ describe('POST /money/pin/reset/confirm with an Idempotency-Key', () => {
       responseStatus: 200,
     });
     expect(JSON.stringify(row)).not.toContain(reset.code);
-    expect(row.fingerprint).toMatch(/^\$argon2id\$/);
+    expect(row.fingerprint).toMatch(/^hmac-sha256:v1:/);
   });
 
   it('a wrong code gives the key back; the right code under the same key then goes through', async () => {
@@ -595,30 +615,29 @@ describe('POST /money/pin/reset/confirm with an Idempotency-Key', () => {
 });
 
 describe('a request that died after the PIN changed (verifier D1, the store’s crash rule)', () => {
+  const keyOf = (who: Person, route: string, key: string) => ({
+    wawuUserId_method_route_key: {
+      wawuUserId: who.id,
+      method: route === PIN_CHANGE_ROUTE ? 'PUT' : 'POST',
+      route,
+      key,
+    },
+  });
+
+  /**
+   * The change really happened (the PIN is `next`, and the key names it),
+   * and the request died before it stored its answer: the row is put back as
+   * the crash would have left it.
+   */
   async function diedAfterCommit(old: boolean) {
     const first = pin();
     const next = pin();
     const who = await holder(first);
     const key = newKey();
-    const body = { newPin: next, newPinConfirmation: next };
-    // The PIN changed, the key names it, and the answer was never stored.
-    await t.prisma.moneyIdempotencyKey.create({
-      data: {
-        wawuUserId: who.id,
-        method: 'PUT',
-        route: PIN_CHANGE_ROUTE,
-        key,
-        fingerprint: await fingerprintOf(
-          who,
-          'PUT',
-          PIN_CHANGE_ROUTE,
-          key,
-          body,
-        ),
-        state: 'in_progress',
-        claimId: randomUUID(),
-        resourceId: who.id,
-      },
+    await change(who, first, next, key).expect(200);
+    await t.prisma.moneyIdempotencyKey.update({
+      where: keyOf(who, PIN_CHANGE_ROUTE, key),
+      data: { state: 'in_progress', responseStatus: null, responseBody: null },
     });
     if (old) {
       await t.prisma
@@ -627,11 +646,12 @@ describe('a request that died after the PIN changed (verifier D1, the store’s 
     return { first, next, who, key };
   }
 
-  it('a repeat is told to wait while that request could still be running', async () => {
+  it('a repeat is told to wait while that request could still be running, in the PIN’s words', async () => {
     const { first, next, who, key } = await diedAfterCommit(false);
     const res = await change(who, first, next, key).expect(409);
     expect(t.body(res).reason).toMatchObject({
       code: 'idempotency_in_progress',
+      message: PIN_KEY_WORDS['pin:change'].inProgress,
     });
   });
 
@@ -646,6 +666,569 @@ describe('a request that died after the PIN changed (verifier D1, the store’s 
     expect((await pinRow(who)).failedTries).toBe(0);
     const [row] = await rowsFor(who);
     expect(row.state).toBe('done');
+    // And it was true: the PIN is the one this request set.
+    await t.approveWithPin(who, next).expect(200);
+  });
+
+  it('N4: once it cannot be, and the PIN was changed again since, the repeat is 409 pin_changed_again: never a 200 for a PIN that is not the PIN', async () => {
+    const { next, who, key } = await diedAfterCommit(true);
+    const elsewhere = pin();
+    // A second change, by another phone, after the first landed and before its repeat.
+    await change(who, next, elsewhere, null).expect(200);
+    await t.prisma
+      .$executeRaw`UPDATE "MoneyIdempotencyKey" SET "updatedAt" = now() - ${`${STALE_CLAIM_SECONDS + 5} seconds`}::interval WHERE "key" = ${key} AND "wawuUserId" = ${who.id}`;
+    for (const current of [next, pin(), null]) {
+      // Whatever PIN rides along: the repeat is answered before it is looked at.
+      const res = await change(who, current, next, key).expect(409);
+      expect(res.headers['idempotent-replayed']).toBeUndefined();
+      expect(t.body(res).reason).toEqual({
+        code: 'pin_changed_again',
+        message: CHANGED_AGAIN_MESSAGE,
+      });
+      expect(t.body(res).data).toBeNull();
+    }
+    // No 200 was stored for the key, no try was used, and the PIN is theirs.
+    const [row] = await rowsFor(who);
+    expect(row).toMatchObject({
+      state: 'in_progress',
+      responseStatus: null,
+      responseBody: null,
+    });
+    expect((await pinRow(who)).failedTries).toBe(0);
+    await t.approveWithPin(who, elsewhere).expect(200);
+    await t.approveWithPin(who, next).expect(403);
+  });
+
+  it('N4: the PIN was changed again to the very same PIN: it is still the PIN this request set, so the repeat is the 200', async () => {
+    const { next, who, key } = await diedAfterCommit(true);
+    await change(who, next, next, null).expect(200);
+    await t.prisma
+      .$executeRaw`UPDATE "MoneyIdempotencyKey" SET "updatedAt" = now() - ${`${STALE_CLAIM_SECONDS + 5} seconds`}::interval WHERE "key" = ${key} AND "wawuUserId" = ${who.id}`;
+    const res = await change(who, pin(), next, key).expect(200);
+    expect(res.headers['idempotent-replayed']).toBe('true');
+    await t.approveWithPin(who, next).expect(200);
+  });
+
+  it('N4 on the reset: the code was used and the answer lost, then the PIN was changed again: 409 pin_changed_again', async () => {
+    const first = pin();
+    const chosen = pin();
+    const elsewhere = pin();
+    const who = await holder(first);
+    const reset = await resetOf(who);
+    const key = newKey();
+    await confirm(who, { ...reset, newPin: chosen }, key).expect(200);
+    await t.prisma.moneyIdempotencyKey.update({
+      where: keyOf(who, PIN_RESET_CONFIRM_ROUTE, key),
+      data: { state: 'in_progress', responseStatus: null, responseBody: null },
+    });
+    await change(who, chosen, elsewhere, null).expect(200);
+    await t.prisma
+      .$executeRaw`UPDATE "MoneyIdempotencyKey" SET "updatedAt" = now() - ${`${STALE_CLAIM_SECONDS + 5} seconds`}::interval WHERE "key" = ${key} AND "wawuUserId" = ${who.id}`;
+    const res = await confirm(who, { ...reset, newPin: chosen }, key).expect(
+      409,
+    );
+    expect(t.body(res).reason).toEqual({
+      code: 'pin_changed_again',
+      message: CHANGED_AGAIN_MESSAGE,
+    });
+    await t.approveWithPin(who, elsewhere).expect(200);
+  });
+});
+
+describe('the one-minute rule, with literal numbers (verifier T2: V-S1, V-S2)', () => {
+  const age = (claimId: string | null, seconds: number) =>
+    t.prisma
+      .$executeRaw`UPDATE "MoneyIdempotencyKey" SET "updatedAt" = now() - ${`${seconds} seconds`}::interval WHERE "claimId" = ${claimId}`;
+
+  it('V-S1 a claim that names nothing is still in progress at 55 s and is taken again at 61 s', async () => {
+    const first = pin();
+    const next = pin();
+    const who = await holder(first);
+    const key = newKey();
+    const claimId = randomUUID();
+    await t.prisma.moneyIdempotencyKey.create({
+      data: {
+        wawuUserId: who.id,
+        method: 'PUT',
+        route: PIN_CHANGE_ROUTE,
+        key,
+        fingerprint: fingerprintOf(who, 'PUT', PIN_CHANGE_ROUTE, key, {
+          newPin: next,
+          newPinConfirmation: next,
+        }),
+        state: 'in_progress',
+        claimId,
+      },
+    });
+    await age(claimId, 55);
+    const young = await change(who, first, next, key).expect(409);
+    expect(t.body(young).reason).toMatchObject({
+      code: 'idempotency_in_progress',
+    });
+    await age(claimId, 61);
+    const res = await change(who, first, next, key).expect(200);
+    expect(res.headers['idempotent-replayed']).toBeUndefined();
+  });
+
+  it('V-S2 a claim that names the PIN with no answer waits at 55 s and is answered from the PIN at 61 s, with no try used', async () => {
+    const first = pin();
+    const next = pin();
+    const who = await holder(first);
+    const key = newKey();
+    await change(who, first, next, key).expect(200);
+    const [row] = await rowsFor(who);
+    await t.prisma.moneyIdempotencyKey.update({
+      where: {
+        wawuUserId_method_route_key: {
+          wawuUserId: who.id,
+          method: 'PUT',
+          route: PIN_CHANGE_ROUTE,
+          key,
+        },
+      },
+      data: { state: 'in_progress', responseStatus: null, responseBody: null },
+    });
+    await age(row.claimId, 55);
+    await change(who, pin(), next, key).expect(409);
+    await age(row.claimId, 61);
+    const res = await change(who, pin(), next, key).expect(200);
+    expect(res.headers['idempotent-replayed']).toBe('true');
+    expect((await pinRow(who)).failedTries).toBe(0);
+  });
+});
+
+describe('the wallet gate answers before the key, on both routes (verifier T1: V-G1, V-G2)', () => {
+  it('V-G1 a person with no wallet who sends a usable key to /reset/confirm gets the wallet answer and no key row', async () => {
+    const stranger = t.person();
+    const res = await t
+      .http()
+      .post(CONFIRM)
+      .set('Authorization', stranger.auth)
+      .set('Idempotency-Key', newKey())
+      .send({
+        resetId: randomUUID(),
+        code: '123456',
+        newPin: '4821',
+        newPinConfirmation: '4821',
+      });
+    expect(res.status).toBe(409);
+    expect(t.body(res).reason).toMatchObject({ code: 'wallet_not_open' });
+    expect(await rowsFor(stranger)).toEqual([]);
+  });
+
+  it('V-G2 the same person with an UNUSABLE key still gets the wallet answer, not idempotency_key_required: the gate is first', async () => {
+    const stranger = t.person();
+    for (const key of ['x', 'has space in it', 'a'.repeat(129)]) {
+      const res = await t
+        .http()
+        .post(CONFIRM)
+        .set('Authorization', stranger.auth)
+        .set('Idempotency-Key', key)
+        .send({
+          resetId: randomUUID(),
+          code: '123456',
+          newPin: '4821',
+          newPinConfirmation: '4821',
+        });
+      expect(res.status).toBe(409);
+      expect(t.body(res).reason).toMatchObject({ code: 'wallet_not_open' });
+    }
+  });
+
+  it('and the same on PUT /money/pin: no wallet answers first, whatever key rides along', async () => {
+    const stranger = t.person();
+    const res = await change(stranger, '1234', pin(), 'x').expect(409);
+    expect(t.body(res).reason).toMatchObject({ code: 'wallet_not_open' });
+  });
+});
+
+describe('the PIN’s own words for the store’s refusals (N1)', () => {
+  async function running(route: string, who: Person, body: unknown) {
+    const key = newKey();
+    await t.prisma.moneyIdempotencyKey.create({
+      data: {
+        wawuUserId: who.id,
+        method: route === PIN_CHANGE_ROUTE ? 'PUT' : 'POST',
+        route,
+        key,
+        fingerprint: fingerprintOf(
+          who,
+          route === PIN_CHANGE_ROUTE ? 'PUT' : 'POST',
+          route,
+          key,
+          body,
+        ),
+        state: 'in_progress',
+        claimId: randomUUID(),
+      },
+    });
+    return key;
+  }
+
+  it('the change: still going through, and key already used, are about the PIN and say nothing of a payment', async () => {
+    const first = pin();
+    const next = pin();
+    const other = pin();
+    const who = await holder(first);
+    const key = await running(PIN_CHANGE_ROUTE, who, {
+      newPin: next,
+      newPinConfirmation: next,
+    });
+    const waiting = await change(who, first, next, key).expect(409);
+    expect(t.body(waiting).reason).toEqual({
+      code: 'idempotency_in_progress',
+      message:
+        'Your PIN change is still going through. Check again in a moment.',
+      retryAfterSeconds: 2,
+    });
+    const reused = await change(who, first, other, key).expect(409);
+    expect(t.body(reused).reason).toEqual({
+      code: 'idempotency_key_reused',
+      message: 'Start again to change your PIN.',
+    });
+    for (const res of [waiting, reused]) {
+      expect(res.text).not.toMatch(/payment|pay\b/i);
+    }
+  });
+
+  it('the reset: the same two, worded for a reset', async () => {
+    const first = pin();
+    const chosen = pin();
+    const other = pin();
+    const who = await holder(first);
+    const reset = await resetOf(who);
+    const key = await running(PIN_RESET_CONFIRM_ROUTE, who, {
+      ...reset,
+      newPin: chosen,
+      newPinConfirmation: chosen,
+    });
+    const waiting = await confirm(
+      who,
+      { ...reset, newPin: chosen },
+      key,
+    ).expect(409);
+    expect(t.body(waiting).reason).toEqual({
+      code: 'idempotency_in_progress',
+      message:
+        'Your PIN reset is still going through. Check again in a moment.',
+      retryAfterSeconds: 2,
+    });
+    const reused = await confirm(who, { ...reset, newPin: other }, key).expect(
+      409,
+    );
+    expect(t.body(reused).reason).toEqual({
+      code: 'idempotency_key_reused',
+      message: 'Start again to reset your PIN.',
+    });
+    for (const res of [waiting, reused]) {
+      expect(res.text).not.toMatch(/payment|pay\b/i);
+    }
+  });
+
+  it('a link that fails because the claim was taken over says it in the same words', async () => {
+    const first = pin();
+    const next = pin();
+    const who = await holder(first);
+    const service = t.app.get(TransactionPinService);
+    const keyed = t.app.get(PinRequestKeys);
+    const lost = {
+      wawuUserId: who.id,
+      method: 'PUT',
+      route: PIN_CHANGE_ROUTE,
+      key: newKey(),
+      fingerprint: 'not-this-requests',
+      claimId: randomUUID(),
+    };
+    await expect(
+      keyed.under(lost, who.id, (inTransaction) =>
+        service.change(
+          who.id,
+          { newPin: next, newPinConfirmation: next },
+          inTransaction,
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code: 'idempotency_in_progress',
+      response: {
+        reason: {
+          message:
+            'Your PIN change is still going through. Check again in a moment.',
+        },
+      },
+    });
+    await t.approveWithPin(who, first).expect(200);
+  });
+});
+
+describe('the fingerprint is keyed with a server secret (N3)', () => {
+  it('a row’s fingerprint is the HMAC under a key derived from WAWU_ID_INTERNAL_SERVICE_KEY with the fixed label, written out here independently', async () => {
+    const first = pin();
+    const next = pin();
+    const who = await holder(first);
+    const key = newKey();
+    await change(who, first, next, key).expect(200);
+    const [row] = await rowsFor(who);
+    const secret =
+      t.app.get(ConfigService).get<string>(FINGERPRINT_SECRET_KEY) ||
+      'dev-internal-service-key-not-secret';
+    const derived = createHmac('sha256', secret)
+      .update('wawu-hub:pin-request-fingerprint:v1')
+      .digest();
+    expect(FINGERPRINT_LABEL).toBe('wawu-hub:pin-request-fingerprint:v1');
+    const message = JSON.stringify([
+      who.id,
+      'PUT',
+      PIN_CHANGE_ROUTE,
+      key,
+      `{"newPin":"${next}","newPinConfirmation":"${next}"}`,
+    ]);
+    expect(row.fingerprint).toBe(
+      `${FINGERPRINT_PREFIX}${createHmac('sha256', derived).update(message).digest('hex')}`,
+    );
+  });
+
+  it('with the table and no secret, none of the 10,000 PINs matches the row; with the secret exactly one does', async () => {
+    const first = pin();
+    const next = pin();
+    const who = await holder(first);
+    const key = newKey();
+    await change(who, first, next, key).expect(200);
+    const [row] = await rowsFor(who);
+    const id = {
+      wawuUserId: who.id,
+      method: 'PUT',
+      route: PIN_CHANGE_ROUTE,
+      key,
+    };
+    const guesser = new PinRequestFingerprints(
+      new ConfigService({
+        [FINGERPRINT_SECRET_KEY]: 'a-secret-the-reader-guessed',
+      }),
+    );
+    const real = fingerprints();
+    const all = Array.from({ length: 10_000 }, (_, i) =>
+      String(i).padStart(4, '0'),
+    );
+    const bodyOf = (p: string) => ({ newPin: p, newPinConfirmation: p });
+    expect(
+      all.filter((p) => guesser.of(id, bodyOf(p)) === row.fingerprint),
+    ).toEqual([]);
+    expect(
+      all.filter((p) => real.of(id, bodyOf(p)) === row.fingerprint),
+    ).toEqual([next]);
+  });
+
+  it('another secret, another person, another route, another key, another body: another fingerprint', () => {
+    const id = {
+      wawuUserId: 'u1',
+      method: 'PUT',
+      route: PIN_CHANGE_ROUTE,
+      key: 'key-0001-key',
+    };
+    const body = { newPin: '1234', newPinConfirmation: '1234' };
+    const a = new PinRequestFingerprints(
+      new ConfigService({ [FINGERPRINT_SECRET_KEY]: 'one-secret-one' }),
+    );
+    const b = new PinRequestFingerprints(
+      new ConfigService({ [FINGERPRINT_SECRET_KEY]: 'two-secret-two' }),
+    );
+    const base = a.of(id, body);
+    expect(a.of(id, { ...body })).toBe(base);
+    expect(b.of(id, body)).not.toBe(base);
+    expect(a.of({ ...id, wawuUserId: 'u2' }, body)).not.toBe(base);
+    expect(a.of({ ...id, route: PIN_RESET_CONFIRM_ROUTE }, body)).not.toBe(
+      base,
+    );
+    expect(a.of({ ...id, key: 'key-0002-key' }, body)).not.toBe(base);
+    expect(a.of(id, { newPin: '1235', newPinConfirmation: '1235' })).not.toBe(
+      base,
+    );
+  });
+
+  it('production does not start without the secret (the Hub already requires it: no new setting)', () => {
+    const was = process.env.NODE_ENV;
+    try {
+      process.env.NODE_ENV = 'production';
+      expect(() => new PinRequestFingerprints(new ConfigService({}))).toThrow(
+        /WAWU_ID_INTERNAL_SERVICE_KEY/,
+      );
+      expect(
+        () =>
+          new PinRequestFingerprints(
+            new ConfigService({
+              [FINGERPRINT_SECRET_KEY]: 'set-in-production',
+            }),
+          ),
+      ).not.toThrow();
+    } finally {
+      process.env.NODE_ENV = was;
+    }
+  });
+});
+
+describe('rows written before round 3 are read as before until they expire (N3)', () => {
+  async function oldRow(
+    who: Person,
+    route: string,
+    key: string,
+    body: unknown,
+    extra: Record<string, unknown> = {},
+  ) {
+    const method = route === PIN_CHANGE_ROUTE ? 'PUT' : 'POST';
+    return t.prisma.moneyIdempotencyKey.create({
+      data: {
+        wawuUserId: who.id,
+        method,
+        route,
+        key,
+        fingerprint: await legacyFingerprintOf(who, method, route, key, body),
+        state: 'in_progress',
+        claimId: randomUUID(),
+        ...extra,
+      },
+    });
+  }
+
+  it('a finished old row replays its answer, byte for byte, with no try used', async () => {
+    const first = pin();
+    const next = pin();
+    const who = await holder(first);
+    const key = newKey();
+    const lost = await change(who, first, next, key).expect(200);
+    // Rewrite the row the way the old code wrote it.
+    await t.prisma.moneyIdempotencyKey.updateMany({
+      where: { wawuUserId: who.id, key },
+      data: {
+        fingerprint: await legacyFingerprintOf(
+          who,
+          'PUT',
+          PIN_CHANGE_ROUTE,
+          key,
+          {
+            newPin: next,
+            newPinConfirmation: next,
+          },
+        ),
+      },
+    });
+    const again = await change(who, first, next, key).expect(200);
+    expect(again.headers['idempotent-replayed']).toBe('true');
+    expect(again.text).toBe(lost.text);
+    expect((await pinRow(who)).failedTries).toBe(0);
+    // The row stays as it was: nothing rewrites it.
+    expect((await rowsFor(who))[0].fingerprint).toMatch(/^\$argon2id\$/);
+  });
+
+  it('an old row still running: the repeat waits; another body is key_reused; both in the PIN’s words', async () => {
+    const first = pin();
+    const next = pin();
+    const other = pin();
+    const who = await holder(first);
+    const key = newKey();
+    await oldRow(who, PIN_CHANGE_ROUTE, key, {
+      newPin: next,
+      newPinConfirmation: next,
+    });
+    const waiting = await change(who, first, next, key).expect(409);
+    expect(t.body(waiting).reason).toMatchObject({
+      code: 'idempotency_in_progress',
+      message: PIN_KEY_WORDS['pin:change'].inProgress,
+    });
+    const reused = await change(who, first, other, key).expect(409);
+    expect(t.body(reused).reason).toMatchObject({
+      code: 'idempotency_key_reused',
+      message: PIN_KEY_WORDS['pin:change'].reused,
+    });
+  });
+
+  it('an old row of a request that landed and died before its answer: after the minute it is answered from the PIN, and N4 applies to it too', async () => {
+    const first = pin();
+    const next = pin();
+    const who = await holder(first);
+    const key = newKey();
+    await change(who, first, next, key).expect(200);
+    const body = { newPin: next, newPinConfirmation: next };
+    await t.prisma.moneyIdempotencyKey.updateMany({
+      where: { wawuUserId: who.id, key },
+      data: {
+        fingerprint: await legacyFingerprintOf(
+          who,
+          'PUT',
+          PIN_CHANGE_ROUTE,
+          key,
+          body,
+        ),
+        state: 'in_progress',
+        responseStatus: null,
+        responseBody: null,
+      },
+    });
+    const age = () =>
+      t.prisma
+        .$executeRaw`UPDATE "MoneyIdempotencyKey" SET "updatedAt" = now() - ${`${STALE_CLAIM_SECONDS + 5} seconds`}::interval WHERE "key" = ${key} AND "wawuUserId" = ${who.id}`;
+    await age();
+    const ok = await change(who, pin(), next, key).expect(200);
+    expect(ok.headers['idempotent-replayed']).toBe('true');
+    // Put it back and change the PIN again: the same old row now answers 409.
+    await t.prisma.moneyIdempotencyKey.updateMany({
+      where: { wawuUserId: who.id, key },
+      data: { state: 'in_progress', responseStatus: null, responseBody: null },
+    });
+    await change(who, next, pin(), null).expect(200);
+    await age();
+    const refused = await change(who, pin(), next, key).expect(409);
+    expect(t.body(refused).reason).toMatchObject({ code: 'pin_changed_again' });
+  });
+
+  it('an old row of a request that died before it changed anything is taken again, and the new row is written in the keyed form', async () => {
+    const first = pin();
+    const next = pin();
+    const who = await holder(first);
+    const key = newKey();
+    const dead = await oldRow(who, PIN_CHANGE_ROUTE, key, {
+      newPin: next,
+      newPinConfirmation: next,
+    });
+    await t.prisma
+      .$executeRaw`UPDATE "MoneyIdempotencyKey" SET "updatedAt" = now() - ${`${STALE_CLAIM_SECONDS + 5} seconds`}::interval WHERE "claimId" = ${dead.claimId}`;
+    const res = await change(who, first, next, key).expect(200);
+    expect(res.headers['idempotent-replayed']).toBeUndefined();
+    const [row] = await rowsFor(who);
+    expect(row.state).toBe('done');
+    expect(row.fingerprint).toMatch(/^hmac-sha256:v1:/);
+    await t.approveWithPin(who, next).expect(200);
+  });
+
+  it('an old row on the reset route is read the same way', async () => {
+    const first = pin();
+    const chosen = pin();
+    const who = await holder(first);
+    const reset = await resetOf(who);
+    const key = newKey();
+    const landed = await confirm(who, { ...reset, newPin: chosen }, key).expect(
+      200,
+    );
+    await t.prisma.moneyIdempotencyKey.updateMany({
+      where: { wawuUserId: who.id, key },
+      data: {
+        fingerprint: await legacyFingerprintOf(
+          who,
+          'POST',
+          PIN_RESET_CONFIRM_ROUTE,
+          key,
+          {
+            ...reset,
+            newPin: chosen,
+            newPinConfirmation: chosen,
+          },
+        ),
+      },
+    });
+    const again = await confirm(who, { ...reset, newPin: chosen }, key).expect(
+      200,
+    );
+    expect(again.headers['idempotent-replayed']).toBe('true');
+    expect(again.text).toBe(landed.text);
   });
 });
 

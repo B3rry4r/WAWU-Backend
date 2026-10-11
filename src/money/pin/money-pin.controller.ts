@@ -79,6 +79,7 @@ export class MoneyPinController {
     'pin_incorrect',
     'pin_locked',
     'pin_mismatch',
+    'pin_changed_again',
   )
   change(
     @CurrentUser() user: WawuJwtClaims,
