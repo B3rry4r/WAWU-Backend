@@ -2201,9 +2201,12 @@ the ledger or the handler is not told again:
 - Two servers running the job at once share the rows between them; a row is
   cleared by one of them. A row a consumer holds is skipped and cleared by the
   next run. A second run finds nothing to clear and writes nothing.
-- The receiver never waits for the job: a repeat of a delivery that is being
-  cleared answers `duplicate` at once (`ON CONFLICT DO NOTHING` does not wait on
-  a row lock), and a new delivery is a new row, received after the cutoff.
+- A new delivery never waits for the job: it is a new row, received after the
+  cutoff, and its insert conflicts with nothing. A repeat of a delivery whose
+  row is in the batch being cleared right now waits for that one statement
+  (Postgres makes an insert that conflicts with a row being updated wait for the
+  updater, a few milliseconds for 200 rows) and then answers `duplicate`; a
+  repeat of any other row does not wait at all.
 
 **A new reader of these tables.** A reader of `rawBody` or `payload` reads only
 rows in a held state, as the ledger sweep and the Nuvion dispatcher do (they

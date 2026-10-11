@@ -88,11 +88,13 @@ const empty = (): WebhookRetentionTableReport => ({
  *   between them, and a row a consumer holds is left to the next run. The
  *   statement is a transaction of its own, `batch` rows at most, so no lock
  *   outlives it.
- * - A repeat of a delivery that is being cleared answers `duplicate` without
- *   waiting: `ON CONFLICT DO NOTHING` sees the unique key, which the clearing
- *   does not change, and does not wait for the row's lock.
+ * - A repeat of a delivery whose row is in the batch being cleared right now
+ *   waits for that one statement (Postgres makes an insert that conflicts
+ *   with a row being updated wait for the updater) and then answers
+ *   `duplicate`: the clearing does not change the unique key. A repeat of any
+ *   other row does not wait.
  * - A delivery that arrives during a run is a new row, received after the
- *   cutoff, and is never a candidate.
+ *   cutoff, conflicts with nothing and is never a candidate.
  * - A second run finds nothing to clear (`bodyClearedAt` is set) and writes
  *   nothing.
  *
