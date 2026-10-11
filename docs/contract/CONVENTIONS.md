@@ -2015,3 +2015,89 @@ When another job completes a payment between a path's figures update and its
 `complete()`, the path's note (both figures) is still written, once, to the
 completed payment (`keepNote`, a conditional update that only touches a
 completed payment).
+
+## 19. The nightly check against the provider (MONEY-16)
+
+`src/money/check/`. No route. It reads WAWU's ledger and the provider's own
+record and reports any difference the same night. It only reads: it never
+changes a ledger row, a hold, a payment or a balance (the provider's balance is
+the truth, and what to do about a difference is a person's call). It reaches
+the provider only through `WALLET_PROVIDER` and acts only on the rows of the
+provider the server runs (their `provider` column).
+
+- **When.** `MONEY_CHECK_TIME` (HH:MM Lagos, default 02:30, PROVISIONAL), from
+  that minute until `MONEY_CHECK_CATCH_UP_HOURS` (6) later; a minute cron
+  (`money-nightly-check`) starts it where `ScheduleModule.forRoot()` is loaded.
+  By hand: `npm run money:check` (after `npm run build`, with the Hub's
+  environment; `-- --night=YYYY-MM-DD`, `-- --again` for one more run of a
+  night that finished). It prints one line and exits 0 (finished or already
+  finished) or 2.
+- **One run a night, on any number of Hub processes.** The run is claimed by
+  inserting its `MoneyCheckRun` row (unique per provider, Lagos date and
+  sequence). A run is kept with a lease that its worker extends per wallet; a
+  process that finds a `running` row past its lease takes it over and makes the
+  run again (`attempt` + 1), at most three times a night. A night that cannot be
+  made ends `finished` with the verdict `incomplete` and the reason, and is
+  reported like any other: a night is never left as nothing, which would read as
+  clean. A run another process took while this one worked is dropped, and says
+  nothing.
+- **What it compares.**
+  1. `movements`: each wallet's debits (`listTransactions`, newest first, 100 a
+     page) with the ledger's `out` rows, inside the window (back past the last
+     finished run by `MONEY_CHECK_OVERLAP_HOURS`, never further than
+     `MONEY_CHECK_MAX_LOOKBACK_DAYS`). A debit only the provider has (completed)
+     and a completed or pending send only the ledger has are mismatches; so are
+     a different amount, two provider records for one ledger row, and statuses
+     that cannot both be true. A provider record that is only `PENDING` or
+     `FAILURE` with no ledger row moved no money (a notice), as are the
+     provider's own charges to WAWU (`kind` `charge`). Movements younger than
+     `MONEY_CHECK_SETTLE_MINUTES` are left to the next night.
+  2. `merchant_movements`: the same for WAWU's own account.
+  3. `balances`: each wallet's available (or booked) balance against completed
+     money in less completed money out, widened by the pending rows and by a
+     failed bank send nobody has seen come back. Read with the ledger standing
+     still and confirmed once; a wallet that kept moving is not compared.
+  4. `held_money` (R-19): the provider's available balance of WAWU's account
+     against what the open holds need (their price, less a move already handed
+     to the provider). It cannot be one equality: the account also holds WAWU's
+     shares and fees (BACKEND_GAPS G-447). Also a completed payment of a held
+     kind with no hold, and a settled hold whose merchant-side row is missing,
+     pending or marked.
+  5. `merchant_charges` (R-10, OPS-09): for each completed send whose ledger row
+     carries a WAWU fee, the provider's full record (`findTransactionById`,
+     Fintava's `merchantComm`) shows that charge paid to WAWU.
+  6. `ledger_rows`: rows the ledger marked as disagreeing (`discrepancy`), rows
+     pending past the confirm window, failed bank sends with no reversal, and
+     each completed payment's two rows.
+  7. `payments` and 8. `holds`: what a person has to look at. A payment in
+     review (silence from the provider never ends a payment, G-480), one whose
+     charge was not believed, one debited above the quote, one paid twice; a
+     hold in review, a move handed over and unconfirmed past the review bound, a
+     move waiting past it for a reason other than a person's wallet, and money
+     owed to a deleted payee (G-461). A payee who has not opened a wallet is
+     not a problem (R-11): a notice.
+- **Verdicts.** `differences` (any mismatch); `not_checked` (nothing could be
+  compared with the provider: not set up here, or its adapter answers
+  `not_supported` to all of it); `incomplete` (something could not be compared:
+  a wallet the provider would not answer for, a history longer than the pages
+  read, a check the adapter cannot do yet, a run that did not finish);
+  `needs_a_look`; `clean` only when every comparison was made and nothing was
+  found. The report says how many wallets were checked and why the others were
+  not.
+- **Telling someone.** Through WAWU ID, as the data-export link and the PIN
+  reset code go: `POST /internal/users/:userId/money-check-report` with the
+  `X-Service-Key`, once per WAWU id in `MONEY_CHECK_RECIPIENT_WAWU_IDS`. The Hub
+  names the person and gives the facts (the verdict, the counts, each check's
+  state, and up to 100 findings as check, kind, reference, a sentence and kobo);
+  WAWU ID owns the address and the wording, and builds the route (BACKEND_GAPS
+  G-680). A clean night is mailed too, so silence never means clean. A report
+  WAWU ID would not take is kept and handed on again with a growing rest
+  (5 minutes doubling to 6 hours, for a week); a recipient already mailed is not
+  mailed twice. With no recipient set the run is still made, and the result is in
+  the log (an error line per night that is not clean) and in the table.
+- **Never in a report or an email:** a name, a phone number or an account
+  number. A reference is a ledger row id, a payment id, a hold id, our own
+  reference at the provider or the provider's wallet id. Amounts are kobo as
+  decimal text.
+- **Rows.** `MoneyCheckRun.report` holds the first 500 mismatches and the first 500 looks
+  and counts the rest; finished runs are kept `MONEY_CHECK_KEEP_DAYS` (120).

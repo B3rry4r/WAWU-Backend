@@ -1,0 +1,347 @@
+import { ConfigService } from '@nestjs/config';
+import {
+  MoneyCheckConfigError,
+  MoneyCheckSettings,
+  recipientsSetting,
+  timeSetting,
+  wholeSetting,
+} from '../money-check-config';
+import { mailOf } from '../money-check-mailer';
+import { FindingSink } from '../money-check-sink';
+import { isNight, lagosMinuteOfDay, lagosNight } from '../money-check-time';
+import {
+  CHECK_IDS,
+  type Finding,
+  type MoneyCheckReport,
+  REPORT_KEEP,
+  REPORT_MAIL,
+} from '../money-check-types';
+import { failureReport, verdictOf } from '../money-check.service';
+
+/** The settings, the clock, the sink, the verdict and the email's shape (task MONEY-16). */
+
+function settings(values: Record<string, string> = {}): MoneyCheckSettings {
+  return new MoneyCheckSettings({
+    get: (key: string) => values[key],
+  } as unknown as ConfigService);
+}
+
+describe('the settings', () => {
+  it('take their defaults when left empty', () => {
+    const s = settings();
+    expect(s.minuteOfDay).toBe(2 * 60 + 30);
+    expect(s.recipients).toEqual([]);
+    expect(s.settleMs).toBe(30 * 60_000);
+    expect(s.overlapMs).toBe(96 * 3_600_000);
+    expect(s.lookbackMs).toBe(35 * 24 * 3_600_000);
+    expect(s.historyPages).toBe(30);
+    expect(s.feeLookups).toBe(2000);
+  });
+
+  it('read the hour, the recipients and the limits', () => {
+    const s = settings({
+      MONEY_CHECK_TIME: '23:05',
+      MONEY_CHECK_RECIPIENT_WAWU_IDS: 'a1b2, c3d4 ,a1b2',
+      MONEY_CHECK_SETTLE_MINUTES: '45',
+      MONEY_CHECK_HISTORY_PAGES: '5',
+    });
+    expect(s.minuteOfDay).toBe(23 * 60 + 5);
+    expect(s.recipients).toEqual(['a1b2', 'c3d4']);
+    expect(s.settleMs).toBe(45 * 60_000);
+    expect(s.historyPages).toBe(5);
+  });
+
+  it('turn the schedule off with `off`', () => {
+    expect(timeSetting('off')).toBeNull();
+    expect(timeSetting(' OFF ')).toBeNull();
+    expect(settings({ MONEY_CHECK_TIME: 'off' }).minuteOfDay).toBeNull();
+  });
+
+  it.each(['2:30', '24:00', '02:60', 'noon', '02.30', '0230'])(
+    'refuse the time %s, naming the setting',
+    (bad) => {
+      expect(() => timeSetting(bad)).toThrow(MoneyCheckConfigError);
+      expect(() => timeSetting(bad)).toThrow(/MONEY_CHECK_TIME/);
+    },
+  );
+
+  it('refuse a number outside its range and a recipient that is not an id', () => {
+    expect(() => wholeSetting('4', 'K', 1, 5, 9)).toThrow(
+      /K must be a whole number from 5 to 9/,
+    );
+    expect(() => wholeSetting('1.5', 'K', 1, 0, 9)).toThrow(
+      MoneyCheckConfigError,
+    );
+    expect(() => wholeSetting('-1', 'K', 1, 0, 9)).toThrow(
+      MoneyCheckConfigError,
+    );
+    expect(wholeSetting('', 'K', 7, 0, 9)).toBe(7);
+    expect(() => recipientsSetting('ok, bad id')).toThrow(/WAWU ids/);
+    expect(() => settings({ MONEY_CHECK_CALL_GAP_MS: '99999' })).toThrow(
+      /MONEY_CHECK_CALL_GAP_MS/,
+    );
+  });
+});
+
+describe('the Lagos night', () => {
+  it('is the calendar date in Lagos, which is an hour ahead of UTC', () => {
+    expect(lagosNight(new Date('2026-10-11T22:59:00Z'))).toBe('2026-10-11');
+    expect(lagosNight(new Date('2026-10-11T23:00:00Z'))).toBe('2026-10-12');
+    expect(lagosMinuteOfDay(new Date('2026-10-11T23:00:00Z'))).toBe(0);
+    expect(lagosMinuteOfDay(new Date('2026-10-12T01:30:00Z'))).toBe(
+      2 * 60 + 30,
+    );
+  });
+
+  it('knows a real date from a made-up one', () => {
+    expect(isNight('2026-10-12')).toBe(true);
+    expect(isNight('2026-02-30')).toBe(false);
+    expect(isNight('2026-1-2')).toBe(false);
+    expect(isNight('tonight')).toBe(false);
+  });
+});
+
+function finding(over: Partial<Finding> = {}): Finding {
+  return {
+    check: 'movements',
+    severity: 'mismatch',
+    kind: 'provider_only',
+    ref: 'r1',
+    detail: 'Something differs.',
+    ...over,
+  };
+}
+
+describe('the finding sink', () => {
+  it('keeps what a report holds and counts the rest', () => {
+    const sink = new FindingSink();
+    for (let i = 0; i < REPORT_KEEP + 40; i += 1)
+      sink.add(finding({ ref: `m${i}` }));
+    for (let i = 0; i < 3; i += 1) {
+      sink.add(
+        finding({ severity: 'look', check: 'holds', kind: 'hold_in_review' }),
+      );
+    }
+    sink.skipped('holds', 'look', 7);
+    expect(sink.mismatches).toHaveLength(REPORT_KEEP);
+    expect(sink.mismatchCount).toBe(REPORT_KEEP + 40);
+    expect(sink.omitted.mismatches).toBe(40);
+    expect(sink.lookCount).toBe(10);
+    expect(sink.omitted.look).toBe(7);
+  });
+
+  it('summarises each check in order, a mismatch beating a look, a look beating ok', () => {
+    const sink = new FindingSink();
+    sink.add(finding());
+    sink.add(
+      finding({ check: 'holds', severity: 'look', kind: 'hold_in_review' }),
+    );
+    sink.compared('movements', 12);
+    sink.cannot('balances', 'incomplete', 'Two wallets could not be read.');
+    sink.cannot('merchant_charges', 'not_checked', 'Not asked.');
+    const byId = Object.fromEntries(sink.summaries().map((s) => [s.id, s]));
+    expect(sink.summaries().map((s) => s.id)).toEqual([...CHECK_IDS]);
+    expect(byId.movements).toMatchObject({
+      state: 'differences',
+      checked: 12,
+      found: 1,
+    });
+    expect(byId.holds.state).toBe('needs_a_look');
+    expect(byId.balances).toMatchObject({
+      state: 'incomplete',
+      note: 'Two wallets could not be read.',
+    });
+    expect(byId.merchant_charges.state).toBe('not_checked');
+    expect(byId.payments).toMatchObject({ state: 'ok', found: 0, note: null });
+  });
+
+  it('lets a check that was not made at all stay not made, whatever else is said about it', () => {
+    const sink = new FindingSink();
+    sink.cannot('balances', 'not_checked', 'a');
+    sink.cannot('balances', 'incomplete', 'b');
+    const s = sink.summaries().find((x) => x.id === 'balances')!;
+    expect(s.state).toBe('not_checked');
+    expect(s.note).toBe('a b');
+  });
+
+  it('adds up notices and the money they stand for', () => {
+    const sink = new FindingSink();
+    sink.notice('x', 2, 500n);
+    sink.mergeNotices({ x: { count: 1, amountKobo: '250' }, y: { count: 3 } });
+    sink.notice('z', 0);
+    expect(sink.notices).toEqual({
+      x: { count: 3, amountKobo: '750' },
+      y: { count: 3 },
+    });
+  });
+});
+
+function reportWith(
+  checks: Array<[string, string]>,
+  wallets: Partial<MoneyCheckReport['wallets']> = {},
+): Pick<MoneyCheckReport, 'checks' | 'wallets'> {
+  return {
+    checks: checks.map(([id, state]) => ({
+      id: id as MoneyCheckReport['checks'][number]['id'],
+      state: state as MoneyCheckReport['checks'][number]['state'],
+      checked: 0,
+      found: 0,
+      note: null,
+    })),
+    wallets: { total: 3, checked: 3, notChecked: {}, ...wallets },
+  };
+}
+
+describe('the verdict', () => {
+  const ok = [
+    ['movements', 'ok'],
+    ['merchant_movements', 'ok'],
+    ['balances', 'ok'],
+    ['holds', 'ok'],
+  ] as Array<[string, string]>;
+
+  it('is clean only when every comparison was made and nothing was found', () => {
+    expect(verdictOf(reportWith(ok), 0, 0)).toBe('clean');
+  });
+
+  it('is differences when anything differs, whatever else is missing', () => {
+    expect(verdictOf(reportWith(ok), 1, 0)).toBe('differences');
+    expect(
+      verdictOf(
+        reportWith([
+          ['movements', 'not_checked'],
+          ['balances', 'not_checked'],
+        ]),
+        2,
+        0,
+      ),
+    ).toBe('differences');
+  });
+
+  it('is needs_a_look when nothing differs and a person has something to decide', () => {
+    expect(verdictOf(reportWith(ok), 0, 4)).toBe('needs_a_look');
+  });
+
+  it('is never clean when a wallet was not checked or a check was not made in full', () => {
+    expect(
+      verdictOf(
+        reportWith(ok, { checked: 2, notChecked: { unreadable: 1 } }),
+        0,
+        0,
+      ),
+    ).toBe('incomplete');
+    expect(
+      verdictOf(reportWith([...ok, ['merchant_charges', 'incomplete']]), 0, 0),
+    ).toBe('incomplete');
+    expect(
+      verdictOf(reportWith([...ok, ['held_money', 'not_checked']]), 0, 3),
+    ).toBe('incomplete');
+  });
+
+  it('is not_checked when nothing could be compared with the provider', () => {
+    expect(
+      verdictOf(
+        reportWith([
+          ['movements', 'not_checked'],
+          ['merchant_movements', 'not_checked'],
+          ['balances', 'not_checked'],
+        ]),
+        0,
+        0,
+      ),
+    ).toBe('not_checked');
+  });
+
+  it('says a provider that answers one comparison and not another is incomplete, not clean', () => {
+    expect(
+      verdictOf(
+        reportWith([
+          ['movements', 'not_checked'],
+          ['merchant_movements', 'not_checked'],
+          ['balances', 'ok'],
+        ]),
+        0,
+        0,
+      ),
+    ).toBe('incomplete');
+  });
+});
+
+describe('a night that could not be made', () => {
+  it('is reported as incomplete in every check, with the reason, never as clean', () => {
+    const r = failureReport(
+      'fintava',
+      '2026-10-12',
+      new Date('2026-10-12T01:30:00Z'),
+      new Date('2026-10-12T02:10:00Z'),
+      'the provider failed: unavailable',
+    );
+    expect(r.verdict).toBe('incomplete');
+    expect(r.checks).toHaveLength(CHECK_IDS.length);
+    expect(r.checks.every((c) => c.state === 'incomplete')).toBe(true);
+    expect(r.checks[0].note).toContain('the provider failed: unavailable');
+    expect(r.mismatches).toEqual([]);
+  });
+});
+
+describe("the email's facts", () => {
+  const base = failureReport(
+    'fintava',
+    '2026-10-12',
+    new Date('2026-10-12T01:30:00Z'),
+    new Date('2026-10-12T02:10:00Z'),
+    'x',
+  );
+
+  it('carry counts, references and kobo, and no more than the mail holds', () => {
+    const report: MoneyCheckReport = {
+      ...base,
+      verdict: 'differences',
+      wallets: { total: 9, checked: 8, notChecked: { unreadable: 1 } },
+      mismatches: Array.from({ length: REPORT_MAIL }, (_, i) =>
+        finding({ ref: `m${i}`, amountKobo: '1500', otherKobo: '1000' }),
+      ),
+      look: [
+        finding({
+          severity: 'look',
+          ref: 'l1',
+          check: 'payments',
+          kind: 'payment_in_review',
+        }),
+      ],
+      omitted: { mismatches: 5, look: 0 },
+    };
+    const mail = mailOf(report, {
+      mismatchCount: REPORT_MAIL + 5,
+      lookCount: 1,
+    });
+    expect(mail.items).toHaveLength(REPORT_MAIL);
+    expect(mail.itemsOmitted).toBe(REPORT_MAIL + 5 + 1 - REPORT_MAIL);
+    expect(mail.walletsChecked).toBe(8);
+    expect(mail.walletsTotal).toBe(9);
+    expect(mail.verdict).toBe('differences');
+    expect(Object.keys(mail.items[0]).sort()).toEqual(
+      [
+        'amountKobo',
+        'check',
+        'detail',
+        'kind',
+        'otherKobo',
+        'ref',
+        'severity',
+      ].sort(),
+    );
+    expect(mail.checks).toHaveLength(CHECK_IDS.length);
+  });
+
+  it('holds no em-dash, name, phone number or account number', () => {
+    const text = JSON.stringify(
+      mailOf(
+        { ...base, mismatches: [finding()], look: [] },
+        { mismatchCount: 1, lookCount: 0 },
+      ),
+    );
+    expect(text).not.toContain(String.fromCharCode(0x2014));
+    expect(text).not.toMatch(/\+234|\b0[789]\d{9}\b|\b\d{10}\b/);
+  });
+});

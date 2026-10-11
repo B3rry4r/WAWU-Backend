@@ -5785,3 +5785,68 @@ model WaitlistRegistration {
   @@index([email])
   @@index([claimedByWawuId])
 }
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// THE NIGHTLY CHECK AGAINST THE WALLET PROVIDER (task MONEY-16)
+///
+/// One row per run of the nightly check: it compares WAWU's ledger with the
+/// provider's own record (every wallet's debits and balance, WAWU's own
+/// account, the money held for payers and payees, the merchant charge on each
+/// fee-bearing send) and reports a difference the same night. A run only
+/// reads and reports: it never changes a ledger row, a hold, a payment or a
+/// balance. The provider's balance is the truth.
+///
+/// The unique key is the lock: `night` is the Lagos calendar date the run
+/// belongs to, `sequence` is 1 for the scheduled run and counts up for a run
+/// made again by hand, so two Hub processes cannot both run one night. A run
+/// that dies leaves `running` with an old `leaseUntil`; any process may take
+/// it over after that (`attempt` counts the tries). A run never ends as
+/// clean unless every comparison was made: `verdict` says so, and `report`
+/// holds the counts and the references a person looks at (kobo as decimal
+/// text; never a name, a phone number or an account number).
+///
+/// `emailedTo` lists the WAWU ids the report was handed to WAWU ID for;
+/// `emailedAt` is set when every recipient has been; a failed hand-over is
+/// tried again (`nextEmailAt`).
+/// ─────────────────────────────────────────────────────────────────────────
+model MoneyCheckRun {
+  id             String    @id @default(uuid())
+  /// The wallet provider whose rows were checked: `fintava` or `nuvion`.
+  provider       String    @default("fintava")
+  /// The Lagos date this run belongs to, `YYYY-MM-DD`.
+  night          String
+  /// 1 for the scheduled run; a run made again by hand takes the next number.
+  sequence       Int       @default(1)
+  /// running, failed (this try threw; another may take it after `leaseUntil`)
+  /// or finished (`verdict` and `report` are set).
+  status         String    @default("running")
+  attempt        Int       @default(1)
+  byHand         Boolean   @default(false)
+  startedAt      DateTime
+  /// Until when the process that holds this run keeps it. Extended while it
+  /// works; any process may take a `running` or `failed` run after it.
+  leaseUntil     DateTime
+  finishedAt     DateTime?
+  /// What the movement comparison looked at: from (null: no lower bound) to.
+  windowFrom     DateTime?
+  windowTo       DateTime?
+  /// clean, needs_a_look, differences, incomplete or not_checked.
+  verdict        String?
+  walletsTotal   Int?
+  walletsChecked Int?
+  mismatchCount  Int?
+  lookCount      Int?
+  report         Json?
+  /// Why the last try failed, in words with no provider text in them.
+  failure        String?
+  emailedTo      String[]  @default([])
+  emailAttempts  Int       @default(0)
+  nextEmailAt    DateTime?
+  emailedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([provider, night, sequence])
+  @@index([provider, status, finishedAt])
+  @@index([emailedAt, finishedAt])
+}
