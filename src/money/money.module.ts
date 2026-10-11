@@ -33,7 +33,10 @@ import { BeneficiaryService } from './saved-accounts/beneficiary.service';
 import { MoneySavedAccountsController } from './saved-accounts/money-saved-accounts.controller';
 import { PayoutAccountService } from './saved-accounts/payout-account.service';
 import { PinRequestKeyFilter, PinRequestKeyGuard } from './pin/pin-request-key';
-import { PinRequestKeys } from './pin/pin-request-keys.service';
+import {
+  PinRequestFingerprints,
+  PinRequestKeys,
+} from './pin/pin-request-keys.service';
 import { IdempotencyGuard, IdempotencyService } from './payments/idempotency';
 import { MerchantWallet } from './payments/merchant-wallet';
 import { HoldViewService } from './holds/hold-view.service';
@@ -189,6 +192,7 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     WalletGateGuard,
     TransactionPinService,
     TransactionPinGuard,
+    PinRequestFingerprints,
     PinRequestKeys,
     PinRequestKeyGuard,
     PinRequestKeyFilter,
