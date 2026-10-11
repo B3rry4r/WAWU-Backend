@@ -5772,6 +5772,13 @@ model WaitlistRegistration {
   /// The WAWU ID account that claimed this payment in the app (JOIN-03).
   claimedByWawuId String?
   claimedAt       DateTime?
+  /// What the claim told its claimer (JOIN-03 round 2): the offer's name, the
+  /// days given, whether they were added to a running plan, and the points
+  /// lot. Written in the claim's own transaction. The SAME account repeating
+  /// the SAME code is answered from it, as a 200, so a lost answer can be
+  /// replayed; nobody else ever sees it. Never carries another person's
+  /// details. NULL on an unclaimed row.
+  claimResult     Json?
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 
