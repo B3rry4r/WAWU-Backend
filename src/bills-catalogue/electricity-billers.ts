@@ -87,6 +87,30 @@ const KNOWN: Record<string, Known> = {
   Aba_Power_Postpaid: { biller: 'aba', name: 'Aba Power', plan: 'postpaid' },
 };
 
+/**
+ * The short names the companies are known by (IKEDC for Ikeja Electric, and so on), by the `biller` key of `KNOWN`. A
+ * name that is only the company's own name, code or short name is not a meter's owner (BILLS-01 round 4, R3-1).
+ */
+const SHORT_NAMES: Record<string, string[]> = {
+  ikeja: ['ikedc'],
+  eko: ['ekedc', 'ekedp'],
+  aedc: ['aedc'],
+  ibadan: ['ibedc'],
+  ph: ['phed', 'phedc'],
+  kano: ['kedco'],
+  kaduna: ['kaedco'],
+  jos: ['jed', 'jedc'],
+  bedc: ['bedc'],
+  enugu: ['eedc'],
+  aba: ['aple'],
+};
+
+/** The short names of the company a disco code belongs to; none for a code this table does not know. */
+export function companyShortNames(code: string): string[] {
+  const known = KNOWN[code];
+  return known ? (SHORT_NAMES[known.biller] ?? []) : [];
+}
+
 const PLAN_WORDS = /\b(pre-?paid|post-?paid)\b/gi;
 const NOISE_WORDS = /\b(bill payment|token purchase|distribution|disco)\b/gi;
 
