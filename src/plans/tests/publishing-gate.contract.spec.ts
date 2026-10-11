@@ -1103,6 +1103,26 @@ describe('Publishing needs a tier (TIER-02) over HTTP', () => {
       ).toHaveLength(PRODUCT_DRAFTS_MAX);
     });
 
+    it('ten drafts sent together with one place left take that place and no other', async () => {
+      const id = await creator();
+      await prisma.productDraft.createMany({
+        data: Array.from({ length: PRODUCT_DRAFTS_MAX - 1 }, (_, n) => ({
+          wawuUserId: id,
+          title: `Filler ${n}`,
+        })),
+      });
+      const sent = await Promise.all(
+        Array.from({ length: 10 }, (_, n) =>
+          post(id, '/product-drafts', { title: `Last ${n}` }),
+        ),
+      );
+      expect(sent.filter((r) => r.status === 201)).toHaveLength(1);
+      expect(sent.filter((r) => r.status === 409)).toHaveLength(9);
+      expect(
+        await prisma.productDraft.count({ where: { wawuUserId: id } }),
+      ).toBe(PRODUCT_DRAFTS_MAX);
+    });
+
     it("another person's full set of drafts does not stop this person's first", async () => {
       const full = await creator();
       await prisma.productDraft.createMany({
