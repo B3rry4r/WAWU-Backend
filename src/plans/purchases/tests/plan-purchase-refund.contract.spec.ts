@@ -161,7 +161,7 @@ describe('A plan that cannot be granted when its payment confirms is paid back (
       status: 'completed',
       delivered: true,
     });
-    expect(REFUNDED_MESSAGE).not.toMatch(/—/);
+    expect(REFUNDED_MESSAGE).not.toMatch(/\u2014/);
     const row = await tierRow(p);
     expect(row.tierId).toBe(small.id);
     expect(row.activeUntil.getTime()).toBeLessThan(Date.now());
