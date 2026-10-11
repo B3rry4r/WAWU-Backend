@@ -1484,8 +1484,10 @@ Fintava or on Nuvion, whichever the server runs.
   price from its own record and the payee (or `404 target_not_found`, `409
   target_not_payable`), and `onCompleted` delivers it once the debit is
   confirmed. **Delivery is at least once**: `onCompleted` can be called
-  twice for one payment (two servers, or a delivery slower than a minute)
-  and must be idempotent. A delivery that fails is tried again on the same
+  twice for one payment (a delivery slower than its lease, or a server that
+  dies after telling the feature and before recording the delivery; two
+  servers that race one due delivery tell it once, see the claim under "Airtight
+  against a concurrent path") and must be idempotent. A delivery that fails is tried again on the same
   capped backoff as the check (1, 2, 4, 8, 16, 32, then 60 minutes, with its
   own count `deliveryAttempts` and next try `nextDeliveryAt`; the first retry
   is a minute after completion, so it does not race the one the completion
@@ -2058,8 +2060,16 @@ above the quote is believed (completed, flagged `debitReviewSince`, as before).
   between it and the call to the feature. A payment in charge review (or any
   review) is not delivered, however it was read before, and the sweeps do not
   offer it. The claim also leases the delivery (`nextDeliveryAt`), so a slow
-  feature is not told twice at once. A report that arrives after a payment completed but before its
-  delivery stops that delivery (the item stays claimed, the payment is out of
+  feature is not told twice at once, **even by two servers** (MONEY-18 round 4,
+  R3-1): the claim compares `nextDeliveryAt` with the value its caller read
+  (`null` matches an unleased row), so of two servers that read the same due
+  payment exactly one update matches and the other tells nobody. A server that
+  dies holding the lease leaves it in the row; the delivery then happens once,
+  after the rest has passed (1 to 60 minutes). A feature that is merely slower
+  than its lease may be offered the payment again when the rest passes, which
+  is the at-least-once above: `onCompleted` must still be idempotent. A
+  report that arrives after a payment completed but before its delivery stops
+  that delivery (the item stays claimed, the payment is out of
   the delivery sweep, the hold, if any, stays); a delivery already made is not
   taken back, the payment is only marked. A person clears the review by
   clearing `chargeReviewSince` and `reviewSince`; the next sweep delivers.

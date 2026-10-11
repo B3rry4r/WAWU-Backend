@@ -32,8 +32,8 @@
  * each the socket's, each with its own syscall. Every leaf must pass.
  *
  * Read from real sockets in `connection-never-opened.spec.ts` (the shapes)
- * and `netns/connection-never-opened-rig.ts` (the route failing after the
- * write, in a private network namespace).
+ * and `test/netns/connection-never-opened-rig.ts` (the route failing after
+ * the write, in a private network namespace: `npm run test:netns`).
  */
 export const CONNECTION_NEVER_OPENED_SYSCALL: ReadonlyMap<string, string> =
   new Map([

@@ -33,8 +33,8 @@ import { WalletProviderError } from '../wallet-provider-error';
  * name codes. Every fixture below carries the syscall a real error carries
  * (the shapes were read from real sockets: the route failing after the write
  * gave `read EHOSTUNREACH` errno -113, `read ENETUNREACH` -101 and
- * `read ECONNREFUSED` -111; `netns/` and `connection-never-opened-sockets.spec.ts`
- * produce them again).
+ * `read ECONNREFUSED` -111; `npm run test:netns` (`test/netns/`)
+ * produces them again).
  */
 
 /** The error Node raises for a failure in `syscall`, as a real one is shaped. */
@@ -511,7 +511,8 @@ describe('the Nuvion client marks a request that never reached Nuvion', () => {
  * `requestNotSent` only when the server read nothing; whenever it read the
  * whole request the answer is "ask, never resend", however the line ended.
  * (The route failing under an established connection, `read EHOSTUNREACH`,
- * needs a private network namespace: `connection-never-opened-sockets.spec.ts`.)
+ * needs a private network namespace, so it is a script and not a jest test:
+ * `npm run test:netns`, which fails when it cannot run.)
  */
 describe('both clients over real sockets: marked only when nothing was read', () => {
   type Seen = { bytes: number; full: number };

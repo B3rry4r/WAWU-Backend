@@ -1,5 +1,6 @@
 /**
- * Real-socket rig for `connectionNeverOpened` (MONEY-18 round 3, R2-1).
+ * Real-socket rig for `connectionNeverOpened` (MONEY-18 round 3, R2-1; run as
+ * a script since round 4, R3-2).
  *
  * Runs the real `FintavaClient` and the real `NuvionClient` against raw TCP
  * servers and reports, for each scenario, whether the client marked the
@@ -13,17 +14,20 @@
  * replies and the first hop answers the client's retransmissions with an ICMP
  * error, and the kernel's retransmission limit is lowered so the socket dies
  * before the client's own deadline. That takes iptables and sysctl in a
- * PRIVATE network namespace. The rig therefore refuses to start unless the
- * only interface is loopback (it flushes the OUTPUT chain), and it is run by
- * `connection-never-opened-sockets.spec.ts` under `unshare -n`. By hand:
+ * PRIVATE network namespace, which a jest process does not have, so this is
+ * NOT a jest spec (a spec that cannot get a namespace has to skip, and a skip
+ * hides the only proof of a money rule). It is a script:
  *
- *   unshare -n sh -c 'ip link set lo up; \
- *     sysctl -w net.ipv4.tcp_retries2=3; \
- *     node -r ts-node/register/transpile-only \
- *       test/netns/connection-never-opened-rig.ts'
+ *   npm run test:netns        (test/netns/run.sh)
  *
- * (as root; `ip link set lo up` can be any way of raising loopback). One
- * `ROW {json}` line per client per scenario on stdout, then `DONE`.
+ * `run.sh` makes the namespace, runs this file in it and exits non-zero when
+ * it cannot make one ("cannot run" is a failure, never a pass). The rig itself
+ * refuses to start unless the only interface is loopback (it flushes the
+ * OUTPUT chain), checks every row and the shape of the whole run (`verify`),
+ * and exits 1 on any wrong row. One `ROW {json}` line per client per scenario
+ * on stdout, then `DONE`. The cases that need no privilege (a closed port, a
+ * reset, a FIN, a 503, a silent server, both clients) are jest tests in
+ * `src/wallet-provider/tests/connection-never-opened.spec.ts`.
  */
 import { execFileSync } from 'node:child_process';
 import { createServer, type Server, type Socket } from 'node:net';
@@ -224,6 +228,92 @@ async function closedPort(): Promise<number> {
   return port;
 }
 
+const EXPECTED_SCENARIOS = [
+  'closed port',
+  'closed port by name (localhost)',
+  'name that does not resolve',
+  'no route (10.255.255.1)',
+  'deadline passes while connecting',
+  'connect timeout (undici, before the deadline)',
+  'EHOSTUNREACH on a read, after the whole request was read (icmp-host-unreachable)',
+  'ENETUNREACH on a read, after the whole request was read (icmp-net-unreachable)',
+  'ECONNREFUSED on a read, after the whole request was read (icmp-port-unreachable)',
+];
+
+/** Scenarios whose request never left: marked, and the server read nothing. */
+const NEVER_SENT_SCENARIOS = [
+  'closed port',
+  'closed port by name (localhost)',
+  'connect timeout (undici, before the deadline)',
+  'name that does not resolve',
+  'no route (10.255.255.1)',
+];
+
+/** What is wrong with a finished run; an empty list is a pass. */
+export function verify(all: readonly RigRow[]): string[] {
+  const problems: string[] = [];
+  const ran = [...new Set(all.map((x) => x.scenario))].sort();
+  if (JSON.stringify(ran) !== JSON.stringify([...EXPECTED_SCENARIOS].sort())) {
+    problems.push(`scenarios that ran: ${JSON.stringify(ran)}`);
+  }
+  if (all.length !== 16) problems.push(`${all.length} rows, expected 16`);
+
+  // Every row: marked exactly when the scenario says nothing was sent.
+  for (const x of all.filter((y) => !y.ok)) {
+    problems.push(
+      `${x.client}: ${x.scenario} marked=${x.requestNotSent} (expected ${x.expectNotSent}, server read ${x.serverBytes} bytes)`,
+    );
+  }
+
+  // The route that fails AFTER the write: the server really read the whole
+  // request (so the case is not vacuous), and neither client marked it.
+  const afterWrite = all.filter((x) => x.scenario.includes('on a read'));
+  if (afterWrite.length !== 6) {
+    problems.push(`${afterWrite.length} after-the-write rows, expected 6`);
+  }
+  for (const x of afterWrite) {
+    const bad =
+      x.fullRequests !== 1 ||
+      x.serverBytes <= 300 ||
+      x.requestNotSent ||
+      !x.recordMayExist ||
+      x.kind !== 'outcome_unknown';
+    if (bad) {
+      problems.push(
+        `${x.client}: ${x.scenario}: fullRequests=${x.fullRequests} serverBytes=${x.serverBytes} requestNotSent=${x.requestNotSent} recordMayExist=${x.recordMayExist} kind=${x.kind}`,
+      );
+    }
+  }
+
+  // What was marked read nothing, and only the five never-sent scenarios
+  // are marked, for every client the rig drove.
+  const marked = all.filter((x) => x.requestNotSent);
+  for (const x of marked.filter((y) => y.serverBytes !== 0)) {
+    problems.push(
+      `${x.client}: ${x.scenario} was marked and the server read ${x.serverBytes} bytes`,
+    );
+  }
+  const markedNames = [...new Set(marked.map((x) => x.scenario))].sort();
+  if (
+    JSON.stringify(markedNames) !==
+    JSON.stringify([...NEVER_SENT_SCENARIOS].sort())
+  ) {
+    problems.push(
+      `scenarios marked requestNotSent: ${JSON.stringify(markedNames)}`,
+    );
+  }
+
+  // Our own deadline passing while connecting is a plain timeout.
+  for (const x of all.filter(
+    (y) => y.scenario === 'deadline passes while connecting',
+  )) {
+    if (x.requestNotSent) {
+      problems.push(`${x.client}: our own deadline was marked requestNotSent`);
+    }
+  }
+  return problems;
+}
+
 async function main() {
   const names = Object.keys(networkInterfaces());
   if (names.length !== 1 || names[0] !== 'lo') {
@@ -390,9 +480,12 @@ async function main() {
   );
   await sleep(50);
   ipt('-F', 'OUTPUT');
-  const bad = rows.filter((r) => !r.ok);
-  console.log(`DONE rows=${rows.length} notOk=${bad.length}`);
-  process.exit(0);
+  const problems = verify(rows);
+  for (const p of problems) console.error(`PROBLEM ${p}`);
+  console.log(
+    `DONE rows=${rows.length} wrong=${rows.filter((r) => !r.ok).length} problems=${problems.length}`,
+  );
+  process.exit(problems.length === 0 ? 0 : 1);
 }
 
 main().catch((e: unknown) => {

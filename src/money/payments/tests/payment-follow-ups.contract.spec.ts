@@ -1120,6 +1120,99 @@ describe('MONEY-17 follow-ups (D8-1, N2) on Fintava', () => {
     expect(done.openKey).toBeNull();
   });
 
+  /** The service's `fulfil`, the one step both a request and a sweep end in. */
+  function fulfilOf() {
+    const registry = app.get(PayableRegistry);
+    const fulfil = (
+      payments as unknown as {
+        fulfil: (...a: unknown[]) => Promise<boolean>;
+      }
+    ).fulfil.bind(payments);
+    return (row: unknown, kind: string, at?: Date) =>
+      fulfil(row, registry.get(kind as 'paid_dm' | 'content_unlock'), at);
+  }
+
+  it('R3-1 two servers read the same due delivery and both try to take it: exactly one wins the claim, the feature is told once (a held kind and one that is not, round after round)', async () => {
+    const fulfil = fulfilOf();
+    for (let round = 0; round < 6; round += 1) {
+      const kind = round % 2 === 0 ? 'paid_dm' : 'content_unlock';
+      const { paid } = await completedNotDelivered(QUOTE_FEE + 500, kind);
+      // Both servers read the payment before either has claimed it.
+      const readByA = await rowOf(paid.id);
+      const readByB = await rowOf(paid.id);
+      expect(readByA.nextDeliveryAt).toEqual(readByB.nextDeliveryAt);
+      const before = feature.started;
+      let finish!: () => void;
+      feature.wait = new Promise<void>((r) => (finish = r));
+      let answers: boolean[] = [];
+      try {
+        const both = Promise.all([
+          fulfil(readByA, kind),
+          fulfil(readByB, kind),
+        ]);
+        await until(() => feature.started > before);
+        // Time for the other claim to happen, if the claim lets it.
+        await new Promise((r) => setTimeout(r, 300));
+        expect(feature.started).toBe(before + 1);
+        finish();
+        answers = await both;
+      } finally {
+        feature.wait = null;
+        finish();
+      }
+      expect([...answers].sort()).toEqual([false, true]);
+      expect(feature.started).toBe(before + 1);
+      expect(deliveries(paid.id)).toBe(1);
+      const done = await rowOf(paid.id);
+      expect(done.fulfilledAt).not.toBeNull();
+      expect(done.nextDeliveryAt).toBeNull();
+      expect(done.openKey).toBeNull();
+    }
+  });
+
+  it('R3-1 a server that dies holding the lease: nothing is delivered before the lease ends, one delivery after it, then none', async () => {
+    const fulfil = fulfilOf();
+    const { paid } = await completedNotDelivered(QUOTE_FEE + 500);
+    const readByDead = await rowOf(paid.id);
+    const t0 = later(31 * 60_000);
+    const before = feature.started;
+    let finish!: () => void;
+    feature.wait = new Promise<void>((r) => (finish = r));
+    // The server takes the claim and its call to the feature never returns.
+    const dead = fulfil(readByDead, 'paid_dm', t0);
+    try {
+      await until(() => feature.started > before);
+      feature.wait = null;
+      const leased = await rowOf(paid.id);
+      const leaseEnd = leased.nextDeliveryAt!;
+      // One failed try so far: the rest the next failure would give is two minutes.
+      expect(leaseEnd.getTime()).toBe(t0.getTime() + 2 * 60_000);
+      expect(leased.fulfilledAt).toBeNull();
+
+      const early = await payments.sweep(new Date(leaseEnd.getTime() - 5_000));
+      expect(early.delivered).toBe(0);
+      expect(feature.started).toBe(before + 1);
+      expect(deliveries(paid.id)).toBe(0);
+
+      const late = await payments.sweep(new Date(leaseEnd.getTime() + 5_000));
+      expect(late.delivered).toBe(1);
+      expect(feature.started).toBe(before + 2);
+      expect(deliveries(paid.id)).toBe(1);
+      const done = await rowOf(paid.id);
+      expect(done.fulfilledAt).not.toBeNull();
+      expect(done.nextDeliveryAt).toBeNull();
+
+      const after = await payments.sweep(
+        new Date(leaseEnd.getTime() + 3_600_000),
+      );
+      expect(after.delivered).toBe(0);
+      expect(deliveries(paid.id)).toBe(1);
+    } finally {
+      finish();
+      await dead.catch(() => undefined);
+    }
+  });
+
   it('R2-5 any review stops a delivery that was read before it, not only a charge review: a person (or the delivery review) puts the payment under review after the row was read', async () => {
     const { paid } = await completedNotDelivered(QUOTE_FEE + 500);
     const stale = await rowOf(paid.id);

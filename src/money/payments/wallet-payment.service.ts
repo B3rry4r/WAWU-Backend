@@ -1934,6 +1934,16 @@ export class WalletPaymentService implements OnModuleInit {
       // the next failure would give it has passed, so a slow feature is not
       // told twice at once; a delivery that is made clears it, one that
       // fails writes the same rest again.
+      //
+      // The lease is what makes the claim exclusive between servers
+      // (MONEY-18 round 4, R3-1): `nextDeliveryAt` is compared with the value
+      // this caller READ (`null` matches an unleased row). Two servers that
+      // read the same due payment both try to take it; Postgres lets one
+      // update through, the other re-reads the row, finds the lease the first
+      // wrote, and touches nothing. Without the comparison the second update
+      // still matched (nothing in its WHERE had changed) and the feature was
+      // told twice. A server that dies holding the lease leaves it in the
+      // row; the delivery then happens once, after the rest has passed.
       const claimed = await this.prisma.walletPayment.updateMany({
         where: {
           id: p.id,
@@ -1941,6 +1951,7 @@ export class WalletPaymentService implements OnModuleInit {
           fulfilledAt: null,
           reviewSince: null,
           chargeReviewSince: null,
+          nextDeliveryAt: p.nextDeliveryAt,
         },
         data: {
           nextDeliveryAt: new Date(
