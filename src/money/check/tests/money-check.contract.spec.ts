@@ -1381,6 +1381,44 @@ describe('the nightly check against the wallet provider (MONEY-16)', () => {
       expect(await prisma.moneyCheckRun.count()).toBe(1);
     });
 
+    it('does not take a run whose owner extended it a moment after it was read as expired', async () => {
+      const n = night();
+      const id = randomUUID();
+      await prisma.moneyCheckRun.create({
+        data: {
+          id,
+          provider: 'fintava',
+          night: n,
+          status: 'running',
+          startedAt: ago(40 * MIN),
+          leaseUntil: ago(MIN),
+        },
+      });
+      const real = prisma.moneyCheckRun.findUnique.bind(prisma.moneyCheckRun);
+      let slowOwner = true;
+      jest.spyOn(prisma.moneyCheckRun, 'findUnique').mockImplementation(((
+        args: never,
+      ) => {
+        const read = real(args);
+        if (!slowOwner) return read;
+        slowOwner = false;
+        // The owner was only slow: it keeps its lease right after this read.
+        return read.then(async (row: unknown) => {
+          await prisma.moneyCheckRun.update({
+            where: { id },
+            data: { leaseUntil: new Date(Date.now() + 10 * MIN) },
+          });
+          return row;
+        });
+      }) as never);
+      expect(await run({ night: n })).toEqual({ state: 'busy', runId: id });
+      const after = await prisma.moneyCheckRun.findUniqueOrThrow({
+        where: { id },
+      });
+      expect(after).toMatchObject({ status: 'running', attempt: 1 });
+      expect(mail.mailed).toHaveLength(0);
+    });
+
     it('drops a run another process took while it worked, and says nothing', async () => {
       const a = await wallet(0);
       books.wallets.get(a.walletId)!.availableKobo = 0;
