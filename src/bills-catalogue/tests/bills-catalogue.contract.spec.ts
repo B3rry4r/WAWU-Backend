@@ -12,6 +12,7 @@ import { Test } from '@nestjs/testing';
 import * as jwt from 'jsonwebtoken';
 import request, { type Response } from 'supertest';
 import type { App } from 'supertest/types';
+import { NOT_GREEN_BODIES } from '../../../test/bills/not-green-bodies';
 import { SANDBOX_DISCOS } from '../../../test/bills/sandbox-discos';
 import {
   FintavaDouble,
@@ -846,6 +847,28 @@ describe('BILLS-01 electricity catalogue and meter check over HTTP', () => {
         expect(found).toHaveLength(5);
       });
 
+      it.each(NOT_GREEN_BODIES)(
+        'the verifier’s round 2 body, %s, is never a meter found (R2-1)',
+        async (_label, bodyAnswer) => {
+          listAnswers();
+          double.on('POST', '/billing/preview-meter', {
+            status: 200,
+            body: bodyAnswer,
+          });
+          const res = await preview({
+            code: 'Ikeja_Electric_Bill_Payment',
+            meterNumber: '04123456789',
+          }).expect(502);
+          expect(body(res).data).toBeNull();
+          expect(body(res).reason?.code).toBe('meter_unconfirmed');
+          expect(res.text).not.toMatch(/X Y/);
+        },
+      );
+
+      it('has all 22 of the verifier’s bodies', () => {
+        expect(NOT_GREEN_BODIES).toHaveLength(22);
+      });
+
       it('compares the owner with the company’s own name whatever the capitals, spaces and plan words', async () => {
         listAnswers();
         for (const name of [
@@ -866,6 +889,21 @@ describe('BILLS-01 electricity catalogue and meter check over HTTP', () => {
           }).expect(502);
           expect(body(res).reason?.code).toBe('meter_unconfirmed');
         }
+        // The other plan's word is the company's name too (round 2, case 85).
+        for (const name of [
+          'Ikeja Electric Postpaid',
+          'IKEJA ELECTRIC POSTPAID',
+        ]) {
+          double.on('POST', '/billing/preview-meter', {
+            status: 200,
+            body: { data: { name }, status: 200 },
+          });
+          const res = await preview({
+            code: 'Ikeja_Electric_Bill_Payment',
+            meterNumber: '04123456789',
+          }).expect(502);
+          expect(body(res).reason?.code).toBe('meter_unconfirmed');
+        }
         // Another company's name on an Ikeja meter is a person's name as far as the Hub can tell.
         double.on('POST', '/billing/preview-meter', {
           status: 200,
@@ -875,6 +913,43 @@ describe('BILLS-01 electricity catalogue and meter check over HTTP', () => {
           code: 'Ikeja_Electric_Bill_Payment',
           meterNumber: '04123456789',
         }).expect(200);
+      });
+
+      it.each([
+        [
+          'Fintava’s own wording for the company',
+          'Jos Electricity Distribution',
+        ],
+        ['the same wording in capitals', 'JOS ELECTRICITY DISTRIBUTION'],
+        ['the company’s code', 'Jos_Disco'],
+        ['the code in small letters', 'jos disco'],
+        ['the company’s name', 'Jos Electricity'],
+        ['the company’s name and the other plan', 'Jos Electricity Postpaid'],
+      ])(
+        'is not an owner when the name is %s (round 2 survivors V9 and V10)',
+        async (_k, name) => {
+          listAnswers();
+          double.on('POST', '/billing/preview-meter', {
+            status: 200,
+            body: { data: { name }, status: 200 },
+          });
+          const res = await preview({
+            code: 'Jos_Disco',
+            meterNumber: '04123456789',
+          }).expect(502);
+          expect(body(res).reason?.code).toBe('meter_unconfirmed');
+        },
+      );
+
+      it('is an owner when the name only starts like the company’s', async () => {
+        listAnswers();
+        double.on('POST', '/billing/preview-meter', {
+          status: 200,
+          body: { data: { name: 'Jos Okoro' }, status: 200 },
+        });
+        await preview({ code: 'Jos_Disco', meterNumber: '04123456789' }).expect(
+          200,
+        );
       });
 
       it('says in plain words that the meter could not be confirmed, with no provider name or em-dash', async () => {
@@ -934,6 +1009,61 @@ describe('BILLS-01 electricity catalogue and meter check over HTTP', () => {
       expect(data.address).toBe(`${'Y'.repeat(199)}😀`);
     });
 
+    it.each([
+      [
+        'a family emoji',
+        [0x1f468, 0x1f469, 0x1f467, 0x1f466]
+          .map((c) => String.fromCodePoint(c))
+          .join(String.fromCodePoint(0x200d)),
+      ],
+      ['a flag', String.fromCodePoint(0x1f1f3, 0x1f1ec)],
+      ['a letter with its accent', `e${String.fromCodePoint(0x301)}`],
+    ])(
+      'never splits %s at the cut, in the name or the address (R2-5)',
+      async (_k, whole) => {
+        listAnswers();
+        double.on('POST', '/billing/preview-meter', {
+          status: 200,
+          body: {
+            data: {
+              Customer_Name: `${'N'.repeat(199)}${whole}tail`,
+              Address: `${'A'.repeat(200)}${whole}`,
+            },
+            status: 200,
+          },
+        });
+        const res = await preview({
+          code: 'AEDC',
+          meterNumber: '04123456789',
+        }).expect(200);
+        const data = body<MeterPreviewView>(res).data!;
+        // 199 letters and the character: the 200th, so it stays whole. The address has 200 letters, so it goes whole.
+        expect(data.name).toBe(`${'N'.repeat(199)}${whole}`);
+        expect(data.address).toBe('A'.repeat(200));
+      },
+    );
+
+    it('drops the spaces the cut leaves at the end (round 2 survivor V11)', async () => {
+      listAnswers();
+      double.on('POST', '/billing/preview-meter', {
+        status: 200,
+        body: {
+          data: {
+            Customer_Name: `${'N'.repeat(199)} tail`,
+            Address: `${'A'.repeat(198)}   tail`,
+          },
+          status: 200,
+        },
+      });
+      const res = await preview({
+        code: 'AEDC',
+        meterNumber: '04123456789',
+      }).expect(200);
+      const data = body<MeterPreviewView>(res).data!;
+      expect(data.name).toBe('N'.repeat(199));
+      expect(data.address).toBe('A'.repeat(198));
+    });
+
     it('a name of exactly 200 characters is passed on whole', async () => {
       listAnswers();
       double.on('POST', '/billing/preview-meter', {
@@ -979,50 +1109,188 @@ describe('BILLS-01 electricity catalogue and meter check over HTTP', () => {
       expect(res.headers['retry-after']).toBeUndefined();
     });
 
-    it('forgets the kept list when a check says bills are not switched on, so S2 draws S13 at once (D6)', async () => {
-      const kept = serviceWith({ ...ENV, BILLS_CATALOGUE_CACHE_SECONDS: '60' });
+    it('sends Retry-After with no other answer of either route, even one whose body names a wait (round 2 survivor V15)', async () => {
+      // 404 biller_not_found
       listAnswers();
-      expect((await kept.electricityBillers()).available).toBe(true);
-      expect(listCalls()).toBe(1);
-      // The merchant goes inactive: the list still looks fine in the cache, the check is refused.
+      let res = await preview({
+        code: 'No_Such_Code',
+        meterNumber: '04123456789',
+      }).expect(404);
+      expect(res.headers['retry-after']).toBeUndefined();
+      // 502 meter_unconfirmed
+      double.on('POST', '/billing/preview-meter', {
+        status: 200,
+        body: { data: 'x' },
+      });
+      res = await preview({ code: 'AEDC', meterNumber: '04123456789' }).expect(
+        502,
+      );
+      expect(res.headers['retry-after']).toBeUndefined();
+      // 503 provider_unreachable: its body does say how long to wait, its header does not
+      double.on('POST', '/billing/preview-meter', {
+        status: 500,
+        body: fintavaError(500, 'read ECONNRESET'),
+      });
+      res = await preview({ code: 'AEDC', meterNumber: '04123456789' }).expect(
+        503,
+      );
+      expect(body(res).reason?.code).toBe('provider_unreachable');
+      expect(body(res).reason?.retryAfterSeconds).toBeGreaterThan(0);
+      expect(res.headers['retry-after']).toBeUndefined();
+      // 503 bills_unavailable
       double.on('POST', '/billing/preview-meter', {
         status: 403,
         body: fintavaError(403, 'Merchant is not active'),
       });
-      listAnswers({
-        status: 403,
-        body: fintavaError(403, 'Merchant is not active'),
-      });
-      await expect(
-        kept.previewMeter(randomUUID(), {
-          code: 'AEDC',
-          meterNumber: '04123456789',
-        }),
-      ).rejects.toMatchObject({ code: 'bills_unavailable' });
-      // The next list read goes to Fintava again and is S13, not the minute-old list.
-      expect(await kept.electricityBillers()).toEqual({
-        available: false,
-        billers: [],
-      });
-      expect(listCalls()).toBe(2);
+      res = await preview({ code: 'AEDC', meterNumber: '04123456789' }).expect(
+        503,
+      );
+      expect(body(res).reason?.code).toBe('bills_unavailable');
+      expect(res.headers['retry-after']).toBeUndefined();
+      // the list, when Fintava does not answer
+      listAnswers({ status: 500, body: fintavaError(500, 'read ECONNRESET') });
+      res = await getBillers().expect(503);
+      expect(res.headers['retry-after']).toBeUndefined();
     });
 
-    it('forgets the kept list for a 2xx "service not currently available" too (D6)', async () => {
-      const kept = serviceWith({ ...ENV, BILLS_CATALOGUE_CACHE_SECONDS: '60' });
-      listAnswers();
-      await kept.electricityBillers();
-      double.on('POST', '/billing/preview-meter', {
-        status: 201,
-        body: { status: 201, message: 'service not currently available' },
-      });
-      await expect(
-        kept.previewMeter(randomUUID(), {
+    describe('a check that finds bills off holds "off" for the cache window (D6, R2-U1)', () => {
+      const TTL = 60_000;
+      const OFF = { available: false, billers: [] };
+      const check = (svc: BillsCatalogueService) =>
+        svc.previewMeter(randomUUID(), {
           code: 'AEDC',
-          meterNumber: '04123456789',
-        }),
-      ).rejects.toMatchObject({ code: 'bills_unavailable' });
-      await kept.electricityBillers();
-      expect(listCalls()).toBe(2);
+          meterNumber: '04183456789',
+        });
+      /** The service with a clock the test moves. */
+      function withClock(values: Record<string, string> = {}) {
+        const clock = { t: 1_000_000 };
+        const svc = serviceWith({
+          ...ENV,
+          BILLS_CATALOGUE_CACHE_SECONDS: '60',
+          ...values,
+        });
+        svc.now = () => clock.t;
+        return { svc, clock };
+      }
+      const off201 = () =>
+        double.on('POST', '/billing/preview-meter', {
+          status: 201,
+          body: { status: 200, message: 'service not currently available' },
+        });
+      const preview403 = () =>
+        double.on('POST', '/billing/preview-meter', {
+          status: 403,
+          body: fintavaError(403, 'Merchant is not active'),
+        });
+
+      it('is S13 for the list straight after a 2xx "service not currently available", while the list still answers (the verifier’s 04183456789 case)', async () => {
+        const { svc } = withClock();
+        listAnswers();
+        expect((await svc.electricityBillers()).available).toBe(true);
+        off201();
+        await expect(check(svc)).rejects.toMatchObject({
+          code: 'bills_unavailable',
+        });
+        // Fintava’s list is fine, and is not asked: the answer stays off.
+        expect(await svc.electricityBillers()).toEqual(OFF);
+        expect(await svc.electricityBillers()).toEqual(OFF);
+        expect(listCalls()).toBe(1);
+      });
+
+      it('holds it for a refused key too, without asking Fintava’s list again', async () => {
+        const { svc } = withClock();
+        listAnswers();
+        await svc.electricityBillers();
+        preview403();
+        listAnswers({
+          status: 403,
+          body: fintavaError(403, 'Merchant is not active'),
+        });
+        await expect(check(svc)).rejects.toMatchObject({
+          code: 'bills_unavailable',
+        });
+        expect(await svc.electricityBillers()).toEqual(OFF);
+        expect(listCalls()).toBe(1);
+      });
+
+      it('answers the next check as off without asking Fintava, until the window passes', async () => {
+        const { svc, clock } = withClock();
+        listAnswers();
+        off201();
+        await expect(check(svc)).rejects.toMatchObject({
+          code: 'bills_unavailable',
+        });
+        expect(previewCalls()).toHaveLength(1);
+        clock.t += 1_000;
+        await expect(check(svc)).rejects.toMatchObject({
+          code: 'bills_unavailable',
+        });
+        expect(previewCalls()).toHaveLength(1);
+        expect(listCalls()).toBe(1);
+      });
+
+      it('lets go exactly when the cache window ends, and asks Fintava again', async () => {
+        const { svc, clock } = withClock();
+        listAnswers();
+        off201();
+        await expect(check(svc)).rejects.toMatchObject({
+          code: 'bills_unavailable',
+        });
+        clock.t += TTL - 1;
+        expect(await svc.electricityBillers()).toEqual(OFF);
+        expect(listCalls()).toBe(1);
+        clock.t += 1;
+        const again = await svc.electricityBillers();
+        expect(again.available).toBe(true);
+        expect(listCalls()).toBe(2);
+        // And a check is asked of Fintava again.
+        double.on('POST', '/billing/preview-meter', {
+          status: 200,
+          body: { data: { name: 'Ada Eze' }, status: 200 },
+        });
+        expect(await check(svc)).toMatchObject({ name: 'Ada Eze' });
+      });
+
+      it('holds for the cache window the server is set to, not a fixed minute', async () => {
+        const { svc, clock } = withClock({
+          BILLS_CATALOGUE_CACHE_SECONDS: '5',
+        });
+        listAnswers();
+        off201();
+        await expect(check(svc)).rejects.toMatchObject({
+          code: 'bills_unavailable',
+        });
+        clock.t += 4_999;
+        expect(await svc.electricityBillers()).toEqual(OFF);
+        clock.t += 1;
+        expect((await svc.electricityBillers()).available).toBe(true);
+      });
+
+      it('holds nothing when the server keeps no list (a window of nothing)', async () => {
+        const { svc } = withClock({ BILLS_CATALOGUE_CACHE_SECONDS: '0' });
+        listAnswers();
+        off201();
+        await expect(check(svc)).rejects.toMatchObject({
+          code: 'bills_unavailable',
+        });
+        expect((await svc.electricityBillers()).available).toBe(true);
+        expect(listCalls()).toBe(2);
+      });
+
+      it('is held for everyone who asks, not only the person whose check found it', async () => {
+        const { svc } = withClock();
+        listAnswers();
+        off201();
+        await expect(check(svc)).rejects.toMatchObject({
+          code: 'bills_unavailable',
+        });
+        await expect(
+          svc.previewMeter(randomUUID(), {
+            code: 'AEDC',
+            meterNumber: '04999999999',
+          }),
+        ).rejects.toMatchObject({ code: 'bills_unavailable' });
+      });
     });
 
     it('keeps the list when a check fails for a reason that says nothing about the list (a meter not found)', async () => {

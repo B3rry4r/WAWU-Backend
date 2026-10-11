@@ -1744,23 +1744,9 @@ export class FintavaClient {
       if (!Array.isArray(data)) throw new FintavaShapeError('rows missing');
       const discos: FintavaDisco[] = [];
       data.forEach((row: unknown, i) => {
-        try {
-          const o = obj(row, 'disco');
-          discos.push({
-            code: str(o, 'code'),
-            description: strOrNull(o, 'description') ?? str(o, 'code'),
-            minimumKobo: fintavaAmountToKobo(o.minimum_value),
-            maximumKobo: fintavaAmountToKobo(o.maximum_value),
-            available: o.is_available === 'Yes',
-          });
-        } catch (e) {
-          if (!(
-            e instanceof FintavaShapeError || e instanceof FintavaAmountError
-          )) {
-            throw e;
-          }
-          // The row's place and code only: its values are Fintava's, and the
-          // amount error would repeat one.
+        // The row's place and code only: its values are Fintava's, and the
+        // amount error would repeat one.
+        const skip = (why: string) => {
           const code =
             isObj(row) && typeof row.code === 'string' ? row.code : '';
           this.logger.warn(
@@ -1768,8 +1754,35 @@ export class FintavaClient {
               (code
                 ? ` "${maskFintavaText(code, [this.#apiKey]).slice(0, 80)}"`
                 : '') +
-              ' (not readable)',
+              ` (${why})`,
           );
+        };
+        try {
+          const o = obj(row, 'disco');
+          const disco: FintavaDisco = {
+            code: str(o, 'code'),
+            description: strOrNull(o, 'description') ?? str(o, 'code'),
+            minimumKobo: fintavaAmountToKobo(o.minimum_value),
+            maximumKobo: fintavaAmountToKobo(o.maximum_value),
+            available: o.is_available === 'Yes',
+          };
+          // A company no amount fits (a negative limit, or a minimum above
+          // its maximum) is not listed: S3 would offer a row nobody can pay
+          // (BILLS-01 round 3, R2-4).
+          // (A negative maximum is one of the two: below a minimum of nothing
+          // or above, or itself below a negative minimum.)
+          if (disco.minimumKobo < 0 || disco.minimumKobo > disco.maximumKobo) {
+            skip('limits do not fit');
+            return;
+          }
+          discos.push(disco);
+        } catch (e) {
+          if (!(
+            e instanceof FintavaShapeError || e instanceof FintavaAmountError
+          )) {
+            throw e;
+          }
+          skip('not readable');
         }
       });
       if (data.length > 0 && discos.length === 0) {
