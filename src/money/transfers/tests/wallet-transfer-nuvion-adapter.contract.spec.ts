@@ -140,31 +140,34 @@ describe('Send to a WAWU user (WALLET-07) on the real Nuvion adapter and the boo
     return { id, auth, account };
   }
 
-  async function send(
-    p: Person,
-    to: Person,
-    amountKobo: number,
-    key: string = randomUUID(),
-  ) {
+  /** A fee quote and the request body that pays it: one body per intent. */
+  async function prepare(p: Person, to: Person, amountKobo: number) {
     const quote = await request(app.getHttpServer())
       .get(`${BASE}/fees/quote?kind=wawu_transfer&amountKobo=${amountKobo}`)
       .set('Authorization', p.auth);
     expect(quote.status).toBe(200);
     const q = body<FeeQuoteView>(quote).data!;
+    return {
+      recipientWawuUserId: to.id,
+      amountKobo,
+      expectedTotalKobo: q.totalKobo,
+      quoteToken: q.quoteToken,
+    };
+  }
+
+  async function post(p: Person, payload: object, key: string = randomUUID()) {
     const res = await request(app.getHttpServer())
       .post(`${BASE}/transfers/wawu`)
       .set('Authorization', p.auth)
       .set('Idempotency-Key', key)
       .set('X-Transaction-Pin', PIN)
-      .send({
-        recipientWawuUserId: to.id,
-        amountKobo,
-        expectedTotalKobo: q.totalKobo,
-        quoteToken: q.quoteToken,
-      });
+      .send(payload);
     seenTexts.push(res.text);
     return res;
   }
+
+  const send = async (p: Person, to: Person, amountKobo: number) =>
+    post(p, await prepare(p, to, amountKobo));
 
   const states = async (reference: string) =>
     (
@@ -359,8 +362,10 @@ describe('Send to a WAWU user (WALLET-07) on the real Nuvion adapter and the boo
     const me = await person(2_000_000);
     const to = await person(0);
     const key = randomUUID();
+    // The app sends the same body on every retry of one intent.
+    const payload = await prepare(me, to, 200_000);
     const answers = await Promise.all(
-      Array.from({ length: 6 }, () => send(me, to, 200_000, key)),
+      Array.from({ length: 6 }, () => post(me, payload, key)),
     );
     for (const r of answers) {
       expect([201, 409]).toContain(r.status);
