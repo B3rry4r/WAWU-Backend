@@ -209,7 +209,12 @@ describe('BILLS-01 electricity catalogue and meter check over HTTP', () => {
         plan: 'prepaid',
         minimumKobo: 50_000,
         maximumKobo: 50_000_000,
-        presetsKobo: [200_000, 500_000, 1_000_000, 2_000_000],
+        presets: [
+          { amountKobo: 200_000 },
+          { amountKobo: 500_000 },
+          { amountKobo: 1_000_000 },
+          { amountKobo: 2_000_000 },
+        ],
       });
       const eko = view
         .data!.billers.filter((b) => b.name === 'Eko Electricity')
