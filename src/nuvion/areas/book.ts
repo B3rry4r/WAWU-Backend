@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import type {
   ProviderHolder,
   ProviderLookup,
@@ -261,6 +262,7 @@ function failureKind(
  *   record, never computed here.
  */
 export class NuvionBookArea implements NuvionBookMethods {
+  private readonly logger = new Logger('NuvionBookTransfers');
   private operational: {
     accountId: string;
     nuvionBan: string;
@@ -498,8 +500,45 @@ export class NuvionBookArea implements NuvionBookMethods {
     const narration =
       (input.narration ?? '').trim() || NUVION_DEFAULT_NARRATION;
     this.checkSend(op, input, reference);
-    const store = this.need(op);
+    this.need(op);
 
+    // Naming the accounts and writing the send down: WAWU's own records,
+    // before anything is sent. A failure here (the database, not Nuvion)
+    // sent nothing, so it is a clean refusal, never an unknown outcome.
+    let row: BookTransferRow;
+    try {
+      const staged = await this.stage(input, reference, narration, op);
+      if (staged.answered) return await this.answerFromRecord(staged.row, op);
+      row = staged.row;
+    } catch (e) {
+      if (e instanceof WalletProviderError) throw e;
+      this.logger.error(
+        `book transfer ${reference}: WAWU's record of book transfers could not be read or written (${e instanceof Error ? e.name : 'error'}); nothing was sent`,
+      );
+      throw this.error(
+        'unavailable',
+        op.name,
+        [
+          `${AREA}: the record of book transfers could not be read or written; nothing was sent`,
+        ],
+        reference,
+      );
+    }
+    return this.send(row, op);
+  }
+
+  /**
+   * Names both accounts and writes the send down (or finds it already
+   * written). `answered`: its answer was read before, so Nuvion is asked
+   * about it and not told again.
+   */
+  private async stage(
+    input: ProviderWalletTransferInput,
+    reference: string,
+    narration: string,
+    op: NuvionOp,
+  ): Promise<{ row: BookTransferRow; answered: boolean }> {
+    const store = this.need(op);
     const from = await this.resolve(input.fromAccountNumber, op);
     const to = await this.resolve(input.toAccountNumber, op);
     if (!from || !to) {
@@ -552,10 +591,8 @@ export class NuvionBookArea implements NuvionBookMethods {
         );
       }
       if (row.status === 'refused') row = await store.reopen(reference, now);
-      // Its answer was read before: Nuvion is asked about it, not told again.
-      if (row.nuvionId) return this.answerFromRecord(row, op);
     }
-    return this.send(row, op);
+    return { row, answered: !begun.created && row.nuvionId !== null };
   }
 
   /** Sends the transfer (or finds the original of a repeated reference) and answers. */
@@ -675,18 +712,29 @@ export class NuvionBookArea implements NuvionBookMethods {
     answered: boolean,
   ): Promise<BookTransferRow> {
     if (!isBookNuvionStatus(t.status)) return row;
-    const updated = await this.need().recordRead(
-      row.reference,
-      {
-        nuvionId: t.id,
-        status: t.status,
-        statusReason: t.statusReason,
-        feeKobo: t.feeStated ? BigInt(t.feeKobo) : null,
-      },
-      this.now(),
-      { answered },
-    );
-    return updated ?? row;
+    try {
+      const updated = await this.need().recordRead(
+        row.reference,
+        {
+          nuvionId: t.id,
+          status: t.status,
+          statusReason: t.statusReason,
+          feeKobo: t.feeStated ? BigInt(t.feeKobo) : null,
+        },
+        this.now(),
+        { answered },
+      );
+      return updated ?? row;
+    } catch (e) {
+      if (e instanceof WalletProviderError) throw e;
+      // Nuvion's answer is read; only WAWU's note of it failed. The answer
+      // is not lost for that: the row stays as it was and the transfer is
+      // found again by its reference.
+      this.logger.error(
+        `book transfer ${row.reference}: Nuvion's record could not be written to the log (${e instanceof Error ? e.name : 'error'}); the log is behind and the transfer is found again by its reference`,
+      );
+      return row;
+    }
   }
 
   /** Reads the transfer again while Nuvion has not finished it, within the wait. */

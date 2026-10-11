@@ -1146,6 +1146,82 @@ describe('NUV-05: book transfers and the operational account', () => {
   // The rules of the whole spec
   // -------------------------------------------------------------------------
 
+  describe("WAWU's own record failing", () => {
+    /** The real store, with some methods failing as a lost database connection does. */
+    function flaky(failing: Set<string>): PrismaNuvionBookStore {
+      return new Proxy(store, {
+        get: (target, key: string) => {
+          const fn = (target as unknown as Record<string, unknown>)[key];
+          if (typeof fn !== 'function') return fn;
+          return (...args: unknown[]) =>
+            failing.has(key)
+              ? Promise.reject(new Error('the database is gone'))
+              : (fn as (...a: unknown[]) => unknown).apply(target, args);
+        },
+      });
+    }
+    function areaOver(s: PrismaNuvionBookStore) {
+      const client = new NuvionClient(
+        standin.settings({ operationalAccountId: book.operational.id }),
+        KEY,
+      );
+      return new NuvionBookArea(client, client.settings, s, {
+        settleStepsMs: [],
+      });
+    }
+
+    it.each(['findPersonAccount', 'begin'])(
+      'when %s fails before the send, nothing is sent and the refusal is clean (not an unknown outcome)',
+      async (method) => {
+        const p = await person(1_000_000);
+        const e = await failure(
+          sendFrom(
+            p,
+            operationalBan(),
+            100_000,
+            ref(`db-${method}`),
+            areaOver(flaky(new Set([method]))),
+          ),
+        );
+        expect(e.kind).toBe('unavailable');
+        expect(e.recordMayExist).toBe(false);
+        expect(book.createRequests).toHaveLength(0);
+        expect(book.availableOf(p.account.id)).toBe(1_000_000);
+      },
+    );
+
+    it("when only the note of Nuvion's answer fails, the receipt is still answered and the transfer is found again later", async () => {
+      const p = await person(1_000_000);
+      const reference = ref('db-after');
+      const a = areaOver(flaky(new Set(['recordRead'])));
+      const receipt = await sendFrom(
+        p,
+        operationalBan(),
+        100_000,
+        reference,
+        a,
+      );
+      expect(receipt.amountKobo).toBe(100_000n);
+      expect(book.byReference(reference)).toHaveLength(1);
+      // The log is behind: no id, still `sending`.
+      const behind = await prisma.nuvionBookTransfer.findUniqueOrThrow({
+        where: { reference },
+      });
+      expect(behind).toMatchObject({ nuvionId: null, status: 'sending' });
+      // The database is back: the transfer is found by its reference, and
+      // sent again it is Nuvion's original.
+      const found = await area.reconcileSend(
+        reference,
+        { kind: 'customer', customerId: p.account.entity_id },
+        behind.sentAt,
+      );
+      expect(found).toMatchObject({ state: 'found', source: 'history' });
+      const again = await sendFrom(p, operationalBan(), 100_000, reference);
+      expect(again.transactionId).toBe(receipt.transactionId);
+      expect(book.byReference(reference)).toHaveLength(1);
+    });
+  });
+
   describe('the adapter without its record', () => {
     it('sends nothing: not_configured', async () => {
       const client = new NuvionClient(standin.settings(), KEY);
