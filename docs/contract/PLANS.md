@@ -171,7 +171,11 @@ first publishes sent together both succeed.
 3), `reason.code`:
 
 - `tier_required`: no running tier and no tick that has not ended.
-  `tierState` is `none` or `ended`.
+  `tierState` is `none` or `ended`. A person who still has products up (the
+  tick or the tier ended) and for whom no tier would leave a place is not told
+  to pick one: "You have 12 products up and no plan has room for another.
+  Remove some to publish." (with "Your tier has ended." in front when it
+  has), and `tiers` is empty (round 4, D7).
 - `product_limit_reached`: every product they may have is published. The
   `message` names only the ways on that the answer carries: both ("Add more
   products or move up a tier") while a higher tier and extra products are
@@ -188,12 +192,15 @@ first publishes sent together both succeed.
 only when the Hub could not read the plan at that moment; the app then shows
 `message` alone). The
 offers are the figures `GET /plans` answers, in the person's billing currency
-only: for `tier_required` every tier; for `product_limit_reached` only what
-would let another product go up: the tiers that leave more places than the
-person has products published (so, at the limit, the tiers above the one they
-hold, extras bought carried over, and none when they hold the top one or only
-a tick; above their allowance, only the tiers big enough for everything they
-have, often none), and `extraProducts` (`count`, `priceMinor`) while they hold
+only, and only what would let another product go up: the tiers that, once
+bought, leave more places than the person has products published (extras
+bought carried over). For `tier_required` that is every tier for someone with
+nothing published, and only the tiers big enough for everything they have for
+someone who still has products up, often none (round 4, D7; round 3 offered
+every tier). For `product_limit_reached`, at the limit, it is the tiers above
+the one they hold, and none when they hold the top one or only a tick; above
+their allowance, only the tiers big enough for everything they have, often
+none. `extraProducts` (`count`, `priceMinor`) while they hold
 a running tier and the pack lifts it above what is published, else `null`. The routes' interceptor
 (`PublishingOffersInterceptor`) adds them, because only the route knows whose
 token, and so whose currency, asked.

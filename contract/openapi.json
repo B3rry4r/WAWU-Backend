@@ -29482,7 +29482,7 @@
           },
           "tiers": {
             "type": "array",
-            "description": "`tier_required`: every tier. `product_limit_reached`: the tiers that\nwould let the person publish another, that is, allow more products than\nthey have published now (none when no tier does, including when they have\nmore published than any tier allows).",
+            "description": "The tiers that would let the person publish another, in both refusals:\nonce bought they leave more places than the person has products\npublished now (the extras they hold carry over). For `tier_required`\nthat is every tier for someone with nothing published, and only the big\nenough ones for someone who still has products up after a tick or tier\nended. For `product_limit_reached` it is the tiers above the one they\nhold. The list is empty when no tier does (they hold the top one, or they\nhave more published than any tier allows); `message` then says products\nmust come down first.",
             "items": {
               "$ref": "#/components/schemas/PlanTierView"
             }

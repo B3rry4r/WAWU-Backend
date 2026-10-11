@@ -43,10 +43,15 @@ export class TierGateReasonDto {
   currency?: 'NGN' | 'USD';
 
   /**
-   * `tier_required`: every tier. `product_limit_reached`: the tiers that
-   * would let the person publish another, that is, allow more products than
-   * they have published now (none when no tier does, including when they have
-   * more published than any tier allows).
+   * The tiers that would let the person publish another, in both refusals:
+   * once bought they leave more places than the person has products
+   * published now (the extras they hold carry over). For `tier_required`
+   * that is every tier for someone with nothing published, and only the big
+   * enough ones for someone who still has products up after a tick or tier
+   * ended. For `product_limit_reached` it is the tiers above the one they
+   * hold. The list is empty when no tier does (they hold the top one, or they
+   * have more published than any tier allows); `message` then says products
+   * must come down first.
    */
   @ApiPropertyOptional({
     type: 'array',

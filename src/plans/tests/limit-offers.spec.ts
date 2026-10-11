@@ -1,5 +1,5 @@
 const TICK_UPLOADS = 25;
-import { limitOffers } from '../limit-offers';
+import { limitOffers, tierRequiredOffers } from '../limit-offers';
 import type { PlanTierView } from '../plans-view.type';
 
 /**
@@ -134,5 +134,69 @@ describe('limitOffers', () => {
       plan,
     );
     expect(o.extraProducts).toBeNull();
+  });
+});
+
+/**
+ * The offers a `tier_required` refusal carries (TIER-02 round 4, D7): the same
+ * rule as the limit, one step earlier. A person with no running tier and no
+ * tick may still have products up; a tier is offered only if buying it leaves
+ * more places than that, and the pack never (it needs a running tier).
+ */
+describe('tierRequiredOffers', () => {
+  const none = (used: number) => ({ productsUsed: used, extraProducts: 0 });
+
+  it("nothing up: every tier, in the plan's order, and no pack", () => {
+    const o = tierRequiredOffers(none(0), plan);
+    expect(ids(o)).toEqual(['verify', 'plus', 'founding']);
+    expect(o.extraProducts).toBeNull();
+  });
+
+  it('a tier is offered only if it leaves more places than products up', () => {
+    expect(ids(tierRequiredOffers(none(2), plan))).toEqual([
+      'verify',
+      'plus',
+      'founding',
+    ]);
+    // 3 up: Verify (3) leaves no place for another.
+    expect(ids(tierRequiredOffers(none(3), plan))).toEqual([
+      'plus',
+      'founding',
+    ]);
+    expect(ids(tierRequiredOffers(none(5), plan))).toEqual([
+      'plus',
+      'founding',
+    ]);
+    expect(ids(tierRequiredOffers(none(6), plan))).toEqual(['founding']);
+    expect(ids(tierRequiredOffers(none(9), plan))).toEqual(['founding']);
+  });
+
+  it('10 up and more: no tier is offered and the pack is not either', () => {
+    for (const used of [10, 12, 25])
+      expect(tierRequiredOffers(none(used), plan)).toEqual({
+        tiers: [],
+        extraProducts: null,
+      });
+  });
+
+  it('extras that would carry over count toward a tier, like the limit offers', () => {
+    // Plus (6) + 5 = 11 leaves a place over 9 up; Verify (3) + 5 = 8 does not.
+    const o = tierRequiredOffers({ productsUsed: 9, extraProducts: 5 }, plan);
+    expect(ids(o)).toEqual(['plus', 'founding']);
+  });
+
+  it('judges a tier exactly as the limit offers do', () => {
+    for (let used = 0; used <= 12; used += 1) {
+      const required = tierRequiredOffers(none(used), plan);
+      const limit = limitOffers(
+        held({
+          productsUsed: used,
+          runningTierId: null,
+          runningTierProducts: 0,
+        }),
+        plan,
+      );
+      expect(ids(required)).toEqual(ids(limit));
+    }
   });
 });

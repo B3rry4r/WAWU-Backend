@@ -4,6 +4,8 @@ import {
 } from '../../common/creator-allowance';
 import { FREE_STORAGE_BYTES } from '../../common/creator-allowance';
 import { TierGateError } from '../tier-gate-error';
+import { limitOffers, tierRequiredOffers } from '../limit-offers';
+import type { PlanTierView } from '../plans-view.type';
 import {
   publishingOver,
   publishingTables,
@@ -258,6 +260,120 @@ describe('PublishingGate (TIER-02)', () => {
       currency: 'NGN',
       tiers: [],
       extraProducts: null,
+    });
+  });
+});
+
+/**
+ * The extras a person has bought reach the offers through the REAL allowance
+ * service (TIER-02 round 4, T10). `limit-offers.spec.ts` feeds the offers
+ * hand-made allowances, and the HTTP spec seeds a row, so neither would notice
+ * an allowance that always reported 0 extras: the offers would quietly drop
+ * the tiers and the pack that only count with them (SHARED-CHANGES TIER-02,
+ * question 5: extras carry over a move up).
+ */
+describe('the extras bought, from the allowance to the offers (round 4, T10)', () => {
+  const tier = (id: string, products: number) =>
+    ({ id, products }) as unknown as PlanTierView;
+  const plan = {
+    tiers: [tier('verify', 3), tier('plus', 6), tier('founding', 10)],
+    extraProducts: { count: 5, priceMinor: 150_000 },
+  };
+  const ids = (o: { tiers: PlanTierView[] }) => o.tiers.map((t) => t.id);
+
+  it('the allowance reports the extras of a running tier, and none otherwise', async () => {
+    const verifyPlus5 = gateOf({
+      tier: {
+        tierId: 'verify',
+        endsInDays: 20,
+        productsIncluded: 3,
+        extraProducts: 5,
+      },
+    });
+    await expect(verifyPlus5.allowance.of('p1')).resolves.toMatchObject({
+      extraProducts: 5,
+      runningTierProducts: 3,
+      productsAllowed: 8,
+    });
+    // Ending still runs, so its extras still count.
+    const ending = gateOf({
+      tier: {
+        tierId: 'verify',
+        endsInDays: 2,
+        productsIncluded: 3,
+        extraProducts: 5,
+      },
+    });
+    await expect(ending.allowance.of('p1')).resolves.toMatchObject({
+      extraProducts: 5,
+    });
+    for (const world of [
+      {},
+      { tick: true as const },
+      {
+        tier: { endsInDays: -1, productsIncluded: 3, extraProducts: 5 },
+      },
+    ])
+      await expect(gateOf(world).allowance.of('p1')).resolves.toMatchObject({
+        extraProducts: 0,
+      });
+  });
+
+  it('Verify with 5 extras at 8 of 8 is offered Plus, Founding and the pack', async () => {
+    const { allowance } = gateOf({
+      tier: {
+        tierId: 'verify',
+        endsInDays: 20,
+        productsIncluded: 3,
+        extraProducts: 5,
+      },
+      slotsUsed: 8,
+    });
+    const offers = limitOffers(await allowance.of('p1'), plan);
+    // Plus (6 + 5 = 11) and Founding (10 + 5) leave places over 8; without
+    // the extras carried over Plus (6) would not, and the pack (3 + 5 = 8)
+    // would not either.
+    expect(ids(offers)).toEqual(['plus', 'founding']);
+    expect(offers.extraProducts).toEqual(plan.extraProducts);
+  });
+
+  it('Plus with no extras at 6 of 6: only Founding and the pack', async () => {
+    const { allowance } = gateOf({
+      tier: { tierId: 'plus', endsInDays: 20, productsIncluded: 6 },
+      slotsUsed: 6,
+    });
+    const offers = limitOffers(await allowance.of('p1'), plan);
+    expect(ids(offers)).toEqual(['founding']);
+    expect(offers.extraProducts).toEqual(plan.extraProducts);
+  });
+
+  describe('tier_required (round 4, D7)', () => {
+    // The verifier's cases: a tick that ended with real pieces up, no tier.
+    const offersFor = async (used: number) => {
+      const { allowance } = gateOf({ tick: 'lapsed', slotsUsed: used });
+      return tierRequiredOffers(await allowance.of('p1'), plan);
+    };
+
+    it('nothing up: every tier, never the pack', async () => {
+      const offers = await offersFor(0);
+      expect(ids(offers)).toEqual(['verify', 'plus', 'founding']);
+      expect(offers.extraProducts).toBeNull();
+    });
+
+    it('9 up: only Founding would leave a place', async () => {
+      expect(ids(await offersFor(9))).toEqual(['founding']);
+    });
+
+    it('3 up: Verify (3) would leave none, Plus and Founding would', async () => {
+      expect(ids(await offersFor(3))).toEqual(['plus', 'founding']);
+    });
+
+    it('10 up, 12 up and 25 up: no tier would, so none is offered', async () => {
+      for (const used of [10, 12, 25])
+        expect(await offersFor(used)).toEqual({
+          tiers: [],
+          extraProducts: null,
+        });
     });
   });
 });

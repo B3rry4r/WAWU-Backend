@@ -104,6 +104,52 @@ describe('productLimitMessage', () => {
   });
 });
 
+describe('tierRequiredMessage', () => {
+  it('asks for a tier while a tier would let the person publish', () => {
+    // Nothing up, or tiers big enough for what is up: the plain sentence.
+    for (const used of [0, 4, 9]) {
+      expect(tierRequiredMessage('none', used, offers(higher, null))).toBe(
+        'Publishing and uploading files need a tier. Pick one to carry on. Drafts stay free.',
+      );
+      expect(tierRequiredMessage('ended', used, offers(higher, null))).toBe(
+        'Your tier has ended. Renew it to publish or upload files. Everything you published stays up.',
+      );
+    }
+    // Before the offers are known (the bare refusal) it is the same.
+    expect(tierRequiredMessage('none', 12)).toBe(tierRequiredMessage('none'));
+    expect(tierRequiredMessage('ended', 12)).toBe(tierRequiredMessage('ended'));
+  });
+
+  it('with products up and no tier that would leave a place, says so with the number and that some must come down (round 4, D7)', () => {
+    expect(tierRequiredMessage('none', 12, offers([], null))).toBe(
+      'You have 12 products up and no plan has room for another. Remove some to publish.',
+    );
+    expect(tierRequiredMessage('none', 25, offers([], null))).toBe(
+      'You have 25 products up and no plan has room for another. Remove some to publish.',
+    );
+    expect(tierRequiredMessage('none', 1, offers([], null))).toBe(
+      'You have 1 product up and no plan has room for another. Remove some to publish.',
+    );
+    expect(tierRequiredMessage('ended', 12, offers([], null))).toBe(
+      'Your tier has ended. You have 12 products up and no plan has room for another. Remove some to publish.',
+    );
+  });
+
+  it('nothing up and no tier on offer is not told to remove anything', () => {
+    // No tiers configured at all; there is nothing to remove.
+    expect(tierRequiredMessage('none', 0, offers([], null))).toBe(
+      tierRequiredMessage('none'),
+    );
+  });
+
+  it('never carries an em-dash or an en-dash', () => {
+    for (const state of ['none', 'ended'] as const)
+      for (const used of [0, 1, 12, 25])
+        for (const o of [undefined, offers([], null), offers(higher, null)])
+          expect(tierRequiredMessage(state, used, o)).not.toMatch(/[—–]/);
+  });
+});
+
 describe('TierGateError.withOffers', () => {
   const facts = {
     tierState: 'active' as const,
@@ -128,7 +174,7 @@ describe('TierGateError.withOffers', () => {
     ).toBe(messageOf(full));
   });
 
-  it('leaves the tier_required sentence as it was', () => {
+  it('leaves the tier_required sentence as it was while a tier is on offer', () => {
     const bare = new TierGateError(
       'tier_required',
       tierRequiredMessage('none'),
@@ -136,6 +182,32 @@ describe('TierGateError.withOffers', () => {
     );
     expect(messageOf(bare.withOffers(offers(higher, extras)))).toBe(
       tierRequiredMessage('none'),
+    );
+  });
+
+  it('writes the tier_required sentence again when no tier is on offer (round 4, D7)', () => {
+    const bare = new TierGateError(
+      'tier_required',
+      tierRequiredMessage('none'),
+      { tierState: 'none', productsUsed: 12, productsAllowed: 0 },
+    );
+    expect(messageOf(bare)).toContain('Pick one to carry on');
+    const full = bare.withOffers(offers([], null));
+    expect(messageOf(full)).toBe(
+      'You have 12 products up and no plan has room for another. Remove some to publish.',
+    );
+    expect(
+      (full.getResponse() as { reason: { message: string } }).reason.message,
+    ).toBe(messageOf(full));
+    expect(full.getStatus()).toBe(402);
+    // An ended tier keeps its opening line.
+    const ended = new TierGateError(
+      'tier_required',
+      tierRequiredMessage('ended'),
+      { tierState: 'ended', productsUsed: 12, productsAllowed: 0 },
+    ).withOffers(offers([], null));
+    expect(messageOf(ended)).toBe(
+      'Your tier has ended. You have 12 products up and no plan has room for another. Remove some to publish.',
     );
   });
 });

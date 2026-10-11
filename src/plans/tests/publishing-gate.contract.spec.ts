@@ -1271,6 +1271,143 @@ describe('Publishing needs a tier (TIER-02) over HTTP', () => {
     });
   });
 
+  describe('tier_required offers only tiers that would let the person publish (round 4, D7)', () => {
+    /** A person whose tick ended with `used` products still up and who holds no tier. */
+    async function afterTick(used: number): Promise<string> {
+      const id = await creator();
+      await giveTick(id, -1);
+      if (used > 0)
+        await prisma.creatorState.create({
+          data: { wawuUserId: id, slotsUsed: used },
+        });
+      return id;
+    }
+    /** The biggest tier's products (read once the config is loaded). */
+    const topOf = () => Math.max(...config.tiers.map((t) => t.products));
+
+    it('lists only the tiers that leave a place over what is up, and every one it lists lets the next publish through', async () => {
+      const top = topOf();
+      // 0 up, the size of each tier, and one more than the biggest tier: the
+      // verifier's 9-up and 25-up cases are the middle and the end of this.
+      const cases = [0, ...config.tiers.map((t) => t.products), top + 2];
+      for (const used of [...new Set(cases)]) {
+        const id = await afterTick(used);
+        const res = await publish(id).expect(402);
+        const offered = config.tiers
+          .filter((t) => t.products > used)
+          .map((t) => t.id);
+        expect(body(res).reason.code).toBe('tier_required');
+        expect(tiersOf(res).map((t) => t.id)).toEqual(offered);
+        expect(body(res).reason.extraProducts).toBeNull();
+        expect(body(res).reason.productsUsed).toBe(used);
+        expect(body(res).reason.message).toBe(body(res).message);
+        expect(body(res).message).not.toMatch(/[—–]/);
+        if (offered.length === 0)
+          expect(body(res).message).toBe(
+            `You have ${used} ${used === 1 ? 'product' : 'products'} up and no plan has room for another. Remove some to publish.`,
+          );
+        else expect(body(res).message).toMatch(/need a tier/);
+        // The same answer from the file entrances.
+        const presigned = await presign(id, 'content/full').expect(402);
+        expect(tiersOf(presigned).map((t) => t.id)).toEqual(offered);
+        expect(body(presigned).message).toBe(body(res).message);
+
+        // Buy each tier in turn: the next publish goes through exactly when
+        // the tier was on offer, so nothing offered is refused again and
+        // nothing left out would have worked.
+        for (let i = 0; i < config.tiers.length; i += 1) {
+          await prisma.makerTier.deleteMany({ where: { wawuUserId: id } });
+          await giveTier(id, i);
+          const next = await publish(id);
+          expect([config.tiers[i].id, next.status]).toEqual([
+            config.tiers[i].id,
+            offered.includes(config.tiers[i].id) ? 201 : 402,
+          ]);
+          // Put the counter back for the next tier (a 201 took a place).
+          await prisma.creatorState.upsert({
+            where: { wawuUserId: id },
+            create: { wawuUserId: id, slotsUsed: used },
+            update: { slotsUsed: used },
+          });
+        }
+      }
+    });
+
+    it("a person with nothing up is still offered every tier, in the plan's order", async () => {
+      const id = await creator();
+      const res = await publish(id).expect(402);
+      expect(tiersOf(res).map((t) => t.id)).toEqual(
+        config.tiers.map((t) => t.id),
+      );
+    });
+
+    it('an ended tier with products up is told so, and told to remove some when no tier fits', async () => {
+      const top = topOf();
+      const id = await creator();
+      await giveTier(id, 0, { endsInDays: -1 });
+      await prisma.creatorState.create({
+        data: { wawuUserId: id, slotsUsed: top + 2 },
+      });
+      const res = await publish(id).expect(402);
+      expect(body(res).reason).toMatchObject({
+        code: 'tier_required',
+        tierState: 'ended',
+        tiers: [],
+        extraProducts: null,
+      });
+      expect(body(res).message).toBe(
+        `Your tier has ended. You have ${top + 2} products up and no plan has room for another. Remove some to publish.`,
+      );
+    });
+
+    it('"remove some" is true: removing enough pieces brings a tier back on offer', async () => {
+      const top = topOf();
+      const id = await creator();
+      await giveTick(id, -1);
+      const pieces = [];
+      for (let n = 0; n < top + 2; n += 1)
+        pieces.push(await seedPiece(id, 'live'));
+      const before = await publish(id).expect(402);
+      expect(tiersOf(before)).toEqual([]);
+      // Down to one below the biggest tier: it is on offer again.
+      for (let n = 0; n < 3; n += 1)
+        await del(id, `/content/${pieces[n].id}`).expect(204);
+      const after = await publish(id).expect(402);
+      expect(tiersOf(after).map((t) => t.id)).toEqual(
+        config.tiers.filter((t) => t.products > top - 1).map((t) => t.id),
+      );
+    });
+  });
+
+  describe('the extras bought reach the offers over HTTP (round 4, T10)', () => {
+    it('Verify with the pack bought, all its places used: the tiers that count with the extras, and the pack, are offered', async () => {
+      const id = await creator();
+      const extra = config.extraProducts.count;
+      await giveTier(id, 0, { extra });
+      const used = config.tiers[0].products + extra;
+      await prisma.creatorState.create({
+        data: { wawuUserId: id, slotsUsed: used },
+      });
+      const res = await publish(id).expect(402);
+      // A tier counts with the extras carried over: its products plus the
+      // extras must beat what is up. Without the extras only the biggest tier
+      // would be left, so this fails if the allowance drops them.
+      const expected = config.tiers
+        .filter((t) => t.products + extra > used)
+        .map((t) => t.id);
+      expect(expected.length).toBeGreaterThan(
+        config.tiers.filter((t) => t.products > used).length,
+      );
+      expect(tiersOf(res).map((t) => t.id)).toEqual(expected);
+      expect(body(res).reason.extraProducts).not.toBeNull();
+      expect(body(res).reason).toMatchObject({
+        code: 'product_limit_reached',
+        productsUsed: used,
+        productsAllowed: used,
+      });
+    });
+  });
+
   // ── 9. Round 2: the cases the verifier's mutants found untested ───────────
 
   describe('what the verifier found untested (round 2, T1 to T5)', () => {

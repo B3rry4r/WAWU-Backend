@@ -35,10 +35,14 @@ export interface TierGateFacts {
 export interface TierGateOffers {
   currency: PlanCurrency;
   /**
-   * `tier_required`: every tier. `product_limit_reached`: the tiers that
-   * would let the person publish another, that is, allow more products than
-   * they have published now (none when no tier does: they hold the top one,
-   * or they have more published than any tier allows).
+   * The tiers that would let the person publish another, that is, once
+   * bought leave more places than they have products published now (the
+   * extras they hold carry over). For `tier_required` that is every tier for
+   * someone with nothing published, and only the big enough ones for someone
+   * who still has products up (a tick or tier ended). For
+   * `product_limit_reached` it is the tiers above the one they hold. None
+   * when no tier does: they hold the top one, or they have more published
+   * than any tier allows.
    */
   tiers: PlanTierView[];
   /**
@@ -83,9 +87,9 @@ export class TierGateError extends HttpException {
   }
 
   /**
-   * The same refusal with its offers filled in. The sentence for
-   * `product_limit_reached` is written again from the offers, so it never
-   * promises a way on the body does not carry.
+   * The same refusal with its offers filled in. The sentence is written again
+   * from the offers (both refusals), so it never promises a way on the body
+   * does not carry.
    */
   withOffers(offers: TierGateOffers): TierGateError {
     return new TierGateError(
@@ -96,15 +100,34 @@ export class TierGateError extends HttpException {
             this.facts.productsAllowed,
             offers,
           )
-        : (this.getResponse() as { message: string }).message,
+        : tierRequiredMessage(
+            this.facts.tierState,
+            this.facts.productsUsed,
+            offers,
+          ),
       this.facts,
       offers,
     );
   }
 }
 
-/** The sentence for `tier_required`. No em-dash; a person reads it. */
-export function tierRequiredMessage(tierState: MyTierState): string {
+/**
+ * The sentence for `tier_required`. No em-dash; a person reads it.
+ *
+ * With the offers known, a person who still has products published and for
+ * whom no tier would leave a place (TIER-02 round 4, D7) is not told to pick
+ * a tier: they are told how many products they have and that some must come
+ * down first. Everyone else keeps the sentence that asks for a tier.
+ */
+export function tierRequiredMessage(
+  tierState: MyTierState,
+  used = 0,
+  offers?: Pick<TierGateOffers, 'tiers'>,
+): string {
+  if (offers && offers.tiers.length === 0 && used > 0) {
+    const have = `${used} ${used === 1 ? 'product' : 'products'}`;
+    return `${tierState === 'ended' ? 'Your tier has ended. ' : ''}You have ${have} up and no plan has room for another. Remove some to publish.`;
+  }
   return tierState === 'ended'
     ? 'Your tier has ended. Renew it to publish or upload files. Everything you published stays up.'
     : 'Publishing and uploading files need a tier. Pick one to carry on. Drafts stay free.';

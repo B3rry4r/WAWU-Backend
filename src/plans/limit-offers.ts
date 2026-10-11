@@ -26,6 +26,9 @@ import type { TierGateOffers } from './tier-gate-error';
  *
  * When nothing counts both come back empty and the sentence says products
  * must come down first.
+ *
+ * `tier_required` follows the same rule (TIER-02 round 4, D7): see
+ * `tierRequiredOffers`.
  */
 export function limitOffers(
   allowance: Pick<
@@ -35,9 +38,7 @@ export function limitOffers(
   plan: Pick<PlansView, 'tiers' | 'extraProducts'>,
 ): Pick<TierGateOffers, 'tiers' | 'extraProducts'> {
   const used = allowance.productsUsed;
-  const tiers = plan.tiers.filter(
-    (t) => t.products + allowance.extraProducts > used,
-  );
+  const tiers = tiersWithRoom(allowance, plan);
   const hasTier = allowance.runningTierId !== null;
   const withPack =
     allowance.runningTierProducts +
@@ -47,4 +48,37 @@ export function limitOffers(
     tiers,
     extraProducts: hasTier && withPack > used ? plan.extraProducts : null,
   };
+}
+
+/**
+ * The tiers that, once bought, leave more places than the person has products
+ * published. The extras they hold carry over a purchase (they are 0 for a
+ * person with no running tier, whose old extras are not counted).
+ */
+function tiersWithRoom(
+  allowance: Pick<PublishingAllowance, 'productsUsed' | 'extraProducts'>,
+  plan: Pick<PlansView, 'tiers'>,
+): PlansView['tiers'] {
+  return plan.tiers.filter(
+    (t) => t.products + allowance.extraProducts > allowance.productsUsed,
+  );
+}
+
+/**
+ * The offers a `tier_required` refusal carries (TIER-02 round 4, D7): the same
+ * rule as the limit, applied one step earlier. A person with no running tier
+ * and no tick may still have products published (the tick ended, or the tier
+ * did); a tier is offered only if buying it leaves more places than they have
+ * products up, so no tier is offered that the next publish would refuse. For
+ * someone with nothing published that is every tier. When none counts the
+ * list is empty and the sentence says products must come down first.
+ *
+ * The extra-products pack is never offered here: it is bought on a running
+ * tier, and this person has none.
+ */
+export function tierRequiredOffers(
+  allowance: Pick<PublishingAllowance, 'productsUsed' | 'extraProducts'>,
+  plan: Pick<PlansView, 'tiers'>,
+): Pick<TierGateOffers, 'tiers' | 'extraProducts'> {
+  return { tiers: tiersWithRoom(allowance, plan), extraProducts: null };
 }

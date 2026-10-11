@@ -11,7 +11,7 @@ import type { Request } from 'express';
 import { Observable, catchError, from, mergeMap, throwError } from 'rxjs';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { TierGateErrorEnvelope } from './dto/tier-gate-error.dto';
-import { limitOffers } from './limit-offers';
+import { limitOffers, tierRequiredOffers } from './limit-offers';
 import { PlansService } from './plans.service';
 import { PublishingAllowanceService } from './publishing-allowance.service';
 import { TierGateError, type TierGateOffers } from './tier-gate-error';
@@ -67,12 +67,14 @@ export class PublishingOffersInterceptor implements NestInterceptor {
         }),
         this.allowance.of(user.sub),
       ]);
-      // `tier_required`: every tier, and no extras (they need a tier first).
-      // `product_limit_reached`: only what would let another product go up
-      // (limitOffers), which is nothing for a person above every allowance.
+      // Both refusals offer only what would let another product go up: the
+      // tiers that leave more places than the person has products published
+      // (TIER-02 round 4, D7), which is every tier for someone with nothing
+      // up and nothing for a person above every allowance. `tier_required`
+      // never offers the extras (they need a tier first).
       const offers =
         err.code === 'tier_required'
-          ? { tiers: plan.tiers, extraProducts: null }
+          ? tierRequiredOffers(allowance, plan)
           : limitOffers(allowance, plan);
       return { currency: plan.currency, ...offers };
     } catch {
