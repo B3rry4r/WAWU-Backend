@@ -1452,6 +1452,42 @@ describe('Send to a WAWU user (WALLET-07) over HTTP', () => {
     expect(balance(to)).toBe(200_000);
   });
 
+  it('completing is once and only from pending: a path that read the send pending cannot complete one another path has already moved on (reversed)', async () => {
+    const me = await person(1_000_000);
+    const to = await person(0);
+    const b = await ready(me, to, 200_000);
+    const real = ledger.record.bind(ledger);
+    let moved = false;
+    jest
+      .spyOn(ledger, 'record')
+      .mockImplementation(async (input: LedgerMovementInput, ...rest) => {
+        if (
+          !moved &&
+          input.direction === 'in' &&
+          input.status === 'completed'
+        ) {
+          moved = true;
+          // Another path (the sweep, a reversal) moves the send on while this
+          // one is between reading it and completing it.
+          await prisma.walletTransfer.updateMany({
+            where: { customerReference: input.references.customerReference! },
+            data: { status: 'reversed', reversedAt: new Date() },
+          });
+        }
+        return real(input, ...rest);
+      });
+    const res = await send(me, b);
+    jest.restoreAllMocks();
+    expect(moved).toBe(true);
+    const view = body<TransferView>(res).data!;
+    expect(view.status).toBe('reversed');
+    const row = await prisma.walletTransfer.findUniqueOrThrow({
+      where: { id: view.id },
+    });
+    expect(row.status).toBe('reversed');
+    expect(row.completedAt).toBeNull();
+  });
+
   it('kill C: the Hub dies after completing the send and before storing the answer: the key answers "in progress", then, once the request can no longer be running, the completed send; one transfer', async () => {
     const me = await person(1_000_000);
     const to = await person(0);
