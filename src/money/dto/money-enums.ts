@@ -62,6 +62,12 @@ export type FeePartCode = (typeof FEE_PART_CODES)[number];
  *   paid_dm         INBOX-17 (held)
  *   event_ticket    EVENTS-07 (held)
  *   bill            BILLS-04 (held)
+ *
+ * `tier` and `tier_bump` (TIER-03) are WAWU's own sale of a maker tier: a
+ * tier bought, renewed or upgraded (`tier`), and the same with the checkout
+ * offer's extra points (`tier_bump`). They are paid in one debit into WAWU's
+ * own account with no seller split, and are not held. Their `targetId` names
+ * the terms (docs/contract/PLANS.md section 8).
  */
 export const PAYMENT_KINDS = [
   'content_unlock',
@@ -73,6 +79,8 @@ export const PAYMENT_KINDS = [
   'paid_dm',
   'event_ticket',
   'bill',
+  'tier',
+  'tier_bump',
 ] as const;
 export type PaymentKind = (typeof PAYMENT_KINDS)[number];
 

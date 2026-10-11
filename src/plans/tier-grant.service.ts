@@ -8,6 +8,32 @@ type Tx = Prisma.TransactionClient;
 /** A day, in milliseconds. */
 const DAY_MS = 86_400_000;
 
+/**
+ * Thrown when a grant no longer fits what the person holds: an upgrade from
+ * a tier they no longer have, or to a tier that is not bigger. Nothing is
+ * written. Its own class (and `name`) so the payment sweep's log says what it
+ * was; it is never shown to a person.
+ */
+export class TierGrantRefusal extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TierGrantRefusal';
+  }
+}
+
+/**
+ * Takes the one lock that serialises a person's tier: held until the caller's
+ * transaction ends, and re-entrant, so a purchase may take it first, read
+ * what the person holds, and then call `grant` or `upgrade`, which take it
+ * again.
+ */
+export async function lockPersonTier(
+  tx: Tx,
+  wawuUserId: string,
+): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`tier:${wawuUserId}`}, 0))`;
+}
+
 export interface TierGrantInput {
   wawuUserId: string;
   /** A tier in `plans.config.json`. */
@@ -21,6 +47,18 @@ export interface TierGrantInput {
   sourceRef: string;
   /** How many days to give. Omitted means the tier's own days. */
   days?: number;
+  /** The moment to act as of (tests). */
+  now?: Date;
+}
+
+export interface TierUpgradeInput {
+  wawuUserId: string;
+  /** The tier the person must hold, still running, for the upgrade to apply. */
+  fromTierId: string;
+  /** The bigger tier they move to. */
+  tierId: string;
+  /** The purchase's payment reference, as for `grant`. */
+  sourceRef: string;
   /** The moment to act as of (tests). */
   now?: Date;
 }
@@ -84,7 +122,7 @@ export class TierGrantService {
     if (!Number.isSafeInteger(days) || days < 1)
       throw new Error('A grant gives a whole number of days, at least one.');
 
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`tier:${input.wawuUserId}`}, 0))`;
+    await lockPersonTier(tx, input.wawuUserId);
 
     // The pass is the anchor: its reference is unique, so a grant asked for
     // twice finds its own pass the second time and writes nothing more.
@@ -186,6 +224,115 @@ export class TierGrantService {
       granted: true,
       ...outcome,
       daysAdded: days,
+      pointsGranted,
+      pointsExpireAt,
+    };
+  }
+
+  /**
+   * An upgrade (TIER-03): the person's running tier becomes a bigger one,
+   * starting now (never at a later date) for the new tier's own days. Unused
+   * points stay where they are. What the new tier gives is copied onto the
+   * row, and the points it adds are the DIFFERENCE between the two tiers'
+   * bonuses (the person already holds the smaller one's lot), as one lot with
+   * the new tier's expiry. The event pass is the new tier's. The extra
+   * products bought on top are kept.
+   *
+   * Same rules as `grant`: inside the caller's transaction (READ COMMITTED),
+   * one person at a time, a reference grants once, points last. It applies
+   * only to a person who still holds `fromTierId` and whose tier has not
+   * ended; otherwise it throws `TierGrantRefusal` and writes nothing. Whether
+   * the new tier is the bigger one is the purchase's rule (its price), not
+   * this method's: it adds nothing when the new bonus is not larger.
+   */
+  async upgrade(tx: Tx, input: TierUpgradeInput): Promise<TierGrantOutcome> {
+    const now = input.now ?? new Date();
+    const tier = tierById(this.config, input.tierId);
+    if (tier === null)
+      throw new Error(`The plans file names no tier "${input.tierId}".`);
+
+    await lockPersonTier(tx, input.wawuUserId);
+
+    const { count } = await tx.eventPass.createMany({
+      data: [
+        {
+          wawuUserId: input.wawuUserId,
+          type: tier.eventPass,
+          purchaseRef: input.sourceRef,
+        },
+      ],
+      skipDuplicates: true,
+    });
+    const held = await tx.makerTier.findUnique({
+      where: { wawuUserId: input.wawuUserId },
+    });
+    if (count === 0) {
+      if (held === null)
+        throw new Error(
+          'This reference granted a pass but the person has no tier.',
+        );
+      return {
+        granted: false,
+        tierId: held.tierId,
+        extended: false,
+        activeFrom: held.activeFrom,
+        activeUntil: held.activeUntil,
+        daysAdded: 0,
+        pointsGranted: 0,
+        pointsExpireAt: null,
+      };
+    }
+    if (
+      held === null ||
+      held.tierId !== input.fromTierId ||
+      held.activeUntil.getTime() <= now.getTime()
+    )
+      throw new TierGrantRefusal(
+        'The person no longer holds the tier this upgrade was bought from.',
+      );
+    if (held.tierId === tier.id)
+      throw new TierGrantRefusal('An upgrade moves to a different tier.');
+
+    const activeUntil = new Date(now.getTime() + tier.days * DAY_MS);
+    assertDate(activeUntil);
+    await tx.makerTier.update({
+      where: { wawuUserId: input.wawuUserId },
+      data: {
+        tierId: tier.id,
+        activeFrom: now,
+        activeUntil,
+        productsIncluded: tier.products,
+        pointsIncluded: tier.bonusPoints,
+        voiceIntroIncluded: held.voiceIntroIncluded || tier.firstVoiceIntro,
+      },
+    });
+
+    const extra = Math.max(0, tier.bonusPoints - held.pointsIncluded);
+    let pointsGranted = 0;
+    let pointsExpireAt: Date | null = null;
+    if (extra > 0) {
+      const lot = await this.points.grant(
+        {
+          wawuUserId: input.wawuUserId,
+          source: 'tier_bonus',
+          sourceRef: input.sourceRef,
+          points: extra,
+          expiresAt: new Date(now.getTime() + tier.bonusExpiryDays * DAY_MS),
+        },
+        { tx, now },
+      );
+      if (lot.granted) {
+        pointsGranted = lot.points;
+        pointsExpireAt = lot.expiresAt;
+      }
+    }
+    return {
+      granted: true,
+      tierId: tier.id,
+      extended: false,
+      activeFrom: now,
+      activeUntil,
+      daysAdded: tier.days,
       pointsGranted,
       pointsExpireAt,
     };
