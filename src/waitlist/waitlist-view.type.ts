@@ -73,6 +73,13 @@ export interface WaitlistClaimView {
   pointsGranted: number;
   /** When the bonus points end (ISO 8601); null when none were added. */
   pointsExpireAt: string | null;
+  /**
+   * When the code was claimed (ISO 8601): the moment of the first claim, the
+   * same on a repeat. A screen that is shown the answer again, after the plan
+   * began or ended, tells the person what is true from this and `tier`
+   * (JOIN-03 round 3, D4). Never the time of the repeat.
+   */
+  claimedAt: string;
   /** The person's tier now, exactly as `GET /me/tier` answers it. */
   tier: MyTierView;
 }

@@ -65,7 +65,10 @@ const WORDS = {
  * (`claimResult`). The account that made the claim and sends the same code
  * again, because the answer never reached the phone or a second tap came in,
  * gets that answer back as a 200 and nothing is written: a claim is idempotent
- * for its own claimer. Anyone else is told the code is used (`already_claimed`).
+ * for its own claimer. The answer also says WHEN the code was claimed
+ * (`claimedAt`, the row's own stamp, so a repeat carries the first time and
+ * never its own), so the screen can say what is true of a plan that has begun
+ * or ended since (JOIN-03 round 3, D4). Anyone else is told the code is used (`already_claimed`).
  * A row claimed before the column existed has no stored answer and keeps
  * answering its claimer `claimed_by_you` (409).
  */
@@ -162,7 +165,11 @@ export class WaitlistClaimService {
     if (outcome.kind === 'taken')
       return this.answerClaimed(user, outcome.current, now);
     this.logger.log(`Registration ${row.id} claimed by an account.`);
-    return { ...outcome.told, tier: await this.tiers.myTier(user.sub, now) };
+    return {
+      ...outcome.told,
+      claimedAt: now.toISOString(),
+      tier: await this.tiers.myTier(user.sub, now),
+    };
   }
 
   /**
@@ -173,14 +180,24 @@ export class WaitlistClaimService {
    */
   private async answerClaimed(
     user: WawuJwtClaims,
-    row: { claimedByWawuId: string | null; claimResult: unknown },
+    row: {
+      claimedByWawuId: string | null;
+      claimedAt: Date | null;
+      claimResult: unknown;
+    },
     now: Date,
   ): Promise<WaitlistClaimView> {
     if (row.claimedByWawuId !== user.sub)
       throw new WaitlistError('already_claimed', WORDS.claimed);
     const told = readStoredClaimResult(row.claimResult);
-    if (told === null)
+    // A claim always stamps both; a row with an answer and no stamp is not one
+    // this code wrote, and is told what a claim from before the answer was kept is.
+    if (told === null || row.claimedAt === null)
       throw new WaitlistError('claimed_by_you', WORDS.claimedByYou);
-    return { ...told, tier: await this.tiers.myTier(user.sub, now) };
+    return {
+      ...told,
+      claimedAt: row.claimedAt.toISOString(),
+      tier: await this.tiers.myTier(user.sub, now),
+    };
   }
 }

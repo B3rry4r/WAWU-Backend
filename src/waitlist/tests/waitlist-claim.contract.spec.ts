@@ -243,6 +243,11 @@ describe('Claiming a paid event registration in the app (JOIN-03) over HTTP', ()
       });
       expect(claimed.claimedByWawuId).toBe(who.sub);
       expect(claimed.claimedAt).not.toBeNull();
+      // The answer says when the code was claimed (round 3, D4): the row's own stamp.
+      expect(view.claimedAt).toBe(claimed.claimedAt!.toISOString());
+      const at = new Date(view.claimedAt).getTime();
+      expect(at).toBeGreaterThanOrEqual(before - 1000);
+      expect(at).toBeLessThanOrEqual(after + 1000);
     });
 
     it('reads the code the way the page shows it: spaces, dashes and lower case', async () => {
@@ -413,6 +418,92 @@ describe('Claiming a paid event registration in the app (JOIN-03) over HTTP', ()
         pointsExpireAt: data(r1).pointsExpireAt,
       });
       expect(data(replay).tier).toEqual(data(r2).tier);
+    });
+
+    it('a replay carries WHEN the code was claimed, the first time and never its own (round 3, D4)', async () => {
+      const who = person();
+      const row = await registration(who);
+      const first = await claim(mint(who), row.accessCode).expect(200);
+      // Ten days on, as the app would see a repeat of the code: the stamp is the claim's.
+      const tenDaysAgo = new Date(Date.now() - 10 * DAY);
+      await prisma.waitlistRegistration.update({
+        where: { id: row.id },
+        data: { claimedAt: tenDaysAgo },
+      });
+      const replay = await claim(mint(who), row.accessCode).expect(200);
+      expect(data(replay).claimedAt).toBe(tenDaysAgo.toISOString());
+      expect(data(replay).claimedAt).not.toBe(data(first).claimedAt);
+      // Every other field is still the first answer's.
+      const withoutStamp = (view: Record<string, unknown>) =>
+        Object.fromEntries(
+          Object.entries(view).filter(([key]) => key !== 'claimedAt'),
+        );
+      expect(withoutStamp(data(replay))).toEqual(withoutStamp(data(first)));
+      // Nothing was written by the repeat.
+      expect(
+        (
+          await prisma.waitlistRegistration.findUniqueOrThrow({
+            where: { id: row.id },
+          })
+        ).claimedAt,
+      ).toEqual(tenDaysAgo);
+    });
+
+    // N13 (round 2 survivors Y7b, Y7c): the reader of the stored answer.
+    it('replays a claim that gave no points: pointsGranted 0 and pointsExpireAt null are an answer (round 3, N13)', async () => {
+      const who = person();
+      const row = await registration(who);
+      const first = await claim(mint(who), row.accessCode).expect(200);
+      const noPoints = {
+        offerName: data(first).offerName,
+        days: data(first).days,
+        extended: false,
+        pointsGranted: 0,
+        pointsExpireAt: null,
+      };
+      await prisma.waitlistRegistration.update({
+        where: { id: row.id },
+        data: { claimResult: noPoints },
+      });
+      const replay = await claim(mint(who), row.accessCode).expect(200);
+      expect(data(replay)).toMatchObject(noPoints);
+      expect(data(replay).pointsExpireAt).toBeNull();
+    });
+
+    it('refuses to replay a damaged stored answer: a fractional day count, a fractional point count, or a points end that is not text or null (round 3, N13)', async () => {
+      const who = person();
+      const row = await registration(who);
+      const first = await claim(mint(who), row.accessCode).expect(200);
+      const good = {
+        offerName: data(first).offerName,
+        days: data(first).days,
+        extended: data(first).extended,
+        pointsGranted: data(first).pointsGranted,
+        pointsExpireAt: data(first).pointsExpireAt,
+      };
+      const damaged: Record<string, unknown>[] = [
+        { ...good, days: 30.5 },
+        { ...good, days: 'thirty' },
+        { ...good, pointsGranted: 100.25 },
+        { ...good, pointsExpireAt: 1760000000000 },
+        { ...good, pointsExpireAt: undefined },
+        { ...good, extended: 'no' },
+        { ...good, offerName: 42 },
+      ];
+      for (const stored of damaged) {
+        await prisma.waitlistRegistration.update({
+          where: { id: row.id },
+          data: { claimResult: stored as Prisma.InputJsonValue },
+        });
+        const res = await claim(mint(who), row.accessCode).expect(409);
+        expect(reason(res).code).toBe('claimed_by_you');
+      }
+      // The undamaged answer is still replayed.
+      await prisma.waitlistRegistration.update({
+        where: { id: row.id },
+        data: { claimResult: good },
+      });
+      await claim(mint(who), row.accessCode).expect(200);
     });
 
     it('still needs the proof: the claimer whose token proves nothing, or not the registration, is refused as before', async () => {

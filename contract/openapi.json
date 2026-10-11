@@ -48448,6 +48448,9 @@
             "type": "string",
             "nullable": true
           },
+          "claimedAt": {
+            "type": "string"
+          },
           "tier": {
             "$ref": "#/components/schemas/MyTierView"
           }
@@ -48458,6 +48461,7 @@
           "extended",
           "pointsGranted",
           "pointsExpireAt",
+          "claimedAt",
           "tier"
         ]
       },

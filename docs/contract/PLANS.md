@@ -158,3 +158,10 @@ the same account sending the same code again is answered with it as a 200 (the
 time. Any other account is told `already_claimed`. A row claimed before the
 answer was kept has none, and answers its claimer `claimed_by_you` (409).
 
+The answer also carries `claimedAt` (ISO 8601, round 3): when the code was
+claimed, read from the registration's own stamp, so a repeat says the time of
+the first claim and never its own. The plan the answer shows can have begun or
+ended since; the app tells the person what is true from `claimedAt` and `tier`
+(a plan that has ended is not "ready"). The field is additive and always
+present on a 200.
+
