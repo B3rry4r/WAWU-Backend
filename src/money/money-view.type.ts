@@ -272,6 +272,13 @@ export interface PinResetView {
   sentTo: string;
   /** When Resend becomes available (W37's countdown). */
   resendAvailableAt: string;
+  /**
+   * Whole seconds from the moment of this answer until Resend opens (0 when it
+   * is open). The phone counts this down on its own timer: it never subtracts
+   * `resendAvailableAt` from its own clock, which can be minutes out
+   * (WALLET-06 round 2, D3).
+   */
+  resendInSeconds: number;
   expiresAt: string;
 }
 

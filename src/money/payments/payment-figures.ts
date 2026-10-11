@@ -8,6 +8,7 @@
  *
  * Pure: bigint kobo in, bigint kobo out, no rounding and no I/O.
  */
+import { DEFAULT_PAYMENT_CHARGE_REVIEW_ABOVE_KOBO } from './payment-config';
 
 /** What the buyer was quoted (and what the payment was claimed with). */
 export interface QuotedDebit {
@@ -30,9 +31,12 @@ export interface RecordedDebit {
 /**
  * `as_quoted`: the provider took what the quote said. `above`: it took more
  * (flagged for review, NUV-08 reconciles it). `below`: it took less (recorded
- * as taken, nobody is owed anything, no flag).
+ * as taken, nobody is owed anything, no flag). `untrusted` (MONEY-18, MONEY-17's
+ * N2): a charge below 0, a total below the amount, or a charge above the
+ * quoted one by more than the cap: not believed, so the payment is neither
+ * completed nor delivered at it.
  */
-export type DebitVerdict = 'as_quoted' | 'above' | 'below';
+export type DebitVerdict = 'as_quoted' | 'above' | 'below' | 'untrusted';
 
 export interface CompletedFigures {
   verdict: DebitVerdict;
@@ -46,6 +50,8 @@ export function completedFigures(
   quoted: QuotedDebit,
   record: RecordedDebit,
   label: string,
+  /** How far above the quoted charge a charge is still believed (kobo). */
+  trustAboveKobo: bigint = BigInt(DEFAULT_PAYMENT_CHARGE_REVIEW_ABOVE_KOBO),
 ): CompletedFigures {
   // A record that gives neither figure says nothing against the quote; one
   // that gives one of them gives the other by the amount.
@@ -58,6 +64,20 @@ export function completedFigures(
   }
   if (feeKobo === quoted.providerFeeKobo && totalKobo === quoted.totalKobo) {
     return { verdict: 'as_quoted', feeKobo, totalKobo, note: null };
+  }
+  // A charge nothing honest produces (below 0, a total under the amount) or
+  // one far above the quote is not believed (N2): never completed at it.
+  if (
+    feeKobo < 0n ||
+    totalKobo < record.amountKobo ||
+    feeKobo - quoted.providerFeeKobo > trustAboveKobo
+  ) {
+    return {
+      verdict: 'untrusted',
+      feeKobo,
+      totalKobo,
+      note: `charge not trusted: ${label} reported ${totalKobo} kobo (fee ${feeKobo}), quoted ${quoted.totalKobo} kobo (fee ${quoted.providerFeeKobo}); held for review`,
+    };
   }
   const verdict: DebitVerdict =
     totalKobo > quoted.totalKobo ? 'above' : 'below';

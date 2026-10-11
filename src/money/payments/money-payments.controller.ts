@@ -36,8 +36,7 @@ import { PAY_ROUTE, WalletPaymentService } from './wallet-payment.service';
 /**
  * Pay from wallet (task MONEY-17) and the poll of one payment (task
  * MONEY-19). Declared by MONEY-04, served here (docs/contract/CONVENTIONS.md
- * sections 0 and 14). The holds (MONEY-18) stay declared in
- * money-payment.controller.ts.
+ * sections 0 and 14). The holds are MONEY-18's (holds/money-holds.controller.ts).
  */
 @ApiBearerAuth('wawu-id')
 @UseGuards(WawuAuthGuard)

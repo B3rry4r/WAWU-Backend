@@ -91,6 +91,12 @@ export class FintavaError extends Error {
    * while this is true; it reconciles.
    */
   readonly recordMayExist: boolean;
+  /**
+   * True when Fintava answered, in a 2xx, that its service for this call is not available (`201 { status: 200,
+   * message: "service not currently available" }`, as cable answers today). The kind is `unavailable`; this tells that
+   * apart from a timeout or a 5xx, which a retry may cure.
+   */
+  readonly serviceNotAvailable: boolean;
 
   constructor(args: {
     kind: FintavaErrorKind;
@@ -99,6 +105,7 @@ export class FintavaError extends Error {
     messages?: string[];
     reference?: string | null;
     recordMayExist?: boolean;
+    serviceNotAvailable?: boolean;
   }) {
     const status = args.httpStatus ?? null;
     super(
@@ -113,6 +120,7 @@ export class FintavaError extends Error {
     this.reference = args.reference ?? null;
     this.recordMayExist =
       args.recordMayExist ?? FINTAVA_UNKNOWN_OUTCOMES.includes(args.kind);
+    this.serviceNotAvailable = args.serviceNotAvailable ?? false;
   }
 
   /** The error in this backend's own shape, for a route to throw. */
