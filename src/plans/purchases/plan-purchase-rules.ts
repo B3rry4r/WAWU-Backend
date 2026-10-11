@@ -41,8 +41,6 @@ export const CANNOT_PRICE_UPGRADE_MESSAGE =
 export const SAME_PLAN_MESSAGE = 'That is the plan you have. Renew it instead.';
 export const NO_DOWNGRADE_MESSAGE =
   "You can't move to a smaller plan while yours is running.";
-export const OTHER_PAYMENT_OPEN_MESSAGE =
-  'You have a plan payment that is still going through. Wait for it to finish.';
 
 /** Why a purchase cannot be made, as the money error code it answers with. */
 export class PurchaseRefusal extends Error {

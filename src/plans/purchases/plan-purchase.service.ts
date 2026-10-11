@@ -130,22 +130,29 @@ export class PlanPurchaseService implements OnModuleInit {
     );
   }
 
-  /** A tier id too long to name an upgrade in a payment target stops the boot, as a bad file does. */
+  /** A tier id too long to name a purchase in a payment target stops the boot, as a bad file does. */
   private assertTargetsFit(): void {
-    for (const to of this.config.tiers)
+    const unfit = (terms: PurchaseTerms) => targetIdOf(terms) === null;
+    for (const to of this.config.tiers) {
+      for (const kind of ['tier', 'renew'] as const)
+        if (unfit({ kind, tierId: to.id, fromTierId: null, bump: false }))
+          throw new Error(
+            `plans.config.json: the tier id "${to.id}" is too long to name a purchase in a payment target.`,
+          );
       for (const from of this.config.tiers)
         if (
           from.id !== to.id &&
-          targetIdOf({
+          unfit({
             kind: 'upgrade',
             tierId: to.id,
             fromTierId: from.id,
             bump: false,
-          }) === null
+          })
         )
           throw new Error(
             `plans.config.json: the tier ids "${from.id}" and "${to.id}" are too long to name an upgrade in a payment target.`,
           );
+    }
   }
 
   // -------------------------------------------------------------------------

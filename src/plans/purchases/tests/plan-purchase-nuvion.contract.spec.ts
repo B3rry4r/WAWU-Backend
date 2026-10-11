@@ -146,6 +146,31 @@ describe('Buy, renew or upgrade a tier from the wallet (TIER-03), Nuvion stood i
     expect(sendsFrom(p)).toHaveLength(1);
   });
 
+  it('a payment Nuvion later fails or reverses is failed or reversed, with nothing granted', async () => {
+    for (const word of ['failed', 'reversed'] as const) {
+      const p = await h.buyer(RICH);
+      const t: Terms = { kind: 'tier', tierId: small.id };
+      const q = await quoted(p, t);
+      nuvion.mode = 'pending';
+      const res = await call.buy(p, request(t, q));
+      const pending = data<PlanPurchaseView>(res);
+      expect(pending.status).toBe('pending');
+      nuvion.settle(pending.payment.reference, word);
+      await until(async () => {
+        await h.sweepLater();
+        return (
+          data<PlanPurchaseView>(await call.read(p, pending.id)).status === word
+        );
+      }, `the purchase to read ${word}`);
+      const view = data<PlanPurchaseView>(await call.read(p, pending.id));
+      expect(view).toMatchObject({ status: word, grant: null, paidAt: null });
+      expect(view.payment).toMatchObject({ delivered: false });
+      expect(await rows(p)).toHaveLength(0);
+      expect((await tierOf(p)).state).toBe('none');
+      expect((await pointsOf(p)).balance).toBe(0);
+    }
+  });
+
   it('an upgrade debits only the difference and a person short of money gets the exact shortfall', async () => {
     const p = await h.buyer(RICH);
     const first = await call.buy(

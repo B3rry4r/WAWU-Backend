@@ -157,6 +157,31 @@ describe('Delivering a confirmed tier payment (TIER-03)', () => {
     await nothingWritten(q, none);
   });
 
+  it('the purchase row alone makes a repeat a no-op: with the pass row gone, a repeat does not extend the tier again', async () => {
+    const p = await h.buyer(0);
+    const c = confirmed(p, 'tier', `tier-${small.id}`);
+    await deliver(c);
+    const first = await h.prisma.makerTier.findUniqueOrThrow({
+      where: { wawuUserId: p.id },
+    });
+    await h.prisma.eventPass.deleteMany({
+      where: { purchaseRef: c.paymentId },
+    });
+    await deliver(c);
+    const again = await h.prisma.makerTier.findUniqueOrThrow({
+      where: { wawuUserId: p.id },
+    });
+    expect(again.activeUntil).toEqual(first.activeUntil);
+    expect(
+      await h.prisma.eventPass.count({ where: { purchaseRef: c.paymentId } }),
+    ).toBe(0);
+    expect(
+      await h.prisma.makerPurchase.count({
+        where: { paymentRef: c.paymentId },
+      }),
+    ).toBe(1);
+  });
+
   it('a first purchase that meets the same tier already running extends it, as a renewal', async () => {
     const p = await h.buyer(0);
     await holdTier(p, small.id, 10);
@@ -226,6 +251,33 @@ describe('Delivering a confirmed tier payment (TIER-03)', () => {
       expect(
         await h.prisma.pointLot.count({ where: { wawuUserId: p.id } }),
       ).toBe(rows[0].bump ? 2 : 1);
+    }
+  });
+
+  it("two purchases for one person whose currency is already fixed, delivered at once: one is granted and the other refused, because the person's tier lock serialises them", async () => {
+    for (let round = 0; round < 12; round += 1) {
+      const p = await h.buyer(0);
+      await h.prisma.personBilling.create({
+        data: {
+          wawuUserId: p.id,
+          currency: 'NGN',
+          fixedBy: 'first_purchase',
+          purchaseRef: `earlier-${p.id}`,
+        },
+      });
+      const a = confirmed(p, 'tier', `tier-${small.id}`);
+      const b = confirmed(p, 'tier_bump', `tier-${big.id}`);
+      const settled = await Promise.allSettled([deliver(a), deliver(b)]);
+      expect(settled.filter((s) => s.status === 'fulfilled')).toHaveLength(1);
+      const refused = settled.filter((s) => s.status === 'rejected');
+      expect(refused).toHaveLength(1);
+      expect(refused[0].reason).toMatchObject({ name: 'TierGrantRefusal' });
+      expect(
+        await h.prisma.makerPurchase.count({ where: { wawuUserId: p.id } }),
+      ).toBe(1);
+      expect(
+        await h.prisma.eventPass.count({ where: { wawuUserId: p.id } }),
+      ).toBe(1);
     }
   });
 

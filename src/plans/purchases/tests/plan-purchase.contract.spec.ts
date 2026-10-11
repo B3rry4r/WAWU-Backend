@@ -932,6 +932,34 @@ describe('Buy, renew or upgrade a tier from the wallet (TIER-03)', () => {
     ).toBe(0);
   });
 
+  it('the quote refuses a malformed ask as a plain 400 and takes nothing', async () => {
+    const p = await h.buyer(RICH);
+    const ask = (qs: string) =>
+      request(h.app.getHttpServer())
+        .get(`/api/hub/plans/purchases/quote?${qs}`)
+        .set('Authorization', p.auth);
+    for (const qs of [
+      `kind=tier`,
+      `tierId=${small.id}`,
+      `kind=bogus&tierId=${small.id}`,
+      `kind=tier&tierId=${small.id}&bump=banana`,
+      `kind=tier&tierId=${small.id}&bump=1`,
+      `kind=tier&tierId=Founding`,
+      `kind=tier&tierId=${small.id}&price=1`,
+    ])
+      expect({ qs, status: (await ask(qs)).status }).toEqual({
+        qs,
+        status: 400,
+      });
+    expect((await ask(`kind=tier&tierId=${small.id}&bump=true`)).status).toBe(
+      200,
+    );
+    expect((await ask(`kind=tier&tierId=${small.id}&bump=false`)).status).toBe(
+      200,
+    );
+    expect(sendsFrom(p)).toHaveLength(0);
+  });
+
   // ---------------------------------------------------------------------------
   // Who may read a purchase
   // ---------------------------------------------------------------------------
