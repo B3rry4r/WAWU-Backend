@@ -41,6 +41,9 @@ import { IdempotencyGuard, IdempotencyService } from './payments/idempotency';
 import { MerchantWallet } from './payments/merchant-wallet';
 import { HoldViewService } from './holds/hold-view.service';
 import { MoneyHoldsController } from './holds/money-holds.controller';
+import { EarningSettlementService } from './earnings/earning-settlement.service';
+import { EarningsViewService } from './earnings/earnings-view.service';
+import { MoneyEarningsController } from './earnings/money-earnings.controller';
 import { WalletHoldService } from './holds/wallet-hold.service';
 import { MoneyPaymentsController } from './payments/money-payments.controller';
 import { PayableRegistry } from './payments/payable-registry';
@@ -141,6 +144,15 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
  * A sweep every minute settles a move whose answer was lost and tries again
  * what is waiting (a wallet not opened yet, a frozen one, the provider out of
  * reach); it runs where ScheduleModule.forRoot() is loaded.
+ * WALLET-16: earnings land in the wallet by themselves (R-11). A sale of a
+ * kind that is not held (an unlock, a tip, a legal fee, school fees) is paid
+ * into WAWU's own account; when it is finished, `EarningSettlementService`
+ * (exported; a sweep every minute, where ScheduleModule.forRoot() is loaded)
+ * moves the payee's 85% from there into the payee's wallet. A payee with no
+ * wallet keeps earning: the share waits and lands within a minute of the
+ * wallet opening. `GET /money/earnings` and `/money/earnings/content` read
+ * what was earned from our records of the sales (not behind the wallet gate,
+ * never a balance).
  * WALLET-18: receipts. The owner's routes (`/money/transactions/{id}/receipt`,
  * its image and its PDF) sit behind the wallet gate and read the row through
  * the history's detail; the public check (`/r/{code}`, no sign-in,
@@ -183,6 +195,7 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     MoneyFeesController,
     MoneyPaymentsController,
     MoneyHoldsController,
+    MoneyEarningsController,
     MoneyReceiptController,
     PublicReceiptController,
     MoneyRecipientController,
@@ -222,6 +235,8 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     WalletPaymentService,
     HoldViewService,
     WalletHoldService,
+    EarningSettlementService,
+    EarningsViewService,
     ReceiptSettings,
     ReceiptService,
     RecipientService,
@@ -244,6 +259,7 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     PayableRegistry,
     WalletHoldService,
     HoldViewService,
+    EarningSettlementService,
   ],
 })
 export class MoneyModule {}

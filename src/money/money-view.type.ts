@@ -550,6 +550,90 @@ export interface HoldPage {
   nextCursor: string | null;
 }
 
+/* ------------------------------------------------------------------ */
+/* Earnings (W39, WALLET-16)                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * What one kind of sale earned: the payee's 85% (R-5) of what was sold,
+ * counted from our own records of the sales, labelled as earnings and never
+ * as a balance (the provider's balance is the only one, MONEY-11).
+ */
+export interface EarningStreamView {
+  /** What was sold: `content_unlock` (Unlocks), `tip` (Tips), `paid_dm` (Paid DMs), and so on. */
+  kind: PaymentKind;
+  /** The payee's share of those sales, in kobo. */
+  earnedKobo: number;
+  /** How many sales it is the share of. */
+  sales: number;
+}
+
+/** The earnings of a period; `streams` add up to `earnedKobo` exactly. */
+export interface EarningsPeriodView {
+  earnedKobo: number;
+  sales: number;
+  /** One entry per kind with a sale in the period, largest first. */
+  streams: EarningStreamView[];
+}
+
+/**
+ * What the caller has earned (W39). Reads our records of the sales; it never
+ * calls the provider and is not behind the wallet gate: a creator without a
+ * wallet keeps earning, and sees the money waiting (R-11).
+ *
+ * An earning is the payee's 85% of a finished sale: an ordinary sale (unlock,
+ * tip, legal fee, school fees) once it is paid and delivered, a held kind
+ * (paid DM, ticket) once its hold is released to the payee. A held price not
+ * yet released is `held`, not earned.
+ */
+export interface EarningsView {
+  /** Everything ever earned. */
+  allTime: EarningsPeriodView;
+  /** The month `thisMonth` is about, YYYY-MM in Africa/Lagos time. */
+  month: string;
+  /** The earnings of `month` (the current month unless the caller asked for another). */
+  thisMonth: EarningsPeriodView;
+  /**
+   * Earned and not in the wallet yet: no wallet opened, a frozen wallet, or
+   * the move not confirmed yet. It lands by itself; there is nothing to tap.
+   * Part of `allTime`, not on top of it.
+   */
+  waiting: EarningsWaitingView;
+  /** Paid for and not earned yet: a paid DM unanswered, a ticket before its event. */
+  held: EarningsWaitingView;
+  /** Whether the caller has a wallet to receive earnings; false shows "Open your wallet" beside the waiting money. */
+  walletOpen: boolean;
+}
+
+/** A count and a sum in kobo. */
+export interface EarningsWaitingView {
+  count: number;
+  amountKobo: number;
+}
+
+/** One piece of content, service or event and what it earned in a month (W39 "per content"). */
+export interface EarningContentView {
+  kind: PaymentKind;
+  targetId: string;
+  /** The item as it was named when it was sold. */
+  title: string;
+  earnedKobo: number;
+  sales: number;
+  /** The latest sale counted, ISO 8601. */
+  lastAt: string;
+}
+
+/**
+ * A page of per-content earnings for one month, largest first. Every page
+ * together adds up to the month's `thisMonth.earnedKobo`. `nextCursor` null
+ * means the last page.
+ */
+export interface EarningContentPage {
+  month: string;
+  items: EarningContentView[];
+  nextCursor: string | null;
+}
+
 /**
  * pending:   the debit is not confirmed yet (H18, E10); poll GET /money/payments/{id}.
  *            It ends as completed, failed or reversed once the wallet provider

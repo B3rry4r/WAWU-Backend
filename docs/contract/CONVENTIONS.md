@@ -1635,7 +1635,8 @@ Fintava or on Nuvion, whichever the server runs.
 - **The split** is recorded on the payment (`WalletPayment`), of the price
   only: the payee's 85% rounded down to the kobo, WAWU's 15% the rest (R-5;
   ₦1,000 is ₦850 and ₦150, ₦999.99 is ₦849.99 and ₦150.00). No payee: all
-  of it is WAWU's. Landing the 85% in the payee's wallet is WALLET-16's.
+  of it is WAWU's. Landing the 85% in the payee's wallet is WALLET-16's
+  (section 19).
   Deleting the payer's account keeps the payment (the payee's share may be
   unpaid) with the payer side set to null (`ANONYMISED` in the account data
   map).
@@ -2100,3 +2101,127 @@ When another job completes a payment between a path's figures update and its
 `complete()`, the path's note (both figures) is still written, once, to the
 completed payment (`keepNote`, a conditional update that only touches a
 completed payment).
+
+## 19. Earnings land in the wallet by themselves (WALLET-16)
+
+R-11: a sale's 85% reaches the payee's wallet without anyone tapping anything,
+and a creator without a wallet keeps earning: the money waits and lands the
+moment they open one. Section 18 does this for a held kind (the hold's
+release); this section does it for every other kind with a payee (an unlock, a
+tip, a legal fee, school fees). The provider's balance is still the only
+balance (MONEY-11): nothing here is added up into one, and the routes say
+"earned" and "waiting", never "balance".
+
+- **What an earning is.** The payee's 85% (R-5, rounded down to the kobo, as
+  recorded on the payment: `WalletPayment.payeeShareKobo`) of a finished sale.
+  An ordinary sale is finished when its payment is `completed`, what was paid
+  for is delivered (or has nothing to deliver: `openKey` is given up, section
+  14) and neither `reviewSince` nor `chargeReviewSince` is set; a delivery or a
+  charge in question waits for a person, and its earning with it. A held kind
+  is earned when its hold is RELEASED to the payee (section 18); a hold nobody
+  has decided is `held` (money paid, not earned), a refunded one is the
+  payer's. WAWU's own sales (credits, ticks, bills: no payee), a share under a
+  kobo, and the web's Flutterwave sales (`GET /content/mine/earnings`, which is
+  unchanged) are not earnings here.
+- **Routes** (`src/money/earnings/`, `no-store`, from our own records of the
+  sales: they never call the provider, so neither answers
+  `provider_unreachable`). **Not behind the wallet gate**: a creator with no
+  wallet reads them (no `409 wallet_not_open`), because that is the person who
+  has to see the money waiting. Any signed-in person reads their own and only
+  their own; a person with no sales gets zeros.
+  - `GET /money/earnings?month=YYYY-MM` (`EarningsView`): `allTime` and
+    `thisMonth` (each `earnedKobo`, `sales` and `streams`, one entry per kind
+    sold, largest first; the streams add up to `earnedKobo` exactly), `month`
+    (YYYY-MM in Africa/Lagos time, the current month unless asked), `waiting`
+    (`count`, `amountKobo`: earned and not in the wallet yet, part of `allTime`),
+    `held` (paid for, not earned yet) and `walletOpen` (the caller has a wallet
+    of the provider this server runs; false with money waiting is "Open your
+    wallet" on W39). Every figure comes from one statement, so they always agree.
+  - `GET /money/earnings/content?month=&cursor=&limit=` (`EarningContentPage`):
+    that month piece by piece (`kind`, `targetId`, `title` as the piece last
+    sold, `earnedKobo`, `sales`, `lastAt`), largest first, then kind, then
+    target. Every page together adds up to the month's `thisMonth.earnedKobo`.
+    The cursor is `e1.` plus base64url of the month and the last row's figure,
+    kind and target; one the server did not write, or one given for another
+    month, is a plain `400` ("cursor is not one this list gave.").
+  - A month is the Africa/Lagos calendar month of when the sale completed (a
+    release's time for a held kind). `month` that is not `YYYY-MM`, or is year
+    0000, is a plain `400` ("month must look like 2026-09").
+- **The move** (`EarningSettlementService`, exported by `MoneyModule`; nothing
+  else moves an earning, no client request does). One row per finished
+  ordinary sale (`EarningSettlement`, made by the sweep; the payment id is
+  unique). The payee's 85% moves from WAWU's own account (the account the sale
+  was paid into) to the payee's wallet by a wallet-to-wallet transfer through
+  the seam (`walletToWallet`; a book transfer on Nuvion, section 14). The 15%
+  is WAWU's and stays. The provider's charge on the move is WAWU's, paid from
+  its 15% (R-31): the payee receives the whole share, and the charge is on the
+  merchant-side ledger row and `providerFeeKobo`.
+- **Exactly once.** The provider sees one reference per earning,
+  `wawu-earn-<payment id>` (46 characters, inside Nuvion's 64), unique in our
+  table and refused as a repeat by the provider. The move is handed over by a
+  lease (`sentAt`) only one caller wins, taken with the sale's row read FOR
+  SHARE so a review mark set meanwhile is seen (nothing is sent) or waits. A
+  replay, the sweep and a second Hub process asking at once, or a restart
+  therefore send one move. The database holds the same rules (the migration's
+  CHECKs and triggers): one row per sale, a row only for a completed payment of
+  this payee for exactly the payee's share, never for a payment that has a hold
+  (and no hold for a payment that has a row), what is owed and to whom never
+  changes, a landed row never changes.
+- **The provider's record is the truth** (the same rules as sections 14 and
+  18). A move whose outcome is unknown (a timeout, a 5xx, a transfer accepted
+  and not finished, a repeated reference, a Hub killed between the provider's
+  answer and our write) is `pending`: the provider is asked about our reference
+  (`reconcileSend` on WAWU's own account, backing off 1, 2, 4 ... 60 minutes),
+  the move is never sent again and never read as "nothing moved". Past
+  `PAYMENT_REVIEW_AFTER_HOURS` (72) with no answer it goes to review
+  (`reviewSince`): out of the sweep, the money where it is, a person decides.
+  Only the provider's own record that the move FAILED starts a new try, under
+  a new reference (`wawu-earn-<id>-2`); a record that it completed and was
+  then REVERSED, or that another amount moved, is review. The earning is
+  `landed` only when the provider confirmed the move, and the sale's
+  `payeeSettledAt` is set in the same write.
+- **Waiting is not failing** (`waiting` on the earning; the earning stays
+  `owed` and the money stays in WAWU's account):
+  - `payee_wallet`: the person has no wallet of this provider yet. Looked at
+    again after a rest that doubles with the earning's age, a minute to an
+    hour; the first sweep after the person HAS a wallet wakes it whatever its
+    rest, so the money lands within a minute of the wallet opening. No review
+    bound. A wallet of the other provider is not a place to send to.
+  - `recipient_frozen`: the provider refuses a move into a frozen wallet (G-10).
+    Paid on unfreeze, tried hourly.
+  - `funds`: the provider says WAWU's own account cannot cover the move: an
+    error in the log on every try.
+  - `provider`: the provider is out of reach or not set up, one of its limits
+    was hit, or it is another provider's sale (written before a switch of
+    `WALLET_PROVIDER`; this server sends nothing for it). A request that
+    provably never reached the provider (`requestNotSent`) is this, and is
+    sent again under the same reference.
+  - `not_supported`: the running provider has no way to make this move yet
+    (Nuvion before NUV-05's book transfers merge). An error in the log on every
+    try saying so; the earning waits and lands once the provider can.
+  - `refused`: the provider refused and nothing moved; a person looks past the
+    review bound.
+- **The sweep** (`EarningSettlementService.sweep`, every minute, where
+  ScheduleModule.forRoot() is loaded) first makes the earning of every finished
+  ordinary sale of the running provider that has none, then walks every due
+  earning by a keyset cursor (creation time, then id) with no cap on the rows
+  it looks at, stopping only at the end or when its time
+  (`EARNING_SWEEP_BUDGET_MS`, 45 s) is used. A sale finished in the last
+  minute lands in that pass.
+- **The ledger.** On confirmation both sides are written under our reference,
+  category `earning`, linked to the item: WAWU's account `out` (with the
+  provider's charge) and the payee's wallet `in` (naming the payer; WAWU when
+  the payer's account is gone). Grouping of unlock earnings in the history
+  (section 6) reads these rows. Best effort, like every ledger write after the
+  money moved; the signed delivery and the status check write them too.
+- **For the nightly check (MONEY-16):** `EarningSettlementService.owedTotals()`
+  is the count and the sum, in kobo, of the earnings still `owed` for the
+  running provider. That money is in WAWU's account beside the open holds
+  (`WalletHoldService.openTotals()`) and WAWU's own shares. Compared with the
+  provider's own balance, never shown as one.
+- **Account deletion.** The payee's id on an earning is a `COUNTERPARTY`: the
+  payer's payment and the share it owes survive (BACKEND_GAPS G-702 for what is
+  owed to an account that is gone).
+- **Not here** (BACKEND_GAPS G-700 to G-703): refunding or reversing a sale
+  after its earning landed; credits' host shares and event hosts' payouts
+  (WALLET-17); batching small earnings into one move.

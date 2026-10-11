@@ -502,3 +502,28 @@ export class HoldListQueryDto extends CursorQueryDto {
   @IsIn(HOLD_ROLES)
   role!: HoldRole;
 }
+
+/** GET /money/earnings (W39). */
+export class MoneyEarningsQueryDto {
+  /**
+   * The month `thisMonth` is about, YYYY-MM in Africa/Lagos time. The current
+   * month when absent.
+   */
+  @ApiPropertyOptional({ pattern: MONTH_PATTERN.source })
+  @IsOptional()
+  @Matches(MONTH_PATTERN, { message: 'month must look like 2026-09' })
+  month?: string;
+}
+
+/** GET /money/earnings/content (W39 "per content"). */
+export class EarningContentQueryDto extends CursorQueryDto {
+  /**
+   * The month the pieces earned in, YYYY-MM in Africa/Lagos time. The
+   * current month when absent. A cursor is good only for the month it was
+   * given for.
+   */
+  @ApiPropertyOptional({ pattern: MONTH_PATTERN.source })
+  @IsOptional()
+  @Matches(MONTH_PATTERN, { message: 'month must look like 2026-09' })
+  month?: string;
+}

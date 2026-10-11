@@ -53,6 +53,8 @@ caller from the token.
 | `GET /money/payments/{id}` | `PaymentView` | | MONEY-19 (served; CONVENTIONS.md section 14a) |
 | `GET /money/holds?role=&cursor=&limit=` | `HoldPage` | | MONEY-18 (served; CONVENTIONS.md section 18) |
 | `GET /money/holds/{id}` | `HoldView` | | MONEY-18 (served; CONVENTIONS.md section 18) |
+| `GET /money/earnings?month=` | `EarningsView` | | WALLET-16 (served; CONVENTIONS.md section 19; not behind the wallet gate) |
+| `GET /money/earnings/content?month=&cursor=&limit=` | `EarningContentPage` | | WALLET-16 (served; CONVENTIONS.md section 19; not behind the wallet gate) |
 | `GET /money/transactions?filter=&q=&month=&group=&cursor=&limit=` | `TransactionPage` | | MONEY-15 (served; CONVENTIONS.md section 6) |
 | `GET /money/transactions/summary?month=` | `MonthlySummaryView` | | MONEY-15 (served) |
 | `GET /money/transactions/{id}` | `TransactionView` | | MONEY-15 (served) |
@@ -231,8 +233,10 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 | W36 PIN create | set; confirm | `POST /money/pin` (`pin`, `pinConfirmation`); change is `PUT /money/pin` |
 | W37 PIN reset | code to the phone on file, resend timer | `POST /money/pin/reset` → `sentTo` (last 4 digits), `resendAvailableAt`, `expiresAt`; `429 reset_codes_exhausted`, `503 provider_unreachable` (MONEY-14) |
 | | code check, then W36 | `POST /money/pin/reset/confirm` (`code`, `newPin`, `newPinConfirmation`) |
-| W39 Earnings | earned, by stream, by content | WALLET-16 (`GET /content/mine/earnings` today); not a money-contract route |
-| | paid DM money still held for the creator | `GET /money/holds?role=payee` |
+| W39 Earnings | earned all time and this month, by stream (Unlocks, Tips, Paid DMs), by content | `GET /money/earnings` → `allTime`, `thisMonth` (`earnedKobo`, `streams`), `GET /money/earnings/content?month=` → `EarningContentPage` (WALLET-16). The web's `GET /content/mine/earnings` is unchanged |
+| | no "Ready to move", no button; the money lands by itself (R-11) | nothing to call: `EarningSettlementService` moves each sale's 85% |
+| | a creator with no wallet: the money is waiting, "Open your wallet" | `EarningsView.waiting` (`count`, `amountKobo`) and `walletOpen: false`; both routes work without a wallet |
+| | paid DM money still held for the creator | `GET /money/holds?role=payee` (behind the wallet gate, G-449) or `EarningsView.held` (not gated) |
 | A21 Payout bank | bank list, name check | `GET /money/banks`, `POST /money/banks/name-check` |
 | | name against the BVN name | `PayoutAccountView.matchesBvnName` |
 | | save | `PUT /money/payout-account` |
@@ -280,6 +284,10 @@ Listed, not resolved. Each names what the canvas draws, what Fintava does
    money into WAWU's merchant wallet (the buyer pays Fintava's charge, R-10),
    and the creator's 85% then has to move from WAWU's wallet to the creator's
    (R-11): a second wallet to wallet move, charged ₦15.75 to ₦23.25 again.
+   R-31 (lead default, until the owner rules) makes that second charge WAWU's:
+   the creator receives the whole 85% and the charge is taken from WAWU's 15%
+   (WALLET-16 and MONEY-18 build it so). On a ₦100 sale the 15% is ₦15, less
+   than the ₦23.25 move, so WAWU pays more than it keeps (BACKEND_GAPS G-703).
    The same holds for releasing or refunding a hold (R-19) and for bills
    (`naira-api.md`, "Bills are paid from WAWU's merchant wallet"). Who pays
    that second charge (WAWU, the creator out of the 85%, or the buyer) is not
