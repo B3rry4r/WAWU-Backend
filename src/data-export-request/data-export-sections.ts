@@ -1081,6 +1081,11 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
     },
     { model: 'ChatParticipant', reason: 'A read position, not content.' },
     { model: 'CommunityReadMarker', reason: 'A read position, not content.' },
+    {
+      model: 'CommunityMessageKey',
+      reason:
+        'The key one community message was sent under, so a repeat is not stored twice; the message itself is exported under communityMessages.',
+    },
     { model: 'CartItem', reason: 'A transient basket, not a record.' },
     {
       model: 'EventReferral',

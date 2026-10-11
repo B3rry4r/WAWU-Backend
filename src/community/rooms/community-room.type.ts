@@ -55,3 +55,44 @@ export interface CommunityReadView {
   communityId: string;
   lastReadAt: Date;
 }
+
+/**
+ * INBOX-05. Where the caller stands in a room: `host` (they host it),
+ * `member` (let in), `pending` (asked to join a private room, waiting for the
+ * host) or `none`.
+ *
+ * A TypeScript enum, not a union of string literals, on purpose: the contract
+ * generator (scripts/enrich-contract.js) lists a literal union in the order the
+ * compiler happens to create the literal types, which moves with whatever else
+ * is in the program (a merge with main reordered it). An enum's members are
+ * created together, in the order written here, so `contract:build` writes the
+ * same order every time. The wire values are the strings.
+ */
+export enum CommunityViewerRole {
+  Host = 'host',
+  Member = 'member',
+  Pending = 'pending',
+  None = 'none',
+}
+
+/** INBOX-05, GET /communities/:id/room: a room as the caller sees it (I25). */
+export type CommunityRoomView = CommunityRoom & {
+  role: CommunityViewerRole;
+  /**
+   * WAWU Credits the caller spends to send one message here: 0 for the host,
+   * the metered cost for anyone else. A count, never naira.
+   */
+  messageCostInCredits: number;
+};
+
+/** INBOX-05, GET /communities/message-cost: the Communities card's price line (I24). */
+export interface CommunityMessageCost {
+  /** WAWU Credits one message costs a member. Reading costs nothing. */
+  creditsPerMessage: number;
+}
+
+/**
+ * INBOX-05, GET /communities/suggested: a room the caller could join, with its
+ * member count (I24, "2.1K members · open").
+ */
+export type SuggestedCommunity = CommunityResponse;
