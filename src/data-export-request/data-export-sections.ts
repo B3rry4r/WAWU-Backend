@@ -930,6 +930,11 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
       reason: 'A door role the organiser gave, not data the person gave.',
     },
     {
+      model: 'EventDoorScan',
+      reason:
+        'The first answer to one scan at a door, kept a day or two so a repeat is answered the same; it holds the ticket holder name, which is not the scanner own data.',
+    },
+    {
       model: 'PushToken',
       reason:
         'A phone push token is a working address for that phone, not content: a file that carries it hands the address to whoever opens the file.',

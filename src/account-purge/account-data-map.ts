@@ -164,8 +164,10 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'MakerTier', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'EventPass', column: 'wawuUserId', disposition: 'OWNED' },
   // An event registration this account claimed in the app (JOIN-01; claimed by
-  // JOIN-03): its name, phone, email and the payment that bought the plan. It
-  // names this account only after the claim, so it goes with the claimer. An
+  // JOIN-03, POST /waitlist/claims): its name, phone, email and the payment that
+  // bought the plan. It names this account only after the claim, so it goes
+  // with the claimer; what the claim granted (MakerTier, EventPass, PointLot
+  // and PointLedger) is mapped on its own rows above and below. An
   // unclaimed registration names no account and is not touched here: an
   // unpaid one is deleted after a week, a paid one waits for its person.
   // Default (agent), owner may override: the payment record goes with the
@@ -228,6 +230,10 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // Working someone's door (EVENTS-05) is this person's role on that event;
   // it goes with them. A ticket they let in stays let in.
   { model: 'EventDoorStaff', column: 'staffWawuId', disposition: 'OWNED' },
+  // The first answer to each scan this person made at a door (EVENTS-09 round
+  // 2), kept a day or two so a scan asked again is answered the same. It goes
+  // with them; the ticket they let in stays let in.
+  { model: 'EventDoorScan', column: 'scannerWawuId', disposition: 'OWNED' },
   {
     model: 'CreatorNoResponseTracker',
     column: 'creatorWawuId',
