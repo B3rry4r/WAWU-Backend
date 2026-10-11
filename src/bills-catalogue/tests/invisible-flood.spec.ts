@@ -1,5 +1,12 @@
-import { SANDBOX_DISCO_ROWS } from '../../../test/bills/sandbox-discos';
-import type { FintavaClient } from '../../fintava/fintava-client';
+import {
+  SANDBOX_DISCO_ROWS,
+  SANDBOX_DISCOS,
+} from '../../../test/bills/sandbox-discos';
+import {
+  FintavaDouble,
+  fintavaConfig,
+} from '../../../test/fintava/fintava-double';
+import { FintavaClient } from '../../fintava/fintava-client';
 import {
   hasVisibleText,
   readMeterAnswer,
@@ -31,12 +38,12 @@ const SECOND = 1000;
 
 /** Each is a space or an invisible character the name rule knows; the last two are above U+FFFF (two UTF-16 units each). */
 const BLANKS: [string, string][] = [
-  ['zero-width spaces', '​'],
-  ['Braille blanks', '⠀'],
-  ['Hangul fillers', 'ㅤ'],
+  ['zero-width spaces', '\u200b'],
+  ['Braille blanks', '\u2800'],
+  ['Hangul fillers', '\u3164'],
   ['spaces', ' '],
-  ['byte order marks', '﻿'],
-  ['no-break spaces', ' '],
+  ['byte order marks', '\ufeff'],
+  ['no-break spaces', '\u00a0'],
   ['null controls', '\u0000'],
   ['tag characters', String.fromCodePoint(0xe0020)],
   ['musical symbol begin beam', String.fromCodePoint(0x1d173)],
@@ -180,7 +187,7 @@ describe('the meter check answers a flood of invisible characters, it does not t
     'is `meter_unconfirmed` for %s of invisible characters as the name',
     async (_label, units) => {
       const started = Date.now();
-      await expect(check(flood('⠀', units), 'x')).rejects.toMatchObject({
+      await expect(check(flood('\u2800', units), 'x')).rejects.toMatchObject({
         code: 'meter_unconfirmed',
       });
       expect(Date.now() - started).toBeLessThan(SECOND);
@@ -192,19 +199,81 @@ describe('the meter check answers a flood of invisible characters, it does not t
     async (_label, units) => {
       const started = Date.now();
       const got = await check(
-        `${flood('​', units)}Ada Eze`,
-        flood('ㅤ', units),
+        `${flood('\u200b', units)}Ada Eze`,
+        flood('\u3164', units),
       );
       expect(got).toMatchObject({ name: 'Ada Eze', address: null });
       expect(Date.now() - started).toBeLessThan(SECOND);
     },
   );
 
-  it('keeps the address behind a flood too', async () => {
-    const got = await check(
-      'Ada Eze',
-      `${flood('⠀', 5_000_000)}14 Admiralty Way`,
-    );
+  it.each([...SIZES, ['12 MB', ABOVE_THE_ENGINES_STACK]] as [string, number][])(
+    'keeps the address behind %s of invisible characters',
+    async (_label, units) => {
+      const started = Date.now();
+      const got = await check(
+        'Ada Eze',
+        `${flood('\u2800', units)}14 Admiralty Way`,
+      );
+      expect(got).toMatchObject({
+        name: 'Ada Eze',
+        address: '14 Admiralty Way',
+      });
+      expect(Date.now() - started).toBeLessThan(SECOND);
+    },
+  );
+});
+
+describe('over HTTP, through the real Fintava client and the service (5 MB each way)', () => {
+  const double = new FintavaDouble();
+  const service = () => {
+    const config = fintavaConfig({
+      FINTAVA_BASE_URL: double.baseUrl,
+      FINTAVA_API_KEY: 'live_test_flood_0123456789FAKEKEY',
+      // The module's own timeout is for small answers; ten megabytes of JSON need longer on a loaded machine.
+      FINTAVA_TIMEOUT_MS: '30000',
+    });
+    return new BillsCatalogueService(new FintavaClient(config), config);
+  };
+  const check = (data: Record<string, string>) => {
+    double.on('GET', '/billing/discos', { status: 200, body: SANDBOX_DISCOS });
+    double.on('POST', '/billing/preview-meter', {
+      status: 200,
+      body: { data, status: 200, message: 'Meter details fetched' },
+    });
+    return service().previewMeter('person-1', {
+      code: 'AEDC',
+      meterNumber: '04123456789',
+    });
+  };
+
+  beforeAll(() => double.start());
+  afterAll(() => double.stop());
+  beforeEach(() => double.reset());
+
+  it('answers the name and the address behind a flood in the address', async () => {
+    const got = await check({
+      Customer_Name: 'Ada Eze',
+      Address: `${flood('\u2800', 5_000_000)}14 Admiralty Way`,
+    });
     expect(got).toMatchObject({ name: 'Ada Eze', address: '14 Admiralty Way' });
-  });
+  }, 30_000);
+
+  it('answers `meter_unconfirmed` for a flood as the name', async () => {
+    await expect(
+      check({
+        Customer_Name: flood('\u200b', 5_000_000),
+        Address: '14 Admiralty Way',
+      }),
+    ).rejects.toMatchObject({ code: 'meter_unconfirmed' });
+  }, 30_000);
+
+  it('answers `meter_unconfirmed` when a flood is followed by a name (the rule refuses a name behind this many)', async () => {
+    await expect(
+      check({
+        Customer_Name: `${flood('\u200b', 5_000_000)}Ada Eze`,
+        Address: '14 Admiralty Way',
+      }),
+    ).rejects.toMatchObject({ code: 'meter_unconfirmed' });
+  }, 30_000);
 });
