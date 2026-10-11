@@ -2591,6 +2591,7 @@ model Event {
   referrals   EventReferral[]
   /// People the host lets scan tickets in at the door (EVENTS-05).
   doorStaff   EventDoorStaff[]
+  doorScans   EventDoorScan[]
 
   /// Banner image. Object-storage URL from POST /uploads/presign.
   bannerUrl    String?
@@ -3377,6 +3378,34 @@ model EventDoorStaff {
 
   @@unique([eventId, staffWawuId])
   @@index([staffWawuId])
+}
+
+/// The first answer to one scan at the door (EVENTS-09 round 2, D1).
+///
+/// A phone sends `Idempotency-Key` with a scan; the key is made once per scan
+/// and sent again unchanged when the phone asks again after an answer was lost.
+/// One row per (scanner, key). The row is written in the same transaction as
+/// the check-in it answers, so either both exist or neither does: a repeat
+/// finds the row and gets the first verdict ("let them in", with the holder's
+/// name) instead of "already used" by the scanner's own door. The primary key
+/// is the lock: two requests with one key, on one Hub process or two, leave
+/// one row. `fingerprint` is the event and the text sent, so a key used for
+/// another scan is refused. Rows are purged after `DOOR_SCAN_KEY_HOURS`.
+model EventDoorScan {
+  scannerWawuId String
+  key           String
+  eventId       String
+  fingerprint   String
+  /// The answer exactly as first sent (a `DoorCheckInResult` as JSON text, so
+  /// a repeat is the same bytes: a JSON column would reorder its keys).
+  response      String
+  createdAt     DateTime @default(now())
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@id([scannerWawuId, key])
+  @@index([eventId])
+  @@index([createdAt])
 }
 
 // -----------------------------------------------------------------------------
@@ -5766,6 +5795,13 @@ model WaitlistRegistration {
   /// The WAWU ID account that claimed this payment in the app (JOIN-03).
   claimedByWawuId String?
   claimedAt       DateTime?
+  /// What the claim told its claimer (JOIN-03 round 2): the offer's name, the
+  /// days given, whether they were added to a running plan, and the points
+  /// lot. Written in the claim's own transaction. The SAME account repeating
+  /// the SAME code is answered from it, as a 200, so a lost answer can be
+  /// replayed; nobody else ever sees it. Never carries another person's
+  /// details. NULL on an unclaimed row.
+  claimResult     Json?
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 

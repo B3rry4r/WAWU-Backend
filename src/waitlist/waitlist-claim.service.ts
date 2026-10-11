@@ -1,0 +1,203 @@
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { WaitlistStatus } from '../../generated/prisma/enums';
+import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
+import { PrismaService } from '../common/prisma/prisma.service';
+import { PLANS_CONFIG, type PlansConfig } from '../plans/plans-config';
+import { PlansService } from '../plans/plans.service';
+import { TierGrantService } from '../plans/tier-grant.service';
+import {
+  holdsRegisteredContact,
+  readAccessCode,
+  verifiedContactsOf,
+} from './waitlist-claim-proof';
+import {
+  readStoredClaimResult,
+  type StoredClaimResult,
+} from './waitlist-claim-result';
+import { WaitlistError } from './waitlist-error';
+import type { WaitlistClaimView } from './waitlist-view.type';
+
+/** The words a refused claim gives. No em-dash, nothing the caller sent, nobody else's details. */
+const WORDS = {
+  invalid: 'Type the 8 letters and numbers of your access code.',
+  notFound:
+    'We could not match that code to you. Check the code, and sign in with the phone number or email you registered with. It must be one you have confirmed.',
+  notVerified:
+    'Confirm your phone number or email first, then try your code again.',
+  refunded:
+    'That code is from an extra payment, which is being refunded, so it cannot be used. Use the code from your first payment.',
+  claimed: 'That code has already been used.',
+  claimedByYou: 'You have already claimed that code.',
+  offerGone:
+    'The offer for that code is no longer available. Email support@wawuafrica.com with your code.',
+} as const;
+
+/**
+ * THE CLAIM (JOIN-03, R-48): a signed-in person turns what they paid for on
+ * the registration page into the plan, with the access code that page showed.
+ *
+ * ── WHO MAY CLAIM ────────────────────────────────────────────────────────
+ * The code alone is never enough. The caller must hold a phone or an email
+ * their account has PROVEN (waitlist-claim-proof.ts: WAWU ID's `phoneVerified`
+ * and `emailVerified` flags, or the Hub's BVN-checked phone) that is the one
+ * the registration was made with. A phone that was only typed never counts. A code that does not exist, is not paid, or
+ * belongs to a registration whose contacts the caller has not proven all
+ * answer the same `code_not_found`, so the route cannot be used to learn which
+ * codes exist, and no answer carries anyone's name, phone, email or reference.
+ * Only after the match does the caller learn more about THEIR OWN
+ * registration: that it is a refunded extra payment, or already claimed.
+ *
+ * ── WHAT IT GIVES ────────────────────────────────────────────────────────
+ * What the offer's tier gives (what Verify gives, R-48), its days counted
+ * from the claim, through TierGrantService: the one place a plan is granted.
+ * A `failed` row (a second payment kept for a refund) is refused.
+ *
+ * ── ONCE, AND SAFE TO REPEAT ─────────────────────────────────────────────
+ * The first statement of the transaction marks the row claimed with a
+ * conditional UPDATE (`status` paid and not yet claimed). Two taps at once, on
+ * one server or two, queue on that row in Postgres: the second finds it
+ * claimed (READ COMMITTED re-checks the condition) and changes nothing. The
+ * grant is in the same transaction, so a grant that fails leaves the code
+ * unclaimed, and a claim is never marked without its grant. The grant's own
+ * references (`join:<registration id>`) are unique too.
+ *
+ * What the claim answered is stored on the row in that same transaction
+ * (`claimResult`). The account that made the claim and sends the same code
+ * again, because the answer never reached the phone or a second tap came in,
+ * gets that answer back as a 200 and nothing is written: a claim is idempotent
+ * for its own claimer. The answer also says WHEN the code was claimed
+ * (`claimedAt`, the row's own stamp, so a repeat carries the first time and
+ * never its own), so the screen can say what is true of a plan that has begun
+ * or ended since (JOIN-03 round 3, D4). Anyone else is told the code is used (`already_claimed`).
+ * A row claimed before the column existed has no stored answer and keeps
+ * answering its claimer `claimed_by_you` (409).
+ */
+@Injectable()
+export class WaitlistClaimService {
+  private readonly logger = new Logger(WaitlistClaimService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(PLANS_CONFIG) private readonly plans: PlansConfig,
+    private readonly grants: TierGrantService,
+    private readonly tiers: PlansService,
+  ) {}
+
+  /** POST /waitlist/claims. */
+  async claim(
+    user: WawuJwtClaims,
+    rawCode: string,
+    now: Date = new Date(),
+  ): Promise<WaitlistClaimView> {
+    const code = readAccessCode(rawCode);
+    if (code === null) throw new WaitlistError('code_invalid', WORDS.invalid);
+
+    // The Hub's own proof of a phone (the BVN check matched it to the account's):
+    // read for the caller only, by their own id.
+    const identity = await this.prisma.walletIdentity.findUnique({
+      where: { wawuUserId: user.sub },
+      select: { verifiedPhone: true, bvnVerifiedAt: true },
+    });
+    const proven = verifiedContactsOf(user, identity);
+    if (proven.phones.length === 0 && proven.email === null)
+      throw new WaitlistError('contact_not_verified', WORDS.notVerified);
+
+    const row = await this.prisma.waitlistRegistration.findUnique({
+      where: { accessCode: code },
+    });
+    // Unknown, still unpaid, or somebody else's: one answer for all three.
+    if (
+      row === null ||
+      row.status === WaitlistStatus.pending ||
+      !holdsRegisteredContact(proven, row)
+    )
+      throw new WaitlistError('code_not_found', WORDS.notFound);
+
+    // From here the caller has proven the registration is theirs.
+    if (row.status === WaitlistStatus.failed)
+      throw new WaitlistError('code_refunded', WORDS.refunded);
+    if (row.claimedByWawuId !== null) return this.answerClaimed(user, row, now);
+
+    const offer = this.plans.eventOffers.find((o) => o.id === row.offerId);
+    if (offer === undefined)
+      throw new WaitlistError('offer_unavailable', WORDS.offerGone);
+
+    const outcome = await this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.waitlistRegistration.updateMany({
+        where: {
+          id: row.id,
+          status: WaitlistStatus.paid,
+          claimedByWawuId: null,
+        },
+        data: { claimedByWawuId: user.sub, claimedAt: now },
+      });
+      if (claimed.count === 0) {
+        // Lost the race to another tap: the row is claimed now, and by whom
+        // decides the answer below. Nothing was written here.
+        return {
+          kind: 'taken' as const,
+          current: await tx.waitlistRegistration.findUniqueOrThrow({
+            where: { id: row.id },
+          }),
+        };
+      }
+      const granted = await this.grants.grant(tx, {
+        wawuUserId: user.sub,
+        tierId: offer.tier,
+        sourceRef: `join:${row.id}`,
+        days: offer.tierDays,
+        now,
+      });
+      const told: StoredClaimResult = {
+        offerName: offer.name,
+        days: granted.daysAdded,
+        extended: granted.extended,
+        pointsGranted: granted.pointsGranted,
+        pointsExpireAt: granted.pointsExpireAt?.toISOString() ?? null,
+      };
+      await tx.waitlistRegistration.update({
+        where: { id: row.id },
+        data: { claimResult: told },
+      });
+      return { kind: 'claimed' as const, told };
+    });
+
+    if (outcome.kind === 'taken')
+      return this.answerClaimed(user, outcome.current, now);
+    this.logger.log(`Registration ${row.id} claimed by an account.`);
+    return {
+      ...outcome.told,
+      claimedAt: now.toISOString(),
+      tier: await this.tiers.myTier(user.sub, now),
+    };
+  }
+
+  /**
+   * The row is claimed already. The account that claimed it is given what it
+   * was first told (a 200, nothing written); anyone else is told the code is
+   * used. A claim from before the answer was stored is refused its claimer
+   * with `claimed_by_you`.
+   */
+  private async answerClaimed(
+    user: WawuJwtClaims,
+    row: {
+      claimedByWawuId: string | null;
+      claimedAt: Date | null;
+      claimResult: unknown;
+    },
+    now: Date,
+  ): Promise<WaitlistClaimView> {
+    if (row.claimedByWawuId !== user.sub)
+      throw new WaitlistError('already_claimed', WORDS.claimed);
+    const told = readStoredClaimResult(row.claimResult);
+    // A claim always stamps both; a row with an answer and no stamp is not one
+    // this code wrote, and is told what a claim from before the answer was kept is.
+    if (told === null || row.claimedAt === null)
+      throw new WaitlistError('claimed_by_you', WORDS.claimedByYou);
+    return {
+      ...told,
+      claimedAt: row.claimedAt.toISOString(),
+      tier: await this.tiers.myTier(user.sub, now),
+    };
+  }
+}

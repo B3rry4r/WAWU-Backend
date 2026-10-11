@@ -9,7 +9,7 @@
 --
 -- Rollback:
 --   DROP TABLE "ProductDraft";
---   DELETE FROM "_prisma_migrations" WHERE migration_name = '20261021030000_product_drafts';
+--   DELETE FROM "_prisma_migrations" WHERE migration_name = '20261021120000_product_drafts';
 
 -- CreateTable
 CREATE TABLE "ProductDraft" (
