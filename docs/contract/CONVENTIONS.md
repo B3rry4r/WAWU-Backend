@@ -261,7 +261,9 @@ status.
 ## 4. `Idempotency-Key` on every request that moves money
 
 **Which requests:** `POST /money/transfers/wawu`, `POST /money/transfers/bank`
-and `POST /money/payments`, and every money-moving route added later. Without
+and `POST /money/payments`, `POST /plans/purchases` (a tier bought from the
+wallet, TIER-03: its stored answer is the purchase, not the bare payment;
+docs/contract/PLANS.md section 7), and every money-moving route added later. Without
 the header: `400 idempotency_key_required`. Format: 8 to 128 characters of
 `[A-Za-z0-9_-]`.
 

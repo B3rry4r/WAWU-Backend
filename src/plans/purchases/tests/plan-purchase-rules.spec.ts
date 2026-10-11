@@ -269,6 +269,6 @@ describe('what a tier purchase costs (TIER-03)', () => {
     expect(t('renew', false)).toBe(`${small.name} renewal`);
     expect(t('upgrade', false)).toBe(`Upgrade to ${big.name}`);
     for (const k of ['tier', 'renew', 'upgrade'] as const)
-      expect(t(k, true)).not.toMatch(/[0-9—₦$]/);
+      expect(t(k, true)).not.toMatch(new RegExp('[0-9\\u2014₦$]'));
   });
 });

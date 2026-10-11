@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import request from 'supertest';
 import type { Response } from 'supertest';
 import {
   api,
@@ -10,6 +11,7 @@ import {
 } from '../../../../test/plans/tier-purchase-harness';
 import { body } from '../../../../test/payments/poll-helpers';
 import type { PaymentKind } from '../../../money/dto/money-enums';
+import type { TransactionPage } from '../../../money/money-view.type';
 import {
   OTHER_CURRENCY_MESSAGE,
   PAYMENT_FAILED_REASON,
@@ -49,6 +51,7 @@ const DAY = 86_400_000;
 const config = loadPlansConfig();
 const byPrice = [...config.tiers].sort((a, b) => a.price.kobo - b.price.kobo);
 const small = byPrice[0];
+const middle = byPrice[1];
 const big = byPrice[byPrice.length - 1];
 const bumpKobo = priceIn(config.checkoutBump.price, 'NGN');
 const bumpPoints = countIn(config.checkoutBump.points, 'NGN');
@@ -309,6 +312,26 @@ describe('Buy, renew or upgrade a tier from the wallet (TIER-03)', () => {
       bump: true,
       amountMinor: total,
     });
+  });
+
+  it('shows in the wallet history as a purchase named after the tier, with the checkout bump said', async () => {
+    const p = await h.buyer(RICH);
+    await purchase(p, { kind: 'tier', tierId: small.id, bump: true });
+    const res = await request(h.app.getHttpServer())
+      .get('/api/hub/money/transactions')
+      .set('Authorization', p.auth);
+    expect(res.status).toBe(200);
+    const rows = body<TransactionPage>(res).data!.items.filter(
+      (r) => r.link?.kind === 'tier_bump',
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      direction: 'out',
+      category: 'purchase',
+      status: 'completed',
+      description: `Tier and points · ${small.name} and bonus points`,
+    });
+    expect(rows[0].description).not.toMatch(/\u2014/);
   });
 
   // ---------------------------------------------------------------------------
@@ -584,6 +607,24 @@ describe('Buy, renew or upgrade a tier from the wallet (TIER-03)', () => {
     });
     expect(bad.status).toBe(409);
     expect(reasonOf(bad).code).toBe('target_not_payable');
+    expect(sendsFrom(p)).toHaveLength(sends);
+    expect(await rowsOf(p)).toHaveLength(1);
+  });
+
+  it('an upgrade quoted from one tier is not paid once the person runs another: the quote no longer fits and nothing is taken', async () => {
+    const p = await h.buyer(RICH);
+    await purchase(p, { kind: 'tier', tierId: small.id });
+    const t: Terms = { kind: 'upgrade', tierId: big.id };
+    const q = await quoted(p, t);
+    expect(q.fromTierId).toBe(small.id);
+    await h.prisma.makerTier.update({
+      where: { wawuUserId: p.id },
+      data: { tierId: middle.id },
+    });
+    const sends = sendsFrom(p).length;
+    const res = await call.buy(p, bodyFor(t, q));
+    expect(res.status).toBe(409);
+    expect(reasonOf(res).code).toBe('quote_changed');
     expect(sendsFrom(p)).toHaveLength(sends);
     expect(await rowsOf(p)).toHaveLength(1);
   });

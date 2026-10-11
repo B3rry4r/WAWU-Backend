@@ -132,6 +132,7 @@ payment onto the wallet.
 | `paid_dm` | INBOX-17 | the message id `POST /dm/:creatorWawuId/send` returns | no | until the creator answers |
 | `event_ticket` | EVENTS-07 | the order id `POST /events/:id/orders` returns | no | until the event takes place |
 | `bill` | BILLS-04 | the bill id `POST /bills/init` returns | no | until the biller delivers |
+| `tier`, `tier_bump` | TIER-03 | the terms: `tier-<tierId>`, `renew-<tierId>` or `upgrade-<fromTierId>-<tierId>` (`GET /plans/purchases/quote` builds it; `tier_bump` adds the checkout bump) | no | no (WAWU's own sale, no seller split) |
 
 ## 2. The named schemas (G-1)
 

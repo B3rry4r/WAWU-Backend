@@ -27,6 +27,11 @@ import {
   recordByReference,
   type SeenRequest,
 } from '../fintava/fintava-double';
+import { WALLET_PROVIDER } from '../../src/wallet-provider/wallet-provider.interface';
+import {
+  type NuvionAccount,
+  type NuvionSeamStandIn,
+} from '../payments/nuvion-seam-standin';
 import { mintToken, QuietLogger } from '../payments/poll-helpers';
 
 /**
@@ -198,6 +203,15 @@ export interface Person {
   auth: string;
   walletId: string;
   accountNumber: string;
+  /** The person's account at the Nuvion stand-in, when one is booted. */
+  account?: NuvionAccount;
+}
+
+export interface BootOptions {
+  /** Run the wallet provider seam on this Nuvion stand-in instead of the Fintava double. */
+  nuvion?: NuvionSeamStandIn;
+  /** The fee Nuvion's settings charge on a book transfer, in kobo (a spec value). */
+  nuvionFeeKobo?: number;
 }
 
 export interface TierHarness {
@@ -221,7 +235,10 @@ export interface TierHarness {
 }
 
 /** Boots the stand-ins; call from `beforeAll`, and `close()` from `afterAll`. */
-export async function bootTierApp(tag: string): Promise<TierHarness> {
+export async function bootTierApp(
+  tag: string,
+  opts: BootOptions = {},
+): Promise<TierHarness> {
   const cheapPinHash = await argon2.hash(PIN, {
     type: argon2.argon2id,
     timeCost: 1,
@@ -243,13 +260,21 @@ export async function bootTierApp(tag: string): Promise<TierHarness> {
     MERCHANT_MAX_PER_TXN_KOBO: '1000000000',
     PIN_LOCK_MINUTES: '',
     IDEMPOTENCY_KEY_HOURS: '',
+    ...(opts.nuvion
+      ? {
+          NUVION_FEE_BOOK_TRANSFER: String(opts.nuvionFeeKobo ?? 0),
+          NUVION_FEE_BANK_PAYOUT: String(opts.nuvionFeeKobo ?? 0),
+          NUVION_FEE_INFLOW: String(opts.nuvionFeeKobo ?? 0),
+          WAWU_LIMIT_PURCHASE_DAILY_KOBO: '100000000',
+        }
+      : {}),
   };
   for (const [k, v] of Object.entries(env)) {
     previous[k] = process.env[k];
     process.env[k] = v;
   }
   installFintava(double, wallets);
-  const moduleRef = await Test.createTestingModule({
+  let builder = Test.createTestingModule({
     imports: [
       ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
       PassportModule.register({ defaultStrategy: 'wawu-jwt' }),
@@ -259,9 +284,10 @@ export async function bootTierApp(tag: string): Promise<TierHarness> {
       PlanPurchasesModule,
     ],
     providers: [WawuJwtStrategy, WawuIdClient],
-  })
-    .setLogger(logger)
-    .compile();
+  });
+  if (opts.nuvion)
+    builder = builder.overrideProvider(WALLET_PROVIDER).useValue(opts.nuvion);
+  const moduleRef = await builder.setLogger(logger).compile();
   const app = moduleRef.createNestApplication<INestApplication<App>>({
     ...HUB_APP_OPTIONS,
     logger,
@@ -300,6 +326,29 @@ export async function bootTierApp(tag: string): Promise<TierHarness> {
       users.push(id);
       accountSeq += 1;
       const accountNumber = `31${String(Date.now()).slice(-6)}${String(accountSeq).padStart(2, '0')}`;
+      if (opts.nuvion) {
+        // An approved Nuvion account holding `kobo`, as NUV-04 will record it.
+        const account = opts.nuvion.openAccount(BigInt(kobo), accountNumber);
+        await prisma.fintavaWallet.create({
+          data: {
+            wawuUserId: id,
+            customerId: account.entityId,
+            walletId: account.accountId,
+            accountNumber,
+            provider: 'nuvion',
+          },
+        });
+        await prisma.transactionPin.create({
+          data: { wawuUserId: id, pinHash: cheapPinHash },
+        });
+        return {
+          id,
+          auth: `Bearer ${mintToken(id, tag)}`,
+          walletId: account.accountId,
+          accountNumber,
+          account,
+        };
+      }
       const walletId = randomUUID();
       await prisma.fintavaWallet.create({
         data: {
