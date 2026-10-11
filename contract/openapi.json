@@ -13204,6 +13204,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per scan, made by the app when a ticket is first read and sent again unchanged when it asks again about that scan. A repeat is answered with the first verdict.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
           }
         ],
         "requestBody": {
@@ -13211,7 +13221,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ScanTicketDto"
+                "$ref": "#/components/schemas/DoorScanDto"
               }
             }
           }
@@ -13228,7 +13238,7 @@
             }
           }
         },
-        "summary": "Scan at the door, as the host or their door staff. Let them in (E20)\nwith the holder's name, already used (E23) with when and by whom, or\nnot valid (E24), with the live counts.",
+        "summary": "Scan at the door, as the host or their door staff. Let them in (E20)\nwith the holder's name, already used (E23) with when and by whom, or\nnot valid (E24), with the live counts.\n\n`Idempotency-Key` (optional): the phone makes one per scan and sends it\nagain unchanged when it asks again after an answer was lost. A repeat is\nanswered with the first verdict (header `Idempotent-Replayed: true`),\nnever \"already used\" by the scanner's own door.",
         "tags": [
           "EventRunning"
         ]
@@ -30610,6 +30620,19 @@
           }
         }
       },
+      "DoorScanDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 4,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "code"
+        ]
+      },
       "MoneyErrorReason": {
         "type": "object",
         "properties": {
@@ -39584,6 +39607,13 @@
               "already_used",
               "invalid"
             ]
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "cancelled"
+            ],
+            "nullable": true
           },
           "ticket": {
             "type": "object",
