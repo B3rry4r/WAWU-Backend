@@ -6,7 +6,7 @@ import {
   timeSetting,
   wholeSetting,
 } from '../money-check-config';
-import { mailOf } from '../money-check-mailer';
+import { mailOf, MoneyCheckMailer } from '../money-check-mailer';
 import { FindingSink } from '../money-check-sink';
 import { isNight, lagosMinuteOfDay, lagosNight } from '../money-check-time';
 import {
@@ -343,5 +343,33 @@ describe("the email's facts", () => {
     );
     expect(text).not.toContain(String.fromCharCode(0x2014));
     expect(text).not.toMatch(/\+234|\b0[789]\d{9}\b|\b\d{10}\b/);
+  });
+});
+
+describe('the mailer', () => {
+  const config = (values: Record<string, string>) =>
+    ({ get: (key: string) => values[key] }) as unknown as ConfigService;
+  const mail = mailOf(
+    failureReport(
+      'fintava',
+      '2026-10-12',
+      new Date('2026-10-12T01:30:00Z'),
+      new Date('2026-10-12T02:10:00Z'),
+      'x',
+    ),
+    { mismatchCount: 0, lookCount: 0 },
+  );
+
+  it('will not send in production without WAWU IDs service key', async () => {
+    const was = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      await expect(
+        new MoneyCheckMailer(config({})).send('owner', mail),
+      ).rejects.toThrow('WAWU_ID_INTERNAL_SERVICE_KEY');
+    } finally {
+      if (was === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = was;
+    }
   });
 });

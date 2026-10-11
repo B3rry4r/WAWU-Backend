@@ -2075,6 +2075,77 @@ describe('the nightly check against the wallet provider (MONEY-16)', () => {
 
   // -------------------------------------------------------------------------
 
+  describe('what the database refuses, whatever the code does', () => {
+    const base = (over: Record<string, unknown>) => ({
+      id: randomUUID(),
+      provider: 'fintava',
+      night: night(),
+      startedAt: new Date(),
+      leaseUntil: new Date(),
+      ...over,
+    });
+
+    it('refuses a status or a verdict it does not know, and a night that is not a date', async () => {
+      await expect(
+        prisma.moneyCheckRun.create({ data: base({ status: 'done' }) }),
+      ).rejects.toThrow();
+      await expect(
+        prisma.moneyCheckRun.create({
+          data: base({
+            status: 'finished',
+            verdict: 'fine',
+            report: {},
+            finishedAt: new Date(),
+          }),
+        }),
+      ).rejects.toThrow();
+      await expect(
+        prisma.moneyCheckRun.create({ data: base({ night: 'tonight' }) }),
+      ).rejects.toThrow();
+    });
+
+    it('refuses a finished run without its time, verdict or report, and an unfinished run with a verdict', async () => {
+      const finished = {
+        status: 'finished',
+        verdict: 'clean',
+        report: {},
+        finishedAt: new Date(),
+      };
+      for (const missing of ['verdict', 'report', 'finishedAt']) {
+        const data = { ...finished, [missing]: undefined };
+        await expect(
+          prisma.moneyCheckRun.create({ data: base(data) }),
+        ).rejects.toThrow();
+      }
+      await expect(
+        prisma.moneyCheckRun.create({
+          data: base({ status: 'running', verdict: 'clean' }),
+        }),
+      ).rejects.toThrow();
+      await expect(
+        prisma.moneyCheckRun.create({ data: base(finished) }),
+      ).resolves.toMatchObject({ status: 'finished' });
+    });
+
+    it('refuses a second row for one provider, night and sequence', async () => {
+      const n = night();
+      await prisma.moneyCheckRun.create({ data: base({ night: n }) });
+      await expect(
+        prisma.moneyCheckRun.create({ data: base({ night: n }) }),
+      ).rejects.toThrow();
+      await expect(
+        prisma.moneyCheckRun.create({ data: base({ night: n, sequence: 2 }) }),
+      ).resolves.toBeDefined();
+      await expect(
+        prisma.moneyCheckRun.create({
+          data: base({ night: n, provider: 'nuvion' }),
+        }),
+      ).resolves.toBeDefined();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+
   describe('by hand (npm run money:check)', () => {
     it('reads --night and --again, and refuses anything else', () => {
       expect(parseArgs([])).toEqual({ again: false });
