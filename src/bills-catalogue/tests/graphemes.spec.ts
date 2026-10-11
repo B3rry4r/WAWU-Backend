@@ -1,4 +1,5 @@
 import {
+  boundBytes,
   clipGraphemes,
   graphemes,
   graphemesByRule,
@@ -167,6 +168,16 @@ describe.each(splitters)('clipGraphemes by %s', (_name, split) => {
   it('counts a family emoji as one character, not seven', () => {
     expect(clipGraphemes(FAMILY.repeat(3), 2, split)).toBe(FAMILY.repeat(2));
   });
+
+  it('drops the last character when it is told the text was cut short, since that one may be only part of one', () => {
+    expect(clipGraphemes('abcdef', 10, split, true)).toBe('abcde');
+    expect(clipGraphemes('abcdef', 3, split, true)).toBe('abc');
+    expect(clipGraphemes(FAMILY.repeat(3), 10, split, true)).toBe(
+      FAMILY.repeat(2),
+    );
+    expect(clipGraphemes('abcdef', 10, split, false)).toBe('abcdef');
+    expect(clipGraphemes('', 10, split, true)).toBe('');
+  });
 });
 
 describe('clipProviderText: the cap on what the Hub passes on', () => {
@@ -185,9 +196,11 @@ describe('clipProviderText: the cap on what the Hub passes on', () => {
     expect(clipProviderText(as(200) + whole)).toBe(as(200));
   });
 
-  it('counts the characters, so 200 family emoji are passed on whole', () => {
-    expect(clipProviderText(FAMILY.repeat(200))).toBe(FAMILY.repeat(200));
-    expect(clipProviderText(FAMILY.repeat(201))).toBe(FAMILY.repeat(200));
+  it('counts the characters, so 200 family emoji are passed on whole when the byte bound leaves room', () => {
+    // A family is 25 bytes, so 200 of them are 5,000: the default byte bound (R3-6) would cut them, this test is about the count.
+    const room = 100_000;
+    expect(clipProviderText(FAMILY.repeat(200), room)).toBe(FAMILY.repeat(200));
+    expect(clipProviderText(FAMILY.repeat(201), room)).toBe(FAMILY.repeat(200));
   });
 
   it('drops spaces left at the end by the cut', () => {
@@ -200,5 +213,145 @@ describe('clipProviderText: the cap on what the Hub passes on', () => {
 
   it('passes a short text on as it is', () => {
     expect(clipProviderText('Chidinma Okoro')).toBe('Chidinma Okoro');
+  });
+});
+
+describe('boundBytes: the text read only as far as the cap (BILLS-01 round 4, R3-6)', () => {
+  const bytes = (text: string) => Buffer.byteLength(text, 'utf8');
+
+  it('leaves a text that fits as it is, and says it was not cut', () => {
+    expect(boundBytes('Chidinma Okoro', 1024)).toEqual({
+      text: 'Chidinma Okoro',
+      cut: false,
+    });
+    expect(boundBytes('', 10)).toEqual({ text: '', cut: false });
+    expect(boundBytes('abcde', 5)).toEqual({ text: 'abcde', cut: false });
+  });
+
+  it('cuts at the byte, and says it cut', () => {
+    expect(boundBytes('abcdef', 5)).toEqual({ text: 'abcde', cut: true });
+  });
+
+  it.each([
+    ['two bytes a letter', 'é', 2],
+    ['three bytes a letter', '\u20a6', 3],
+    ['four bytes a letter', '\u{1F600}', 4],
+  ])(
+    'counts a character of %s by its bytes and never splits it',
+    (_k, ch, size) => {
+      const text = ch.repeat(10);
+      for (const max of [size, size * 3, size * 3 + 1, size * 3 + size - 1]) {
+        const got = boundBytes(text, max);
+        expect(bytes(got.text)).toBeLessThanOrEqual(max);
+        expect(got.text).toBe(ch.repeat(Math.floor(max / size)));
+        expect(got.cut).toBe(true);
+      }
+    },
+  );
+
+  it.each([
+    ['U+007F, the last of one byte', 0x7f, 1],
+    ['U+0080, the first of two', 0x80, 2],
+    ['U+07FF, the last of two', 0x7ff, 2],
+    ['U+0800, the first of three', 0x800, 3],
+    ['U+FFFF, the last of three', 0xffff, 3],
+    ['U+10000, the first of four', 0x10000, 4],
+    ['U+10FFFF, the last of four', 0x10ffff, 4],
+  ])('counts %s as %i bytes', (_k, code, size) => {
+    const ch = String.fromCodePoint(code);
+    expect(bytes(ch)).toBe(size);
+    const text = ch.repeat(20);
+    const got = boundBytes(text, size * 7);
+    expect(got).toEqual({ text: ch.repeat(7), cut: true });
+    expect(boundBytes(ch.repeat(7), size * 7)).toEqual({
+      text: ch.repeat(7),
+      cut: false,
+    });
+  });
+
+  it('cuts a text of many characters of three bytes even when its length is under the cap (the length is not the bytes)', () => {
+    const text = '\u20a6'.repeat(300);
+    expect(boundBytes(text, 800)).toEqual({
+      text: '\u20a6'.repeat(266),
+      cut: true,
+    });
+  });
+
+  it('reads no further than the cap: five megabytes are cut as quickly as five thousand', () => {
+    const started = Date.now();
+    const got = boundBytes('x'.repeat(5_000_000), 1024);
+    expect(got.text).toHaveLength(1024);
+    expect(got.cut).toBe(true);
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+});
+
+describe('clipProviderText: the byte bound before the cut (R3-6)', () => {
+  const bytes = (text: string) => Buffer.byteLength(text, 'utf8');
+  const marks = (n: number) => point(0x301).repeat(n);
+
+  it('is a bound: one letter and a thousand and a half marks, one character a person sees, is not passed on', () => {
+    // The 200 characters cap alone let this through whole (1,501 code points).
+    expect(clipProviderText(`e${marks(1500)}`)).toBe('');
+  });
+
+  it('is a bound: a chain of 400 emoji joined by a joiner is one character and is not passed on', () => {
+    expect(clipProviderText(Array(400).fill(point(0x1f468)).join(ZWJ))).toBe(
+      '',
+    );
+  });
+
+  it('is a bound: 150 letters with ten accents each are cut to the whole letters that fit', () => {
+    const unit = `a${marks(10)}`;
+    const got = clipProviderText(unit.repeat(150));
+    expect(bytes(got)).toBeLessThanOrEqual(1024);
+    expect(got).toBe(unit.repeat(got.length / unit.length));
+    // The one the cut landed in is left out, and the rest are whole.
+    expect(got.length / unit.length).toBeGreaterThan(30);
+    expect(got.length / unit.length).toBeLessThan(50);
+  });
+
+  it('takes the cap from its argument, which is the Hub’s setting', () => {
+    expect(clipProviderText('N'.repeat(100), 64)).toBe('N'.repeat(63));
+    expect(clipProviderText('N'.repeat(100), 4096)).toBe('N'.repeat(100));
+  });
+
+  it('keeps a text of exactly the cap whole when it is not cut (the cap is on the bytes read, 1,024 by default)', () => {
+    expect(clipProviderText('N'.repeat(150))).toBe('N'.repeat(150));
+  });
+
+  it('takes the spaces and invisible characters off its start before it cuts, so a name behind 250 of them is read', () => {
+    for (const blank of [
+      '\u200b',
+      '\u2800',
+      '\u3164',
+      ' ',
+      '\ufeff',
+      '\u00a0',
+    ]) {
+      expect(clipProviderText(`${blank.repeat(250)}Ada Eze`)).toBe('Ada Eze');
+    }
+    expect(clipProviderText(` \u200b\u2800 \u3164Ada Eze`)).toBe('Ada Eze');
+  });
+
+  it('is nothing for a text of invisible characters only', () => {
+    expect(clipProviderText('\u200b'.repeat(250))).toBe('');
+    expect(clipProviderText('\u2800'.repeat(5_000_000))).toBe('');
+  });
+
+  it('gives the segmenter at most the byte cap, never the five megabytes', () => {
+    const segment = jest.spyOn(Intl.Segmenter.prototype, 'segment');
+    try {
+      const started = Date.now();
+      expect(clipProviderText('N'.repeat(5_000_000))).toBe('N'.repeat(200));
+      expect(Date.now() - started).toBeLessThan(1000);
+      const longest = Math.max(
+        ...segment.mock.calls.map(([text]) => String(text).length),
+      );
+      expect(longest).toBeLessThanOrEqual(1024);
+      expect(segment).toHaveBeenCalled();
+    } finally {
+      segment.mockRestore();
+    }
   });
 });

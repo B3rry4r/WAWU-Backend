@@ -48,11 +48,47 @@ export function graphemes(text: string): string[] {
     : graphemesByRule(text);
 }
 
-/** The first `max` graphemes of `text`, whole. */
+/**
+ * The first `max` graphemes of `text`, whole. `endCut` says the text was cut short by bytes (`boundBytes`), so its last
+ * grapheme may be only part of one: it is left out.
+ */
 export function clipGraphemes(
   text: string,
   max: number,
   split: Split = graphemes,
+  endCut = false,
 ): string {
-  return split(text).slice(0, max).join('');
+  const parts = split(text);
+  if (endCut) parts.pop();
+  return parts.slice(0, max).join('');
+}
+
+/** How many bytes a code point takes in UTF-8. */
+function utf8Bytes(codePoint: number): number {
+  if (codePoint < 0x80) return 1;
+  if (codePoint < 0x800) return 2;
+  if (codePoint < 0x10000) return 3;
+  return 4;
+}
+
+/**
+ * The text cut to at most `maxBytes` bytes (UTF-8), at a code point, and whether it was cut. It reads only as far as the
+ * cap, so a name of five megabytes costs no more than one of the cap's size (BILLS-01 round 4, R3-6: the grapheme cut ran
+ * over the whole text and took 3.9 s on 5 MB). The cut can land inside a character a person sees as one, so a caller that
+ * cut drops the last grapheme (see `clipGraphemes`).
+ */
+export function boundBytes(
+  text: string,
+  maxBytes: number,
+): { text: string; cut: boolean } {
+  if (text.length * 3 <= maxBytes) return { text, cut: false };
+  let bytes = 0;
+  let end = 0;
+  for (const point of text) {
+    const size = utf8Bytes(point.codePointAt(0) ?? 0);
+    if (bytes + size > maxBytes) return { text: text.slice(0, end), cut: true };
+    bytes += size;
+    end += point.length;
+  }
+  return { text, cut: false };
 }
