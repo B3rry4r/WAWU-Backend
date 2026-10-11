@@ -31,8 +31,8 @@ export const WEBHOOK_RETENTION_CONFIG_KEYS = {
  *
  * `batch` and `budgetMs` bound one run: at most `batch` rows are cleared by
  * one statement (a transaction of its own, so no lock is held for longer than
- * that statement), and no new batch starts after `budgetMs`. What is left is
- * cleared by the next run.
+ * that statement), and no new batch starts on a table after `budgetMs` (each
+ * table has its own budget). What is left is cleared by the next run.
  */
 export const WEBHOOK_RETENTION_DEFAULTS = {
   days: 90,

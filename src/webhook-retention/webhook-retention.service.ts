@@ -21,6 +21,8 @@ export interface WebhookRetentionTableReport {
   batches: number;
   /** True when the time budget ended the run before it ran out of rows. */
   stoppedEarly: boolean;
+  /** The name of the error that ended this table's run, or null. The other table's run still goes ahead. */
+  error: string | null;
   /**
    * Rows past the period that still hold their body because their state is
    * held (pending, failed, unrecognised), by state. Counted after the
@@ -60,6 +62,7 @@ const empty = (): WebhookRetentionTableReport => ({
   cleared: 0,
   batches: 0,
   stoppedEarly: false,
+  error: null,
   heldPastPeriod: {},
 });
 
@@ -148,22 +151,32 @@ export class WebhookRetentionService {
     }
     this.running = true;
     try {
-      const deadline = Date.now() + limits.budgetMs;
       for (const table of TABLES) {
-        report[table] = await this.clearTable(
-          table,
-          cutoff,
-          now,
-          limits.batch,
-          deadline,
-        );
+        // Each table has its own budget, so a long backlog in one cannot
+        // starve the other; and one table's failure does not stop the other.
+        const deadline = Date.now() + limits.budgetMs;
+        try {
+          report[table] = await this.clearTable(
+            table,
+            cutoff,
+            now,
+            limits.batch,
+            deadline,
+          );
+        } catch (e) {
+          // The name only; tomorrow's run picks up what this one did not.
+          report[table].error = (e as Error).name ?? 'Error';
+          this.logger.error(
+            `webhook retention: ${table} failed (${report[table].error})`,
+          );
+        }
       }
       const said = TABLES.map((t) => {
         const r = report[t];
         const held = Object.entries(r.heldPastPeriod)
           .map(([state, n]) => `${state} ${n}`)
           .join(', ');
-        return `${t} cleared ${r.cleared}${held ? ` (held past the period: ${held})` : ''}${r.stoppedEarly ? ' (stopped at the time budget)' : ''}`;
+        return `${t} cleared ${r.cleared}${held ? ` (held past the period: ${held})` : ''}${r.stoppedEarly ? ' (stopped at the time budget)' : ''}${r.error ? ` (failed: ${r.error})` : ''}`;
       }).join('; ');
       this.logger.log(`webhook retention: ${said}`);
       return report;

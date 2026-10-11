@@ -992,6 +992,51 @@ describe('FIX-20: provider webhook deliveries are not kept for ever', () => {
       expect(next.FintavaWebhookEvent.cleared).toBeGreaterThanOrEqual(5);
     });
 
+    it('one table failing does not stop the other: the error is reported by name only and the other table is cleared', async () => {
+      const fin = await fintavaRow({ state: 'processed', days: 100 });
+      const nuv = await nuvionRow({ state: 'processed', days: 100 });
+      const original = prisma.$queryRaw.bind(prisma) as (
+        ...a: unknown[]
+      ) => Promise<unknown>;
+      const spy = jest.spyOn(prisma, '$queryRaw').mockImplementation(((
+        ...args: unknown[]
+      ) => {
+        const q = args[0] as { sql?: string };
+        if (q?.sql?.includes('UPDATE "FintavaWebhookEvent"')) {
+          const boom = new Error(`boom with ${PHONE}`);
+          boom.name = 'BoomError';
+          return Promise.reject(boom);
+        }
+        return original(...args);
+      }) as never);
+      const lines: string[] = [];
+      const error = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation((...a: unknown[]) => {
+          lines.push(a.map(String).join(' '));
+        });
+      let report;
+      try {
+        report = await retention.run(stampOf());
+      } finally {
+        spy.mockRestore();
+        error.mockRestore();
+      }
+      expect(report.FintavaWebhookEvent.error).toBe('BoomError');
+      expect(report.FintavaWebhookEvent.cleared).toBe(0);
+      expect(report.NuvionWebhookEvent.error).toBeNull();
+      expect(hasBody(await finRow(fin.id))).toBe(true);
+      expect(hasBody(await nuvRow(nuv.id))).toBe(false);
+      expect(lines.join('\n')).toContain(
+        'FintavaWebhookEvent failed (BoomError)',
+      );
+      expect(lines.join('\n')).not.toContain(PHONE);
+      // The next run finishes what this one could not.
+      const next = await retention.run(stampOf());
+      expect(next.FintavaWebhookEvent.error).toBeNull();
+      expect(hasBody(await finRow(fin.id))).toBe(false);
+    });
+
     it('the statement that picks rows to clear uses the partial index (the planner is shown the real statement, with sequential scans off)', async () => {
       await fintavaRow({ state: 'processed', days: 100 });
       await nuvionRow({ state: 'processed', days: 100 });
