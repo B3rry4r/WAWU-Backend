@@ -4561,6 +4561,12 @@ model WalletPayment {
   /// real fee and total, `discrepancy` names both figures, and NUV-08
   /// reconciles it with the provider. Null: the debit was as quoted or less.
   debitReviewSince      DateTime?
+  /// When the provider's charge was found not to be believable (MONEY-18, N2):
+  /// below 0, or above the quoted fee by more than PAYMENT_CHARGE_REVIEW_ABOVE_KOBO.
+  /// The payment is then held for a person with both figures on `discrepancy`:
+  /// no path completes or delivers it (`reviewSince` is set with it while it is
+  /// `pending`). Null: the charge was believable.
+  chargeReviewSince     DateTime?
   /// A tip's message.
   note                  String?
   /// When the debit was first sent to Fintava (the reconcile window).
@@ -4576,12 +4582,103 @@ model WalletPayment {
   nextDeliveryAt        DateTime?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
+  /// Set for a held kind (paid DM, ticket, bill) once the payment completes (MONEY-18).
+  hold                  WalletHold?
 
   @@index([payerWawuUserId, createdAt])
   @@index([status, createdAt])
   @@index([kind, targetId])
   @@index([status, reviewSince, nextCheckAt, id])
   @@index([status, fulfilledAt, reviewSince, nextDeliveryAt])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// MONEY HELD BETWEEN PAYER AND PAYEE (task MONEY-18, R-19)
+///
+/// A paid DM, an event ticket and a bill are paid into WAWU's own account at
+/// the wallet provider (a WalletPayment), and the price then waits there
+/// until something happens: it is RELEASED to the payee (the payee's 85%; the
+/// other 15% is WAWU's and stays) or REFUNDED to the payer (the price, never
+/// the provider's charge on the original payment, R-10). The provider cannot
+/// reserve part of a balance, so a hold is a row here plus money in WAWU's
+/// account; the provider's balance is still the only balance (MONEY-11).
+///
+/// One row per completed held payment, written in the same transaction as the
+/// payment's completion. `status` is what a person sees: `held` until the
+/// provider has CONFIRMED the move out of WAWU's account, then `released` or
+/// `refunded`. `action` is what was decided (the owning feature asked for it,
+/// once, and it never changes): while it is set and `status` is still `held`
+/// the move is waiting, in flight or in review. The money moves under OUR
+/// reference (`customerReference`, `wawu-rel-<id>` or `wawu-ref-<id>`, a
+/// number added after a proven failure), so a repeat can never move it twice
+/// at the provider, and a lost answer is looked up by that reference, never
+/// sent again. Every figure is integer kobo.
+/// ─────────────────────────────────────────────────────────────────────────
+model WalletHold {
+  id                       String        @id @default(uuid())
+  paymentId                String        @unique
+  payment                  WalletPayment @relation(fields: [paymentId], references: [id])
+  /// Null once the payer's account is deleted: the hold stays (WAWU still holds the money).
+  payerWawuUserId          String?
+  /// Null when WAWU itself is the payee (a bill).
+  payeeWawuUserId          String?
+  /// What was paid for: the payment's kind, its target and its title.
+  kind                     String
+  targetId                 String
+  title                    String
+  /// dm_answered, event_took_place or bill_delivered.
+  releaseCondition         String
+  /// The held price.
+  amountKobo               BigInt
+  /// The 85/15 split of the price (R-5); a release moves only the payee's share.
+  payeeShareKobo           BigInt
+  wawuShareKobo            BigInt
+  /// WAWU's own account at the provider the price is held in.
+  merchantAccountNumber    String
+  /// The wallet provider that holds it (WALLET_PROVIDER when the payment was taken).
+  provider                 String        @default("fintava")
+  /// held, released or refunded.
+  status                   String        @default("held")
+  heldAt                   DateTime
+  /// When the provider confirmed the move out of WAWU's account.
+  settledAt                DateTime?
+  /// Set when refunded: what came back to the payer (the price).
+  refundedKobo             BigInt?
+
+  /// What was decided: `release` or `refund`. Set once, by the owning feature.
+  action                   String?
+  actionReason             String?
+  actionAt                 DateTime?
+  /// What the chosen action moves out of WAWU's account.
+  transferKobo             BigInt?
+  /// Which try this is: 1, 2 ... A new try (and a new reference) follows only a
+  /// move the provider's own record proved failed.
+  attempt                  Int           @default(1)
+  customerReference        String?       @unique
+  destinationAccountNumber String?
+  /// When the current try was handed to the provider. Set means "a record may
+  /// exist at the provider": it is asked, never sent again, until it says.
+  sentAt                   DateTime?
+  /// The provider's own charge on the move (WAWU's, R-31); null when its record did not say.
+  providerFeeKobo          BigInt?
+  /// The schedule: the next try or the next question to the provider, and how
+  /// many questions have been asked. `waiting` says why nothing has moved
+  /// (payee_wallet, payer_wallet, recipient_frozen, funds, provider, refused);
+  /// a hold waiting for a wallet is tried every minute, no back-off.
+  nextAttemptAt            DateTime?
+  attempts                 Int           @default(0)
+  checks                   Int           @default(0)
+  waiting                  String?
+  /// A person has to look (no answer from the provider past the review bound,
+  /// a reversed move, an amount that is not the price). Out of the sweep.
+  reviewSince              DateTime?
+  discrepancy              String?
+  createdAt                DateTime      @default(now())
+  updatedAt                DateTime      @updatedAt
+
+  @@index([status, action, reviewSince, nextAttemptAt])
+  @@index([payerWawuUserId, heldAt])
+  @@index([payeeWawuUserId, heldAt])
 }
 
 /// ─────────────────────────────────────────────────────────────────────────

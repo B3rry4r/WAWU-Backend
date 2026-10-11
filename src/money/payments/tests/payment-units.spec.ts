@@ -140,12 +140,12 @@ describe('MONEY-17 units', () => {
   });
 
   describe('PayableRegistry', () => {
-    it('refuses held kinds (MONEY-18) and a second handler for a kind', () => {
+    it('takes held kinds like any other (MONEY-18 builds the hold they were refused for) and refuses a second handler for a kind', () => {
       const r = new PayableRegistry();
       for (const kind of HELD_PAYMENT_KINDS) {
         expect(() =>
           r.register({ kind, resolve: () => Promise.reject(new Error('x')) }),
-        ).toThrow(/MONEY-18/);
+        ).not.toThrow();
       }
       r.register({
         kind: 'tip',
@@ -157,7 +157,13 @@ describe('MONEY-17 units', () => {
           resolve: () => Promise.reject(new Error('x')),
         }),
       ).toThrow(/already/);
-      expect(r.kinds()).toEqual(['tip']);
+      expect(() =>
+        r.register({
+          kind: 'paid_dm',
+          resolve: () => Promise.reject(new Error('x')),
+        }),
+      ).toThrow(/already/);
+      expect(r.kinds()).toEqual([...HELD_PAYMENT_KINDS, 'tip'].sort());
       expect(r.get('content_unlock')).toBeNull();
     });
   });

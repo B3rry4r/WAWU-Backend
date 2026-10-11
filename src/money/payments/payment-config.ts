@@ -29,6 +29,7 @@ export function splitPrice(
 export const PAYMENT_CONFIG_KEYS = {
   idempotencyKeyHours: 'IDEMPOTENCY_KEY_HOURS',
   reviewAfterHours: 'PAYMENT_REVIEW_AFTER_HOURS',
+  chargeReviewAboveKobo: 'PAYMENT_CHARGE_REVIEW_ABOVE_KOBO',
 } as const;
 
 /**
@@ -55,11 +56,27 @@ export const DEFAULT_PAYMENT_REVIEW_AFTER_HOURS = 72;
  */
 export const DEFAULT_IDEMPOTENCY_KEY_HOURS = 48;
 
+/**
+ * PROVISIONAL(PAYMENT-CHARGE-REVIEW-ABOVE-KOBO, owner=YOU, why=no ruling names how far the provider's charge on a purchase may be above the quoted one before it is not believed; the lead's default for MONEY-17 round 8 finding N2 is 1000 naira)
+ *
+ * How far above the QUOTED provider charge a payment's real charge may be and
+ * still be believed, in kobo (MONEY-18, MONEY-17's N2). A charge above the
+ * quote by more than this, or below 0, is not trusted: the payment is not
+ * completed or delivered at it. It goes to review with both figures
+ * (`chargeReviewSince`, `discrepancy`) and stays there until a person looks.
+ * A charge above the quote by this much or less is believed: the payment
+ * completes at it and is flagged (`debitReviewSince`) as before. Overridable
+ * with PAYMENT_CHARGE_REVIEW_ABOVE_KOBO (0 to 100000000); 0 means any charge
+ * above the quote is reviewed.
+ */
+export const DEFAULT_PAYMENT_CHARGE_REVIEW_ABOVE_KOBO = 100_000;
+
 /** Read once at boot. A set but unusable value stops the app. */
 @Injectable()
 export class PaymentSettings {
   readonly idempotencyKeyHours: number;
   readonly reviewAfterHours: number;
+  readonly chargeReviewAboveKobo: number;
 
   constructor(config: ConfigService) {
     const review = PAYMENT_CONFIG_KEYS.reviewAfterHours;
@@ -75,6 +92,23 @@ export class PaymentSettings {
       if (e instanceof FeeConfigError) {
         throw new FeeConfigError(
           `${review} must be a whole number of hours from 1 to 720.`,
+        );
+      }
+      throw e;
+    }
+    const above = PAYMENT_CONFIG_KEYS.chargeReviewAboveKobo;
+    try {
+      this.chargeReviewAboveKobo = koboSetting(
+        config.get<string>(above),
+        above,
+        DEFAULT_PAYMENT_CHARGE_REVIEW_ABOVE_KOBO,
+        0,
+        100_000_000,
+      );
+    } catch (e) {
+      if (e instanceof FeeConfigError) {
+        throw new FeeConfigError(
+          `${above} must be a whole number of kobo from 0 to 100000000.`,
         );
       }
       throw e;

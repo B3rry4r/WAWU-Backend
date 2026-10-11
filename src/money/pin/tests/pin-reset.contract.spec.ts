@@ -38,7 +38,7 @@ const t = new Money14App({});
  * masked phone (`+234 *** *** 1590`) whose random last four digits equalled
  * a fixed test PIN failed the scan about once in 30 runs.
  */
-const pins = t.reservePins(40);
+const pins = t.reservePins(60);
 function pin(): string {
   const next = pins.shift();
   if (!next) throw new Error('the PIN pool is used up: reserve more');
@@ -52,6 +52,13 @@ beforeEach(() => t.installDefaults());
 
 /** Everything secret this file sent or was sent: codes and PINs. */
 const secrets = new Set<string>();
+
+/**
+ * Every phone number a person made here has: the one a code goes to. The app
+ * is shown it masked to its last four digits (`+234 *** *** 4412`); the whole
+ * number must not reach a log or an answer (WALLET-06 round 2, B13).
+ */
+const phones = new Set<string>();
 
 function start(who: Person) {
   return t.http().post(RESET).set('Authorization', who.auth);
@@ -79,6 +86,7 @@ function confirm(
 async function holder(first: string = pin(), phone?: string): Promise<Person> {
   const who = t.person(phone);
   secrets.add(first);
+  phones.add(who.phone);
   await t.bvnChecked(who);
   await t.openWallet(who);
   await t.setPin(who, first);
@@ -582,6 +590,130 @@ describe('a reset turns biometric approval off', () => {
   });
 });
 
+describe('a PIN change ends an open reset (BACKEND_GAPS G-50)', () => {
+  it('a code texted before the person changed their PIN is refused afterwards, and the PIN they chose stays', async () => {
+    const first = pin();
+    const chosen = pin();
+    const attacker = pin();
+    const who = await holder(first);
+    const reset = await resetOf(who);
+    const code = t.lastCode(who.phone);
+    secrets.add(code);
+
+    await t
+      .http()
+      .put('/api/hub/money/pin')
+      .set('Authorization', who.auth)
+      .set('X-Transaction-Pin', first)
+      .send({ newPin: chosen, newPinConfirmation: chosen })
+      .expect(200);
+
+    const refused = await confirm(who, {
+      resetId: reset.resetId,
+      code,
+      newPin: attacker,
+    }).expect(400);
+    expect(t.body(refused).reason).toMatchObject({
+      code: 'reset_code_invalid',
+      triesLeft: 0,
+    });
+    // The change stands: the PIN chosen approves, the one the old code would have set does not.
+    await t.approveWithPin(who, chosen).expect(200);
+    await t.approveWithPin(who, attacker).expect(403);
+
+    const row = await t.prisma.transactionPinReset.findUniqueOrThrow({
+      where: { id: reset.resetId },
+    });
+    expect(row.supersededAt).not.toBeNull();
+    expect(row.usedAt).toBeNull();
+  });
+
+  it('a change made while no reset is open changes nothing about other people’s resets', async () => {
+    const mine = pin();
+    const theirs = pin();
+    const me = await holder(mine);
+    const other = await holder(theirs);
+    const reset = await resetOf(other);
+    const newPin = pin();
+    await t
+      .http()
+      .put('/api/hub/money/pin')
+      .set('Authorization', me.auth)
+      .set('X-Transaction-Pin', mine)
+      .send({ newPin, newPinConfirmation: newPin })
+      .expect(200);
+    const row = await t.prisma.transactionPinReset.findUniqueOrThrow({
+      where: { id: reset.resetId },
+    });
+    expect(row.supersededAt).toBeNull();
+    const code = t.lastCode(other.phone);
+    secrets.add(code);
+    await confirm(other, {
+      resetId: reset.resetId,
+      code,
+      newPin: pin(),
+    }).expect(200);
+  });
+
+  it('a reset stores the new PIN only as an argon2id hash (FIX-03 verifier)', async () => {
+    const first = pin();
+    const chosen = pin();
+    const who = await holder(first);
+    const reset = await resetOf(who);
+    const code = t.lastCode(who.phone);
+    secrets.add(code);
+    await confirm(who, {
+      resetId: reset.resetId,
+      code,
+      newPin: chosen,
+    }).expect(200);
+    const stored = await t.prisma.transactionPin.findUniqueOrThrow({
+      where: { wawuUserId: who.id },
+    });
+    expect(stored.pinHash).toMatch(/^\$argon2id\$/);
+    expect(stored.pinHash).not.toContain(chosen);
+  });
+});
+
+describe("Resend is counted in the server's seconds, never the phone's clock (WALLET-06 round 2, D3)", () => {
+  it('a new reset says how many seconds are left; asking again before then answers the same reset with fewer and sends nothing; after it, a new code and a full count', async () => {
+    const who = await holder();
+    const first = await resetOf(who);
+    expect(first.resendInSeconds).toBeGreaterThan(55);
+    expect(first.resendInSeconds).toBeLessThanOrEqual(60);
+    // It is the count at the moment of the answer: it agrees with the time.
+    expect(
+      Math.abs(
+        first.resendInSeconds -
+          (Date.parse(first.resendAvailableAt) - Date.now()) / 1000,
+      ),
+    ).toBeLessThan(10);
+    const textsAfterFirst = t.texts().length;
+
+    // Asked again at once: the same reset, no text, never more seconds than before.
+    const again = await resetOf(who);
+    expect(again.resetId).toBe(first.resetId);
+    expect(again.resendInSeconds).toBeLessThanOrEqual(first.resendInSeconds);
+    expect(again.resendInSeconds).toBeGreaterThan(0);
+    expect(t.texts().length).toBe(textsAfterFirst);
+
+    // Thirty seconds on, the same reset says about thirty seconds, not the full gap.
+    await age(first.resetId, 30_000);
+    const later = await resetOf(who);
+    expect(later.resetId).toBe(first.resetId);
+    expect(later.resendInSeconds).toBeGreaterThan(24);
+    expect(later.resendInSeconds).toBeLessThan(32);
+    expect(t.texts().length).toBe(textsAfterFirst);
+
+    // Once the gap has passed: a new reset, a new text, a full count again.
+    await age(first.resetId, 31_000);
+    const next = await resetOf(who);
+    expect(next.resetId).not.toBe(first.resetId);
+    expect(next.resendInSeconds).toBeGreaterThan(55);
+    expect(t.texts().length).toBe(textsAfterFirst + 1);
+  });
+});
+
 describe('nothing secret leaves the server', () => {
   it('no code and no PIN sent in this file is in any log line, any answer, or any stored column but a hash', async () => {
     expect(secrets.size).toBeGreaterThan(10);
@@ -622,5 +754,29 @@ describe('nothing secret leaves the server', () => {
     expect(leaks).toEqual([]);
     // The one refusal the client logs names the operation and status only.
     expect(logs).toContain('send SMS: refused HTTP 400');
+  });
+
+  it('no whole phone number is in any log line or any answer, in any of its forms (WALLET-06 round 2, B13)', () => {
+    expect(phones.size).toBeGreaterThan(5);
+    // Spaces and dashes between digits do not hide a number.
+    const squashed = (text: string) =>
+      text
+        .replace(
+          /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
+          'ID',
+        )
+        .replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g, 'TIME')
+        .replace(/(?<=\d)[\s-](?=\d)/g, '');
+    const logs = squashed(t.log.lines.join('\n'));
+    const answers = squashed(t.answered.join('\n'));
+    // `+2348031234412`, `2348031234412`, `08031234412` and `8031234412` all
+    // contain the ten digits after the country code.
+    const leaks = [...phones].filter((phone) => {
+      const national = phone.replace(/\D/g, '').slice(-10);
+      return logs.includes(national) || answers.includes(national);
+    });
+    expect(leaks).toEqual([]);
+    // The masked form is what an answer may carry: the last four digits.
+    expect(answers).toMatch(/\+234 \*\*\* \*\*\* \d{4}/);
   });
 });
