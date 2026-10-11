@@ -55,6 +55,14 @@ import {
 const HOUR = 3_600_000;
 const MINUTE = 60_000;
 
+/**
+ * How far past the start of the window the provider's history is read before
+ * it is called read in full: the ledger's time for a movement (the provider's
+ * own time, when it gave one) and the provider's listing can differ by a few
+ * seconds, and a row on the edge must find its pair.
+ */
+const HISTORY_MARGIN_MS = 6 * HOUR;
+
 /** Provider failures worth asking again about before a wallet is given up on. */
 const ASK_AGAIN = new Set(['rate_limited', 'unavailable', 'bad_response']);
 /** Provider failures that mean nothing more can be read this run. */
@@ -313,8 +321,7 @@ export class MoneyCheckService {
       const stored = await this.finish(run, report);
       if (!stored) return { state: 'busy', runId: run.id };
       this.announce(report);
-      await this.deliver(run.id);
-      await this.prune(now);
+      await this.afterwards(run.id, now);
       return {
         state: 'finished',
         runId: run.id,
@@ -324,6 +331,23 @@ export class MoneyCheckService {
     } catch (e) {
       if (e instanceof RunLostError) return { state: 'busy', runId: run.id };
       return this.fail(run, e, opts, now);
+    }
+  }
+
+  /**
+   * What follows a stored run: handing the report on and forgetting old runs.
+   * The run is already finished and kept, so a failure here is logged and
+   * left to the minute tick, which hands on any report that has not reached
+   * everyone.
+   */
+  private async afterwards(runId: string, now: Date): Promise<void> {
+    try {
+      await this.deliver(runId);
+      await this.prune(now);
+    } catch (e) {
+      this.logger.error(
+        `money check: the finished run ${runId} was not handed on (${reasonOf(e)})`,
+      );
     }
   }
 
@@ -566,7 +590,7 @@ export class MoneyCheckService {
     });
     if (count === 1) {
       this.announce(report);
-      await this.deliver(id);
+      await this.afterwards(id, now);
     }
     return { state: 'given_up', runId: id, verdict: 'incomplete' };
   }
@@ -654,8 +678,10 @@ export class MoneyCheckService {
       sink,
     };
     await checkLedgerRows(db);
+    await this.beat(run);
     await checkPayments(db);
     await checkHolds(db);
+    await this.beat(run);
     await checkHeldRecords(db);
     await this.heldFigures(held);
 
@@ -927,7 +953,11 @@ export class MoneyCheckService {
       if (times.length > 0) {
         if (Math.max(...times) > oldestSeen) newestFirst = false;
         oldestSeen = Math.min(oldestSeen, ...times);
-        if (from !== null && newestFirst && Math.min(...times) < from) {
+        if (
+          from !== null &&
+          newestFirst &&
+          Math.min(...times) < from - HISTORY_MARGIN_MS
+        ) {
           return { rows: [...seen.values()], complete: true };
         }
       }

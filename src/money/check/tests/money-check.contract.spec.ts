@@ -797,6 +797,28 @@ describe('the nightly check against the wallet provider (MONEY-16)', () => {
       expect(books.seen.filter((x) => x === 'GET /txn')).toHaveLength(1);
     });
 
+    it('reads a little past the start of the window, so a row on its edge finds its pair', async () => {
+      const a = await wallet(0);
+      await row({ wallet: a, direction: 'in', amountKobo: 10_000_000 });
+      // A page of 100 that reaches an hour before the window starts...
+      for (let i = 0; i < 100; i += 1) {
+        await send(a, 1_000, { ageMs: (47.9 + (i * 1.1) / 100) * HOUR });
+      }
+      // ...and, on the next page, a debit Fintava timed two hours before the
+      // window that the ledger timed inside it.
+      const edge = await row({
+        wallet: a,
+        direction: 'out',
+        amountKobo: 1_000,
+        ageMs: 47.99 * HOUR,
+      });
+      theirs(a, edge.ref, 1_000, { ageMs: 50 * HOUR });
+      books.wallets.get(a.walletId)!.availableKobo = 10_000_000 - 101_000;
+      const r = await report({ windowFrom: ago(48 * HOUR) });
+      expect(r.mismatches).toEqual([]);
+      expect(r.verdict).toBe('clean');
+    });
+
     it('reads a history that is not newest first to its end, and still calls nothing missing that is there', async () => {
       books.ascending = true;
       const a = await wallet(0);
@@ -1492,6 +1514,28 @@ describe('the nightly check against the wallet provider (MONEY-16)', () => {
         [1, 'finished', true],
         [2, 'finished', true],
       ]);
+    });
+
+    it('keeps a run finished when handing its report on fails', async () => {
+      jest
+        .spyOn(service, 'deliver')
+        .mockRejectedValue(new Error('database gone'));
+      const outcome = await run();
+      expect(outcome.state).toBe('finished');
+      if (outcome.state !== 'finished') return;
+      const stored = await prisma.moneyCheckRun.findUniqueOrThrow({
+        where: { id: outcome.runId },
+      });
+      expect(stored).toMatchObject({
+        status: 'finished',
+        verdict: 'clean',
+        emailedAt: null,
+      });
+      expect(logger.lines.join('\n')).toMatch(/was not handed on/);
+      jest.restoreAllMocks();
+      // The minute tick hands it on.
+      await service.sendDue(new Date(Date.now() + MIN));
+      expect(mail.mailed).toHaveLength(2);
     });
 
     it('refuses a night that is not a date', async () => {
