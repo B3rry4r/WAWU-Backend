@@ -33,6 +33,21 @@ import {
   WALLET_PROVIDER,
   type WalletProvider,
 } from '../../src/wallet-provider/wallet-provider.interface';
+import { nuvionWalletId } from '../../src/nuvion/areas/accounts';
+import { NuvionBookArea } from '../../src/nuvion/areas/book';
+import { PrismaNuvionBookStore } from '../../src/nuvion/areas/book-store';
+import { NuvionClient } from '../../src/nuvion/nuvion-client';
+import {
+  NuvionWalletProvider,
+  nuvionAreas,
+} from '../../src/nuvion/nuvion-wallet-provider';
+import {
+  NuvionAccountsStandin,
+  type StandinAccount,
+} from '../nuvion/accounts-standin';
+import { NuvionBookStandin } from '../nuvion/book-standin';
+import { NuvionStandin } from '../nuvion/nuvion-standin';
+import { guardOutbound, type OutboundGuard } from '../nuvion/outbound-guard';
 import { NuvionSeamStandIn } from '../payments/nuvion-seam-standin';
 import {
   FintavaDouble,
@@ -210,8 +225,12 @@ export abstract class CashOutBase {
   protected abstract settings(): Record<string, string>;
   /** Starts what the provider needs (a socket stand-in). */
   protected abstract startProvider(): Promise<void>;
-  /** The provider to put behind the seam instead of the real adapter, or null. */
-  protected abstract providerOverride(): WalletProvider | null;
+  /**
+   * The provider to put behind the seam instead of the real adapter, or null;
+   * a factory when it needs the app's database (the Nuvion adapter's book log).
+   */
+  protected abstract providerOverride():
+    WalletProvider | { factory: (db: PrismaService) => WalletProvider } | null;
   /** Called once the app is up. */
   protected abstract afterBoot(): void;
   protected abstract stopProvider(): Promise<void>;
@@ -253,8 +272,14 @@ export abstract class CashOutBase {
     // config and nothing else.
     if (plans) builder = builder.overrideProvider(PLANS_CONFIG).useValue(plans);
     const over = this.providerOverride();
-    if (over)
+    if (over && 'factory' in over) {
+      builder = builder.overrideProvider(WALLET_PROVIDER).useFactory({
+        inject: [PrismaService],
+        factory: over.factory,
+      });
+    } else if (over) {
       builder = builder.overrideProvider(WALLET_PROVIDER).useValue(over);
+    }
     this.moduleRef = await builder.setLogger(this.logger).compile();
     this.app = this.moduleRef.createNestApplication({
       ...HUB_APP_OPTIONS,
@@ -290,10 +315,23 @@ export abstract class CashOutBase {
     }
   }
 
+  /** Conversions a test made that no longer name their person (the account was deleted). */
+  protected readonly tracked = new Set<string>();
+  track(conversionId: string): string {
+    this.tracked.add(conversionId);
+    return conversionId;
+  }
+
   /** Removes what the spec made. The points ledger is append-only: the purge's own step removes it. */
-  private async clean(): Promise<void> {
+  protected async clean(): Promise<void> {
+    const mine = {
+      OR: [
+        { wawuUserId: { in: this.users } },
+        { id: { in: [...this.tracked] } },
+      ],
+    };
     const rows = await this.prisma.pointConversion.findMany({
-      where: { wawuUserId: { in: this.users } },
+      where: mine,
       select: { customerReference: true },
     });
     await this.prisma.fintavaLedgerEntry.deleteMany({
@@ -301,9 +339,7 @@ export abstract class CashOutBase {
         customerReference: { in: rows.map((r) => r.customerReference) },
       },
     });
-    await this.prisma.pointConversion.deleteMany({
-      where: { wawuUserId: { in: this.users } },
-    });
+    await this.prisma.pointConversion.deleteMany({ where: mine });
     await this.prisma.moneyIdempotencyKey.deleteMany({
       where: { wawuUserId: { in: this.users } },
     });
@@ -709,4 +745,154 @@ export class NuvionCashOut extends CashOutBase {
     this.nuvion.transfers.filter(
       (t) => t.request.unique_reference === reference,
     );
+}
+
+/**
+ * The REAL Nuvion adapter and NUV-05's book area over Nuvion's socket
+ * stand-in (`test/nuvion/book-standin.ts`): Nuvion's documented HTTP API as a
+ * server, the adapter's own client, mapping, book log and lookup by the
+ * payer's transfers. WAWU's own account is the stand-in's operational
+ * account. Nothing reaches a Nuvion, Fintava or wawuafrica.com host (an
+ * outbound guard fails the spec if anything leaves the machine).
+ */
+export class NuvionAdapterCashOut extends CashOutBase {
+  static readonly FEES = '0:1500,500000:2500';
+  readonly standin = new NuvionStandin();
+  readonly accounts = new NuvionAccountsStandin(this.standin);
+  readonly book = new NuvionBookStandin(this.standin, this.accounts);
+  readonly fintavaHits: string[] = [];
+  guard!: OutboundGuard;
+  private fintavaCounter!: Server;
+  private fintavaUrl = '';
+  private numberSeq = 0;
+  readonly people = new Map<string, StandinAccount>();
+
+  protected settings(): Record<string, string> {
+    return {
+      FINTAVA_BASE_URL: this.fintavaUrl,
+      FINTAVA_API_KEY: 'live_test_p04_nuvion_adapter_0123456789FAKEKEY',
+      FEE_QUOTE_KEY: 'p04-nuvion-adapter-fee-key-0123456789abcdef01',
+      MERCHANT_MAX_PER_TXN_KOBO: '1000000000',
+      NUVION_FEE_BOOK_TRANSFER: NuvionAdapterCashOut.FEES,
+      NUVION_FEE_BANK_PAYOUT: NuvionAdapterCashOut.FEES,
+      NUVION_FEE_INFLOW: NuvionAdapterCashOut.FEES,
+      PIN_LOCK_MINUTES: '',
+      IDEMPOTENCY_KEY_HOURS: '',
+      PAYMENT_REVIEW_AFTER_HOURS: '',
+    };
+  }
+
+  protected async startProvider(): Promise<void> {
+    this.guard = guardOutbound();
+    this.fintavaCounter = createServer((req, res) => {
+      this.fintavaHits.push(`${req.method} ${req.url}`);
+      res.statusCode = 503;
+      res.end('{}');
+    });
+    await new Promise<void>((r) =>
+      this.fintavaCounter.listen(0, '127.0.0.1', () => r()),
+    );
+    this.fintavaUrl = `http://127.0.0.1:${(this.fintavaCounter.address() as AddressInfo).port}`;
+    await this.standin.start();
+    this.accounts.install();
+    this.book.install();
+    this.book.fundOperational(50_000_000);
+    this.book.feeKobo = (amount) => (amount >= 500_000 ? 2_500 : 1_500);
+    this.book.mode = 'successful';
+  }
+
+  protected providerOverride() {
+    return {
+      factory: (db: PrismaService): WalletProvider => {
+        const client = new NuvionClient(
+          this.standin.settings({
+            operationalAccountId: this.book.operational.id,
+            moneyTimeoutMs: 2_000,
+            readTimeoutMs: 2_000,
+          }),
+          'nv_test_sk_P04cashoutKEY0000000000000000',
+        );
+        return new NuvionWalletProvider(client, {
+          ...nuvionAreas(client),
+          book: new NuvionBookArea(
+            client,
+            client.settings,
+            new PrismaNuvionBookStore(db),
+            { settleStepsMs: [] },
+          ),
+        });
+      },
+    };
+  }
+
+  protected afterBoot(): void {
+    // The wallets of the people made so far are rows of this database.
+  }
+
+  protected async stopProvider(): Promise<void> {
+    await this.standin.stop();
+    await new Promise<void>((r) => this.fintavaCounter.close(() => r()));
+    this.guard.restore();
+  }
+
+  protected openAccount(kobo: number) {
+    this.numberSeq += 1;
+    const accountNumber = `6${String(Date.now()).slice(-6)}${String(this.numberSeq).padStart(3, '0')}`;
+    const account = this.book.openPerson(kobo, accountNumber);
+    this.people.set(accountNumber, account);
+    return {
+      accountNumber,
+      walletId: nuvionWalletId(account.entity_id, account.id),
+      customerId: account.entity_id,
+      provider: 'nuvion',
+      account,
+    };
+  }
+
+  /** Makes the NuvionEntity row too, as opening a wallet does (the adapter reads it). */
+  override async person(
+    kobo = 0,
+    opts: { pin?: boolean; claims?: { phone?: string; country?: string } } = {},
+  ): Promise<Person> {
+    const p = await super.person(kobo, opts);
+    const account = this.people.get(p.accountNumber)!;
+    await this.prisma.nuvionEntity.create({
+      data: {
+        wawuUserId: p.id,
+        entityId: account.entity_id,
+        accountId: account.id,
+        nuvionBan: account.nuvion_ban,
+        accountNumber: p.accountNumber,
+        status: 'approved',
+        currency: 'NGN',
+      },
+    });
+    return p;
+  }
+
+  /** The Nuvion rows the real adapter wrote for this spec's people. */
+  protected override async clean(): Promise<void> {
+    const rows = await this.prisma.pointConversion.findMany({
+      where: {
+        OR: [
+          { wawuUserId: { in: this.users } },
+          { id: { in: [...this.tracked] } },
+        ],
+      },
+      select: { customerReference: true },
+    });
+    await this.prisma.nuvionBookTransfer.deleteMany({
+      where: { reference: { in: rows.map((r) => r.customerReference) } },
+    });
+    await this.prisma.nuvionEntity.deleteMany({
+      where: { wawuUserId: { in: this.users } },
+    });
+    await super.clean();
+  }
+
+  /** What the person can spend at Nuvion. */
+  balanceOf = (p: Pick<Person, 'accountNumber'>) =>
+    this.book.availableOf(this.people.get(p.accountNumber)!.id);
+  merchantBalance = () => this.book.availableOf(this.book.operational.id);
+  sendsOf = (reference: string) => this.book.byReference(reference);
 }

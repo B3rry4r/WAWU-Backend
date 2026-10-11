@@ -21,6 +21,7 @@ describe('POINTS-04: the database holds the rules of a conversion', () => {
   let prisma: PrismaService;
   let points: PointsService;
   const people: string[] = [];
+  const conversions: string[] = [];
 
   beforeAll(async () => {
     prisma = new PrismaService();
@@ -30,7 +31,9 @@ describe('POINTS-04: the database holds the rules of a conversion', () => {
 
   afterAll(async () => {
     await prisma.pointConversion.deleteMany({
-      where: { wawuUserId: { in: people } },
+      where: {
+        OR: [{ wawuUserId: { in: people } }, { id: { in: conversions } }],
+      },
     });
     for (const id of people) await purgePersonPoints(prisma, id);
     await prisma.$disconnect();
@@ -69,6 +72,7 @@ describe('POINTS-04: the database holds the rules of a conversion', () => {
   /** The conversion and its hold, in one transaction, as the service writes them. */
   async function made(who: string, pts = 1000): Promise<string> {
     const id = randomUUID();
+    conversions.push(id);
     await prisma.$transaction(async (tx) => {
       await tx.pointConversion.create({
         data: row(id, who, { points: pts, cashKobo: cashOf(pts) }),

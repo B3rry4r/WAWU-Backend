@@ -290,6 +290,7 @@ describe('Points to cash survives a kill, a second process and a deleted account
     const p = await h.person(0);
     await h.lots(p, [{ points: 3000, days: 30 }]);
     const { id, reference } = await killedAfterHold(p, 1500);
+    h.track(id);
     const purged = await new AccountPurgeService(h.prisma).purge(p.id);
     expect(purged.pointsLeft).toBe(false);
     expect(purged.deleted['PointConversion.wawuUserId (anonymised)']).toBe(1);
@@ -315,6 +316,7 @@ describe('Points to cash survives a kill, a second process and a deleted account
     const view = body<PointsConversionView>(await h.convert(p, 1200)).data!;
     h.wallets.mode = 'live';
     expect(view.status).toBe('pending');
+    h.track(view.id);
     await new AccountPurgeService(h.prisma).purge(p.id);
 
     await h.cashOut.sweep(h.later());
