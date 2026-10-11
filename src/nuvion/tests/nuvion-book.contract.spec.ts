@@ -904,17 +904,22 @@ describe('NUV-05: book transfers and the operational account', () => {
       expect(list.at(-1)?.query.entity_id).toBeUndefined();
     });
 
-    it("found again with no log row at all, by the sender's entity", async () => {
+    it('a reference the log never held is not asked about: it is not a book transfer this area sent', async () => {
       const p = await person(1_000_000);
       const reference = ref('lost-nolog');
       book.loseAnswerNext(true);
       await failure(sendFrom(p, operationalBan(), 100_000, reference));
       await prisma.nuvionBookTransfer.delete({ where: { reference } });
+      standin.seen.length = 0;
       const r = await area.reconcileSend(reference, {
         kind: 'customer',
         customerId: p.account.entity_id,
       });
-      expect(r).toMatchObject({ state: 'found', source: 'history' });
+      expect(r).toEqual({ state: 'unknown', why: 'unrecognised' });
+      expect(await area.findTransactionByReference(reference)).toEqual({
+        state: 'unknown',
+      });
+      expect(standin.seen).toEqual([]);
     });
 
     it('after a system error that did make the transfer: found, not failed', async () => {

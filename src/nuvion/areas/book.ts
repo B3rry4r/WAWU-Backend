@@ -250,7 +250,9 @@ function failureKind(
  *   sender's transfers (`GET /transfers?entity_id=&account_id=`, each item
  *   carries its `unique_reference`). Nuvion has no lookup by our reference.
  * - Silence is never proof that no money moved: absent stays a wait
- *   (`decideRetry` never advises a resend), as for every Nuvion send.
+ *   (`decideRetry` never advises a resend), as for every Nuvion send. A
+ *   reference the log never held is not a book transfer this area sent
+ *   (a payout, an inflow): nothing is asked of Nuvion about it.
  * - The sender and the receiver are named to the seam by the number WAWU's
  *   records hold (a person's account number, WAWU's `nuvion_ban`); this
  *   area turns them into Nuvion's ids from WAWU's records, and a name it
@@ -950,16 +952,20 @@ export class NuvionBookArea implements NuvionBookMethods {
     since?: Date,
   ): Promise<ProviderReconciliation> {
     const row = await this.need().byReference(reference);
-    return this.reconcile(row, reference, holder, since ?? null);
+    return this.reconcile(row, reference, since ?? null);
   }
 
   private async reconcile(
     row: BookTransferRow | null,
     reference: string,
-    holder: ProviderHolder | null,
     since: Date | null,
   ): Promise<ProviderReconciliation> {
-    if (row?.nuvionId) {
+    // A reference the log never held is not a book transfer this area sent
+    // (every send is written down before it goes out): a payout, an inflow
+    // or another server's. Nothing is asked of Nuvion for it, and its rail's
+    // task answers for it.
+    if (!row) return { state: 'unknown', why: 'unrecognised' };
+    if (row.nuvionId) {
       try {
         const t = await this.readOf(row, row.nuvionId);
         const kept = (await this.keep(row, t, false)) ?? row;
@@ -975,26 +981,13 @@ export class NuvionBookArea implements NuvionBookMethods {
         throw e;
       }
     }
-    let sender: { accountId: string | null; entityId: string | null };
-    try {
-      if (row) {
-        sender = { accountId: row.fromAccountId, entityId: row.fromEntityId };
-      } else if (holder) {
-        sender = await this.senderOf(holder);
-      } else {
-        return { state: 'unknown', why: 'unrecognised' };
-      }
-    } catch (e) {
-      if (e instanceof WalletProviderError) {
-        return { state: 'unknown', why: 'unreachable' };
-      }
-      throw e;
-    }
-    const from = since ?? row?.sentAt ?? null;
+    // The answer was lost: the sender's transfers newest first, each carrying
+    // its `unique_reference`.
+    const from = since ?? row.sentAt;
     const walked = await this.walk(
-      sender,
+      { accountId: row.fromAccountId, entityId: row.fromEntityId },
       reference,
-      from ? new Date(from.getTime() - HISTORY_MARGIN_MS) : null,
+      new Date(from.getTime() - HISTORY_MARGIN_MS),
     ).catch((e: unknown) => {
       if (e instanceof WalletProviderError) return null;
       throw e;
@@ -1002,40 +995,26 @@ export class NuvionBookArea implements NuvionBookMethods {
     if (walked === null) return { state: 'unknown', why: 'unreachable' };
     if (walked.state === 'found') {
       const t = walked.transfer;
-      if (row) {
-        const problem = bookTransferProblem(row, t, { requireReference: true });
-        if (problem) return { state: 'unknown', why: 'unrecognised' };
-        await this.keep(row, t, false);
-      } else if (t.paymentType !== NUVION_BOOK_TRANSFER) {
-        return { state: 'unknown', why: 'unrecognised' };
-      }
+      const problem = bookTransferProblem(row, t, { requireReference: true });
+      if (problem) return { state: 'unknown', why: 'unrecognised' };
+      await this.keep(row, t, false);
       return {
         state: 'found',
         source: 'history',
-        transaction: bookTransactionOf(t, row?.sentAt ?? this.now()),
+        transaction: bookTransactionOf(t, row.sentAt),
       };
     }
-    if (!walked.complete)
+    if (!walked.complete) {
       return { state: 'unknown', why: 'history_incomplete' };
+    }
     if (
-      row &&
       this.now().getTime() - row.sentAt.getTime() <
-        (this.settings.moneyTimeoutMs ?? 30_000)
+      (this.settings.moneyTimeoutMs ?? 30_000)
     ) {
       // The request may still be on its way to Nuvion.
       return { state: 'unknown', why: 'too_soon' };
     }
     return { state: 'absent' };
-  }
-
-  private async senderOf(
-    holder: ProviderHolder,
-  ): Promise<{ accountId: string | null; entityId: string | null }> {
-    if (holder.kind === 'customer') {
-      return { accountId: null, entityId: holder.customerId };
-    }
-    const op = await this.operationalIdentity();
-    return { accountId: op.accountId, entityId: null };
   }
 
   /** The seam's lookup by our reference: from the log, then the sender's transfers. */
@@ -1045,7 +1024,7 @@ export class NuvionBookArea implements NuvionBookMethods {
     // can be asked by it (the sender is unknown), which is not "no such
     // transfer".
     if (!row) return { state: 'unknown' };
-    const r = await this.reconcile(row, reference, null, row.sentAt);
+    const r = await this.reconcile(row, reference, row.sentAt);
     if (r.state === 'found') {
       return { state: 'found', transaction: r.transaction };
     }
@@ -1111,7 +1090,7 @@ export class NuvionBookArea implements NuvionBookMethods {
         (await store.byReference(ref)) ??
         (isNuvionId(ref) ? await store.byNuvionId(ref) : null);
       if (!row) continue;
-      const r = await this.reconcile(row, row.reference, null, row.sentAt);
+      const r = await this.reconcile(row, row.reference, row.sentAt);
       if (r.state === 'found') {
         return {
           state: 'found',
