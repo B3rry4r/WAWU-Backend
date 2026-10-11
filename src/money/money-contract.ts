@@ -35,6 +35,7 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   pin_incorrect: 403,
   pin_locked: 423,
   pin_mismatch: 400,
+  pin_changed_again: 409,
   reset_code_invalid: 400,
   insufficient_funds: 402,
   daily_limit_exceeded: 403,
@@ -202,7 +203,7 @@ export function OptionalIdempotencyKeyHeader(): MethodDecorator {
     name: 'Idempotency-Key',
     required: false,
     description:
-      'Optional. One value per attempt to change the PIN, made by the app when the person first confirms (a UUID) and sent again unchanged when the answer was lost. If the first request landed, its answer comes back with the header Idempotent-Replayed: true and the PIN is not checked again. The same key with another body is 409 idempotency_key_reused; while the first is still running, 409 idempotency_in_progress with retryAfterSeconds; a value that is not 8 to 128 of [A-Za-z0-9_-] is 400 idempotency_key_required. A refused request gives the key back.',
+      'Optional. One value per attempt to change the PIN, made by the app when the person first confirms (a UUID) and sent again unchanged when the answer was lost. If the first request landed, its answer comes back with the header Idempotent-Replayed: true and the PIN is not checked again. The same key with another body is 409 idempotency_key_reused; while the first is still running, 409 idempotency_in_progress with retryAfterSeconds; a value that is not 8 to 128 of [A-Za-z0-9_-] is 400 idempotency_key_required. A refused request gives the key back. A repeat that comes more than a minute after the first, when the first landed but its answer was never stored, is answered from the PIN: 200 if the PIN is still the one that request set, otherwise 409 pin_changed_again.',
     schema: { type: 'string', pattern: '^[A-Za-z0-9_-]{8,128}$' },
   });
 }

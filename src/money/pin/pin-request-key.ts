@@ -31,7 +31,7 @@ import {
 } from '../payments/idempotency';
 import {
   KEY_UNUSABLE_MESSAGE,
-  pinRequestFingerprint,
+  PinRequestKeys,
 } from './pin-request-keys.service';
 import {
   takeDeviceApproval,
@@ -62,7 +62,7 @@ type KeyedRequest = Request & {
 @Injectable()
 export class PinRequestKeyGuard implements CanActivate {
   constructor(
-    private readonly keys: IdempotencyService,
+    private readonly keys: PinRequestKeys,
     private readonly reflector: Reflector,
   ) {}
 
@@ -81,18 +81,10 @@ export class PinRequestKeyGuard implements CanActivate {
       if (typeof raw !== 'string' || !KEY_FORMAT.test(raw)) {
         throw new MoneyError('idempotency_key_required', KEY_UNUSABLE_MESSAGE);
       }
-      const id = {
-        wawuUserId,
-        method: req.method.toUpperCase(),
-        route,
-        key: raw,
-      };
-      const scope: IdempotencyScope = {
-        ...id,
-        fingerprint: await pinRequestFingerprint(id, req.body),
-      };
-      scope.claimId = await this.keys.claim(scope);
-      req[SCOPE_KEY] = scope;
+      req[SCOPE_KEY] = await this.keys.claim(
+        { wawuUserId, method: req.method.toUpperCase(), route, key: raw },
+        req.body,
+      );
       return true;
     } catch (err) {
       // Answered here, so the PIN guard never reads these: they go unread,
