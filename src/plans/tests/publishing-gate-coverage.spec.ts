@@ -587,6 +587,22 @@ describe('how the walk finds a file property in a request body', () => {
       expect([name, one(name)]).toEqual([name, [name]]);
   });
 
+  // Round 5, T13: the six words round 4 added to FILE_WORDS were not pinned
+  // by any test (removing `poster`, `banner` and `icon` left every test
+  // green). Each is a test of its own, so taking one word out of the list
+  // fails exactly that word, bare and at the end of a longer name.
+  it.each([
+    ['cover', 'sectionCover'],
+    ['poster', 'videoPoster'],
+    ['banner', 'eventBanner'],
+    ['avatar', 'userAvatar'],
+    ['icon', 'appIcon'],
+    ['blob', 'rawBlob'],
+  ])('sees the word %s, bare and at the end of a name (%s)', (word, ended) => {
+    expect([word, one(word)]).toEqual([word, [word]]);
+    expect([ended, one(ended)]).toEqual([ended, [ended]]);
+  });
+
   it('sees a file in a class nested in an array, and two classes down', () => {
     class Body {
       @ValidateNested({ each: true }) @Type(() => Item) sections!: Item[];

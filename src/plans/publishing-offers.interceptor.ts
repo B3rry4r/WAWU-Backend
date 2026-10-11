@@ -14,7 +14,11 @@ import { TierGateErrorEnvelope } from './dto/tier-gate-error.dto';
 import { limitOffers, tierRequiredOffers } from './limit-offers';
 import { PlansService } from './plans.service';
 import { PublishingAllowanceService } from './publishing-allowance.service';
-import { TierGateError, type TierGateOffers } from './tier-gate-error';
+import {
+  TierGateError,
+  type EndedTier,
+  type TierGateOffers,
+} from './tier-gate-error';
 
 /**
  * Adds the offers to a `TierGateError` on its way out (TIER-02).
@@ -47,8 +51,10 @@ export class PublishingOffersInterceptor implements NestInterceptor {
           .getRequest<Request & { user?: WawuJwtClaims }>().user;
         if (!user) return throwError(() => err);
         return from(this.offersFor(user, err)).pipe(
-          mergeMap((offers) =>
-            throwError(() => (offers ? err.withOffers(offers) : err)),
+          mergeMap((found) =>
+            throwError(() =>
+              found ? err.withOffers(found.offers, found.endedTier) : err,
+            ),
           ),
         );
       }),
@@ -58,7 +64,7 @@ export class PublishingOffersInterceptor implements NestInterceptor {
   private async offersFor(
     user: WawuJwtClaims,
     err: TierGateError,
-  ): Promise<TierGateOffers | null> {
+  ): Promise<{ offers: TierGateOffers; endedTier: EndedTier | null } | null> {
     try {
       const [plan, allowance] = await Promise.all([
         this.plans.plansFor(user.sub, {
@@ -76,7 +82,19 @@ export class PublishingOffersInterceptor implements NestInterceptor {
         err.code === 'tier_required'
           ? tierRequiredOffers(allowance, plan)
           : limitOffers(allowance, plan);
-      return { currency: plan.currency, ...offers };
+      // The tier that ended, named from the plan, so the `tier_required`
+      // sentence says "Renew it" only when that tier is among the offers
+      // (round 5, D8). Only the wording uses it, never the body.
+      const endedTier: EndedTier | null =
+        allowance.endedTierId === null
+          ? null
+          : {
+              id: allowance.endedTierId,
+              name:
+                plan.tiers.find((t) => t.id === allowance.endedTierId)?.name ??
+                null,
+            };
+      return { offers: { currency: plan.currency, ...offers }, endedTier };
     } catch {
       return null;
     }

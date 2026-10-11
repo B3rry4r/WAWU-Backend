@@ -32,6 +32,12 @@ export interface PublishingAllowance {
   tierState: MyTierState;
   /** The tier id of a RUNNING tier (`active` or `ending`); null otherwise. */
   runningTierId: string | null;
+  /**
+   * The tier id of a tier whose period has ENDED; null otherwise. For the
+   * wording of `tier_required` only (TIER-02 round 5, D8): "Renew it" is said
+   * only when this tier is among the tiers offered.
+   */
+  endedTierId: string | null;
   /** The running tier's own product count, extras left out; 0 with none. */
   runningTierProducts: number;
   /** The extra products bought on the running tier; 0 with none. */
@@ -76,6 +82,7 @@ function allowanceFrom(inputs: Inputs, now: Date): PublishingAllowance {
     productsUsed: inputs.productsUsed,
     tierState: tier?.state ?? 'none',
     runningTierId: running ? tier.tierId : null,
+    endedTierId: tier !== undefined && !running ? tier.tierId : null,
     runningTierProducts: tierProducts,
     extraProducts: running ? tier.extraProducts : 0,
     tickHeld,

@@ -1379,6 +1379,92 @@ describe('Publishing needs a tier (TIER-02) over HTTP', () => {
     });
   });
 
+  describe('an ended tier is told to renew it only when renewing would let the person publish (round 5, D8)', () => {
+    /**
+     * A person whose tier `tierIndex` has ended, with `used` products still
+     * up (the verifier's case: Verify ended, 5 up).
+     */
+    async function afterTierEnded(
+      tierIndex: number,
+      used: number,
+    ): Promise<string> {
+      const id = await creator();
+      await giveTier(id, tierIndex, { endsInDays: -1 });
+      if (used > 0)
+        await prisma.creatorState.create({
+          data: { wawuUserId: id, slotsUsed: used },
+        });
+      return id;
+    }
+
+    it("the verifier's case: an ended Verify with 5 up is not told to renew it, and is told what would work", async () => {
+      const verify = config.tiers[0];
+      const used = verify.products + 2;
+      const id = await afterTierEnded(0, used);
+      const res = await publish(id).expect(402);
+      // Plus and Founding leave a place; Verify, renewed, would not.
+      expect(tiersOf(res).map((t) => t.id)).toEqual(
+        config.tiers.filter((t) => t.products > used).map((t) => t.id),
+      );
+      expect(tiersOf(res).map((t) => t.id)).not.toContain(verify.id);
+      expect(body(res).message).toBe(
+        `Your ${verify.name} plan has ended. You have ${used} products up, and a bigger plan has room for them.`,
+      );
+      expect(body(res).message).not.toMatch(/renew/i);
+      expect(body(res).reason.message).toBe(body(res).message);
+      // Doing what the old sentence said (renewing Verify) would have been
+      // refused; a tier on offer lets the next publish through.
+      await prisma.makerTier.deleteMany({ where: { wawuUserId: id } });
+      await giveTier(id, 0, { endsInDays: 20 });
+      await publish(id).expect(402);
+      await prisma.makerTier.deleteMany({ where: { wawuUserId: id } });
+      await giveTier(id, 1, { endsInDays: 20 });
+      await publish(id).expect(201);
+    });
+
+    it('"Renew it" is said exactly when the ended tier is on offer, and renewing it then lets the next publish through', async () => {
+      const top = Math.max(...config.tiers.map((t) => t.products));
+      const sizes = [0, ...config.tiers.map((t) => t.products), top + 2];
+      for (const used of [...new Set(sizes)])
+        for (let i = 0; i < config.tiers.length; i += 1) {
+          const ended = config.tiers[i];
+          const id = await afterTierEnded(i, used);
+          const res = await publish(id).expect(402);
+          const offered = config.tiers
+            .filter((t) => t.products > used)
+            .map((t) => t.id);
+          const renewable = offered.includes(ended.id);
+          const where = `${ended.id} ended, ${used} up`;
+          expect([where, tiersOf(res).map((t) => t.id)]).toEqual([
+            where,
+            offered,
+          ]);
+          expect([where, /Renew it/.test(body(res).message)]).toEqual([
+            where,
+            renewable,
+          ]);
+          expect(body(res).message).not.toMatch(/[—–]/);
+          expect(body(res).reason.message).toBe(body(res).message);
+          // The file entrance answers in the same words.
+          expect(
+            body(await presign(id, 'content/full').expect(402)).message,
+          ).toBe(body(res).message);
+          if (offered.length > 0 && !renewable)
+            expect(body(res).message).toBe(
+              `Your ${ended.name} plan has ended. You have ${used} ${used === 1 ? 'product' : 'products'} up, and a bigger plan has room for ${used === 1 ? 'it' : 'them'}.`,
+            );
+          // Do what the sentence says: renewing the ended tier lets the next
+          // publish through exactly when it said to renew it.
+          await giveTier(id, i, { endsInDays: 20 });
+          const renewed = await publish(id);
+          expect([where, renewed.status]).toEqual([
+            where,
+            renewable ? 201 : 402,
+          ]);
+        }
+    });
+  });
+
   describe('the extras bought reach the offers over HTTP (round 4, T10)', () => {
     it('Verify with the pack bought, all its places used: the tiers that count with the extras, and the pack, are offered', async () => {
       const id = await creator();

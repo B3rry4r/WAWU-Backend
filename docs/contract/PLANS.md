@@ -175,7 +175,14 @@ first publishes sent together both succeed.
   tick or the tier ended) and for whom no tier would leave a place is not told
   to pick one: "You have 12 products up and no plan has room for another.
   Remove some to publish." (with "Your tier has ended." in front when it
-  has), and `tiers` is empty (round 4, D7).
+  has), and `tiers` is empty (round 4, D7). A person whose tier has ended is
+  told to renew it ("Your tier has ended. Renew it to publish or upload
+  files. Everything you published stays up.") only when that tier is among
+  the `tiers` offered; otherwise the sentence says what would work, with the
+  tier's name and the products up from the data: "Your Verify plan has ended.
+  You have 5 products up, and a bigger plan has room for them." (round 5,
+  D8; renewing a tier that holds no more than the products already up would
+  have been refused). The tier that ended is not in the body.
 - `product_limit_reached`: every product they may have is published. The
   `message` names only the ways on that the answer carries: both ("Add more
   products or move up a tier") while a higher tier and extra products are

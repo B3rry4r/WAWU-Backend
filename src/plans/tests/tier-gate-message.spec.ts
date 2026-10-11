@@ -2,6 +2,7 @@ import {
   TierGateError,
   productLimitMessage,
   tierRequiredMessage,
+  type EndedTier,
   type TierGateOffers,
 } from '../tier-gate-error';
 import type { PlanTierView } from '../plans-view.type';
@@ -13,6 +14,8 @@ import type { PlanTierView } from '../plans-view.type';
  */
 
 const higher = [{ id: 'plus' }] as unknown as PlanTierView[];
+const PLUS: EndedTier = { id: 'plus', name: 'Verify Plus' };
+const VERIFY: EndedTier = { id: 'verify', name: 'Verify' };
 const extras = { count: 5, priceMinor: 150_000 };
 
 const offers = (
@@ -111,7 +114,10 @@ describe('tierRequiredMessage', () => {
       expect(tierRequiredMessage('none', used, offers(higher, null))).toBe(
         'Publishing and uploading files need a tier. Pick one to carry on. Drafts stay free.',
       );
-      expect(tierRequiredMessage('ended', used, offers(higher, null))).toBe(
+      // The ended tier is on offer (Plus is in `higher`): renewing it works.
+      expect(
+        tierRequiredMessage('ended', used, offers(higher, null), PLUS),
+      ).toBe(
         'Your tier has ended. Renew it to publish or upload files. Everything you published stays up.',
       );
     }
@@ -147,6 +153,86 @@ describe('tierRequiredMessage', () => {
       for (const used of [0, 1, 12, 25])
         for (const o of [undefined, offers([], null), offers(higher, null)])
           expect(tierRequiredMessage(state, used, o)).not.toMatch(/[—–]/);
+  });
+});
+
+describe('tierRequiredMessage, an ended tier (round 5, D8)', () => {
+  const RENEW =
+    'Your tier has ended. Renew it to publish or upload files. Everything you published stays up.';
+
+  it('says "Renew it" only when the ended tier is among the offered tiers', () => {
+    // Plus is offered, so renewing Plus is a way on.
+    expect(tierRequiredMessage('ended', 4, offers(higher, null), PLUS)).toBe(
+      RENEW,
+    );
+    // Verify is not offered (it holds no more than the products up): the
+    // sentence does not tell the person to renew it.
+    const message = tierRequiredMessage(
+      'ended',
+      5,
+      offers(higher, null),
+      VERIFY,
+    );
+    expect(message).not.toMatch(/renew/i);
+    expect(message).toBe(
+      'Your Verify plan has ended. You have 5 products up, and a bigger plan has room for them.',
+    );
+  });
+
+  it('takes the tier name and the number of products from the data, in the singular and the plural', () => {
+    expect(tierRequiredMessage('ended', 7, offers(higher, null), PLUS)).toBe(
+      RENEW,
+    );
+    for (const [ended, used] of [
+      [{ id: 'verify', name: 'Verify' }, 6],
+      [{ id: 'founding', name: 'Founding Maker' }, 12],
+      [{ id: 'zeta', name: 'Zeta' }, 1],
+    ] as const)
+      expect(
+        tierRequiredMessage('ended', used, offers(higher, null), ended),
+      ).toBe(
+        `Your ${ended.name} plan has ended. You have ${used} ${used === 1 ? 'product' : 'products'} up, and a bigger plan has room for ${used === 1 ? 'it' : 'them'}.`,
+      );
+  });
+
+  it('a tier the config no longer names is not "bigger" than anything and is not told to renew', () => {
+    const gone: EndedTier = { id: 'retired-tier', name: null };
+    expect(tierRequiredMessage('ended', 5, offers(higher, null), gone)).toBe(
+      'Your plan has ended. You have 5 products up, and another plan has room for them.',
+    );
+    // Nothing up: no count to give, only the way on.
+    expect(tierRequiredMessage('ended', 0, offers(higher, null), gone)).toBe(
+      'Your plan has ended. Pick a plan to carry on.',
+    );
+  });
+
+  it('with no tier on offer and products up, the round 4 sentence stands whatever tier ended', () => {
+    expect(tierRequiredMessage('ended', 12, offers([], null), PLUS)).toBe(
+      'Your tier has ended. You have 12 products up and no plan has room for another. Remove some to publish.',
+    );
+  });
+
+  it('when the ended tier is not known, or the offers are not, it cannot judge and keeps the old sentence', () => {
+    expect(tierRequiredMessage('ended', 5, offers(higher, null))).toBe(RENEW);
+    expect(tierRequiredMessage('ended', 5, offers(higher, null), null)).toBe(
+      RENEW,
+    );
+    expect(tierRequiredMessage('ended', 5, undefined, VERIFY)).toBe(RENEW);
+  });
+
+  it('a person with no tier is never told to renew anything', () => {
+    expect(tierRequiredMessage('none', 5, offers(higher, null), VERIFY)).toBe(
+      'Publishing and uploading files need a tier. Pick one to carry on. Drafts stay free.',
+    );
+  });
+
+  it('never carries an em-dash or an en-dash', () => {
+    for (const ended of [PLUS, VERIFY, { id: 'x', name: null }])
+      for (const used of [0, 1, 5, 12])
+        for (const o of [undefined, offers([], null), offers(higher, null)])
+          expect(tierRequiredMessage('ended', used, o, ended)).not.toMatch(
+            /[—–]/,
+          );
   });
 });
 
@@ -208,6 +294,33 @@ describe('TierGateError.withOffers', () => {
     ).withOffers(offers([], null));
     expect(messageOf(ended)).toBe(
       'Your tier has ended. You have 12 products up and no plan has room for another. Remove some to publish.',
+    );
+  });
+
+  it('writes the ended tier into the sentence only when it is not among the offers (round 5, D8)', () => {
+    const ended = new TierGateError(
+      'tier_required',
+      tierRequiredMessage('ended'),
+      { tierState: 'ended', productsUsed: 5, productsAllowed: 0 },
+    );
+    // Verify ended, Plus offered: Verify is not a way on.
+    const notOffered = ended.withOffers(offers(higher, null), VERIFY);
+    expect(messageOf(notOffered)).toBe(
+      'Your Verify plan has ended. You have 5 products up, and a bigger plan has room for them.',
+    );
+    expect(
+      (notOffered.getResponse() as { reason: { message: string } }).reason
+        .message,
+    ).toBe(messageOf(notOffered));
+    // The tier that ended is not put in the body.
+    expect(JSON.stringify(notOffered.getResponse())).not.toContain('endedTier');
+    // Plus ended, Plus offered: renewing it works.
+    expect(messageOf(ended.withOffers(offers(higher, null), PLUS))).toBe(
+      tierRequiredMessage('ended'),
+    );
+    // No ended tier passed: as before.
+    expect(messageOf(ended.withOffers(offers(higher, null)))).toBe(
+      tierRequiredMessage('ended'),
     );
   });
 });

@@ -54,6 +54,18 @@ export interface TierGateOffers {
 }
 
 /**
+ * The tier whose period has ended, for the wording of `tier_required` only
+ * (TIER-02 round 5, D8). It is never put in the body: the body already carries
+ * the tiers on offer, and the sentence is the only place that needs to know
+ * whether the ended tier is one of them.
+ */
+export interface EndedTier {
+  id: string;
+  /** Null when the config no longer names this tier. */
+  name: string | null;
+}
+
+/**
  * The `reason` object of both refusals, flat: the offers are absent until
  * the route's interceptor adds them, and it always does.
  */
@@ -89,9 +101,14 @@ export class TierGateError extends HttpException {
   /**
    * The same refusal with its offers filled in. The sentence is written again
    * from the offers (both refusals), so it never promises a way on the body
-   * does not carry.
+   * does not carry. `endedTier` is the tier a `tier_required` person held
+   * that has ended, so the sentence can say "Renew it" only when renewing
+   * that tier is among the offers (round 5, D8).
    */
-  withOffers(offers: TierGateOffers): TierGateError {
+  withOffers(
+    offers: TierGateOffers,
+    endedTier: EndedTier | null = null,
+  ): TierGateError {
     return new TierGateError(
       this.code,
       this.code === 'product_limit_reached'
@@ -104,6 +121,7 @@ export class TierGateError extends HttpException {
             this.facts.tierState,
             this.facts.productsUsed,
             offers,
+            endedTier,
           ),
       this.facts,
       offers,
@@ -118,19 +136,48 @@ export class TierGateError extends HttpException {
  * whom no tier would leave a place (TIER-02 round 4, D7) is not told to pick
  * a tier: they are told how many products they have and that some must come
  * down first. Everyone else keeps the sentence that asks for a tier.
+ *
+ * A person whose tier has ended is told to renew it only when that tier is
+ * among the offered `tiers` (round 5, D8): renewing a tier that holds no more
+ * than the products already up would still be refused. Otherwise the sentence
+ * names what would work, with the tier's name and the number of products up
+ * from the data. When the ended tier is not known (the bare refusal, before
+ * the route adds the offers) the answer cannot be judged and the old sentence
+ * stays, as it does for the limit.
  */
 export function tierRequiredMessage(
   tierState: MyTierState,
   used = 0,
   offers?: Pick<TierGateOffers, 'tiers'>,
+  endedTier?: EndedTier | null,
 ): string {
   if (offers && offers.tiers.length === 0 && used > 0) {
-    const have = `${used} ${used === 1 ? 'product' : 'products'}`;
-    return `${tierState === 'ended' ? 'Your tier has ended. ' : ''}You have ${have} up and no plan has room for another. Remove some to publish.`;
+    return `${tierState === 'ended' ? 'Your tier has ended. ' : ''}You have ${productsWord(used)} up and no plan has room for another. Remove some to publish.`;
   }
-  return tierState === 'ended'
-    ? 'Your tier has ended. Renew it to publish or upload files. Everything you published stays up.'
-    : 'Publishing and uploading files need a tier. Pick one to carry on. Drafts stay free.';
+  if (tierState !== 'ended')
+    return 'Publishing and uploading files need a tier. Pick one to carry on. Drafts stay free.';
+  if (offers && endedTier && !offers.tiers.some((t) => t.id === endedTier.id))
+    return endedNotOnOfferMessage(used, endedTier);
+  return 'Your tier has ended. Renew it to publish or upload files. Everything you published stays up.';
+}
+
+/**
+ * The ended tier is not among the tiers that would let the person publish, so
+ * it is not named as the way on. Everything in it is read from the data: the
+ * tier's name (from the plan) and the products up.
+ */
+function endedNotOnOfferMessage(used: number, ended: EndedTier): string {
+  const opening = ended.name
+    ? `Your ${ended.name} plan has ended.`
+    : 'Your plan has ended.';
+  if (used === 0) return `${opening} Pick a plan to carry on.`;
+  const other = ended.name ? 'a bigger' : 'another';
+  return `${opening} You have ${productsWord(used)} up, and ${other} plan has room for ${used === 1 ? 'it' : 'them'}.`;
+}
+
+/** "1 product", "12 products". */
+function productsWord(n: number): string {
+  return `${n} ${n === 1 ? 'product' : 'products'}`;
 }
 
 /**
