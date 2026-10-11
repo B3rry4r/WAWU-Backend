@@ -1,9 +1,11 @@
-import { Injectable, Logger, Module } from '@nestjs/common';
+import { Injectable, Logger, Module, Optional } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { PrismaService } from '../common/prisma/prisma.service';
+import { PrismaNuvionBookStore } from './areas/book-store';
 import { NuvionClient } from './nuvion-client';
 import { readNuvionSettings } from './nuvion-config';
 import { NuvionOtpSender } from './nuvion-otp-sender';
-import { NuvionWalletProvider } from './nuvion-wallet-provider';
+import { NuvionWalletProvider, nuvionAreas } from './nuvion-wallet-provider';
 
 /**
  * Builds the Nuvion adapter, its client and its code sender, once, and only
@@ -23,7 +25,15 @@ export class NuvionAdapterFactory {
   } | null = null;
   private sender: NuvionOtpSender | null = null;
 
-  constructor(private readonly config: ConfigService) {}
+  /**
+   * The database is the book area's record of transfers (NUV-05). Optional
+   * so a module built without PrismaModule (a spec of the settings alone)
+   * still boots: its book area then sends nothing (`not_configured`).
+   */
+  constructor(
+    private readonly config: ConfigService,
+    @Optional() private readonly prisma?: PrismaService,
+  ) {}
 
   /** The client every area calls through. */
   client(): NuvionClient {
@@ -46,7 +56,16 @@ export class NuvionAdapterFactory {
       this.config.get<string>(key),
     );
     const client = new NuvionClient(settings, apiKey);
-    this.built = { client, provider: new NuvionWalletProvider(client) };
+    const bookStore = this.prisma
+      ? new PrismaNuvionBookStore(this.prisma)
+      : undefined;
+    this.built = {
+      client,
+      provider: new NuvionWalletProvider(
+        client,
+        nuvionAreas(client, { bookStore }),
+      ),
+    };
     this.logger.log(`Nuvion adapter ready (${settings.environment})`);
     return this.built;
   }
