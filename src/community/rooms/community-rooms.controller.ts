@@ -20,19 +20,24 @@ import { CreateCommunityDto } from '../dto/create-community.dto';
 import { CommunityRoomsService } from './community-rooms.service';
 import type {
   CommunityLinkView,
+  CommunityMessageCost,
   CommunityReadView,
   CommunityRoom,
+  CommunityRoomView,
   MyCommunity,
+  SuggestedCommunity,
 } from './community-room.type';
 
 /**
- * INBOX-01. New routes under /communities for the app; see
+ * INBOX-01 and INBOX-05. New routes under /communities for the app; see
  * CommunityRoomsService for what each does.
  *
  * ORDER MATTERS. CommunityController declares GET /communities/:id, which
  * would take GET /communities/mine and answer 400 (not a uuid). This
  * controller is listed first in CommunityModule, so its fixed paths
- * (`mine`, `rooms`, `links/:slug`) are matched before that one.
+ * (`mine`, `suggested`, `message-cost`, `rooms`, `links/:slug`) are matched
+ * before that one (community-discover-routing.contract.spec.ts checks it in
+ * the full app).
  */
 @UseGuards(WawuAuthGuard)
 @Controller('communities')
@@ -50,6 +55,41 @@ export class CommunityRoomsController {
     @Query() { page, perPage }: PaginationQueryDto,
   ): Promise<Paginated<MyCommunity>> {
     return this.rooms.mine(user.sub, page, perPage);
+  }
+
+  /**
+   * INBOX-05. Rooms the caller could join (I24, Suggested): none they host,
+   * are in or have asked to join, none hosted by somebody hidden from them.
+   * Most members first, then by name.
+   */
+  @Get('suggested')
+  suggested(
+    @CurrentUser() user: WawuJwtClaims,
+    @Query() { page, perPage }: PaginationQueryDto,
+  ): Promise<Paginated<SuggestedCommunity>> {
+    return this.rooms.suggested(user.sub, page, perPage);
+  }
+
+  /**
+   * INBOX-05. What one message in a community costs a member, in WAWU
+   * Credits (I24: "1 credit per message you send"). Reading is free.
+   */
+  @Get('message-cost')
+  messageCost(): CommunityMessageCost {
+    return this.rooms.messageCost();
+  }
+
+  /**
+   * INBOX-05. One room as the caller sees it (I25): its counts and link,
+   * `role` (host, member, pending or none) and `messageCostInCredits`, what
+   * one message costs the caller there (0 for the host).
+   */
+  @Get(':id/room')
+  room(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @CurrentUser() user: WawuJwtClaims,
+  ): Promise<CommunityRoomView> {
+    return this.rooms.room(id, user.sub);
   }
 
   /**
