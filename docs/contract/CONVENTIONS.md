@@ -1921,8 +1921,12 @@ added up into one.
     provider's hold (written before a switch of `WALLET_PROVIDER`; this
     server sends nothing for it). **A request that provably never reached the
     provider** (the connection was refused, the host name did not resolve, no
-    route: `WalletProviderError.requestNotSent`, set by the Fintava and
-    Nuvion clients from the socket's own error code) is this, not an unknown
+    route, WHILE the connection was being made: `WalletProviderError.requestNotSent`,
+    set by the Fintava and Nuvion clients from the socket's own error code AND
+    the syscall that raised it: `connect` for a refusal or an unreachable
+    route, `getaddrinfo` for a name, undici's own connect timeout; the same
+    codes on an established connection, `read ECONNREFUSED` after the provider
+    read the request, are not it, MONEY-18 round 3, R2-1) is this, not an unknown
     outcome: the lease is given back and the minute sweep sends it again under
     the SAME reference (MONEY-18 round 2, O1). Every other loss (a timeout,
     a dropped line, a reset, a 5xx, a TLS failure) may have reached the
@@ -1993,9 +1997,13 @@ above the quote is believed (completed, flagged `debitReviewSince`, as before).
   read the payment a moment ago and judged it "as quoted" (the sweep's lookup
   carries no charge) cannot complete it once the mark is there. The mark and
   the completion meet on one row; whichever is second sees the other.
-- Delivery reads the payment at the moment of delivery (`fulfil`): a payment
-  in charge review (or any review) is not delivered, and the sweeps do not
-  offer it. A report that arrives after a payment completed but before its
+- Delivery is a claim, not a read (`fulfil`; MONEY-18 round 3, R2-2): one
+  conditional update on the payment as it stands in the database (completed,
+  not delivered, no review, no charge review), taken last, with nothing awaited
+  between it and the call to the feature. A payment in charge review (or any
+  review) is not delivered, however it was read before, and the sweeps do not
+  offer it. The claim also leases the delivery (`nextDeliveryAt`), so a slow
+  feature is not told twice at once. A report that arrives after a payment completed but before its
   delivery stops that delivery (the item stays claimed, the payment is out of
   the delivery sweep, the hold, if any, stays); a delivery already made is not
   taken back, the payment is only marked. A person clears the review by

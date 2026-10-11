@@ -87,8 +87,9 @@ export class WalletProviderError extends Error {
   readonly recordMayExist: boolean;
   /**
    * True only when the request PROVABLY never reached the provider: the
-   * connection was refused or the host name did not resolve
-   * (`connectionNeverOpened`). The provider has no record of it, so a caller
+   * connection was refused or the host name did not resolve while the
+   * connection was being made (`connectionNeverOpened`: the error code AND
+   * the syscall that raised it, round 3). The provider has no record of it, so a caller
    * that moves held money (MONEY-18 round 2, O1) may send it again under the
    * same reference. `recordMayExist` is unchanged by it: a caller that does
    * not read this flag keeps treating a lost write as an unknown outcome.

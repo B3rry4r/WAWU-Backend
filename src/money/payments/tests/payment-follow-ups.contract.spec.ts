@@ -11,6 +11,7 @@ import { PassportModule } from '@nestjs/passport';
 import { Test } from '@nestjs/testing';
 import * as argon2 from 'argon2';
 import * as jwt from 'jsonwebtoken';
+import { Client } from 'pg';
 import request, { type Response } from 'supertest';
 import type { App } from 'supertest/types';
 import {
@@ -181,6 +182,11 @@ describe('MONEY-17 follow-ups (D8-1, N2) on Fintava', () => {
   const delivered: CompletedPayment[] = [];
   /** The next `n` deliveries fail (the feature is down). */
   const failDeliveries = { n: 0 };
+  /** While `wait` is set the feature is working on a delivery; `started` counts the times it was told. */
+  const feature: { wait: Promise<void> | null; started: number } = {
+    wait: null,
+    started: 0,
+  };
   const previous: Record<string, string | undefined> = {};
   let accountSeq = 0;
   let clock = Date.now();
@@ -499,6 +505,8 @@ describe('MONEY-17 follow-ups (D8-1, N2) on Fintava', () => {
         },
         onCompleted: async (p) => {
           await Promise.resolve();
+          feature.started += 1;
+          if (feature.wait) await feature.wait;
           if (failDeliveries.n > 0) {
             failDeliveries.n -= 1;
             throw new Error('the feature is down');
@@ -994,6 +1002,164 @@ describe('MONEY-17 follow-ups (D8-1, N2) on Fintava', () => {
     expect(await fulfil(stale, registry.get('content_unlock'))).toBe(false);
     expect(deliveries(paid.id)).toBe(0);
     expect((await rowOf(paid.id)).fulfilledAt).toBeNull();
+  });
+
+  // -------------------------------------------------------------------------
+  // MONEY-18 round 3: the decision to deliver is a claim (R2-2), and the
+  // reviews it honours are each pinned (R2-5)
+  // -------------------------------------------------------------------------
+
+  /** How many queries are waiting for a lock on the hold table. */
+  async function waitingOnHoldTable(): Promise<number> {
+    const r = await prisma.$queryRaw<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM pg_stat_activity
+       WHERE wait_event_type = 'Lock' AND query LIKE '%"WalletHold"%'
+         AND pid <> pg_backend_pid()`;
+    return r[0].n;
+  }
+
+  /** A completed payment whose first delivery failed (the feature was down): owed, not delivered. */
+  async function completedNotDelivered(fee: number, kind = 'paid_dm') {
+    const made = await lostAnswerTaking(fee, kind);
+    failDeliveries.n = 1;
+    await payments.settle(made.paid.id, new Date(), true);
+    const row = await rowOf(made.paid.id);
+    expect(row.status).toBe('completed');
+    expect(row.fulfilledAt).toBeNull();
+    expect(row.chargeReviewSince).toBeNull();
+    expect(deliveries(made.paid.id)).toBe(0);
+    return made;
+  }
+
+  it('R2-2 the delivery is a claim, not a read: the table it reads for the hold is locked, a report of an untrusted charge is applied meanwhile, the lock is released: nothing is delivered', async () => {
+    const { p, paid } = await completedNotDelivered(QUOTE_FEE + CAP + 500);
+    const lock = new Client({
+      connectionString: process.env.DATABASE_URL!.replace(/\?.*$/, ''),
+    });
+    await lock.connect();
+    let sweeping: Promise<unknown> = Promise.resolve();
+    try {
+      await lock.query('BEGIN');
+      await lock.query('LOCK TABLE "WalletHold" IN ACCESS EXCLUSIVE MODE');
+      // The sweep has read the payment (no mark yet) and is about to tell the
+      // feature; the one query in front of that is the read of its hold.
+      sweeping = payments.sweep(later(31 * 60_000));
+      await until(async () => (await waitingOnHoldTable()) > 0);
+      expect((await rowOf(paid.id)).chargeReviewSince).toBeNull();
+      expect(await consumer.consume(await deliverWebhook(p, paid.id))).toBe(
+        'processed',
+      );
+      expect((await rowOf(paid.id)).chargeReviewSince).not.toBeNull();
+    } finally {
+      await lock.query('COMMIT');
+      await lock.end();
+      await sweeping;
+    }
+    const row = await rowOf(paid.id);
+    expect(deliveries(paid.id)).toBe(0);
+    expect(row.fulfilledAt).toBeNull();
+    expect(row.chargeReviewSince).not.toBeNull();
+    // Still claimed, for a person.
+    expect(row.openKey).not.toBeNull();
+    expect(row.reviewSince).not.toBeNull();
+  });
+
+  it('R2-2 round after round: the report and the delivery sweep started at random offsets never end delivered after the mark was committed', async () => {
+    for (let round = 0; round < 6; round += 1) {
+      const { p, paid } = await completedNotDelivered(
+        QUOTE_FEE + CAP + 500,
+        round % 2 === 0 ? 'paid_dm' : 'content_unlock',
+      );
+      const now = later(31 * 60_000);
+      const offset = Math.floor(Math.random() * 40);
+      const [reported] = await Promise.all([
+        deliverWebhook(p, paid.id).then((id) => consumer.consume(id)),
+        new Promise((r) => setTimeout(r, offset)).then(() =>
+          payments.sweep(now),
+        ),
+      ]);
+      expect(reported).toBe('processed');
+      const row = await rowOf(paid.id);
+      expect(row.chargeReviewSince).not.toBeNull();
+      // Whichever came first: delivered once and then marked, or marked and
+      // never delivered. Never delivered twice, never a delivery that began
+      // after the mark.
+      expect(deliveries(paid.id)).toBeLessThanOrEqual(1);
+      if (deliveries(paid.id) === 0) expect(row.fulfilledAt).toBeNull();
+      else expect(row.fulfilledAt).not.toBeNull();
+    }
+  });
+
+  it('R2-2 the claim leases the delivery: while the feature is still working on it the payment carries a rest, and it is told once', async () => {
+    const { paid } = await completedNotDelivered(QUOTE_FEE + 500);
+    const before = feature.started;
+    let finish!: () => void;
+    feature.wait = new Promise<void>((r) => (finish = r));
+    const now = later(31 * 60_000);
+    let sweeping: Promise<unknown> = Promise.resolve();
+    try {
+      sweeping = payments.sweep(now);
+      await until(() => feature.started > before);
+      const working = await rowOf(paid.id);
+      expect(working.fulfilledAt).toBeNull();
+      // Taken for delivery: not due again until the rest the next failure
+      // would give it (one failed try so far: two minutes).
+      expect(working.nextDeliveryAt!.getTime()).toBe(
+        now.getTime() + 2 * 60_000,
+      );
+    } finally {
+      feature.wait = null;
+      finish();
+      await sweeping;
+    }
+    expect(feature.started).toBe(before + 1);
+    expect(deliveries(paid.id)).toBe(1);
+    const done = await rowOf(paid.id);
+    expect(done.fulfilledAt).not.toBeNull();
+    expect(done.nextDeliveryAt).toBeNull();
+    expect(done.openKey).toBeNull();
+  });
+
+  it('R2-5 any review stops a delivery that was read before it, not only a charge review: a person (or the delivery review) puts the payment under review after the row was read', async () => {
+    const { paid } = await completedNotDelivered(QUOTE_FEE + 500);
+    const stale = await rowOf(paid.id);
+    expect(stale.reviewSince).toBeNull();
+    expect(stale.chargeReviewSince).toBeNull();
+    await prisma.walletPayment.update({
+      where: { id: paid.id },
+      data: { reviewSince: new Date(), nextDeliveryAt: null },
+    });
+    const started = feature.started;
+    const registry = app.get(PayableRegistry);
+    const fulfil = (
+      payments as unknown as {
+        fulfil: (...a: unknown[]) => Promise<boolean>;
+      }
+    ).fulfil.bind(payments);
+    expect(await fulfil(stale, registry.get('paid_dm'))).toBe(false);
+    // The feature was not even told.
+    expect(feature.started).toBe(started);
+    expect(deliveries(paid.id)).toBe(0);
+    expect((await rowOf(paid.id)).fulfilledAt).toBeNull();
+  });
+
+  it('R2-2 a row read before another path delivered it is not delivered a second time', async () => {
+    const { paid } = await completedNotDelivered(QUOTE_FEE + 500);
+    const stale = await rowOf(paid.id);
+    expect(stale.fulfilledAt).toBeNull();
+    // Another path (the other server's sweep) delivers it.
+    await payments.sweep(later(31 * 60_000));
+    expect(deliveries(paid.id)).toBe(1);
+    const started = feature.started;
+    const registry = app.get(PayableRegistry);
+    const fulfil = (
+      payments as unknown as {
+        fulfil: (...a: unknown[]) => Promise<boolean>;
+      }
+    ).fulfil.bind(payments);
+    expect(await fulfil(stale, registry.get('paid_dm'))).toBe(false);
+    expect(feature.started).toBe(started);
+    expect(deliveries(paid.id)).toBe(1);
   });
 
   it('a payment of a kind that is not held has no hold', async () => {

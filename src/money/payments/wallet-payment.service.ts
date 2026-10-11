@@ -1928,28 +1928,6 @@ export class WalletPaymentService implements OnModuleInit {
     if (!handler.onCompleted || p.fulfilledAt || !p.payerWawuUserId) {
       return false;
     }
-    // The payment as it stands at the moment of delivery, not as the caller
-    // read it (MONEY-18 round 2, O3): a charge that is not believed (N2), or
-    // any review, stops a delivery not yet made. A delivery already made is
-    // not taken back; the mark is all that is left to do for it.
-    const fresh = await this.prisma.walletPayment.findUnique({
-      where: { id: p.id },
-      select: {
-        status: true,
-        fulfilledAt: true,
-        reviewSince: true,
-        chargeReviewSince: true,
-      },
-    });
-    if (
-      !fresh ||
-      fresh.status !== 'completed' ||
-      fresh.fulfilledAt ||
-      fresh.reviewSince ||
-      fresh.chargeReviewSince
-    ) {
-      return false;
-    }
     try {
       const hold = releaseConditionOf(p.kind)
         ? await this.prisma.walletHold.findUnique({
@@ -1957,6 +1935,35 @@ export class WalletPaymentService implements OnModuleInit {
             select: { id: true },
           })
         : null;
+      // The decision to deliver is a CLAIM, not a read (MONEY-18 round 3,
+      // R2-2; O3 in round 2): one conditional update on the payment as it
+      // stands in the database at this moment, taken last, with nothing
+      // awaited between it and the call to the feature. A charge that is not
+      // believed (N2), any review, a delivery already made or a payment that
+      // is not completed makes it touch no row, and nothing is delivered. A
+      // mark that is committed before the claim is seen by it (the later
+      // writer waits for the row and then re-reads it); one committed after
+      // it finds a delivery that has begun, which is not taken back (the
+      // payment is only marked, as for a report that arrives late). The claim
+      // also leases the delivery: the sweeps skip the payment until the rest
+      // the next failure would give it has passed, so a slow feature is not
+      // told twice at once; a delivery that is made clears it, one that
+      // fails writes the same rest again.
+      const claimed = await this.prisma.walletPayment.updateMany({
+        where: {
+          id: p.id,
+          status: 'completed',
+          fulfilledAt: null,
+          reviewSince: null,
+          chargeReviewSince: null,
+        },
+        data: {
+          nextDeliveryAt: new Date(
+            now.getTime() + nextCheckDelayMs(p.deliveryAttempts),
+          ),
+        },
+      });
+      if (claimed.count === 0) return false;
       await handler.onCompleted({
         paymentId: p.id,
         payerWawuUserId: p.payerWawuUserId,

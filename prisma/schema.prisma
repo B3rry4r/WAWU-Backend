@@ -4664,7 +4664,9 @@ model WalletHold {
   /// The schedule: the next try or the next question to the provider, and how
   /// many questions have been asked. `waiting` says why nothing has moved
   /// (payee_wallet, payer_wallet, recipient_frozen, funds, provider, refused);
-  /// a hold waiting for a wallet is tried every minute, no back-off.
+  /// a hold waiting for a wallet rests a minute to an hour (it doubles with the
+  /// hold's age), and the first sweep after the person HAS a wallet wakes it
+  /// whatever its rest (MONEY-18 round 2, F4).
   nextAttemptAt            DateTime?
   attempts                 Int           @default(0)
   checks                   Int           @default(0)

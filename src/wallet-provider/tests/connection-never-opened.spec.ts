@@ -1,5 +1,9 @@
 import { createServer, type Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import {
+  createServer as createTcpServer,
+  type AddressInfo,
+  type Socket,
+} from 'node:net';
 import { runInNewContext } from 'node:vm';
 import { Logger } from '@nestjs/common';
 import { fintavaConfig } from '../../../test/fintava/fintava-double';
@@ -9,7 +13,8 @@ import { FintavaError } from '../../fintava/fintava-error';
 import { toWalletProviderError } from '../../fintava/fintava-wallet-provider';
 import { NuvionClient, type NuvionOp } from '../../nuvion/nuvion-client';
 import {
-  CONNECTION_NEVER_OPENED_CODES,
+  CONNECT_TIMEOUT_CODE,
+  CONNECTION_NEVER_OPENED_SYSCALL,
   connectionNeverOpened,
 } from '../connection-never-opened';
 import { WalletProviderError } from '../wallet-provider-error';
@@ -20,20 +25,143 @@ import { WalletProviderError } from '../wallet-provider-error';
  * `requestNotSent`, so a release or refund can be sent again under the same
  * reference; every other loss is still an unknown outcome that is asked
  * about and never sent again.
+ *
+ * Round 3, R2-1: the error CODE alone is not proof. Node raises
+ * ECONNREFUSED, ENETUNREACH and EHOSTUNREACH on an established connection
+ * too (`read EHOSTUNREACH`, after the provider read the whole request), so
+ * the SYSCALL decides: `connect` for those three, `getaddrinfo` for the two
+ * name codes. Every fixture below carries the syscall a real error carries
+ * (the shapes were read from real sockets: the route failing after the write
+ * gave `read EHOSTUNREACH` errno -113, `read ENETUNREACH` -101 and
+ * `read ECONNREFUSED` -111; `netns/` and `connection-never-opened-sockets.spec.ts`
+ * produce them again).
  */
 
+/** The error Node raises for a failure in `syscall`, as a real one is shaped. */
+const ERRNO: Record<string, number> = {
+  ECONNREFUSED: -111,
+  ENETUNREACH: -101,
+  EHOSTUNREACH: -113,
+  ECONNRESET: -104,
+  ETIMEDOUT: -110,
+  EPIPE: -32,
+  ENOTFOUND: -3008,
+  EAI_AGAIN: -3001,
+};
+const socketError = (code: string, syscall: string, extra: object = {}) =>
+  Object.assign(new Error(`${syscall} ${code}`), {
+    errno: ERRNO[code] ?? -1,
+    code,
+    syscall,
+    ...extra,
+  });
+/** A code with no syscall at all (how the old fixtures looked). */
 const withCode = (code: string, extra: object = {}) =>
   Object.assign(new Error(`connect ${code}`), { code, ...extra });
 const fetchFailed = (cause: unknown) =>
   Object.assign(new TypeError('fetch failed'), { cause });
 
 describe('connectionNeverOpened (the shape of a failed fetch)', () => {
-  it.each([...CONNECTION_NEVER_OPENED_CODES])(
-    '%s under fetch failed: the request was not sent',
-    (code) => {
-      expect(connectionNeverOpened(fetchFailed(withCode(code)))).toBe(true);
+  it.each([...CONNECTION_NEVER_OPENED_SYSCALL])(
+    '%s from %s (the phase before any request is written) under fetch failed: the request was not sent',
+    (code, syscall) => {
+      expect(
+        connectionNeverOpened(fetchFailed(socketError(code, syscall))),
+      ).toBe(true);
     },
   );
+
+  it('undici connect-phase timeout: the request was not sent', () => {
+    const timeout = Object.assign(
+      new Error(
+        'Connect Timeout Error (attempted address: 10.0.0.1:443, timeout: 10000ms)',
+      ),
+      { name: 'ConnectTimeoutError', code: CONNECT_TIMEOUT_CODE },
+    );
+    expect(connectionNeverOpened(fetchFailed(timeout))).toBe(true);
+  });
+
+  // R2-1: the same codes on a connection that was already made. The provider
+  // read the request; the route failed under the open socket.
+  it.each([
+    ['EHOSTUNREACH', 'read'],
+    ['ENETUNREACH', 'read'],
+    ['ECONNREFUSED', 'read'],
+    ['EHOSTUNREACH', 'write'],
+    ['ENETUNREACH', 'write'],
+    ['ECONNREFUSED', 'write'],
+  ])(
+    '%s from %s (an established connection): the request may have been read, not proof',
+    (code, syscall) => {
+      expect(
+        connectionNeverOpened(fetchFailed(socketError(code, syscall))),
+      ).toBe(false);
+    },
+  );
+
+  it('the three errors a route failing after the write really gave, read from real sockets', () => {
+    // verbatim from probes/s13.js: name=Error code=EHOSTUNREACH syscall=read
+    // errno=-113 message="read EHOSTUNREACH", and the net and port forms.
+    for (const [code, errno] of [
+      ['EHOSTUNREACH', -113],
+      ['ENETUNREACH', -101],
+      ['ECONNREFUSED', -111],
+    ] as const) {
+      const real = Object.assign(new Error(`read ${code}`), {
+        errno,
+        code,
+        syscall: 'read',
+      });
+      expect(connectionNeverOpened(fetchFailed(real))).toBe(false);
+    }
+  });
+
+  it('a code with no syscall, or one from the other phase, is not proof', () => {
+    for (const code of CONNECTION_NEVER_OPENED_SYSCALL.keys()) {
+      expect(connectionNeverOpened(fetchFailed(withCode(code)))).toBe(false);
+    }
+    expect(
+      connectionNeverOpened(
+        fetchFailed(socketError('ECONNREFUSED', 'getaddrinfo')),
+      ),
+    ).toBe(false);
+    expect(
+      connectionNeverOpened(fetchFailed(socketError('ENOTFOUND', 'connect'))),
+    ).toBe(false);
+    expect(
+      connectionNeverOpened(fetchFailed(socketError('EAI_AGAIN', 'read'))),
+    ).toBe(false);
+    // A syscall that is not a string says nothing.
+    expect(
+      connectionNeverOpened(
+        fetchFailed(socketError('ECONNREFUSED', 'connect', { syscall: 7 })),
+      ),
+    ).toBe(false);
+  });
+
+  it('the syscall is read where the code is: the socket error under the wrapper, however deep', () => {
+    // `FintavaDeadline.headers` / `NuvionDeadline.headers` wrap a rejection
+    // that is not an Error of this realm in a new Error with the original as
+    // its cause, so there can be two wrappers above the socket's error.
+    const refused = socketError('ECONNREFUSED', 'connect');
+    const twice = new Error('fetch failed', { cause: fetchFailed(refused) });
+    expect(connectionNeverOpened(twice)).toBe(true);
+    const established = socketError('ECONNREFUSED', 'read');
+    expect(
+      connectionNeverOpened(
+        new Error('fetch failed', { cause: fetchFailed(established) }),
+      ),
+    ).toBe(false);
+    // A wrapper's own syscall does not stand in for the cause's.
+    expect(
+      connectionNeverOpened(
+        Object.assign(new Error('wrapper'), {
+          syscall: 'connect',
+          cause: fetchFailed(established),
+        }),
+      ),
+    ).toBe(false);
+  });
 
   it('the refused connection Node reports, read from a real fetch to a port nobody listens on', async () => {
     const server = createServer();
@@ -48,6 +176,10 @@ describe('connectionNeverOpened (the shape of a failed fetch)', () => {
       (err: unknown) => err,
     );
     expect(e).not.toBeNull();
+    // Where Node really puts it: the cause of `fetch failed`.
+    const cause = (e as { cause?: { code?: string; syscall?: string } }).cause;
+    expect(cause?.code).toBe('ECONNREFUSED');
+    expect(cause?.syscall).toBe('connect');
     expect(connectionNeverOpened(e)).toBe(true);
   });
 
@@ -82,20 +214,45 @@ describe('connectionNeverOpened (the shape of a failed fetch)', () => {
       (err: unknown) => err,
     );
     expect(e).not.toBeNull();
+    const cause = (e as { cause?: { code?: string; syscall?: string } }).cause;
+    expect(cause?.syscall).toBe('getaddrinfo');
+    expect(['ENOTFOUND', 'EAI_AGAIN']).toContain(cause?.code);
     expect(connectionNeverOpened(e)).toBe(true);
   });
 
   it('an address list that was refused one by one (an AggregateError) is not sent, but not if one of them failed another way', () => {
     const refused = Object.assign(
-      new AggregateError([withCode('ECONNREFUSED'), withCode('ECONNREFUSED')]),
+      new AggregateError([
+        socketError('ECONNREFUSED', 'connect'),
+        socketError('ECONNREFUSED', 'connect'),
+      ]),
       { code: 'ECONNREFUSED' },
     );
     expect(connectionNeverOpened(fetchFailed(refused))).toBe(true);
     const mixed = Object.assign(
-      new AggregateError([withCode('ECONNREFUSED'), withCode('ECONNRESET')]),
+      new AggregateError([
+        socketError('ECONNREFUSED', 'connect'),
+        socketError('ECONNRESET', 'read'),
+      ]),
       { code: 'ECONNREFUSED' },
     );
     expect(connectionNeverOpened(fetchFailed(mixed))).toBe(false);
+    // One address refused while connecting, another failed on a read: the
+    // aggregate's own code does not decide, its leaves do.
+    const oneEstablished = Object.assign(
+      new AggregateError([
+        socketError('ECONNREFUSED', 'connect'),
+        socketError('ECONNREFUSED', 'read'),
+      ]),
+      { code: 'ECONNREFUSED' },
+    );
+    expect(connectionNeverOpened(fetchFailed(oneEstablished))).toBe(false);
+    // Leaves with a code and no syscall are not proof either.
+    const bare = Object.assign(
+      new AggregateError([withCode('ECONNREFUSED'), withCode('ECONNREFUSED')]),
+      { code: 'ECONNREFUSED' },
+    );
+    expect(connectionNeverOpened(fetchFailed(bare))).toBe(false);
   });
 
   it.each([
@@ -110,6 +267,11 @@ describe('connectionNeverOpened (the shape of a failed fetch)', () => {
     'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
   ])('%s may have happened after the request was read: not proof', (code) => {
     expect(connectionNeverOpened(fetchFailed(withCode(code)))).toBe(false);
+    for (const syscall of ['connect', 'read', 'write']) {
+      expect(
+        connectionNeverOpened(fetchFailed(socketError(code, syscall))),
+      ).toBe(false);
+    }
   });
 
   it('anything that is not a socket error says nothing', () => {
@@ -129,20 +291,29 @@ describe('connectionNeverOpened (the shape of a failed fetch)', () => {
   });
 
   it('a cause chain that is too deep, or loops, is not read as proof', () => {
-    let deep: unknown = withCode('ECONNREFUSED');
+    let deep: unknown = socketError('ECONNREFUSED', 'connect');
     for (let i = 0; i < 12; i += 1) deep = new Error('wrap', { cause: deep });
     expect(connectionNeverOpened(deep)).toBe(false);
+    // The same socket error one wrapper down is proof, so the depth is what refuses.
+    expect(
+      connectionNeverOpened(
+        new Error('wrap', { cause: socketError('ECONNREFUSED', 'connect') }),
+      ),
+    ).toBe(true);
     const loop = new Error('loop');
     (loop as { cause?: unknown }).cause = loop;
     expect(connectionNeverOpened(loop)).toBe(false);
   });
 
   it('an error from another realm (a jest sandbox) is read the same way', () => {
-    const foreign = runInNewContext(
-      "Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('connect'), { code: 'ECONNREFUSED' }) })",
-    ) as unknown;
+    const make = (syscall: string) =>
+      runInNewContext(
+        `Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('x'), { code: 'ECONNREFUSED', syscall: '${syscall}' }) })`,
+      ) as unknown;
+    const foreign = make('connect');
     expect(foreign instanceof Error).toBe(false);
     expect(connectionNeverOpened(foreign)).toBe(true);
+    expect(connectionNeverOpened(make('read'))).toBe(false);
   });
 });
 
@@ -332,4 +503,189 @@ describe('the Nuvion client marks a request that never reached Nuvion', () => {
       await standin.stop();
     }
   });
+});
+
+/**
+ * R2-1, the cases that need no privileges: both real clients over real
+ * sockets, with the server counting what it read. A request is marked
+ * `requestNotSent` only when the server read nothing; whenever it read the
+ * whole request the answer is "ask, never resend", however the line ended.
+ * (The route failing under an established connection, `read EHOSTUNREACH`,
+ * needs a private network namespace: `connection-never-opened-sockets.spec.ts`.)
+ */
+describe('both clients over real sockets: marked only when nothing was read', () => {
+  type Seen = { bytes: number; full: number };
+  type Outcome = {
+    kind: string;
+    recordMayExist: boolean;
+    requestNotSent: boolean;
+  };
+  const servers: Server[] = [];
+  const sockets: Array<ReturnType<typeof createTcpServer>> = [];
+  const KEY = 'live_test_o1_0123456789FAKEKEY';
+  const NKEY = 'nv_test_sk_o1standinKEY0123456789abcdef';
+  const WRITE: NuvionOp = { name: 'make thing', call: 'write' };
+  const MONEY = {
+    senderAccountNumber: '1102000001',
+    receiverAccountNumber: '1102000002',
+    amountKobo: 100_000,
+    customerReference: 'wawu-rel-r3',
+    narration: 'WAWU earning',
+  };
+
+  beforeAll(() => {
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+  });
+  afterAll(async () => {
+    jest.restoreAllMocks();
+    for (const s of sockets) await new Promise<void>((r) => s.close(() => r()));
+    for (const s of servers) {
+      s.closeAllConnections();
+      await new Promise<void>((r) => s.close(() => r()));
+    }
+  });
+
+  /** A raw TCP server; `onFull` runs once the whole POST has been read. */
+  async function raw(
+    onFull: (s: Socket) => void,
+    onConnect: (s: Socket) => void = () => undefined,
+  ): Promise<{ base: string; seen: Seen }> {
+    const seen: Seen = { bytes: 0, full: 0 };
+    const server = createTcpServer((s) => {
+      let buf = Buffer.alloc(0);
+      let fired = false;
+      onConnect(s);
+      s.on('data', (d: Buffer) => {
+        seen.bytes += d.length;
+        buf = Buffer.concat([buf, d]);
+        const he = buf.indexOf('\r\n\r\n');
+        if (he < 0 || fired) return;
+        const m = /content-length:\s*(\d+)/i.exec(
+          buf.subarray(0, he).toString(),
+        );
+        if (buf.length >= he + 4 + (m ? Number(m[1]) : 0)) {
+          fired = true;
+          seen.full += 1;
+          onFull(s);
+        }
+      });
+      s.on('error', () => undefined);
+    });
+    sockets.push(server);
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const port = (server.address() as AddressInfo).port;
+    return { base: `http://127.0.0.1:${port}/api/dev`, seen };
+  }
+
+  async function closedBase(): Promise<string> {
+    const s = createTcpServer();
+    await new Promise<void>((r) => s.listen(0, '127.0.0.1', () => r()));
+    const port = (s.address() as AddressInfo).port;
+    await new Promise<void>((r) => s.close(() => r()));
+    return `http://127.0.0.1:${port}/api/dev`;
+  }
+
+  async function fintava(base: string, ms = 2_000): Promise<Outcome> {
+    const c = new FintavaClient(
+      fintavaConfig({
+        FINTAVA_BASE_URL: base,
+        FINTAVA_API_KEY: KEY,
+        FINTAVA_TIMEOUT_MS: String(ms),
+        FINTAVA_MONEY_TIMEOUT_MS: String(ms),
+        FINTAVA_CHECK_TIMEOUT_MS: String(ms),
+      }),
+    );
+    return c.walletToWallet(MONEY).then(
+      () => ({ kind: 'ok', recordMayExist: false, requestNotSent: false }),
+      (e: unknown) => e as Outcome,
+    );
+  }
+  async function nuvion(base: string, ms = 2_000): Promise<Outcome> {
+    const c = new NuvionClient(
+      new NuvionStandin().settings({
+        baseUrl: base,
+        moneyTimeoutMs: ms,
+        readTimeoutMs: ms,
+        checkTimeoutMs: ms,
+      }),
+      NKEY,
+    );
+    return c.post(WRITE, '/transfers', {}, { reference: 'nuv-r3' }).then(
+      () => ({ kind: 'ok', recordMayExist: false, requestNotSent: false }),
+      (e: unknown) => e as Outcome,
+    );
+  }
+  const clients = [
+    ['Fintava', fintava],
+    ['Nuvion', nuvion],
+  ] as const;
+
+  it.each(clients)(
+    '%s: a closed port is marked, and nothing was sent',
+    async (_n, via) => {
+      const o = await via(await closedBase());
+      expect(o.kind).toBe('outcome_unknown');
+      expect(o.recordMayExist).toBe(true);
+      expect(o.requestNotSent).toBe(true);
+    },
+  );
+
+  it.each(clients)(
+    '%s: the line reset after the whole request was read is not marked',
+    async (_n, via) => {
+      const { base, seen } = await raw((s) => s.resetAndDestroy());
+      const o = await via(base);
+      expect(seen.full).toBe(1);
+      expect(o.requestNotSent).toBe(false);
+      expect(o.recordMayExist).toBe(true);
+    },
+  );
+
+  it.each(clients)(
+    '%s: closed (FIN) after the whole request, no answer, is not marked',
+    async (_n, via) => {
+      const { base, seen } = await raw((s) => s.end());
+      const o = await via(base);
+      expect(seen.full).toBe(1);
+      expect(o.requestNotSent).toBe(false);
+    },
+  );
+
+  it.each(clients)(
+    '%s: reset the moment it connects (before a byte) is not marked: nothing proves the request was not read',
+    async (_n, via) => {
+      const { base } = await raw(
+        () => undefined,
+        (s) => s.resetAndDestroy(),
+      );
+      const o = await via(base);
+      expect(o.requestNotSent).toBe(false);
+    },
+  );
+
+  it.each(clients)(
+    '%s: a 503 after the whole request is not marked',
+    async (_n, via) => {
+      const { base, seen } = await raw((s) => {
+        const body = JSON.stringify({ status: 503, message: ['down'] });
+        s.write(
+          `HTTP/1.1 503 X\r\ncontent-type: application/json\r\ncontent-length: ${body.length}\r\nconnection: close\r\n\r\n${body}`,
+        );
+        s.end();
+      });
+      const o = await via(base);
+      expect(seen.full).toBe(1);
+      expect(o.requestNotSent).toBe(false);
+    },
+  );
+
+  it.each(clients)(
+    '%s: a request read and never answered (the deadline passes) is not marked',
+    async (_n, via) => {
+      const { base, seen } = await raw(() => undefined);
+      const o = await via(base, 400);
+      expect(seen.full).toBe(1);
+      expect(o.requestNotSent).toBe(false);
+    },
+  );
 });
