@@ -166,7 +166,7 @@ ended since; the app tells the person what is true from `claimedAt` and `tier`
 (a plan that has ended is not "ready"). The field is additive and always
 present on a 200.
 
-## 7. Buying, renewing and upgrading a tier from the wallet (TIER-03)
+## 8. Buying, renewing and upgrading a tier from the wallet (TIER-03)
 
 Task TIER-03, R-43, R-44. A person pays for a tier from their wallet
 (VF5 to VF7). It is WAWU's own sale, so the price goes into WAWU's own account
@@ -208,6 +208,7 @@ payment, so a poll needs nothing the app does not already have. `status`:
 | `pending` | The provider has not confirmed the debit yet (`payment.status` `pending`, `statusMessage` "We're still confirming this payment. Don't pay again; we'll let you know."), or it is confirmed and the tier is being opened (`payment.status` `completed`, `payment.delivered` false, "Your payment went through and we're finishing it. Don't pay again."). Poll `GET /plans/purchases/{id}`; the sweep settles it. | null |
 | `failed` | The provider refused it; nothing moved (`statusMessage` is the reason). | null |
 | `reversed` | The money went back to the buyer; nothing was granted. | null |
+| `refunded` | The payment was confirmed but the plan could no longer be granted as quoted (below), so nothing was granted and the whole price is going back to the buyer's wallet (`statusMessage` "We could not give you this plan, so we are paying your money back to your wallet.") or has gone back ("We could not give you this plan, so we paid your money back to your wallet."). The buyer may buy again at once. | null |
 
 The first answer and every replay of its key are the same body: the answer
 stored under the key is this view, built when the payment first has an answer
@@ -259,8 +260,15 @@ can pay it (NUV-09), so cents are never charged as kobo.
   downgrade while a tier runs. The new period starts TODAY for the new tier's
   own days (the old tier's remaining days are not carried over), the unused
   points stay, and the bonus points granted are the difference of the two
-  tiers' bonuses, as one lot with the new tier's expiry. The extra products
-  bought on top (TIER-04) are kept.
+  tiers' bonuses, as one lot with the new tier's expiry.
+- **Extra products stay.** The extra products a person paid for (TIER-04)
+  stay on every new period: a renewal of a running tier, an upgrade, a renewal
+  of an ended tier and a first purchase after the tier ended all keep
+  `MakerTier.extraProducts`, so `productsAllowed` (the tier's products plus the
+  extras) never falls because a plan was bought. Only a first-ever purchase
+  starts at none. TIER-02's `tier_required` offers ignore an ended tier's
+  extras, so they promise less than a purchase gives (the safe side); TIER-04
+  aligns them. Pinned by `plan-purchase-grant.contract.spec.ts`.
 - **One plan payment at a time per person.** A payment for another plan (or
   the same plan with or without the bump) that is still confirming, or paid
   and not yet opened, is `409 payment_in_progress` with its `paymentId`. It is
@@ -274,24 +282,58 @@ the answer was lost, on any server), one transaction at READ COMMITTED
 (`fixAtFirstPurchase` needs it) does, in this order:
 
 1. takes the person's tier lock;
-2. inserts the `MakerPurchase` row, whose primary key is the payment's id: if
+2. if the payment is already being paid back (below), it is not granted;
+3. inserts the `MakerPurchase` row, whose primary key is the payment's id: if
    it is already there the payment was granted and nothing else happens;
-3. fixes the billing currency (`PersonBilling`, `first_purchase`, the payment's
+4. fixes the billing currency (`PersonBilling`, `first_purchase`, the payment's
    reference); a person fixed in another currency than the one paid is not
    granted;
-4. grants through `TierGrantService` (`grant`; `upgrade` for an upgrade): the
+5. grants through `TierGrantService` (`grant`; `upgrade` for an upgrade): the
    tier and its dates (`activeFrom` is now, never later), the event pass, the
    first Voice Intro, the bonus points as one lot with its expiry;
-5. grants the bump's points as a `bump` lot (expiry: `points.bought_expiry_days`),
-   last, as POINTS-01 asks of every caller.
+6. grants the bump's points as a `bump` lot (expiry: `points.bought_expiry_days`),
+   last, as POINTS-01 asks of every caller: after the first points write, the
+   transaction writes nothing but points (`plan-purchase-grant.contract.spec.ts`
+   reads the statements).
 
 A repeat, a second server, or the request and the sweep together find the row
-and write nothing. A purchase that no longer fits what the person holds when it
-is confirmed (their tier changed meanwhile, for example an event code claimed
-in the app) is NOT granted: the delivery fails, the payment service tries
-again with its backoff and sends it to review after
-`PAYMENT_REVIEW_AFTER_HOURS`; the money is in WAWU's account and the person
-cannot pay for another plan until a person at WAWU settles it.
+and write nothing.
+
+### A plan that cannot be granted is paid back (round 2)
+
+A purchase that no longer fits what the person holds when the payment confirms
+is NOT granted, and nothing is written for the grant (the transaction rolls
+back). It fits not when: the tier an upgrade came from ended while the
+payment confirmed (the lost answer, a late webhook) or is no longer the one
+held; another tier was granted meanwhile (an event code claimed in the app,
+JOIN-03; a change by support); the renewal's tier is not the one held; the
+billing currency was fixed another way; or the plans file no longer names the
+tier. The whole price then goes back to the payer through MONEY-18's refund
+(`WalletHoldService.refund`; CONVENTIONS.md section 18):
+
+- A tier payment is WAWU's own sale and is not a held kind, so it has no
+  `WalletHold`. One is written for it only here (`releaseCondition`
+  `plan_granted`, the payment's price and shares, the payee null), under the
+  person's tier lock, and the refund is asked for at once. Exactly one of the
+  two outcomes can happen to a payment: the purchase row (granted) or the hold
+  (paid back). A delivery that finds the other's mark does nothing more, and a
+  payment already being paid back is never granted later, even if the tier
+  would now fit.
+- The money moves once, one way: a send from WAWU's account to the payer's
+  wallet under our reference `wawu-ref-<hold id>`, which the provider refuses
+  to repeat; a lost answer is asked about and never sent again; a payer with
+  no wallet or a frozen one waits (MONEY-18). The **price** comes back; the
+  provider's charge on the original payment does not (R-10), and the
+  provider's charge on the refund move is WAWU's (R-31).
+- The delivery then returns normally: the payment is delivered, its claim is
+  given up and the buyer may buy again at once (no `payment_in_progress`),
+  even while the refund is still on its way. The purchase reads `refunded`.
+  `GET /money/holds` lists the hold like any other (its payer reads it).
+- Anything else that goes wrong in the delivery (the database, a points
+  conflict, a date out of range) still throws: the payment service tries
+  again with its backoff and sends it to review after
+  `PAYMENT_REVIEW_AFTER_HOURS`, the money in WAWU's account (BACKEND_GAPS
+  G-680).
 
 ### Not built here
 

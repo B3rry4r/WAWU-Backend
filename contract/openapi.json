@@ -34942,7 +34942,8 @@
             "enum": [
               "dm_answered",
               "event_took_place",
-              "bill_delivered"
+              "bill_delivered",
+              "plan_granted"
             ]
           },
           "payer": {
@@ -49047,6 +49048,7 @@
               "pending",
               "failed",
               "reversed",
+              "refunded",
               "paid"
             ]
           },

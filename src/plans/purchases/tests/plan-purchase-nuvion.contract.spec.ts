@@ -171,6 +171,59 @@ describe('Buy, renew or upgrade a tier from the wallet (TIER-03), Nuvion stood i
     }
   });
 
+  it('an upgrade whose tier ended while Nuvion was settling it is paid back from the operational account, once (round 2, D1)', async () => {
+    const p = await h.buyer(RICH);
+    const first = await call.buy(
+      p,
+      request(
+        { kind: 'tier', tierId: small.id },
+        await quoted(p, { kind: 'tier', tierId: small.id }),
+      ),
+    );
+    expect(data<PlanPurchaseView>(first).status).toBe('paid');
+    const t: Terms = { kind: 'upgrade', tierId: big.id };
+    const q = await quoted(p, t);
+    const diff = priceIn(big.price, 'NGN') - priceIn(small.price, 'NGN');
+    nuvion.mode = 'pending';
+    const res = await call.buy(p, request(t, q));
+    const pending = data<PlanPurchaseView>(res);
+    expect(pending.status).toBe('pending');
+    // The tier the upgrade came from ends while Nuvion is still settling it.
+    await h.prisma.makerTier.update({
+      where: { wawuUserId: p.id },
+      data: {
+        activeFrom: new Date(Date.now() - 20 * 86_400_000),
+        activeUntil: new Date(Date.now() - 1000),
+      },
+    });
+    nuvion.settle(pending.payment.reference, 'successful');
+    nuvion.mode = 'successful';
+    await until(async () => {
+      await h.sweepLater();
+      return (
+        data<PlanPurchaseView>(await call.read(p, pending.id)).status ===
+        'refunded'
+      );
+    }, 'the purchase to read refunded');
+    const view = data<PlanPurchaseView>(await call.read(p, pending.id));
+    expect(view).toMatchObject({ status: 'refunded', grant: null });
+    expect(view.payment).toMatchObject({ delivered: true });
+    // The difference went back from WAWU's account to the payer, once.
+    const back = nuvion
+      .sendsFrom(nuvion.operational.accountId)
+      .filter((x) => x.toAccountId === p.account!.accountId);
+    expect(back).toHaveLength(1);
+    expect(back[0]).toMatchObject({ amountKobo: BigInt(diff) });
+    await h.sweepLater(70 * 60_000);
+    expect(
+      nuvion
+        .sendsFrom(nuvion.operational.accountId)
+        .filter((x) => x.toAccountId === p.account!.accountId),
+    ).toHaveLength(1);
+    expect(await rows(p)).toHaveLength(1);
+    expect((await tierOf(p)).state).toBe('ended');
+  });
+
   it('an upgrade debits only the difference and a person short of money gets the exact shortfall', async () => {
     const p = await h.buyer(RICH);
     const first = await call.buy(

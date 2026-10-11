@@ -264,7 +264,7 @@ status.
 **Which requests:** `POST /money/transfers/wawu`, `POST /money/transfers/bank`
 and `POST /money/payments`, `POST /plans/purchases` (a tier bought from the
 wallet, TIER-03: its stored answer is the purchase, not the bare payment;
-docs/contract/PLANS.md section 7), and every money-moving route added later. Without
+docs/contract/PLANS.md section 8), and every money-moving route added later. Without
 the header: `400 idempotency_key_required`. Format: 8 to 128 characters of
 `[A-Za-z0-9_-]`.
 
@@ -1967,6 +1967,13 @@ added up into one.
   - Answers are `HoldSettlement { state: settled | pending | waiting |
     review, waiting, status }`; `status` stays `held` until the provider
     **confirmed** the move (its answer, or its record of our reference).
+  - **A hold for a kind that is not held** (TIER-03 round 2): a tier payment is
+    WAWU's own sale and completes into no hold. When its plan cannot be
+    granted after the payment confirmed, `PlanPurchaseService` writes a
+    `WalletHold` for it (`releaseCondition: plan_granted`, no payee, the
+    payment's price and shares) and asks for the **refund** at once; nothing
+    ever releases it. The same once, one way, the same sweep, the same
+    reference `wawu-ref-<hold id>`. docs/contract/PLANS.md section 8.
 - **The provider's record is the truth** (the same rules as section 14).
   A move whose outcome is unknown (a timeout, a 5xx, a transfer accepted and
   not finished, a repeated reference) is `pending`: `sentAt` is set, the

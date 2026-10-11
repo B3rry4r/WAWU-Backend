@@ -67,7 +67,7 @@ export type FeePartCode = (typeof FEE_PART_CODES)[number];
  * tier bought, renewed or upgraded (`tier`), and the same with the checkout
  * offer's extra points (`tier_bump`). They are paid in one debit into WAWU's
  * own account with no seller split, and are not held. Their `targetId` names
- * the terms (docs/contract/PLANS.md section 7).
+ * the terms (docs/contract/PLANS.md section 8).
  */
 export const PAYMENT_KINDS = [
   'content_unlock',
