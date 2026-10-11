@@ -311,6 +311,14 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // not the account at Nuvion, which stays there; deletion needs an empty
   // wallet first (R-17).
   { model: 'NuvionEntity', column: 'wawuUserId', disposition: 'OWNED' },
+  // NUV-05. NuvionBookTransfer, the log of every book transfer sent on
+  // Nuvion, has no person column (like NuvionWebhookEvent): it names Nuvion's
+  // account ids, a person's account number, the amount and WAWU's reference,
+  // never a name, and it is the record that finds a transfer whose answer
+  // was lost. It is a money record, kept after an account is deleted like the
+  // provider's own record of the same transfer (Default (agent), owner may
+  // override: how long money records are kept is the owner's call), so
+  // neither this map nor the export list names it.
   // The documents sent to Nuvion and the onboarding submission and hosted
   // selfie (NUV-03): which kind and which sides went, the state, Nuvion's
   // document id, a SHA-256 of the bytes and the time; the session id and the

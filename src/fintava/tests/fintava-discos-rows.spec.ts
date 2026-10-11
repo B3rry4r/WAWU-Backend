@@ -84,6 +84,18 @@ describe('listDiscos with a malformed row', () => {
         'a minimum a kobo above its maximum',
         { minimum_value: '777.78', maximum_value: '777.77' },
       ],
+      [
+        'a minimum of nothing and a maximum of nothing (R3-5)',
+        { minimum_value: '0', maximum_value: '0' },
+      ],
+      [
+        'a minimum of nothing and a maximum of nothing, written with kobo',
+        { minimum_value: '0.00', maximum_value: '0.00' },
+      ],
+      [
+        'a minimum above a maximum of nothing',
+        { minimum_value: '5', maximum_value: '0' },
+      ],
     ])('skips a row with %s and reads the others', async (_k, limits) => {
       rows(good, { ...good, code: 'Odd_One', ...limits }, DISCOS.data[1]);
       const list = await client().listDiscos();
@@ -95,11 +107,8 @@ describe('listDiscos with a malformed row', () => {
         'a minimum equal to its maximum',
         { minimum_value: '777', maximum_value: '777' },
       ],
-      [
-        'a minimum of nothing and a maximum of nothing',
-        { minimum_value: '0', maximum_value: '0' },
-      ],
       ['a minimum of nothing', { minimum_value: '0', maximum_value: '777.77' }],
+      ['a maximum of one kobo', { minimum_value: '0', maximum_value: '0.01' }],
       [
         'kobo in both limits',
         { minimum_value: '1000.50', maximum_value: '1000.51' },

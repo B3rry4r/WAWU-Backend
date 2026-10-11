@@ -1008,6 +1008,10 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
     // person column (like FintavaWebhookEvent): it is Nuvion's record of
     // events, not the person's, so neither the purge map nor this list
     // names it.
+    // NUV-05. NuvionBookTransfer, the log of book transfers sent on Nuvion,
+    // has no person column either: it holds account ids, an account number,
+    // an amount and WAWU's reference, and the person's own transfers reach
+    // them through their wallet history, so this list does not name it.
     {
       model: 'NuvionEntity',
       reason:
