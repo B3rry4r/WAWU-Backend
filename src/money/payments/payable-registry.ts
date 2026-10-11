@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { HELD_PAYMENT_KINDS, type PaymentKind } from '../dto/money-enums';
+import type { PaymentKind } from '../dto/money-enums';
 import type { MoneyPartyView } from '../money-view.type';
 
 /**
@@ -41,6 +41,13 @@ export interface CompletedPayment {
   priceKobo: number;
   payeeWawuUserId: string | null;
   note: string | null;
+  /**
+   * The hold the price now sits in, for a held kind (paid DM, ticket, bill):
+   * the feature keeps it, and later asks `WalletHoldService` to release it
+   * to the payee or refund it to the payer (MONEY-18). Null for every other
+   * kind.
+   */
+  holdId: string | null;
 }
 
 /**
@@ -60,7 +67,8 @@ export interface CompletedPayment {
  *   payment sweep when a pending payment settles, and again from the sweep
  *   while it has not succeeded. It MUST be idempotent (it can run twice for
  *   one payment, from two servers) and must not move money: the payee's 85%
- *   lands through WALLET-16 (R-11).
+ *   lands through WALLET-16 (R-11), or, for a held kind, when the feature
+ *   releases the hold (MONEY-18).
  */
 export interface PayableKindHandler {
   readonly kind: PaymentKind;
@@ -75,19 +83,17 @@ export interface PayableKindHandler {
  * is ever taken for something nothing would deliver.
  *
  * Held kinds (a paid DM, a ticket, a bill: the price waits in WAWU's own
- * account at the provider until something happens, R-19, R-42) are MONEY-18's: they are
- * refused here until it builds the hold, its release and its refund.
+ * account at the provider until something happens, R-19, R-42) register like
+ * any other (MONEY-18). Their payment completes into a hold, the feature's
+ * `onCompleted` is told its id, and the feature later releases or refunds it
+ * through `WalletHoldService`; what releases each kind is fixed in
+ * `holds/hold-rules.ts`.
  */
 @Injectable()
 export class PayableRegistry {
   private readonly handlers = new Map<PaymentKind, PayableKindHandler>();
 
   register(handler: PayableKindHandler): void {
-    if (HELD_PAYMENT_KINDS.includes(handler.kind)) {
-      throw new Error(
-        `PayableRegistry: ${handler.kind} is held until something happens (R-19); MONEY-18 builds held payments.`,
-      );
-    }
     if (this.handlers.has(handler.kind)) {
       throw new Error(
         `PayableRegistry: ${handler.kind} already has a handler.`,

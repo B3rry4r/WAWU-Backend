@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { PrismaModule } from '../common/prisma/prisma.module';
+import { BillsCatalogueModule } from '../bills-catalogue/bills-catalogue.module';
 import { AdminAuthModule } from '../admin/auth/admin-auth.module';
 import { AdminOpsAuditModule } from '../common/audit/admin-ops-audit.module';
 import { FlutterwaveCheckoutVerifier } from '../common/flutterwave/checkout-verifier';
@@ -17,9 +18,19 @@ import { BillPaymentOpsController } from './bill-payment-ops.controller';
  * that file is untouched — Nest dedupes the already-registered module.
  */
 @Module({
-  imports: [PrismaModule, AdminAuthModule, AdminOpsAuditModule],
+  imports: [
+    PrismaModule,
+    AdminAuthModule,
+    AdminOpsAuditModule,
+    // BILLS-01: the electricity catalogue and the meter check, on Fintava.
+    BillsCatalogueModule,
+  ],
   controllers: [BillPaymentController, BillPaymentOpsController],
-  providers: [BillPaymentService, FlutterwaveBillsClient, FlutterwaveCheckoutVerifier],
+  providers: [
+    BillPaymentService,
+    FlutterwaveBillsClient,
+    FlutterwaveCheckoutVerifier,
+  ],
   exports: [BillPaymentService],
 })
 export class BillPaymentModule {}

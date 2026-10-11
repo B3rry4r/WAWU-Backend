@@ -11,7 +11,7 @@
 --
 -- Rollback (nothing else references this table):
 --   DROP TABLE "EventDoorScan";
---   DELETE FROM "_prisma_migrations" WHERE migration_name = '20261020170000_event_door_scans';
+--   DELETE FROM "_prisma_migrations" WHERE migration_name = '20261021070000_event_door_scans';
 
 -- CreateTable
 CREATE TABLE "EventDoorScan" (
