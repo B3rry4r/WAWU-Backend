@@ -1179,6 +1179,98 @@ describe('Publishing needs a tier (TIER-02) over HTTP', () => {
     });
   });
 
+  // ── 8b. Round 3: a person above their allowance ──────────────────────────
+
+  describe('a person with more published than their plan allows (round 3, D6)', () => {
+    it('the tick ended with 25 up and Verify was bought: both numbers, nothing offered, "remove some"', async () => {
+      const id = await creator();
+      // The tick ran out yesterday; the person then bought the smallest tier.
+      await giveTick(id, -1);
+      await giveTier(id, 0);
+      await prisma.creatorState.create({
+        data: { wawuUserId: id, slotsUsed: TICK_UPLOADS },
+      });
+      expect(await myTier(id)).toMatchObject({
+        productsUsed: TICK_UPLOADS,
+        productsAllowed: config.tiers[0].products,
+      });
+
+      const res = await publish(id).expect(402);
+      expect(body(res).reason).toMatchObject({
+        code: 'product_limit_reached',
+        productsUsed: TICK_UPLOADS,
+        productsAllowed: config.tiers[0].products,
+        tiers: [],
+        extraProducts: null,
+      });
+      expect(body(res).message).toBe(
+        `You have ${TICK_UPLOADS} products and your plan allows ${config.tiers[0].products}. To publish another, remove some.`,
+      );
+      expect(body(res).reason.message).toBe(body(res).message);
+      expect(body(res).message).not.toMatch(/[—–]/);
+      expect(body(res).message).not.toMatch(/tier|used 25 of/i);
+
+      // The same sentence from the other entrances that need a free place.
+      const presigned = await presign(id, 'content/full').expect(402);
+      expect(body(presigned).message).toBe(body(res).message);
+      expect(body(presigned).reason.tiers).toEqual([]);
+    });
+
+    it('offers only what would let another product go up, and says "add more places" while one does', async () => {
+      const id = await creator();
+      await giveTier(id, 0);
+      // Enough published that the smallest pack still falls short, and only
+      // the top tier is big enough.
+      const used = config.tiers[0].products + config.extraProducts.count + 1;
+      await prisma.creatorState.create({
+        data: { wawuUserId: id, slotsUsed: used },
+      });
+      const bigEnough = config.tiers.filter((t) => t.products > used);
+      expect(bigEnough.length).toBeGreaterThan(0);
+      expect(bigEnough.length).toBeLessThan(config.tiers.length - 1);
+
+      const res = await publish(id).expect(402);
+      expect(tiersOf(res).map((t) => t.id)).toEqual(bigEnough.map((t) => t.id));
+      expect(body(res).reason.extraProducts).toBeNull();
+      expect(body(res).message).toBe(
+        `You have ${used} products and your plan allows ${config.tiers[0].products}. To publish another, remove some or add more places.`,
+      );
+
+      // One product fewer than the pack lifts the tier to: the pack counts.
+      await prisma.creatorState.update({
+        where: { wawuUserId: id },
+        data: { slotsUsed: config.tiers[0].products + 1 },
+      });
+      const near = await publish(id).expect(402);
+      expect(body(near).reason.extraProducts).toEqual({
+        count: config.extraProducts.count,
+        priceMinor: expect.any(Number),
+      });
+      expect(tiersOf(near).map((t) => t.id)).toEqual(
+        config.tiers
+          .filter((t) => t.products > config.tiers[0].products + 1)
+          .map((t) => t.id),
+      );
+    });
+
+    it('"remove some" is true: removing enough pieces lets the next one go up', async () => {
+      const id = await creator();
+      await giveTier(id, 0);
+      const over = config.tiers[0].products + 2;
+      const pieces = [];
+      for (let n = 0; n < over; n += 1)
+        pieces.push(await seedPiece(id, 'live'));
+      await publish(id).expect(402);
+      // Down to one below the allowance: a removed piece gives its place back.
+      for (let n = 0; n < over - config.tiers[0].products + 1; n += 1)
+        await del(id, `/content/${pieces[n].id}`).expect(204);
+      expect((await myTier(id)).productsUsed).toBe(
+        config.tiers[0].products - 1,
+      );
+      await publish(id).expect(201);
+    });
+  });
+
   // ── 9. Round 2: the cases the verifier's mutants found untested ───────────
 
   describe('what the verifier found untested (round 2, T1 to T5)', () => {

@@ -157,7 +157,13 @@ one. Removal is the unpublish: there is no route that turns a live piece back
 into a draft, because a draft holds no file. A piece gives its place back
 once, however many requests remove it at the same moment: the removal changes
 the row conditionally on the status it read, only the request that changed it
-frees the place, and the others answer `404`, as a repeat removal does. A
+frees the place, and the others answer `404`, as a repeat removal does. The
+admin decisions keep the same rule (round 3): a take-down reads the piece's
+status inside its transaction and changes the row only if it is still in that
+status, a reject or an approve only if it is still waiting, and a request that
+finds the status moved reads again and acts on what is true. So a turned-down
+piece that is then taken down returns no second place, and a turned-down piece
+the creator sent again, then taken down, returns the place it took. A
 person's counter row is made insert-or-nothing before the first claim, so two
 first publishes sent together both succeed.
 
@@ -171,17 +177,24 @@ first publishes sent together both succeed.
   products or move up a tier") while a higher tier and extra products are
   offered, one of them when only that one is, and the limit alone ("You've
   used all 25 of your product places.") for a tick holder at the tick-era cap,
-  where nothing can be bought. The number is the allowance.
+  where nothing can be bought. The number is the allowance. A person with MORE
+  products published than they are now allowed (a tick ended with 25 up, then
+  Verify was bought) is told both numbers: "You have 25 products and your plan
+  allows 3. To publish another, remove some." with ", or add more places"
+  only while an offer in the answer would really let another go up (round 3).
 
 `reason` is flat: `code`, `message`, `tierState`, `productsUsed`,
 `productsAllowed`, and the offers `currency`, `tiers`, `extraProducts` (absent
 only when the Hub could not read the plan at that moment; the app then shows
 `message` alone). The
 offers are the figures `GET /plans` answers, in the person's billing currency
-only: for `tier_required` every tier; for `product_limit_reached` the tiers
-that allow more products than the one they hold (none when they hold the top
-one, or only a tick), and `extraProducts` (`count`, `priceMinor`) while they
-hold a running tier, else `null`. The routes' interceptor
+only: for `tier_required` every tier; for `product_limit_reached` only what
+would let another product go up: the tiers that leave more places than the
+person has products published (so, at the limit, the tiers above the one they
+hold, extras bought carried over, and none when they hold the top one or only
+a tick; above their allowance, only the tiers big enough for everything they
+have, often none), and `extraProducts` (`count`, `priceMinor`) while they hold
+a running tier and the pack lifts it above what is published, else `null`. The routes' interceptor
 (`PublishingOffersInterceptor`) adds them, because only the route knows whose
 token, and so whose currency, asked.
 

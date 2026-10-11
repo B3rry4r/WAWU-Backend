@@ -34,6 +34,8 @@ export interface PublishingAllowance {
   runningTierId: string | null;
   /** The running tier's own product count, extras left out; 0 with none. */
   runningTierProducts: number;
+  /** The extra products bought on the running tier; 0 with none. */
+  extraProducts: number;
   /** A verification tick (either kind) is held now. */
   tickHeld: boolean;
   /**
@@ -75,6 +77,7 @@ function allowanceFrom(inputs: Inputs, now: Date): PublishingAllowance {
     tierState: tier?.state ?? 'none',
     runningTierId: running ? tier.tierId : null,
     runningTierProducts: tierProducts,
+    extraProducts: running ? tier.extraProducts : 0,
     tickHeld,
     storageBytes: running || tickHeld ? TICK_STORAGE_BYTES : FREE_STORAGE_BYTES,
   };

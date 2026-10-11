@@ -36,11 +36,16 @@ export interface TierGateOffers {
   currency: PlanCurrency;
   /**
    * `tier_required`: every tier. `product_limit_reached`: the tiers that
-   * allow more products than the one the person holds (none when they hold
-   * no tier, or the top one).
+   * would let the person publish another, that is, allow more products than
+   * they have published now (none when no tier does: they hold the top one,
+   * or they have more published than any tier allows).
    */
   tiers: PlanTierView[];
-  /** The extra products they can buy now, or null when they cannot (no running tier). */
+  /**
+   * The extra products they can buy now, or null when they cannot: no running
+   * tier, or buying them would still leave fewer places than products
+   * published (`product_limit_reached`).
+   */
   extraProducts: PlanExtraProductsView | null;
 }
 
@@ -111,6 +116,12 @@ export function tierRequiredMessage(tierState: MyTierState): string {
  * the tick-era cap, or at the top of the ladder with nothing to buy, is told
  * the limit and nothing they cannot do (TIER-02 round 2, D4). With no offers
  * known, both ways are named. No em-dash.
+ *
+ * A person who has MORE products published than they are now allowed (a tick
+ * ended, then a smaller tier was bought) is told both numbers plainly, and
+ * that products must come down before another can go up; "add more places"
+ * is said only while an offer in the answer would really let another go up
+ * (TIER-02 round 3, D6).
  */
 export function productLimitMessage(
   used: number,
@@ -119,6 +130,13 @@ export function productLimitMessage(
 ): string {
   const moreProducts = offers ? offers.extraProducts !== null : true;
   const higherTier = offers ? offers.tiers.length > 0 : true;
+  if (used > allowed) {
+    const have = `${used} ${used === 1 ? 'product' : 'products'}`;
+    const base = `You have ${have} and your plan allows ${allowed}. To publish another, remove some`;
+    return moreProducts || higherTier
+      ? `${base} or add more places.`
+      : `${base}.`;
+  }
   if (!moreProducts && !higherTier)
     return `You've used all ${allowed} of your product places.`;
   const ways =

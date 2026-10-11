@@ -11,6 +11,7 @@ import type { Request } from 'express';
 import { Observable, catchError, from, mergeMap, throwError } from 'rxjs';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { TierGateErrorEnvelope } from './dto/tier-gate-error.dto';
+import { limitOffers } from './limit-offers';
 import { PlansService } from './plans.service';
 import { PublishingAllowanceService } from './publishing-allowance.service';
 import { TierGateError, type TierGateOffers } from './tier-gate-error';
@@ -66,22 +67,14 @@ export class PublishingOffersInterceptor implements NestInterceptor {
         }),
         this.allowance.of(user.sub),
       ]);
-      // A held tick that allows more than any tier leaves nothing to buy
-      // that would add a product; so does a person with no running tier
-      // asking for extras (they need a tier first).
-      const byTier = allowance.basis === 'tier';
-      return {
-        currency: plan.currency,
-        tiers:
-          err.code === 'tier_required'
-            ? plan.tiers
-            : byTier
-              ? plan.tiers.filter(
-                  (t) => t.products > allowance.runningTierProducts,
-                )
-              : [],
-        extraProducts: byTier ? plan.extraProducts : null,
-      };
+      // `tier_required`: every tier, and no extras (they need a tier first).
+      // `product_limit_reached`: only what would let another product go up
+      // (limitOffers), which is nothing for a person above every allowance.
+      const offers =
+        err.code === 'tier_required'
+          ? { tiers: plan.tiers, extraProducts: null }
+          : limitOffers(allowance, plan);
+      return { currency: plan.currency, ...offers };
     } catch {
       return null;
     }

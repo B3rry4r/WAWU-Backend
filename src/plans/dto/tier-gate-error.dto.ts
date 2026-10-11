@@ -44,8 +44,9 @@ export class TierGateReasonDto {
 
   /**
    * `tier_required`: every tier. `product_limit_reached`: the tiers that
-   * allow more products than the one the person holds (none when there is
-   * no way up).
+   * would let the person publish another, that is, allow more products than
+   * they have published now (none when no tier does, including when they have
+   * more published than any tier allows).
    */
   @ApiPropertyOptional({
     type: 'array',
@@ -53,7 +54,11 @@ export class TierGateReasonDto {
   })
   tiers?: unknown[];
 
-  /** The extra products they can buy now, or null when they cannot. */
+  /**
+   * The extra products they can buy now, or null when they cannot: no running
+   * tier, or buying them would still leave fewer places than products
+   * published.
+   */
   @ApiPropertyOptional({
     nullable: true,
     allOf: [{ $ref: getSchemaPath('PlanExtraProductsView') }],

@@ -44,10 +44,39 @@ describe('productLimitMessage', () => {
       expect(productLimitMessage(allowed, allowed, offers([], null))).toBe(
         `You've used all ${allowed} of your product places.`,
       );
-    // Above the allowance (a tier that ended with more pieces up) it is
-    // still the allowance that is named.
+  });
+
+  // ── Round 3, D6: more published than the allowance ───────────────────────
+
+  it('above the allowance, names both numbers plainly and says products must come down', () => {
+    // A tick ended with 25 pieces up and a smaller tier was bought: no offer
+    // lets another go up, so none is promised.
+    expect(productLimitMessage(25, 3, offers([], null))).toBe(
+      'You have 25 products and your plan allows 3. To publish another, remove some.',
+    );
+    // Round 2 pinned "You've used all 25 of your product places." for 27 of
+    // 25; above the allowance it is the two numbers that are named.
     expect(productLimitMessage(27, 25, offers([], null))).toBe(
-      "You've used all 25 of your product places.",
+      'You have 27 products and your plan allows 25. To publish another, remove some.',
+    );
+  });
+
+  it('above the allowance, adds "add more places" only while an offer would really let another go up', () => {
+    const sentence =
+      'You have 5 products and your plan allows 3. To publish another, remove some or add more places.';
+    expect(productLimitMessage(5, 3, offers(higher, extras))).toBe(sentence);
+    expect(productLimitMessage(5, 3, offers([], extras))).toBe(sentence);
+    expect(productLimitMessage(5, 3, offers(higher, null))).toBe(sentence);
+    // Offers not known yet (before the route adds them): the ways are open.
+    expect(productLimitMessage(5, 3)).toBe(sentence);
+  });
+
+  it('at exactly the allowance the round 2 sentences are unchanged', () => {
+    expect(productLimitMessage(3, 3, offers([], null))).toBe(
+      "You've used all 3 of your product places.",
+    );
+    expect(productLimitMessage(3, 3, offers(higher, extras))).toBe(
+      'You have used 3 of 3 products. Add more products or move up a tier to publish another.',
     );
   });
 
@@ -65,7 +94,11 @@ describe('productLimitMessage', () => {
       offers(higher, null),
       offers([], null),
     ])
-      expect(productLimitMessage(3, 3, o)).not.toContain('—');
+      for (const [used, allowed] of [
+        [3, 3],
+        [25, 3],
+      ])
+        expect(productLimitMessage(used, allowed, o)).not.toContain('—');
     expect(tierRequiredMessage('none')).not.toContain('—');
     expect(tierRequiredMessage('ended')).not.toContain('—');
   });

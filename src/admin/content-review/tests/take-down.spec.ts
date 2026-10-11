@@ -33,16 +33,29 @@ function buildService(seed: ContentRow) {
 
   const tx = {
     contentPiece: {
+      // The service reads the piece inside its transaction (TIER-02 round 3,
+      // D5), so the transaction double answers the read too.
+      findUnique: ({ where }: { where: { id: string } }) => {
+        const row = content.get(where.id);
+        return Promise.resolve(row ? { ...row } : null);
+      },
       updateMany: ({
         where,
         data,
       }: {
-        where: { id: string; status?: { not?: string } };
+        where: { id: string; status?: string | { not?: string } };
         data: Record<string, unknown>;
       }) => {
         const row = content.get(where.id);
         if (!row) return Promise.resolve({ count: 0 });
-        if (where.status?.not && row.status === where.status.not) {
+        if (typeof where.status === 'string' && row.status !== where.status) {
+          return Promise.resolve({ count: 0 });
+        }
+        if (
+          typeof where.status === 'object' &&
+          where.status.not &&
+          row.status === where.status.not
+        ) {
           return Promise.resolve({ count: 0 });
         }
         Object.assign(row, data);
