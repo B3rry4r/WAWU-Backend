@@ -1112,6 +1112,24 @@ describe('NUV-06: sending to a bank and paying out', () => {
       expect(await targets.forPayoutAccount(owner, 'wawu')).toMatchObject({
         target: { payee: person.payee },
       });
+      // Another number at the same bank takes none of the old account's ids.
+      pay.addAccountAtBank('044', '0123456741', 'Third Account');
+      await payout.set(owner, { bankCode: '044', accountNumber: '0123456741' });
+      expect(await targets.forPayoutAccount(owner, 'wawu')).toMatchObject({
+        target: { bankCode: '044', payee: null },
+      });
+      // Nor does the same number at another bank.
+      await targets.rememberPayoutPayee(
+        owner,
+        'wawu',
+        { bankCode: '044', accountNumber: '0123456741' },
+        person.payee,
+      );
+      pay.addAccountAtBank('058', '0123456741', 'Third Account');
+      await payout.set(owner, { bankCode: '058', accountNumber: '0123456741' });
+      expect(await targets.forPayoutAccount(owner, 'wawu')).toMatchObject({
+        target: { bankCode: '058', payee: null },
+      });
       // Another account takes none of the old account's ids.
       pay.addAccountAtBank('058', '0123456740', 'Second Account');
       await payout.set(owner, { bankCode: '058', accountNumber: '0123456740' });

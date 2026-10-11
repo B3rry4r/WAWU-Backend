@@ -1212,6 +1212,13 @@ export function transferProblem(
     return 'the transfer leaves another account';
   }
   if (
+    expect.source.entityId !== null &&
+    t.entityId !== null &&
+    t.entityId !== expect.source.entityId
+  ) {
+    return 'the transfer is for another entity';
+  }
+  if (
     expect.payee !== null &&
     t.counterpartyId !== null &&
     t.counterpartyId !== expect.payee.counterpartyId

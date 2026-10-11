@@ -1042,6 +1042,7 @@ describe('NUV-06: the payouts area against the Nuvion stand-in', () => {
         [{ type: 'inflow' }, /not money out/],
         [{ payment_type: 'book-transfer' }, /not a bank transfer/],
         [{ account_id: 'ACC2' }, /another account/],
+        [{ entity_id: 'ENT2' }, /another entity/],
         [{ counterparty_id: 'CPY2' }, /another payee/],
         [{ payment_detail_id: 'PDT2' }, /another account/],
         [{ status: 'failed' }, /already failed/],
