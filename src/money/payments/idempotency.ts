@@ -78,6 +78,12 @@ export interface IdempotencyScope {
   fingerprint: string;
   /** Set once this request holds the key: its own claim, never a later one's. */
   claimId?: string;
+  /**
+   * What the route wants its stale resolver to know about the repeat that is
+   * asking (the PIN routes pass the new PIN the request carries). Held in
+   * memory for this request only: never stored, never logged.
+   */
+  context?: unknown;
 }
 
 /** JSON with every object's keys sorted, so the same body is the same text. */
@@ -124,10 +130,13 @@ type KeyRow = Prisma.MoneyIdempotencyKeyGetPayload<object>;
  * written and names a payment (the request that wrote it died after making
  * the payment: a restart, a crash). It returns the answer the route would
  * give now from that record, or null to keep answering "in progress".
- * Registered per route by the service that owns it.
+ * Registered per route by the service that owns it. It is given the repeat
+ * that is asking (its scope, with whatever `context` the route set), and may
+ * throw a refusal instead of answering: the repeat gets that.
  */
 export type StaleKeyResolver = (
   row: KeyRow,
+  scope: IdempotencyScope,
 ) => Promise<{ status: number; body: string } | null>;
 
 @Injectable()
@@ -218,7 +227,7 @@ export class IdempotencyService {
       return;
     }
     if (old && stale) {
-      const answer = await stale.resolve(row);
+      const answer = await stale.resolve(row, scope);
       if (answer) {
         await this.finish(scope, answer.status, answer.body);
         throw new IdempotentReplay(answer.status, answer.body);
