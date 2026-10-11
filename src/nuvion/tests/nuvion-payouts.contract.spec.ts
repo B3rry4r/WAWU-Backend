@@ -886,6 +886,24 @@ describe('NUV-06: sending to a bank and paying out', () => {
         ).toEqual(['failed']);
       });
 
+      it("a failed send charged nothing: a charge on its record is not a charge, and the row's quote stands without a note", async () => {
+        const p = await person();
+        const { reference, id } = await sendFrom(p, { amountKobo: 1_000_000n });
+        await quote(p, reference, 1_000_000);
+        pay.settle(id, 'failed');
+        asRecord(id).applicable_fee = 3_000;
+        const d = await deliverAndDispatch('outflows.failed', pay.delivery(id));
+        expect(d.processingStatus).toBe('processed');
+        const rows = await entriesFor(reference);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({
+          status: 'failed',
+          feeKobo: 6_500n,
+          providerFeeKobo: BigInt(pay.fee),
+          discrepancy: null,
+        });
+      });
+
       it("D1c: Nuvion's charge differs from the quote: Nuvion's is recorded and the row says both, once", async () => {
         const p = await person();
         const { reference, id } = await sendFrom(p, { amountKobo: 1_000_000n });
