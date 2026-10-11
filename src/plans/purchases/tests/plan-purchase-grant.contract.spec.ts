@@ -192,8 +192,24 @@ describe('What a purchase leaves in place and the order it writes in (TIER-03 ro
     }
     return seen;
   }
+  /**
+   * A write to a table, however it is spelled: Prisma writes
+   * `INSERT INTO "public"."T"`, a raw statement may leave the schema off,
+   * quote it or not, say `ONLY`, hide the write in a `WITH` clause, or
+   * `TRUNCATE` (TIER-03 round 3, R2-D3: the pattern used to require
+   * `"public".`, so a raw `UPDATE "MakerTier"` after the points was invisible).
+   * `FOR UPDATE` and `DO UPDATE SET` are not followed by a quoted name, so
+   * they match nothing.
+   */
   const WRITE =
-    /^\s*(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+"public"\."(\w+)"/i;
+    /(?:\bINSERT\s+INTO|\bUPDATE|\bDELETE\s+FROM|\bTRUNCATE(?:\s+TABLE)?)\s+(?:ONLY\s+)?(?:"?\w+"?\s*\.\s*)?"(\w+)"/gi;
+  /** The tables a statement writes, in order. */
+  function tablesWritten(sql: string): string[] {
+    return [...sql.matchAll(WRITE)].map((m) => m[1]);
+  }
+  /** The insert of the purchase row, with or without the schema. */
+  const PURCHASE_INSERT =
+    /^\s*INSERT\s+INTO\s+(?:"?\w+"?\s*\.\s*)?"MakerPurchase"/i;
 
   /**
    * The tables written by the transaction that inserted the purchase row, in
@@ -203,9 +219,7 @@ describe('What a purchase leaves in place and the order it writes in (TIER-03 ro
   function writesOfPurchaseTransaction(
     seen: Array<{ pid: number; sql: string }>,
   ): string[] {
-    const at = seen.findIndex((s) =>
-      /^\s*INSERT\s+INTO\s+"public"\."MakerPurchase"/i.test(s.sql),
-    );
+    const at = seen.findIndex((s) => PURCHASE_INSERT.test(s.sql));
     expect(at).toBeGreaterThan(-1);
     const pid = seen[at].pid;
     let begin = at;
@@ -223,8 +237,7 @@ describe('What a purchase leaves in place and the order it writes in (TIER-03 ro
         ended = /^COMMIT/i.test(seen[i].sql);
         break;
       }
-      const w = WRITE.exec(seen[i].sql);
-      if (w) writes.push(w[1]);
+      writes.push(...tablesWritten(seen[i].sql));
     }
     expect(ended).toBe(true);
     return writes;

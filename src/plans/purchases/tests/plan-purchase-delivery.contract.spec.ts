@@ -13,10 +13,7 @@ import type { CompletedPayment } from '../../../money/payments/payable-registry'
 import { loadPlansConfig, priceIn } from '../../plans-config';
 import { WalletHoldService } from '../../../money/holds/wallet-hold.service';
 import { lockPersonTier, TierGrantService } from '../../tier-grant.service';
-import {
-  PlanPurchaseService,
-  REFUNDED_MESSAGE,
-} from '../plan-purchase.service';
+import { PlanPurchaseService, refundedMessage } from '../plan-purchase.service';
 import type {
   PlanPurchaseQuoteView,
   PlanPurchaseView,
@@ -496,7 +493,7 @@ describe('Delivering a confirmed tier payment (TIER-03)', () => {
     const back = body<PlanPurchaseView>(await call.read(p, pending.id)).data!;
     expect(back).toMatchObject({
       status: 'refunded',
-      statusMessage: REFUNDED_MESSAGE,
+      statusMessage: refundedMessage(price),
       grant: null,
       paidAt: null,
     });

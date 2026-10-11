@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { OpenWallet } from '../../money/gate/wallet-gate';
+import { nairaText } from '../../money/insufficient-funds';
 import { MoneyError } from '../../money/money-error';
 import type { PaymentStatus, PaymentView } from '../../money/money-view.type';
 import { WalletHoldService } from '../../money/holds/wallet-hold.service';
@@ -71,10 +72,20 @@ export const PURCHASE_NOT_FOUND_MESSAGE = 'We could not find that purchase.';
  * confirmed and the money is going back (TIER-03 round 2): while the move is
  * on its way, and once the provider has confirmed it.
  */
-export const REFUNDING_MESSAGE =
-  'We could not give you this plan, so we are paying your money back to your wallet.';
-export const REFUNDED_MESSAGE =
-  'We could not give you this plan, so we paid your money back to your wallet.';
+export const CHARGE_NOT_RETURNED_NOTE =
+  'The charge on your first payment is not returned.';
+
+/**
+ * What comes back is the price the hold holds (R-10: a refund returns the
+ * price, never the provider's charge on the original payment), said in naira
+ * so the person who was just refunded can match it to their wallet.
+ */
+export function refundingMessage(amountKobo: number): string {
+  return `We could not give you this plan, so ${nairaText(amountKobo)} is on its way back to your wallet. ${CHARGE_NOT_RETURNED_NOTE}`;
+}
+export function refundedMessage(amountKobo: number): string {
+  return `We could not give you this plan, so ${nairaText(amountKobo)} is back in your wallet. ${CHARGE_NOT_RETURNED_NOTE}`;
+}
 
 /** The hold's `releaseCondition` for a tier payment that is being refunded. */
 export const PLAN_REFUND_CONDITION = 'plan_granted';
@@ -538,7 +549,7 @@ export class PlanPurchaseService implements OnModuleInit {
       ? null
       : await this.prisma.walletHold.findUnique({
           where: { paymentId: view.id },
-          select: { status: true },
+          select: { status: true, amountKobo: true },
         });
     return {
       id: view.id,
@@ -554,8 +565,8 @@ export class PlanPurchaseService implements OnModuleInit {
         ? null
         : payback
           ? payback.status === 'refunded'
-            ? REFUNDED_MESSAGE
-            : REFUNDING_MESSAGE
+            ? refundedMessage(Number(payback.amountKobo))
+            : refundingMessage(Number(payback.amountKobo))
           : (view.failureReason ?? view.statusMessage),
       payment: view,
       grant: row ? await this.grantView(row.wawuUserId, row.paymentRef) : null,

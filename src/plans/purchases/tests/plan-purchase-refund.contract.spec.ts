@@ -14,7 +14,7 @@ import type { TransactionPage } from '../../../money/money-view.type';
 import type { MyPointsView } from '../../../points/points-view.type';
 import { loadPlansConfig, priceIn } from '../../plans-config';
 import type { MyTierView } from '../../plans-view.type';
-import { REFUNDED_MESSAGE, REFUNDING_MESSAGE } from '../plan-purchase.service';
+import { refundedMessage, refundingMessage } from '../plan-purchase.service';
 import type {
   PlanPurchaseQuoteView,
   PlanPurchaseView,
@@ -152,7 +152,7 @@ describe('A plan that cannot be granted when its payment confirms is paid back (
       tierId: big.id,
       fromTierId: small.id,
       status: 'refunded',
-      statusMessage: REFUNDED_MESSAGE,
+      statusMessage: refundedMessage(diff),
       grant: null,
       paidAt: null,
       amountMinor: diff,
@@ -161,7 +161,18 @@ describe('A plan that cannot be granted when its payment confirms is paid back (
       status: 'completed',
       delivered: true,
     });
-    expect(REFUNDED_MESSAGE).not.toMatch(/\u2014/);
+    // The words, pinned: what comes back (the price, in naira, worked out here
+    // and not by the code under test) and what does not (the first payment's
+    // charge, R-10); no em-dash in a sentence a person reads (R-5).
+    const nairaDiff = `\u20A6${(diff / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
+    expect(back.statusMessage).toBe(
+      `We could not give you this plan, so ${nairaDiff} is back in your wallet. The charge on your first payment is not returned.`,
+    );
+    expect(refundingMessage(diff)).toBe(
+      `We could not give you this plan, so ${nairaDiff} is on its way back to your wallet. The charge on your first payment is not returned.`,
+    );
+    expect(refundedMessage(diff)).not.toMatch(/\u2014/);
+    expect(refundingMessage(diff)).not.toMatch(/\u2014/);
     const row = await tierRow(p);
     expect(row.tierId).toBe(small.id);
     expect(row.activeUntil.getTime()).toBeLessThan(Date.now());
@@ -285,7 +296,7 @@ describe('A plan that cannot be granted when its payment confirms is paid back (
     const onItsWay = await read(p, pending.id);
     expect(onItsWay).toMatchObject({
       status: 'refunded',
-      statusMessage: REFUNDING_MESSAGE,
+      statusMessage: refundingMessage(diff),
       grant: null,
     });
     expect(
@@ -304,7 +315,7 @@ describe('A plan that cannot be granted when its payment confirms is paid back (
     await holds.sweep(new Date(Date.now() + 3 * 3_600_000));
     expect(await read(p, pending.id)).toMatchObject({
       status: 'refunded',
-      statusMessage: REFUNDED_MESSAGE,
+      statusMessage: refundedMessage(diff),
     });
     expect(
       await h.prisma.walletHold.findUniqueOrThrow({
