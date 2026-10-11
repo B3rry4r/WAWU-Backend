@@ -1186,6 +1186,28 @@
         ]
       }
     },
+    "/api/hub/me/points": {
+      "get": {
+        "operationId": "PointsController_mine",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyPointsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Balance, live lots with their end dates, the next end, the last 20 movements.",
+        "tags": [
+          "Points"
+        ]
+      }
+    },
     "/api/hub/bills/categories": {
       "get": {
         "operationId": "BillPaymentController_categories",
@@ -27918,28 +27940,6 @@
         ]
       }
     },
-    "/api/hub/me/points": {
-      "get": {
-        "operationId": "PointsController_mine",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MyPointsView"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Balance, live lots with their end dates, the next end, the last 20 movements.",
-        "tags": [
-          "Points"
-        ]
-      }
-    },
     "/api/hub/waitlist/offers/current": {
       "get": {
         "operationId": "WaitlistPublicController_currentOffer",
@@ -29482,13 +29482,13 @@
           },
           "tiers": {
             "type": "array",
-            "description": "`tier_required`: every tier. `product_limit_reached`: the tiers that\nallow more products than the one the person holds (none when there is\nno way up).",
+            "description": "`tier_required`: every tier. `product_limit_reached`: the tiers that\nwould let the person publish another, that is, allow more products than\nthey have published now (none when no tier does, including when they have\nmore published than any tier allows).",
             "items": {
               "$ref": "#/components/schemas/PlanTierView"
             }
           },
           "extraProducts": {
-            "description": "The extra products they can buy now, or null when they cannot.",
+            "description": "The extra products they can buy now, or null when they cannot: no running\ntier, or buying them would still leave fewer places than products\npublished.",
             "nullable": true,
             "allOf": [
               {
@@ -35827,6 +35827,135 @@
         "required": [
           "unreadCount",
           "items"
+        ]
+      },
+      "PointNextExpiryView": {
+        "type": "object",
+        "properties": {
+          "points": {
+            "type": "number"
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "points",
+          "expiresAt"
+        ]
+      },
+      "PointLotView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "points": {
+            "type": "number"
+          },
+          "granted": {
+            "type": "number"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "tier_bonus",
+              "pack",
+              "bump",
+              "referral",
+              "shortfall",
+              "returned"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "points",
+          "granted",
+          "source",
+          "label",
+          "expiresAt"
+        ]
+      },
+      "PointMovementView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "points": {
+            "type": "number"
+          },
+          "label": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "hold",
+              "grant",
+              "release",
+              "expire"
+            ]
+          },
+          "pending": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "points",
+          "label",
+          "reason",
+          "pending",
+          "createdAt"
+        ]
+      },
+      "MyPointsView": {
+        "type": "object",
+        "properties": {
+          "balance": {
+            "type": "number"
+          },
+          "nextExpiry": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PointNextExpiryView"
+              }
+            ],
+            "nullable": true
+          },
+          "lots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PointLotView"
+            }
+          },
+          "lotCount": {
+            "type": "number"
+          },
+          "movements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PointMovementView"
+            }
+          }
+        },
+        "required": [
+          "balance",
+          "nextExpiry",
+          "lots",
+          "lotCount",
+          "movements"
         ]
       },
       "PlanBadgeView": {
@@ -48422,135 +48551,6 @@
           "chats",
           "paidDms",
           "communities"
-        ]
-      },
-      "PointNextExpiryView": {
-        "type": "object",
-        "properties": {
-          "points": {
-            "type": "number"
-          },
-          "expiresAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "points",
-          "expiresAt"
-        ]
-      },
-      "PointLotView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "points": {
-            "type": "number"
-          },
-          "granted": {
-            "type": "number"
-          },
-          "source": {
-            "type": "string",
-            "enum": [
-              "tier_bonus",
-              "pack",
-              "bump",
-              "referral",
-              "shortfall",
-              "returned"
-            ]
-          },
-          "label": {
-            "type": "string"
-          },
-          "expiresAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "points",
-          "granted",
-          "source",
-          "label",
-          "expiresAt"
-        ]
-      },
-      "PointMovementView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "points": {
-            "type": "number"
-          },
-          "label": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string",
-            "enum": [
-              "hold",
-              "grant",
-              "release",
-              "expire"
-            ]
-          },
-          "pending": {
-            "type": "boolean"
-          },
-          "createdAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "points",
-          "label",
-          "reason",
-          "pending",
-          "createdAt"
-        ]
-      },
-      "MyPointsView": {
-        "type": "object",
-        "properties": {
-          "balance": {
-            "type": "number"
-          },
-          "nextExpiry": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/PointNextExpiryView"
-              }
-            ],
-            "nullable": true
-          },
-          "lots": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/PointLotView"
-            }
-          },
-          "lotCount": {
-            "type": "number"
-          },
-          "movements": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/PointMovementView"
-            }
-          }
-        },
-        "required": [
-          "balance",
-          "nextExpiry",
-          "lots",
-          "lotCount",
-          "movements"
         ]
       },
       "MeCountsView": {
