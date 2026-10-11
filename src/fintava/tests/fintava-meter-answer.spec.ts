@@ -783,6 +783,8 @@ describe('readMeterAnswer: what is never a green found meter (BILLS-01 round 3, 
     });
 
     it('looks for a failure four levels down and ten items into a list, and not further', () => {
+      const fine = (n: number): string[] =>
+        Array.from({ length: n }, () => 'fine');
       const deep = (n: number): Record<string, unknown> =>
         n === 0 ? { error: 'x' } : { next: deep(n - 1) };
       // The body is level 0 and data level 1: an object four levels below the body is read, one five levels below is not.
@@ -814,19 +816,19 @@ describe('readMeterAnswer: what is never a green found meter (BILLS-01 round 3, 
         readMeterAnswer({
           data: {
             name: 'Ada Eze',
-            notes: [...Array(9).fill('fine'), 'it failed'],
+            notes: [...fine(9), 'it failed'],
           },
         }),
       ).toMatchObject({ kind: 'owner' });
       expect(
         readMeterAnswer({
-          message: [...Array(9).fill('fine'), 'it failed'],
+          message: [...fine(9), 'it failed'],
           data: { name: 'Ada Eze' },
         }),
       ).toEqual({ kind: 'unreadable' });
       expect(
         readMeterAnswer({
-          message: [...Array(10).fill('fine'), 'it failed'],
+          message: [...fine(10), 'it failed'],
           data: { name: 'Ada Eze' },
         }),
       ).toMatchObject({ kind: 'owner' });
