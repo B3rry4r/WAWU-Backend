@@ -1,3 +1,4 @@
+import { POINTS_WORD_TITLE } from '../../points/points-words';
 import type { PaymentKind, TransactionFilter } from '../dto/money-enums';
 import type { TransactionCategory } from '../money-view.type';
 
@@ -41,6 +42,7 @@ export const LINK_KIND_LABELS: Record<PaymentKind, string> = {
   paid_dm: 'Paid question',
   event_ticket: 'Event ticket',
   bill: 'Bill',
+  points_cash_out: `${POINTS_WORD_TITLE} to cash`,
 };
 
 /** Between the parts of a description. */

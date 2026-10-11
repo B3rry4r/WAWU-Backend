@@ -422,13 +422,15 @@ describe('NUV-07: every route that quotes or moves money answers fees_not_set fi
       ]),
     );
     // MONEY-17 serves the payment and its quote (src/money/payments/): they
-    // left the declared controller and are mounted, money-moving, here.
+    // left the declared controller and are mounted, money-moving, here. So
+    // does POINTS-04's conversion of points to cash (src/points/convert/),
+    // which moves cash from WAWU's account into the person's wallet.
     expect(
       mounted
         .filter(movesMoney)
         .map((r) => r.key)
         .sort(),
-    ).toEqual(['POST money/payments']);
+    ).toEqual(['POST money/payments', 'POST points/convert']);
     expect(mounted.map((r) => r.key)).toContain('GET money/payments/quote');
     expect(
       declared

@@ -202,7 +202,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
     expect(half).toEqual([]);
   });
 
-  it('the gated routes today: the PIN, the balance, the PIN reset and biometric approval (MONEY-14), the history (MONEY-15), beneficiaries and the payout account (WALLET-14), the fee quote (WALLET-15), receipts (WALLET-18), statements (WALLET-27), recipient search and recent recipients (WALLET-08), the payment quote, the payment and the poll of one payment (MONEY-17, MONEY-19), holds (MONEY-18)', () => {
+  it('the gated routes today: the PIN, the balance, the PIN reset and biometric approval (MONEY-14), the history (MONEY-15), beneficiaries and the payout account (WALLET-14), the fee quote (WALLET-15), receipts (WALLET-18), statements (WALLET-27), recipient search and recent recipients (WALLET-08), the payment quote, the payment and the poll of one payment (MONEY-17, MONEY-19), holds (MONEY-18), the points-to-cash quote and conversion (POINTS-04)', () => {
     expect(
       mounted
         .filter((r) => r.guards.includes(WalletGateGuard))
@@ -229,6 +229,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'GET money/transactions/:id/receipt/pdf',
       'GET money/transactions/summary',
       'GET money/wallet/balance',
+      'GET points/convert/quote',
       'POST money/approval/verify',
       'POST money/beneficiaries',
       'POST money/device/challenge',
@@ -238,6 +239,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'POST money/pin/reset/confirm',
       'POST money/pin/verify',
       'POST money/transactions/:id/receipt',
+      'POST points/convert',
       'PUT money/device',
       'PUT money/payout-account',
       'PUT money/pin',
@@ -252,6 +254,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'POST money/approval/verify',
       'POST money/payments',
       'POST money/pin/verify',
+      'POST points/convert',
       'PUT money/device',
       'PUT money/pin',
     ]);

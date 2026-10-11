@@ -82,6 +82,7 @@ import { LiveModule } from './live/live.module';
 import { InboxModule } from './inbox/inbox.module';
 import { MeModule } from './me/me.module';
 import { PlansModule } from './plans/plans.module';
+import { PointsConvertModule } from './points/convert/points-convert.module';
 import { WaitlistModule } from './waitlist/waitlist.module';
 import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
 import { NuvionWebhookModule } from './nuvion/webhook/nuvion-webhook.module';
@@ -392,6 +393,11 @@ import { PushModule } from './push/push.module';
     // src/plans/plans.config.json, which a bad edit stops at boot. `plans` is a
     // first segment nothing else declares; `me/tier` is a literal leaf.
     PlansModule,
+    // Convert points to cash (task POINTS-04): `points/convert/quote`,
+    // `points/convert` (POST) and `points/convert/{id}`, and the sweep that
+    // finishes a conversion whose answer was lost. `points` is a first segment
+    // nothing else declares; it sits after PlansModule and MoneyModule.
+    PointsConvertModule,
     // The event registration link (task JOIN-01): `waitlist/offers/current`,
     // `waitlist/registrations` (register, verify, status) and the team's
     // `admin/waitlist/registrations` (list, export). `waitlist` and

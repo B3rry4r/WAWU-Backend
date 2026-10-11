@@ -62,6 +62,12 @@ export type FeePartCode = (typeof FEE_PART_CODES)[number];
  *   paid_dm         INBOX-17 (held)
  *   event_ticket    EVENTS-07 (held)
  *   bill            BILLS-04 (held)
+ *
+ * `points_cash_out` (POINTS-04) is not a payment anyone makes from the wallet:
+ * it is the link kind of the ledger rows of points turned into cash, WAWU's
+ * own movement from its account into the person's wallet (R-43, R-31). It is
+ * never registered with PayableRegistry, so a payment for it is
+ * `target_not_payable` like any kind no feature has moved onto the wallet.
  */
 export const PAYMENT_KINDS = [
   'content_unlock',
@@ -73,6 +79,7 @@ export const PAYMENT_KINDS = [
   'paid_dm',
   'event_ticket',
   'bill',
+  'points_cash_out',
 ] as const;
 export type PaymentKind = (typeof PAYMENT_KINDS)[number];
 
@@ -184,5 +191,11 @@ export const MONEY_ERROR_CODES = [
   // Opening tries from one address in an hour (NUV-02 round 3): a plain 429
   // with its own code, beside the person's `identity_checks_exhausted`.
   'open_address_limited',
+  // Converting points to cash (POINTS-04): fewer points than the config's
+  // minimum; more points than the person has; a person billed in dollars,
+  // who has no dollar wallet to be paid into yet (NUV-09).
+  'below_minimum',
+  'insufficient_points',
+  'currency_not_supported',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];

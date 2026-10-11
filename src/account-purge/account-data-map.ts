@@ -372,6 +372,20 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'PointLedger', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'PointHold', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'PointLot', column: 'wawuUserId', disposition: 'OWNED' },
+  // Points turned into cash (POINTS-04): each row is WAWU's own movement of
+  // cash from its account to this person's wallet, and the provider's record
+  // of it (our reference, the amount, whether it was confirmed) must outlive
+  // the account while a move may still be in flight. The row stays; the
+  // person and the wallet account it paid into are set to null. Its points
+  // hold went with the person's points above, and a conversion still held
+  // when the account is deleted is cancelled by the sweep (nothing is paid
+  // into a wallet that is gone).
+  {
+    model: 'PointConversion',
+    column: 'wawuUserId',
+    disposition: 'ANONYMISED',
+    clear: ['destinationAccountNumber'],
+  },
 
   // The city on this person's professional card (PROS-02). Theirs, and
   // public only beside a listing that goes with them.

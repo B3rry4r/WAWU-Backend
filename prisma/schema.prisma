@@ -5790,6 +5790,78 @@ model PointLedger {
   @@index([holdId])
 }
 
+/// ─────────────────────────────────────────────────────────────────────────
+/// POINTS CONVERTED TO CASH (task POINTS-04, R-43, R-31)
+///
+/// A person turns points into naira in their wallet at the config rate
+/// (plans.config.json `cash_out`, TIER-01). One row per request. The row and
+/// the points hold it rests on (POINTS-01, purpose `cash_out`, reference =
+/// this row's id) are written in ONE transaction, so there is no row without
+/// held points and no held points without a row.
+///
+/// `held` until the provider CONFIRMS the cash in the person's wallet; then
+/// `paid` (the hold is committed, in the same transaction) or, when the
+/// provider's own record says nothing moved, `cancelled` (the hold is
+/// released, back to the lots it came from). An unknown outcome (a lost
+/// answer, a transfer accepted and not finished) stays `held` and is asked
+/// about by our reference, never sent again and never read as "nothing
+/// moved"; past PAYMENT_REVIEW_AFTER_HOURS it goes to a person
+/// (`reviewSince`) with the points still held. The cash leaves WAWU's own
+/// account at the provider (`merchantAccountNumber`, R-19, R-42) and the
+/// provider's charge on the move is WAWU's (R-31).
+///
+/// Exactly once, whoever asks: the Idempotency-Key links to this row (one
+/// request, one row), the reference the provider sees is `wawu-pts-<id>`
+/// (unique, so a repeat is refused by the provider and by our table), and the
+/// move is handed over by a lease (`sentAt`) only one caller wins. Every
+/// figure is integer kobo or whole points; `cashKobo` is exactly the rate
+/// applied to the points (the migration's CHECK), rounded down.
+///
+/// `wawuUserId` is null once the account is deleted (ANONYMISED): the row
+/// stays for the provider's record of the move.
+/// ─────────────────────────────────────────────────────────────────────────
+model PointConversion {
+  id                       String    @id @default(uuid())
+  /// Whose points. Null after the account is deleted.
+  wawuUserId               String?
+  points                   Int
+  /// What is paid into the wallet, in kobo: floor(points x rate / 1,000).
+  cashKobo                 BigInt
+  /// The rate it was worked out at: kobo paid for 1,000 points, frozen with the row.
+  per1000PointsKobo        BigInt
+  /// WAWU's own account at the provider the cash leaves.
+  merchantAccountNumber    String
+  /// The wallet provider that moves it (the running one when it was asked).
+  provider                 String    @default("fintava")
+  /// held, paid or cancelled.
+  status                   String    @default("held")
+  /// When the provider confirmed the cash (paid) or the points went back (cancelled).
+  settledAt                DateTime?
+  /// OUR reference at the provider: `wawu-pts-<id>`. One conversion, one reference.
+  customerReference        String    @unique
+  destinationAccountNumber String?
+  /// When the move was handed to the provider. Set means "a record may exist
+  /// at the provider": it is asked, never sent again, until it says.
+  sentAt                   DateTime?
+  /// The provider's own charge on the move (WAWU's, R-31); null when its record did not say.
+  providerFeeKobo          BigInt?
+  /// The schedule: a lease on a call in flight, or the next question to the provider.
+  nextAttemptAt            DateTime?
+  attempts                 Int       @default(0)
+  checks                   Int       @default(0)
+  /// A person has to look (no answer past the review bound, a reversed move,
+  /// another amount than asked). Out of the sweep; the points stay held.
+  reviewSince              DateTime?
+  discrepancy              String?
+  /// Why a cancelled conversion ended, in words for the person.
+  failureReason            String?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  @@index([status, reviewSince, nextAttemptAt])
+  @@index([wawuUserId, createdAt])
+}
+
 enum WaitlistStatus {
   pending
   paid
