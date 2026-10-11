@@ -23,7 +23,7 @@
 -- Rollback:
 --   ALTER TABLE "PersonBilling" DROP CONSTRAINT "PersonBilling_firstPurchaseRef_check";
 --   DROP TABLE "MakerPurchase";
---   DELETE FROM "_prisma_migrations" WHERE migration_name = '20261021140000_maker_purchase';
+--   DELETE FROM "_prisma_migrations" WHERE migration_name = '20261021160500_maker_purchase';
 
 -- CreateTable
 CREATE TABLE "MakerPurchase" (
