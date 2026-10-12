@@ -5856,6 +5856,16 @@ model WaitlistRegistration {
   email           String
   state           String?
   makes           String?
+  /// What the person makes or does, one of `WAITLIST_CRAFTS` (the owner's
+  /// redesign of /join, JOIN-V2). NULL from a client that does not send it.
+  craft           String?
+  /// The conference city they will attend, one of `WAITLIST_CITIES`: Lagos,
+  /// Abuja, Port Harcourt, Enugu or Online (JOIN-V2). NULL from a client that
+  /// does not send it.
+  city            String?
+  /// Whether they asked for launch and conference updates (JOIN-V2): true
+  /// accepted, false declined, NULL not asked.
+  updatesOptIn    Boolean?
   consentAt       DateTime
   reference       String         @unique
   /// The launch access code the payer sees as "XXXX XXXX": the first 8

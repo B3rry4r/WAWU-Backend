@@ -1,6 +1,7 @@
 import {
   IsBoolean,
   IsEnum,
+  IsIn,
   IsOptional,
   IsString,
   Matches,
@@ -9,7 +10,13 @@ import {
 } from 'class-validator';
 import { PaginationQueryDto } from '../../common/dto/pagination.dto';
 import { WaitlistStatus } from '../../../generated/prisma/enums';
-import { NAME_MAX, NAME_MIN, SHORT_TEXT_MAX } from '../waitlist-config';
+import {
+  NAME_MAX,
+  NAME_MIN,
+  SHORT_TEXT_MAX,
+  WAITLIST_CITIES,
+  WAITLIST_CRAFTS,
+} from '../waitlist-config';
 
 /** POST /waitlist/registrations. */
 export class CreateWaitlistRegistrationDto {
@@ -50,6 +57,34 @@ export class CreateWaitlistRegistrationDto {
   @IsString()
   @MaxLength(SHORT_TEXT_MAX)
   makes?: string;
+
+  /**
+   * What they make or do (optional): one of `WAITLIST_CRAFTS`, written as in
+   * the list (Music, Fashion, Film and video, Photography, Art, Design, Food,
+   * Digital art, Tech and software, Writing and media, Professional services,
+   * Founder or business, Other).
+   */
+  @IsOptional()
+  @IsIn(WAITLIST_CRAFTS, {
+    message: 'Choose what you make or do from the list.',
+  })
+  craft?: (typeof WAITLIST_CRAFTS)[number];
+
+  /**
+   * The conference city they will attend (optional): Lagos, Abuja, Port
+   * Harcourt, Enugu or Online.
+   */
+  @IsOptional()
+  @IsIn(WAITLIST_CITIES, { message: 'Choose a city from the list.' })
+  city?: (typeof WAITLIST_CITIES)[number];
+
+  /**
+   * They asked for launch and conference updates on WhatsApp and email
+   * (optional). Sending nothing means the question was not asked.
+   */
+  @IsOptional()
+  @IsBoolean()
+  updatesOptIn?: boolean;
 
   /** The consent line (with the privacy link) was accepted. Must be true. */
   @IsBoolean()

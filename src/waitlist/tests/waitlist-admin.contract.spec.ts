@@ -119,7 +119,16 @@ describe('Event registrations, the team view (JOIN-01)', () => {
           : // The two free-text fields come from people too.
             i === 3
             ? { state: '+SUM(1+1)', makes: '@SUM(2+2)' }
-            : {},
+            : // JOIN-V2: the craft, the city and the updates answer.
+              i === 4
+              ? { craft: 'Music', city: 'Enugu', updatesOptIn: true }
+              : i === 5
+                ? {
+                    craft: 'Founder or business',
+                    city: 'Online',
+                    updatesOptIn: false,
+                  }
+                : {},
       );
       if (i <= 5) {
         tx += 1;
@@ -248,7 +257,7 @@ describe('Event registrations, the team view (JOIN-01)', () => {
       .split('\r\n')
       .filter(Boolean);
     expect(lines[0]).toBe(
-      'Registered at,Offer,Status,Full name,Phone,Email,State,What they make,Fee (₦),Paid (₦),Refund due (₦),Paid at,Access code,Reference,Transaction id,Claimed,Claimed at',
+      'Registered at,Offer,Status,Full name,Phone,Email,State,What they make,Fee (₦),Paid (₦),Refund due (₦),Paid at,Access code,Reference,Transaction id,Claimed,Claimed at,Craft,City,Updates opt-in',
     );
     const mine = lines.slice(1).filter((l) => l.includes(MARK));
     expect(mine).toHaveLength(8);
@@ -309,6 +318,47 @@ describe('Event registrations, the team view (JOIN-01)', () => {
       (r) => r.reference === paidRefs[2],
     );
     expect([row.state, row.makes]).toEqual(['+SUM(1+1)', '@SUM(2+2)']);
+  });
+
+  it('shows the craft, the city and the updates answer in the list and the export (JOIN-V2); a row without them shows empty', async () => {
+    const list = await http()
+      .get(
+        `/api/hub/admin/waitlist/registrations?offerId=${OFFER_ID}&perPage=100`,
+      )
+      .set(as('support'))
+      .expect(200);
+    const rows = list.body.data as any[];
+    const byRef = (ref: string) => rows.find((r) => r.reference === ref);
+    expect(byRef(paidRefs[3])).toMatchObject({
+      craft: 'Music',
+      city: 'Enugu',
+      updatesOptIn: true,
+    });
+    expect(byRef(paidRefs[4])).toMatchObject({
+      craft: 'Founder or business',
+      city: 'Online',
+      updatesOptIn: false,
+    });
+    expect(byRef(paidRefs[0])).toMatchObject({
+      craft: null,
+      city: null,
+      updatesOptIn: null,
+    });
+
+    const res = await http()
+      .get(`/api/hub/admin/waitlist/registrations/export?offerId=${OFFER_ID}`)
+      .set(as('finance'))
+      .expect(200);
+    const lines = (res.body.data.content as string).split('\r\n');
+    const header = lines.find((l) => l.includes('Registered at'))!.split(',');
+    const cell = (ref: string, column: string) =>
+      lines.find((l) => l.includes(ref))!.split(',')[header.indexOf(column)];
+    expect(cell(paidRefs[3], 'Craft')).toBe('Music');
+    expect(cell(paidRefs[3], 'City')).toBe('Enugu');
+    expect(cell(paidRefs[3], 'Updates opt-in')).toBe('yes');
+    expect(cell(paidRefs[4], 'Updates opt-in')).toBe('no');
+    expect(cell(paidRefs[0], 'Craft')).toBe('');
+    expect(cell(paidRefs[0], 'Updates opt-in')).toBe('');
   });
 
   it('refuses a reviewer on the list and the export, and refuses a user token and no token on every route', async () => {

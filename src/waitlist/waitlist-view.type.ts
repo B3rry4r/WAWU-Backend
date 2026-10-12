@@ -94,6 +94,12 @@ export interface AdminWaitlistRegistrationView {
   email: string;
   state: string | null;
   makes: string | null;
+  /** What they make or do, one of the form's list; null when the client did not send it. */
+  craft: string | null;
+  /** The conference city they chose (Lagos, Abuja, Port Harcourt, Enugu or Online); null when not sent. */
+  city: string | null;
+  /** True when they asked for launch and conference updates, false when they declined, null when not asked. */
+  updatesOptIn: boolean | null;
   status: WaitlistRegistrationStatus;
   /** The fee asked for, in whole kobo. */
   amountKobo: number;
