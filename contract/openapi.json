@@ -33516,6 +33516,40 @@
             "description": "What they make (optional, up to 60 characters).",
             "maxLength": 60
           },
+          "craft": {
+            "type": "string",
+            "description": "What they make or do (optional): one of `WAITLIST_CRAFTS`, written as in\nthe list (Music, Fashion, Film and video, Photography, Art, Design, Food,\nDigital art, Tech and software, Writing and media, Professional services,\nFounder or business, Other).",
+            "enum": [
+              "Music",
+              "Fashion",
+              "Film and video",
+              "Photography",
+              "Art",
+              "Design",
+              "Food",
+              "Digital art",
+              "Tech and software",
+              "Writing and media",
+              "Professional services",
+              "Founder or business",
+              "Other"
+            ]
+          },
+          "city": {
+            "type": "string",
+            "description": "The conference city they will attend (optional): Lagos, Abuja, Port\nHarcourt, Enugu or Online.",
+            "enum": [
+              "Lagos",
+              "Abuja",
+              "Port Harcourt",
+              "Enugu",
+              "Online"
+            ]
+          },
+          "updatesOptIn": {
+            "type": "boolean",
+            "description": "They asked for launch and conference updates on WhatsApp and email\n(optional). Sending nothing means the question was not asked."
+          },
           "consent": {
             "type": "boolean",
             "description": "The consent line (with the privacy link) was accepted. Must be true."
@@ -49118,6 +49152,18 @@
             "type": "string",
             "nullable": true
           },
+          "craft": {
+            "type": "string",
+            "nullable": true
+          },
+          "city": {
+            "type": "string",
+            "nullable": true
+          },
+          "updatesOptIn": {
+            "type": "boolean",
+            "nullable": true
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -49170,6 +49216,9 @@
           "email",
           "state",
           "makes",
+          "craft",
+          "city",
+          "updatesOptIn",
           "status",
           "amountKobo",
           "paidKobo",

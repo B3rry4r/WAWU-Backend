@@ -49,6 +49,40 @@ export const NAME_MIN = 2;
 export const SHORT_TEXT_MAX = 60;
 export const EMAIL_MAX = 254;
 
+/**
+ * What the person makes or does: the choices of the registration form's
+ * "What do you make or do?" (the owner's list, 12 Oct 2026). The words are
+ * stored exactly as written here, so the team reads the same words the person
+ * chose. Optional on the route: a client that does not send one keeps working.
+ */
+export const WAITLIST_CRAFTS = [
+  'Music',
+  'Fashion',
+  'Film and video',
+  'Photography',
+  'Art',
+  'Design',
+  'Food',
+  'Digital art',
+  'Tech and software',
+  'Writing and media',
+  'Professional services',
+  'Founder or business',
+  'Other',
+] as const;
+
+/**
+ * The conference cities of "Which city will you attend?" (owner, 12 Oct 2026):
+ * exactly four Nigerian cities and Online. Optional on the route.
+ */
+export const WAITLIST_CITIES = [
+  'Lagos',
+  'Abuja',
+  'Port Harcourt',
+  'Enugu',
+  'Online',
+] as const;
+
 /** The prefix of every reference (it is the Flutterwave tx_ref). */
 export const REFERENCE_PREFIX = 'wawu-join-';
 /** Random bytes in a reference: 18 bytes is 144 bits, above the 128 asked. */
