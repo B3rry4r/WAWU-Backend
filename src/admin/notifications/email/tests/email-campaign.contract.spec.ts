@@ -447,12 +447,35 @@ describe('EMAIL-01 email campaigns', () => {
         .set(auth('superadmin'))
         .expect(409);
 
-      // The link in the email works (GET), and the one-click POST works too.
+      // A GET (a mail scanner opening the link) shows a confirmation and
+      // leaves the address subscribed; only the POST suppresses it.
       const link = /unsubscribe\?t=([^"&\s]+)/.exec(first.body.html)![1];
-      const page = await http()
-        .get(`/api/hub/email/unsubscribe?t=${link}`)
-        .expect(200);
-      expect(page.text).toContain('You are unsubscribed');
+      const url = `/api/hub/email/unsubscribe?t=${link}`;
+      const ask = await http().get(url).expect(200);
+      expect(ask.text).toContain(
+        'Unsubscribe p***@em01.test.wawu.dev from WAWU emails?',
+      );
+      expect(ask.text).toContain('method="post"');
+      expect(
+        await prisma.emailSuppression.count({
+          where: { email: `p1${DOMAIN}` },
+        }),
+      ).toBe(0);
+      await http().get(url).expect(200);
+      expect(
+        await prisma.emailSuppression.count({
+          where: { email: `p1${DOMAIN}` },
+        }),
+      ).toBe(0);
+      const bye = await http().post(url).expect(200);
+      expect(bye.text).toContain('You are unsubscribed.');
+      expect(
+        await prisma.emailSuppression.count({
+          where: { email: `p1${DOMAIN}` },
+        }),
+      ).toBe(1);
+      await http().post(url).expect(200);
+      // The one-click POST a mail app sends suppresses too.
       await http()
         .post(
           `/api/hub/email/unsubscribe?t=${encodeURIComponent(signUnsubscribeToken(`p3${DOMAIN}`, SECRET))}`,
@@ -461,6 +484,7 @@ describe('EMAIL-01 email campaigns', () => {
         .send('List-Unsubscribe=One-Click')
         .expect(200);
       await http().get('/api/hub/email/unsubscribe?t=bad.token').expect(400);
+      await http().post('/api/hub/email/unsubscribe?t=bad.token').expect(400);
       expect(
         await prisma.emailSuppression.count({
           where: { email: { in: [`p1${DOMAIN}`, `p3${DOMAIN}`] } },

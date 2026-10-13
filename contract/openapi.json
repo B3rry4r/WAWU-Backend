@@ -18388,7 +18388,7 @@
         ],
         "responses": {
           "200": {
-            "description": "An HTML page confirming the address is unsubscribed."
+            "description": "An HTML page asking to confirm. Nothing is changed."
           },
           "400": {
             "description": "An HTML page saying the link is not valid."
