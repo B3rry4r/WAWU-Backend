@@ -273,7 +273,7 @@ describe('Rate limits behind nginx (OPS-11)', () => {
       );
     });
 
-    it('only the three payment webhooks (Flutterwave, Fintava, Nuvion: NUV-01) skip the limits; the only other overrides are admin login and refresh, the BVN check (KYC-01), the selfie match (KYC-02), the public receipt check and the receipt image and PDF (WALLET-18), the recipient search (WALLET-08), and the four public event registration routes (JOIN-01), once each', () => {
+    it('only the three payment webhooks (Flutterwave, Fintava, Nuvion: NUV-01) skip the limits; the only other overrides are admin login and refresh, the BVN check (KYC-01), the selfie match (KYC-02), the public receipt check and the receipt image and PDF (WALLET-18), the recipient search (WALLET-08), the four public event registration routes (JOIN-01), once each, and the two public email unsubscribe routes (EMAIL-01), once each', () => {
       const root = join(__dirname, '..');
       const files: string[] = [];
       const walk = (dir: string) => {
@@ -300,8 +300,16 @@ describe('Rate limits behind nginx (OPS-11)', () => {
         'nuvion/webhook/nuvion-webhook.controller.ts': 1,
         'payment-webhook/payment-webhook.controller.ts': 1,
       });
+      // EMAIL-01: the public unsubscribe page (GET shows the confirmation,
+      // POST unsubscribes, and the one-click request a mail app sends is that
+      // POST) has its own `medium` limit of 120 calls per address in 10
+      // minutes. It needs no sign-in and writes to the suppression list, so it
+      // is held well below the global `medium` (200 a minute): a person needs
+      // one or two calls, and a mail provider opening links from one address
+      // stays inside 120 in 10 minutes. `short` keeps its 20 a second.
       expect(uses(/^\s*@Throttle\(/gm)).toEqual({
         'admin/auth/admin-auth.controller.ts': 2,
+        'admin/notifications/email/email-unsubscribe.controller.ts': 2,
         'money/identity/money-identity.controller.ts': 2,
         'money/receipts/money-receipt.controller.ts': 2,
         'money/receipts/public-receipt.controller.ts': 1,
