@@ -5901,3 +5901,107 @@ model WaitlistRegistration {
   @@index([email])
   @@index([claimedByWawuId])
 }
+
+// ---------------------------------------------------------------------------
+// EMAIL-01: the email campaign tool in the admin dashboard. Additive: four
+// new tables, nothing existing is touched. Sent through Resend by the Hub
+// (src/admin/notifications/email/), only to people who consented.
+// ---------------------------------------------------------------------------
+
+enum EmailCampaignStatus {
+  /// Built and counted, nothing sent yet.
+  ready
+  /// The background job is working through the recipients.
+  sending
+  /// Every recipient has a result (sent, failed or skipped).
+  sent
+}
+
+enum EmailRecipientStatus {
+  queued
+  sent
+  failed
+  skipped
+}
+
+enum EmailSuppressionReason {
+  unsubscribed
+  bounced
+  complained
+}
+
+/// A saved email: the body is Markdown or simple text with {{first_name}} and
+/// {{join_link}}. `version` goes up on every save.
+model EmailTemplate {
+  id          String   @id @default(uuid())
+  name        String
+  subject     String
+  previewText String   @default("")
+  body        String
+  version     Int      @default(1)
+  createdBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([updatedAt])
+}
+
+/// One send. The template is copied in (a snapshot), so editing or deleting the
+/// template later never changes what a campaign sent.
+model EmailCampaign {
+  id               String              @id @default(uuid())
+  templateId       String?
+  templateName     String
+  subject          String
+  previewText      String              @default("")
+  body             String
+  /// `csv` or `registrants`.
+  audienceKind     String
+  /// A sentence for the dashboard: "CSV upload (people.csv)" or
+  /// "Join registrants: paid, first 500".
+  audienceNote     String
+  status           EmailCampaignStatus @default(ready)
+  totalCount       Int                 @default(0)
+  sentCount        Int                 @default(0)
+  failedCount      Int                 @default(0)
+  skippedCount     Int                 @default(0)
+  /// CSV rows that were not an email address, and repeats of one already in.
+  invalidCount     Int                 @default(0)
+  duplicateCount   Int                 @default(0)
+  createdBy        String
+  createdAt        DateTime            @default(now())
+  startedAt        DateTime?
+  finishedAt       DateTime?
+  updatedAt        DateTime            @updatedAt
+  recipients       EmailRecipient[]
+
+  @@index([createdAt])
+  @@index([status])
+}
+
+model EmailRecipient {
+  id         String               @id @default(uuid())
+  campaignId String
+  campaign   EmailCampaign        @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  /// Lower case.
+  email      String
+  firstName  String?
+  status     EmailRecipientStatus @default(queued)
+  /// Set the moment one worker takes the row, before anything is sent. A row
+  /// with a claim and no result is never sent again (no double send).
+  claimedAt  DateTime?
+  providerId String?
+  error      String?
+  sentAt     DateTime?
+  createdAt  DateTime             @default(now())
+
+  @@unique([campaignId, email])
+  @@index([campaignId, status])
+}
+
+/// Addresses that must not be emailed again.
+model EmailSuppression {
+  email  String                 @id
+  reason EmailSuppressionReason
+  at     DateTime               @default(now())
+}
