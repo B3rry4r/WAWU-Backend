@@ -17853,6 +17853,574 @@
         ]
       }
     },
+    "/api/hub/admin/notifications/email/templates": {
+      "get": {
+        "operationId": "AdminEmailController_templates",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EmailTemplateView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminEmail"
+        ]
+      },
+      "post": {
+        "operationId": "AdminEmailController_createTemplate",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailTemplateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailTemplateView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/email/templates/{id}": {
+      "get": {
+        "operationId": "AdminEmailController_template",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailTemplateView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminEmail"
+        ]
+      },
+      "patch": {
+        "operationId": "AdminEmailController_updateTemplate",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailTemplateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailTemplateView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminEmail"
+        ]
+      },
+      "delete": {
+        "operationId": "AdminEmailController_deleteTemplate",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "deleted"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/email/preview": {
+      "post": {
+        "operationId": "AdminEmailController_preview",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailPreviewDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailPreviewView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The final HTML and text for a draft, exactly as a recipient gets them.",
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/email/test-send": {
+      "post": {
+        "operationId": "AdminEmailController_testSend",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailTestSendDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sent": {
+                      "type": "boolean"
+                    },
+                    "providerId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "sent",
+                    "providerId"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "One real email to one address. Superadmin only.",
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/email/audiences/registrants": {
+      "get": {
+        "operationId": "AdminEmailController_registrantCount",
+        "parameters": [
+          {
+            "name": "filter",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "default": "all",
+              "type": "string",
+              "enum": [
+                "all",
+                "paid",
+                "not_paid",
+                "opted_in"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 20000,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailAudienceCountView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "How many /join registrants a filter and a limit would email.",
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/email/campaigns": {
+      "get": {
+        "operationId": "AdminEmailController_list",
+        "parameters": [
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EmailCampaignView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/email/campaigns/registrants": {
+      "post": {
+        "operationId": "AdminEmailController_fromRegistrants",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRegistrantCampaignDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailCampaignView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Build a campaign from the /join registrants. Sends nothing.",
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/email/campaigns/csv": {
+      "post": {
+        "operationId": "AdminEmailController_fromCsv",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCsvCampaignDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailCampaignView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Build a campaign from an uploaded CSV (multipart: file, templateId, limit). Sends nothing.",
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/email/campaigns/{id}": {
+      "get": {
+        "operationId": "AdminEmailController_detail",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailCampaignView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/email/campaigns/{id}/recipients": {
+      "get": {
+        "operationId": "AdminEmailController_recipients",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "failed",
+                "sent",
+                "queued",
+                "skipped"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EmailRecipientView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/email/campaigns/{id}/start": {
+      "post": {
+        "operationId": "AdminEmailController_start",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailCampaignView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Start sending in the background. Superadmin only; answers 409 when RESEND_API_KEY is unset.",
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/email/unsubscribe": {
+      "get": {
+        "operationId": "PublicEmailUnsubscribeController_get",
+        "parameters": [
+          {
+            "name": "t",
+            "required": false,
+            "in": "query",
+            "schema": {}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An HTML page asking to confirm. Nothing is changed."
+          },
+          "400": {
+            "description": "An HTML page saying the link is not valid."
+          }
+        },
+        "tags": [
+          "PublicEmailUnsubscribe"
+        ]
+      },
+      "post": {
+        "operationId": "PublicEmailUnsubscribeController_post",
+        "parameters": [
+          {
+            "name": "t",
+            "required": false,
+            "in": "query",
+            "schema": {}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An HTML page confirming the address is unsubscribed."
+          },
+          "400": {
+            "description": "An HTML page saying the link is not valid."
+          }
+        },
+        "tags": [
+          "PublicEmailUnsubscribe"
+        ]
+      }
+    },
     "/api/hub/account": {
       "delete": {
         "operationId": "AccountController_deleteAccount",
@@ -31617,6 +32185,141 @@
           "audience"
         ]
       },
+      "EmailTemplateDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "subject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "previewText": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "body": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "version": {
+            "type": "number",
+            "description": "The version the editor loaded. A save over a newer one is refused.",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "name",
+          "subject",
+          "body"
+        ]
+      },
+      "EmailPreviewDto": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "previewText": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 20000
+          },
+          "firstName": {
+            "type": "string",
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "subject",
+          "body"
+        ]
+      },
+      "EmailTestSendDto": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "previewText": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 20000
+          },
+          "firstName": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "to": {
+            "type": "string",
+            "maxLength": 254,
+            "format": "email"
+          }
+        },
+        "required": [
+          "subject",
+          "body",
+          "to"
+        ]
+      },
+      "CreateRegistrantCampaignDto": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "default": "all",
+            "enum": [
+              "all",
+              "paid",
+              "not_paid",
+              "opted_in"
+            ],
+            "type": "string"
+          },
+          "limit": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 20000
+          },
+          "templateId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "filter",
+          "templateId"
+        ]
+      },
+      "CreateCsvCampaignDto": {
+        "type": "object",
+        "properties": {
+          "templateId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "limit": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 20000
+          }
+        },
+        "required": [
+          "templateId"
+        ]
+      },
       "DeleteAccountDto": {
         "type": "object",
         "properties": {}
@@ -43509,6 +44212,206 @@
           "recipientCount",
           "deliveredCount",
           "suppressedByPreference"
+        ]
+      },
+      "EmailTemplateView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "previewText": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "version": {
+            "type": "number"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "subject",
+          "previewText",
+          "body",
+          "version",
+          "updatedAt"
+        ]
+      },
+      "EmailPreviewView": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string"
+          },
+          "html": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject",
+          "html",
+          "text"
+        ]
+      },
+      "EmailAudienceCountView": {
+        "type": "object",
+        "properties": {
+          "matching": {
+            "type": "number"
+          },
+          "willSend": {
+            "type": "number"
+          },
+          "unsubscribed": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "matching",
+          "willSend",
+          "unsubscribed"
+        ]
+      },
+      "EmailCampaignView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "templateName": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "audienceKind": {
+            "type": "string"
+          },
+          "audienceNote": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "sent",
+              "sending",
+              "ready"
+            ]
+          },
+          "totalCount": {
+            "type": "number"
+          },
+          "queuedCount": {
+            "type": "number"
+          },
+          "sentCount": {
+            "type": "number"
+          },
+          "failedCount": {
+            "type": "number"
+          },
+          "skippedCount": {
+            "type": "number"
+          },
+          "unsubscribedCount": {
+            "type": "number"
+          },
+          "invalidCount": {
+            "type": "number"
+          },
+          "duplicateCount": {
+            "type": "number"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "finishedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "templateName",
+          "subject",
+          "audienceKind",
+          "audienceNote",
+          "status",
+          "totalCount",
+          "queuedCount",
+          "sentCount",
+          "failedCount",
+          "skippedCount",
+          "unsubscribedCount",
+          "invalidCount",
+          "duplicateCount",
+          "createdAt",
+          "startedAt",
+          "finishedAt"
+        ]
+      },
+      "EmailRecipientView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "firstName": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "failed",
+              "sent",
+              "queued",
+              "skipped"
+            ]
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          },
+          "sentAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "firstName",
+          "status",
+          "error",
+          "sentAt"
         ]
       },
       "ExploreCreatorCard": {
