@@ -9,9 +9,11 @@ import {
 } from './email-config';
 import { RequestPacer } from './email-pacer';
 import {
+  EmailTransport,
   ProviderMessage,
   ProviderResult,
   ResendClient,
+  WawuIdMailRelay,
 } from './email-provider';
 import { renderEmail } from './email-render';
 import { unsubscribeUrl } from './email-unsubscribe';
@@ -55,7 +57,16 @@ export class EmailSendingService implements OnApplicationBootstrap {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly resend: ResendClient,
+    private readonly relay: WawuIdMailRelay,
   ) {}
+
+  /**
+   * Where mail goes out. WAWU ID's relay is the default; a Hub that has its own
+   * RESEND_API_KEY still sends straight to Resend, from EMAIL_CAMPAIGN_FROM.
+   */
+  private transport(): EmailTransport {
+    return this.resend.apiKey() ? this.resend : this.relay;
+  }
 
   /** A campaign that was mid-send when the server stopped carries on. */
   async onApplicationBootstrap(): Promise<void> {
@@ -69,8 +80,8 @@ export class EmailSendingService implements OnApplicationBootstrap {
 
   /** The plain sentence for a 409 when a setting is missing, or null. */
   missingSetting(): string | null {
-    if (!this.resend.apiKey()) {
-      return 'RESEND_API_KEY is not set on the server, so no email can be sent.';
+    if (!this.resend.apiKey() && !this.relay.configured()) {
+      return 'No email sender is set up on the server. Email goes out through WAWU ID, which needs WAWU_ID_BASE_URL and WAWU_ID_INTERNAL_SERVICE_KEY to be set here, so no email can be sent.';
     }
     if (
       !this.config.get<string>('HUB_PUBLIC_URL') &&
@@ -91,6 +102,7 @@ export class EmailSendingService implements OnApplicationBootstrap {
     content: EmailContent,
     to: { id: string; email: string; firstName: string | null },
     subjectPrefix = '',
+    tag?: string,
   ): ProviderMessage {
     const link = unsubscribeUrl(
       this.hubBase(),
@@ -115,6 +127,7 @@ export class EmailSendingService implements OnApplicationBootstrap {
         'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
       },
       idempotencyKey: `wawu-email-${to.id}`,
+      ...(tag ? { tag } : {}),
     };
   }
 
@@ -127,7 +140,7 @@ export class EmailSendingService implements OnApplicationBootstrap {
     };
     for (let attempt = 1; attempt <= MAX_SEND_ATTEMPTS; attempt++) {
       await this.pacer.acquire();
-      last = await this.resend.send(message);
+      last = await this.transport().send(message);
       if (last.ok || !last.transient) return last;
       if (attempt < MAX_SEND_ATTEMPTS) {
         await this.retrySleep(RETRY_BASE_MS * 2 ** (attempt - 1));
@@ -216,7 +229,7 @@ export class EmailSendingService implements OnApplicationBootstrap {
     }
 
     const result = await this.sendWithRetries(
-      this.buildMessage(recipient.campaign, recipient),
+      this.buildMessage(recipient.campaign, recipient, '', campaignId),
     );
     if (result.ok) {
       await this.prisma.emailRecipient.update({

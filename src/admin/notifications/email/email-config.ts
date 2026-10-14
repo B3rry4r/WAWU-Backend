@@ -1,7 +1,10 @@
 /**
- * EMAIL-01 settings and fixed figures. The two settings the owner sets on the
- * server are RESEND_API_KEY and EMAIL_CAMPAIGN_FROM; HUB_PUBLIC_URL (already
- * set for the data export email) is the address the unsubscribe link points at.
+ * EMAIL-01 and EMAIL-02 settings and fixed figures. A campaign goes out
+ * through WAWU ID's mail relay (WAWU_ID_BASE_URL and WAWU_ID_INTERNAL_SERVICE_KEY,
+ * already set on the server), which sends from WAWU ID's own MAIL_FROM. Only a
+ * Hub that also has RESEND_API_KEY sends straight to Resend, from
+ * EMAIL_CAMPAIGN_FROM. HUB_PUBLIC_URL (already set for the data export email)
+ * is the address the unsubscribe link points at.
  */
 
 /** Used when EMAIL_CAMPAIGN_FROM is unset: the sender WAWU ID already uses. */
@@ -28,6 +31,23 @@ export const MAX_CSV_BYTES = 5 * 1024 * 1024;
 
 /** The most recipients one campaign may hold. */
 export const MAX_CAMPAIGN_RECIPIENTS = 20_000;
+
+/** How long one call to WAWU ID's relay is waited for. */
+export const RELAY_TIMEOUT_MS = 20_000;
+
+/** WAWU ID's address from WAWU_ID_BASE_URL, without a trailing slash; empty when unset. */
+export function relayBaseUrl(env: {
+  get(key: string): string | undefined;
+}): string {
+  return (env.get('WAWU_ID_BASE_URL')?.trim() ?? '').replace(/\/+$/, '');
+}
+
+/** The shared internal service key; empty when unset (there is no development fallback here). */
+export function relayServiceKey(env: {
+  get(key: string): string | undefined;
+}): string {
+  return env.get('WAWU_ID_INTERNAL_SERVICE_KEY')?.trim() ?? '';
+}
 
 /** Resend's address. Anything else is refused unless it is a local address. */
 export const RESEND_DEFAULT_BASE_URL = 'https://api.resend.com';

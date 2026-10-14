@@ -57,12 +57,31 @@ interface Captured {
   };
 }
 
+interface RelayCaptured {
+  url: string;
+  headers: IncomingMessage['headers'];
+  body: {
+    to: string;
+    subject: string;
+    html: string;
+    text: string;
+    headers: Record<string, string>;
+    tag?: string;
+    from?: string;
+  };
+}
+
 describe('EMAIL-01 email campaigns', () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let sending: EmailSendingService;
   let standIn: Server;
   let captured: Captured[] = [];
+  /** A local stand-in for WAWU ID's POST /internal/mail/send (EMAIL-02). */
+  let relayStandIn: Server;
+  let relayUrl = '';
+  let relayCaptured: RelayCaptured[] = [];
+  let relayScript: Array<{ status: number; message?: string }> = [];
   /** Statuses the stand-in answers with, one per request, then 200. */
   let script: number[] = [];
   const tokens: Record<string, string> = {};
@@ -92,12 +111,40 @@ describe('EMAIL-01 email campaigns', () => {
       'ADMIN_JWT_REFRESH_SECRET',
       'RESEND_API_KEY',
       'RESEND_BASE_URL',
+      'WAWU_ID_BASE_URL',
+      'WAWU_ID_INTERNAL_SERVICE_KEY',
     ]) {
       envBefore[k] = process.env[k];
     }
     process.env.ADMIN_JWT_SECRET = SECRET;
     process.env.ADMIN_JWT_REFRESH_SECRET = `${SECRET}-refresh`;
     delete process.env.RESEND_API_KEY;
+    delete process.env.WAWU_ID_BASE_URL;
+    delete process.env.WAWU_ID_INTERNAL_SERVICE_KEY;
+
+    relayStandIn = createServer((req, res) => {
+      let raw = '';
+      req.on('data', (c) => (raw += c));
+      req.on('end', () => {
+        const next = relayScript.shift();
+        if (next) {
+          res.writeHead(next.status, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({ statusCode: next.status, message: next.message }),
+          );
+          return;
+        }
+        relayCaptured.push({
+          url: req.url ?? '',
+          headers: req.headers,
+          body: JSON.parse(raw),
+        });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ id: `relay-${relayCaptured.length}` }));
+      });
+    });
+    await new Promise<void>((r) => relayStandIn.listen(0, '127.0.0.1', r));
+    relayUrl = `http://127.0.0.1:${(relayStandIn.address() as AddressInfo).port}`;
 
     standIn = createServer((req, res) => {
       let raw = '';
@@ -182,6 +229,7 @@ describe('EMAIL-01 email campaigns', () => {
     });
     await app.close();
     await new Promise((r) => standIn.close(r));
+    await new Promise((r) => relayStandIn.close(r));
     for (const [k, v] of Object.entries(envBefore)) {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
@@ -191,6 +239,8 @@ describe('EMAIL-01 email campaigns', () => {
   beforeEach(async () => {
     captured = [];
     script = [];
+    relayCaptured = [];
+    relayScript = [];
     await prisma.emailSuppression.deleteMany({
       where: { email: { endsWith: DOMAIN } },
     });
@@ -257,21 +307,23 @@ describe('EMAIL-01 email campaigns', () => {
       .expect(403);
   });
 
-  it('answers 409 and sends nothing while RESEND_API_KEY is unset', async () => {
+  it('answers 409 and sends nothing while neither WAWU ID nor a Resend key is set up', async () => {
     const t = await newTemplate();
     const c = await csvCampaign(t.id, five);
     const res = await http()
       .post(`${P}/campaigns/${c.id}/start`)
       .set(auth('superadmin'))
       .expect(409);
-    expect(JSON.stringify(res.body)).toContain('RESEND_API_KEY is not set');
+    expect(JSON.stringify(res.body)).toContain('No email sender is set up');
+    expect(JSON.stringify(res.body)).toContain('WAWU_ID_BASE_URL');
     const test = await http()
       .post(`${P}/test-send`)
       .set(auth('superadmin'))
       .send({ to: `a${DOMAIN}`, subject: 's', body: 'b' })
       .expect(409);
-    expect(JSON.stringify(test.body)).toContain('RESEND_API_KEY is not set');
+    expect(JSON.stringify(test.body)).toContain('No email sender is set up');
     expect(captured).toHaveLength(0);
+    expect(relayCaptured).toHaveLength(0);
     const after = await prisma.emailCampaign.findUniqueOrThrow({
       where: { id: c.id as string },
     });
@@ -601,6 +653,175 @@ describe('EMAIL-01 email campaigns', () => {
         .set(auth('superadmin'))
         .expect(200);
       expect(rows.body.data[0].error).toContain('Invalid');
+    });
+  });
+
+  describe('through WAWU ID (EMAIL-02), with no Resend key on the Hub', () => {
+    const SERVICE_KEY = 'email02-spec-service-key-not-a-real-secret';
+    beforeAll(() => {
+      delete process.env.RESEND_API_KEY;
+      process.env.WAWU_ID_BASE_URL = `${relayUrl}/`;
+      process.env.WAWU_ID_INTERNAL_SERVICE_KEY = SERVICE_KEY;
+    });
+    afterAll(() => {
+      delete process.env.WAWU_ID_BASE_URL;
+      delete process.env.WAWU_ID_INTERNAL_SERVICE_KEY;
+      delete process.env.RESEND_API_KEY;
+    });
+
+    it('sends a test email through the relay, with the service key and no From of its own', async () => {
+      await http()
+        .post(`${P}/test-send`)
+        .set(auth('superadmin'))
+        .send({
+          to: `Me${DOMAIN}`,
+          subject: 'Hi {{first_name}}',
+          body: 'Body',
+          firstName: 'Ada',
+        })
+        .expect(200);
+      expect(captured).toHaveLength(0);
+      expect(relayCaptured).toHaveLength(1);
+      const sent = relayCaptured[0];
+      expect(sent.url).toBe('/internal/mail/send');
+      expect(sent.headers['x-service-key']).toBe(SERVICE_KEY);
+      expect(sent.body.subject).toBe('[Test] Hi Ada');
+      expect(sent.body.to).toBe(`me${DOMAIN}`);
+      expect(sent.body.from).toBeUndefined();
+      expect(sent.body.headers['List-Unsubscribe']).toMatch(/^<http.*>$/);
+    });
+
+    it('sends a 3-row campaign once each, with the unsubscribe headers, the campaign tag and a key per person', async () => {
+      const t = await newTemplate();
+      const c = await csvCampaign(
+        t.id,
+        `email,first_name\nr1${DOMAIN},One\nr2${DOMAIN},Two\nr3${DOMAIN},Three`,
+      );
+      await http()
+        .post(`${P}/campaigns/${c.id}/start`)
+        .set(auth('superadmin'))
+        .expect(200);
+      expect(await untilSent(c.id as string)).toMatchObject({
+        sentCount: 3,
+        failedCount: 0,
+        queuedCount: 0,
+      });
+      expect(captured).toHaveLength(0);
+      expect(relayCaptured).toHaveLength(3);
+      expect(new Set(relayCaptured.map((m) => m.body.to)).size).toBe(3);
+      for (const m of relayCaptured) {
+        expect(m.body.tag).toBe(c.id);
+        expect(m.body.headers['List-Unsubscribe']).toMatch(
+          /^<http.*\/api\/hub\/email\/unsubscribe\?t=.+>$/,
+        );
+        expect(m.body.headers['List-Unsubscribe-Post']).toBe(
+          'List-Unsubscribe=One-Click',
+        );
+        expect(m.body.html).toContain('/api/hub/email/unsubscribe?t=');
+        expect(m.headers['idempotency-key']).toMatch(/^wawu-email-/);
+      }
+      const sentRows = await prisma.emailRecipient.findMany({
+        where: { campaignId: c.id as string, status: 'sent' },
+        select: { providerId: true },
+      });
+      expect(sentRows.map((r) => r.providerId).sort()).toEqual([
+        'relay-1',
+        'relay-2',
+        'relay-3',
+      ]);
+    });
+
+    it('retries a 503 from WAWU ID and then sends', async () => {
+      const t = await newTemplate();
+      const c = await csvCampaign(t.id, `email\nretry503${DOMAIN}`);
+      relayScript = [
+        {
+          status: 503,
+          message: 'The email provider is busy or unavailable. Try again.',
+        },
+        { status: 502 },
+      ];
+      await http()
+        .post(`${P}/campaigns/${c.id}/start`)
+        .set(auth('superadmin'))
+        .expect(200);
+      expect(await untilSent(c.id as string)).toMatchObject({
+        sentCount: 1,
+        failedCount: 0,
+      });
+      expect(relayCaptured).toHaveLength(1);
+    });
+
+    it("marks a recipient failed on a 400, with WAWU ID's words, and does not retry it", async () => {
+      const t = await newTemplate();
+      const c = await csvCampaign(t.id, `email\nbad400${DOMAIN}`);
+      relayScript = [
+        { status: 400, message: 'Invalid `to` field.' },
+        { status: 400 },
+      ];
+      await http()
+        .post(`${P}/campaigns/${c.id}/start`)
+        .set(auth('superadmin'))
+        .expect(200);
+      expect(await untilSent(c.id as string)).toMatchObject({
+        sentCount: 0,
+        failedCount: 1,
+      });
+      expect(relayScript).toHaveLength(1);
+      const rows = await http()
+        .get(`${P}/campaigns/${c.id}/recipients?status=failed`)
+        .set(auth('superadmin'))
+        .expect(200);
+      expect(rows.body.data[0].error).toContain('Invalid `to` field.');
+    });
+
+    it('marks a recipient failed, with no retry, when WAWU ID has reached its daily cap or refuses the key', async () => {
+      const t = await newTemplate();
+      const c = await csvCampaign(
+        t.id,
+        `email\ncap429${DOMAIN}\nkey401${DOMAIN}`,
+      );
+      relayScript = [
+        {
+          status: 429,
+          message:
+            'The daily email limit has been reached. Try again tomorrow.',
+        },
+        { status: 401, message: 'Invalid service key' },
+      ];
+      await http()
+        .post(`${P}/campaigns/${c.id}/start`)
+        .set(auth('superadmin'))
+        .expect(200);
+      expect(await untilSent(c.id as string)).toMatchObject({
+        sentCount: 0,
+        failedCount: 2,
+      });
+      expect(relayScript).toHaveLength(0);
+      const rows = await http()
+        .get(`${P}/campaigns/${c.id}/recipients?status=failed`)
+        .set(auth('superadmin'))
+        .expect(200);
+      const errors = (rows.body.data as Array<{ error: string }>)
+        .map((r) => r.error)
+        .join('|');
+      expect(errors).toContain('daily email limit');
+      expect(errors).toContain('WAWU ID refused the service key.');
+    });
+
+    it('still sends straight to Resend when the Hub has its own RESEND_API_KEY', async () => {
+      process.env.RESEND_API_KEY = 're_test_local_stand_in';
+      try {
+        await http()
+          .post(`${P}/test-send`)
+          .set(auth('superadmin'))
+          .send({ to: `direct${DOMAIN}`, subject: 'Direct', body: 'Body' })
+          .expect(200);
+      } finally {
+        delete process.env.RESEND_API_KEY;
+      }
+      expect(captured).toHaveLength(1);
+      expect(relayCaptured).toHaveLength(0);
     });
   });
 });
