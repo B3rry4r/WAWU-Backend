@@ -1,4 +1,5 @@
 import type { MyTierView } from '../plans/plans-view.type';
+import type { WaitlistReferralOutcomeView } from './referral/referral-view.type';
 
 /**
  * What the event registration routes answer (JOIN-01, R-48). Naira only:
@@ -36,14 +37,32 @@ export interface WaitlistCheckoutView {
   customerPhone: string;
 }
 
+/**
+ * POST /waitlist/registrations, when the registration is already complete:
+ * a referral code at price 0 needs no payment. What the page shows next, the
+ * same as a paid registration (the launch access code).
+ */
+export interface WaitlistRegistrationCompletedView {
+  status: 'paid';
+  /** The first name only. */
+  firstName: string;
+  /** The launch access code, "XXXX XXXX". */
+  accessCode: string;
+}
+
 /** POST /waitlist/registrations: the reference and what to pay with. */
 export interface WaitlistRegistrationStartView {
   /** Keep this: the status and verify routes take it. */
   reference: string;
   offerId: string;
-  /** The fee for this registration, in whole kobo. */
+  /** The fee for this registration, in whole kobo; 0 for a free referral code. */
   amountKobo: number;
-  flutterwaveConfig: WaitlistCheckoutView;
+  /** What to pay with. Absent when `completed` is present (a free registration needs no payment). */
+  flutterwaveConfig?: WaitlistCheckoutView;
+  /** Present only when the registration is already paid (a free referral code): there is no payment window. */
+  completed?: WaitlistRegistrationCompletedView;
+  /** Present only when a referral code was sent: what became of it. */
+  referral?: WaitlistReferralOutcomeView;
 }
 
 export type WaitlistRegistrationStatus = 'pending' | 'paid' | 'failed';
@@ -116,6 +135,10 @@ export interface AdminWaitlistRegistrationView {
   claimedByWawuId: string | null;
   claimedAt: string | null;
   createdAt: string;
+  /** The referral code the registration is counted under; null for no code (and for every row made before codes existed). */
+  referralCode: string | null;
+  /** The code's community when the person registered; null with `referralCode`. */
+  referralCommunity: string | null;
 }
 
 /** The CSV file the team downloads. */

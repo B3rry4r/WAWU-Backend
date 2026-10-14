@@ -314,7 +314,11 @@ describe('Rate limits behind nginx (OPS-11)', () => {
         'money/receipts/money-receipt.controller.ts': 2,
         'money/receipts/public-receipt.controller.ts': 1,
         'money/recipients/money-recipient.controller.ts': 1,
-        'waitlist/waitlist-public.controller.ts': 4,
+        // REF-01: the referral code check is the fifth, on the same limit as
+        // the other two reads (600 calls per address in 10 minutes): a
+        // venue's shared address checks one code per person, and the answer
+        // names no limit, count or community, so there is nothing to mine.
+        'waitlist/waitlist-public.controller.ts': 5,
       });
     });
 
@@ -400,6 +404,7 @@ describe('Rate limits behind nginx (OPS-11)', () => {
         'MoneyRecipientController.search',
         'PublicReceiptController.page',
         'WaitlistPublicController.currentOffer',
+        'WaitlistPublicController.referralCheck',
         'WaitlistPublicController.register',
         'WaitlistPublicController.status',
         'WaitlistPublicController.verify',
@@ -469,7 +474,8 @@ describe('Rate limits behind nginx (OPS-11)', () => {
       ]);
       // JOIN-01 (round 2, lead ruling of 10 Oct 2026: many Nigerian phones sit
       // behind one mobile-network address and a venue shares one Wi-Fi
-      // address): the four public event registration routes each set their own
+      // address): the public event registration routes (four, and REF-01's
+      // referral code check as the fifth) each set their own
       // `medium` override and the guard counts each route apart. The two reads
       // (the offer, a registration's status) allow 600 calls per address in 10
       // minutes, the two writes (register, verify) 300. Only `medium` is
@@ -487,6 +493,8 @@ describe('Rate limits behind nginx (OPS-11)', () => {
           .sort((a, b) => a.on.localeCompare(b.on)),
       ).toEqual([
         waitlist('currentOffer', 600),
+        // REF-01: the public referral code check, a read like the other two.
+        waitlist('referralCheck', 600),
         waitlist('register', 300),
         waitlist('status', 600),
         waitlist('verify', 300),

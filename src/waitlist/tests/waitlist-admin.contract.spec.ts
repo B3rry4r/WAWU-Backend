@@ -257,7 +257,7 @@ describe('Event registrations, the team view (JOIN-01)', () => {
       .split('\r\n')
       .filter(Boolean);
     expect(lines[0]).toBe(
-      'Registered at,Offer,Status,Full name,Phone,Email,State,What they make,Fee (₦),Paid (₦),Refund due (₦),Paid at,Access code,Reference,Transaction id,Claimed,Claimed at,Craft,City,Updates opt-in',
+      'Registered at,Offer,Status,Full name,Phone,Email,State,What they make,Fee (₦),Paid (₦),Refund due (₦),Paid at,Access code,Reference,Transaction id,Claimed,Claimed at,Craft,City,Updates opt-in,Referral code,Community',
     );
     const mine = lines.slice(1).filter((l) => l.includes(MARK));
     expect(mine).toHaveLength(8);

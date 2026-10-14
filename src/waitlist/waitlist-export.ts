@@ -30,6 +30,10 @@ export const WAITLIST_EXPORT_COLUMNS = [
   'Craft',
   'City',
   'Updates opt-in',
+  // Appended after the columns the team already reads (REF-01), so no
+  // existing column moves.
+  'Referral code',
+  'Community',
 ] as const;
 
 export const WAITLIST_EXPORT_CONTENT_TYPE = 'text/csv; charset=utf-8';
@@ -86,4 +90,6 @@ const CELLS: Record<Column, (r: WaitlistRegistration) => string> = {
   City: (r) => textCell(r.city),
   'Updates opt-in': (r) =>
     r.updatesOptIn === null ? '' : r.updatesOptIn ? 'yes' : 'no',
+  'Referral code': (r) => textCell(r.referralCode),
+  Community: (r) => textCell(r.referralCommunity),
 };

@@ -28594,6 +28594,40 @@
         ]
       }
     },
+    "/api/hub/waitlist/referral-codes/{code}": {
+      "get": {
+        "operationId": "WaitlistPublicController_referralCheck",
+        "parameters": [
+          {
+            "name": "code",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaitlistReferralCheckView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`reason.code` `referral_unknown` (no such code) or `no_open_offer`."
+          }
+        },
+        "summary": "Before paying: does this referral code apply, and what would the person\npay. Never the limit, the count or the community. A code we do not have\nis a 404 `referral_unknown`. Advice only: the registration decides again.",
+        "tags": [
+          "WaitlistPublic"
+        ]
+      }
+    },
     "/api/hub/waitlist/registrations": {
       "post": {
         "operationId": "WaitlistPublicController_register",
@@ -28623,7 +28657,7 @@
             "description": "`reason.code` `phone_invalid`, `email_invalid`, `name_invalid` or `consent_required`; a malformed body has no `reason`."
           },
           "404": {
-            "description": "`reason.code` `no_open_offer`: no offer has this id."
+            "description": "`reason.code` `no_open_offer` (no offer has this id) or `referral_unknown` (no such referral code)."
           },
           "409": {
             "description": "`reason.code` `offer_closed` (closed or not open yet) or `already_registered` (this phone or email already paid; nothing is charged)."
@@ -28632,7 +28666,7 @@
             "description": "`reason.code` `payments_unavailable`: payments are not set up."
           }
         },
-        "summary": "Register and get the checkout settings. Every call that passes the checks\nadds a new registration with a new reference, even for the same offer,\nphone and email, so each checkout has its own reference.\nNothing is charged here: the payment happens in the Flutterwave checkout\nwith the answer's `flutterwaveConfig`, and counts only after\nPOST /waitlist/registrations/verify (or Flutterwave's own notice).",
+        "summary": "Register and get the checkout settings. Every call that passes the checks\nadds a new registration with a new reference, even for the same offer,\nphone and email, so each checkout has its own reference.\nNothing is charged here: the payment happens in the Flutterwave checkout\nwith the answer's `flutterwaveConfig`, and counts only after\nPOST /waitlist/registrations/verify (or Flutterwave's own notice).\n\nWith a `referralCode` (REF-01) the answer also carries `referral`. A code\nat price 0 needs no checkout: the answer has `completed` and no\n`flutterwaveConfig`, and the registration is already paid.",
         "tags": [
           "WaitlistPublic"
         ]
@@ -28806,6 +28840,25 @@
                 "failed"
               ]
             }
+          },
+          {
+            "name": "referralCode",
+            "required": false,
+            "in": "query",
+            "description": "Only registrations counted under this referral code (any case).",
+            "schema": {
+              "maxLength": 60,
+              "type": "string"
+            }
+          },
+          {
+            "name": "noReferral",
+            "required": false,
+            "in": "query",
+            "description": "`true`: only registrations with no referral code (including every one made before codes existed). Not with `referralCode`.",
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -28823,7 +28876,40 @@
             }
           }
         },
-        "summary": "Registrations, newest first, every status unless `status` is given\n(`pending`, `paid` or `failed`; a `failed` row is a second payment kept\nfor a refund). `offerId` narrows to one offer.",
+        "summary": "Registrations, newest first, every status unless `status` is given\n(`pending`, `paid` or `failed`; a `failed` row is a second payment kept\nfor a refund). `offerId` narrows to one offer; `referralCode` to one code,\nor `noReferral=true` to the registrations with no code.",
+        "tags": [
+          "WaitlistAdmin"
+        ]
+      }
+    },
+    "/api/hub/admin/waitlist/registrations/summary": {
+      "get": {
+        "operationId": "WaitlistAdminController_summary",
+        "parameters": [
+          {
+            "name": "offerId",
+            "required": false,
+            "in": "query",
+            "description": "Only this offer. Omitted means every offer.",
+            "schema": {
+              "maxLength": 60,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminWaitlistSummaryView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The whole offer in numbers (REF-01): people paid, money paid (kobo),\nsecond payments kept for a refund, and the split by referral code with a\nlast \"No code\" row. Every paid registration since the offer opened counts,\nthose made before referral codes included. Counted by the server.",
         "tags": [
           "WaitlistAdmin"
         ]
@@ -28854,6 +28940,25 @@
                 "failed"
               ]
             }
+          },
+          {
+            "name": "referralCode",
+            "required": false,
+            "in": "query",
+            "description": "Only registrations counted under this referral code (any case).",
+            "schema": {
+              "maxLength": 60,
+              "type": "string"
+            }
+          },
+          {
+            "name": "noReferral",
+            "required": false,
+            "in": "query",
+            "description": "`true`: only registrations with no referral code. Not with `referralCode`.",
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -28871,6 +28976,102 @@
         "summary": "The same rows as a CSV file, oldest first, inside the usual envelope\n(`content` is the file; save it as `fileName`). A byte-order mark first,\nso a spreadsheet opens it as UTF-8 and shows the naira sign.",
         "tags": [
           "WaitlistAdmin"
+        ]
+      }
+    },
+    "/api/hub/admin/waitlist/referral-codes": {
+      "get": {
+        "operationId": "ReferralAdminController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminReferralCodeView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "Every code with its paid count, held count, money paid and limit.",
+        "tags": [
+          "ReferralAdmin"
+        ]
+      },
+      "post": {
+        "operationId": "ReferralAdminController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateReferralCodeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminReferralCodeView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Make a code. The price is from 0 (free) to the offer's standard price.",
+        "tags": [
+          "ReferralAdmin"
+        ]
+      }
+    },
+    "/api/hub/admin/waitlist/referral-codes/{id}": {
+      "patch": {
+        "operationId": "ReferralAdminController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateReferralCodeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminReferralCodeView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Change a code's community, price, limit (null for none) or on/off.",
+        "tags": [
+          "ReferralAdmin"
         ]
       }
     },
@@ -34256,6 +34457,11 @@
           "consent": {
             "type": "boolean",
             "description": "The consent line (with the privacy link) was accepted. Must be true."
+          },
+          "referralCode": {
+            "type": "string",
+            "description": "A referral code (optional): 3 to 20 letters and numbers, in any case.\nLeave it out, or empty, to pay the standard price. A code we do not have\nis refused (`referral_unknown`); one that is switched off or full is not\nrefused: the person registers at the standard price and the answer's\n`referral` says the code was not applied.",
+            "maxLength": 60
           }
         },
         "required": [
@@ -34299,6 +34505,69 @@
         "required": [
           "code"
         ]
+      },
+      "CreateReferralCodeDto": {
+        "type": "object",
+        "properties": {
+          "priceKobo": {
+            "type": "integer",
+            "description": "What a person using the code pays, in whole kobo: 0 (free) up to the offer's price.",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "limit": {
+            "type": "integer",
+            "nullable": true,
+            "description": "How many people may use the code. Leave out, or null, for no limit.",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "code": {
+            "type": "string",
+            "description": "3 to 20 letters and digits. Stored in upper case; matched in any case.",
+            "maxLength": 60
+          },
+          "community": {
+            "type": "string",
+            "description": "The community the code is for: the label the owner tracks by.",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Whether the code works. Defaults to true."
+          }
+        },
+        "required": [
+          "priceKobo",
+          "code",
+          "community"
+        ]
+      },
+      "UpdateReferralCodeDto": {
+        "type": "object",
+        "properties": {
+          "priceKobo": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "limit": {
+            "type": "integer",
+            "nullable": true,
+            "description": "A number, or null to remove the limit.",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "community": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "active": {
+            "type": "boolean"
+          }
+        }
       },
       "CreateAdCreativeDto": {
         "type": "object",
@@ -50109,6 +50378,14 @@
           },
           "createdAt": {
             "type": "string"
+          },
+          "referralCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "referralCommunity": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -50132,7 +50409,93 @@
           "claimed",
           "claimedByWawuId",
           "claimedAt",
-          "createdAt"
+          "createdAt",
+          "referralCode",
+          "referralCommunity"
+        ]
+      },
+      "AdminWaitlistSplitRowView": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "nullable": true
+          },
+          "community": {
+            "type": "string",
+            "nullable": true
+          },
+          "people": {
+            "type": "number"
+          },
+          "kobo": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "code",
+          "community",
+          "people",
+          "kobo"
+        ]
+      },
+      "AdminWaitlistSummaryView": {
+        "type": "object",
+        "properties": {
+          "offerId": {
+            "type": "string",
+            "nullable": true
+          },
+          "paid": {
+            "type": "object",
+            "properties": {
+              "people": {
+                "type": "number"
+              },
+              "kobo": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "people",
+              "kobo"
+            ]
+          },
+          "failed": {
+            "type": "object",
+            "properties": {
+              "people": {
+                "type": "number"
+              },
+              "kobo": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "people",
+              "kobo"
+            ]
+          },
+          "unpaid": {
+            "type": "number"
+          },
+          "split": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminWaitlistSplitRowView"
+            }
+          },
+          "generatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "offerId",
+          "paid",
+          "failed",
+          "unpaid",
+          "split",
+          "generatedAt"
         ]
       },
       "AdminWaitlistExportView": {
@@ -50198,6 +50561,58 @@
           "tier"
         ]
       },
+      "AdminReferralCodeView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "community": {
+            "type": "string"
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "number",
+            "nullable": true
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "paidCount": {
+            "type": "number"
+          },
+          "heldCount": {
+            "type": "number"
+          },
+          "paidKobo": {
+            "type": "integer"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "community",
+          "priceKobo",
+          "limit",
+          "active",
+          "paidCount",
+          "heldCount",
+          "paidKobo",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
       "WaitlistOfferView": {
         "type": "object",
         "properties": {
@@ -50232,6 +50647,33 @@
           "products",
           "days",
           "closesAt"
+        ]
+      },
+      "WaitlistReferralCheckView": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "applies": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "full",
+              "inactive"
+            ],
+            "nullable": true
+          },
+          "priceKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code",
+          "applies",
+          "priceKobo"
         ]
       },
       "WaitlistCheckoutView": {
@@ -50272,6 +50714,51 @@
           "customerPhone"
         ]
       },
+      "WaitlistRegistrationCompletedView": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "paid"
+            ]
+          },
+          "firstName": {
+            "type": "string"
+          },
+          "accessCode": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "firstName",
+          "accessCode"
+        ]
+      },
+      "WaitlistReferralOutcomeView": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "applied": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "full",
+              "inactive"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "code",
+          "applied"
+        ]
+      },
       "WaitlistRegistrationStartView": {
         "type": "object",
         "properties": {
@@ -50285,14 +50772,22 @@
             "type": "integer"
           },
           "flutterwaveConfig": {
-            "$ref": "#/components/schemas/WaitlistCheckoutView"
+            "$ref": "#/components/schemas/WaitlistCheckoutView",
+            "nullable": true
+          },
+          "completed": {
+            "$ref": "#/components/schemas/WaitlistRegistrationCompletedView",
+            "nullable": true
+          },
+          "referral": {
+            "$ref": "#/components/schemas/WaitlistReferralOutcomeView",
+            "nullable": true
           }
         },
         "required": [
           "reference",
           "offerId",
-          "amountKobo",
-          "flutterwaveConfig"
+          "amountKobo"
         ]
       },
       "WaitlistRegistrationStatusView": {
