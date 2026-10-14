@@ -48,6 +48,14 @@ export const WAITLIST_ERROR_STATUS = {
   claimed_by_you: 409,
   /** The offer this code was bought under is no longer in the plans file (JOIN-03). */
   offer_unavailable: 409,
+  /** The referral code is not one we have (REF-01). The same words on the page's check and on register. */
+  referral_unknown: 404,
+  /** An admin tried to create a referral code that already exists (REF-01). */
+  referral_code_taken: 409,
+  /** An admin sent a referral code the rules refuse: its shape, its price or its limit (REF-01). */
+  referral_invalid: 400,
+  /** No referral code has this id (REF-01, admin). */
+  referral_not_found: 404,
 } as const;
 
 export type WaitlistErrorCode = keyof typeof WAITLIST_ERROR_STATUS;

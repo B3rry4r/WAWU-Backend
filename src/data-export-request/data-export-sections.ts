@@ -700,6 +700,9 @@ export const EXPORT_SECTIONS: ExportSection[] = [
           craft: true,
           city: true,
           updatesOptIn: true,
+          // REF-01: the code they registered with and its community.
+          referralCode: true,
+          referralCommunity: true,
           consentAt: true,
           status: true,
           amountKobo: true,

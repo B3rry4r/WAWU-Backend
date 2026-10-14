@@ -19,6 +19,7 @@ import {
   WAITLIST_THROTTLE_WRITE,
 } from './waitlist-config';
 import { WaitlistService } from './waitlist.service';
+import type { WaitlistReferralCheckView } from './referral/referral-view.type';
 import type {
   WaitlistOfferView,
   WaitlistRegistrationStartView,
@@ -55,12 +56,35 @@ export class WaitlistPublicController {
   }
 
   /**
+   * Before paying: does this referral code apply, and what would the person
+   * pay. Never the limit, the count or the community. A code we do not have
+   * is a 404 `referral_unknown`. Advice only: the registration decides again.
+   */
+  @Get('referral-codes/:code')
+  @Throttle(WAITLIST_THROTTLE_READ)
+  @Header('Cache-Control', 'no-store')
+  @ApiResponse({
+    status: 404,
+    description:
+      '`reason.code` `referral_unknown` (no such code) or `no_open_offer`.',
+  })
+  referralCheck(
+    @Param('code') code: string,
+  ): Promise<WaitlistReferralCheckView> {
+    return this.waitlist.referralCheck(code);
+  }
+
+  /**
    * Register and get the checkout settings. Every call that passes the checks
    * adds a new registration with a new reference, even for the same offer,
    * phone and email, so each checkout has its own reference.
    * Nothing is charged here: the payment happens in the Flutterwave checkout
    * with the answer's `flutterwaveConfig`, and counts only after
    * POST /waitlist/registrations/verify (or Flutterwave's own notice).
+   *
+   * With a `referralCode` (REF-01) the answer also carries `referral`. A code
+   * at price 0 needs no checkout: the answer has `completed` and no
+   * `flutterwaveConfig`, and the registration is already paid.
    */
   @Post('registrations')
   @Throttle(WAITLIST_THROTTLE_WRITE)
@@ -73,7 +97,8 @@ export class WaitlistPublicController {
   })
   @ApiResponse({
     status: 404,
-    description: '`reason.code` `no_open_offer`: no offer has this id.',
+    description:
+      '`reason.code` `no_open_offer` (no offer has this id) or `referral_unknown` (no such referral code).',
   })
   @ApiResponse({
     status: 409,

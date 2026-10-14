@@ -1,3 +1,4 @@
+import { Transform } from 'class-transformer';
 import {
   IsBoolean,
   IsEnum,
@@ -89,6 +90,18 @@ export class CreateWaitlistRegistrationDto {
   /** The consent line (with the privacy link) was accepted. Must be true. */
   @IsBoolean()
   consent!: boolean;
+
+  /**
+   * A referral code (optional): 3 to 20 letters and numbers, in any case.
+   * Leave it out, or empty, to pay the standard price. A code we do not have
+   * is refused (`referral_unknown`); one that is switched off or full is not
+   * refused: the person registers at the standard price and the answer's
+   * `referral` says the code was not applied.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  referralCode?: string;
 }
 
 /** POST /waitlist/registrations/verify. */
@@ -145,6 +158,20 @@ export class AdminWaitlistListQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsEnum(WaitlistStatus)
   status?: WaitlistStatus;
+
+  /** Only registrations counted under this referral code (any case). */
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  referralCode?: string;
+
+  /** `true`: only registrations with no referral code (including every one made before codes existed). Not with `referralCode`. */
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    value === 'true' ? true : value === 'false' ? false : value,
+  )
+  @IsBoolean()
+  noReferral?: boolean;
 }
 
 /** GET /admin/waitlist/registrations/export. */
@@ -157,4 +184,27 @@ export class AdminWaitlistExportQueryDto {
   @IsOptional()
   @IsEnum(WaitlistStatus)
   status?: WaitlistStatus;
+
+  /** Only registrations counted under this referral code (any case). */
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  referralCode?: string;
+
+  /** `true`: only registrations with no referral code. Not with `referralCode`. */
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    value === 'true' ? true : value === 'false' ? false : value,
+  )
+  @IsBoolean()
+  noReferral?: boolean;
+}
+
+/** GET /admin/waitlist/registrations/summary. */
+export class AdminWaitlistSummaryQueryDto {
+  /** Only this offer. Omitted means every offer. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  offerId?: string;
 }

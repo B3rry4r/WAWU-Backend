@@ -7,7 +7,9 @@ import type { Paginated } from '../common/interceptors/response.interceptor';
 import {
   AdminWaitlistExportQueryDto,
   AdminWaitlistListQueryDto,
+  AdminWaitlistSummaryQueryDto,
 } from './dto/waitlist.dto';
+import type { AdminWaitlistSummaryView } from './referral/referral-view.type';
 import { CSV_BOM } from '../money/statements/statement-csv';
 import {
   WAITLIST_EXPORT_CONTENT_TYPE,
@@ -40,7 +42,8 @@ export class WaitlistAdminController {
   /**
    * Registrations, newest first, every status unless `status` is given
    * (`pending`, `paid` or `failed`; a `failed` row is a second payment kept
-   * for a refund). `offerId` narrows to one offer.
+   * for a refund). `offerId` narrows to one offer; `referralCode` to one code,
+   * or `noReferral=true` to the registrations with no code.
    */
   @AdminRoles(AdminRole.superadmin, AdminRole.finance, AdminRole.support)
   @Get()
@@ -49,6 +52,21 @@ export class WaitlistAdminController {
     @Query() query: AdminWaitlistListQueryDto,
   ): Promise<Paginated<AdminWaitlistRegistrationView>> {
     return this.waitlist.adminList(query);
+  }
+
+  /**
+   * The whole offer in numbers (REF-01): people paid, money paid (kobo),
+   * second payments kept for a refund, and the split by referral code with a
+   * last "No code" row. Every paid registration since the offer opened counts,
+   * those made before referral codes included. Counted by the server.
+   */
+  @AdminRoles(AdminRole.superadmin, AdminRole.finance, AdminRole.support)
+  @Get('summary')
+  @Header('Cache-Control', 'no-store')
+  summary(
+    @Query() query: AdminWaitlistSummaryQueryDto,
+  ): Promise<AdminWaitlistSummaryView> {
+    return this.waitlist.adminSummary(query);
   }
 
   /**
@@ -71,7 +89,14 @@ export class WaitlistAdminController {
     }
     const day = generatedAt.toISOString().slice(0, 10);
     return {
-      fileName: `registrations-${query.offerId ?? 'all'}${query.status ? `-${query.status}` : ''}-${day}.csv`,
+      fileName: `registrations-${query.offerId ?? 'all'}${query.status ? `-${query.status}` : ''}${
+        query.referralCode
+          ? `-${query.referralCode
+              .trim()
+              .toUpperCase()
+              .replace(/[^A-Z0-9]/g, '')}`
+          : ''
+      }${query.noReferral ? '-nocode' : ''}-${day}.csv`,
       contentType: WAITLIST_EXPORT_CONTENT_TYPE,
       rowCount,
       content,

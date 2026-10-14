@@ -71,6 +71,8 @@ const registration = (
   claimedByWawuId: null,
   claimedAt: null,
   claimResult: null,
+  referralCode: null,
+  referralCommunity: null,
   createdAt: new Date('2026-10-01T10:05:00.000Z'),
   updatedAt: new Date('2026-10-02T11:30:00.000Z'),
   ...over,
@@ -146,6 +148,9 @@ describe('the waitlist CSV reads back by header (round 2, N4)', () => {
       Craft: 'Fashion',
       City: 'Enugu',
       'Updates opt-in': 'yes',
+      // REF-01: appended after the existing columns; this row used no code.
+      'Referral code': '',
+      Community: '',
     });
   });
 
@@ -184,7 +189,13 @@ describe('the waitlist CSV reads back by header (round 2, N4)', () => {
       'Claimed',
       'Claimed at',
     ]);
-    expect(headers.slice(17)).toEqual(['Craft', 'City', 'Updates opt-in']);
+    expect(headers.slice(17)).toEqual([
+      'Craft',
+      'City',
+      'Updates opt-in',
+      'Referral code',
+      'Community',
+    ]);
   });
 
   it('puts a refund under Refund due and not under Paid, a pending row under neither, an unclaimed row under Claimed: no', () => {

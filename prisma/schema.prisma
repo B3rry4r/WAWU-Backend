@@ -5893,6 +5893,14 @@ model WaitlistRegistration {
   /// replayed; nobody else ever sees it. Never carries another person's
   /// details. NULL on an unclaimed row.
   claimResult     Json?
+  /// The referral code this registration is counted under (REF-01): set only
+  /// when the code was active and under its limit at the moment of registering.
+  /// NULL for every row made before REF-01 and for everyone who used no code,
+  /// or whose code was switched off or full (they pay the standard price and are
+  /// not counted under the code).
+  referralCode      String?
+  /// The code's community name at that moment (REF-01); NULL with `referralCode`.
+  referralCommunity String?
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 
@@ -5900,6 +5908,31 @@ model WaitlistRegistration {
   @@index([phone])
   @@index([email])
   @@index([claimedByWawuId])
+  @@index([referralCode, status, createdAt])
+}
+
+/// A referral code for the paid registration page /join (REF-01, owner, 14 Oct
+/// 2026). It names the community a registrant came from and sets the price its
+/// users pay (0 to the offer's price; 0 is free), with an optional limit on
+/// how many people may use it. Created and changed by admins only. Never
+/// deleted: switched off (`active` false). A price or limit change affects only
+/// registrations started after it (each registration keeps its own
+/// `amountKobo`).
+model ReferralCode {
+  id         String   @id @default(uuid())
+  /// Upper case letters and digits, 3 to 20. Matched case-insensitively.
+  code       String   @unique
+  /// The label the owner tracks by.
+  community  String
+  /// What a person using the code pays, in whole kobo; 0 means free.
+  priceKobo  Int
+  /// How many people may use the code; NULL means no limit.
+  usageLimit Int?
+  active     Boolean  @default(true)
+  /// The admin who created it (admin id); NULL for the code the migration inserted.
+  createdBy  String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 }
 
 // ---------------------------------------------------------------------------
