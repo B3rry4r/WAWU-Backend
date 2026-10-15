@@ -94,6 +94,8 @@ npm run lint                eslint (it runs with --fix, so it edits files)
 npm run test:contract       contract suite; always this, never bare jest (README)
 python3 scripts/gates/run.py          the gates
 python3 scripts/gates/check_baseline.py   every accepted finding has an owner and a reason
+scripts/dev/stack.sh up|status|down   a local test stack in one command (README, "Local test stack")
+scripts/dev/quiet.sh <name> -- <cmd>  full output to a log, only the end on screen
 npm run contract:build      regenerate contract/openapi.json (never hand-edit it)
 ```
 
