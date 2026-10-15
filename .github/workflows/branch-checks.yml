@@ -108,7 +108,7 @@ jobs:
           npx prisma migrate deploy
 
       - name: Seed
-        run: npm run db:seed
+        run: npm run db:seed -- --ops-ci-red
 
       - name: Start mock WAWU ID
         # The contract tests do a real JWKS handshake against this service, so
