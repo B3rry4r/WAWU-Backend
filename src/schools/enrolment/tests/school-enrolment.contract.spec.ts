@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { Logger } from '@nestjs/common';
 import request from 'supertest';
 import { MERCHANT_ACCOUNT } from '../../../../test/fintava/fintava-double';
 import { body, until } from '../../../../test/payments/poll-helpers';
@@ -252,6 +253,66 @@ describe('SCHOOLS-07 enrol in a course and pay from the wallet', () => {
         code: 'reservation_limit',
       });
       expect(await seats(extra.intakeIds[0])).toBe(0);
+    });
+
+    it('eight requests at once for eight courses hold at most the cap, and the rest give their seat back', async () => {
+      const p = await h.buyer(START);
+      const classes: SeededClass[] = [];
+      for (let i = 0; i < 8; i += 1) {
+        classes.push(
+          await h.seed({
+            priceKobo: PRICE,
+            title: `Cap course ${i}`,
+            intakes: [{ capacity: 5, startDate: NOV }],
+          }),
+        );
+      }
+      const all = await Promise.all(
+        classes.map((c) => r.enrol(p, { intakeId: c.intakeIds[0] })),
+      );
+      const held = await h.prisma.schoolEnrolment.count({
+        where: { wawuUserId: p.id, status: 'reserved' },
+      });
+      expect(held).toBe(3);
+      expect(all.filter((x) => x.status === 201)).toHaveLength(3);
+      const refused = all.filter((x) => x.status !== 201);
+      expect(refused.map((x) => x.status)).toEqual(Array(5).fill(409));
+      for (const x of refused) {
+        expect(body<unknown>(x).reason).toMatchObject({
+          code: 'reservation_limit',
+        });
+      }
+      let taken = 0;
+      for (const c of classes) taken += await seats(c.intakeIds[0]);
+      expect(taken).toBe(3);
+    });
+
+    it('two classes of one course asked at once never say a payment is in progress when there is none', async () => {
+      const c = await h.seed({
+        priceKobo: PRICE,
+        intakes: [
+          { capacity: 5, startDate: NOV },
+          { capacity: 5, startDate: JAN },
+        ],
+      });
+      const p = await h.buyer(START);
+      const all = await Promise.all(
+        Array.from({ length: 12 }, (_, i) =>
+          r.enrol(p, { intakeId: c.intakeIds[i % 2] }),
+        ),
+      );
+      for (const x of all) {
+        expect(body<unknown>(x).reason?.code).not.toBe('payment_in_progress');
+        expect(x.status).toBe(201);
+      }
+      const live = await h.prisma.schoolEnrolment.findMany({
+        where: { wawuUserId: p.id, status: { in: ['reserved', 'enrolled'] } },
+      });
+      expect(live).toHaveLength(1);
+      expect(
+        (await seats(c.intakeIds[0])) + (await seats(c.intakeIds[1])),
+      ).toBe(1);
+      expect(await seats(live[0].intakeId)).toBe(1);
     });
 
     it('a course with no fee enrols at once and has nothing to pay', async () => {
@@ -823,6 +884,72 @@ describe('SCHOOLS-07 enrol in a course and pay from the wallet', () => {
         returned: true,
         returnedKobo: PRICE,
       });
+    });
+
+    it('refunds the fee through the hold, once, when the student chose the course again in the gap', async () => {
+      const c = await h.seed({
+        priceKobo: PRICE,
+        intakes: [
+          { capacity: 2, startDate: NOV },
+          { capacity: 2, startDate: JAN },
+        ],
+      });
+      const p = await h.buyer(START);
+      const { e, paid, hold } = await paidThenReleased(c, p);
+      // The student picked a class of the same course again: the one live
+      // order a course may have is now this one, and the old one cannot be
+      // revived beside it.
+      const again = await enrol(p, c.intakeIds[1]);
+      const sends = () =>
+        h.wallets.sends.filter(
+          (s) => s.from === MERCHANT_ACCOUNT && s.to === p.accountNumber,
+        ).length;
+      const warned = jest
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined);
+      try {
+        await deliver(e, paid, p, hold.id);
+        const row = await h.prisma.schoolEnrolment.findUniqueOrThrow({
+          where: { id: e.id },
+        });
+        expect(row.status).toBe('refunded');
+        expect(row.paymentId).toBe(paid.id);
+        expect(row.refundedAt).not.toBeNull();
+        const after = await h.prisma.walletHold.findUniqueOrThrow({
+          where: { id: hold.id },
+        });
+        expect(after).toMatchObject({ action: 'refund', status: 'refunded' });
+        // The price is back; Fintava's charge is not returned (R-10).
+        expect(balance(p)).toBe(START - FEE);
+        expect(sends()).toBe(1);
+        // The class the old order had keeps no seat for it; the new order keeps its own.
+        expect(await seats(c.intakeIds[0])).toBe(0);
+        expect(await seats(c.intakeIds[1])).toBe(1);
+        expect(
+          (
+            await h.prisma.schoolEnrolment.findUniqueOrThrow({
+              where: { id: again.id },
+            })
+          ).status,
+        ).toBe('reserved');
+        // Told again, one after the other and all at once: nothing moves twice.
+        await deliver(e, paid, p, hold.id);
+        await Promise.all([
+          deliver(e, paid, p, hold.id),
+          deliver(e, paid, p, hold.id),
+          deliver(e, paid, p, hold.id),
+        ]);
+        expect(sends()).toBe(1);
+        expect(balance(p)).toBe(START - FEE);
+        expect(await seats(c.intakeIds[0])).toBe(0);
+        expect(await seats(c.intakeIds[1])).toBe(1);
+        const mine = warned.mock.calls.filter((call) =>
+          String(call[0]).includes(e.id),
+        );
+        expect(mine).toHaveLength(1);
+      } finally {
+        warned.mockRestore();
+      }
     });
   });
   describe('the person leaves', () => {

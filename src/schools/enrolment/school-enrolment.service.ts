@@ -162,7 +162,7 @@ export class SchoolEnrolmentService implements OnModuleInit {
         );
       }
       try {
-        const row = await this.claim(wawuUserId, intake, live, now);
+        const row = await this.claim(wawuUserId, intake, now);
         return this.viewOf(row);
       } catch (e) {
         if (e instanceof NoSeat) {
@@ -228,22 +228,64 @@ export class SchoolEnrolmentService implements OnModuleInit {
   }
 
   /**
-   * One short transaction, database only: give back the student's other
-   * unpaid place in this course (a different class chosen), take the seat,
-   * write the order. A seat that is not there rolls all of it back, so the
-   * student keeps the place they had.
+   * One short transaction, database only: take the student's lock, look at
+   * the course's live order again, give back their other unpaid place in this
+   * course (a different class chosen), take the seat, write the order. A seat
+   * that is not there rolls all of it back, so the student keeps the place
+   * they had.
+   *
+   * The lock is a transaction-scoped advisory lock on the student, held for
+   * these few statements and released at commit, before any caller reaches a
+   * provider. It makes the per-student cap and the one-place-per-course rule
+   * a check made one request at a time, instead of a count that parallel
+   * requests all pass. The live order is read again under it, so a twin
+   * request that got there first is answered by what it made (the same class)
+   * or swapped for the class now asked (another class), never refused as a
+   * payment in progress when none exists.
    */
   private async claim(
     wawuUserId: string,
     intake: Intake,
-    other: SchoolEnrolment | null,
     now: Date,
   ): Promise<SchoolEnrolment> {
     const price = intake.course.priceKobo;
     return this.prisma.$transaction(async (tx) => {
-      if (other) {
-        const gone = await this.releaseIds(tx, [other.id], now);
-        if (gone === 0) throw await this.inProgress(other.id);
+      await tx.$queryRaw`SELECT 1 AS "locked" FROM pg_advisory_xact_lock(hashtextextended(${`school-claim:${wawuUserId}`}, 0))`;
+      const live = await tx.schoolEnrolment.findFirst({
+        where: {
+          wawuUserId,
+          courseId: intake.courseId,
+          status: { in: ['reserved', 'enrolled'] },
+        },
+      });
+      if (live) {
+        if (live.intakeId === intake.id) {
+          // A twin request made this order a moment ago: it is the answer,
+          // its place kept a while longer.
+          if (live.status === 'reserved') {
+            await tx.schoolEnrolment.updateMany({
+              where: { id: live.id, status: 'reserved' },
+              data: { reservedUntil: reservedUntil(now, this.minutes()) },
+            });
+          }
+          return tx.schoolEnrolment.findUniqueOrThrow({
+            where: { id: live.id },
+          });
+        }
+        if (live.status === 'enrolled') {
+          throw new SchoolEnrolmentError(
+            'already_enrolled',
+            ENROLMENT_MESSAGES.alreadyEnrolled,
+            { enrolmentId: live.id },
+          );
+        }
+        // Another class is held: give it back for this one. Only a payment
+        // that has started keeps it.
+        const gone = await this.releaseIds(tx, [live.id], now);
+        if (gone === 0) {
+          const open = await this.openPayment(tx, live.id);
+          if (open) throw this.inProgress(open);
+        }
       }
       if (price > 0) {
         const open = await tx.schoolEnrolment.count({
@@ -370,9 +412,12 @@ export class SchoolEnrolmentService implements OnModuleInit {
     }
   }
 
-  /** Why a place cannot be swapped: its payment has started. */
-  private async inProgress(enrolmentId: string): Promise<MoneyError> {
-    const open = await this.prisma.walletPayment.findFirst({
+  /** The id of a payment of this order that is pending or completed, in the caller's transaction. */
+  private async openPayment(
+    tx: Tx,
+    enrolmentId: string,
+  ): Promise<string | null> {
+    const open = await tx.walletPayment.findFirst({
       where: {
         kind: SCHOOL_FEE_KIND,
         targetId: enrolmentId,
@@ -380,10 +425,15 @@ export class SchoolEnrolmentService implements OnModuleInit {
       },
       select: { id: true },
     });
+    return open?.id ?? null;
+  }
+
+  /** Why a place cannot be swapped: its payment has started. */
+  private inProgress(paymentId: string): MoneyError {
     return new MoneyError(
       'payment_in_progress',
       ENROLMENT_MESSAGES.confirming,
-      open ? { paymentId: open.id } : {},
+      { paymentId },
     );
   }
 
@@ -490,10 +540,11 @@ export class SchoolEnrolmentService implements OnModuleInit {
         `enrolment ${payment.targetId}: no such order to deliver`,
       );
     }
+    let chose = false;
     if (row.status === 'released' && row.paymentId === null) {
       // The place went back to the class just as the payment arrived: take a
       // seat again if there is one.
-      row = await this.retake(row, payment, now);
+      ({ row, chose } = await this.retake(row, payment, now));
     }
     if (row.paymentId !== null && row.paymentId !== payment.paymentId) {
       // Another payment paid this order: this one is a second payment for one
@@ -516,16 +567,23 @@ export class SchoolEnrolmentService implements OnModuleInit {
       case 'released': {
         // No seat: the order is marked first, then the fee goes back, holding
         // nothing across the provider's answer.
-        await this.prisma.schoolEnrolment.updateMany({
+        const marked = await this.prisma.schoolEnrolment.updateMany({
           where: { id: row.id, status: 'released', paymentId: null },
           data: {
             status: 'refunded',
             paymentId: payment.paymentId,
             holdId: payment.holdId,
             refundedAt: now,
-            failureReason: 'The class filled before the payment arrived.',
+            failureReason: chose
+              ? 'The student chose this course again before the payment arrived.'
+              : 'The class filled before the payment arrived.',
           },
         });
+        if (chose && marked.count === 1) {
+          this.logger.warn(
+            `enrolment ${row.id}: payment ${payment.paymentId} completed after the student chose the course again; it is refunded`,
+          );
+        }
         await this.holds.refund({ paymentId: payment.paymentId });
         return;
       }
@@ -539,14 +597,20 @@ export class SchoolEnrolmentService implements OnModuleInit {
     }
   }
 
-  /** Takes a seat for a released order whose payment arrived; the order as it stands, enrolled or still released when the class is full. */
+  /**
+   * Takes a seat for a released order whose payment arrived. Answers the order
+   * as it stands: enrolled, or still released when the class is full or when
+   * the student has chosen a class of the course again since (`chose`; a
+   * course has one live order per student, so this one cannot be revived
+   * beside it). Either way the caller refunds through the hold.
+   */
   private async retake(
     row: SchoolEnrolment,
     payment: CompletedPayment,
     now: Date,
-  ): Promise<SchoolEnrolment> {
+  ): Promise<{ row: SchoolEnrolment; chose: boolean }> {
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      const enrolled = await this.prisma.$transaction(async (tx) => {
         if (!(await this.takeSeat(tx, row.intakeId))) throw new NoSeat();
         const { count } = await tx.schoolEnrolment.updateMany({
           where: { id: row.id, status: 'released', paymentId: null },
@@ -562,8 +626,16 @@ export class SchoolEnrolmentService implements OnModuleInit {
         if (count !== 1) throw new NoSeat();
         return tx.schoolEnrolment.findUniqueOrThrow({ where: { id: row.id } });
       });
+      return { row: enrolled, chose: false };
     } catch (e) {
-      if (e instanceof NoSeat) return this.byId(row.id);
+      if (e instanceof NoSeat) {
+        return { row: await this.byId(row.id), chose: false };
+      }
+      // The one-live-order-per-course index: the student holds or has paid for
+      // another place in this course now. The seat taken is rolled back.
+      if (isUniqueViolation(e)) {
+        return { row: await this.byId(row.id), chose: true };
+      }
       throw e;
     }
   }
