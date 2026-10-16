@@ -270,6 +270,16 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    key: 'recentSearches',
+    models: ['SearchHistory'],
+    load: (prisma, me) =>
+      prisma.searchHistory.findMany({
+        where: { userWawuId: me },
+        select: { query: true, searchedAt: true },
+        orderBy: { searchedAt: 'desc' },
+      }),
+  },
+  {
     key: 'blockedAccounts',
     models: ['BlockedAccount'],
     load: (prisma, me) =>
@@ -368,6 +378,18 @@ export const EXPORT_SECTIONS: ExportSection[] = [
         where: { userWawuId: me },
         select: { eventId: true, savedAt: true },
         orderBy: { savedAt: 'desc' },
+      }),
+  },
+  {
+    // SCHOOLS-10: the school sites this person opened from "Apply on their
+    // site" (SC9): which school and course, and when.
+    key: 'schoolLinkClicks',
+    models: ['SchoolLinkClick'],
+    load: (prisma, me) =>
+      prisma.schoolLinkClick.findMany({
+        where: { userWawuId: me },
+        select: { schoolId: true, courseId: true, clickedAt: true },
+        orderBy: { clickedAt: 'desc' },
       }),
   },
   {

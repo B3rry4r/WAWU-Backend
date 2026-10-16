@@ -18,7 +18,7 @@ import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import type { ContentPieceResponse } from '../common/types/content-piece.type';
 import { GatesPublishing } from '../plans/publishing-offers.interceptor';
 import { StorageBusyInterceptor } from '../storage/storage-busy.interceptor';
-import { CreatorAccountGuard } from './guards/creator-account-guard';
+import { CreatorAccountGuard } from '../common/guards/creator-account.guard';
 import {
   CreateProductDraftDto,
   PublishProductDraftDto,

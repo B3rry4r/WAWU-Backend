@@ -18,7 +18,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { PaginationQueryDto } from '../common/dto/pagination.dto';
 import { ContentPieceService } from './content-piece.service';
-import { CreatorAccountGuard } from './guards/creator-account-guard';
+import { CreatorAccountGuard } from '../common/guards/creator-account.guard';
 import { ListContentQueryDto } from './dto/list-content-query.dto';
 import { CreateContentDto } from './dto/create-content.dto';
 import { VerifyUnlockDto } from './dto/verify-unlock.dto';
