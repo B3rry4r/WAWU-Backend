@@ -19,7 +19,7 @@ import { ResponseInterceptor } from '../../common/interceptors/response.intercep
 import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
-import { FREE_STORAGE_BYTES } from '../../common/creator-allowance';
+import { TICK_STORAGE_BYTES } from '../../common/creator-allowance';
 import { StorageModule } from '../storage.module';
 
 /**
@@ -38,6 +38,14 @@ import { StorageModule } from '../storage.module';
  * does. Every row is this spec's own and is deleted in afterAll.
  */
 const MB = 1024 * 1024;
+/**
+ * Since TIER-02 (R-43) only a person who may publish is signed a file for
+ * content, and that person's storage is the larger limit. Each person here
+ * holds a running tier, so every figure below is measured against it.
+ */
+const LIMIT = TICK_STORAGE_BYTES;
+/** One row holds at most 2 GB (the column is an INTEGER). */
+const ROW_MAX = Math.floor(1.8 * 1024 * MB);
 const OWN = (n: number) =>
   `f1500000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 /** Refused and accepted uploads, and the retry after a refusal. */
@@ -185,6 +193,28 @@ describe('A refused upload does not count against storage (FIX-15, contract)', (
     prisma.storageObject.findUniqueOrThrow({ where: { key } });
 
   /**
+   * Content already stored and confirmed, as `bytes` in rows of at most
+   * ROW_MAX, so a person is `bytes` into a limit far larger than one row.
+   */
+  async function alreadyStored(sub: string, bytes: number, tag: string) {
+    const rows: number[] = [];
+    for (let left = bytes; left > 0; left -= ROW_MAX) {
+      rows.push(Math.min(left, ROW_MAX));
+    }
+    await prisma.storageObject.createMany({
+      data: rows.map((rowBytes, n) => ({
+        wawuUserId: sub,
+        key: `content/full/${sub}/00000000-0000-4000-8000-${tag}${String(n).padStart(2, '0')}.mp4`,
+        bytes: rowBytes,
+        contentType: 'video/mp4',
+        folder: 'content/full',
+        status: 'confirmed' as const,
+        confirmedAt: new Date('2026-09-01T00:00:00Z'),
+      })),
+    });
+  }
+
+  /**
    * Moves a reservation's presign time back: 7 minutes is past the life of
    * the upload URL (confirm gives up on a missing file), 20 is past the
    * sweep's grace.
@@ -243,10 +273,24 @@ describe('A refused upload does not count against storage (FIX-15, contract)', (
     await prisma.storageObject.deleteMany({
       where: { wawuUserId: { in: OWNED } },
     });
+    await prisma.makerTier.deleteMany({ where: { wawuUserId: { in: OWNED } } });
+    await prisma.makerTier.createMany({
+      data: OWNED.map((wawuUserId) => ({
+        wawuUserId,
+        tierId: 'fix15-suite',
+        activeFrom: new Date(Date.now() - 86_400_000),
+        activeUntil: new Date(Date.now() + 30 * 86_400_000),
+        productsIncluded: 3,
+        pointsIncluded: 0,
+      })),
+    });
   });
 
   afterAll(async () => {
     await prisma?.storageObject.deleteMany({
+      where: { wawuUserId: { in: OWNED } },
+    });
+    await prisma?.makerTier.deleteMany({
       where: { wawuUserId: { in: OWNED } },
     });
     await app?.close();
@@ -273,20 +317,10 @@ describe('A refused upload does not count against storage (FIX-15, contract)', (
     });
 
     it('a refused upload gives its space back when the app confirms after the URL is spent', async () => {
-      // 574 MB already stored, so a 400 MB file fits, and a second one does
+      // 450 MB of room left, so a 400 MB file fits, and a second one does
       // not while the first one's reservation stands.
-      const held = FREE_STORAGE_BYTES - 450 * MB;
-      await prisma.storageObject.create({
-        data: {
-          wawuUserId: PERSON,
-          key: `content/full/${PERSON}/00000000-0000-4000-8000-0000000000aa.mp4`,
-          bytes: held,
-          contentType: 'video/mp4',
-          folder: 'content/full',
-          status: 'confirmed',
-          confirmedAt: new Date('2026-09-01T00:00:00Z'),
-        },
-      });
+      const held = LIMIT - 450 * MB;
+      await alreadyStored(PERSON, held, 'aaaaaaaaaa');
       const before = await usedBytes(PERSON);
       expect(before).toBe(held);
 
@@ -422,6 +456,9 @@ describe('A refused upload does not count against storage (FIX-15, contract)', (
   describe('confirm cannot be used to store past the limit (verifier finding, round 2)', () => {
     it('a confirm sent before the PUT frees nothing, so the limit still refuses the third 500 MB file', async () => {
       const size = 500 * MB;
+      // 1 GiB of room left.
+      const held = LIMIT - 1024 * MB;
+      await alreadyStored(EARLY, held, 'dddddddddd');
       const uploads: { key: string; uploadUrl: string }[] = [];
       let refusedAt = -1;
       for (let n = 0; n < 8; n++) {
@@ -441,17 +478,17 @@ describe('A refused upload does not count against storage (FIX-15, contract)', (
         });
         uploads.push({ key, uploadUrl });
       }
-      // 2 x 500 MB fits in 1 GiB; the third does not, whatever was confirmed.
+      // 2 x 500 MB fits in the 1 GiB left; the third does not, whatever was confirmed.
       expect(refusedAt).toBe(2);
       expect(uploads).toHaveLength(2);
-      expect(await usedBytes(EARLY)).toBe(2 * size);
+      expect(await usedBytes(EARLY)).toBe(held + 2 * size);
 
       // The PUTs land; everything the bucket holds is counted, and still
       // nothing more can be presigned.
       for (const { uploadUrl } of uploads) {
         expect(await putTo(uploadUrl, 1)).toBe(200);
       }
-      expect(await usedBytes(EARLY)).toBe(2 * size);
+      expect(await usedBytes(EARLY)).toBe(held + 2 * size);
       expect((await presign(EARLY, size)).status).toBe(413);
       for (const { key } of uploads) {
         expect(dataOf(await confirm(EARLY, { key }))).toEqual({
@@ -459,23 +496,14 @@ describe('A refused upload does not count against storage (FIX-15, contract)', (
           status: 'confirmed',
         });
       }
-      expect(await usedBytes(EARLY)).toBe(2 * size);
+      expect(await usedBytes(EARLY)).toBe(held + 2 * size);
     });
 
     it('a file that lands after it was given up on is refused and removed when it no longer fits', async () => {
       const size = 400 * MB;
-      const held = 600 * MB;
-      await prisma.storageObject.create({
-        data: {
-          wawuUserId: LATE,
-          key: `content/full/${LATE}/00000000-0000-4000-8000-0000000000cc.mp4`,
-          bytes: held,
-          contentType: 'video/mp4',
-          folder: 'content/full',
-          status: 'confirmed',
-          confirmedAt: new Date('2026-09-01T00:00:00Z'),
-        },
-      });
+      // 600 MB stored with 1 GiB of room in all: one 400 MB file fits, two do not.
+      const held = LIMIT - 1024 * MB + 600 * MB;
+      await alreadyStored(LATE, held, 'cccccccccc');
       const first = await presign(LATE, size);
       const { key, uploadUrl } = dataOf<{ key: string; uploadUrl: string }>(
         first,
@@ -520,23 +548,13 @@ describe('A refused upload does not count against storage (FIX-15, contract)', (
         expect(await putTo(uploadUrl, 1)).toBe(200);
         keys.push(key);
       }
-      // 524 MB stored leaves room for one 500 MB file, not two.
-      await prisma.storageObject.create({
-        data: {
-          wawuUserId: RACE,
-          key: `content/full/${RACE}/00000000-0000-4000-8000-0000000000bb.mp4`,
-          bytes: FREE_STORAGE_BYTES - 500 * MB,
-          contentType: 'video/mp4',
-          folder: 'content/full',
-          status: 'confirmed',
-          confirmedAt: new Date('2026-09-01T00:00:00Z'),
-        },
-      });
+      // 500 MB of room left: one 500 MB file fits, not two.
+      await alreadyStored(RACE, LIMIT - 500 * MB, 'bbbbbbbbbb');
       const answers = await Promise.all(
         keys.map((key) => confirm(RACE, { key })),
       );
       expect(answers.map((a) => a.status).sort()).toEqual([200, 413]);
-      expect(await usedBytes(RACE)).toBe(FREE_STORAGE_BYTES);
+      expect(await usedBytes(RACE)).toBe(LIMIT);
       const rows = await Promise.all(keys.map((key) => rowFor(key)));
       expect(rows.map((r) => r.status).sort()).toEqual([
         'abandoned',

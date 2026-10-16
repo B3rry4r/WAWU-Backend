@@ -51196,8 +51196,8 @@
             "type": "string",
             "enum": [
               "creator",
-              "content",
-              "event"
+              "event",
+              "content"
             ]
           },
           "savedAt": {
@@ -51398,8 +51398,8 @@
           "kind": {
             "type": "string",
             "enum": [
-              "content",
               "community",
+              "content",
               "paid_question",
               "profile"
             ]

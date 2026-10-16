@@ -17,6 +17,7 @@ import {
 } from './dto/presign-upload.dto';
 import { formatFolderRule } from './upload-formats';
 import { releaseOwnUpload } from './upload-release';
+import { lockStorageQuota } from './storage-lock';
 import { sweepLateFiles, type LateSweepResult } from './late-file-sweep';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
@@ -761,7 +762,9 @@ export class StorageService {
   ): Promise<boolean> {
     await this.reconcileStale(wawuId);
     const refusal = await this.prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`storage-quota:${wawuId}`}, 0))`;
+      // The same lock a release takes (storage-lock.ts), so a release that is
+      // under way finishes first and this confirm then reads its mark.
+      await lockStorageQuota(tx, wawuId);
       const row = await tx.storageObject.findUnique({ where: { id: rowId } });
       if (!row || row.status === 'confirmed') return null;
       // Released while this confirm was under way: it stays released.
@@ -772,8 +775,11 @@ export class StorageService {
           return this.storageFullRefusal(row.bytes, usage, tickHeld);
         }
       }
-      await tx.storageObject.update({
-        where: { id: rowId },
+      // Guarded on the row not being released, whatever the lock says: a
+      // confirmed row that is also released, with no file, could not be
+      // cleared by the person.
+      await tx.storageObject.updateMany({
+        where: { id: rowId, releasedAt: null },
         data: { status: 'confirmed', confirmedAt: new Date() },
       });
       return null;

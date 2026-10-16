@@ -3685,12 +3685,18 @@ model StorageObject {
   /// When the person gave the file up (POST /uploads/release). Null otherwise.
   /// A released row stays released: a late file never counts it again.
   releasedAt  DateTime?
-  /// When the Hub's sweep settled a given-up file after its upload link had
-  /// expired (ME-04 round 3): it looked at the bucket and removed the file if
-  /// it was there. Null until then.
+  /// When the Hub's sweep first looked at a given-up file after its upload
+  /// link had expired (ME-04 round 3). Null until then.
   sweptAt     DateTime?
-  /// When that sweep deleted a file it found. Null when it found none.
+  /// When that sweep deleted a file it found (a file the person released and
+  /// no listing uses). Null when it found none. A file it found on a row the
+  /// person never released is counted instead: the row becomes `confirmed`.
   sweptRemovedAt DateTime?
+  /// The second look, an hour or more after the first, for a file that
+  /// arrived late. Null until then (ME-04 round 4).
+  sweptHourAt DateTime?
+  /// The third and last look, a day or more after the first. Null until then.
+  sweptDayAt  DateTime?
 
   @@index([wawuUserId, status])
   @@index([status, createdAt])

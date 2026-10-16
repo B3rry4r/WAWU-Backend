@@ -25,7 +25,8 @@ import type { RateContentDto } from './dto/rate-content.dto';
 import { netOfCommission } from '../common/money';
 import { NotificationService } from '../notification/notification.service';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
-import { StorageService } from '../storage/storage.service';
+import { StorageService, objectKeyFrom } from '../storage/storage.service';
+import { LOCKED_TX, lockStorageQuota } from '../storage/storage-lock';
 import type { VerifyUnlockDto } from './dto/verify-unlock.dto';
 import type { UpdateContentDto } from './dto/update-content.dto';
 import type { MyContentFilter } from './dto/my-content-query.dto';
@@ -44,6 +45,15 @@ const STANDARD_COMMISSION_RATE = 0.15;
  * again) inside one request's few milliseconds is not a case worth more.
  */
 const DELETE_ATTEMPTS = 3;
+
+/**
+ * Said when a listing names a file its owner released or whose upload never
+ * arrived (ME-04 round 4): the space of such a file is not counted, so a
+ * listing on it would hold storage that nothing counts. Photo-set frames are
+ * refused the same way (content-media.service.ts).
+ */
+const GIVEN_UP_FILE =
+  'One of these files was released or never arrived. Upload it again.';
 
 export interface FlutterwaveConfigResponse {
   flutterwaveConfig: {
@@ -558,6 +568,57 @@ export class ContentPieceService {
   }
 
   /**
+   * Refuses a listing that names a file its owner released, or whose upload
+   * never arrived (the row is `abandoned`): 400, as a photo-set frame is
+   * refused. The files of such a row are not counted against the person's
+   * storage, so a listing on one would keep them uncounted for good (ME-04
+   * round 4). Runs inside the caller's transaction, under the person's storage
+   * lock, so a release or the sweep that is deciding about the same key
+   * finishes first: a key released a moment ago is seen here as released, and
+   * a key named here is seen by the release (409) and by the sweep as claimed.
+   * A value that is not one of our keys (a link elsewhere) matches no row and
+   * passes, as before.
+   */
+  private async assertFilesNotGivenUp(
+    tx: Prisma.TransactionClient,
+    creatorWawuId: string,
+    urls: readonly (string | null | undefined)[],
+  ): Promise<void> {
+    const keys = [
+      ...new Set(
+        urls
+          .filter((u): u is string => typeof u === 'string' && u !== '')
+          .map((u) => objectKeyFrom(u))
+          // eslint-disable-next-line no-control-regex -- a control character is in no key we wrote
+          .filter((k) => !/[\u0000-\u001f\u007f]/.test(k)),
+      ),
+    ];
+    if (keys.length === 0) return;
+    await lockStorageQuota(tx, creatorWawuId);
+    const given = await tx.storageObject.findFirst({
+      where: { key: { in: keys }, status: 'abandoned' },
+      select: { id: true },
+    });
+    if (given) throw new BadRequestException(GIVEN_UP_FILE);
+  }
+
+  /**
+   * The check every way of publishing a piece makes inside its create
+   * transaction (see `assertFilesNotGivenUp`): pass it as `create`'s
+   * `inTransaction`, or call it from yours.
+   */
+  filesUsableIn(
+    creatorWawuId: string,
+    dto: Pick<CreateContentDto, 'previewAsset' | 'fullAsset'>,
+  ): (tx: Prisma.TransactionClient) => Promise<void> {
+    return (tx) =>
+      this.assertFilesNotGivenUp(tx, creatorWawuId, [
+        dto.previewAsset,
+        dto.fullAsset,
+      ]);
+  }
+
+  /**
    * `inTransaction`, when given, runs inside the publish transaction before
    * the place is claimed: a draft being published deletes itself there, so a
    * second tap finds it gone and publishes nothing twice.
@@ -668,7 +729,9 @@ export class ContentPieceService {
           status: 'pending',
         },
       });
-    });
+      // May wait for the person's storage lock while a release or the sweep
+      // finishes a call to the bucket: longer than Prisma's 5 s default.
+    }, LOCKED_TX);
 
     return this.toResponse(created, true);
   }
@@ -865,10 +928,17 @@ export class ContentPieceService {
 
     // Conditional on the status read above: a reviewer approving the piece
     // at this instant must win, and the edit must not land on a live piece.
-    const written = await this.prisma.contentPiece.updateMany({
-      where: { id, creatorWawuId, status: { in: ['pending', 'rejected'] } },
-      data: changes,
-    });
+    const written = await this.prisma.$transaction(async (tx) => {
+      // A file this edit names must still be the person's (ME-04 round 4).
+      await this.assertFilesNotGivenUp(tx, creatorWawuId, [
+        dto.previewAsset,
+        dto.fullAsset,
+      ]);
+      return tx.contentPiece.updateMany({
+        where: { id, creatorWawuId, status: { in: ['pending', 'rejected'] } },
+        data: changes,
+      });
+    }, LOCKED_TX);
     if (written.count === 0) {
       throw new ConflictException(
         'This piece was reviewed a moment ago. Open it again to see where it stands.',

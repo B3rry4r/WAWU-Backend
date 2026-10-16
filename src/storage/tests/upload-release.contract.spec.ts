@@ -190,6 +190,21 @@ describe('Releasing an upload (ME-04 round 2, contract)', () => {
         professionalVerifiedUntil: null,
       })),
     });
+    // Since TIER-02 (R-43) only a person who may publish is signed a file for
+    // content: each person here holds a running tier.
+    await prisma.makerTier.deleteMany({
+      where: { wawuUserId: { in: OWNED } },
+    });
+    await prisma.makerTier.createMany({
+      data: OWNED.map((wawuUserId) => ({
+        wawuUserId,
+        tierId: 'me04-suite',
+        activeFrom: new Date(Date.now() - 86_400_000),
+        activeUntil: new Date(Date.now() + 30 * 86_400_000),
+        productsIncluded: 30,
+        pointsIncluded: 0,
+      })),
+    });
   });
 
   beforeEach(() => {
@@ -206,6 +221,9 @@ describe('Releasing an upload (ME-04 round 2, contract)', () => {
       where: { wawuUserId: { in: OWNED } },
     });
     await prisma.creatorState.deleteMany({
+      where: { wawuUserId: { in: OWNED } },
+    });
+    await prisma.makerTier.deleteMany({
       where: { wawuUserId: { in: OWNED } },
     });
     await prisma.userProfile.deleteMany({
@@ -384,5 +402,130 @@ describe('Releasing an upload (ME-04 round 2, contract)', () => {
     bucketDown = false;
     await release(MAKER, pick.key).expect(200);
     expect(await usedBytes(MAKER)).toBe(before);
+  });
+
+  describe('a listing may only name files that are still the person’s (ME-04 round 4)', () => {
+    const GIVEN_UP =
+      'One of these files was released or never arrived. Upload it again.';
+    const listing = (previewAsset: string, fullAsset: string) => ({
+      contentType: 'pdf',
+      title: 'ME-04 round 4',
+      description: 'A piece that names two uploads',
+      category: 'business_entrepreneurship',
+      tags: [],
+      accessType: 'paid',
+      price: 2000,
+      previewAsset,
+      fullAsset,
+    });
+    const post = (owner: string, previewAsset: string, fullAsset: string) =>
+      request(server())
+        .post('/content')
+        .set('Authorization', bearer(owner))
+        .send(listing(previewAsset, fullAsset));
+    const counts = async (owner: string) => ({
+      pieces: await prisma.contentPiece.count({
+        where: { creatorWawuId: owner },
+      }),
+      slots:
+        (
+          await prisma.creatorState.findUnique({
+            where: { wawuUserId: owner },
+          })
+        )?.slotsUsed ?? 0,
+    });
+
+    it('refuses POST /content that names a released file, in either field, and takes no place', async () => {
+      const full = await reserve(MAKER, 'content/full', 2 * MB);
+      const preview = await reserve(MAKER, 'content/preview', 1 * MB);
+      await release(MAKER, full.key).expect(200);
+      const before = await counts(MAKER);
+
+      for (const [pv, fl] of [
+        [preview.fileUrl, full.fileUrl],
+        [full.fileUrl, preview.fileUrl],
+        // The key itself is the same file as its link.
+        [preview.fileUrl, full.key],
+      ]) {
+        const res = await post(MAKER, pv, fl).expect(400);
+        expect(res.body).toMatchObject({ statusCode: 400, message: GIVEN_UP });
+        expect(GIVEN_UP).not.toMatch(/\u2014/);
+      }
+      expect(await counts(MAKER)).toEqual(before);
+    });
+
+    it('refuses a file whose upload never arrived (given up, not released)', async () => {
+      const full = await reserve(MAKER, 'content/full', 2 * MB);
+      const preview = await reserve(MAKER, 'content/preview', 1 * MB);
+      await prisma.storageObject.update({
+        where: { key: full.key },
+        data: { status: 'abandoned' },
+      });
+      const before = await counts(MAKER);
+      const res = await post(MAKER, preview.fileUrl, full.fileUrl).expect(400);
+      expect(res.body).toMatchObject({ statusCode: 400, message: GIVEN_UP });
+      expect(await counts(MAKER)).toEqual(before);
+    });
+
+    it('takes files that are pending or confirmed, and a link that is not ours', async () => {
+      const full = await reserve(MAKER, 'content/full', 2 * MB);
+      const preview = await reserve(MAKER, 'content/preview', 1 * MB);
+      await prisma.storageObject.update({
+        where: { key: preview.key },
+        data: { status: 'confirmed', confirmedAt: new Date() },
+      });
+      await post(MAKER, preview.fileUrl, full.fileUrl).expect(201);
+      const other = await reserve(MAKER, 'content/full', 1 * MB);
+      await post(MAKER, 'https://cdn.example.com/p.jpg', other.fileUrl).expect(
+        201,
+      );
+    });
+
+    it('refuses PATCH /content/:id that names a released file and leaves the piece as it was', async () => {
+      const full = await reserve(MAKER, 'content/full', 2 * MB);
+      const preview = await reserve(MAKER, 'content/preview', 1 * MB);
+      const made = await post(MAKER, preview.fileUrl, full.fileUrl).expect(201);
+      const id = (made.body as { data: { id: string } }).data.id;
+
+      const next = await reserve(MAKER, 'content/full', 2 * MB);
+      await release(MAKER, next.key).expect(200);
+      const res = await request(server())
+        .patch(`/content/${id}`)
+        .set('Authorization', bearer(MAKER))
+        .send({ fullAsset: next.fileUrl })
+        .expect(400);
+      expect(res.body).toMatchObject({ statusCode: 400, message: GIVEN_UP });
+      const stored = await prisma.contentPiece.findUniqueOrThrow({
+        where: { id },
+      });
+      expect(stored.fullAssetUrl).toBe(full.fileUrl);
+
+      // A file that is still the person's replaces it.
+      const fresh = await reserve(MAKER, 'content/full', 2 * MB);
+      await request(server())
+        .patch(`/content/${id}`)
+        .set('Authorization', bearer(MAKER))
+        .send({ fullAsset: fresh.fileUrl })
+        .expect(200);
+    });
+
+    it('a release and a listing sent together never leave a listing on a deleted file', async () => {
+      const bad: string[] = [];
+      for (let i = 0; i < 12; i += 1) {
+        const full = await reserve(MAKER, 'content/full', 100);
+        const preview = await reserve(MAKER, 'content/preview', 100);
+        const [made, freed] = await Promise.all([
+          post(MAKER, preview.fileUrl, full.fileUrl),
+          release(MAKER, full.key),
+        ]);
+        // Exactly one of them won: the listing (and the release answers 409)
+        // or the release (and the listing answers 400).
+        const listed = made.status === 201;
+        const gone = freed.status === 200;
+        if (listed === gone) bad.push(`${made.status}/${freed.status}`);
+        if (listed && deleted.includes(full.key)) bad.push(full.key);
+      }
+      expect(bad).toEqual([]);
+    });
   });
 });

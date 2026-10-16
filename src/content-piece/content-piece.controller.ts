@@ -134,7 +134,13 @@ export class ContentPieceController {
   @UseGuards(CreatorAccountGuard)
   @GatesPublishing()
   create(@CurrentUser() user: WawuJwtClaims, @Body() dto: CreateContentDto) {
-    return this.contentPieceService.create(user.sub, dto);
+    // The files it names must still be the person's: checked inside the
+    // create transaction, under the storage lock (ME-04 round 4).
+    return this.contentPieceService.create(
+      user.sub,
+      dto,
+      this.contentPieceService.filesUsableIn(user.sub, dto),
+    );
   }
 
   /**

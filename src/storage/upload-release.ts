@@ -5,7 +5,9 @@ import {
   type Logger,
 } from '@nestjs/common';
 import { DeleteObjectCommand, type S3Client } from '@aws-sdk/client-s3';
+import type { Prisma } from '../../generated/prisma/client';
 import type { PrismaService } from '../common/prisma/prisma.service';
+import { LOCKED_TX, lockStorageQuota } from './storage-lock';
 
 /**
  * ME-04 round 2: a person who takes a file out of an unfinished draft gives
@@ -41,7 +43,7 @@ export interface ReleaseDeps {
  * its status: a removed piece still holds its row.
  */
 export async function isClaimed(
-  prisma: PrismaService,
+  prisma: Pick<Prisma.TransactionClient, 'contentPiece' | 'contentFrame'>,
   key: string,
 ): Promise<boolean> {
   const [piece, frame] = await Promise.all([
@@ -74,40 +76,51 @@ export async function releaseOwnUpload(
     );
   }
 
-  const row = await prisma.storageObject.findUnique({ where: { key } });
-  if (!row || row.wawuUserId !== wawuId || !folders.includes(row.folder)) {
-    throw new NotFoundException(UPLOAD_NOT_FOUND);
-  }
-  if (await isClaimed(prisma, key)) {
-    throw new ConflictException({
-      message: 'That file is already part of a listing.',
-      reason: { code: 'upload_claimed' },
-    });
-  }
-
-  // The object first, the row second: if the bucket cannot be reached the
-  // space stays counted and the same call can be made again. Deleting a key
-  // that is already gone is a success in S3, which is what makes a repeat safe.
-  try {
-    await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
-  } catch (err) {
-    const status = (err as { $metadata?: { httpStatusCode?: number } })
-      .$metadata?.httpStatusCode;
-    if (status !== 404) {
-      logger.warn(`Could not delete storage object ${key}: ${String(err)}`);
-      throw new ServiceUnavailableException(
-        'Could not remove that file right now. Try again in a moment.',
-      );
+  // Under the person's storage lock (storage-lock.ts), the same one a confirm
+  // takes to count a file and a listing takes to name it: the check that no
+  // listing uses the key, the delete and the mark are one step, so a listing
+  // cannot slip in between them and a confirm cannot count the file after it
+  // was deleted. Whatever is thrown here leaves the row as it was.
+  return prisma.$transaction(async (tx) => {
+    await lockStorageQuota(tx, wawuId);
+    const row = await tx.storageObject.findUnique({ where: { key } });
+    if (!row || row.wawuUserId !== wawuId || !folders.includes(row.folder)) {
+      throw new NotFoundException(UPLOAD_NOT_FOUND);
     }
-  }
-  // `releasedAt` is what keeps the row released: POST /uploads/confirm never
-  // counts it again if a late file lands (the PUT link stays valid for its
-  // whole life after this call), and the sweep removes that file once the link
-  // has expired (late-file-sweep.ts). A row already given up some other way
-  // (a settled, missing upload) is marked too: the person has released it now.
-  await prisma.storageObject.updateMany({
-    where: { id: row.id, releasedAt: null },
-    data: { status: 'abandoned', releasedAt: new Date() },
-  });
-  return { released: true };
+    if (await isClaimed(tx, key)) {
+      throw new ConflictException({
+        message: 'That file is already part of a listing.',
+        reason: { code: 'upload_claimed' },
+      });
+    }
+
+    // The object first, the row second: if the bucket cannot be reached the
+    // space stays counted and the same call can be made again. Deleting a key
+    // that is already gone is a success in S3, which is what makes a repeat
+    // safe.
+    try {
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+    } catch (err) {
+      const status = (err as { $metadata?: { httpStatusCode?: number } })
+        .$metadata?.httpStatusCode;
+      if (status !== 404) {
+        logger.warn(`Could not delete storage object ${key}: ${String(err)}`);
+        throw new ServiceUnavailableException(
+          'Could not remove that file right now. Try again in a moment.',
+        );
+      }
+    }
+    // `releasedAt` is what keeps the row released: POST /uploads/confirm never
+    // counts it again if a late file lands (the PUT link stays valid for its
+    // whole life after this call), and the sweep removes that file once the
+    // link has expired (late-file-sweep.ts). A row already given up some other
+    // way (a settled, missing upload) is marked too: the person has released
+    // it now. A row confirmed a moment ago is released too, because the lock
+    // made that confirm finish first.
+    await tx.storageObject.updateMany({
+      where: { id: row.id, releasedAt: null },
+      data: { status: 'abandoned', releasedAt: new Date() },
+    });
+    return { released: true as const };
+  }, LOCKED_TX);
 }
