@@ -31814,7 +31814,11 @@
           },
           "remainingTodayKobo": {
             "type": "integer",
-            "description": "daily_limit_exceeded: what is left of today's limit."
+            "description": "daily_limit_exceeded, limit_reached: what is left of today's limit."
+          },
+          "limitKobo": {
+            "type": "integer",
+            "description": "limit_reached on the account's daily limit (WALLET-23): the limit itself, in kobo."
           },
           "minimumKobo": {
             "type": "integer",

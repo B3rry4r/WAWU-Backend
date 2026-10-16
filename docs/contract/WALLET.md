@@ -219,7 +219,7 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 | W27 Transaction detail | type, counterparty, linked content, destination, reference, fee breakdown | `GET /money/transactions/{id}` → `category`, `counterparty`, `link`, `fee`, `reference` |
 | | Report a problem (support chat with the reference) | no support route exists: gap (section 5) |
 | W28 No results | a filtered, empty month | `filter=bills&month=2026-09` → `items: []` |
-| W35 Wallet settings | limits row (fill or hide) | `WalletView.limits` (null hides; section 5: no task fills it yet) |
+| W35 Wallet settings | limits row (fill or hide) | `WalletView.limits` (null hides; filled by WALLET-23, section 5) |
 | | PIN last changed | `WalletView.pin.changedAt` |
 | | beneficiaries count | `WalletView.beneficiaryCount` |
 | | account details | `WalletView.account` |
@@ -361,12 +361,29 @@ Listed, not resolved. Each names what the canvas draws, what Fintava does
 
 ## 5. Gaps this task found (not done here)
 
-- **Daily limits have no owner task.** `limits.md` wants `TIER_LIMITS` in
-  config, the day's limit and what is left on W35 and A8, and a send over it
-  stopped before the PIN. The contract has the fields
-  (`WalletView.limits`, `FeeQuoteView.withinDailyLimit`,
-  `daily_limit_exceeded`), but no launch task fills them. Until one does,
-  `limits` is null and the row is hidden.
+- **Daily limits are served by WALLET-23** (the provider's limit on the
+  account). Fintava publishes no limit; it reports the wallet's tier on every
+  balance read (`data.tier`), and the tier's daily limit is the setting
+  `FINTAVA_TIER_DAILY_LIMITS_KOBO` (unset: Fintava's policy of 2 Oct 2026 in
+  `limits.md`, Tier 1 ₦50,000, Tier 2 ₦500,000, Tier 3 ₦5,000,000). The read
+  is kept on the wallet row (`accountTier`, `dailyLimitKobo`, `limitsReadAt`),
+  so `GET /money/wallet` still never calls the provider.
+  - `WalletView.limits` is filled once a balance read has kept a limit, with
+    `tier: null` (the row names no tier, BRIEF W35), and stays null (the row
+    hides) before that and for a tier the setting does not know. Nuvion names
+    no limit, so it is null there.
+  - The check (`MoneyLimits.assertMayMove`) counts every kind of movement out
+    of the wallet today in Lagos together, by amount before fees, and refuses
+    `403 limit_reached` with `limit: daily`, `limitKobo` (the limit) and
+    `remainingTodayKobo` (what is left), the sentence carrying both in naira.
+    The quote's `withinDailyLimit` and `remainingTodayKobo` use the tighter of
+    this and WAWU's own daily limit for the kind.
+  - The code stays `limit_reached` (NUV-07), not `daily_limit_exceeded`, which
+    the declared transfer routes still list for WALLET-07 and WALLET-09 to
+    decide when they serve them.
+  - Fintava's own refusal for a limit has never been seen in the sandbox
+    (`limits.md`), so there is no mapping for it yet; WAWU's early refusal is
+    what a person sees.
 - **Biometric approval routes** are served by MONEY-14 (`/money/device`,
   `/money/approval/verify`, the `X-Device-Approval` format: a device key's
   signature, CONVENTIONS.md section 5). The declared debits still document

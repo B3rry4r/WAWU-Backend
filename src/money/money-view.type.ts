@@ -90,16 +90,19 @@ export interface WalletAccountView {
 }
 
 /**
- * The daily send limit and what is left of it today (limits.md in the
- * mobile repo). The figures come from config per tier, marked provisional
- * there; `tier` is whatever Fintava reports, or null when it reports none.
+ * The daily limit the wallet provider puts on the account, what was moved
+ * today and what is left (W35; task WALLET-23, `AccountLimits`). The limit is
+ * the provider's: Fintava reports the wallet's tier on every balance read and
+ * the tier's daily limit is a setting (limits.md in the mobile repo). `tier`
+ * is always null: the limits row names no tier (BRIEF W35), and the provider's
+ * own name for the level stays on the wallet row for ops.
  */
 export interface WalletLimitsView {
   tier: string | null;
   dailyLimitKobo: number;
   usedTodayKobo: number;
   remainingTodayKobo: number;
-  /** When today's limit starts again. The day boundary is Fintava's policy, read from config. */
+  /** When today's limit starts again: the next midnight in Lagos, where WAWU's own daily limits also turn over. */
   resetsAt: string;
 }
 
@@ -137,7 +140,7 @@ export interface WalletView {
   state: WalletState;
   /** Null while state is not_open or opening. */
   account: WalletAccountView | null;
-  /** Null when no limit is known; the screen hides the row (A8, W35). */
+  /** Null until a balance read has kept the provider's limit, and when it names none; the screen hides the row (A8, W35). */
   limits: WalletLimitsView | null;
   pin: PinStateView;
   bankTransfers: BankTransferAccessView;
