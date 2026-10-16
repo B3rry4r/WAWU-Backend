@@ -14,6 +14,7 @@ import { StorageService, type UploadAllowanceView } from './storage.service';
 import { PresignUploadDto } from './dto/presign-upload.dto';
 import { ReleaseUploadDto } from './dto/release-upload.dto';
 import { uploadFormatsView, type UploadFormatsView } from './upload-formats';
+import { ConfirmUploadDto } from './dto/confirm-upload.dto';
 
 /**
  * POST /uploads/presign — hands the authenticated caller a short-lived PUT
@@ -52,6 +53,24 @@ export class StorageController {
   @Get('formats')
   formats(): UploadFormatsView {
     return uploadFormatsView();
+  }
+
+  /**
+   * POST /uploads/confirm: the app has finished sending the file it got a URL
+   * for, taken or turned away by the storage host. The server asks the bucket
+   * and answers `confirmed` (the file is there and counts against the person's
+   * storage), `pending` (it is not there yet and the URL could still be used,
+   * so nothing changes and the sweep settles it) or `abandoned` (it is not
+   * there and the URL is spent, so the space it held goes back at once instead
+   * of when the sweep settles it). A file that lands after it was given up on
+   * and no longer fits the person's storage is removed and answers 413. The
+   * app's word decides nothing; only the person's own upload can be settled. A
+   * bucket that cannot be asked answers 503 and changes nothing.
+   */
+  @Post('confirm')
+  @HttpCode(HttpStatus.OK)
+  confirm(@CurrentUser() user: WawuJwtClaims, @Body() dto: ConfirmUploadDto) {
+    return this.storage.settleUpload(user.sub, dto.key);
   }
 
   /**

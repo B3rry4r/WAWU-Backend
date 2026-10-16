@@ -53,9 +53,13 @@ export class MoneyErrorReason {
   @ApiPropertyOptional({ type: 'integer' })
   shortfallKobo?: number;
 
-  /** daily_limit_exceeded: what is left of today's limit. */
+  /** daily_limit_exceeded, limit_reached: what is left of today's limit. */
   @ApiPropertyOptional({ type: 'integer' })
   remainingTodayKobo?: number;
+
+  /** limit_reached on the account's daily limit (WALLET-23): the limit itself, in kobo. */
+  @ApiPropertyOptional({ type: 'integer' })
+  limitKobo?: number;
 
   /** amount_out_of_range: the smallest amount accepted. */
   @ApiPropertyOptional({ type: 'integer' })
