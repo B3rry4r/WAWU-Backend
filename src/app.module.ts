@@ -82,6 +82,7 @@ import { LiveModule } from './live/live.module';
 import { InboxModule } from './inbox/inbox.module';
 import { MeModule } from './me/me.module';
 import { PlansModule } from './plans/plans.module';
+import { PlanPurchasesModule } from './plans/purchases/plan-purchases.module';
 import { WaitlistModule } from './waitlist/waitlist.module';
 import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
 import { NuvionWebhookModule } from './nuvion/webhook/nuvion-webhook.module';
@@ -392,6 +393,11 @@ import { PushModule } from './push/push.module';
     // src/plans/plans.config.json, which a bad edit stops at boot. `plans` is a
     // first segment nothing else declares; `me/tier` is a literal leaf.
     PlansModule,
+    // Buy, renew or upgrade a tier from the wallet (task TIER-03): `plans/purchases`
+    // (the quote, the purchase and one purchase by id), and the payment kinds `tier`
+    // and `tier_bump` registered with the wallet payments. `plans/purchases` is a
+    // path nothing else declares, listed after PlansModule and MoneyModule.
+    PlanPurchasesModule,
     // The event registration link (task JOIN-01): `waitlist/offers/current`,
     // `waitlist/registrations` (register, verify, status) and the team's
     // `admin/waitlist/registrations` (list, export). `waitlist` and

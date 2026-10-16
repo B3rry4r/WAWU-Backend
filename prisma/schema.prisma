@@ -376,6 +376,41 @@ model MakerTier {
   updatedAt          DateTime @updatedAt
 }
 
+/// A tier bought, renewed or upgraded from the wallet (TIER-03), written once
+/// the payment is confirmed, in the same transaction that grants what it
+/// bought (the tier and its dates, the event pass, the bonus points, the
+/// first Voice Intro, the checkout offer's points). `paymentRef` is the id of
+/// the wallet payment that paid for it (WalletPayment.id), the primary key
+/// and so unique: a payment confirmed twice, on two servers or from the
+/// request and the sweep, finds its row and grants nothing a second time. It
+/// is also the purchase's id in GET /plans/purchases/{id}.
+///
+/// Only a PAID purchase has a row; a payment still confirming, failed or
+/// reversed is read from the payment itself, so no row ever says "paid" for
+/// money that did not move. `status` has the one value `paid` today; a later
+/// task that takes a purchase before its money arrives (TIER-05) adds its own.
+///
+/// `amountMinor` is the plan's price in the minor unit of `currency` (the
+/// tier's, or the difference on an upgrade, plus the checkout offer's when
+/// `bump`), never the provider's charge. `kind` is `tier` (a first purchase,
+/// or after the last one ended), `renew` (the same tier again) or `upgrade`
+/// (from `fromTierId` to `tierId`). The account purge deletes it.
+model MakerPurchase {
+  paymentRef  String          @id
+  wawuUserId  String
+  kind        String
+  tierId      String
+  fromTierId  String?
+  bump        Boolean         @default(false)
+  currency    BillingCurrency
+  amountMinor Int
+  method      String          @default("wallet")
+  status      String          @default("paid")
+  createdAt   DateTime        @default(now())
+
+  @@index([wawuUserId, createdAt])
+}
+
 /// A pass to the Christmas event, issued with a tier (W44). One row per
 /// purchase that issued one: `purchaseRef` is unique, so a repeated payment
 /// confirmation issues it once. `type` names an event pass in
@@ -5821,6 +5856,16 @@ model WaitlistRegistration {
   email           String
   state           String?
   makes           String?
+  /// What the person makes or does, one of `WAITLIST_CRAFTS` (the owner's
+  /// redesign of /join, JOIN-V2). NULL from a client that does not send it.
+  craft           String?
+  /// The conference city they will attend, one of `WAITLIST_CITIES`: Lagos,
+  /// Abuja, Port Harcourt, Enugu or Online (JOIN-V2). NULL from a client that
+  /// does not send it.
+  city            String?
+  /// Whether they asked for launch and conference updates (JOIN-V2): true
+  /// accepted, false declined, NULL not asked.
+  updatesOptIn    Boolean?
   consentAt       DateTime
   reference       String         @unique
   /// The launch access code the payer sees as "XXXX XXXX": the first 8
@@ -5848,6 +5893,14 @@ model WaitlistRegistration {
   /// replayed; nobody else ever sees it. Never carries another person's
   /// details. NULL on an unclaimed row.
   claimResult     Json?
+  /// The referral code this registration is counted under (REF-01): set only
+  /// when the code was active and under its limit at the moment of registering.
+  /// NULL for every row made before REF-01 and for everyone who used no code,
+  /// or whose code was switched off or full (they pay the standard price and are
+  /// not counted under the code).
+  referralCode      String?
+  /// The code's community name at that moment (REF-01); NULL with `referralCode`.
+  referralCommunity String?
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 
@@ -5855,6 +5908,135 @@ model WaitlistRegistration {
   @@index([phone])
   @@index([email])
   @@index([claimedByWawuId])
+  @@index([referralCode, status, createdAt])
+}
+
+/// A referral code for the paid registration page /join (REF-01, owner, 14 Oct
+/// 2026). It names the community a registrant came from and sets the price its
+/// users pay (0 to the offer's price; 0 is free), with an optional limit on
+/// how many people may use it. Created and changed by admins only. Never
+/// deleted: switched off (`active` false). A price or limit change affects only
+/// registrations started after it (each registration keeps its own
+/// `amountKobo`).
+model ReferralCode {
+  id         String   @id @default(uuid())
+  /// Upper case letters and digits, 3 to 20. Matched case-insensitively.
+  code       String   @unique
+  /// The label the owner tracks by.
+  community  String
+  /// What a person using the code pays, in whole kobo; 0 means free.
+  priceKobo  Int
+  /// How many people may use the code; NULL means no limit.
+  usageLimit Int?
+  active     Boolean  @default(true)
+  /// The admin who created it (admin id); NULL for the code the migration inserted.
+  createdBy  String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// EMAIL-01: the email campaign tool in the admin dashboard. Additive: four
+// new tables, nothing existing is touched. Sent through Resend by the Hub
+// (src/admin/notifications/email/), only to people who consented.
+// ---------------------------------------------------------------------------
+
+enum EmailCampaignStatus {
+  /// Built and counted, nothing sent yet.
+  ready
+  /// The background job is working through the recipients.
+  sending
+  /// Every recipient has a result (sent, failed or skipped).
+  sent
+}
+
+enum EmailRecipientStatus {
+  queued
+  sent
+  failed
+  skipped
+}
+
+enum EmailSuppressionReason {
+  unsubscribed
+  bounced
+  complained
+}
+
+/// A saved email: the body is Markdown or simple text with {{first_name}} and
+/// {{join_link}}. `version` goes up on every save.
+model EmailTemplate {
+  id          String   @id @default(uuid())
+  name        String
+  subject     String
+  previewText String   @default("")
+  body        String
+  version     Int      @default(1)
+  createdBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([updatedAt])
+}
+
+/// One send. The template is copied in (a snapshot), so editing or deleting the
+/// template later never changes what a campaign sent.
+model EmailCampaign {
+  id               String              @id @default(uuid())
+  templateId       String?
+  templateName     String
+  subject          String
+  previewText      String              @default("")
+  body             String
+  /// `csv` or `registrants`.
+  audienceKind     String
+  /// A sentence for the dashboard: "CSV upload (people.csv)" or
+  /// "Join registrants: paid, first 500".
+  audienceNote     String
+  status           EmailCampaignStatus @default(ready)
+  totalCount       Int                 @default(0)
+  sentCount        Int                 @default(0)
+  failedCount      Int                 @default(0)
+  skippedCount     Int                 @default(0)
+  /// CSV rows that were not an email address, and repeats of one already in.
+  invalidCount     Int                 @default(0)
+  duplicateCount   Int                 @default(0)
+  createdBy        String
+  createdAt        DateTime            @default(now())
+  startedAt        DateTime?
+  finishedAt       DateTime?
+  updatedAt        DateTime            @updatedAt
+  recipients       EmailRecipient[]
+
+  @@index([createdAt])
+  @@index([status])
+}
+
+model EmailRecipient {
+  id         String               @id @default(uuid())
+  campaignId String
+  campaign   EmailCampaign        @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  /// Lower case.
+  email      String
+  firstName  String?
+  status     EmailRecipientStatus @default(queued)
+  /// Set the moment one worker takes the row, before anything is sent. A row
+  /// with a claim and no result is never sent again (no double send).
+  claimedAt  DateTime?
+  providerId String?
+  error      String?
+  sentAt     DateTime?
+  createdAt  DateTime             @default(now())
+
+  @@unique([campaignId, email])
+  @@index([campaignId, status])
+}
+
+/// Addresses that must not be emailed again.
+model EmailSuppression {
+  email  String                 @id
+  reason EmailSuppressionReason
+  at     DateTime               @default(now())
 }
 
 /// ─────────────────────────────────────────────────────────────────────────

@@ -1,0 +1,298 @@
+name: Branch checks
+
+# OPS-CI (15 Oct 2026). The full checks, on GitHub, for every task branch.
+#
+# deploy.yml runs the full suite only AFTER a merge to main. Three deploys were
+# stopped that way (a kobo-field contract spec, a regex stack overflow, an
+# undeclared rate-limit inventory entry). This workflow runs the same steps on
+# every push to a wmt/** branch and on every pull request, so a branch that
+# would stop the deploy is red before it merges. Agents run only the specs they
+# touched and read this result; they do not run the full suite on their machine.
+#
+# The steps of `suite` and `netns` are COPIES of deploy.yml's `test` job (a
+# workflow cannot call another workflow's job). deploy.yml is untouched. The
+# first job, deploy-test-in-sync, fails when the copy and the original differ
+# (scripts/ci/check_deploy_in_sync.py lists exactly what it ignores), and the
+# other test jobs wait for it.
+#
+#   deploy-test-in-sync  the copy still matches deploy.yml
+#   suite                the deploy's test steps, jest split into 3 shards
+#                        (--runInBand inside each shard: the suite is not
+#                        parallel-safe, README "Running the tests"; each shard
+#                        has its own Postgres)
+#   netns                the deploy's test:netns step (one job, needs sudo)
+#   contract             contract:build twice: the committed contract is
+#                        current, and a second build changes nothing
+#
+# Each job's last log line is "RESULT <job>: <status>".
+# The gates and the protected routes run in gates.yml and protected-routes.yml.
+
+on:
+  push:
+    branches: ['wmt/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One run per branch (per pull request for pull_request runs): a newer push
+  # cancels the older run.
+  group: branch-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy-test-in-sync:
+    name: deploy-test-in-sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install --quiet pyyaml
+
+      - name: deploy.yml test job and this copy are the same steps
+        run: python3 scripts/ci/check_deploy_in_sync.py
+
+      - name: Result
+        id: result
+        if: always()
+        run: 'echo "RESULT deploy-test-in-sync: ${{ job.status }}"'
+
+  suite:
+    name: suite (shard ${{ matrix.shard }} of 3)
+    needs: deploy-test-in-sync
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: wawu_hub_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports: ['5432:5432']
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/wawu_hub_test?schema=public
+      WAWU_ID_JWKS_URL: http://localhost:4001/.well-known/jwks.json
+      WAWU_ID_BASE_URL: http://localhost:4001
+      ADMIN_JWT_SECRET: ci-only-admin-secret-not-a-real-one-000000
+      ADMIN_JWT_REFRESH_SECRET: ci-only-admin-refresh-secret-not-a-real-one-0
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --no-audit --no-fund
+
+      - name: Prisma generate + migrate
+        run: |
+          npx prisma generate
+          npx prisma migrate deploy
+
+      - name: Seed
+        run: npm run db:seed
+
+      - name: Start mock WAWU ID
+        # The contract tests do a real JWKS handshake against this service, so
+        # it has to be genuinely running and genuinely signing.
+        run: |
+          cd mock-wawu-id
+          npm ci --no-audit --no-fund
+
+          # THE SIGNING KEYPAIR IS NOT IN THE REPO, AND SHOULD NOT BE.
+          # private.pem is gitignored — correctly, it is a private key even
+          # for a mock — so a fresh checkout does not have it and the mock
+          # dies on startup with ENOENT. Every contract test then fails with
+          # "mock-wawu-id did not become healthy in time", which points at a
+          # timeout rather than at the missing file.
+          #
+          # BOTH halves are regenerated, not just the private one: public.pem
+          # IS committed, and a new private key with the old public key would
+          # make the mock sign with one key while its JWKS advertises another
+          # — every signature check would fail, which is a far more confusing
+          # failure than the mock simply not starting.
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out private.pem -quiet
+          openssl rsa -in private.pem -pubout -out public.pem 2>/dev/null
+
+          nohup node server.js > /tmp/mock.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4001/health >/dev/null && echo "mock up" && exit 0
+            sleep 1
+          done
+          echo "mock-wawu-id never became healthy. Its log:" >&2
+          cat /tmp/mock.log >&2
+          exit 1
+
+      - run: npx tsc --noEmit
+
+      - name: Contract tests (shard ${{ matrix.shard }} of 3)
+        run: npx jest --runInBand --forceExit --shard=${{ matrix.shard }}/3
+      - name: Result
+        id: result
+        if: always()
+        run: 'echo "RESULT suite shard ${{ matrix.shard }} of 3: ${{ job.status }}"'
+
+  netns:
+    name: netns
+    needs: deploy-test-in-sync
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: wawu_hub_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports: ['5432:5432']
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/wawu_hub_test?schema=public
+      WAWU_ID_JWKS_URL: http://localhost:4001/.well-known/jwks.json
+      WAWU_ID_BASE_URL: http://localhost:4001
+      ADMIN_JWT_SECRET: ci-only-admin-secret-not-a-real-one-000000
+      ADMIN_JWT_REFRESH_SECRET: ci-only-admin-refresh-secret-not-a-real-one-0
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --no-audit --no-fund
+
+      - name: Prisma generate + migrate
+        run: |
+          npx prisma generate
+          npx prisma migrate deploy
+
+      - name: Seed
+        run: npm run db:seed
+
+      - name: Start mock WAWU ID
+        # The contract tests do a real JWKS handshake against this service, so
+        # it has to be genuinely running and genuinely signing.
+        run: |
+          cd mock-wawu-id
+          npm ci --no-audit --no-fund
+
+          # THE SIGNING KEYPAIR IS NOT IN THE REPO, AND SHOULD NOT BE.
+          # private.pem is gitignored — correctly, it is a private key even
+          # for a mock — so a fresh checkout does not have it and the mock
+          # dies on startup with ENOENT. Every contract test then fails with
+          # "mock-wawu-id did not become healthy in time", which points at a
+          # timeout rather than at the missing file.
+          #
+          # BOTH halves are regenerated, not just the private one: public.pem
+          # IS committed, and a new private key with the old public key would
+          # make the mock sign with one key while its JWKS advertises another
+          # — every signature check would fail, which is a far more confusing
+          # failure than the mock simply not starting.
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out private.pem -quiet
+          openssl rsa -in private.pem -pubout -out public.pem 2>/dev/null
+
+          nohup node server.js > /tmp/mock.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4001/health >/dev/null && echo "mock up" && exit 0
+            sleep 1
+          done
+          echo "mock-wawu-id never became healthy. Its log:" >&2
+          cat /tmp/mock.log >&2
+          exit 1
+
+      - name: Route failures on real sockets (npm run test:netns, with sudo)
+        # MONEY-18 round 4. The one proof that a route dying under an open
+        # connection is never read as "the request was not sent" needs a
+        # private network namespace and iptables, so it is a script and not a
+        # jest test (a test that cannot get a namespace has to skip). The
+        # runner has passwordless sudo. If a namespace cannot be made here the
+        # script exits non-zero and this job fails: cannot run is a failure.
+        run: sudo env "PATH=$PATH" npm run test:netns
+      - name: Result
+        id: result
+        if: always()
+        run: 'echo "RESULT netns: ${{ job.status }}"'
+
+  contract:
+    name: contract
+    runs-on: ubuntu-latest
+    env:
+      # The build only reads route metadata (preview mode); it never connects.
+      # The values are the placeholders the other jobs use.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/wawu_hub_test?schema=public
+      WAWU_ID_JWKS_URL: http://localhost:4001/.well-known/jwks.json
+      WAWU_ID_BASE_URL: http://localhost:4001
+      ADMIN_JWT_SECRET: ci-only-admin-secret-not-a-real-one-000000
+      ADMIN_JWT_REFRESH_SECRET: ci-only-admin-refresh-secret-not-a-real-one-0
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --no-audit --no-fund
+
+      - name: Contract build, first run
+        run: npm run contract:build
+
+      - name: The committed contract is current
+        run: |
+          if ! git diff --exit-code -- contract/; then
+            echo "contract/openapi.json in this branch is not what contract:build produces." >&2
+            echo "Run npm run contract:build and commit contract/openapi.json." >&2
+            exit 1
+          fi
+
+      - name: Record the tree after the first run
+        run: |
+          git status --porcelain > /tmp/status-1.txt
+          git diff | sha256sum > /tmp/diff-1.txt
+          sha256sum contract/openapi.json > /tmp/contract-1.txt
+
+      - name: Contract build, second run
+        run: npm run contract:build
+
+      - name: The second run changed nothing
+        run: |
+          git status --porcelain > /tmp/status-2.txt
+          git diff | sha256sum > /tmp/diff-2.txt
+          sha256sum contract/openapi.json > /tmp/contract-2.txt
+          ok=1
+          for f in status diff contract; do
+            if ! diff -u "/tmp/$f-1.txt" "/tmp/$f-2.txt"; then
+              echo "The second contract:build changed $f. The build is not repeatable." >&2
+              ok=0
+            fi
+          done
+          [ "$ok" = 1 ]
+
+      - name: Result
+        id: result
+        if: always()
+        run: 'echo "RESULT contract: ${{ job.status }}"'

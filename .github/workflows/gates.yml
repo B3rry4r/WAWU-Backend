@@ -15,7 +15,7 @@ name: Gates
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, 'wmt/**' ]
   pull_request:
   workflow_dispatch:
 

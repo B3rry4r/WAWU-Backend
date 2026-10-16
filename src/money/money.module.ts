@@ -133,9 +133,11 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
  * plus a sweep that settles a payment whose answer was lost from the
  * ledger's status check (it runs where ScheduleModule.forRoot() is loaded).
  * Exported: PayableRegistry, where each selling feature registers its kind
- * (HOME-14, HOME-15, INBOX-16, ME-18, LEGAL-05, SCHOOLS-07); the
+ * (HOME-14, HOME-15, INBOX-16, ME-18, LEGAL-05, SCHOOLS-07, TIER-03); the
  * Idempotency-Key service and guard, for the sends (WALLET-07, WALLET-09),
- * through `@RequireIdempotentApproval()`.
+ * through `@RequireIdempotentApproval()`. WalletPaymentService is exported for
+ * a feature route that pays and answers its own view of the payment (TIER-03's
+ * `POST /plans/purchases`: `quote`, `pay`, `view`, `presentRoute`).
  *
  * MONEY-18: hold, release and refund (`GET /money/holds`, `GET
  * /money/holds/{id}`). A held kind (paid DM, ticket, bill) registers with
@@ -260,6 +262,7 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     IdempotencyService,
     IdempotencyGuard,
     PayableRegistry,
+    WalletPaymentService,
     WalletHoldService,
     HoldViewService,
     MoneyCheckService,
