@@ -2130,7 +2130,7 @@ When another job completes a payment between a path's figures update and its
 completed payment (`keepNote`, a conditional update that only touches a
 completed payment).
 
-## 19. The nightly check against the provider (MONEY-16)
+## 22. The nightly check against the provider (MONEY-16)
 
 `src/money/check/`. No route. It reads WAWU's ledger and the provider's own
 record and reports any difference the same night. It only reads: it never
