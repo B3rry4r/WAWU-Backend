@@ -25354,6 +25354,80 @@
         ]
       }
     },
+    "/api/hub/search/recent": {
+      "post": {
+        "operationId": "SearchHistoryController_record",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordRecentSearchDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchTextList"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Remember what the caller searched, when they submit it (not on every key\nthey type). Answers their recent searches, newest first.",
+        "tags": [
+          "SearchHistory"
+        ]
+      },
+      "delete": {
+        "operationId": "SearchHistoryController_clear",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClearedSearches"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Clear: forget every recent search of the caller's.",
+        "tags": [
+          "SearchHistory"
+        ]
+      }
+    },
+    "/api/hub/search/popular": {
+      "get": {
+        "operationId": "SearchHistoryController_popular",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchTextList"
+                }
+              }
+            }
+          }
+        },
+        "summary": "What many different people searched lately, most first. May be empty:\nonly searches made by enough people appear.",
+        "tags": [
+          "SearchHistory"
+        ]
+      }
+    },
     "/api/hub/schools": {
       "get": {
         "operationId": "SchoolsPublicController_list",
@@ -33690,6 +33764,18 @@
             "description": "null means still studying there."
           }
         }
+      },
+      "RecordRecentSearchDto": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string",
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "q"
+        ]
       },
       "CreateCommunityDto": {
         "type": "object",
@@ -47523,6 +47609,31 @@
         },
         "required": [
           "items"
+        ]
+      },
+      "SearchTextList": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "ClearedSearches": {
+        "type": "object",
+        "properties": {
+          "cleared": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "cleared"
         ]
       },
       "PublicSchoolCard": {

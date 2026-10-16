@@ -141,6 +141,8 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'PrivacySettings', column: 'userWawuId', disposition: 'OWNED' },
   // Whether this person wants TGIF on Today (HOME-11): theirs alone.
   { model: 'TgifPreference', column: 'userWawuId', disposition: 'OWNED' },
+  // What this person searched, kept for Recent on the Search landing (EXPLORE-05): theirs alone.
+  { model: 'SearchHistory', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'DataExportRequest', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'BlockedAccount', column: 'userWawuId', disposition: 'OWNED' },
   // How far this person had read in each chat: theirs alone.

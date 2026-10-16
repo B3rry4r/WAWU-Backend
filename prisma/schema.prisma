@@ -6208,3 +6208,27 @@ model MoneyCheckRun {
   @@index([provider, status, finishedAt])
   @@index([emailedAt, finishedAt])
 }
+
+/// EXPLORE-05. One person's recent search, kept so the Search landing can show
+/// "Recent" and clear it. One row per person and normalised text: searching the
+/// same thing again moves the row to the top (`searchedAt`), it does not add a
+/// second one. A person keeps their newest few (see search-history.config.ts).
+///
+/// `queryKey` is the text trimmed, with runs of spaces made one, and lowercased:
+/// "Tax  Filing" and "tax filing" are one search. `query` is what the person
+/// last typed, in their own case, and is what the app shows.
+///
+/// "People are searching" is read from this table, never from a count of its
+/// own: a query is popular when enough different people searched it lately.
+/// So Clear takes a person's text out of that too, and nothing about who
+/// searched is stored anywhere else.
+model SearchHistory {
+  userWawuId String
+  queryKey   String
+  query      String
+  searchedAt DateTime @default(now())
+
+  @@id([userWawuId, queryKey])
+  @@index([userWawuId, searchedAt])
+  @@index([searchedAt, queryKey])
+}

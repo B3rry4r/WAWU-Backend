@@ -18,8 +18,10 @@ import type {
   SearchResults,
   SearchSuggestions,
   ClosestSearchResult,
+  CommunityResponse,
 } from '../common/types';
 import { SchoolsPublicService } from '../schools/schools-public.service';
+import { SearchHistoryService } from './search-history.service';
 import type { PublicSchoolCard } from '../schools/schools-public.views';
 import type { SearchTab } from './dto/search-query.dto';
 
@@ -27,6 +29,11 @@ import type { SearchTab } from './dto/search-query.dto';
 const RESULT_LIMIT = 20;
 const SUGGESTION_LIMIT = 5;
 const CLOSEST_LIMIT = 10;
+/**
+ * EXPLORE-05. Communities whose name matches are read in this many (the most
+ * joined first), ranked, and the best RESULT_LIMIT are answered.
+ */
+const COMMUNITY_SCAN = 100;
 
 /**
  * SearchResponse (registry.json) has NO Prisma model of its own (fields: []
@@ -51,6 +58,7 @@ export class SearchResponseService {
     private readonly prisma: PrismaService,
     private readonly blockedAccounts: BlockedAccountService,
     private readonly schools: SchoolsPublicService,
+    private readonly history: SearchHistoryService,
   ) {}
 
   // ---------------------------------------------------------------------
@@ -70,15 +78,17 @@ export class SearchResponseService {
   ): Promise<SearchResults> {
     const wantContent = tab === 'all' || tab === 'content';
     const wantCreators = tab === 'all' || tab === 'creators';
+    const wantCommunities = tab === 'all' || tab === 'communities';
     // SETTINGS-04: nobody the caller blocked, or who blocked the caller,
     // is a result, whichever tab asked.
     const hidden = await this.blockedAccounts.hiddenFrom(requesterWawuId);
 
-    const [content, creators] = await Promise.all([
+    const [content, creators, communities] = await Promise.all([
       wantContent
         ? this.searchContent(q, requesterWawuId, hidden)
         : Promise.resolve([]),
       wantCreators ? this.searchCreators(q, hidden) : Promise.resolve([]),
+      wantCommunities ? this.searchCommunities(q, hidden) : Promise.resolve([]),
     ]);
 
     // SCHOOLS-04: `schools` appears only on tab=schools, so every answer
@@ -92,17 +102,8 @@ export class SearchResponseService {
       ...schools,
       content,
       creators,
-      // JUDGMENT (task brief, loud call-out): Community is Wave 3 and
-      // src/community does not exist in this checkout yet (confirmed: `ls
-      // src/community` fails). This is NOT a stub awaiting a runtime
-      // trigger — it's a dependency that genuinely does not exist yet to
-      // build a real predicate against (no CommunityService/DTO/test
-      // conventions to follow, no confidence about what "searchable" means
-      // for a Community once Wave 3 lands, e.g. should archived/private
-      // communities match?). Returns [] unconditionally so /search's
-      // envelope shape is contract-correct today without guessing Wave 3's
-      // own design. Revisit once src/community exists — see final report.
-      communities: [],
+      // EXPLORE-05: rooms whose name matches, on tab=all and tab=communities.
+      communities,
     };
   }
 
@@ -151,37 +152,96 @@ export class SearchResponseService {
     return this.buildCreatorProfiles(orderedIds);
   }
 
+  /**
+   * EXPLORE-05: communities whose NAME contains `q` (any case), with the same
+   * `memberCount` and `messagesToday` as GET /communities (members OTHER than
+   * the host who have joined, and messages since the start of today, UTC),
+   * counted for all of them in two queries. A room hosted by somebody the
+   * caller blocked, or who blocked the caller, is not a result. A name that
+   * starts with the search comes first, then the room with more members, then
+   * the name. Private rooms are results too: the app offers Ask for them.
+   */
+  private async searchCommunities(
+    q: string,
+    hidden: string[],
+  ): Promise<CommunityResponse[]> {
+    const matches = await this.prisma.community.findMany({
+      where: {
+        name: { contains: q, mode: 'insensitive' },
+        hostWawuId: { notIn: hidden },
+      },
+      orderBy: [{ memberships: { _count: 'desc' } }, { name: 'asc' }],
+      take: COMMUNITY_SCAN,
+    });
+    if (matches.length === 0) return [];
+
+    const ids = matches.map((c) => c.id);
+    const now = new Date();
+    const startOfToday = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+    );
+    const [members, today] = await Promise.all([
+      this.prisma.communityMembership.groupBy({
+        by: ['communityId'],
+        where: { communityId: { in: ids }, status: 'joined' },
+        _count: { _all: true },
+      }),
+      this.prisma.communityMessage.groupBy({
+        by: ['communityId'],
+        where: { communityId: { in: ids }, sentAt: { gte: startOfToday } },
+        _count: { _all: true },
+      }),
+    ]);
+    const memberCounts = new Map(
+      members.map((m) => [m.communityId, m._count._all]),
+    );
+    const messageCounts = new Map(
+      today.map((m) => [m.communityId, m._count._all]),
+    );
+
+    const needle = q.trim().toLowerCase();
+    return matches
+      .map((c) => ({
+        ...c,
+        memberCount: memberCounts.get(c.id) ?? 0,
+        messagesToday: messageCounts.get(c.id) ?? 0,
+      }))
+      .sort(
+        (a, b) =>
+          Number(b.name.toLowerCase().startsWith(needle)) -
+            Number(a.name.toLowerCase().startsWith(needle)) ||
+          b.memberCount - a.memberCount ||
+          a.name.localeCompare(b.name),
+      )
+      .slice(0, RESULT_LIMIT);
+  }
+
   // ---------------------------------------------------------------------
   // GET /search/suggestions
   // ---------------------------------------------------------------------
 
   /**
-   * No `requesterWawuId` param: recentSearches is always `[]` regardless of
-   * auth state (see the doc comment on the return below) so there is
-   * nothing yet to key off the caller. The controller still resolves
-   * `user?.sub` from an optional bearer token — this signature intentionally
-   * doesn't accept it today; wire it back in once search-history
-   * persistence exists.
+   * `recentSearches` is the caller's own recent searches (EXPLORE-05), newest
+   * first, and `[]` for a caller who is not signed in or has none.
+   * `popularSearches` stays what it was for the web, which reads it: the titles
+   * of the most viewed live content. The app reads real popular searches from
+   * GET /search/popular instead, never from here.
    */
   async suggestions(requesterWawuId?: string): Promise<SearchSuggestions> {
     const hidden = await this.blockedAccounts.hiddenFrom(requesterWawuId);
-    const [popularSearches, suggestedCreatorIds] = await Promise.all([
-      this.popularSearches(hidden),
-      this.topCreatorIdsByEvgScore(SUGGESTION_LIMIT, hidden),
-    ]);
+    const [recentSearches, popularSearches, suggestedCreatorIds] =
+      await Promise.all([
+        requesterWawuId
+          ? this.history.recent(requesterWawuId)
+          : Promise.resolve([] as string[]),
+        this.popularSearches(hidden),
+        this.topCreatorIdsByEvgScore(SUGGESTION_LIMIT, hidden),
+      ]);
     const suggestedCreators =
       await this.buildCreatorProfiles(suggestedCreatorIds);
 
     return {
-      // JUDGMENT (task brief, documented gap): prisma/schema.prisma has no
-      // per-user search-history table (confirmed: grep `^model ` above —
-      // no SearchHistory/RecentSearch model exists), and this resource has
-      // no Prisma model of its own to add one to (out of scope per task
-      // brief § SCOPE — never touch prisma/schema.prisma). recentSearches
-      // is therefore [] for every caller, authenticated or not, until a
-      // future wave adds persistence. Not silently swallowed: flagged
-      // loudly in the final report for the orchestrator.
-      recentSearches: [],
+      recentSearches,
       popularSearches,
       suggestedCreators,
     };

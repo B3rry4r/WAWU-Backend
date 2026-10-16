@@ -270,6 +270,16 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    key: 'recentSearches',
+    models: ['SearchHistory'],
+    load: (prisma, me) =>
+      prisma.searchHistory.findMany({
+        where: { userWawuId: me },
+        select: { query: true, searchedAt: true },
+        orderBy: { searchedAt: 'desc' },
+      }),
+  },
+  {
     key: 'blockedAccounts',
     models: ['BlockedAccount'],
     load: (prisma, me) =>

@@ -217,14 +217,16 @@ describe('SearchResponse (contract)', () => {
       expect(ids).not.toContain(USER_PLAIN);
     });
 
-    it('always returns communities: [] regardless of tab — Community (Wave 3) is not built yet', async () => {
+    it('returns the communities whose name matches (EXPLORE-05: this was always [] while community search was a stub)', async () => {
       const res = await request(app.getHttpServer())
         .get('/search')
         .query({ q: 'founders' })
         .expect(200);
       // The seeded Community is literally named "SEEDED: WAWU Founders
-      // Circle" — if Community search were live this query would hit it.
-      expect(res.body.data.communities).toEqual([]);
+      // Circle", so this query hits it now that community search is live.
+      expect(
+        res.body.data.communities.map((c: { name: string }) => c.name),
+      ).toContain('SEEDED: WAWU Founders Circle');
     });
 
     it('tab=content narrows to content only, with creators/communities present as empty arrays (documented envelope shape)', async () => {
@@ -249,13 +251,15 @@ describe('SearchResponse (contract)', () => {
       expect(res.body.data.communities).toEqual([]);
     });
 
-    it('tab=communities narrows to communities only — always empty (Wave 3 not built)', async () => {
+    it('tab=communities narrows to communities only (EXPLORE-05: it was always empty while community search was a stub)', async () => {
       const res = await request(app.getHttpServer())
         .get('/search')
         .query({ q: 'founders', tab: 'communities' })
         .expect(200);
 
-      expect(res.body.data.communities).toEqual([]);
+      expect(
+        res.body.data.communities.map((c: { name: string }) => c.name),
+      ).toContain('SEEDED: WAWU Founders Circle');
       expect(res.body.data.content).toEqual([]);
       expect(res.body.data.creators).toEqual([]);
     });
