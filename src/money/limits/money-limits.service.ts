@@ -8,6 +8,7 @@ import {
 } from '../../wallet-provider/wallet-provider.interface';
 import { feesNotSet } from '../fees/fees-not-set';
 import { unsetFeeSettings } from '../fees/provider-fee-schedule';
+import { AccountLimits } from './account-limits.service';
 import { lagosDayStart, lagosMonthStart } from './lagos-window';
 import { limitReached } from './limit-reached';
 import { type MoneyLimitKind, MoneyLimitSettings } from './money-limit-config';
@@ -76,7 +77,10 @@ const KIND_WHERE: Record<MoneyLimitKind, Prisma.FintavaLedgerEntryWhereInput> =
  *      above the per-transaction limit for its kind;
  *   3. `limit: daily` when what the person moved of that kind today, in
  *      Lagos, plus this amount is above the daily limit;
- *   4. `limit: monthly` the same over the Lagos calendar month.
+ *   4. `limit: monthly` the same over the Lagos calendar month;
+ *   5. `limit: daily` again, with the limit shown, when what the person moved
+ *      of every kind today plus this amount is above the daily limit the
+ *      wallet provider puts on the account (WALLET-23, `AccountLimits`).
  *
  * Unset limits are no limit. What counts toward a day or a month is the
  * person's own movements of that kind out of their wallet, pending or
@@ -113,6 +117,8 @@ export class MoneyLimits {
     private readonly prisma: PrismaService,
     @Inject(WALLET_PROVIDER) provider: Pick<WalletProvider, 'name'>,
     config: ConfigService,
+    /** The provider's own limit on the account (WALLET-23). Absent: only WAWU's limits. */
+    private readonly accounts?: AccountLimits,
   ) {
     this.unsetFees = unsetFeeSettings(provider.name, (key) =>
       config.get<string>(key),
@@ -157,9 +163,13 @@ export class MoneyLimits {
     }
     const daily = this.settings.limitOf(kind, 'daily');
     const monthly = this.settings.limitOf(kind, 'monthly');
-    if (daily === null && monthly === null) return;
-
     const now = opts.now ?? new Date();
+    // The provider's limit on the account, as its last balance read said it.
+    const account = this.accounts
+      ? ((await this.accounts.stored(input.wawuUserId, tx))?.dailyKobo ?? null)
+      : null;
+    if (daily === null && monthly === null && account === null) return;
+
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`money-limits:${input.wawuUserId}`}, 0))`;
     if (daily !== null) {
       const used = await this.movedSince(tx, input, lagosDayStart(now));
@@ -168,6 +178,15 @@ export class MoneyLimits {
     if (monthly !== null) {
       const used = await this.movedSince(tx, input, lagosMonthStart(now));
       if (used + amount > BigInt(monthly)) throw limitReached('monthly');
+    }
+    if (account !== null && this.accounts) {
+      await this.accounts.assertWithin(
+        tx,
+        input.wawuUserId,
+        amount,
+        account,
+        now,
+      );
     }
   }
 
@@ -181,13 +200,26 @@ export class MoneyLimits {
   ): Promise<DailyStanding> {
     const amount = this.amountOf(input);
     const daily = this.settings.limitOf(input.kind, 'daily');
-    if (daily === null) {
+    // What is left of the provider's limit on the account, when one is known;
+    // the standing is the tighter of the two.
+    const account = this.accounts
+      ? await this.accounts.remainingToday(input.wawuUserId, now)
+      : null;
+    let left: bigint | null = null;
+    if (daily !== null) {
+      const used = await this.movedSince(
+        this.prisma,
+        input,
+        lagosDayStart(now),
+      );
+      left = BigInt(daily) - used;
+    }
+    if (account !== null && (left === null || account < left)) left = account;
+    if (left === null) {
       return { withinDailyLimit: true, remainingTodayKobo: null };
     }
-    const used = await this.movedSince(this.prisma, input, lagosDayStart(now));
-    const left = BigInt(daily) - used;
     return {
-      withinDailyLimit: used + amount <= BigInt(daily),
+      withinDailyLimit: amount <= left,
       remainingTodayKobo: left > 0n ? Number(left) : 0,
     };
   }

@@ -77,6 +77,10 @@ export const SETTINGS_GATE: Partial<
   // nobody who has not touched the switch notices anything.
   tip_received: 'moneyIn',
   sale: 'moneyIn',
+  // WALLET-10. A bank transfer into the person's account is "Money in" too
+  // (Z3: "Tips, sales, transfers"). With the switch off nothing is written
+  // and nothing is kept to send later; the history row is there either way.
+  money_in: 'moneyIn',
   content_published: 'contentReviews',
   content_rejected: 'contentReviews',
   // ME-10. A buyer's star rating is a review too: whoever switched "Reviews"

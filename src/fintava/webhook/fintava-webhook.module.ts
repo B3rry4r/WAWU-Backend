@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { PrismaModule } from '../../common/prisma/prisma.module';
+import { WebhookRetentionModule } from '../../webhook-retention/webhook-retention.module';
 import { FintavaSignatureGuard } from './fintava-signature.guard';
 import { FintavaWebhookController } from './fintava-webhook.controller';
 import { FintavaWebhookService } from './fintava-webhook.service';
@@ -13,9 +14,13 @@ import { FintavaWebhookService } from './fintava-webhook.service';
  *
  * Needs the app built with `rawBody: true` (src/hub-app-options.ts, used by
  * src/main.ts): the signature covers the exact bytes Fintava sent.
+ *
+ * FIX-20: imports WebhookRetentionModule, the daily job that clears the body
+ * and the parsed copy of old deliveries (it is mounted here and by
+ * NuvionWebhookModule, not by AppModule).
  */
 @Module({
-  imports: [ConfigModule, PrismaModule],
+  imports: [ConfigModule, PrismaModule, WebhookRetentionModule],
   controllers: [FintavaWebhookController],
   providers: [FintavaWebhookService, FintavaSignatureGuard],
 })
