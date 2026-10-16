@@ -785,7 +785,7 @@ export class WalletBillService implements OnModuleInit {
    *
    * - Only bills that failed in the last two days, NEWEST first, at most
    *   LATE_SCAN_BATCH a pass; a bill already noted is not read again.
-   * - Only bills whose payment belongs to the provider this server runs
+   * - Only bills whose payment was taken by the provider this server runs
    *   (R-39): after a switch to Nuvion a Fintava bill left in the database
    *   is never asked about at Fintava and gets no ledger row of the wrong
    *   provider.
