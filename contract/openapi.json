@@ -1098,6 +1098,55 @@
         ]
       }
     },
+    "/api/hub/uploads/confirm": {
+      "post": {
+        "operationId": "StorageController_confirm",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmUploadDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "confirmed",
+                        "abandoned"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "status"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "POST /uploads/confirm: the app has finished sending the file it got a URL\nfor, taken or turned away by the storage host. The server asks the bucket\nand answers `confirmed` (the file is there and counts against the person's\nstorage), `pending` (it is not there yet and the URL could still be used,\nso nothing changes and the sweep settles it) or `abandoned` (it is not\nthere and the URL is spent, so the space it held goes back at once instead\nof when the sweep settles it). A file that lands after it was given up on\nand no longer fits the person's storage is removed and answers 413. The\napp's word decides nothing; only the person's own upload can be settled. A\nbucket that cannot be asked answers 503 and changes nothing.",
+        "tags": [
+          "Storage"
+        ]
+      }
+    },
     "/api/hub/uploads/usage": {
       "get": {
         "operationId": "StorageController_usage",
@@ -31013,6 +31062,19 @@
           "message"
         ]
       },
+      "ConfirmUploadDto": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The `key` or the `fileUrl` POST /uploads/presign returned for this file.",
+            "maxLength": 2048
+          }
+        },
+        "required": [
+          "key"
+        ]
+      },
       "ValidateCustomerDto": {
         "type": "object",
         "properties": {
@@ -32742,7 +32804,11 @@
           },
           "remainingTodayKobo": {
             "type": "integer",
-            "description": "daily_limit_exceeded: what is left of today's limit."
+            "description": "daily_limit_exceeded, limit_reached: what is left of today's limit."
+          },
+          "limitKobo": {
+            "type": "integer",
+            "description": "limit_reached on the account's daily limit (WALLET-23): the limit itself, in kobo."
           },
           "minimumKobo": {
             "type": "integer",

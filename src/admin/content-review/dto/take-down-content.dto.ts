@@ -14,8 +14,7 @@ import { IsString, Matches, MaxLength } from 'class-validator';
 export class TakeDownContentDto {
   @IsString()
   @Matches(/\S/, {
-    message:
-      'reason is required — it is the only record of why this came down.',
+    message: 'reason is required. It is the only record of why this came down.',
   })
   @MaxLength(1000)
   reason!: string;

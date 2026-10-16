@@ -41,6 +41,7 @@ import {
 import {
   buildHistory,
   buildInstruction,
+  buildTurnSchema,
   parseTurn,
   validAnswers,
   type AssistantDraft,
@@ -604,6 +605,7 @@ export class LegalAssistantService {
           answers,
         }),
         history,
+        responseSchema: buildTurnSchema(intake.matter),
       });
       turn = parseTurn(raw);
     } catch (error) {

@@ -4017,6 +4017,16 @@ model FintavaWallet {
   /// only on rows of the provider it runs, so after a rollback one
   /// provider's ids are never sent to the other (MONEY-20 finding 2).
   provider      String?  @default("fintava")
+  /// The provider's own name for the account's level (`TIER_2`), as its last
+  /// balance read said it (WALLET-23). For ops only: the app is never shown it.
+  accountTier   String?
+  /// What the account may send in a Lagos day, in kobo, as of `limitsReadAt`
+  /// (WALLET-23); null when the provider named no limit. A copy for the
+  /// limit check and the W35 row, refreshed on every balance read; the
+  /// provider stays the one that enforces it.
+  dailyLimitKobo BigInt?
+  /// When `accountTier` and `dailyLimitKobo` were last read. Null: never read.
+  limitsReadAt  DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }

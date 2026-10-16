@@ -42,7 +42,13 @@ const PASSWORD = 'schools-04-round-3-password';
 const KEYS = ['ADMIN_JWT_SECRET', 'ADMIN_JWT_REFRESH_SECRET'];
 const REFUSED_CURSOR = 'cursor is not one this server gave out';
 
-/** Counts as one character to the admin; 9 bytes of JSON (\u0001 + U+FE0F). */
+/**
+ * Counts as one character to class-validator; 9 bytes of JSON (\u0001 +
+ * U+FE0F). FIX-19: the admin now refuses the control character, so this name
+ * is written straight to the table, as the rows the admin accepted before
+ * FIX-19 were. The cursor bound stays at this worst case (larger than needed
+ * is safe), and those rows still page.
+ */
 const WORST_BYTES = '\u0001\uFE0F';
 /** Counts as one character to the admin; 3 UTF-16 units (a flag). */
 const WORST_UNITS = '\u{1F3F3}\uFE0F';
@@ -125,6 +131,20 @@ describe('Public schools on rows the admin wrote (SCHOOLS-04 round 3)', () => {
         ...extra,
       }).expect(201),
     );
+  /** A school row as it was before FIX-19: no admin rule between the name and the table. */
+  const writeSchool = async (name: string) =>
+    (
+      await prisma.school.create({
+        data: {
+          name,
+          category: 'vocational',
+          location: LOC,
+          about: 'A school this spec creates and removes.',
+          reportEmail: 'enrolments@school.example.com',
+        },
+        select: { id: true },
+      })
+    ).id;
   const cleanUp = () =>
     prisma.school.deleteMany({ where: { location: { startsWith: PLACE } } });
 
@@ -189,17 +209,37 @@ describe('Public schools on rows the admin wrote (SCHOOLS-04 round 3)', () => {
     const ids: Record<string, string> = {};
     beforeAll(async () => {
       // The admin's maximum of each worst character, and one more refused.
+      // FIX-19: the worst-bytes name holds a control character, which the
+      // admin refuses now; its rows are written to the table instead.
+      const refusedBody = (name: string) => ({
+        name,
+        category: 'vocational',
+        location: LOC,
+        about: 'Refused by the admin.',
+        reportEmail: 'enrolments@school.example.com',
+      });
       for (const [key, c] of [
         ['bytes', WORST_BYTES],
         ['units', WORST_UNITS],
       ] as const) {
-        const refused = await admin('post', '/schools', {
-          name: c.repeat(121),
-          category: 'vocational',
-          location: LOC,
-          about: 'Refused: one character over the admin maximum.',
-          reportEmail: 'enrolments@school.example.com',
-        }).expect(400);
+        if (key === 'bytes') {
+          const refused = await admin(
+            'post',
+            '/schools',
+            refusedBody(c.repeat(120)),
+          ).expect(400);
+          expect(message(refused)).toBe(
+            'name must not contain control characters',
+          );
+          ids[key] = await writeSchool(c.repeat(120));
+          ids[`${key}-next`] = await writeSchool(c.repeat(119) + LATER);
+          continue;
+        }
+        const refused = await admin(
+          'post',
+          '/schools',
+          refusedBody(c.repeat(121)),
+        ).expect(400);
         expect(message(refused)).toBe(
           'name must be shorter than or equal to 120 characters',
         );
@@ -232,8 +272,9 @@ describe('Public schools on rows the admin wrote (SCHOOLS-04 round 3)', () => {
         );
         expect(cursorAfter[ids[key]]).toEqual(expect.any(String));
       }
-      // The worst case the bounds are derived from, reached through the
-      // real admin route: 1498 characters of cursor, 360 units of name.
+      // The worst case the bounds are derived from: 1498 characters of
+      // cursor (a row written to the table, FIX-19), 360 units of name
+      // (through the real admin route).
       expect(cursorAfter[ids.bytes]).toHaveLength(1498);
       expect(CURSOR_MAX_LENGTH).toBe(1498);
       expect(decodeCursor(cursorAfter[ids.units]).name).toHaveLength(360);

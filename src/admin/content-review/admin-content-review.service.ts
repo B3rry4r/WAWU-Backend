@@ -290,7 +290,7 @@ export class AdminContentReviewService {
       }
       if (existing.status !== 'pending') {
         throw new BadRequestException(
-          `Only a pending piece can be reviewed — this one is already ${existing.status}.`,
+          `Only a pending piece can be reviewed. This one is already ${existing.status}.`,
         );
       }
 
