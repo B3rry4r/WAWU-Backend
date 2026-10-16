@@ -9032,9 +9032,6 @@
                       "id": {
                         "type": "string"
                       },
-                      "status": {
-                        "type": "string"
-                      },
                       "kind": {
                         "type": "string",
                         "enum": [
@@ -9049,6 +9046,9 @@
                         ]
                       },
                       "title": {
+                        "type": "string"
+                      },
+                      "status": {
                         "type": "string"
                       },
                       "applicantWawuId": {
@@ -9225,9 +9225,9 @@
                     },
                     "required": [
                       "id",
-                      "status",
                       "kind",
                       "title",
+                      "status",
                       "applicantWawuId",
                       "reference",
                       "appliedDate",
@@ -9273,9 +9273,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -9290,6 +9287,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -9466,9 +9466,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -9573,9 +9573,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -9590,6 +9587,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -9766,9 +9766,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -9814,9 +9814,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -9831,6 +9828,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -10007,9 +10007,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -10056,9 +10056,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -10073,6 +10070,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -10249,9 +10249,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -10297,9 +10297,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -10314,6 +10311,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -10490,9 +10490,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -10669,9 +10669,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -10686,6 +10683,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -10862,9 +10862,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -10920,9 +10920,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -10937,6 +10934,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -11113,9 +11113,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -11170,9 +11170,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -11187,6 +11184,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -11363,9 +11363,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -12079,6 +12079,10 @@
                           "id": {
                             "type": "string"
                           },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
                           "status": {
                             "type": "string",
                             "enum": [
@@ -12088,10 +12092,6 @@
                               "paid",
                               "cancelled"
                             ]
-                          },
-                          "createdAt": {
-                            "type": "string",
-                            "format": "date-time"
                           },
                           "flutterwaveTxRef": {
                             "type": "string"
@@ -12163,8 +12163,8 @@
                         "required": [
                           "items",
                           "id",
-                          "status",
                           "createdAt",
+                          "status",
                           "flutterwaveTxRef",
                           "flutterwaveTxId",
                           "refundError",
@@ -12246,6 +12246,10 @@
                     "id": {
                       "type": "string"
                     },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
                     "status": {
                       "type": "string",
                       "enum": [
@@ -12255,10 +12259,6 @@
                         "paid",
                         "cancelled"
                       ]
-                    },
-                    "createdAt": {
-                      "type": "string",
-                      "format": "date-time"
                     },
                     "flutterwaveTxRef": {
                       "type": "string"
@@ -12329,8 +12329,8 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "createdAt",
+                    "status",
                     "flutterwaveTxRef",
                     "flutterwaveTxId",
                     "refundError",
@@ -16044,7 +16044,8 @@
                 "event_ticket",
                 "bill",
                 "tier",
-                "tier_bump"
+                "tier_bump",
+                "points_cash_out"
               ]
             }
           },
@@ -19751,11 +19752,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "updatedAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "nullable": true
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -19766,6 +19762,11 @@
                     },
                     "title": {
                       "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "nullable": true
                     },
                     "updated": {
                       "type": "string",
@@ -19935,9 +19936,9 @@
                   },
                   "required": [
                     "id",
-                    "updatedAt",
                     "kind",
                     "title",
+                    "updatedAt",
                     "updated",
                     "country",
                     "subtitle",
@@ -19992,11 +19993,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "updatedAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "nullable": true
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -20007,6 +20003,11 @@
                     },
                     "title": {
                       "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "nullable": true
                     },
                     "updated": {
                       "type": "string",
@@ -20176,9 +20177,9 @@
                   },
                   "required": [
                     "id",
-                    "updatedAt",
                     "kind",
                     "title",
+                    "updatedAt",
                     "updated",
                     "country",
                     "subtitle",
@@ -20665,16 +20666,16 @@
                           "id": {
                             "type": "string"
                           },
+                          "imageUrl": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "status": {
                             "type": "string",
                             "enum": [
                               "live",
                               "coming"
                             ]
-                          },
-                          "imageUrl": {
-                            "type": "string",
-                            "nullable": true
                           },
                           "slug": {
                             "type": "string"
@@ -20855,8 +20856,8 @@
                         "required": [
                           "name",
                           "id",
-                          "status",
                           "imageUrl",
+                          "status",
                           "slug",
                           "category",
                           "featured",
@@ -20890,16 +20891,16 @@
                               "id": {
                                 "type": "string"
                               },
+                              "imageUrl": {
+                                "type": "string",
+                                "nullable": true
+                              },
                               "status": {
                                 "type": "string",
                                 "enum": [
                                   "live",
                                   "coming"
                                 ]
-                              },
-                              "imageUrl": {
-                                "type": "string",
-                                "nullable": true
                               },
                               "slug": {
                                 "type": "string"
@@ -21067,8 +21068,8 @@
                             "required": [
                               "name",
                               "id",
-                              "status",
                               "imageUrl",
+                              "status",
                               "slug",
                               "category",
                               "featured",
@@ -21144,16 +21145,16 @@
                     "id": {
                       "type": "string"
                     },
+                    "imageUrl": {
+                      "type": "string",
+                      "nullable": true
+                    },
                     "status": {
                       "type": "string",
                       "enum": [
                         "live",
                         "coming"
                       ]
-                    },
-                    "imageUrl": {
-                      "type": "string",
-                      "nullable": true
                     },
                     "slug": {
                       "type": "string"
@@ -21357,8 +21358,8 @@
                   "required": [
                     "name",
                     "id",
-                    "status",
                     "imageUrl",
+                    "status",
                     "slug",
                     "category",
                     "featured",
@@ -21468,13 +21469,13 @@
                     "id": {
                       "type": "string"
                     },
+                    "title": {
+                      "type": "string"
+                    },
                     "updatedAt": {
                       "type": "string",
                       "format": "date-time",
                       "nullable": true
-                    },
-                    "title": {
-                      "type": "string"
                     },
                     "description": {
                       "type": "string"
@@ -21778,8 +21779,8 @@
                   },
                   "required": [
                     "id",
-                    "updatedAt",
                     "title",
+                    "updatedAt",
                     "description",
                     "format",
                     "fileUrl",
@@ -24102,12 +24103,12 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "createdAt": {
                       "type": "string",
                       "format": "date-time"
+                    },
+                    "status": {
+                      "type": "string"
                     },
                     "topics": {
                       "type": "array",
@@ -24130,8 +24131,8 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "createdAt",
+                    "status",
                     "topics",
                     "mentorId",
                     "requesterWawuId",
@@ -28954,6 +28955,262 @@
         ]
       }
     },
+    "/api/hub/points/convert/quote": {
+      "get": {
+        "operationId": "PointsConvertController_quote",
+        "parameters": [
+          {
+            "name": "points",
+            "required": false,
+            "in": "query",
+            "description": "The points to quote. Left out, the quote is for the whole balance.\nDigits only: `1e3` or `1,000` is a 400, never read as some other number.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 2147483647,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PointsConvertQuoteView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, currency_not_supported",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "PT6 before the PIN: the rate (1,000 points for so many kobo, from the\nconfig), the fewest points one conversion takes, the balance, and the\ncash for `points` (the whole balance when none is asked). WAWU pays the\nprovider's charge, so the person pays nothing to convert (R-31).\n`canConvert` and `blockedBy` say when the points asked cannot be\nconverted as they are (below the minimum, more than the balance, more\nthan one move carries), with the figures, instead of refusing. Nothing is\nheld. A person billed in dollars is `409 currency_not_supported`; with no\nwallet, `409 wallet_not_open`.",
+        "tags": [
+          "PointsConvert"
+        ],
+        "x-wawu-built-by": "POINTS-04"
+      }
+    },
+    "/api/hub/points/convert": {
+      "post": {
+        "operationId": "PointsConvertController_convertPoints",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PointsConvertDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PointsConversionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds, insufficient_points",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, device_approval_refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, currency_not_supported",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reason.code: below_minimum",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable, fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Turns points into cash in the wallet, once. The cash is worked out at the\nconfig's rate and rounded down; the points are held (soonest-ending lots\nfirst) and the cash is paid from WAWU's own account into the person's\nwallet; the points are spent only when the provider has confirmed it, and\ngo back to their lots if it did not move. Answers 201 with the\nconversion: `completed`, `pending` while the provider has not confirmed\nthe cash yet (the points stay on hold; poll `GET /points/convert/{id}`;\nit is never sent again), or `failed` when the cash did not move and the\npoints are back. The same Idempotency-Key and body answer the first\nresult again (`Idempotent-Replayed: true`) without checking the PIN.\nBefore the PIN, and changing nothing: `422 below_minimum`, `402\ninsufficient_points`, `400 amount_out_of_range` (more than one move\ncarries), `409 currency_not_supported`, `409 wallet_not_open`, `503\nfees_not_set`.",
+        "tags": [
+          "PointsConvert"
+        ],
+        "x-wawu-built-by": "POINTS-04"
+      }
+    },
+    "/api/hub/points/convert/{id}": {
+      "get": {
+        "operationId": "PointsConvertController_read",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PointsConversionView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One conversion as it stands now: what the app polls after `pending`.\nOnly its owner reads it; another person's conversion and an id nobody\nholds are the same `404 not_found`. It reads our own records only and\nnever asks the provider.",
+        "tags": [
+          "PointsConvert"
+        ],
+        "x-wawu-built-by": "POINTS-04"
+      }
+    },
     "/api/hub/waitlist/offers/current": {
       "get": {
         "operationId": "WaitlistPublicController_currentOffer",
@@ -31983,7 +32240,10 @@
               "limit_reached",
               "identity_under_review",
               "step_not_used",
-              "open_address_limited"
+              "open_address_limited",
+              "below_minimum",
+              "insufficient_points",
+              "currency_not_supported"
             ],
             "type": "string"
           },
@@ -32044,6 +32304,22 @@
               "monthly"
             ],
             "type": "string"
+          },
+          "minimumPoints": {
+            "type": "integer",
+            "description": "below_minimum: the fewest points one conversion to cash takes (POINTS-04)."
+          },
+          "balancePoints": {
+            "type": "integer",
+            "description": "below_minimum, insufficient_points: the points the person has now."
+          },
+          "neededPoints": {
+            "type": "integer",
+            "description": "insufficient_points: the points asked for."
+          },
+          "shortfallPoints": {
+            "type": "integer",
+            "description": "insufficient_points: neededPoints minus balancePoints."
           },
           "message": {
             "type": "string",
@@ -32444,7 +32720,8 @@
               "event_ticket",
               "bill",
               "tier",
-              "tier_bump"
+              "tier_bump",
+              "points_cash_out"
             ],
             "type": "string"
           },
@@ -34738,6 +35015,19 @@
           "quoteToken"
         ]
       },
+      "PointsConvertDto": {
+        "type": "object",
+        "properties": {
+          "points": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          }
+        },
+        "required": [
+          "points"
+        ]
+      },
       "CreateWaitlistRegistrationDto": {
         "type": "object",
         "properties": {
@@ -35234,7 +35524,8 @@
               "paid_dm",
               "event_ticket",
               "tier",
-              "tier_bump"
+              "tier_bump",
+              "points_cash_out"
             ]
           },
           "targetId": {
@@ -35528,6 +35819,138 @@
           "fileName",
           "rowCount",
           "sentAt"
+        ]
+      },
+      "PaginationMeta": {
+        "type": "object",
+        "properties": {
+          "currentPage": {
+            "type": "number"
+          },
+          "nextPage": {
+            "type": "number",
+            "nullable": true
+          },
+          "perPage": {
+            "type": "number"
+          },
+          "total": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "currentPage",
+          "nextPage",
+          "perPage",
+          "total"
+        ]
+      },
+      "NotificationsResponse": {
+        "type": "object",
+        "properties": {
+          "unreadCount": {
+            "type": "number"
+          },
+          "items": {
+            "type": "object",
+            "properties": {
+              "statusCode": {
+                "type": "number",
+                "enum": [
+                  200
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "data": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "userWawuId": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "body": {
+                      "type": "string"
+                    },
+                    "tone": {
+                      "type": "string"
+                    },
+                    "amount": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "creditsCount": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "actionLabel": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "read": {
+                      "type": "boolean"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "imageUrl": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "actionHref": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "campaignId": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "userWawuId",
+                    "kind",
+                    "title",
+                    "body",
+                    "tone",
+                    "amount",
+                    "creditsCount",
+                    "actionLabel",
+                    "read",
+                    "createdAt",
+                    "imageUrl",
+                    "actionHref",
+                    "campaignId"
+                  ]
+                }
+              },
+              "pagination": {
+                "$ref": "#/components/schemas/PaginationMeta"
+              }
+            },
+            "required": [
+              "statusCode",
+              "message",
+              "data",
+              "pagination"
+            ]
+          }
+        },
+        "required": [
+          "unreadCount",
+          "items"
         ]
       },
       "FeeQuotePartView": {
@@ -36316,7 +36739,8 @@
               "paid_dm",
               "event_ticket",
               "tier",
-              "tier_bump"
+              "tier_bump",
+              "points_cash_out"
             ]
           },
           "status": {
@@ -36411,7 +36835,8 @@
               "paid_dm",
               "event_ticket",
               "tier",
-              "tier_bump"
+              "tier_bump",
+              "points_cash_out"
             ]
           },
           "targetId": {
@@ -36498,7 +36923,8 @@
               "paid_dm",
               "event_ticket",
               "tier",
-              "tier_bump"
+              "tier_bump",
+              "points_cash_out"
             ]
           },
           "targetId": {
@@ -37075,138 +37501,6 @@
           "accessToken",
           "refreshToken",
           "expiresIn"
-        ]
-      },
-      "PaginationMeta": {
-        "type": "object",
-        "properties": {
-          "currentPage": {
-            "type": "number"
-          },
-          "nextPage": {
-            "type": "number",
-            "nullable": true
-          },
-          "perPage": {
-            "type": "number"
-          },
-          "total": {
-            "type": "number"
-          }
-        },
-        "required": [
-          "currentPage",
-          "nextPage",
-          "perPage",
-          "total"
-        ]
-      },
-      "NotificationsResponse": {
-        "type": "object",
-        "properties": {
-          "unreadCount": {
-            "type": "number"
-          },
-          "items": {
-            "type": "object",
-            "properties": {
-              "statusCode": {
-                "type": "number",
-                "enum": [
-                  200
-                ]
-              },
-              "message": {
-                "type": "string"
-              },
-              "data": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string"
-                    },
-                    "userWawuId": {
-                      "type": "string"
-                    },
-                    "createdAt": {
-                      "type": "string",
-                      "format": "date-time"
-                    },
-                    "kind": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "body": {
-                      "type": "string"
-                    },
-                    "tone": {
-                      "type": "string"
-                    },
-                    "amount": {
-                      "type": "number",
-                      "nullable": true
-                    },
-                    "creditsCount": {
-                      "type": "number",
-                      "nullable": true
-                    },
-                    "actionLabel": {
-                      "type": "string",
-                      "nullable": true
-                    },
-                    "read": {
-                      "type": "boolean"
-                    },
-                    "imageUrl": {
-                      "type": "string",
-                      "nullable": true
-                    },
-                    "actionHref": {
-                      "type": "string",
-                      "nullable": true
-                    },
-                    "campaignId": {
-                      "type": "string",
-                      "nullable": true
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "userWawuId",
-                    "createdAt",
-                    "kind",
-                    "title",
-                    "body",
-                    "tone",
-                    "amount",
-                    "creditsCount",
-                    "actionLabel",
-                    "read",
-                    "imageUrl",
-                    "actionHref",
-                    "campaignId"
-                  ]
-                }
-              },
-              "pagination": {
-                "$ref": "#/components/schemas/PaginationMeta"
-              }
-            },
-            "required": [
-              "statusCode",
-              "message",
-              "data",
-              "pagination"
-            ]
-          }
-        },
-        "required": [
-          "unreadCount",
-          "items"
         ]
       },
       "StorageUsage": {
@@ -38892,6 +39186,13 @@
           "id": {
             "type": "string"
           },
+          "title": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -38900,13 +39201,6 @@
               "live",
               "removed"
             ]
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "title": {
-            "type": "string"
           },
           "creatorWawuId": {
             "type": "string"
@@ -38990,9 +39284,9 @@
         },
         "required": [
           "id",
-          "status",
-          "createdAt",
           "title",
+          "createdAt",
+          "status",
           "creatorWawuId",
           "slug",
           "contentType",
@@ -39020,6 +39314,13 @@
           "id": {
             "type": "string"
           },
+          "title": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -39028,13 +39329,6 @@
               "live",
               "removed"
             ]
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "title": {
-            "type": "string"
           },
           "creatorWawuId": {
             "type": "string"
@@ -39130,9 +39424,9 @@
         },
         "required": [
           "id",
-          "status",
-          "createdAt",
           "title",
+          "createdAt",
+          "status",
           "creatorWawuId",
           "slug",
           "contentType",
@@ -39368,6 +39662,13 @@
           "id": {
             "type": "string"
           },
+          "title": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -39376,13 +39677,6 @@
               "live",
               "removed"
             ]
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "title": {
-            "type": "string"
           },
           "creatorWawuId": {
             "type": "string"
@@ -39484,9 +39778,9 @@
         },
         "required": [
           "id",
-          "status",
-          "createdAt",
           "title",
+          "createdAt",
+          "status",
           "creatorWawuId",
           "slug",
           "contentType",
@@ -39959,6 +40253,9 @@
           "id": {
             "type": "string"
           },
+          "amount": {
+            "type": "number"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -39966,9 +40263,6 @@
               "awaiting_response",
               "responded"
             ]
-          },
-          "amount": {
-            "type": "number"
           },
           "creatorWawuId": {
             "type": "string"
@@ -40028,8 +40322,8 @@
         },
         "required": [
           "id",
-          "status",
           "amount",
+          "status",
           "creatorWawuId",
           "senderWawuId",
           "text",
@@ -45968,11 +46262,6 @@
           "id": {
             "type": "string"
           },
-          "updatedAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
-          },
           "kind": {
             "type": "string",
             "enum": [
@@ -45983,6 +46272,11 @@
           },
           "title": {
             "type": "string"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
           },
           "updated": {
             "type": "string",
@@ -46020,9 +46314,9 @@
         },
         "required": [
           "id",
-          "updatedAt",
           "kind",
           "title",
+          "updatedAt",
           "updated",
           "country",
           "subtitle",
@@ -46069,13 +46363,13 @@
           "id": {
             "type": "string"
           },
+          "title": {
+            "type": "string"
+          },
           "updatedAt": {
             "type": "string",
             "format": "date-time",
             "nullable": true
-          },
-          "title": {
-            "type": "string"
           },
           "description": {
             "type": "string"
@@ -46113,8 +46407,8 @@
         },
         "required": [
           "id",
-          "updatedAt",
           "title",
+          "updatedAt",
           "description",
           "format",
           "fileUrl",
@@ -50828,6 +51122,137 @@
           "grant",
           "createdAt",
           "paidAt"
+        ]
+      },
+      "PointsConvertQuoteView": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN"
+            ]
+          },
+          "balancePoints": {
+            "type": "number"
+          },
+          "minimumPoints": {
+            "type": "number"
+          },
+          "maximumPoints": {
+            "type": "number",
+            "nullable": true
+          },
+          "rate": {
+            "type": "object",
+            "properties": {
+              "points": {
+                "type": "number"
+              },
+              "kobo": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "points",
+              "kobo"
+            ]
+          },
+          "points": {
+            "type": "number"
+          },
+          "cashKobo": {
+            "type": "integer"
+          },
+          "feeKobo": {
+            "type": "integer"
+          },
+          "wawuPaysProviderCharge": {
+            "type": "boolean"
+          },
+          "canConvert": {
+            "type": "boolean"
+          },
+          "blockedBy": {
+            "type": "string",
+            "enum": [
+              "below_minimum",
+              "insufficient_points",
+              "above_maximum"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "currency",
+          "balancePoints",
+          "minimumPoints",
+          "maximumPoints",
+          "rate",
+          "points",
+          "cashKobo",
+          "feeKobo",
+          "wawuPaysProviderCharge",
+          "canConvert",
+          "blockedBy"
+        ]
+      },
+      "PointsConversionView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "completed",
+              "failed"
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN"
+            ]
+          },
+          "points": {
+            "type": "number"
+          },
+          "cashKobo": {
+            "type": "integer"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "statusMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "completedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "currency",
+          "points",
+          "cashKobo",
+          "reference",
+          "statusMessage",
+          "failureReason",
+          "createdAt",
+          "completedAt"
         ]
       },
       "AdminWaitlistRegistrationView": {

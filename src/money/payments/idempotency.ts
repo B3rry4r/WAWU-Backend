@@ -430,6 +430,12 @@ export const CurrentIdempotencyScope = createParamDecorator(
  * (`@RequireApproval()`, MONEY-14; the gate it brings again passes on the
  * wallet already found). Documents `Idempotency-Key` as required, and both
  * approval headers.
+ *
+ * `beforeApproval`: guards that run after the key and before the PIN, for the
+ * checks a route makes so that a request that cannot succeed uses up no PIN
+ * try and changes nothing (POINTS-04's minimum and balance). Because they run
+ * after the key, a repeat of a finished request is answered first; the filter
+ * gives the key back when one of them refuses.
  */
 export function RequireIdempotentApproval(
   route: string,

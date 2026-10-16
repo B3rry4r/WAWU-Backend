@@ -60,7 +60,7 @@ decides nothing about categories by itself:
 
 | Pushed | Switch |
 |---|---|
-| `sale`, `tip_received` | Money in (`moneyIn`) |
+| `sale`, `tip_received`, `money_in` | Money in (`moneyIn`) |
 | `dm_refunded` | Refunds (`refunds`) |
 | `new_follower` | New followers (`newFollowers`) |
 | `dm_deadline` | Paid questions (`dmReminders`) |
@@ -91,7 +91,9 @@ with one exception: `content_rejected`'s list body carries the admin's
 free-text reason, which never goes on a lock screen, so its push body is
 "“<piece title>” was sent back. Tap to see why." (the reason is read in the
 app). `review_received` keeps the piece title and the stars (reviews are
-public); the amount-bearing kinds are as BACKEND_GAPS G-266 says.
+public); the amount-bearing kinds are as BACKEND_GAPS G-266 says. `money_in` (WALLET-10)
+also names the sender, with only the last four digits of their account number,
+when the provider gave a name (G-737); without a name it says the amount alone.
 `actionHref` and `target` are present only when the notification has them. A
 body that would pass Expo's 4096 byte payload limit is shortened; `data` never
 is. INBOX-21 reads `data` on a tap.
