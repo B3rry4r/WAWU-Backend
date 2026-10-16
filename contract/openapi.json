@@ -29832,6 +29832,7 @@
     },
     "/api/hub/events/{id}/orders/wallet": {
       "post": {
+        "description": "A priced basket needs an open wallet: 409 with reason.code wallet_not_open or wallet_opening, and the app leads to Open your wallet; with no fees set it is 503 fees_not_set. A basket that costs nothing needs no wallet and no fees. With an Idempotency-Key, the same key and tickets answer the same order; the same key with other tickets is 409 idempotency_key_reused, and a malformed key is 400 idempotency_key_required.",
         "operationId": "createEventWalletOrder",
         "parameters": [
           {
@@ -29874,16 +29875,6 @@
               }
             }
           },
-          "400": {
-            "description": "reason.code: idempotency_key_required",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
           "404": {
             "description": "reason.code: target_not_found",
             "content": {
@@ -29895,17 +29886,7 @@
             }
           },
           "409": {
-            "description": "reason.code: target_not_payable, wallet_not_open, wallet_opening, idempotency_key_reused",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "reason.code: fees_not_set",
+            "description": "reason.code: target_not_payable",
             "content": {
               "application/json": {
                 "schema": {

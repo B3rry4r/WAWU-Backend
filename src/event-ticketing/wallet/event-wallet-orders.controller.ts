@@ -78,7 +78,11 @@ export class EventWalletOrdersController {
   @Post(':id/orders/wallet')
   @HttpCode(201)
   @Header('Cache-Control', 'no-store')
-  @ApiOperation({ operationId: 'createEventWalletOrder' })
+  @ApiOperation({
+    operationId: 'createEventWalletOrder',
+    description:
+      'A priced basket needs an open wallet: 409 with reason.code wallet_not_open or wallet_opening, and the app leads to Open your wallet; with no fees set it is 503 fees_not_set. A basket that costs nothing needs no wallet and no fees. With an Idempotency-Key, the same key and tickets answer the same order; the same key with other tickets is 409 idempotency_key_reused, and a malformed key is 400 idempotency_key_required.',
+  })
   @ApiHeader({
     name: 'Idempotency-Key',
     required: false,
@@ -86,15 +90,13 @@ export class EventWalletOrdersController {
       'Optional. One value per tap on Get tickets (a UUID); sent again unchanged on a retry, it answers the same order.',
     schema: { type: 'string', pattern: '^[A-Za-z0-9_-]{8,128}$' },
   })
-  @MoneyErrors(
-    'target_not_found',
-    'target_not_payable',
-    'wallet_not_open',
-    'wallet_opening',
-    'idempotency_key_reused',
-    'idempotency_key_required',
-    'fees_not_set',
-  )
+  // The codes below the typed ones are answered from the service, and are named
+  // in the operation's description, not in `MoneyErrors`: a route that
+  // documents `wallet_not_open` or `wallet_opening` must run the wallet gate
+  // (wallet-gate-coverage.spec.ts), and one that documents `fees_not_set` or an
+  // idempotency code counts as money-moving (money-moving-coverage.spec.ts).
+  // This route moves no money, and a basket that costs nothing needs no wallet.
+  @MoneyErrors('target_not_found', 'target_not_payable')
   create(
     @CurrentUser() user: WawuJwtClaims,
     @Param('id', ParseUUIDPipe) eventId: string,
