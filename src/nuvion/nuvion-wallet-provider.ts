@@ -32,6 +32,7 @@ import {
   NuvionReconcileArea,
   type NuvionReconcileMethods,
 } from './areas/reconcile';
+import { BANK_SEND_REFERENCE_PREFIX } from '../wallet-provider/wallet-provider.interface';
 import type { NuvionClient } from './nuvion-client';
 import { reconcileBankSend } from './handlers/outflows-bank';
 
@@ -244,9 +245,10 @@ export class NuvionWalletProvider implements WalletProvider {
   /**
    * What Nuvion knows of one of our sends. A book transfer is found through
    * the book log (NUV-05). A reference the log never held is another rail's;
-   * a bank send (NUV-06) is then asked of the payouts area by the sender's
-   * transfers (`reconcileBankSend`, WALLET-09), which never makes a transfer
-   * and never reads silence as "no money moved".
+   * one of ours that names a bank send (`BANK_SEND_REFERENCE_PREFIX`, NUV-06)
+   * is then asked of the payouts area by the sender's transfers
+   * (`reconcileBankSend`, WALLET-09), which never makes a transfer and never
+   * reads silence as "no money moved". Any other reference is not asked.
    */
   async reconcileSend(
     reference: string,
@@ -257,6 +259,7 @@ export class NuvionWalletProvider implements WalletProvider {
     if (
       book.state === 'unknown' &&
       book.why === 'unrecognised' &&
+      reference.startsWith(BANK_SEND_REFERENCE_PREFIX) &&
       this.areas.payouts instanceof NuvionPayoutsArea
     ) {
       return reconcileBankSend(this.areas.payouts, reference, holder, since);

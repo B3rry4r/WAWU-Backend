@@ -5,6 +5,7 @@ import type { Prisma } from '../../../generated/prisma/client';
 import { WawuIdClient } from '../../common/auth/wawu-id.client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
+  BANK_SEND_REFERENCE_PREFIX,
   type ProviderReconciliation,
   type ProviderTransaction,
   type ProviderTransferReceipt,
@@ -357,7 +358,7 @@ export class WalletTransferService implements OnModuleInit {
       wawuFeeKobo: BigInt(fee.fee.wawuFeeKobo),
       totalKobo: BigInt(fee.totalKobo),
       note,
-      customerReference: `wawu-bank-${id}`,
+      customerReference: `${BANK_SEND_REFERENCE_PREFIX}${id}`,
       payerAccountNumber: wallet.accountNumber,
       provider: this.provider.name,
       status: 'pending',

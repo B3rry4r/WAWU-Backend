@@ -51,6 +51,14 @@ describe('NuvionWalletProvider.reconcileSend (WALLET-09)', () => {
     });
   });
 
+  it('a send to another WAWU user that the book log never held is not asked of the payouts area', async () => {
+    const { p, find } = provider({ state: 'unknown', why: 'unrecognised' });
+    await expect(
+      p.reconcileSend('wawu-send-3f6b1d1e-0000-4000-8000-000000000001', HOLDER),
+    ).resolves.toEqual({ state: 'unknown', why: 'unrecognised' });
+    expect(find).not.toHaveBeenCalled();
+  });
+
   it("a book transfer is the book area's answer and the payouts area is not asked", async () => {
     const found: ProviderReconciliation = { state: 'absent' };
     const { p, find } = provider(found);
