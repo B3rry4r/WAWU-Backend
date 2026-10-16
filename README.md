@@ -469,16 +469,45 @@ dashboard and puts the dashboard's webhook secret in
   constant time, and fails closed (401) when the secret is unset. The raw
   bytes exist because the app is created with `rawBody: true`
   (`src/hub-app-options.ts`).
-- **Exactly once**: Fintava sends no event id, so each delivery is stored in
-  `FintavaWebhookEvent` under the unique key (event, transaction reference,
-  Fintava's status), with an `ON CONFLICT DO NOTHING` insert. A retry, a
-  replay or two copies at once leave one row and answer `duplicate`.
+- **Exactly once**: Fintava sends no event id and no timestamp, so each
+  delivery is stored in `FintavaWebhookEvent` under the unique key
+  `bodySha256`, the SHA-256 of the exact bytes it signed (MONEY-08 round 3),
+  with an `ON CONFLICT DO NOTHING` insert. A retry, a replay or two copies at
+  once leave one row and answer `duplicate`.
+- **Not kept for ever** (FIX-20): a daily job clears the raw body and the
+  parsed copy of a finished delivery after `WEBHOOK_RETENTION_DAYS` (90 by
+  default; `.env.example`). The row stays with its hash, so a delivery sent
+  again after clearing is still a `duplicate`. A pending, failed or
+  unrecognised delivery keeps its body. Nuvion's `NuvionWebhookEvent` follows
+  the same rule. See `docs/contract/CONVENTIONS.md`, section 21.
 - **Records only**: no money moves and no balance changes here. Rows are
   `pending` for the ledger (MONEY-10) and the pending sweep (MONEY-08);
   an event nobody documents is `unrecognised`.
 - **Status codes**: `200` recorded or duplicate; `400` no JSON body; `401`
   signature missing or wrong, or no secret; `503` not stored, resend.
 - Run `npx prisma migrate deploy` so `FintavaWebhookEvent` exists.
+
+### The nightly check against the wallet provider (MONEY-16)
+
+Once a night (`MONEY_CHECK_TIME`, Lagos, default 02:30) the Hub compares its
+ledger with the wallet provider's own record: every wallet's debits and
+balance, WAWU's own account, the money held for payers and payees, and WAWU's
+charge on each send. It lists what a person has to look at (a payment or a
+hold in review, money owed to a deleted payee) and has the report emailed
+through WAWU ID to the accounts in `MONEY_CHECK_RECIPIENT_WAWU_IDS`. It only
+reads and reports. No route; the cron runs where `ScheduleModule.forRoot()` is
+loaded, and a run is claimed in the database (`MoneyCheckRun`), so any number
+of Hub processes make one run a night.
+
+- **By hand**: `npm run build`, then `npm run money:check` with the Hub's
+  environment (`-- --night=YYYY-MM-DD`, `-- --again`). It prints one line and
+  exits 0 when the run finished (or had), 2 otherwise.
+- **Reading a night**: `MoneyCheckRun.report` (kobo as text, references only).
+  The verdict is `clean` only when every comparison was made and nothing was
+  found. What the provider's adapter cannot answer is `not_checked`, never clean.
+- The settings are in `.env.example`; what it does and does not compare is in
+  `docs/contract/CONVENTIONS.md` section 19.
+- Run `npx prisma migrate deploy` so `MoneyCheckRun` exists.
 
 ## Verification: two ticks, not a ladder
 
@@ -606,6 +635,24 @@ It is **off unless `PUSH_ENABLED=true`**. `EXPO_ACCESS_TOKEN` (only for an Expo
 project with enhanced push security) and `EXPO_PUSH_BASE_URL` (default
 `https://exp.host`) are optional; both are listed in `deploy/README.md` and
 `.env.example`. Android needs the owner's FCM credentials uploaded to Expo.
+
+## Money in (WALLET-10)
+
+A bank transfer into a person's account is a completed `in` row of category
+`top_up` in the ledger (`src/money/ledger/`; Fintava's `account_funded` through
+the ledger sweep, Nuvion's `inflows.completed` through NUV-04's handler). A
+sweep in every Hub (`src/money/money-in-notice/`, every 10 seconds) turns each
+such row into one `money_in` notification, which the push sender above then
+sends to the person's phones. It reads the ledger, never the webhook event, and
+never calls the provider; a server tells only the rows of the provider it runs.
+
+Exactly once: the notification and its mark (`MoneyInNotice`, primary key the
+ledger row) are written in one transaction with the row locked, so a replayed
+delivery, a credit delivered twice or out of order, two Hubs and a stop
+between the row and the push all end in one notification. With the person's
+"Money in" switch (Z3) off, only the mark is written (`muted`): nothing is
+sent and nothing waits. `MONEY_IN_NOTICE_WINDOW_HOURS` (default 72, in
+`.env.example`) bounds how far back a pass reads.
 
 ## Blocking and data export (SETTINGS-04)
 

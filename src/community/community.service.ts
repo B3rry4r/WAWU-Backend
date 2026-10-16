@@ -53,7 +53,7 @@ import type { UpdateCommunityDto } from './dto/update-community.dto';
  * to an approval.
  */
 const ALREADY_APPROVED =
-  'That request was already approved — this person is a member. Remove them instead.';
+  'That request was already approved. This person is a member. Remove them instead.';
 
 @Injectable()
 export class CommunityService {
@@ -225,7 +225,7 @@ export class CommunityService {
       dto.imageUrl === undefined
     ) {
       throw new BadRequestException(
-        'Nothing to update — send a name, a description and/or an image.',
+        'Nothing to update. Send a name, a description and/or an image.',
       );
     }
 

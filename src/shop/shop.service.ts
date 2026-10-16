@@ -440,7 +440,7 @@ export class ShopService {
           // pending, and it surfaces as a 409 that support can act on. Seating
           // somebody for stock that is gone would be worse.
           throw new ConflictException(
-            `${item.nameSnapshot} sold out while your payment was going through. You have not been charged for it — contact support and we will put this right.`,
+            `${item.nameSnapshot} sold out while your payment was going through. You have not been charged for it. Contact support and we will put this right.`,
           );
         }
       }

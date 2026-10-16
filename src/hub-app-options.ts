@@ -14,8 +14,13 @@ import { isIPv4 } from 'node:net';
  */
 export const HUB_APP_OPTIONS: NestApplicationOptions = { rawBody: true };
 
-/** 127.0.0.0/8 or ::1, also when Node writes an IPv4 peer as `::ffff:127.x`. */
-export function isLoopbackAddress(address: string): boolean {
+/**
+ * 127.0.0.0/8 or ::1, also when Node writes an IPv4 peer as `::ffff:127.x`.
+ * An address that is not known (the socket is already gone when Express asks,
+ * so `remoteAddress` is `undefined`) is not loopback and never throws (FIX-18).
+ */
+export function isLoopbackAddress(address: string | undefined): boolean {
+  if (typeof address !== 'string') return false;
   const v4 = address.toLowerCase().startsWith('::ffff:')
     ? address.slice('::ffff:'.length)
     : address;
@@ -45,7 +50,10 @@ export function isLoopbackAddress(address: string): boolean {
  * bucket shared by everyone behind nginx. A CDN or load balancer added in
  * front of nginx is another hop, and this must change with it.
  */
-export function hubTrustProxy(address: string, hop: number): boolean {
+export function hubTrustProxy(
+  address: string | undefined,
+  hop: number,
+): boolean {
   return hop === 0 && isLoopbackAddress(address);
 }
 

@@ -314,6 +314,18 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // not the account at Nuvion, which stays there; deletion needs an empty
   // wallet first (R-17).
   { model: 'NuvionEntity', column: 'wawuUserId', disposition: 'OWNED' },
+  // FIX-20. FintavaWebhookEvent and NuvionWebhookEvent, the stored provider
+  // deliveries, have no person column: each keeps the delivery's raw body and
+  // a parsed copy, which hold names, account numbers and narrations, and the
+  // purge cannot find a person's rows in them. RETENTION covers these rows,
+  // not the purge: a daily job (src/webhook-retention/) clears the body and
+  // the parsed copy once a delivery is older than WEBHOOK_RETENTION_DAYS (90
+  // by default) and finished with, and keeps the ids, references, hash,
+  // outcome and times that make a repeat a repeat. A delivery still pending,
+  // failed or held for review keeps its body until a consumer or a person is
+  // done with it (docs/contract/CONVENTIONS.md section 21). A person's own
+  // money history is the ledger (FintavaLedgerEntry above), which the purge
+  // does cover, so neither table is named in this map.
   // NUV-05. NuvionBookTransfer, the log of every book transfer sent on
   // Nuvion, has no person column (like NuvionWebhookEvent): it names Nuvion's
   // account ids, a person's account number, the amount and WAWU's reference,
@@ -365,6 +377,23 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // The codes this person made to share their receipts (WALLET-18). They go
   // with them, and each code then opens the plain "not found" page.
   { model: 'MoneyReceipt', column: 'wawuUserId', disposition: 'OWNED' },
+  // A send from one wallet to another (WALLET-07) is BOTH people's record of
+  // money that moved, so neither side's purge deletes the row: each person's
+  // side is set to null with the details that name or reach them (their
+  // account number and the name they went by on the other's history; the
+  // sender's note is the sender's words and goes with the sender).
+  {
+    model: 'WalletTransfer',
+    column: 'payerWawuUserId',
+    disposition: 'ANONYMISED',
+    clear: ['payerAccountNumber', 'payerName', 'note'],
+  },
+  {
+    model: 'WalletTransfer',
+    column: 'recipientWawuUserId',
+    disposition: 'ANONYMISED',
+    clear: ['recipientAccountNumber', 'recipientName'],
+  },
 
   // ── points (POINTS-01) ──────────────────────────────────────────────────
   // This person's points: the ledger of every change, the holds that spent
@@ -378,6 +407,20 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'PointLedger', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'PointHold', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'PointLot', column: 'wawuUserId', disposition: 'OWNED' },
+  // Points turned into cash (POINTS-04): each row is WAWU's own movement of
+  // cash from its account to this person's wallet, and the provider's record
+  // of it (our reference, the amount, whether it was confirmed) must outlive
+  // the account while a move may still be in flight. The row stays; the
+  // person and the wallet account it paid into are set to null. Its points
+  // hold went with the person's points above, and a conversion still held
+  // when the account is deleted is cancelled by the sweep (nothing is paid
+  // into a wallet that is gone).
+  {
+    model: 'PointConversion',
+    column: 'wawuUserId',
+    disposition: 'ANONYMISED',
+    clear: ['destinationAccountNumber'],
+  },
 
   // The city on this person's professional card (PROS-02). Theirs, and
   // public only beside a listing that goes with them.
@@ -556,6 +599,8 @@ export const NOT_A_USER_REFERENCE: ReadonlyArray<{
   { model: 'WalletPayment', column: 'wawuShareKobo' },
   // WAWU's 15% share in kobo on a hold (MONEY-18), not a person.
   { model: 'WalletHold', column: 'wawuShareKobo' },
+  // WAWU's fee in kobo on a send between two people (WALLET-07), not a person.
+  { model: 'WalletTransfer', column: 'wawuFeeKobo' },
 ];
 
 /** The rows a purge keeps with the account's side set to null. */

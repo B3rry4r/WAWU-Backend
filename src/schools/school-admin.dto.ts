@@ -125,6 +125,33 @@ const IsTextList = (max: number) =>
 
 const trimmed = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() : value;
+
+/**
+ * FIX-19. True when the text holds a C0 control (U+0001 to U+001F, tab and
+ * line breaks included), DEL (U+007F) or a C1 control (U+0080 to U+009F). The
+ * app draws each as a box. NUL (U+0000) is refused by `IsCleanText`, with its
+ * own message. Written with code units, not a regex, so the lint rule against
+ * control characters in a pattern has nothing to flag.
+ */
+export function hasControlCharacter(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  for (let i = 0; i < value.length; i++) {
+    const c = value.charCodeAt(i);
+    if ((c >= 0x01 && c <= 0x1f) || (c >= 0x7f && c <= 0x9f)) return true;
+  }
+  return false;
+}
+
+/**
+ * A name (a school's `name`, a course's `title`) is trimmed like any other
+ * text, except that one holding a control character is left as it came, so
+ * the check below sees it: a name that is `"Acme\n"` must be refused, not
+ * quietly trimmed into a different name.
+ */
+const trimmedName = ({ value }: { value: unknown }) =>
+  typeof value === 'string' && hasControlCharacter(value)
+    ? value
+    : trimmed({ value });
 const trimmedList = ({ value }: { value: unknown }): unknown =>
   Array.isArray(value)
     ? (value as unknown[]).map((x) => (typeof x === 'string' ? x.trim() : x))
@@ -151,12 +178,20 @@ const IsSafeUrl = decorate(
   '$property must be a URL address (https), with no null characters or broken characters',
 );
 
+/** A name, and a title: no control character of any kind (FIX-19). */
+const HasNoControlCharacters = decorate(
+  'hasNoControlCharacters',
+  (v) => !hasControlCharacter(v),
+  '$property must not contain control characters',
+);
+
 // ---- school ---------------------------------------------------------------
 
 export class CreateSchoolDto {
-  @Transform(trimmed)
+  @Transform(trimmedName)
   @IsString()
   @IsCleanText()
+  @HasNoControlCharacters()
   @MaxLength(SCHOOL_LIMITS.name)
   name!: string;
 
@@ -210,9 +245,10 @@ export class CreateSchoolDto {
 /** Every field optional; `hidden` hides or shows the school. */
 export class UpdateSchoolDto {
   @OptionalNotNull()
-  @Transform(trimmed)
+  @Transform(trimmedName)
   @IsString()
   @IsCleanText()
+  @HasNoControlCharacters()
   @MaxLength(SCHOOL_LIMITS.name)
   @NotNull()
   name?: string;
@@ -306,9 +342,10 @@ export class ListSchoolsDto {
 // ---- course ---------------------------------------------------------------
 
 export class CreateCourseDto {
-  @Transform(trimmed)
+  @Transform(trimmedName)
   @IsString()
   @IsCleanText()
+  @HasNoControlCharacters()
   @MaxLength(SCHOOL_LIMITS.title)
   title!: string;
 
@@ -344,9 +381,10 @@ export class CreateCourseDto {
 
 export class UpdateCourseDto {
   @OptionalNotNull()
-  @Transform(trimmed)
+  @Transform(trimmedName)
   @IsString()
   @IsCleanText()
+  @HasNoControlCharacters()
   @MaxLength(SCHOOL_LIMITS.title)
   @NotNull()
   title?: string;

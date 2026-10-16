@@ -29,9 +29,13 @@ export class DataExportDownloadController {
     @Query('token') token: string | undefined,
     @Res() res: Response,
   ): Promise<void> {
-    const requestId = token
-      ? verifyExportLink(token, this.config.get<string>('ADMIN_JWT_SECRET'))
-      : null;
+    // A repeated `token` arrives as an array although it is typed string
+    // (the declared type is the contract's): not a link this server issued,
+    // so the same 404 as any other failed link (FIX-18).
+    const requestId =
+      typeof token === 'string' && token
+        ? verifyExportLink(token, this.config.get<string>('ADMIN_JWT_SECRET'))
+        : null;
     if (!requestId) throw new NotFoundException(NOT_VALID);
 
     const row = await this.prisma.dataExportRequest.findUnique({
