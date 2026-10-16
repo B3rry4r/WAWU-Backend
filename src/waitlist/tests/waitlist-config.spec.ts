@@ -37,7 +37,7 @@ function stop(edit: (raw: any) => void): string {
 }
 
 describe('event_offers in plans.config.json (JOIN-01)', () => {
-  it('the shipped file carries the default offer: id, name, 200000 kobo, the Verify tier for 30 days, open from 10 Oct 2026 (Lagos) with no closing date', () => {
+  it('the shipped file carries the default offer: id, name, 200000 kobo, the Verify tier for 365 days (a full year, owner 12 Oct 2026), open from 10 Oct 2026 (Lagos) with no closing date', () => {
     const config = loadPlansConfig();
     expect(config.eventOffers).toHaveLength(1);
     const o = config.eventOffers[0];
@@ -46,7 +46,7 @@ describe('event_offers in plans.config.json (JOIN-01)', () => {
       name: 'WAWU event registration',
       priceKobo: 200000,
       tier: 'verify',
-      tierDays: 30,
+      tierDays: 365,
     });
     expect(o.openFrom.toISOString()).toBe('2026-10-09T23:00:00.000Z');
     expect(o.openUntil).toBeNull();

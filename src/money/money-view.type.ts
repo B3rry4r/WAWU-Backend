@@ -419,7 +419,10 @@ export interface FeeQuoteView {
 /* ------------------------------------------------------------------ */
 
 /**
- * pending:   accepted and debited; the bank has not confirmed (bank sends).
+ * pending:   accepted and debited; the bank has not confirmed (bank sends),
+ *            or the provider has not yet said whether it took a send to a
+ *            WAWU user whose answer was lost (WALLET-07: asked about by our
+ *            reference, never sent again).
  * completed: the money arrived.
  * failed:    refused before any money left the wallet.
  * reversed:  the money left, the send failed, and it came back (W14).
@@ -465,6 +468,19 @@ export interface TransferView {
   /** A sentence for the person, set when status is failed or reversed. */
   failureReason: string | null;
   reversal: TransferReversalView | null;
+  /**
+   * A sentence for the person while status is pending: the send is not
+   * confirmed yet, so nothing says it failed and they are told not to send
+   * again (WALLET-07; the same sentence as a payment's). Null otherwise.
+   */
+  statusMessage: string | null;
+  /**
+   * The sender's row in the history (`TransactionView.id`): what the receipt
+   * routes (`/money/transactions/{id}/receipt`, WALLET-18) are keyed by, so
+   * W12's Share can ask for its receipt (BACKEND_GAPS G-66). Null for a send
+   * the ledger holds no row of.
+   */
+  transactionId: string | null;
   createdAt: string;
   completedAt: string | null;
 }
@@ -517,9 +533,14 @@ export interface PaymentQuoteView {
 
 export type HoldStatus = 'held' | 'released' | 'refunded';
 
-/** What releases a hold to the payee; the opposite outcome refunds the payer. */
+/**
+ * What releases a hold to the payee; the opposite outcome refunds the payer.
+ * `plan_granted` (TIER-03) is not a held kind's: a tier payment is WAWU's own
+ * sale and is never held, a hold is written for it only when the plan cannot
+ * be granted after the payment confirmed, and it is refunded at once.
+ */
 export type HoldReleaseCondition =
-  'dm_answered' | 'event_took_place' | 'bill_delivered';
+  'dm_answered' | 'event_took_place' | 'bill_delivered' | 'plan_granted';
 
 /**
  * Money held between payer and payee in WAWU's merchant wallet (R-19). The

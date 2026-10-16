@@ -10,6 +10,7 @@ import {
   Injectable,
   Logger,
   SetMetadata,
+  type Type,
   UseFilters,
   UseGuards,
 } from '@nestjs/common';
@@ -78,6 +79,13 @@ export interface IdempotencyScope {
   fingerprint: string;
   /** Set once this request holds the key: its own claim, never a later one's. */
   claimId?: string;
+  /**
+   * The body the payment service stored as this request's answer, when the
+   * route answers its own view of the payment (`WalletPaymentService.
+   * presentRoute`, TIER-03): the route returns exactly this, so the first
+   * answer and every replay are the same text.
+   */
+  answered?: unknown;
   /**
    * What the route wants its stale resolver to know about the repeat that is
    * asking (the PIN routes pass the new PIN the request carries). Held in
@@ -423,10 +431,17 @@ export const CurrentIdempotencyScope = createParamDecorator(
  * wallet already found). Documents `Idempotency-Key` as required, and both
  * approval headers.
  */
-export function RequireIdempotentApproval(route: string): MethodDecorator {
+export function RequireIdempotentApproval(
+  route: string,
+  ...beforeApproval: Type<CanActivate>[]
+): MethodDecorator {
   return applyDecorators(
     SetMetadata(ROUTE_KEY, route),
-    UseGuards(WalletGateGuard, IdempotencyGuard),
+    // `beforeApproval`: guards of the route's own that must answer BEFORE the
+    // PIN is looked at, and after a repeat has been answered (WALLET-07: who
+    // the money is going to). A refusal from one gives the key back
+    // (IdempotencyFilter), and uses no PIN try.
+    UseGuards(WalletGateGuard, IdempotencyGuard, ...beforeApproval),
     RequireApproval(),
     UseFilters(IdempotencyFilter),
     IdempotencyKeyHeader(),

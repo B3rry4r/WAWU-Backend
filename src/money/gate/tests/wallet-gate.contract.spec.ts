@@ -389,7 +389,7 @@ describe('No wallet yet: every wallet route answers the same (MONEY-13) over HTT
     }
   });
 
-  it('tries every gated route: the PIN routes, the balance, the PIN reset and biometric approval (MONEY-14), the history (MONEY-15), beneficiaries and the payout account (WALLET-14), the fee quote (WALLET-15), receipts (WALLET-18), statements (WALLET-27), recipient search and recent recipients (WALLET-08), the payment quote, the payment and the poll of one payment (MONEY-17, MONEY-19), holds (MONEY-18)', () => {
+  it('tries every gated route: the PIN routes, the balance, the PIN reset and biometric approval (MONEY-14), the history (MONEY-15), beneficiaries and the payout account (WALLET-14), the fee quote (WALLET-15), receipts (WALLET-18), statements (WALLET-27), recipient search and recent recipients (WALLET-08), the payment quote, the payment and the poll of one payment (MONEY-17, MONEY-19), holds (MONEY-18), the send to a WAWU user and the read of one send (WALLET-07)', () => {
     expect(routes.map((r) => `${r.method} ${r.path}`).sort()).toEqual([
       'delete /api/hub/money/beneficiaries/:id',
       'delete /api/hub/money/device',
@@ -410,6 +410,7 @@ describe('No wallet yet: every wallet route answers the same (MONEY-13) over HTT
       'get /api/hub/money/transactions/:id/receipt/image',
       'get /api/hub/money/transactions/:id/receipt/pdf',
       'get /api/hub/money/transactions/summary',
+      'get /api/hub/money/transfers/:id',
       'get /api/hub/money/wallet/balance',
       'post /api/hub/money/approval/verify',
       'post /api/hub/money/beneficiaries',
@@ -420,6 +421,7 @@ describe('No wallet yet: every wallet route answers the same (MONEY-13) over HTT
       'post /api/hub/money/pin/reset/confirm',
       'post /api/hub/money/pin/verify',
       'post /api/hub/money/transactions/:id/receipt',
+      'post /api/hub/money/transfers/wawu',
       'put /api/hub/money/device',
       'put /api/hub/money/payout-account',
       'put /api/hub/money/pin',

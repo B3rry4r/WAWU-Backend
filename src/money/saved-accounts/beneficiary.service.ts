@@ -196,7 +196,11 @@ export class BeneficiaryService {
       bankCode,
       accountNumber,
     );
-    return this.insert(owner, { kind: 'bank_account', ...account });
+    return this.insert(owner, {
+      kind: 'bank_account',
+      ...account,
+      ...this.banks.checkedStamp(account.bankCode),
+    });
   }
 
   /**
@@ -208,7 +212,10 @@ export class BeneficiaryService {
     owner: string,
     data:
       | { kind: 'wawu_user'; recipientWawuId: string }
-      | ({ kind: 'bank_account' } & BankAccountView),
+      | ({ kind: 'bank_account' } & BankAccountView & {
+            nuvionBankCode: string | null;
+            nuvionCheckedAt: Date | null;
+          }),
   ): Promise<BeneficiaryView> {
     try {
       const row = await this.prisma.$transaction(async (tx) => {

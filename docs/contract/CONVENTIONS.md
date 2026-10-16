@@ -262,7 +262,9 @@ status.
 ## 4. `Idempotency-Key` on every request that moves money
 
 **Which requests:** `POST /money/transfers/wawu`, `POST /money/transfers/bank`
-and `POST /money/payments`, and every money-moving route added later. Without
+and `POST /money/payments`, `POST /plans/purchases` (a tier bought from the
+wallet, TIER-03: its stored answer is the purchase, not the bare payment;
+docs/contract/PLANS.md section 8), and every money-moving route added later. Without
 the header: `400 idempotency_key_required`. Format: 8 to 128 characters of
 `[A-Za-z0-9_-]`.
 
@@ -1153,6 +1155,30 @@ this applies and every answer is as in section 9.
   confirm the account, or a bank code not in the list, is `422
   name_check_failed` and nothing is saved; Fintava not answering (or the
   key refused) is `503 provider_unreachable` with `retryAfterSeconds`.
+- **Under Nuvion the same two checks (NUV-06), with a sentence of their
+  own for each way the account is not confirmed.** The bank list is
+  Nuvion's (`GET /bank-codes/NG`) and the name check is its
+  `POST /counterparty-lookups`. All four are `422 name_check_failed`, so
+  the app's switch on `reason.code` is the same; the message says what to
+  fix: no account with that number at that bank, a bank the check cannot
+  ask (including a code not in the list; nothing is asked), a number that
+  is not ten digits (nothing is asked), or more than one account found. A
+  check that got no answer in time (Nuvion's own timeout, its lookup
+  service down, or ours running out) is `503 provider_unreachable`, not a
+  wrong account. Fintava's yes-or-no answer keeps its one sentence.
+  `bank_not_supported` and the others are sentences, not new codes: the
+  contract's `MoneyErrorReason` is unchanged.
+- **A saved account carries what Nuvion needs to send to it (NUV-06).**
+  `MoneyBeneficiary` and `MoneyPayoutAccount` hold `nuvionBankCode` (the
+  bank's code in Nuvion's list) and `nuvionCheckedAt` (when the holder's name
+  was last confirmed through Nuvion; null on a row from the Fintava days,
+  which is matched to Nuvion's list by code, else by bank name, and
+  checked by name again before its first Nuvion send:
+  `SavedAccountTargetService`), and the ids of Nuvion's counterparty and
+  payment detail once a send has made them (`nuvionCounterpartyId`,
+  `nuvionPaymentDetailId`; a payout account also holds WAWU's operational
+  account's own pair). None is in any response. Saving a different account
+  as the payout account clears the ids.
 - **The BVN name.** The BVN check (KYC-01) keeps, with every passed check,
   the keyed hash of each word of the BVN record's first and last name,
   bound to the person and the check: HMAC-SHA256 under `IDENTITY_HASH_KEY`
@@ -1985,6 +2011,13 @@ added up into one.
   - Answers are `HoldSettlement { state: settled | pending | waiting |
     review, waiting, status }`; `status` stays `held` until the provider
     **confirmed** the move (its answer, or its record of our reference).
+  - **A hold for a kind that is not held** (TIER-03 round 2): a tier payment is
+    WAWU's own sale and completes into no hold. When its plan cannot be
+    granted after the payment confirmed, `PlanPurchaseService` writes a
+    `WalletHold` for it (`releaseCondition: plan_granted`, no payee, the
+    payment's price and shares) and asks for the **refund** at once; nothing
+    ever releases it. The same once, one way, the same sweep, the same
+    reference `wawu-ref-<hold id>`. docs/contract/PLANS.md section 8.
 - **The provider's record is the truth** (the same rules as section 14).
   A move whose outcome is unknown (a timeout, a 5xx, a transfer accepted and
   not finished, a repeated reference) is `pending`: `sentAt` is set, the
@@ -2120,3 +2153,211 @@ When another job completes a payment between a path's figures update and its
 `complete()`, the path's note (both figures) is still written, once, to the
 completed payment (`keepNote`, a conditional update that only touches a
 completed payment).
+
+## 19. Send to a WAWU user (WALLET-07)
+
+`POST /money/transfers/wawu` and `GET /money/transfers/{id}`
+(`src/money/transfers/`), served; sending to a bank account (WALLET-09) is
+still declared. Finding the person is WALLET-08.
+
+- **The request.** Headers `Idempotency-Key` (required, section 4) and
+  `X-Transaction-Pin` or `X-Device-Approval` (section 5). Body
+  `WawuTransferDto`: `recipientWawuUserId`, `amountKobo` (what they get),
+  `expectedTotalKobo` and `quoteToken` (both from `GET /money/fees/quote?
+  kind=wawu_transfer`, BACKEND_GAPS G-64), and an optional `note` (trimmed,
+  at most 100 characters, no NUL). Answers `201` with `TransferView`.
+- **What moves.** One wallet-to-wallet transfer of `amountKobo` from the
+  sender's wallet to the receiver's, at the provider the server runs (Fintava,
+  or Nuvion's book transfer), under OUR reference `wawu-send-<id>` (also
+  `TransferView.reference`). The sender's balance falls by the quoted
+  `totalKobo` (the amount, the provider's charge and WAWU's fee, R-10); the
+  receiver's rises by exactly `amountKobo`. WAWU's fee is collected by the
+  provider in the same transfer (Fintava's dashboard "Merchant charges",
+  `docs/fintava/fees.md`), so there is no second transfer and no second
+  provider charge. What the provider's own record says it took is the record:
+  a charge other than the quote is kept on the send (`TransferView.fee` and
+  `totalKobo` say what really left, the provider's part first and WAWU's what
+  is left), a believable excess is flagged for NUV-08, and a charge below 0 or
+  above the quote by more than `PAYMENT_CHARGE_REVIEW_ABOVE_KOBO` is not
+  believed: the send stays `pending`, in review, and nothing the provider
+  reported is written.
+- **Who it may go to, answered before the PIN.** Guards run in this order:
+  the wallet gate, the key (a repeat of a finished send is answered here and
+  is never re-judged), the recipient, then the PIN. A refusal at the
+  recipient uses no PIN try and gives the key back.
+
+  | Recipient | Answer |
+  |---|---|
+  | yourself | `400 self_transfer` "You can't send money to yourself." |
+  | nobody the Hub knows | `404 recipient_not_found` "We could not find that person." |
+  | an account whose deletion is scheduled | `404 recipient_not_found` "This account is closed." |
+  | a block between you, in either direction | `403 recipient_blocked` "You can't send money to this person." (never says who blocked whom) |
+  | no open wallet at the provider this server runs | `409 recipient_has_no_wallet` |
+
+  A value that is not a user id is the plain validation `400`, after the PIN
+  like every malformed field. No answer of either route carries a phone
+  number: the recipient is `MoneyPartyView` (id, name, handle, avatar, tick).
+- **Before money moves**, in order: `fees_not_set`, the wallet, the key, the
+  recipient, the PIN, the body, the quote (`409 quote_changed` with
+  `reason.feeQuote`), the provider's available balance (`402
+  insufficient_funds` with `balanceKobo`, `totalKobo` and `shortfallKobo`,
+  CONVENTIONS section 14a; BACKEND_GAPS G-481; nothing claimed, the key given
+  back), WAWU's limits inside the claim (`403 limit_reached`).
+- **Once per key.** The send, the sender's pending ledger row and the key's
+  link to it are written in one transaction BEFORE the provider hears of it.
+  A retry, two taps at once on one Hub or on two, and a Hub that dies between
+  the provider's answer and our write all end in one transfer: the provider
+  is asked about the send by our reference and is never sent it twice.
+- **`status`.** `completed`; `failed` (the provider refused it or its own
+  record says it failed: nothing left the wallet); `reversed` (the provider
+  moved it and reversed it); `pending`. A `pending` send is one whose
+  outcome is not known: the answer was lost, or the provider accepted it
+  and has not finished. It carries `statusMessage` "We're still confirming
+  this send. Don't send it again; we'll let you know."; nothing says no money
+  moved (absence at the provider is never proof, lead ruling D1). The app
+  polls `GET /money/transfers/{id}`; the sweep (every minute, backing off to
+  hourly) asks the provider by reference and settles it; past
+  `PAYMENT_REVIEW_AFTER_HOURS` it goes to review, still `pending`. The one
+  exception to "never sent again": a request that PROVABLY never reached the
+  provider (a refused connection, a host name that did not resolve, decided
+  by error code and syscall) fails the send, answers `503
+  provider_unreachable` and gives the key back, so the same key sends it
+  again as a NEW send under a new reference.
+- **Ledger.** The sender's `out` row (`category: transfer`, counterparty the
+  receiver, the fee split and the note) is pending from the claim; the
+  receiver's `in` row is written only once the send is confirmed, so nobody
+  sees money coming in that has not arrived. `TransferView.transactionId` is
+  the sender's row (`TransactionView.id`), what the receipt routes are keyed
+  by (BACKEND_GAPS G-66).
+- **`GET /money/transfers/{id}`** reads our record only (never the provider),
+  `Cache-Control: no-store`, behind the wallet gate, not behind the fee
+  settings, the key or the PIN. Only the sender reads it: another person's
+  send and an id nobody holds are the same `404 not_found`.
+- **Providers.** Under Fintava the send works as above. Under Nuvion it is a
+  book transfer (NUV-05); until that area is served the adapter answers
+  `not_supported`, and the send answers `503 provider_unreachable`, fails,
+  and gives the key back before any money moves.
+- **Deleting an account** keeps the send for the other person: each side's
+  user id, account number and name are set to null when that person is
+  purged, and the sender's note goes with the sender.
+
+## 22. The nightly check against the provider (MONEY-16)
+
+`src/money/check/`. No route. It reads WAWU's ledger and the provider's own
+record and reports any difference the same night. It only reads: it never
+changes a ledger row, a hold, a payment or a balance (the provider's balance is
+the truth, and what to do about a difference is a person's call). It reaches
+the provider only through `WALLET_PROVIDER` and acts only on the rows of the
+provider the server runs (their `provider` column).
+
+- **When.** `MONEY_CHECK_TIME` (HH:MM Lagos, default 02:30, PROVISIONAL), from
+  that minute until `MONEY_CHECK_CATCH_UP_HOURS` (6) later; a minute cron
+  (`money-nightly-check`) starts it where `ScheduleModule.forRoot()` is loaded.
+  By hand: `npm run money:check` (after `npm run build`, with the Hub's
+  environment; `-- --night=YYYY-MM-DD`, `-- --again` for one more run of a
+  night that finished). It prints one line and exits 0 (finished or already
+  finished) or 2.
+- **One run a night, on any number of Hub processes.** The run is claimed by
+  inserting its `MoneyCheckRun` row (unique per provider, Lagos date and
+  sequence). A run is kept with a lease that its worker extends per wallet; a
+  process that finds a `running` row past its lease takes it over and makes the
+  run again (`attempt` + 1), at most three times a night. A night that cannot be
+  made ends `finished` with the verdict `incomplete` and the reason, and is
+  reported like any other: a night is never left as nothing, which would read as
+  clean. A run another process took while this one worked is dropped, and says
+  nothing. A run whose last try died is closed the same way by the next minute
+  tick at any hour, not only inside the catch-up window: a `running` row whose
+  lease ran out, or a `failed` row whose rest is over, on any night but the one
+  being made now (a `failed` row of a run made by hand is left to the person who
+  saw it fail).
+- **Why a night failed: a code and one fixed sentence.** The stored `failure`
+  (`code: sentence`, for example `provider_unavailable: The wallet provider
+  failed while the check was reading from it.`) and the note in the emailed
+  report carry the code and the sentence only, never an exception's own text,
+  which could hold a value from a library, the database or the provider. The
+  Hub's log names the error class.
+- **What it compares.**
+  1. `movements`: each wallet's debits (`listTransactions`, newest first, 100 a
+     page) with the ledger's `out` rows, inside the window (back past the last
+     finished run by `MONEY_CHECK_OVERLAP_HOURS`, never further than
+     `MONEY_CHECK_MAX_LOOKBACK_DAYS`). A debit only the provider has (completed)
+     and a completed or pending send only the ledger has are mismatches; so are
+     a different amount, two provider records for one ledger row, and statuses
+     that cannot both be true (a send the ledger calls `failed` or `reversed`
+     while the provider lists it completed, a completed one the provider lists as
+     failed, a settled disagreement over pending). A provider record that is only `PENDING` or
+     `FAILURE` with no ledger row moved no money (a notice), as are the
+     provider's own charges to WAWU (`kind` `charge`). Movements younger than
+     `MONEY_CHECK_SETTLE_MINUTES` are left to the next night.
+  2. `merchant_movements`: the same for WAWU's own account.
+  3. `balances`: each wallet's AVAILABLE balance (the figure the app shows)
+     against completed money in less completed money out, widened by the pending
+     rows and by a failed bank send nobody has seen come back. The booked figure
+     never rescues a wallet whose available figure is outside that range: a
+     pending item nobody recorded is the difference this check exists to find. A
+     booked figure that is not the available one is a notice
+     (`balance_booked_differs`). Read with the ledger standing still and
+     confirmed once; a wallet that kept moving is not compared.
+  4. `held_money` (R-19): the provider's available balance of WAWU's account
+     against what the open holds need (their price, less a move already handed
+     to the provider). It cannot be one equality: the account also holds WAWU's
+     shares and fees (BACKEND_GAPS G-447). Also a completed payment of a held
+     kind with no hold, and a settled hold whose merchant-side row is missing,
+     pending or marked.
+  5. `merchant_charges` (R-10, OPS-09): for each completed send whose ledger row
+     carries a WAWU fee, the provider's full record (`findTransactionById`,
+     Fintava's `merchantComm`) shows that charge paid to WAWU.
+  6. `ledger_rows`: rows the ledger marked as disagreeing (`discrepancy`), rows
+     pending past the confirm window, failed bank sends with no reversal, each
+     completed payment's two rows (a missing, pending or marked one is a
+     mismatch), and ledger rows inside the window on a wallet account that has no
+     wallet row (a deleted account's last rows, which no balance or history
+     comparison reaches): a look, with the references and a count.
+  7. `payments` and 8. `holds`: what a person has to look at. A payment in
+     review (silence from the provider never ends a payment, G-480), one whose
+     charge was not believed, one debited above the quote, one paid twice; a
+     hold in review, a move handed over and unconfirmed past the review bound, a
+     move waiting past it for a reason other than a person's wallet, money owed
+     to a deleted payee (G-461), and a refund waiting for a payer's wallet (the
+     payer paid from a wallet, so a missing one is not a normal wait): a look
+     every night until a person settles it. A payee who has not opened a wallet
+     is not a problem (R-11): a notice.
+- **Verdicts.** `differences` (any mismatch); `not_checked` (nothing could be
+  compared with the provider: not set up here, or its adapter answers
+  `not_supported` to all of it); `incomplete` (something could not be compared:
+  a wallet the provider would not answer for, a history longer than the pages
+  read, a check the adapter cannot do yet, a run that did not finish);
+  `needs_a_look`; `clean` only when every comparison was made and nothing was
+  found. The report says how many wallets were checked and why the others were
+  not.
+- **Telling someone.** Through WAWU ID, as the data-export link and the PIN
+  reset code go: `POST /internal/users/:userId/money-check-report` with the
+  `X-Service-Key`, once per WAWU id in `MONEY_CHECK_RECIPIENT_WAWU_IDS`. The Hub
+  names the person and gives the facts (the verdict, the counts, each check's
+  state, and up to 100 findings as check, kind, reference, a sentence and kobo);
+  WAWU ID owns the address and the wording (BACKEND_GAPS G-690; built in wawu-id
+  on `wmt/MONEY-16`). The route mails the account's own VERIFIED address only
+  and answers `200 { data: { emailed: true } }` after the mail was handed to its
+  mailer; `400` for a body it will not take (any field it does not name, a
+  sentence with a character outside letters, digits, spaces and `. , : ; ' " ( )
+  _ -`, a reference that is only 10 or 11 digits, a value outside a closed
+  list), `404` no such account, `409` no verified address, `503` the mailer
+  could not take it. Anything but `emailed: true` leaves the report unsent and
+  tried again. The Hub sends only what that route takes: a sentence is cut to
+  those characters and a reference of a phone's length is given a word in front
+  of it, so a stray character cannot cost a night's report; the stored report
+  keeps the text as the check wrote it. A clean night is mailed too, so silence never means clean. A report
+  WAWU ID would not take is kept and handed on again with a growing rest
+  (5 minutes doubling to 6 hours, for a week); a recipient already mailed is not
+  mailed twice. With no recipient set the run is still made, and the result is in
+  the log (an error line per night that is not clean) and in the table.
+- **Opened during the run.** A wallet opened while the run was going is not in
+  the list read at its start, so "N of N" does not count it and nothing compared
+  it; the report names it (notice `wallets_opened_during_run`) and tomorrow's run
+  reads it.
+- **Never in a report or an email:** a name, a phone number or an account
+  number. A reference is a ledger row id, a payment id, a hold id, our own
+  reference at the provider or the provider's wallet id. Amounts are kobo as
+  decimal text.
+- **Rows.** `MoneyCheckRun.report` holds the first 500 mismatches and the first 500 looks
+  and counts the rest; finished runs are kept `MONEY_CHECK_KEEP_DAYS` (120).

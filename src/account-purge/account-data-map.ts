@@ -158,10 +158,16 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   },
   // The maker plan (TIER-01): the currency this person is billed in, the
   // tier they hold and the event passes it issued. Each exists only because
-  // this account exists and names nobody else. The purchases that paid for
-  // them are their own task's (TIER-03) and are classified there.
+  // this account exists and names nobody else.
   { model: 'PersonBilling', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'MakerTier', column: 'wawuUserId', disposition: 'OWNED' },
+  // A tier this account bought, renewed or upgraded from its wallet
+  // (TIER-03): what it was and what it cost. OWNED, like VerificationPurchase
+  // above: the row exists only because this account bought something and
+  // names no counterparty. The money's record is the payment, which stays
+  // (WalletPayment below, anonymised); its id is this row's key and is not a
+  // link anyone follows once the account is gone.
+  { model: 'MakerPurchase', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'EventPass', column: 'wawuUserId', disposition: 'OWNED' },
   // An event registration this account claimed in the app (JOIN-01; claimed by
   // JOIN-03, POST /waitlist/claims): its name, phone, email and the payment that
@@ -359,6 +365,23 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // The codes this person made to share their receipts (WALLET-18). They go
   // with them, and each code then opens the plain "not found" page.
   { model: 'MoneyReceipt', column: 'wawuUserId', disposition: 'OWNED' },
+  // A send from one wallet to another (WALLET-07) is BOTH people's record of
+  // money that moved, so neither side's purge deletes the row: each person's
+  // side is set to null with the details that name or reach them (their
+  // account number and the name they went by on the other's history; the
+  // sender's note is the sender's words and goes with the sender).
+  {
+    model: 'WalletTransfer',
+    column: 'payerWawuUserId',
+    disposition: 'ANONYMISED',
+    clear: ['payerAccountNumber', 'payerName', 'note'],
+  },
+  {
+    model: 'WalletTransfer',
+    column: 'recipientWawuUserId',
+    disposition: 'ANONYMISED',
+    clear: ['recipientAccountNumber', 'recipientName'],
+  },
 
   // ── points (POINTS-01) ──────────────────────────────────────────────────
   // This person's points: the ledger of every change, the holds that spent
@@ -550,6 +573,8 @@ export const NOT_A_USER_REFERENCE: ReadonlyArray<{
   { model: 'WalletPayment', column: 'wawuShareKobo' },
   // WAWU's 15% share in kobo on a hold (MONEY-18), not a person.
   { model: 'WalletHold', column: 'wawuShareKobo' },
+  // WAWU's fee in kobo on a send between two people (WALLET-07), not a person.
+  { model: 'WalletTransfer', column: 'wawuFeeKobo' },
 ];
 
 /** The rows a purge keeps with the account's side set to null. */
