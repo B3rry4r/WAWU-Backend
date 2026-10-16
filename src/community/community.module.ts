@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { CommunityController } from './community.controller';
 import { CommunityService } from './community.service';
-import { CreatorAccountGuard } from './guards/creator-account-guard';
+import { CreatorAccountGuard } from '../common/guards/creator-account.guard';
 import { CommunityRoomsController } from './rooms/community-rooms.controller';
 import { CommunityRoomsService } from './rooms/community-rooms.service';
 import { BlockedAccountModule } from '../blocked-account/blocked-account.module';

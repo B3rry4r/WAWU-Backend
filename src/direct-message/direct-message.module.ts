@@ -7,7 +7,7 @@ import { DmReplyWriter } from './dm-reply-writer';
 import { PaidDmPauseService } from './paid-dm-pause.service';
 import { PaidDmStandingSweep } from './paid-dm-standing.sweep';
 import { DmRefundService } from './dm-refund.service';
-import { CreatorAccountGuard } from './guards/creator-account-guard';
+import { CreatorAccountGuard } from '../common/guards/creator-account.guard';
 import { FLUTTERWAVE_CLIENT } from './flutterwave-client.interface';
 import { RealFlutterwaveAdapter } from './real-flutterwave.adapter';
 import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';
