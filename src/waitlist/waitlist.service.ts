@@ -5,7 +5,10 @@ import {
   Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import type { WaitlistRegistration } from '../../generated/prisma/client';
+import type {
+  Prisma,
+  WaitlistRegistration,
+} from '../../generated/prisma/client';
 import { WaitlistStatus } from '../../generated/prisma/enums';
 import { PrismaService } from '../common/prisma/prisma.service';
 import type { Paginated } from '../common/interceptors/response.interceptor';
@@ -38,8 +41,17 @@ import {
   REFERENCE_ATTEMPTS,
   REFERENCE_BYTES,
   REFERENCE_PREFIX,
+  REFERRAL_UNKNOWN_WORDS,
   SHORT_TEXT_MAX,
 } from './waitlist-config';
+import { readReferralCode } from './referral/referral-code';
+import { ReferralService } from './referral/referral.service';
+import type {
+  AdminWaitlistSplitRowView,
+  AdminWaitlistSummaryView,
+  WaitlistReferralCheckView,
+  WaitlistReferralOutcomeView,
+} from './referral/referral-view.type';
 import { WaitlistError } from './waitlist-error';
 import {
   type RandomBytes,
@@ -52,6 +64,7 @@ import {
 } from './waitlist-payment-lookup';
 import type {
   AdminWaitlistRegistrationView,
+  WaitlistCheckoutView,
   WaitlistOfferView,
   WaitlistRegistrationStartView,
   WaitlistRegistrationStatusView,
@@ -148,6 +161,9 @@ export class WaitlistService {
     private readonly lookup: WaitlistPaymentLookup,
     @Inject(WAITLIST_RANDOM)
     private readonly random: RandomBytes = systemRandom,
+    // Provided by WaitlistCoreModule; a service built by hand (a spec) gets
+    // its own, which needs only the database.
+    private readonly referrals: ReferralService = new ReferralService(prisma),
   ) {}
 
   // ---- the offer ----------------------------------------------------------
@@ -270,6 +286,18 @@ export class WaitlistService {
         'You are already registered for this event. You have not been charged again.',
       );
 
+    // A referral code (REF-01). With none, everything from here is exactly as
+    // it was before codes existed; with one, the registration is decided in
+    // registerWithReferral.
+    const referralCode = this.readReferral(dto.referralCode);
+    if (referralCode !== null)
+      return this.registerWithReferral(
+        referralCode,
+        offer,
+        { fullName, phone, email, state, makes, dto },
+        now,
+      );
+
     // The checkout needs the public key; without it the page could not pay.
     const charge = this.flutterwave.initCharge({
       amount: offer.priceKobo / KOBO_PER_NAIRA,
@@ -313,6 +341,9 @@ export class WaitlistService {
             email,
             state,
             makes,
+            craft: dto.craft ?? null,
+            city: dto.city ?? null,
+            updatesOptIn: dto.updatesOptIn ?? null,
             consentAt: now,
             reference: newReference(this.random),
             amountKobo: offer.priceKobo,
@@ -346,6 +377,202 @@ export class WaitlistService {
         customerPhone: row.phone,
       },
     };
+  }
+
+  // ---- referral codes (REF-01) --------------------------------------------
+
+  /**
+   * The code a registration came with, upper case; null when it came with
+   * none (left out, or only spaces). A code that is not even the shape of one
+   * is refused like a code we do not have.
+   */
+  private readReferral(raw: string | undefined): string | null {
+    if (raw === undefined || raw.trim() === '') return null;
+    const code = readReferralCode(raw);
+    if (code === null) throw this.referralUnknown();
+    return code;
+  }
+
+  private referralUnknown(): WaitlistError {
+    return new WaitlistError('referral_unknown', REFERRAL_UNKNOWN_WORDS);
+  }
+
+  /**
+   * Register with a referral code. The code's row is locked, the places taken
+   * under it are counted and the registration is inserted, all in one
+   * transaction, so two people asking for the last place cannot both get it.
+   *
+   * - Active and under its limit: the registration is attributed to the code
+   *   and charged the code's price (never more than the offer's).
+   * - Switched off, or full: the person registers at the standard price and
+   *   the registration is NOT attributed to the code. The answer says so.
+   * - Price 0: no checkout. The row is made already paid (paid 0, no
+   *   transaction id) and the answer carries what the page shows next.
+   */
+  private async registerWithReferral(
+    code: string,
+    offer: EventOffer,
+    person: {
+      fullName: string;
+      phone: string;
+      email: string;
+      state: string | null;
+      makes: string | null;
+      dto: CreateWaitlistRegistrationDto;
+    },
+    now: Date,
+  ): Promise<WaitlistRegistrationStartView> {
+    if ((await this.referrals.find(code)) === null)
+      throw this.referralUnknown();
+    const { dto } = person;
+    for (let attempt = 1; attempt <= REFERENCE_ATTEMPTS; attempt += 1) {
+      try {
+        const made = await this.prisma.$transaction(async (tx) => {
+          const locked = await this.referrals.lock(tx, code);
+          if (locked === null) throw this.referralUnknown();
+          const decision = await this.referrals.decide(tx, locked, now);
+          const price = decision.applied
+            ? Math.min(locked.priceKobo, offer.priceKobo)
+            : offer.priceKobo;
+          // A free registration needs no checkout, so no public key either.
+          let checkout: WaitlistCheckoutView | null = null;
+          if (price > 0) {
+            const charge = this.flutterwave.initCharge({
+              amount: price / KOBO_PER_NAIRA,
+              purpose: 'waitlist',
+              wawuUserId: 'waitlist',
+            });
+            if (!charge.publicKey)
+              throw new WaitlistError(
+                'payments_unavailable',
+                'Payments are not available right now. Please try again later.',
+              );
+            checkout = {
+              publicKey: charge.publicKey,
+              txRef: '',
+              amount: price / KOBO_PER_NAIRA,
+              currency: 'NGN',
+              customerName: person.fullName,
+              customerEmail: person.email,
+              customerPhone: person.phone,
+            };
+          }
+          const row = await tx.waitlistRegistration.create({
+            data: {
+              offerId: offer.id,
+              fullName: person.fullName,
+              phone: person.phone,
+              email: person.email,
+              state: person.state,
+              makes: person.makes,
+              craft: dto.craft ?? null,
+              city: dto.city ?? null,
+              updatesOptIn: dto.updatesOptIn ?? null,
+              consentAt: now,
+              reference: newReference(this.random),
+              amountKobo: price,
+              ...(decision.applied
+                ? {
+                    referralCode: locked.code,
+                    referralCommunity: locked.community,
+                  }
+                : {}),
+              ...(price === 0
+                ? { status: WaitlistStatus.paid, paidKobo: 0, paidAt: now }
+                : {}),
+            },
+          });
+          return { row, decision, checkout };
+        });
+        const { row, decision, checkout } = made;
+        const referral: WaitlistReferralOutcomeView = {
+          code,
+          applied: decision.applied,
+          ...(decision.applied ? {} : { reason: decision.reason }),
+        };
+        if (checkout === null) {
+          this.logger.log(
+            `Registration ${row.reference.slice(0, 18)} completed free with a referral code (phone ${maskPhone(row.phone)})`,
+          );
+          return {
+            reference: row.reference,
+            offerId: row.offerId,
+            amountKobo: row.amountKobo,
+            completed: {
+              status: 'paid',
+              firstName: firstNameOf(row.fullName),
+              accessCode: accessCodeLabel(row.accessCode),
+            },
+            referral,
+          };
+        }
+        return {
+          reference: row.reference,
+          offerId: row.offerId,
+          amountKobo: row.amountKobo,
+          flutterwaveConfig: { ...checkout, txRef: row.reference },
+          referral,
+        };
+      } catch (e) {
+        if (!isUniqueViolation(e)) throw e;
+        // Either the access code met a taken one (draw again), or this person
+        // was made `paid` by another start in the meantime (a free code used
+        // twice at once): the partial unique index refuses the second.
+        const paid = await this.prisma.waitlistRegistration.findFirst({
+          where: {
+            offerId: offer.id,
+            status: WaitlistStatus.paid,
+            OR: [{ phone: person.phone }, { email: person.email }],
+          },
+          select: { id: true },
+        });
+        if (paid)
+          throw new WaitlistError(
+            'already_registered',
+            'You are already registered for this event. You have not been charged again.',
+          );
+        this.logger.warn(
+          `A new reference met a taken access code (draw ${attempt} of ${REFERENCE_ATTEMPTS}); drawing another`,
+        );
+      }
+    }
+    throw new ServiceUnavailableException(
+      'We could not start your registration just now. Please try again in a moment.',
+    );
+  }
+
+  /**
+   * GET /waitlist/referral-codes/{code}: whether a registration started now
+   * would get the code's price, and what the person would pay. Advice only:
+   * the registration decides again, inside its own lock. Never the limit, the
+   * count or the community.
+   */
+  async referralCheck(
+    raw: string,
+    now: Date = new Date(),
+  ): Promise<WaitlistReferralCheckView> {
+    const code = readReferralCode(raw);
+    const row = code === null ? null : await this.referrals.find(code);
+    if (code === null || row === null) throw this.referralUnknown();
+    const offer = this.openOffers(now)[0];
+    if (!offer)
+      throw new WaitlistError(
+        'no_open_offer',
+        'There is no event registration open right now.',
+      );
+    const decision = await this.referrals.decide(this.prisma, row, now);
+    return decision.applied
+      ? {
+          code,
+          applies: true,
+          priceKobo: Math.min(row.priceKobo, offer.priceKobo),
+        }
+      : {
+          code,
+          applies: false,
+          reason: decision.reason,
+          priceKobo: offer.priceKobo,
+        };
   }
 
   // ---- status and verify --------------------------------------------------
@@ -562,6 +789,9 @@ export class WaitlistService {
       email: row.email,
       state: row.state,
       makes: row.makes,
+      craft: row.craft,
+      city: row.city,
+      updatesOptIn: row.updatesOptIn,
       status: row.status,
       amountKobo: row.amountKobo,
       paidKobo: row.paidKobo,
@@ -573,6 +803,37 @@ export class WaitlistService {
       claimedByWawuId: row.claimedByWawuId,
       claimedAt: row.claimedAt?.toISOString() ?? null,
       createdAt: row.createdAt.toISOString(),
+      referralCode: row.referralCode,
+      referralCommunity: row.referralCommunity,
+    };
+  }
+
+  /**
+   * The rows a filter matches. `referralCode` narrows to one code (any case);
+   * `noReferral` to every registration with no code, those made before codes
+   * existed included.
+   */
+  private adminWhere(filter: {
+    offerId?: string;
+    status?: WaitlistStatus;
+    referralCode?: string;
+    noReferral?: boolean;
+  }): Prisma.WaitlistRegistrationWhereInput {
+    if (filter.referralCode && filter.noReferral)
+      throw new BadRequestException(
+        'Choose a referral code or "no code", not both.',
+      );
+    return {
+      ...(filter.offerId ? { offerId: filter.offerId } : {}),
+      ...(filter.status ? { status: filter.status } : {}),
+      ...(filter.referralCode
+        ? {
+            referralCode:
+              readReferralCode(filter.referralCode) ??
+              filter.referralCode.trim().toUpperCase(),
+          }
+        : {}),
+      ...(filter.noReferral ? { referralCode: null } : {}),
     };
   }
 
@@ -580,10 +841,7 @@ export class WaitlistService {
   async adminList(
     query: AdminWaitlistListQueryDto,
   ): Promise<Paginated<AdminWaitlistRegistrationView>> {
-    const where = {
-      ...(query.offerId ? { offerId: query.offerId } : {}),
-      ...(query.status ? { status: query.status } : {}),
-    };
+    const where = this.adminWhere(query);
     const [rows, total] = await Promise.all([
       this.prisma.waitlistRegistration.findMany({
         where,
@@ -605,11 +863,10 @@ export class WaitlistService {
   async *adminRows(filter: {
     offerId?: string;
     status?: WaitlistStatus;
+    referralCode?: string;
+    noReferral?: boolean;
   }): AsyncGenerator<WaitlistRegistration> {
-    const where = {
-      ...(filter.offerId ? { offerId: filter.offerId } : {}),
-      ...(filter.status ? { status: filter.status } : {}),
-    };
+    const where = this.adminWhere(filter);
     let cursor: string | undefined;
     for (;;) {
       const batch = await this.prisma.waitlistRegistration.findMany({
@@ -622,6 +879,68 @@ export class WaitlistService {
       if (batch.length < 1000) return;
       cursor = batch[batch.length - 1].id;
     }
+  }
+
+  /**
+   * GET /admin/waitlist/registrations/summary: the whole offer's money and
+   * people, counted on the server from the rows themselves (every paid
+   * registration since the offer opened, those made before referral codes
+   * included). A `failed` row is a second payment kept for a refund, so it is
+   * counted apart and is never part of what was paid. The split has one row
+   * per code and a last "No code" row (`code` null).
+   */
+  async adminSummary(
+    filter: { offerId?: string } = {},
+    now: Date = new Date(),
+  ): Promise<AdminWaitlistSummaryView> {
+    const offer = filter.offerId ? { offerId: filter.offerId } : {};
+    const [paid, failed, unpaid, byCode, codes] = await Promise.all([
+      this.prisma.waitlistRegistration.aggregate({
+        where: { ...offer, status: WaitlistStatus.paid },
+        _count: { _all: true },
+        _sum: { paidKobo: true },
+      }),
+      this.prisma.waitlistRegistration.aggregate({
+        where: { ...offer, status: WaitlistStatus.failed },
+        _count: { _all: true },
+        _sum: { paidKobo: true },
+      }),
+      this.prisma.waitlistRegistration.count({
+        where: { ...offer, status: WaitlistStatus.pending },
+      }),
+      this.prisma.waitlistRegistration.groupBy({
+        by: ['referralCode'],
+        where: { ...offer, status: WaitlistStatus.paid },
+        _count: { _all: true },
+        _sum: { paidKobo: true },
+      }),
+      this.prisma.referralCode.findMany({
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: { code: true, community: true },
+      }),
+    ]);
+    const paidBy = new Map(byCode.map((g) => [g.referralCode, g]));
+    const split: AdminWaitlistSplitRowView[] = codes.map((c) => ({
+      code: c.code,
+      community: c.community,
+      people: paidBy.get(c.code)?._count._all ?? 0,
+      kobo: paidBy.get(c.code)?._sum.paidKobo ?? 0,
+    }));
+    const none = paidBy.get(null);
+    split.push({
+      code: null,
+      community: null,
+      people: none?._count._all ?? 0,
+      kobo: none?._sum.paidKobo ?? 0,
+    });
+    return {
+      offerId: filter.offerId ?? null,
+      paid: { people: paid._count._all, kobo: paid._sum.paidKobo ?? 0 },
+      failed: { people: failed._count._all, kobo: failed._sum.paidKobo ?? 0 },
+      unpaid,
+      split,
+      generatedAt: now.toISOString(),
+    };
   }
 
   // ---- sweeps -------------------------------------------------------------

@@ -273,7 +273,7 @@ describe('Rate limits behind nginx (OPS-11)', () => {
       );
     });
 
-    it('only the three payment webhooks (Flutterwave, Fintava, Nuvion: NUV-01) skip the limits; the only other overrides are admin login and refresh, the BVN check (KYC-01), the selfie match (KYC-02), the public receipt check and the receipt image and PDF (WALLET-18), the recipient search (WALLET-08), and the four public event registration routes (JOIN-01), once each', () => {
+    it('only the three payment webhooks (Flutterwave, Fintava, Nuvion: NUV-01) skip the limits; the only other overrides are admin login and refresh, the BVN check (KYC-01), the selfie match (KYC-02), the public receipt check and the receipt image and PDF (WALLET-18), the recipient search (WALLET-08), the four public event registration routes (JOIN-01), once each, and the two public email unsubscribe routes (EMAIL-01), once each', () => {
       const root = join(__dirname, '..');
       const files: string[] = [];
       const walk = (dir: string) => {
@@ -300,13 +300,25 @@ describe('Rate limits behind nginx (OPS-11)', () => {
         'nuvion/webhook/nuvion-webhook.controller.ts': 1,
         'payment-webhook/payment-webhook.controller.ts': 1,
       });
+      // EMAIL-01: the public unsubscribe page (GET shows the confirmation,
+      // POST unsubscribes, and the one-click request a mail app sends is that
+      // POST) has its own `medium` limit of 120 calls per address in 10
+      // minutes. It needs no sign-in and writes to the suppression list, so it
+      // is held well below the global `medium` (200 a minute): a person needs
+      // one or two calls, and a mail provider opening links from one address
+      // stays inside 120 in 10 minutes. `short` keeps its 20 a second.
       expect(uses(/^\s*@Throttle\(/gm)).toEqual({
         'admin/auth/admin-auth.controller.ts': 2,
+        'admin/notifications/email/email-unsubscribe.controller.ts': 2,
         'money/identity/money-identity.controller.ts': 2,
         'money/receipts/money-receipt.controller.ts': 2,
         'money/receipts/public-receipt.controller.ts': 1,
         'money/recipients/money-recipient.controller.ts': 1,
-        'waitlist/waitlist-public.controller.ts': 4,
+        // REF-01: the referral code check is the fifth, on the same limit as
+        // the other two reads (600 calls per address in 10 minutes): a
+        // venue's shared address checks one code per person, and the answer
+        // names no limit, count or community, so there is nothing to mine.
+        'waitlist/waitlist-public.controller.ts': 5,
       });
     });
 
@@ -392,6 +404,7 @@ describe('Rate limits behind nginx (OPS-11)', () => {
         'MoneyRecipientController.search',
         'PublicReceiptController.page',
         'WaitlistPublicController.currentOffer',
+        'WaitlistPublicController.referralCheck',
         'WaitlistPublicController.register',
         'WaitlistPublicController.status',
         'WaitlistPublicController.verify',
@@ -461,7 +474,8 @@ describe('Rate limits behind nginx (OPS-11)', () => {
       ]);
       // JOIN-01 (round 2, lead ruling of 10 Oct 2026: many Nigerian phones sit
       // behind one mobile-network address and a venue shares one Wi-Fi
-      // address): the four public event registration routes each set their own
+      // address): the public event registration routes (four, and REF-01's
+      // referral code check as the fifth) each set their own
       // `medium` override and the guard counts each route apart. The two reads
       // (the offer, a registration's status) allow 600 calls per address in 10
       // minutes, the two writes (register, verify) 300. Only `medium` is
@@ -479,6 +493,8 @@ describe('Rate limits behind nginx (OPS-11)', () => {
           .sort((a, b) => a.on.localeCompare(b.on)),
       ).toEqual([
         waitlist('currentOffer', 600),
+        // REF-01: the public referral code check, a read like the other two.
+        waitlist('referralCheck', 600),
         waitlist('register', 300),
         waitlist('status', 600),
         waitlist('verify', 300),

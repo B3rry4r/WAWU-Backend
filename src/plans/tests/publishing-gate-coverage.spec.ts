@@ -253,6 +253,8 @@ const NOT_GATED: Record<string, { files: string[]; why: string }> = {
 const MULTIPART_NOT_GATED: Record<string, string> = {
   'POST money/identity/documents':
     'an identity document or proof of address (PDF, JPG or PNG, up to 10 MB) forwarded to the wallet provider for the wallet opening; WAWU keeps no copy, and signed-in accounts only, no tier',
+  'POST admin/notifications/email/campaigns/csv':
+    "an admin's CSV of addresses for an email campaign (superadmin or reviewer only); it builds a draft and sends nothing, it is not a product's file, and no tier applies",
 };
 
 /**

@@ -280,10 +280,22 @@ export class WawuTransferDto {
   @Min(1)
   expectedTotalKobo!: number;
 
-  /** W9's optional note. */
+  /**
+   * `quoteToken` from that fee quote (`GET /money/fees/quote?kind=
+   * wawu_transfer`; BACKEND_GAPS G-64): the server checks it is its own, for
+   * this person and this amount, and not past `expiresAt`; otherwise `409
+   * quote_changed` with the new quote.
+   */
+  @IsString()
+  @Length(1, 1024)
+  @IsStorableText()
+  quoteToken!: string;
+
+  /** W9's optional note, 100 characters at most. */
   @IsOptional()
   @IsString()
   @MaxLength(100)
+  @IsStorableText(true)
   note?: string;
 }
 

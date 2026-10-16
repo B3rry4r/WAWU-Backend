@@ -11,6 +11,8 @@ import {
   RECHECK_AFTER_MS,
   RECHECK_PAGE,
   RECHECK_UNTIL_MS,
+  WAITLIST_CITIES,
+  WAITLIST_CRAFTS,
 } from '../waitlist-config';
 import { REFERENCE_ATTEMPTS } from '../waitlist-config';
 import type { RandomBytes } from '../waitlist-random';
@@ -452,6 +454,90 @@ describe('Event registration link (JOIN-01) over HTTP', () => {
       ]).toEqual([null, null]);
       await register(person({ state: 'x'.repeat(61) })).expect(400);
       await register(person({ makes: 'y'.repeat(61) })).expect(400);
+    });
+
+    it('takes the craft, the city and the updates answer (JOIN-V2), stores them, and keeps working for a client that sends none', async () => {
+      const s = await started({
+        craft: 'Film and video',
+        city: 'Port Harcourt',
+        updatesOptIn: true,
+      });
+      const row = await rowOf(s.reference);
+      expect([row.craft, row.city, row.updatesOptIn]).toEqual([
+        'Film and video',
+        'Port Harcourt',
+        true,
+      ]);
+      const declined = await started({
+        craft: 'Other',
+        city: 'Online',
+        updatesOptIn: false,
+      });
+      const declinedRow = await rowOf(declined.reference);
+      expect([
+        declinedRow.craft,
+        declinedRow.city,
+        declinedRow.updatesOptIn,
+      ]).toEqual(['Other', 'Online', false]);
+      // An older client sends none of the three: it still registers, and the columns stay empty.
+      const old = await started();
+      const oldRow = await rowOf(old.reference);
+      expect([oldRow.craft, oldRow.city, oldRow.updatesOptIn]).toEqual([
+        null,
+        null,
+        null,
+      ]);
+      // Every craft and every city in the lists is taken.
+      for (const craft of WAITLIST_CRAFTS) {
+        const r = await started({ craft });
+        expect((await rowOf(r.reference)).craft).toBe(craft);
+      }
+      for (const city of WAITLIST_CITIES) {
+        const r = await started({ city });
+        expect((await rowOf(r.reference)).city).toBe(city);
+      }
+    });
+
+    it('has exactly the four conference cities and Online, and no other city', () => {
+      expect([...WAITLIST_CITIES]).toEqual([
+        'Lagos',
+        'Abuja',
+        'Port Harcourt',
+        'Enugu',
+        'Online',
+      ]);
+    });
+
+    it.each([
+      ['a craft that is not in the list', { craft: 'Plumbing' }],
+      ['a craft in the wrong case', { craft: 'music' }],
+      ['an empty craft', { craft: '' }],
+      ['a craft that is not text', { craft: 7 }],
+      ['a city that is not in the list', { city: 'Kano' }],
+      ['the retired city option', { city: 'Another Nigerian city' }],
+      ['an empty city', { city: '' }],
+      ['an updates answer that is not true or false', { updatesOptIn: 'yes' }],
+    ])('refuses %s as a 400 and writes nothing', async (_name, over) => {
+      const body = person(over);
+      const res = await register(body).expect(400);
+      expect(res.body.reason).toBeUndefined();
+      expect(
+        await prisma.waitlistRegistration.count({
+          where: { email: body.email },
+        }),
+      ).toBe(0);
+    });
+
+    it('says in plain words which choice to fix when the craft or the city is not in the list', async () => {
+      const craft = await register(person({ craft: 'Plumbing' })).expect(400);
+      expect(JSON.stringify(craft.body)).toContain(
+        'Choose what you make or do from the list.',
+      );
+      const city = await register(person({ city: 'Kano' })).expect(400);
+      expect(JSON.stringify(city.body)).toContain(
+        'Choose a city from the list.',
+      );
+      expect(JSON.stringify([craft.body, city.body])).not.toContain('\u2014');
     });
 
     it('requires the consent and a full name', async () => {
