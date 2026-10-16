@@ -122,6 +122,17 @@ export type HoldRequestErrorCode =
   /** The other outcome was already chosen: a hold is settled once, one way. */
   | 'other_action_chosen';
 
+/**
+ * How a refund differs from the plain one. `returnCharge`: the person gets back
+ * everything the payment took from them, the provider's charge and WAWU's fee
+ * included, and WAWU carries the charge (EVENTS-07 round 2: an order that
+ * failed after the debit, as a failed bill is). It changes only the amount of
+ * the move; the hold's `refundedKobo` stays the held price.
+ */
+export interface RefundOptions {
+  returnCharge?: boolean;
+}
+
 /** A request to release or refund that cannot be honoured. Not an HTTP answer: the feature decides what to do. */
 export class HoldRequestError extends Error {
   constructor(

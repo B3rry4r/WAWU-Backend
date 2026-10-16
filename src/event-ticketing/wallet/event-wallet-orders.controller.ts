@@ -86,12 +86,20 @@ export class EventWalletOrdersController {
       'Optional. One value per tap on Get tickets (a UUID); sent again unchanged on a retry, it answers the same order.',
     schema: { type: 'string', pattern: '^[A-Za-z0-9_-]{8,128}$' },
   })
-  @MoneyErrors('target_not_found', 'target_not_payable')
+  @MoneyErrors(
+    'target_not_found',
+    'target_not_payable',
+    'wallet_not_open',
+    'wallet_opening',
+    'idempotency_key_reused',
+    'idempotency_key_required',
+    'fees_not_set',
+  )
   create(
     @CurrentUser() user: WawuJwtClaims,
     @Param('id', ParseUUIDPipe) eventId: string,
     @Body() dto: CreateEventWalletOrderDto,
-    @Headers('idempotency-key') key?: string,
+    @Headers('idempotency-key') key: string | undefined,
   ): Promise<EventWalletOrderQuoteView> {
     return this.orders.create(user.sub, eventId, dto, key);
   }

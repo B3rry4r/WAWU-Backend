@@ -7,6 +7,8 @@ import * as argon2 from 'argon2';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 import { WawuIdClient } from '../../src/common/auth/wawu-id.client';
+import { AccountPurgeService } from '../../src/account-purge/account-purge.service';
+import { EventHostErasureService } from '../../src/event-ticketing/wallet/event-host-erasure.service';
 import { WawuJwtStrategy } from '../../src/common/auth/wawu-jwt.strategy';
 import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../../src/common/interceptors/response.interceptor';
@@ -58,6 +60,8 @@ export interface EventHarness {
   prisma: PrismaService;
   payments: WalletPaymentService;
   holds: WalletHoldService;
+  purge: AccountPurgeService;
+  erasure: EventHostErasureService;
   double: FintavaDouble;
   wallets: Wallets;
   logger: QuietLogger;
@@ -150,6 +154,8 @@ export async function bootEventApp(
     prisma,
     payments,
     holds: moduleRef.get(WalletHoldService),
+    purge: moduleRef.get(AccountPurgeService, { strict: false }),
+    erasure: moduleRef.get(EventHostErasureService, { strict: false }),
     double,
     wallets,
     logger,

@@ -29843,14 +29843,6 @@
             }
           },
           {
-            "name": "idempotency-key",
-            "required": true,
-            "in": "header",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "name": "Idempotency-Key",
             "in": "header",
             "description": "Optional. One value per tap on Get tickets (a UUID); sent again unchanged on a retry, it answers the same order.",
@@ -29882,6 +29874,16 @@
               }
             }
           },
+          "400": {
+            "description": "reason.code: idempotency_key_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "reason.code: target_not_found",
             "content": {
@@ -29893,7 +29895,17 @@
             }
           },
           "409": {
-            "description": "reason.code: target_not_payable",
+            "description": "reason.code: target_not_payable, wallet_not_open, wallet_opening, idempotency_key_reused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: fees_not_set",
             "content": {
               "application/json": {
                 "schema": {

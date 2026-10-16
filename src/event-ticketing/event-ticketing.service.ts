@@ -164,11 +164,46 @@ export class EventTicketingService {
       }
     }
 
+    // A wallet order that failed or was refunded (EVENTS-07 round 2) names
+    // these tiers too, with nothing sold, and its foreign key would stop them
+    // being replaced. Its money is in the buyer's history, not in the order, so
+    // it goes with the tiers once the price is back with the buyer; while a
+    // refund is still on its way the host waits.
+    const settled = await this.prisma.eventOrder.findMany({
+      where: {
+        eventId,
+        paymentProvider: 'wallet',
+        status: { in: ['failed', 'refunded'] },
+      },
+      select: { id: true },
+    });
+    if (settled.length > 0) {
+      const returning = await this.prisma.walletHold.count({
+        where: {
+          kind: 'event_ticket',
+          status: 'held',
+          targetId: { in: settled.map((o) => o.id) },
+        },
+      });
+      if (returning > 0) {
+        throw new ConflictException(
+          'Money for an order that could not be finished is still on its way back to the buyer. Try again in a minute.',
+        );
+      }
+    }
+
     await this.prisma.$transaction([
       this.prisma.eventOrder.deleteMany({
         where: {
           id: { in: unpaid.map((o) => o.id) },
           status: 'pending',
+          paymentProvider: 'wallet',
+        },
+      }),
+      this.prisma.eventOrder.deleteMany({
+        where: {
+          id: { in: settled.map((o) => o.id) },
+          status: { in: ['failed', 'refunded'] },
           paymentProvider: 'wallet',
         },
       }),

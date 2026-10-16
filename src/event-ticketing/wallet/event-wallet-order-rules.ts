@@ -32,9 +32,14 @@ export const ORDER_FAILED_MESSAGE =
 export const ORDER_CHANGED_MESSAGE =
   'The price of these tickets changed. Pick your tickets again.';
 export const ORDER_FAILED_RETURNED_REASON =
-  'The tickets sold out or the event was called off before your order was finished. Your money is back in your wallet.';
+  'The tickets sold out or the event was called off before your order was finished. Everything you paid, the charge included, is back in your wallet.';
 export const ORDER_FAILED_RETURNING_REASON =
-  'The tickets sold out or the event was called off before your order was finished. Your money is on its way back to your wallet.';
+  'The tickets sold out or the event was called off before your order was finished. Everything you paid, the charge included, is on its way back to your wallet.';
+/** An order refunded after it was paid (the event can no longer take place). */
+export const ORDER_REFUNDED_RETURNED_REASON =
+  'This event can no longer take place. Your money is back in your wallet.';
+export const ORDER_REFUNDED_RETURNING_REASON =
+  'This event can no longer take place. Your money is on its way back to your wallet.';
 export const KEY_REUSED_MESSAGE =
   'That Idempotency-Key was used for different tickets. Use a new key for a new order.';
 export const KEY_MALFORMED_MESSAGE =

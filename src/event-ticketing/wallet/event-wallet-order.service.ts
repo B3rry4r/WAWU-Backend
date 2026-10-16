@@ -11,12 +11,12 @@ import { WawuIdClient } from '../../common/auth/wawu-id.client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { BlockedAccountService } from '../../blocked-account/blocked-account.service';
 import { WalletGate, type OpenWallet } from '../../money/gate/wallet-gate';
-import { HoldViewService } from '../../money/holds/hold-view.service';
 import { WalletHoldService } from '../../money/holds/wallet-hold.service';
 import { koboNumber } from '../../money/ledger/ledger.service';
 import { loadMoneyParties } from '../../money/money-party';
 import { MoneyError } from '../../money/money-error';
 import type {
+  HoldStatus,
   MoneyPartyView,
   PaymentStatus,
   PaymentView,
@@ -57,6 +57,8 @@ import {
   ORDER_FAILED_RETURNED_REASON,
   ORDER_FAILED_RETURNING_REASON,
   ORDER_PAID_MESSAGE,
+  ORDER_REFUNDED_RETURNED_REASON,
+  ORDER_REFUNDED_RETURNING_REASON,
   orderNotFound,
   overOrderLimit,
   progressOf,
@@ -69,6 +71,15 @@ import type {
   EventWalletOrderQuoteView,
   EventWalletOrderView,
 } from './event-wallet-order-view.type';
+
+/**
+ * An order that failed after the debit gives the buyer back everything the
+ * payment took, the provider's charge included, and WAWU carries the charge
+ * (EVENTS-07 round 2, as a failed bill does). Only the amount of the move
+ * differs from a plain refund.
+ */
+const RETURN_ALL = { returnCharge: true } as const;
+const FAILED_REFUND_REASON = 'the order could not be completed';
 
 /** What an order is read with: its basket and the event it is for. */
 const ORDER_INCLUDE = {
@@ -145,7 +156,6 @@ export class EventWalletOrderService implements OnModuleInit {
     private readonly payments: WalletPaymentService,
     private readonly registry: PayableRegistry,
     private readonly holds: WalletHoldService,
-    private readonly holdViews: HoldViewService,
     private readonly gate: WalletGate,
     private readonly blocked: BlockedAccountService,
     private readonly wawuId: WawuIdClient,
@@ -616,7 +626,11 @@ export class EventWalletOrderService implements OnModuleInit {
       this.logger.error(
         `event order ${payment.targetId}: no such order to deliver; payment ${payment.paymentId} is refunded`,
       );
-      await this.holds.refund({ paymentId: payment.paymentId });
+      await this.holds.refund(
+        { paymentId: payment.paymentId },
+        FAILED_REFUND_REASON,
+        RETURN_ALL,
+      );
       return;
     }
     if (
@@ -629,7 +643,11 @@ export class EventWalletOrderService implements OnModuleInit {
       this.logger.error(
         `event order ${order.id}: payment ${payment.paymentId} completed for an order another payment paid; it is refunded`,
       );
-      await this.holds.refund({ paymentId: payment.paymentId });
+      await this.holds.refund(
+        { paymentId: payment.paymentId },
+        FAILED_REFUND_REASON,
+        RETURN_ALL,
+      );
       return;
     }
     switch (order.status) {
@@ -637,7 +655,11 @@ export class EventWalletOrderService implements OnModuleInit {
         return;
       case 'failed':
       case 'refunded':
-        await this.holds.refund({ paymentId: payment.paymentId });
+        await this.holds.refund(
+          { paymentId: payment.paymentId },
+          FAILED_REFUND_REASON,
+          RETURN_ALL,
+        );
         return;
       case 'pending':
         break;
@@ -680,7 +702,11 @@ export class EventWalletOrderService implements OnModuleInit {
         holdId: payment.holdId,
       },
     });
-    await this.holds.refund({ paymentId: payment.paymentId });
+    await this.holds.refund(
+      { paymentId: payment.paymentId },
+      FAILED_REFUND_REASON,
+      RETURN_ALL,
+    );
   }
 
   /**
@@ -779,13 +805,24 @@ export class EventWalletOrderService implements OnModuleInit {
     }));
 
     let returned: EventOrderReturnView | null = null;
-    if (order.status === 'failed' && order.walletPaymentId) {
-      const hold = await this.holdViews.forPayment(order.walletPaymentId);
+    if (
+      (order.status === 'failed' || order.status === 'refunded') &&
+      order.walletPaymentId
+    ) {
+      // The hold's own row: what the move to the buyer was (the price, and the
+      // payment's charge too when the order failed after the debit).
+      const hold = await this.prisma.walletHold.findUnique({
+        where: { paymentId: order.walletPaymentId },
+        select: { status: true, refundedKobo: true, transferKobo: true },
+      });
       if (hold) {
+        const back = hold.status === 'refunded';
         returned = {
-          holdStatus: hold.status,
-          returned: hold.status === 'refunded',
-          returnedKobo: hold.status === 'refunded' ? hold.refundedKobo : null,
+          holdStatus: hold.status as HoldStatus,
+          returned: back,
+          returnedKobo: back
+            ? koboNumber(hold.transferKobo ?? hold.refundedKobo ?? 0n)
+            : null,
         };
       }
     }
@@ -854,7 +891,11 @@ export class EventWalletOrderService implements OnModuleInit {
           ? returned?.returned
             ? ORDER_FAILED_RETURNED_REASON
             : ORDER_FAILED_RETURNING_REASON
-          : null,
+          : order.status === 'refunded'
+            ? returned?.returned
+              ? ORDER_REFUNDED_RETURNED_REASON
+              : ORDER_REFUNDED_RETURNING_REASON
+            : null,
       returned,
       createdAt: order.createdAt.toISOString(),
       paidAt: order.paidAt?.toISOString() ?? null,

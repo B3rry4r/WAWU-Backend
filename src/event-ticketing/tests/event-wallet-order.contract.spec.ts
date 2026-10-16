@@ -542,15 +542,22 @@ describe('EVENTS-07 buy event tickets from the wallet', () => {
         where: { id: hold.id },
       });
       expect(refunded.status).toBe('refunded');
-      // The price is back; Fintava's charge on the first move is not (R-10).
-      expect(balance(p)).toBe(START - FEE);
+      // The order failed after the debit, so the buyer gets back everything
+      // paid, Fintava's charge included, and WAWU carries the charge
+      // (EVENTS-07 round 2, as a failed bill does).
+      expect(balance(p)).toBe(START);
+      expect(refunded).toMatchObject({
+        refundedKobo: BigInt(PRICE),
+        transferKobo: BigInt(TOTAL),
+      });
       const after = body<EventWalletOrderView>(
         await r.read(p, q.order.id).expect(200),
       ).data!;
       expect(after.returned).toMatchObject({
         returned: true,
-        returnedKobo: PRICE,
+        returnedKobo: TOTAL,
       });
+      expect(after.failureReason).toContain('charge included');
     });
 
     it('refunds when the event is called off between the debit and the tickets', async () => {
